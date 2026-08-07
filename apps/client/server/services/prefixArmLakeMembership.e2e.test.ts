@@ -114,6 +114,42 @@ describe('reconcileLakeTags (via updateFabFile) against real Mongo', () => {
     const persistedFile = await FabFile.findById(file.id);
     expect((persistedFile?.tags ?? []).map(t => t.name)).toEqual(['lk:invoices']);
   }, 30000);
+
+  // A prefix-arm JOIN needs no manage-rights gate on the membership itself (the read-side
+  // predicate grants it purely on the tag), but recomputeLakeStats also flips a draft lake to
+  // active - a one-way publication change. A shared editor tagging the OWNER's file with the
+  // OWNER's own lake prefix must not be able to force-publish a lake they have no relationship to.
+  it('does not publish a draft lake when a shared editor triggers the join', async () => {
+    const lake = await makeLake({ status: 'draft', fileCount: 0, totalSizeBytes: 0 });
+    const file = await makeFile([]);
+    const editor = { id: editorId, isAdmin: false } as any;
+
+    await fabFilesService.updateFabFile(
+      editor,
+      { id: file.id as string, tags: [{ name: 'lk:invoices', strength: 1 }] },
+      { db: { fabFiles: fabFileRepository, dataLakes: dataLakeRepository }, storage }
+    );
+
+    const persistedLake = await DataLakeModel.findById(lake.id);
+    expect(persistedLake?.status).toBe('draft');
+    expect(persistedLake?.fileCount).toBe(0);
+  }, 30000);
+
+  it('publishes a draft lake when the OWNER triggers the same join', async () => {
+    const lake = await makeLake({ status: 'draft', fileCount: 0, totalSizeBytes: 0 });
+    const file = await makeFile([]);
+    const owner = { id: ownerId, isAdmin: false } as any;
+
+    await fabFilesService.updateFabFile(
+      owner,
+      { id: file.id as string, tags: [{ name: 'lk:invoices', strength: 1 }] },
+      { db: { fabFiles: fabFileRepository, dataLakes: dataLakeRepository }, storage }
+    );
+
+    const persistedLake = await DataLakeModel.findById(lake.id);
+    expect(persistedLake?.status).toBe('active');
+    expect(persistedLake?.fileCount).toBe(1);
+  }, 30000);
 });
 
 describe('toggleTags against real Mongo', () => {
@@ -161,5 +197,27 @@ describe('toggleTags against real Mongo', () => {
 
     const persistedFile = await FabFile.findById(file.id);
     expect((persistedFile?.tags ?? []).map(t => t.name)).toEqual(['lk:invoices']);
+  }, 30000);
+
+  it('does not publish a draft lake when a shared editor triggers the join', async () => {
+    const lake = await makeLake({ status: 'draft', fileCount: 0, totalSizeBytes: 0 });
+    const file = await makeFile([]);
+
+    await fabFilesService.toggleTags(
+      editorId,
+      { ids: [file.id], tags: ['lk:invoices'] },
+      {
+        db: {
+          fabFiles: fabFileRepository,
+          fileTags: fileTagRepository,
+          dataLakes: dataLakeRepository,
+          users: userRepository,
+        },
+      }
+    );
+
+    const persistedLake = await DataLakeModel.findById(lake.id);
+    expect(persistedLake?.status).toBe('draft');
+    expect(persistedLake?.fileCount).toBe(0);
   }, 30000);
 });

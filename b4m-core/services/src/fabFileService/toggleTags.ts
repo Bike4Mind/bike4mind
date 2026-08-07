@@ -231,10 +231,14 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
         if (!(error instanceof NotFoundError)) throw error;
       }
     }
-    // Stats-only: joining by tagging your own file with your own lake's folder tag needs no gate
-    // (today's accepted "automatic membership" model for content tags), just a recompute.
+    // MEMBERSHIP needs no gate here (the read-side predicate grants it purely on the tag), but
+    // recomputeLakeStats's side effect is stronger: it also flips a draft lake to active
+    // (activateIfDraft), a one-way, publication-visibility change. `file.userId` is the file's
+    // OWNER, not necessarily this actor - `findAllAccessibleByIds` admits a read/write share, so
+    // an unrelated sharee could otherwise force-publish a lake they have no relationship to.
+    // Gated on canManageLake; an unmanaged join just leaves the recompute for later.
     for (const { lake } of prefixJoinsByFile.get(file.id) ?? []) {
-      touchedLakes.set(lake.id, lake);
+      if (canManageLake(lake, actor)) touchedLakes.set(lake.id, lake);
     }
   };
 

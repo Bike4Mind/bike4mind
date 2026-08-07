@@ -425,15 +425,29 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
     expect(adapters.store.get('f1')?.tags.map(t => t.name)).toEqual(['lk:b']);
   });
 
-  it('toggling a prefix tag ON is never a leave', async () => {
+  it('toggling a prefix tag ON is never a leave, and recomputes when the actor manages the lake', async () => {
     const adapters = makeAdapters([file('f1')]);
     adapters.db.dataLakes.find = vi.fn().mockResolvedValue([lake()]);
 
+    // 'owner' both owns the file (file()'s default) and manages the lake (lake()'s default).
     await run(adapters, { ids: ['f1'], tags: ['lk:invoices'] });
 
-    // A join is stats-only (no manage-rights gate, no removeFileFromLake), but it still needs
-    // the recompute so fileCount reflects the new member.
     expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 3, totalSizeBytes: 99 });
+  });
+
+  // MEMBERSHIP needs no gate (the read-side predicate grants it purely on the tag), but the
+  // stats recompute also flips a draft lake to active (recomputeLakeStats -> activateIfDraft) - a
+  // one-way publication change a mere file-share recipient must not be able to force onto a lake
+  // they do not manage.
+  it('does not recompute stats on a prefix-arm join by an actor who cannot manage the lake', async () => {
+    const adapters = makeAdapters([{ id: 'f1', userId: 'owner', tags: [] }]);
+    adapters.db.dataLakes.find = vi.fn().mockResolvedValue([lake({ createdByUserId: 'owner' })]);
+    adapters.db.users.findById = vi.fn().mockResolvedValue({ id: 'editor', isAdmin: false });
+
+    const runAs = (userId: string, params: unknown) => toggleTags(userId, params, adapters as any);
+    await runAs('editor', { ids: ['f1'], tags: ['lk:invoices'] });
+
+    expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
   });
 
   it('recomputes a shared lake once for a batch where every file leaves it', async () => {

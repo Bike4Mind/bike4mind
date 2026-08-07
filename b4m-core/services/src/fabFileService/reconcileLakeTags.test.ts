@@ -350,8 +350,22 @@ describe('reconcileLakeTags', () => {
       expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
     });
 
-    it('recomputes stats on a prefix-arm join with no manage-rights gate', async () => {
+    it('recomputes stats on a prefix-arm join when the actor manages the lake', async () => {
       const adapters = withPrefixLakes([], [lake({ createdByUserId: 'owner' })]);
+
+      const result = await run(adapters, [], [tag('lk:invoices', 1)]);
+      await result.commit();
+
+      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
+    });
+
+    // MEMBERSHIP needs no gate (the read-side predicate grants it purely on the tag), but the
+    // stats recompute also flips a draft lake to active (recomputeLakeStats -> activateIfDraft) -
+    // a one-way publication change a mere file-share recipient must not be able to force onto a
+    // lake they do not manage.
+    it('does not recompute stats on a prefix-arm join by an actor who cannot manage the lake', async () => {
+      const adapters = withPrefixLakes([], [lake({ createdByUserId: 'owner' })]);
+      adapters.db.fabFiles.findById = vi.fn().mockResolvedValue({ id: 'f1', userId: 'owner', tags: [] });
 
       const result = await reconcileLakeTags(
         { userId: 'not-the-owner', isAdmin: false },
@@ -362,7 +376,7 @@ describe('reconcileLakeTags', () => {
       );
       await result.commit();
 
-      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
+      expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
     });
   });
 });

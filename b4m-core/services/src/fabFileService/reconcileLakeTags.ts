@@ -163,10 +163,16 @@ export const reconcileLakeTags = async (
     assertLakeWritable(lake);
   }
   leaves.push(...prefixArmLeaves.map(l => l.lake));
-  // The mirror case: a write that newly satisfies a lake's prefix arm is automatic membership
-  // (today's accepted model for content tags - no manage-rights gate), but it still needs its
-  // stats recomputed, or fileCount stays stale until an unrelated recompute happens to run.
-  joins.push(...prefixArmJoins.map(j => j.lake));
+  // The mirror case: a write that newly satisfies a lake's prefix arm is automatic MEMBERSHIP
+  // (today's accepted model for content tags - the read-side predicate grants it purely on the
+  // tag, with no permission check either). But recomputeLakeStats's side effect is stronger than
+  // membership: it also flips a draft lake to active (recomputeLakeStats -> activateIfDraft),
+  // a one-way, publication-visibility change. `owner` is the FILE's owner, not the acting user -
+  // a caller merely SHARED on that file (findAccessibleById admits a read/write share) could
+  // otherwise force-publish a lake they have no relationship to. Gate the stats/activation side
+  // effect on canManageLake; an unmanaged join just leaves the recompute for later rather than
+  // silently publishing someone else's unfinished lake.
+  joins.push(...prefixArmJoins.filter(j => canManageLake(j.lake, actor)).map(j => j.lake));
 
   // Force-carried, mirroring metaTagsToPersist above: removeFileFromLake checks membership
   // against the STORED document, so if the persisted array already dropped every prefix tag it
