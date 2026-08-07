@@ -1,4 +1,10 @@
-export { BaseSearchIndex, OpenSearchClient, type SearchDocument, searchIndexSettings } from '@bike4mind/fab-pipeline';
+export {
+  BaseSearchIndex,
+  OpenSearchClient,
+  type SearchDocument,
+  buildSearchIndexSettings,
+  buildSearchIndexSettingsForModel,
+} from '@bike4mind/fab-pipeline';
 export * from './utils';
 export * from './ports';
 export * from './assertLakeAccess';

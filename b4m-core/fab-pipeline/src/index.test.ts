@@ -27,7 +27,8 @@ describe('@bike4mind/fab-pipeline public exports', () => {
     'S3Storage',
     'BaseSearchIndex',
     'OpenSearchClient',
-    'searchIndexSettings',
+    'buildSearchIndexSettings',
+    'buildSearchIndexSettingsForModel',
   ])('exports %s', sym => {
     expect((fp as Record<string, unknown>)[sym]).toBeDefined();
   });
