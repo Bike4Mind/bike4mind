@@ -40,6 +40,7 @@ import {
   NO_TEMPERATURE_MODELS,
   IMAGE_SIZE_CONSTRAINTS,
   isBflImageModel,
+  supportsPromptUpsampling,
   ModelBackend,
   ModelInfo,
   ModelName,
@@ -496,7 +497,7 @@ const ResetButton: React.FC<{
       height: undefined,
       aspect_ratio: undefined,
       output_format: isImageModel(model) ? 'jpeg' : undefined,
-      prompt_upsampling: isBflImageModel(model) ? false : undefined,
+      prompt_upsampling: supportsPromptUpsampling(model) ? false : undefined,
       safety_tolerance: isBflImageModel(model) ? BFL_SAFETY_TOLERANCE.DEFAULT : undefined,
     });
     setSpokenWords(200);
@@ -1152,8 +1153,10 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
               </SettingsRow>
             )}
 
-            {/* Spoken Words - voice replies only exist for chat models */}
-            {!isImageModel(model) && (
+            {/* Spoken Words - voice replies only exist for chat models. Gated on the catalog's own
+              type, like the token allocation above, so video and transcription models are covered
+              too; isImageModel() name-matches a hardcoded list and let video models through. */}
+            {modelInfo.type === 'text' && (
               <SettingsRow label="Spoken Words" tooltip={FIELD_TOOLTIPS.spokenWords}>
                 <Input
                   sx={commonInputStyles(mode || 'light')}
@@ -1259,22 +1262,28 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                       ))}
                     </Select>
                   </SettingsRow>
-                  {/* Last row on purpose: it is the only toggle among the dropdowns and inputs, so it
-                    reads as an addendum rather than interrupting the column of matching controls. */}
-                  <SettingsRow label="Prompt Upsampling" tooltip={FIELD_TOOLTIPS.promptEnhancement}>
-                    {/* The toggle is narrower than the inputs and selects, so it sits in a box of the
-                      shared control width and hugs the right edge - lining up with their right edge
-                      rather than floating in the middle of the column. */}
-                    <Box sx={{ width: SETTINGS_CONTROL_WIDTH, display: 'flex', justifyContent: 'flex-end' }}>
-                      {/* The same toggle the tools list uses, so on/off reads identically everywhere. */}
-                      <SquareSlideToggle
-                        checked={prompt_upsampling ?? false}
-                        onChange={e => setLLM({ prompt_upsampling: e.target.checked })}
-                        data-testid="setting-toggle-prompt-upsampling"
-                      />
-                    </Box>
-                  </SettingsRow>
                 </>
+              )}
+
+              {/* Not BFL-only: GeminiImageService maps prompt_upsampling to Google's `enhancePrompt`,
+                so the Nano Banana models support it too. Safety Tolerance above stays BFL-gated - it
+                is a BFL API parameter with no Gemini equivalent. Last row on purpose: the only toggle
+                among the dropdowns and inputs, so it reads as an addendum rather than interrupting
+                the column of matching controls. */}
+              {supportsPromptUpsampling(model) && (
+                <SettingsRow label="Prompt Upsampling" tooltip={FIELD_TOOLTIPS.promptEnhancement}>
+                  {/* The toggle is narrower than the inputs and selects, so it sits in a box of the
+                    shared control width and hugs the right edge - lining up with their right edge
+                    rather than floating in the middle of the column. */}
+                  <Box sx={{ width: SETTINGS_CONTROL_WIDTH, display: 'flex', justifyContent: 'flex-end' }}>
+                    {/* The same toggle the tools list uses, so on/off reads identically everywhere. */}
+                    <SquareSlideToggle
+                      checked={prompt_upsampling ?? false}
+                      onChange={e => setLLM({ prompt_upsampling: e.target.checked })}
+                      data-testid="setting-toggle-prompt-upsampling"
+                    />
+                  </Box>
+                </SettingsRow>
               )}
             </Box>
             <ImageTemplatePanel />

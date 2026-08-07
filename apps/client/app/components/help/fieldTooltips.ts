@@ -33,7 +33,7 @@ export const FIELD_TOOLTIPS = {
   safetyTolerance:
     'How permissive content moderation is (Flux only). Lower is stricter, higher is more permissive (hard-capped).',
   promptEnhancement:
-    'Prompt enhancement (Flux only): the model rewrites and expands your prompt before generating, often adding detail. Turn off to use your prompt exactly as written.',
+    'The provider rewrites and expands your prompt before generating, often adding detail. Turn off to use your prompt exactly as written.',
 } as const;
 
 export type FieldTooltipKey = keyof typeof FIELD_TOOLTIPS;
