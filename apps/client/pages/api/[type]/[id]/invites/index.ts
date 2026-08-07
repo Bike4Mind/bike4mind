@@ -47,8 +47,10 @@ const URL_PATH_TO_INVITE_TYPE = {
  */
 const resolveInviteType = (segment: string | undefined): InviteType | undefined => {
   if (!segment) return undefined;
-  const alias = URL_PATH_TO_INVITE_TYPE[segment as keyof typeof URL_PATH_TO_INVITE_TYPE];
-  if (alias) return alias;
+  // hasOwn, or a segment like 'constructor' resolves to an inherited value instead of undefined.
+  if (Object.hasOwn(URL_PATH_TO_INVITE_TYPE, segment)) {
+    return URL_PATH_TO_INVITE_TYPE[segment as keyof typeof URL_PATH_TO_INVITE_TYPE];
+  }
   return Object.values(InviteType).find(value => value === segment);
 };
 

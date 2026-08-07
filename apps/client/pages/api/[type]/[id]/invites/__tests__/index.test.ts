@@ -212,16 +212,14 @@ describe('DELETE /api/[type]/[id]/invites', () => {
     );
   });
 
-  it('rejects an unrecognized type without calling the service', async () => {
-    const { req, res } = createMocks({ method: 'DELETE', query: { type: 'bogus', id: 'doc-1' }, body: {} });
-    (req as any).user = { id: 'u1' };
-
-    await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow('Invalid cancel invite request');
-    expect(cancelInvite).not.toHaveBeenCalled();
-  });
-
-  it('rejects a path missing type or id without calling the service', async () => {
-    const { req, res } = createMocks({ method: 'DELETE', query: { type: 'Project' }, body: {} });
+  it.each([
+    ['an unrecognized type', { type: 'bogus', id: 'doc-1' }],
+    // An inherited Object.prototype key must not resolve through the alias map.
+    ['an inherited alias-map key', { type: 'constructor', id: 'doc-1' }],
+    ['a missing id', { type: 'Project' }],
+    ['a missing type', { id: 'doc-1' }],
+  ])('rejects %s without calling the service', async (_label: string, query: Record<string, string>) => {
+    const { req, res } = createMocks({ method: 'DELETE', query, body: {} });
     (req as any).user = { id: 'u1' };
 
     // This handler throws for the central errorHandler to map (400), rather than writing the

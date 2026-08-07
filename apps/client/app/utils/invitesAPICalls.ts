@@ -85,9 +85,8 @@ export const fetchProjectInvites = async (
   return response.data;
 };
 
-// Map InviteType enum values to API paths. The invites route accepts the raw InviteType too, but
-// every caller should send this alias so a document has one URL across GET/POST/DELETE.
-export const INVITE_TYPE_TO_API_PATH = {
+// Map InviteType enum values to API paths
+const INVITE_TYPE_TO_API_PATH = {
   [InviteType.FabFile]: 'files',
   [InviteType.Session]: 'sessions',
   [InviteType.Project]: 'projects',
