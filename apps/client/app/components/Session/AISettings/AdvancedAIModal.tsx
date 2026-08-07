@@ -1116,46 +1116,48 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
               </Grid>
             )}
 
-            {/* Spoken Words */}
-            <Grid xs={12} md={6}>
-              <Box
-                sx={{
-                  display: 'flex',
-                  justifyContent: { xs: 'flex-start', sm: 'flex-end' },
-                  alignItems: 'center',
-                  gap: '20px',
-                }}
-              >
-                <Tooltip title="Maximum number of words to speak in voice responses">
-                  <Typography level="body-sm" sx={{ textAlign: 'left', flex: { xs: '1 1 0%', sm: '0 0 auto' } }}>
-                    Spoken Words
-                  </Typography>
-                </Tooltip>
-                <Input
+            {/* Spoken Words - voice replies only exist for chat models */}
+            {!isImageModel(model) && (
+              <Grid xs={12} md={6}>
+                <Box
                   sx={{
-                    ...commonInputStyles(mode || 'light'),
-                    flex: { xs: '1 1 0%', sm: '0 0 auto' },
+                    display: 'flex',
+                    justifyContent: { xs: 'flex-start', sm: 'flex-end' },
+                    alignItems: 'center',
+                    gap: '20px',
                   }}
-                  size="sm"
-                  variant="outlined"
-                  color="primary"
-                  type="number"
-                  value={spokenWords}
-                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                    const value = parseInt(e.target.value);
-                    if (!isNaN(value) && value >= 0) {
-                      setSpokenWords(value);
-                    }
-                  }}
-                  slotProps={{
-                    input: {
-                      min: 0,
-                      step: 10,
-                    },
-                  }}
-                />
-              </Box>
-            </Grid>
+                >
+                  <Tooltip title="Maximum number of words to speak in voice responses">
+                    <Typography level="body-sm" sx={{ textAlign: 'left', flex: { xs: '1 1 0%', sm: '0 0 auto' } }}>
+                      Spoken Words
+                    </Typography>
+                  </Tooltip>
+                  <Input
+                    sx={{
+                      ...commonInputStyles(mode || 'light'),
+                      flex: { xs: '1 1 0%', sm: '0 0 auto' },
+                    }}
+                    size="sm"
+                    variant="outlined"
+                    color="primary"
+                    type="number"
+                    value={spokenWords}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                      const value = parseInt(e.target.value);
+                      if (!isNaN(value) && value >= 0) {
+                        setSpokenWords(value);
+                      }
+                    }}
+                    slotProps={{
+                      input: {
+                        min: 0,
+                        step: 10,
+                      },
+                    }}
+                  />
+                </Box>
+              </Grid>
+            )}
 
             {/* Reasoning Effort - only for reasoning-capable models */}
             {REASONING_SUPPORTED_MODELS.has(model) && (
