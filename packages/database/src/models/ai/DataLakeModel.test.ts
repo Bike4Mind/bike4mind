@@ -711,6 +711,27 @@ describe('DataLakeBatchRepository.incrementCounters - atomic multi-field increme
     expect(after?.failedFiles).toBe(1);
     expect(after?.processingFailedFiles).toBe(1);
   });
+
+  it('is a no-op on an already-terminal batch, so a late-arriving increment cannot push a counter past what a caller already treated as final', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 5 } as never);
+    await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed');
+
+    const result = await dataLakeBatchRepository.incrementCounters(batch.id, {
+      failedFiles: 1,
+      processingFailedFiles: 1,
+    });
+    expect(result).toBeNull();
+
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.failedFiles).toBe(0);
+    expect(fresh?.processingFailedFiles).toBe(0);
+    expect(fresh?.status).toBe('completed');
+  });
+
+  it('returns null without querying Mongo for an empty fields object', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 5 } as never);
+    await expect(dataLakeBatchRepository.incrementCounters(batch.id, {})).resolves.toBeNull();
+  });
 });
 
 describe('DataLakeBatchRepository.findStuck — global cross-user stale scan', () => {

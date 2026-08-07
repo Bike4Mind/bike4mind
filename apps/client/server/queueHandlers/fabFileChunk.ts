@@ -63,6 +63,17 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     return;
   }
 
+  // Idempotency: skip a duplicate delivery once the file is already chunked. Without this,
+  // chunkFabfile's own deleteManyByFabFileId (called unconditionally on every run) would wipe out
+  // and replace chunks a prior successful delivery already created - possibly ones already
+  // vectorized - the exact destructive case the rescue sweep can trigger (a deferred, non-final
+  // attempt clears isChunking/leaves error unset for the whole retry window, matching the sweep's
+  // filter; see chunkScan.ts). Mirrors fabFileVectorize.ts's own early-return.
+  if (fabFile.chunked || fabFile.notes?.startsWith(NO_EXTRACTABLE_TEXT_NOTE_PREFIX)) {
+    logger.log(`FabFile ${fabFileId} already chunked, skipping duplicate message`);
+    return;
+  }
+
   // Mark the file as actively chunking so the self-host safety-net scan (worker) doesn't
   // re-enqueue it mid-run - a duplicate would re-chunk and re-embed the whole file. Cleared
   // in `finally` on success AND failure so it can still be retried/reprocessed. Default: false.

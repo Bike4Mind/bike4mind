@@ -84,6 +84,10 @@ async function main() {
   if (taxonomyQueueUrl) {
     worker.registerQueueHandler('dataLakeTaxonomyQueue', taxonomyQueueUrl, dataLakeTaxonomyAnalysisDispatch, {
       visibilityTimeoutSec: FAB_FILE_VISIBILITY_TIMEOUT_SEC,
+      // Explicit rather than registerQueueHandler's default of 3: infra/queues.ts's hosted
+      // dataLakeTaxonomyQueue is dlq.retry: 2 (LLM calls cost money), so leaving this on the
+      // default would run one extra taxonomy LLM pass on self-host for every poison message.
+      maxReceiveCount: 2,
     });
   } else {
     bootLogger.warn('dataLakeTaxonomyQueue not configured; background AI tag suggestion will not run');

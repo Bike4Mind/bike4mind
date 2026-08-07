@@ -62,6 +62,7 @@ vi.mock('sst', () => ({
 const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() } as never;
 
 import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from './sqsDelivery';
+import { NO_EXTRACTABLE_TEXT_NOTE_PREFIX } from '@server/worker/chunkScan';
 import { dispatch } from './fabFileChunk';
 
 const makeEvent = (body: Record<string, unknown>) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
@@ -193,6 +194,40 @@ describe('fabFileChunk handler - retry gating (#1412)', () => {
     expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['uploaded', 'pending'], 'chunking');
     expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'chunkedFiles');
     expect(h.incrementCounters).not.toHaveBeenCalled();
+  });
+});
+
+describe('fabFileChunk handler - idempotency guard against re-chunking (human review)', () => {
+  // chunkFabfile unconditionally deletes then recreates every chunk. Without this guard, a
+  // duplicate delivery (a rescue-sweep re-enqueue racing a deferred, non-final failure's own
+  // later natural redelivery - see chunkScan.ts) would wipe out and replace chunks a prior
+  // successful delivery already created, including any already vectorized.
+  beforeEach(() => vi.clearAllMocks());
+
+  it('skips re-chunking a file already marked chunked, without ever calling chunkFabfile', async () => {
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1', chunked: true });
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.chunkFabfile).not.toHaveBeenCalled();
+    expect(h.fabFileUpdateOne).not.toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { isChunking: true } });
+  });
+
+  it('skips re-chunking a file already flagged as producing no extractable text', async () => {
+    h.findAccessibleById.mockResolvedValue({
+      id: 'ff1',
+      batchId: 'batch-1',
+      chunked: false,
+      notes: `${NO_EXTRACTABLE_TEXT_NOTE_PREFIX} - re-process or re-upload.`,
+    });
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.chunkFabfile).not.toHaveBeenCalled();
+  });
+
+  it('still chunks a file that has not been chunked yet', async () => {
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1', chunked: false });
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.chunkFabfile.mockResolvedValue([]);
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.chunkFabfile).toHaveBeenCalled();
   });
 });
 

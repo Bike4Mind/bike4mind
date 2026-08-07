@@ -566,22 +566,30 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     field: BatchCounterField,
     amount: number = 1
   ): Promise<IDataLakeBatchDocument | null> {
-    const doc = await this.batchModel.findOneAndUpdate({ _id: batchId }, { $inc: { [field]: amount } }, { new: true });
-    return doc?.toJSON() as IDataLakeBatchDocument | null;
+    return this.incrementCounters(batchId, { [field]: amount });
   }
 
   /**
    * Increment multiple counters in ONE atomic $inc, so a crash between two sequential
    * incrementCounter calls can never leave a caller's counters partially applied (e.g.
    * failedFiles bumped but processingFailedFiles not, misclassifying a processing failure
-   * as an upload failure with no automatic recovery).
+   * as an upload failure with no automatic recovery). Guarded on non-terminal status like every
+   * other mutator here - without it, a late-arriving increment (e.g. a final-attempt failure that
+   * lands after the reconciler already forced the batch terminal) could push a counter past what
+   * a caller already treated as the batch's final tally, even though the terminal status itself
+   * cannot be re-flipped (finalizeBatchIfComplete's own transition is separately guarded).
    */
   async incrementCounters(
     batchId: string,
     fields: Partial<Record<BatchCounterField, number>>
   ): Promise<IDataLakeBatchDocument | null> {
-    const doc = await this.batchModel.findOneAndUpdate({ _id: batchId }, { $inc: fields }, { new: true });
-    return doc?.toJSON() as IDataLakeBatchDocument | null;
+    if (Object.keys(fields).length === 0) return null; // $inc: {} throws; nothing to apply anyway.
+    const doc = await this.batchModel.findOneAndUpdate(
+      { _id: batchId, status: { $in: BATCH_NON_TERMINAL_STATUSES } },
+      { $inc: fields },
+      { new: true }
+    );
+    return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
   }
 
   /**
