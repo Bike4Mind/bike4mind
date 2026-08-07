@@ -604,7 +604,7 @@ const ToolsSection = ({
           alignItems: 'center',
           flex: 1,
           m: '-8px',
-          p: '16px',
+          p: '4px',
           width: 'auto',
           minWidth: 0,
         }}
