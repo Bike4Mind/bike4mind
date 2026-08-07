@@ -48,6 +48,7 @@ import { IUserDocument, Permission } from '@bike4mind/common';
 import { LLMEvents, SessionEvents } from '@server/utils/eventBus';
 import { getSharedTokenizer, publishTelemetryAlertCallback } from '../utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
+import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
 import { slackToolDefinitions, createPendingActionToolDefs } from '@bike4mind/slack';
 import { executePendingAction, cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
@@ -162,6 +163,7 @@ const getStaticOptions = () => {
       });
     },
     recallMementosV2,
+    recallLakeMemory: recallLakeMemoryForSession,
     // Without this the worker resolves session.systemPromptId to undefined, so a triage session
     // gets no authored prompt while the route has already suppressed the brand identity.
     loadSystemPromptById,

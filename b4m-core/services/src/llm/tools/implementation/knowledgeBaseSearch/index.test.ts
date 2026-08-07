@@ -219,6 +219,8 @@ describe('search_knowledge_base partial-corpus disclosure', () => {
     filesScanned: 3,
     chunksScanned: 9,
     chunksSkippedDimensionMismatch: 0,
+    annFilesQueried: 0,
+    annHits: 0,
     budgets: { maxFiles: 20000, maxChunks: 100000 },
     ...overrides,
   });

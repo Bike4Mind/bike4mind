@@ -520,6 +520,14 @@ declare module "sst" {
       "type": "sst.aws.Queue"
       "url": string
     }
+    "lakeMemoryQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "lakeMemoryQueueDLQ": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
     "lambdaFunctionNames": {
       "attackSimulation": string
       "type": "sst.sst.Linkable"

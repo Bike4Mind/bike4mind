@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const h = vi.hoisted(() => ({
   markTerminalIfActive: vi.fn(),
   setTaxonomyStatusIfActive: vi.fn(),
+  touchIfActive: vi.fn(async () => undefined),
   findById: vi.fn(),
   recomputeLakeStats: vi.fn(),
   recordBatchCompletion: vi.fn(),
@@ -16,6 +17,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeBatchRepository: {
     markTerminalIfActive: h.markTerminalIfActive,
     setTaxonomyStatusIfActive: h.setTaxonomyStatusIfActive,
+    touchIfActive: h.touchIfActive,
   },
   dataLakeRepository: { findById: h.findById },
   fabFileRepository: {},
@@ -35,7 +37,11 @@ vi.mock('sst', () => ({
   },
 }));
 
-import { finalizeBatchIfComplete, enqueueTaxonomyAnalysisIfWanted } from './dataLakeBatchProgress';
+import {
+  finalizeBatchIfComplete,
+  enqueueTaxonomyAnalysisIfWanted,
+  deferFailureIfRetryable,
+} from './dataLakeBatchProgress';
 
 const logger = { error: vi.fn() };
 // A batch at its completion threshold (vectorized+failed+skipped >= total).
@@ -230,5 +236,51 @@ describe('enqueueTaxonomyAnalysisIfWanted - guarded, ingest-independent enqueue'
       expect.any(Number),
       expect.any(Number)
     );
+  });
+});
+
+describe('deferFailureIfRetryable - shared non-final-attempt guard (#1412)', () => {
+  const makeEvent = (receiveCount?: number) =>
+    ({
+      Records: [
+        {
+          ...(receiveCount !== undefined ? { attributes: { ApproximateReceiveCount: String(receiveCount) } } : {}),
+        },
+      ],
+    }) as never;
+  const logger2 = { warn: vi.fn(), error: vi.fn() };
+  const params = (batchId: string | undefined) => ({
+    fabFileId: 'ff1',
+    batchId,
+    action: 'Chunking',
+    errorMessage: 'boom',
+    logger: logger2,
+  });
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([1, 2])('returns true (defer) on a non-final attempt %i of 3, and heartbeats the batch', async count => {
+    const deferred = await deferFailureIfRetryable(makeEvent(count), 3, params('batch-1'));
+    expect(deferred).toBe(true);
+    expect(h.touchIfActive).toHaveBeenCalledWith('batch-1');
+    expect(logger2.warn).toHaveBeenCalledWith(expect.stringContaining('attempt ' + count + '/3'));
+  });
+
+  it('does not heartbeat when there is no batchId', async () => {
+    await deferFailureIfRetryable(makeEvent(1), 3, params(undefined));
+    expect(h.touchIfActive).not.toHaveBeenCalled();
+  });
+
+  it('a heartbeat failure never replaces the deferral - still returns true, logs, does not throw', async () => {
+    h.touchIfActive.mockRejectedValueOnce(new Error('mongo blip'));
+    await expect(deferFailureIfRetryable(makeEvent(1), 3, params('batch-1'))).resolves.toBe(true);
+    expect(logger2.error).toHaveBeenCalledWith(expect.stringContaining('batch-1'));
+  });
+
+  it.each([3, 4, undefined])('returns false (final) on attempt %s of 3, without heartbeating', async count => {
+    const deferred = await deferFailureIfRetryable(makeEvent(count), 3, params('batch-1'));
+    expect(deferred).toBe(false);
+    expect(h.touchIfActive).not.toHaveBeenCalled();
+    expect(logger2.warn).not.toHaveBeenCalled();
   });
 });

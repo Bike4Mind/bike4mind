@@ -26,6 +26,7 @@ import { issTrackerTool } from './implementation/issTracker';
 import { planetVisibilityTool } from './implementation/planetVisibility';
 import { knowledgeBaseSearchTool } from './implementation/knowledgeBaseSearch';
 import { knowledgeBaseRetrieveTool } from './implementation/knowledgeBaseRetrieve';
+import { knowledgeBaseCountTool } from './implementation/knowledgeBaseCount';
 import { navigateViewTool } from './implementation/navigateView';
 import { jupyterNotebookTool } from './implementation/jupyterNotebook';
 import { excelGenerationTool } from './implementation/excelGeneration';
@@ -125,6 +126,7 @@ export const b4mTools = {
   // Chess engine
   chess_engine: chessEngineTool,
   retrieve_knowledge_content: knowledgeBaseRetrieveTool,
+  count_knowledge_base: knowledgeBaseCountTool,
 
   // Navigation tool
   navigate_view: navigateViewTool,

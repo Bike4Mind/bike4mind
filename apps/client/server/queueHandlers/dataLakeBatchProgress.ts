@@ -1,4 +1,10 @@
-import { cacheRepository, dataLakeBatchRepository, dataLakeRepository, fabFileRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  cacheRepository,
+  dataLakeBatchRepository,
+  dataLakeRepository,
+  fabFileRepository,
+} from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import type { IDataLakeBatchDocument, IDataLakeBatchSummary } from '@bike4mind/common';
 import { recordBatchCompletion, recordTaxonomyDailyCapExceeded } from '@server/utils/cloudwatch';
@@ -9,7 +15,51 @@ import {
   TAXONOMY_RATE_LIMIT_WINDOW_MS,
   taxonomyRateLimitKey,
 } from '@server/dataLakes/taxonomyRateLimit';
+import {
+  LAKE_MEMORY_DAILY_CAP,
+  LAKE_MEMORY_RATE_LIMIT_WINDOW_MS,
+  lakeMemoryRateLimitKey,
+} from '@server/dataLakes/lakeMemoryRateLimit';
+import { isFinalDeliveryAttempt, getDeliveryAttempt } from '@server/queueHandlers/sqsDelivery';
+import type { SQSEvent } from 'aws-lambda';
 import { Resource } from 'sst';
+
+/**
+ * Non-final-attempt guard shared by fabFileChunk.ts/fabFileVectorize.ts's catch blocks: on any
+ * SQS delivery that is not the last one before DLQ, log a warning and heartbeat the batch (via
+ * touchIfActive, so the read-time stuck-batch reconciler doesn't force it terminal while a retry
+ * is still pending) WITHOUT touching file/batch failure state - marking a file 'failed' before a
+ * retry gets its chance is unrecoverable, since claimFileStatus's success-path claim can never
+ * transition a manifest entry back out of 'failed' (#1412). Returns true when the caller should
+ * just rethrow; false means this is the final attempt and the caller should run its normal
+ * failure accounting instead.
+ */
+export async function deferFailureIfRetryable(
+  event: SQSEvent,
+  maxReceiveCount: number,
+  params: {
+    fabFileId: string;
+    batchId: string | undefined;
+    action: string;
+    errorMessage: string;
+    logger: { warn: (msg: string) => void; error: (msg: string) => void };
+  }
+): Promise<boolean> {
+  if (isFinalDeliveryAttempt(event, maxReceiveCount)) return false;
+  const { fabFileId, batchId, action, errorMessage, logger } = params;
+  const attempt = getDeliveryAttempt(event);
+  logger.warn(
+    `${action} failed for ${fabFileId} on attempt ${attempt}/${maxReceiveCount} (not final - letting SQS retry): ${errorMessage}`
+  );
+  // Purely observational - must never let a heartbeat hiccup replace the real error the caller
+  // is about to rethrow.
+  if (batchId) {
+    await dataLakeBatchRepository
+      .touchIfActive(batchId)
+      .catch(err => logger.error(`Error heartbeating batch ${batchId} on a deferred failure: ${err}`));
+  }
+  return true;
+}
 
 /**
  * Guarded batch finalization shared by the chunk and vectorize handlers. When the
@@ -50,6 +100,11 @@ export async function finalizeBatchIfComplete(
   // is the only other guaranteed-to-run path that can still enqueue taxonomy analysis. Safe to
   // call redundantly with upload-complete.ts's own call - the transition is guarded on 'none'.
   await enqueueTaxonomyAnalysisIfWanted(finalized, logger);
+
+  // Lake memory extraction (#1440 producer) rides the same guaranteed-to-run finalize path. Unlike
+  // taxonomy it needs the RAG pipeline done (it reads chunk text), so finalize - not upload-complete -
+  // is its trigger. Gated on the EnableLakeMemory admin flag + a per-lake daily cap.
+  await enqueueLakeMemoryExtractionIfWanted(finalized, logger);
 }
 
 /** True once a batch has reached its completion threshold. */
@@ -129,5 +184,43 @@ export async function enqueueTaxonomyAnalysisIfWanted(
     });
   } catch (error) {
     logger.error(`Error enqueueing taxonomy analysis for batch ${batch.id}: ${error}`);
+  }
+}
+
+/**
+ * Guarded enqueue for lake memory extraction (#1440 producer). Fires on ingest-finalize (a sibling of
+ * taxonomy analysis) and is gated on:
+ *   - the `EnableLakeMemory` admin flag, off by default - the producer stays dark until an operator
+ *     opts a deployment in for the measurement rollout;
+ *   - a PER-LAKE daily cap, so a burst of batch finalizes triggers at most a few full-lake extractions.
+ * Unlike taxonomy (which only needs file metadata), extraction reads chunk TEXT, so it must run after
+ * the chunk/vectorize pipeline finishes - hence finalize, not upload-complete. The job itself is
+ * idempotent (the ledger de-dups), so a dropped cap slot only delays a re-scan, never loses data.
+ */
+export async function enqueueLakeMemoryExtractionIfWanted(
+  batch: IDataLakeBatchSummary | null,
+  logger: { error: (msg: string) => void }
+): Promise<void> {
+  if (!batch) return;
+
+  try {
+    const enabled = await adminSettingsRepository.getSettingsValue('EnableLakeMemory').catch(() => false);
+    if (!enabled) return;
+
+    // Per-lake cap: collapses a burst of finalizes into a bounded number of full-lake extractions.
+    const { success: withinCap } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
+      lakeMemoryRateLimitKey(batch.dataLakeId),
+      LAKE_MEMORY_DAILY_CAP,
+      LAKE_MEMORY_RATE_LIMIT_WINDOW_MS
+    );
+    if (!withinCap) return;
+
+    await sendToQueue(Resource.lakeMemoryQueue.url, {
+      batchId: batch.id,
+      dataLakeId: batch.dataLakeId,
+      userId: batch.userId,
+    });
+  } catch (error) {
+    logger.error(`Error enqueueing lake memory extraction for batch ${batch.id}: ${error}`);
   }
 }

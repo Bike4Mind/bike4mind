@@ -221,7 +221,8 @@ export interface IDataLakeBatchFile {
  * "completed" batch look reopened. `'none'` covers both "never opted in" and append-mode
  * batches (which never offer the opt-in at all).
  */
-export type TaxonomyStatus = 'none' | 'queued' | 'analyzing' | 'ready' | 'applying' | 'applied' | 'failed';
+export type TaxonomyStatus =
+  'none' | 'queued' | 'analyzing' | 'ready' | 'applying' | 'applied' | 'failed' | 'dismissed';
 
 /** Non-terminal taxonomy phases - the ones the stuck-job reconciler may force to 'failed'. */
 export const TAXONOMY_NON_TERMINAL_STATUSES: TaxonomyStatus[] = ['queued', 'analyzing', 'applying'];
@@ -229,10 +230,11 @@ export const TAXONOMY_NON_TERMINAL_STATUSES: TaxonomyStatus[] = ['queued', 'anal
 /**
  * Every phase the Data Lakes list needs to show a badge for: still running, OR finished and
  * awaiting the user (ready to review / failed and dismissible). Excludes 'none' (never opted
- * in) and 'applied' (already resolved, nothing left to surface). Includes 'applying' so a
- * batch stuck there (e.g. an apply request that errored or hit the Lambda timeout mid-write)
- * stays visible to the list and the fast read-time reconciler instead of only being reachable
- * by the daily cron sweep.
+ * in) and both resolved terminal outcomes, 'applied' and 'dismissed' (nothing left to surface
+ * for either - a dismissed batch's suggestions are never shown again, same as an applied one).
+ * Includes 'applying' so a batch stuck there (e.g. an apply request that errored or hit the
+ * Lambda timeout mid-write) stays visible to the list and the fast read-time reconciler instead
+ * of only being reachable by the daily cron sweep.
  */
 export const TAXONOMY_ATTENTION_STATUSES: TaxonomyStatus[] = ['queued', 'analyzing', 'ready', 'applying', 'failed'];
 
@@ -250,6 +252,9 @@ export interface IDataLakeBatch {
   vectorizedFiles: number;
   failedFiles: number;
   failedFileNames?: string[];
+  /** Subset of failedFiles caused by chunk/vectorize (vs a browser upload failure) - see the
+   * schema comment on this field for why it's tracked separately. */
+  processingFailedFiles: number;
   skippedFiles: number;
 
   // Size tracking
@@ -300,7 +305,8 @@ export type IDataLakeBatchSummary = Omit<IDataLakeBatchDocument, 'files' | 'taxo
   taxonomySuggestions?: Omit<TaxonomyTagSet, 'fileAssignments'>;
 };
 
-export type BatchCounterField = 'uploadedFiles' | 'chunkedFiles' | 'vectorizedFiles' | 'failedFiles' | 'skippedFiles';
+export type BatchCounterField =
+  'uploadedFiles' | 'chunkedFiles' | 'vectorizedFiles' | 'failedFiles' | 'processingFailedFiles' | 'skippedFiles';
 
 export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatchDocument> {
   findActiveByUserId(userId: string): Promise<IDataLakeBatchSummary[]>;
@@ -326,6 +332,13 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    */
   claimFileStatus(batchId: string, fabFileId: string, from: BatchFileStatus[], to: BatchFileStatus): Promise<boolean>;
   incrementCounter(batchId: string, field: BatchCounterField, amount?: number): Promise<IDataLakeBatchDocument | null>;
+  /** Atomic multi-field variant of incrementCounter - use when two+ counters must land together
+   * (e.g. failedFiles + processingFailedFiles), so a crash between them can't leave one applied
+   * and the other not. */
+  incrementCounters(
+    batchId: string,
+    fields: Partial<Record<BatchCounterField, number>>
+  ): Promise<IDataLakeBatchDocument | null>;
   /**
    * Guarded terminal transition: set the batch terminal only if it is still
    * non-terminal. Returns the post-update doc to the single winner, null to losers,
@@ -345,6 +358,15 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
     batchId: string,
     status: Extract<BatchStatus, 'preparing' | 'uploading' | 'processing'>
   ): Promise<IDataLakeBatchDocument | null>;
+  /**
+   * Bump `updatedAt` on a still-non-terminal batch, without touching status or counters. Used
+   * by the chunk/vectorize handlers on a non-final SQS delivery attempt, so a batch that is
+   * legitimately mid-retry doesn't go idle long enough for the stuck-batch reconciler (which
+   * keys off `updatedAt`) to force it terminal before the next attempt lands. Guarded the same
+   * way as `setStatusIfActive`/`markTerminalIfActive`, so it can never resurrect a batch the
+   * pipeline already finalized.
+   */
+  touchIfActive(batchId: string): Promise<void>;
   /**
    * Guarded taxonomy-phase transition: set `taxonomyStatus` only if it is still one of `from`,
    * so a redelivered queue message or a race between the reconciler and a live worker can only

@@ -25,6 +25,7 @@ export * from './recomputeLakeStats';
 export * from './reconcileStuckBatches';
 export * from './reconcileStuckTaxonomy';
 export * from './applyTaxonomySuggestions';
+export * from './dismissTaxonomySuggestion';
 export * from './getDynamicDataLakeTags';
 export * from './embeddingMismatch';
 export * from './getDataLakePrompts';
