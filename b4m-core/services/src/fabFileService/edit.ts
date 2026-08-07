@@ -1,4 +1,10 @@
-import { IFabFileDocument, IFabFileRepository, IUserDocument, isImageServeable } from '@bike4mind/common';
+import {
+  IFabFileDocument,
+  IFabFileRepository,
+  IUserDocument,
+  isImageServeable,
+  FAB_FILE_CONTENT_REWRITE_PATCH,
+} from '@bike4mind/common';
 import { BadRequestError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { diffLines, type Change } from 'diff';
@@ -208,6 +214,7 @@ Return only the edited content without any markdown code blocks or explanations.
       fileUrlExpireAt: new Date(Date.now() + 3600 * 1000),
       filePath,
       updatedAt: new Date(),
+      ...FAB_FILE_CONTENT_REWRITE_PATCH,
     };
 
     await db.fabFiles.update(updatedFile);

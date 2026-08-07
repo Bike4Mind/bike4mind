@@ -9,14 +9,21 @@
  * write side was already populating it.
  *
  * This helper produces a preamble string the caller appends to the
- * first-iteration query. It mirrors the guards used by
- * `publishMementoCompletion`:
+ * first-iteration query. The caller resolves the memory policy once, via
+ * `resolveExecutionMementoGates`, and hands us the concrete `MementoGates` - the SAME resolver the
+ * write side (`publishMementoCompletion`) uses, so a per-request opt-out reads the same on both
+ * sides (#1337). It mirrors those guards:
  *
- * - the user is on NEITHER pipeline. V2 (if the user opted in) is tried first and is mutually
- *   exclusive with V1; V1 additionally requires `enableMementos` (user/admin).
- * - `parentExecutionId` set -> no retrieval. Subagent / DAG-child executions
- *   inherit the parent's materialized context via the existing handoff path
- *   and must not re-fetch (parity with the publish side).
+ * - neither gate is live -> no retrieval. V2 (`gates.v2`) is tried first and is mutually exclusive
+ *   with V1 at inject time; V1 (`gates.v1`) already folds in the admin setting and the request flag.
+ *   An explicit `enableMementos: false` resolves both gates off, so nothing is read.
+ * - `parentExecutionId` OR `spawnedByExecutionId` set -> no retrieval. Subagent / DAG-child
+ *   executions inherit the parent's materialized context via the existing handoff path and must not
+ *   re-fetch (parity with the publish side). Both fields must be checked: a BACKGROUND subagent is
+ *   created with `parentExecutionId` deliberately unset and `spawnedByExecutionId` set instead
+ *   (`agentExecutor.ts` child creation - it bills and counts independently), and `baseFields` never
+ *   copies the parent's `enableMementos`, so a child checked on `parentExecutionId` alone arrives
+ *   with `enableMementos: undefined` and resolves memory back ON despite the parent's opt-out.
  *
  * The caller (`processExecution` in `agentExecutor.ts`) gates on iteration 0
  * of a new execution - same gate as `maybeBuildFirstIterationQuery` - so
@@ -34,11 +41,12 @@ import type { IAgentExecution } from '@bike4mind/database';
 import { buildMemoryContext } from '@bike4mind/common';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import type { IApiKeyRepository, IMementoRepository, IAdminSettingsRepository } from '@bike4mind/common';
-import { mementoService } from '@bike4mind/services';
+import { mementoService, type MementoGates } from '@bike4mind/services';
+import { resolveExecutionMementoGates, type MementoGateExecution } from './resolveExecutionMementoGates';
 
 export type MementoRetrievalExecution = Pick<
   IAgentExecution,
-  'id' | 'userId' | 'query' | 'enableMementos' | 'parentExecutionId'
+  'id' | 'userId' | 'query' | 'parentExecutionId' | 'spawnedByExecutionId'
 >;
 
 export interface MementoRetrievalAdapters {
@@ -85,19 +93,26 @@ const buildV2Preamble = (facts: string[]): string => {
 
 export async function getFirstIterationMementosPreamble(
   execution: MementoRetrievalExecution,
+  gates: MementoGates,
   adapters: MementoRetrievalAdapters,
   logger: Logger
 ): Promise<MementosPreambleResult> {
-  if (execution.parentExecutionId) return EMPTY_RESULT;
+  if (execution.parentExecutionId || execution.spawnedByExecutionId) return EMPTY_RESULT;
 
   try {
     // Mementos V2: the two pipelines are mutually exclusive, exactly as in chat (MementoFeature). A V2
-    // user's memory must reach agent mode too - gating this on `enableMementos` alone is what left a
-    // V2-only user running un-personalized in agent mode while chat knew them perfectly well.
-    //
-    // V2 returns null for a user who is NOT on V2, which is what falls through to the V1 path below.
-    const v2 = await recallMementosV2(execution.userId, execution.query);
-    if (v2 !== null) {
+    // user's memory must reach agent mode too, but only when the resolved V2 gate allows it - an
+    // explicit per-request opt-out resolves `gates.v2` off, so V2 recall never runs (#1337). We hand
+    // recallMementosV2 the already-resolved opt-in so it does not look it up again.
+    // V2 and V1 are mutually exclusive at inject time. We hand recallMementosV2 the already-resolved
+    // opt-in as `enabled: true`, so it always returns an array here - its only `null` is the
+    // `if (!enabled)` short-circuit, which this branch has already ruled out. A V2-gated turn therefore
+    // resolves here and never falls through to the V1 path below.
+    // MUST STAY IN SYNC with `recallMementosV2`: the `!` below is only sound while `if (!enabled)` is
+    // that function's ONLY `return null`. A new null-return there would surface here as a caught
+    // TypeError and memory would quietly stop injecting, so add a branch here if one is ever added.
+    if (gates.v2) {
+      const v2 = (await recallMementosV2(execution.userId, execution.query, { enabled: true }))!;
       if (v2.length === 0) {
         logger.info('[Mementos V2] No relevant beliefs for first iteration', { executionId: execution.id });
         return EMPTY_RESULT;
@@ -110,7 +125,7 @@ export async function getFirstIterationMementosPreamble(
       return { preamble: buildV2Preamble(v2.map(({ fact }) => fact)), mementoIds: [] };
     }
 
-    if (!execution.enableMementos) return EMPTY_RESULT;
+    if (!gates.v1) return EMPTY_RESULT;
 
     const relevantMementos = await mementoService.getRelevantMementos(
       execution.userId,
@@ -150,4 +165,18 @@ export async function getFirstIterationMementosPreamble(
     });
     return EMPTY_RESULT;
   }
+}
+
+/**
+ * Resolve the memory policy and build the preamble, as ONE step - the read-side counterpart to
+ * `resolveAndPublishMementoCompletion`. The caller never holds a `MementoGates` value, so it cannot
+ * fabricate one; see that function's note for why that matters more than a wiring assertion (#1337).
+ */
+export async function resolveAndBuildMementosPreamble(
+  execution: MementoRetrievalExecution & MementoGateExecution,
+  adapters: MementoRetrievalAdapters,
+  logger: Logger
+): Promise<MementosPreambleResult> {
+  const gates = await resolveExecutionMementoGates(execution, adapters, logger);
+  return getFirstIterationMementosPreamble(execution, gates, adapters, logger);
 }

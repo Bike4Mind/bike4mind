@@ -42,6 +42,51 @@ export function createAiLatencySuite({
   // afterAll summary. Stays 'unknown' only if no prompt ran (e.g. all skipped).
   let resolvedModel = 'unknown';
 
+  // Deterministic path relative to this spec folder, not process.cwd() - in CI Playwright can run
+  // with a repo-root CWD, which would write outside apps/client/ and miss the artifact upload.
+  const resultsDir = path.resolve(__dirname, 'test-results', 'ai-latency');
+  const resultsPath = path.join(resultsDir, resultsFilename);
+
+  // Fold newly collected results into whatever is already on disk, then rewrite the summary. Called
+  // after every prompt (not only in afterAll) so a finished prompt's numbers are durable the instant
+  // it completes: a LATER prompt that times out makes Playwright recycle the worker, which resets
+  // this module's in-memory state - an afterAll that knew only in-memory results would then clobber
+  // the file with a partial (or empty) set (the observed `results: []`). Reading the file back and
+  // merging by id keeps each write monotonic. Safe without locking because the AI-latency suites run
+  // serially (PW_WORKERS=1 in e2e-ai-latency.yml), so there is never a concurrent writer.
+  function persistResults(model: string, newResults: PromptResult[]) {
+    fs.mkdirSync(resultsDir, { recursive: true });
+
+    let priorResults: PromptResult[] = [];
+    let priorModel = 'unknown';
+    try {
+      const prior = JSON.parse(fs.readFileSync(resultsPath, 'utf-8'));
+      if (Array.isArray(prior.results)) priorResults = prior.results;
+      if (typeof prior.model === 'string') priorModel = prior.model;
+    } catch {
+      // First prompt (no file yet) or an unreadable/partial file - start from an empty set.
+    }
+
+    // Dedupe by id, last write wins so a retry's result supersedes the original.
+    const results = [...new Map([...priorResults, ...newResults].map(r => [r.id, r])).values()];
+
+    const averageResponseTimeSec =
+      results.length > 0
+        ? Math.round((results.reduce((sum, r) => sum + r.responseTimeSec, 0) / results.length) * 1000) / 1000
+        : 0;
+
+    // Never downgrade an already-resolved model back to 'unknown' (a recycled worker starts fresh).
+    const output = {
+      model: model !== 'unknown' ? model : priorModel,
+      timestamp: new Date().toISOString(),
+      thresholdSec,
+      averageResponseTimeSec,
+      results,
+    };
+
+    fs.writeFileSync(resultsPath, JSON.stringify(output, null, 2));
+  }
+
   function prompt(index: number) {
     const scenario = selectedPrompts[index];
 
@@ -76,14 +121,17 @@ export function createAiLatencySuite({
         )
         .toBeTruthy();
 
-      collectedResults.push({
+      const result: PromptResult = {
         id: scenario.id,
         prompt: scenario.prompt,
         response: responseText,
         responseTimeMs,
         responseTimeSec: Math.round(responseTimeSec * 1000) / 1000,
         responseRateCharsPerSec,
-      });
+      };
+      collectedResults.push(result);
+      // Persist immediately so this prompt's numbers survive a later prompt's timeout/worker recycle.
+      persistResults(resolvedModel, [result]);
     });
   }
 
@@ -97,27 +145,9 @@ export function createAiLatencySuite({
     });
 
     test.afterAll(() => {
-      // Deduplicate by id - retried tests push a second entry; keep the last (retry result wins).
-      const results = [...new Map(collectedResults.map(r => [r.id, r])).values()];
-
-      const averageResponseTimeSec =
-        results.length > 0
-          ? Math.round((results.reduce((sum, r) => sum + r.responseTimeSec, 0) / results.length) * 1000) / 1000
-          : 0;
-
-      const output = {
-        model: resolvedModel,
-        timestamp: new Date().toISOString(),
-        thresholdSec,
-        averageResponseTimeSec,
-        results,
-      };
-
-      // Deterministic path relative to this spec folder, not process.cwd() - in CI Playwright can run
-      // with a repo-root CWD, which would write outside apps/client/ and miss the artifact upload.
-      const resultsDir = path.resolve(__dirname, 'test-results', 'ai-latency');
-      fs.mkdirSync(resultsDir, { recursive: true });
-      fs.writeFileSync(path.join(resultsDir, resultsFilename), JSON.stringify(output, null, 2));
+      // Final summary rewrite, folding this worker's in-memory results into whatever is on disk.
+      // Per-prompt persistence already survives worker recycling; this is the belt-and-suspenders pass.
+      persistResults(resolvedModel, collectedResults);
     });
 
     for (let i = 0; i < 3; i++) {

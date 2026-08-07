@@ -3,8 +3,25 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 import type { IFabFileDocument } from '@bike4mind/common';
-import { useDeleteAllFiles, useGetFabFilesBySessionId, useGetFabFilesByQuestId, useUpdateFabFile } from './fabFiles';
+import {
+  useBulkDeleteFiles,
+  useDeleteAllFiles,
+  useGetFabFilesBySessionId,
+  useGetFabFilesByQuestId,
+  useUpdateFabFile,
+} from './fabFiles';
 import useSessionLayout, { setPendingMessageFiles } from '@client/app/hooks/useSessionLayout';
+
+const toastSuccess = vi.fn();
+const toastError = vi.fn();
+const toastWarning = vi.fn();
+vi.mock('sonner', () => ({
+  toast: {
+    success: (...args: unknown[]) => toastSuccess(...args),
+    error: (...args: unknown[]) => toastError(...args),
+    warning: (...args: unknown[]) => toastWarning(...args),
+  },
+}));
 
 // Mock the axios-backed api context - we only care that the GET/DELETE is (or isn't) fired.
 const apiGet = vi.fn();
@@ -144,6 +161,71 @@ describe('useDeleteAllFiles', () => {
 
     const keys = invalidate.mock.calls.map(call => JSON.stringify((call[0] as { queryKey: unknown[] })?.queryKey));
     expect(keys).toContain(JSON.stringify(['file-tags']));
+  });
+});
+
+describe('useBulkDeleteFiles', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows a success toast when the batch actually removed something', async () => {
+    apiDelete.mockResolvedValue({
+      data: { message: 'Deleted 1 file(s)', results: { deleted: ['f1'], unshared: [], notFound: [], failed: [] } },
+    });
+
+    const { result } = renderHook(() => useBulkDeleteFiles(), { wrapper: makeWrapper() });
+    await act(async () => {
+      await result.current.mutateAsync(['f1']);
+    });
+
+    expect(toastSuccess).toHaveBeenCalledWith('Deleted 1 file(s)');
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  // Regression: a batch where every id was notFound (including the access-denied ids that server
+  // folds into notFound to avoid leaking their existence) used to render as a green success toast
+  // even though nothing was removed.
+  it('shows an error toast, not success, when nothing was actually removed', async () => {
+    apiDelete.mockResolvedValue({
+      data: {
+        message: '1 file(s) not found',
+        results: { deleted: [], unshared: [], notFound: ['f1'], failed: [] },
+      },
+    });
+
+    const { result } = renderHook(() => useBulkDeleteFiles(), { wrapper: makeWrapper() });
+    await act(async () => {
+      await result.current.mutateAsync(['f1']);
+    });
+
+    expect(toastError).toHaveBeenCalledWith('1 file(s) not found');
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  // Regression: a batch that deleted some files but also failed on others used to render a plain
+  // green success toast, masking a mostly-failed destructive operation.
+  it('shows a warning toast, not success, when some deletes failed alongside real deletions', async () => {
+    apiDelete.mockResolvedValue({
+      data: {
+        message: 'Deleted 1 file(s), Failed to process 9 file(s)',
+        results: {
+          deleted: ['f1'],
+          unshared: [],
+          notFound: [],
+          failed: Array.from({ length: 9 }, (_, i) => ({ id: `f${i + 2}`, error: 'boom' })),
+        },
+      },
+    });
+
+    const { result } = renderHook(() => useBulkDeleteFiles(), { wrapper: makeWrapper() });
+    await act(async () => {
+      await result.current.mutateAsync(['f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9', 'f10']);
+    });
+
+    expect(toastWarning).toHaveBeenCalledWith('Deleted 1 file(s), Failed to process 9 file(s)');
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
   });
 });
 

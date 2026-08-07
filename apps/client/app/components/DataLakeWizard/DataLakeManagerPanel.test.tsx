@@ -21,6 +21,23 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     useGetArchivedDataLakes: () => ({ data: undefined }),
     useGetDeletedDataLakes: () => ({ data: undefined }),
     useActiveDataLakeBatches: () => useActiveDataLakeBatches(),
+    useGetDataLakes: () => useGetDataLakes(),
+    // Per-lake files: only the selected lake queries (id != null).
+    useDataLakeFiles: (id: string | null) => ({
+      data: id ? { data: lakeFiles } : undefined,
+      isLoading: false,
+      isError: false,
+    }),
+    // Per-lake counts come from lakeFileCounts (membership), NOT from the per-prefix tag counts.
+    // The two disagree here on purpose: `theirs` has taxonomy tags but only 2 member files, and
+    // `mine` has member files with NO taxonomy tag at all - the shape that used to display 0.
+    useGetDataLakeTagCounts: () => ({
+      data: {
+        tagCounts: [],
+        uniqueArticleCounts: { total: 4, byPrefix: { 'lk:': 0, 'th:': 9 } },
+        lakeFileCounts: { 'datalake:mine': 3, 'datalake:theirs': 2 },
+      },
+    }),
   };
 });
 
@@ -60,29 +77,7 @@ const lakeFiles = [
   { id: 'f4', fileName: 'bare.md', tags: [{ name: 'datalake:mine' }, { name: 'lk:' }] },
 ];
 
-const useDataLakes = vi.fn(() => ({ data: [] as unknown[], isLoading: false }));
-vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
-  useDataLakes: () => useDataLakes(),
-  // Per-lake files: only the selected lake queries (id != null).
-  useDataLakeFiles: (id: string | null) => ({
-    data: id ? { data: lakeFiles } : undefined,
-    isLoading: false,
-    isError: false,
-  }),
-}));
-
-// Per-lake counts come from lakeFileCounts (membership), NOT from the per-prefix tag counts.
-// The two disagree here on purpose: `theirs` has taxonomy tags but only 2 member files, and
-// `mine` has member files with NO taxonomy tag at all - the shape that used to display 0.
-vi.mock('@client/app/hooks/data/fabFiles', () => ({
-  useGetDataLakeTagCounts: () => ({
-    data: {
-      tagCounts: [],
-      uniqueArticleCounts: { total: 4, byPrefix: { 'lk:': 0, 'th:': 9 } },
-      lakeFileCounts: { 'datalake:mine': 3, 'datalake:theirs': 2 },
-    },
-  }),
-}));
+const useGetDataLakes = vi.fn(() => ({ data: [] as unknown[], isLoading: false }));
 
 // Default (flag on) is established per-describe; tests override per-case.
 const isFeatureEnabled = vi.fn();
@@ -148,8 +143,8 @@ const rerenderPanel = (rerender: (ui: ReactNode) => void) =>
 beforeEach(() => {
   isFeatureEnabled.mockReset();
   isFeatureEnabled.mockReturnValue(true);
-  useDataLakes.mockReset();
-  useDataLakes.mockReturnValue({ data: [mineLake, theirsLake], isLoading: false });
+  useGetDataLakes.mockReset();
+  useGetDataLakes.mockReturnValue({ data: [mineLake, theirsLake], isLoading: false });
   archiveMutate.mockClear();
   useActiveDataLakeBatches.mockReset();
   useActiveDataLakeBatches.mockReturnValue({ data: [] });
@@ -221,7 +216,7 @@ describe('DataLakeManagerPanel - root view', () => {
   it('toggles back out of Discover - the one exit that needs no lake of your own to click', async () => {
     const user = userEvent.setup();
     // No lakes: selectLake, the only other route back to the overview, has no row to click.
-    useDataLakes.mockReturnValue({ data: [], isLoading: false });
+    useGetDataLakes.mockReturnValue({ data: [], isLoading: false });
     renderPanel();
     const discover = screen.getByTestId('datalake-manager-discover-btn');
     expect(discover).toHaveAttribute('aria-pressed', 'false');
@@ -352,7 +347,7 @@ describe('DataLakeManagerPanel - lake navigation', () => {
     fireEvent.click(screen.getByTestId('datalake-manager-lake-mine'));
     expect(screen.getByTestId('datalake-manager-lakeinfo')).toBeInTheDocument();
 
-    useDataLakes.mockReturnValue({ data: [theirsLake], isLoading: false });
+    useGetDataLakes.mockReturnValue({ data: [theirsLake], isLoading: false });
     rerender(
       <Wrapper>
         <DataLakeManagerPanel />

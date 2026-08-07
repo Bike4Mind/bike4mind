@@ -5,8 +5,9 @@ import { IBaseRepository, type IMongoDocument } from '.';
 /**
  * Lake lifecycle. Stable states (draft/active/archived/deleted) plus transitional
  * states (archiving/restoring/deleting) that exist to drive UI and make a crashed
- * mid-operation observable. draft -> active is one-way and happens implicitly on
- * first batch creation.
+ * mid-operation observable. draft -> active is one-way. It happens implicitly once the lake
+ * holds its first member file (see `activateIfDraft` below), and unconditionally when an
+ * archived or deleted lake is restored, which is how an empty lake can end up active.
  */
 export type DataLakeStatus = 'draft' | 'active' | 'archiving' | 'archived' | 'restoring' | 'deleting' | 'deleted';
 
@@ -166,6 +167,13 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   }): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
   /** Persist recomputed stats (source via IFabFileRepository.computeDataLakeStats). */
   setStats(id: string, stats: { fileCount: number; totalSizeBytes: number }): Promise<IDataLakeDocument | null>;
+  /**
+   * One-way draft -> active, the transition that makes a lake reachable from `findPublicLakes`
+   * and the `findActive*` retrieval arms. Guarded inside the query, so a caller holding a stale
+   * copy of the document cannot resurrect an archived or deleted lake. Returns whether this call
+   * was the one that flipped it.
+   */
+  activateIfDraft(id: string): Promise<boolean>;
   /**
    * Claim `filesDeletedAt` for a phase-1 teardown: writes `at` only if the lake carries no stamp,
    * and returns the stamp now in force - the existing one when a concurrent teardown or a crashed

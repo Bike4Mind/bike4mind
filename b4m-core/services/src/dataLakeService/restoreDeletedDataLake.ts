@@ -6,7 +6,7 @@ import type { UnarchiveResult } from './unarchiveDataLake';
 
 interface RestoreDeletedDataLakeAdapters {
   db: {
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'setStats'>;
+    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'setStats' | 'activateIfDraft'>;
     fabFiles: Pick<
       IFabFileRepository,
       'findDeletedByDataLakeTag' | 'findByContentHashesInDataLake' | 'undeleteByDataLakeTag' | 'computeDataLakeStats'

@@ -90,13 +90,55 @@ jobs:
       - name: Check user $lookup field projections
         run: node scripts/check-user-lookup-projection.mjs
 
+      # Resolve what "added" means for the two ASCII checks below.
+      #
+      # `pull_request.base.sha` is the base-branch head recorded when the PR was opened -
+      # NOT the fork point, and it does not move as the base branch advances. Both checks
+      # scan ADDED lines relative to that base, so on a long-lived PR every commit main
+      # gained in the meantime is attributed to the PR. That is not hypothetical: a PR
+      # opened 83 commits back failed this job on em-dashes that were already on main, in
+      # files it never touched, and no change to the PR could have cleared it.
+      #
+      # The real base is the merge base of the base branch and what we have checked out.
+      # On a `pull_request` run the checkout is the merge ref, so this resolves to the base
+      # branch tip and the diff is exactly the PR's net contribution. Falls back to the
+      # event's own sha for push / merge_group, and to the empty string if nothing resolves -
+      # which makes both scripts over-scan the whole tree rather than silently check nothing.
+      - name: Resolve base for the ASCII checks
+        id: ascii-base
+        # Both values arrive as env, never interpolated into the script body. `BASE_REF` is a
+        # branch name, and git permits `;`, `$()`, backticks, `|` and quotes in a ref, so an
+        # inline `${{ }}` would let a crafted base branch break out of the quoting and run
+        # arbitrary commands on the runner. Env values are passed as data and are never parsed
+        # by the shell, which is also the pattern the two checks below already used.
+        env:
+          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          resolved="$EVENT_BASE"
+          if [ -n "$BASE_REF" ]; then
+            if git fetch --no-tags --quiet origin "$BASE_REF" 2>/dev/null; then
+              if merge_base=$(git merge-base FETCH_HEAD HEAD 2>/dev/null); then
+                resolved="$merge_base"
+              fi
+            fi
+          fi
+          echo "base=$resolved" >> "$GITHUB_OUTPUT"
+          echo "ASCII checks diff against ${resolved:-<whole tree>} (event base was ${EVENT_BASE:-<none>})"
+
       # Mirrors the husky pre-commit guard so a `--no-verify` bypass is still caught.
-      # Each trigger exposes the base under a different key; the script over-scans the
-      # whole tree if none resolve, so a new-branch push (all-zero `before`) still checks.
       - name: Check for raw control bytes in source files
         run: bash scripts/check-no-control-bytes.sh --changed "$CONTROL_BYTES_BASE"
         env:
-          CONTROL_BYTES_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          CONTROL_BYTES_BASE: ${{ steps.ascii-base.outputs.base }}
+
+      # The other half of the ASCII-only rule. Scans ADDED lines only, so the pre-existing
+      # em-dashes in ~645 tracked files do not gate anything; same base resolution as above.
+      - name: Check for smart punctuation in added lines
+        run: bash scripts/check-no-smart-punctuation.sh --changed "$SMART_PUNCTUATION_BASE"
+        env:
+          SMART_PUNCTUATION_BASE: ${{ steps.ascii-base.outputs.base }}
 
       - name: Check deploy contract matches infra
         run: python3 scripts/check-deploy-contract.py

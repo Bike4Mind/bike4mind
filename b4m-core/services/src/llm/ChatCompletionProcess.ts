@@ -60,6 +60,8 @@ import {
   ITokenizer,
   getLastBuildDebugInfo,
   getSettingsByNames,
+  attachedContentExtractionBudget,
+  safeInputWindow,
 } from '@bike4mind/utils';
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
 // dependency (keeps it out of the CLI bundle). See issue #660.
@@ -106,6 +108,7 @@ import {
   ChatCompletionFeature,
   ContextSummarizationFeature,
   MementoFeature,
+  LakeMemoryFeature,
   OrganizationPromptFeature,
   SessionPromptFeature,
   KnowledgeRetrievalFeature,
@@ -125,7 +128,9 @@ import {
   buildTaggedContextMessages,
   filterByPromptMode,
   filterFeaturesByPromptMode,
+  PROMPT_SOURCE_METADATA,
   resolveForcedRetrieval,
+  SYSTEM_PROMPT_PRIORITY,
   toPromptDetails,
   type PromptSourceId,
 } from './systemPromptSources';
@@ -219,59 +224,20 @@ function assertNeverElisionSignal(signal: never): never {
 const DEFAULT_OUTPUT_MAX_TOKENS = 4096;
 
 /**
- * Usable input window: the context window less the output this request will reserve, less a safety
- * buffer. Deliberately NOT clamped at zero - the empty-prompt guard depends on seeing a non-positive
- * budget for a genuinely misconfigured text model.
- *
- * Image and video models return media rather than tokens, so their max_tokens is a prompt-length
- * limit and is never reserved as output - most media rows set it equal to contextWindow, Gemini's
- * image rows set it lower, and either way subtracting it would leave no room for the prompt itself.
- * Two callers need this figure - the assembly budget and the verbatim-history window - and they must
- * not drift apart.
- *
- * The static catalog tables are held to the positive-budget property by
- * modelCatalogInputBudget.test.ts, and a discovered claim that would break it for a TEXT row is
- * refused in modelDiscoveryService/catalogWrite. Neither covers a media row whose window arrives as
- * 0 from a feed, where the buffer below still makes this negative.
- */
-const safeInputWindow = (
-  modelInfo: ModelInfo,
-  requestedMaxTokens: number,
-  safetyBuffer = CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS
-): number => {
-  const contextLimit = modelInfo.contextWindow ?? 200000;
-  const modelMaxOutput = modelInfo.max_tokens ?? 16384;
-  const returnsMedia = modelInfo.type === 'image' || modelInfo.type === 'video';
-  const reservedOutput = returnsMedia ? 0 : Math.min(requestedMaxTokens, modelMaxOutput);
-  return contextLimit - reservedOutput - safetyBuffer;
-};
-
-/**
  * Share of the context budget this file assumes history will take when sizing a history count. It
  * does NOT mirror how buildAndSortMessages splits the budget: that depends on historyCount, giving
- * files 70% when history is unlimited and guaranteeing them a 35% floor otherwise.
+ * files 70% when history is unlimited and guaranteeing them a 35% floor otherwise - a floor measured
+ * against the budget BEFORE system instructions are charged to it, so it does not shrink as the system
+ * stack grows.
  */
 const HISTORY_BUDGET_PERCENTAGE = 0.3;
-/**
- * Share of the usable input window that attached-file content may be EXTRACTED into.
- * Kept a minority share so conversational history, which is what users notice losing
- * first, keeps the majority. See attachedFileTokenBudget at its only use site.
- *
- * Three different stages, easily confused. HISTORY_BUDGET_PERCENTAGE above sizes the
- * history MESSAGE COUNT before anything is fetched. Two constants in utils.ts govern
- * ASSEMBLY, trimming an already-extracted set to fit: KNOWLEDGE_FILE_TOKEN_ALLOCATION for
- * an unwindowed request, MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION as the floor for a windowed
- * one. This constant governs EXTRACTION - how much is read off disk at all - and is held
- * below the assembly share on purpose.
- */
-const ATTACHED_CONTENT_SHARE = 0.35;
-/**
- * Floor for the attached-content budget, as a share of the raw input window. Applies
- * when subtracting SYSTEM_PROMPT_RESERVE would drive the budget to zero, which a small
- * local model does routinely. See attachedFileTokenBudget for why zero is the dangerous
- * value rather than the safe one.
- */
-const MIN_ATTACHED_CONTENT_SHARE = 0.15;
+// Three stages decide how much attached content survives, and they are easily confused.
+// HISTORY_BUDGET_PERCENTAGE above sizes the history MESSAGE COUNT before anything is fetched. The other
+// two now live together in @bike4mind/utils contextBudget, because the relationship between them is
+// what matters: EXTRACTION reads content off disk, ASSEMBLY trims what was read, and when extraction
+// is the smaller of the two the assembly floor is what a file actually gets. On a small window that
+// held only after the reserve was bounded; above ~80k it does not hold at all, and contextBudget spells
+// out why that is tolerable there.
 
 /**
  * Below this per-doc even-split inline depth (tokens), inlining a RETRIEVABLE data-lake corpus
@@ -711,6 +677,7 @@ export class ChatCompletionProcess {
   public db: IChatCompletionServiceOptions['db'];
   public invokeCreateMemento: IChatCompletionServiceOptions['invokeCreateMemento'];
   public recallMementosV2: IChatCompletionServiceOptions['recallMementosV2'];
+  public recallLakeMemory: IChatCompletionServiceOptions['recallLakeMemory'];
   public loadSystemPromptById: IChatCompletionServiceOptions['loadSystemPromptById'];
   public logger: Logger;
   public user: IUserDocument;
@@ -775,6 +742,7 @@ export class ChatCompletionProcess {
     this.db = options.db;
     this.invokeCreateMemento = options.invokeCreateMemento;
     this.recallMementosV2 = options.recallMementosV2;
+    this.recallLakeMemory = options.recallLakeMemory;
     this.loadSystemPromptById = options.loadSystemPromptById;
     this.storage = options.storage;
     this.imageGenerateStorage = options.imageGenerateStorage;
@@ -961,6 +929,10 @@ export class ChatCompletionProcess {
       // unresolvable the semantic arm cannot run at all (the tool falls back to metadata-only keyword
       // search), so nothing is deferrable. Closes the tag-only gap; #1411 hardened the retrieval-side
       // reads this now relies on. `vectorizedChunkCount >= chunkCount` is the usable-data condition.
+      // MUST STAY IN SYNC with `isFabFileCitable` (apps/client/server/memory/lakeSourceReachability.ts),
+      // the #1440 lake-memory copy of this same "can the knowledge tool actually reach this doc"
+      // predicate (fully vectorized + same embedding model + live/not-excluded). The two live in
+      // different packages with no shared symbol; change one, change the other.
       const queryEmbeddingModel = getSettingsValue('defaultEmbeddingModel', defaultAdminSettings);
       const retrievableIds = files
         .filter(file => {
@@ -2029,26 +2001,18 @@ export class ChatCompletionProcess {
       // answers silently shrank your own retrieval. Deriving it from the input window
       // instead means a large-context model can actually use one.
       //
-      // Held below the assembly budget on purpose. Extraction estimates at
-      // CHARS_PER_TOKEN while assembly re-counts with the real tokenizer, so leaving
-      // headroom keeps anything extracted from being dropped again downstream.
+      // Meant to sit below the assembly budget, because extraction estimates at CHARS_PER_TOKEN while
+      // assembly re-counts with the real tokenizer, so headroom keeps anything extracted from being
+      // dropped again downstream. It does on the small windows that matter, but not universally: see
+      // contextBudget, where the flat-reserve-versus-percentage-buffer crossover is spelled out.
       //
-      // The floor is load-bearing, not defensive. On a small local model the reserve
-      // subtraction goes negative, and a budget of 0 does NOT mean "send nothing" to
-      // processFabFilesServer - it means "no budget given", which restores a flat
-      // per-file cap applied once per file. Three files would then be handed more
-      // content than the whole input window. Flooring at a share of the raw window
-      // keeps the per-file division in effect, and assembly trims from there.
-      // Outer clamp is not redundant: on a tiny context window maxSafeInputTokens is
-      // itself negative (contextLimit - output cap - buffer), so both inner terms are
-      // negative and a negative budget would reach processFabFilesServer.
-      const attachedFileTokenBudget = Math.max(
-        0,
-        Math.max(
-          Math.floor(maxSafeInputTokens * MIN_ATTACHED_CONTENT_SHARE),
-          Math.floor((maxSafeInputTokens - SYSTEM_PROMPT_RESERVE) * ATTACHED_CONTENT_SHARE)
-        )
-      );
+      // SYSTEM_PROMPT_RESERVE is bounded to a share of the window inside this helper. Flat, it was
+      // most of an 8k-class budget, which collapsed the formula onto its emergency floor and
+      // head-sliced a 4k character file to ~2.6k before assembly could apply its own floor - so the
+      // floor was unreachable and raising it changed nothing. Bounded at the use site rather than at
+      // the constant because the history sizing above also reads it, where a smaller reserve would
+      // fetch MORE history to compete with the file.
+      const attachedFileTokenBudget = attachedContentExtractionBudget(maxSafeInputTokens, SYSTEM_PROMPT_RESERVE);
 
       // Once the knowledge tools are offered (above), stop ALSO force-inlining a large retrievable
       // corpus - the even-split inline goes breadth-shallow and the tool can fetch the relevant
@@ -2510,6 +2474,13 @@ export class ChatCompletionProcess {
       });
       const admittedContextMessages = filterByPromptMode(taggedContextMessages, promptMode);
       const contextAndSystemMessages: IMessage[] = admittedContextMessages.map(t => t.message);
+      // Carries each message's source across into the builder, which sees only an IMessage[] and so
+      // could otherwise decide what to drop on array position alone. Keyed by reference, which survives
+      // the map above; if a source ever contributed the same object twice the last tag would win, and
+      // both entries would then hold the same priority anyway.
+      const systemPromptPriorities = new Map<IMessage, number>(
+        admittedContextMessages.map(t => [t.message, SYSTEM_PROMPT_PRIORITY[t.source]])
+      );
       const currentUserPromptMessages = [{ role: 'user' as const, content: effectiveUserPrompt }];
       // An explicit mode also excludes the admin templates this helper appends downstream
       // (FormatPromptTemplate, image prompt) - they are invisible from the assembly above, so the
@@ -2521,6 +2492,7 @@ export class ChatCompletionProcess {
         verbose: false,
         skipAdminPromptTemplates: Boolean(promptMode),
         imageGenerationAvailable,
+        systemMessagePriority: (message: IMessage) => systemPromptPriorities.get(message),
       };
       let messages = await buildAndSortMessages(
         previousMessages,
@@ -2735,14 +2707,42 @@ export class ChatCompletionProcess {
       // only when enhanced telemetry is on - so the API layer can report which prompts fed a
       // completion instead of leaving callers to infer it from behavior. Guarded: a counting
       // failure must degrade to a missing breakdown, never a failed completion.
+      // What actually reached the model, by reference, read off the final payload so it accounts for
+      // overflow recovery too. The budget can drop a system message deliberately now, so being in the
+      // admitted stack no longer means being in the prompt, and every inclusion claim below has to be
+      // read from here rather than from the assembly.
+      const deliveredMessages = new Set<IMessage>(messages);
+      const droppedSources = admittedContextMessages
+        .filter(t => t.message.role === 'system')
+        .reduce<Map<PromptSourceId, boolean>>(
+          (kept, t) => kept.set(t.source, (kept.get(t.source) ?? false) || deliveredMessages.has(t.message)),
+          new Map()
+        );
+      const shedSourceNames = [...droppedSources]
+        .filter(([, survived]) => !survived)
+        .map(([source]) => PROMPT_SOURCE_METADATA[source].name);
+      if (shedSourceNames.length > 0) {
+        // Deliberate, but not something to leave silent: the assistant's behaviour changes and only
+        // this line says which instructions it lost.
+        logger.warn(
+          `📊 System prompts dropped to fit the input budget (${shedSourceNames.length}): ${shedSourceNames.join(', ')}`
+        );
+      }
+
       let systemPromptDetails: SystemPromptDetail[] | undefined;
       try {
         const floorSources: PromptSourceId[] = ['artifactEmission', 'helpCenter'];
         systemPromptDetails = await toPromptDetails(
           admittedContextMessages.filter(t => !floorSources.includes(t.source)),
-          messages => calculateTotalTokenLength(messages, tokenCalcOptions)
+          messages => calculateTotalTokenLength(messages, tokenCalcOptions),
+          deliveredMessages
         );
+        // Two different questions, and the floor rows need both: whether the gates admitted a block at
+        // all, and whether it survived the budget. Collapsing them would report a block the window could
+        // not fit as though an admin had switched it off.
         const admitted = (source: PromptSourceId) => admittedContextMessages.some(t => t.source === source);
+        const delivered = (source: PromptSourceId) =>
+          admittedContextMessages.some(t => t.source === source && deliveredMessages.has(t.message));
         systemPromptDetails.push(
           ...(await buildAlwaysOnFloorDetails(
             {
@@ -2752,6 +2752,8 @@ export class ChatCompletionProcess {
               // the help-center block must surface the same way: excluded, zero tokens.
               isLocalModel: !admitted('helpCenter'),
               helpCenterContent,
+              artifactEmissionDelivered: delivered('artifactEmission'),
+              helpCenterDelivered: delivered('helpCenter'),
             },
             content => calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions)
           ))
@@ -5190,6 +5192,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     const adminSettingsEnableMementos = getSettingsValue('EnableMementos', adminSettings);
     const adminSettingsEnableQuestMaster = getSettingsValue('EnableQuestMaster', adminSettings);
     const adminSettingsEnableAgents = getSettingsValue('EnableAgents', adminSettings);
+    const adminSettingsEnableLakeMemory = getSettingsValue('EnableLakeMemory', adminSettings);
     const adminSettingsAutoNameNotebook = getSettingsValue('AutoNameNotebook', adminSettings);
 
     // Only build features that are in the optimized list
@@ -5298,6 +5301,16 @@ When using tools that require file IDs (like edit_image), use the ID shown above
         'knowledgeRetrieval',
         new KnowledgeRetrievalFeature(this, retrievalTags, citationStyle, retrievalFilter)
       );
+
+      // Lake memory hot-card (#1440) rides the same Data-Lake toggle: a durable identity/context layer
+      // alongside the forced chunk retrieval. Gated on the SAME `EnableLakeMemory` flag as the producer,
+      // so the flag is a complete kill-switch for BOTH sides: turning it off stops new extraction AND
+      // stops injecting already-extracted beliefs (otherwise a lake extracted while it was on would keep
+      // being read forever). Also needs the host to have wired the app-layer ledger read.
+      if (adminSettingsEnableLakeMemory && this.recallLakeMemory) {
+        this.logger.log('  - Enabling LakeMemory (hot-card) feature');
+        this.features.set('lakeMemory', new LakeMemoryFeature(this, retrievalTags, retrievalFilter));
+      }
     }
 
     this.logger.log(`🛠️ Features enabled: ${Array.from(this.features.keys()).join(', ')}`);
