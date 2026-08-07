@@ -21,9 +21,7 @@ export const KnowledgeChunkControls: React.FC<IKnowledgeChunkControlsProps> = ({
   // 2100) where they used to differ by 5% - so a cold mount would silently chunk at a different
   // granularity than a warm one. The effect below resyncs if the setting arrives after mount.
   const configuredChunkSize = useGetSettingsValue('DefaultChunkSize');
-  const [chunkSize, setChunkSize] = useState<number>(
-    Number(configuredChunkSize) || DEFAULT_PASSAGE_TOKEN_TARGET
-  );
+  const [chunkSize, setChunkSize] = useState<number>(Number(configuredChunkSize) || DEFAULT_PASSAGE_TOKEN_TARGET);
   const [chunkSizeDisplay, setChunkSizeDisplay] = useState<string>(`${chunkSize} tokens`);
   const queryClient = useQueryClient();
   const [recheckingVectorization, setRecheckingVectorization] = useState<boolean>(false);

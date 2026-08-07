@@ -371,7 +371,7 @@ describe('NotionTokenManager', () => {
         vi.useRealTimers();
       }
 
-      expect(mockInvokeMcpHandler).toHaveBeenCalledTimes(2);
+      expect(mockInvokeMcpHandler).toHaveBeenCalledTimes(3);
       // Only the envVariables update ran; no tools/toolSchemas write happened
       expect(mockMcpUpdate).toHaveBeenCalledTimes(1);
       expect(mockMcpUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ toolSchemas: expect.anything() }));

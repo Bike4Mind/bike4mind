@@ -250,6 +250,9 @@ export function foldEvents(chain: readonly MemoryEvent[], options: FoldOptions =
         evidenceTier: tier,
         confidence: TIER_CONFIDENCE[tier],
         derivedFrom: [e.hash],
+        // An assert replaces content, so its source docs replace the belief's provenance too (ids,
+        // not plaintext, so unaffected by shred). Enables the source-reachability gate at read time.
+        ...(e.sources?.length ? { sources: [...e.sources] } : {}),
         lastAffirmedAt: e.at,
       });
     } else if (existing) {
@@ -264,6 +267,11 @@ export function foldEvents(chain: readonly MemoryEvent[], options: FoldOptions =
         // already has - but it does backfill one for a belief asserted before embeddings were carried.
         ...(!existing.embedding?.length && e.embedding?.length ? { embedding: e.embedding } : {}),
         derivedFrom: [...existing.derivedFrom, e.hash],
+        // An affirm re-witnesses the claim, possibly from another doc, so its sources ADD to the
+        // belief's provenance (union, deduped) - matching how derivedFrom accumulates affirms.
+        ...(existing.sources?.length || e.sources?.length
+          ? { sources: [...new Set([...(existing.sources ?? []), ...(e.sources ?? [])])] }
+          : {}),
         lastAffirmedAt: e.at,
       });
     }

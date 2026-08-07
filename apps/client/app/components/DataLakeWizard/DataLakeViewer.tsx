@@ -7,8 +7,6 @@ import {
   DialogContent,
   DialogTitle,
   IconButton,
-  Input,
-  List,
   ListItem,
   ListItemButton,
   ListItemContent,
@@ -18,7 +16,6 @@ import {
   Tooltip,
   Typography,
 } from '@mui/joy';
-import SearchIcon from '@mui/icons-material/Search';
 import SortByAlphaIcon from '@mui/icons-material/SortByAlpha';
 import FolderIcon from '@mui/icons-material/Folder';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
@@ -28,16 +25,16 @@ import ChatIcon from '@mui/icons-material/Chat';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
-import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
+import { buildTagTree } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { useGetFabFileContent } from '@client/app/hooks/data/fabFiles';
-import {
-  useDataLakeFiles,
-  useReprocessFabFile,
-  useRemoveFileFromDataLake,
-} from '@client/app/hooks/data/dataLakeWizard';
+import { useDataLakeFiles, useReprocessFabFile, useRemoveFileFromDataLake } from '@client/app/hooks/data/dataLakes';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
 import type { IFabFileDocument } from '@bike4mind/common';
 import { satisfiesTagPrefix } from '@bike4mind/common';
+import DataLakeTreeView, {
+  UNCATEGORIZED_KEY,
+  type DataLakeTreeChrome,
+} from '@client/app/components/datalake/DataLakeTreeView';
 
 // Utilities
 
@@ -160,10 +157,6 @@ export default function DataLakeViewer({
 
 // Tree Sidebar
 
-// Synthetic category for lake files that carry no prefix-matching tag (e.g.
-// appended/meta-tag-only files), so every file is always reachable in the viewer.
-const UNCATEGORIZED_KEY = '__uncategorized__';
-
 interface TreeSidebarProps {
   tree: ReturnType<typeof buildTagTree>;
   articles: IFabFileDocument[];
@@ -187,22 +180,6 @@ function TreeSidebar({
   isLoading,
   isError,
 }: TreeSidebarProps) {
-  const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<'count' | 'alpha'>('count');
-
-  const currentNodes = useMemo(() => getNodesAtPath(tree, breadcrumb), [tree, breadcrumb]);
-
-  const filteredNodes = useMemo(() => {
-    let nodes = currentNodes;
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      nodes = nodes.filter(node => node.segment.toLowerCase().includes(q));
-    }
-    return [...nodes].sort((a, b) =>
-      sortBy === 'count' ? b.fileCount - a.fileCount : a.segment.localeCompare(b.segment)
-    );
-  }, [currentNodes, searchQuery, sortBy]);
-
   // Files in the lake with no prefix-matching (non-meta) tag - surfaced under "Uncategorized".
   // Shares the server's predicate so this bucket holds exactly the files the write doors and the
   // backfill consider uncategorized; a local copy already drifted on the bare-prefix case.
@@ -221,164 +198,125 @@ function TreeSidebar({
     [articles, prefixNorm]
   );
 
-  const isUncategorized = breadcrumb.length === 1 && breadcrumb[0] === UNCATEGORIZED_KEY;
-  const leafTag = !isUncategorized && breadcrumb.length > 0 && currentNodes.length === 0 ? breadcrumb.join(':') : null;
-  const showFiles = isUncategorized || !!leafTag;
-  const files = useMemo(() => {
-    if (isUncategorized) return uncategorizedFiles;
-    if (!leafTag) return [];
-    return [...articles]
-      .filter(f => (f.tags ?? []).some(t => t.name === leafTag))
-      .sort((a, b) => a.fileName.localeCompare(b.fileName));
-  }, [isUncategorized, uncategorizedFiles, leafTag, articles]);
+  const chrome: DataLakeTreeChrome = {
+    containerSx: {
+      width: 280,
+      minWidth: 280,
+      borderRight: '1px solid',
+      borderColor: 'divider',
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+    },
+    toolbarSx: { p: 1.5, pb: 1, display: 'flex', gap: 0.5, alignItems: 'center' },
+    searchPlaceholder: 'Filter...',
+    searchSx: { fontSize: '13px', flex: 1 },
+    renderSortButton: (sortBy, toggle) => (
+      <Tooltip title={sortBy === 'count' ? 'Sort: by count (click for A-Z)' : 'Sort: A-Z (click for count)'} size="sm">
+        <IconButton
+          size="sm"
+          variant={sortBy === 'alpha' ? 'soft' : 'plain'}
+          color="neutral"
+          onClick={toggle}
+          data-testid="datalake-sort-toggle"
+          data-sort={sortBy}
+          sx={{ flexShrink: 0 }}
+        >
+          <SortByAlphaIcon sx={{ fontSize: 18 }} />
+        </IconButton>
+      </Tooltip>
+    ),
+    renderBackRow: (label, onBack) => (
+      <ListItemButton onClick={onBack} sx={{ px: 1.5, py: 0.75, gap: 1, minHeight: 36 }} data-testid="datalake-back">
+        <ArrowBackIcon sx={{ fontSize: 16, color: 'text.tertiary' }} />
+        <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+          {label}
+        </Typography>
+      </ListItemButton>
+    ),
+    scrollSx: { flex: 1, overflow: 'auto' },
+    nodeListSx: { '--ListItem-paddingX': '12px', '--ListItem-paddingY': '4px' },
+    fileListSx: { '--ListItem-paddingX': '12px', '--ListItem-paddingY': '6px' },
+    renderNodeRow: (node, _depth, onOpen) => (
+      <ListItem key={node.segment}>
+        <ListItemButton
+          onClick={onOpen}
+          sx={{ borderRadius: 'sm', gap: 1 }}
+          data-testid={`datalake-node-${node.segment}`}
+        >
+          {node.children.length > 0 ? (
+            <FolderIcon sx={{ fontSize: 18, color: 'warning.400' }} />
+          ) : (
+            <FolderOpenIcon sx={{ fontSize: 18, color: 'warning.300' }} />
+          )}
+          <ListItemContent>
+            <Typography level="body-sm" sx={{ fontWeight: 'md' }}>
+              {humanizeSegment(node.segment)}
+            </Typography>
+          </ListItemContent>
+          <Chip size="sm" variant="soft" color="neutral" sx={{ minHeight: 20, fontSize: '11px' }}>
+            {node.fileCount}
+          </Chip>
+        </ListItemButton>
+      </ListItem>
+    ),
+    renderFileRow: (file, selected, onSelect) => (
+      <ListItem key={file.id}>
+        <ListItemButton
+          selected={selected}
+          onClick={onSelect}
+          sx={{ borderRadius: 'sm', gap: 1 }}
+          data-testid={`datalake-file-${file.id}`}
+        >
+          <ArticleIcon sx={{ fontSize: 16, color: 'text.tertiary', flexShrink: 0 }} />
+          <ListItemContent>
+            <Typography level="body-xs" noWrap sx={{ fontWeight: selected ? 'lg' : undefined }}>
+              {file.fileName.replace(/\.[^/.]+$/, '')}
+            </Typography>
+          </ListItemContent>
+        </ListItemButton>
+      </ListItem>
+    ),
+    humanize: segment => humanizeSegment(segment),
+    allCategoriesLabel: 'All Categories',
+    emptyFilesLabel: 'No files found',
+    errorLabel: 'Failed to load files',
+  };
 
   return (
-    <Box
-      data-testid="datalake-tree"
-      sx={{
-        width: 280,
-        minWidth: 280,
-        borderRight: '1px solid',
-        borderColor: 'divider',
-        display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
+    <DataLakeTreeView
+      tree={tree}
+      articles={articles}
+      breadcrumb={breadcrumb}
+      onNavigate={onNavigate}
+      selectedFileId={selectedFileId}
+      onSelectFile={onSelectFile}
+      isLoading={isLoading}
+      isError={isError}
+      chrome={chrome}
+      uncategorized={{
+        files: uncategorizedFiles,
+        renderRow: (count, onOpen) => (
+          <ListItem key={UNCATEGORIZED_KEY}>
+            <ListItemButton
+              onClick={onOpen}
+              sx={{ borderRadius: 'sm', gap: 1 }}
+              data-testid="datalake-node-uncategorized"
+            >
+              <FolderOpenIcon sx={{ fontSize: 18, color: 'neutral.400' }} />
+              <ListItemContent>
+                <Typography level="body-sm" sx={{ fontWeight: 'md', fontStyle: 'italic', color: 'text.secondary' }}>
+                  Uncategorized
+                </Typography>
+              </ListItemContent>
+              <Chip size="sm" variant="soft" color="neutral" sx={{ minHeight: 20, fontSize: '11px' }}>
+                {count}
+              </Chip>
+            </ListItemButton>
+          </ListItem>
+        ),
       }}
-    >
-      <Box sx={{ p: 1.5, pb: 1, display: 'flex', gap: 0.5, alignItems: 'center' }}>
-        <Input
-          size="sm"
-          placeholder="Filter..."
-          startDecorator={<SearchIcon sx={{ fontSize: 18 }} />}
-          value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
-          sx={{ fontSize: '13px', flex: 1 }}
-        />
-        <Tooltip
-          title={sortBy === 'count' ? 'Sort: by count (click for A-Z)' : 'Sort: A-Z (click for count)'}
-          size="sm"
-        >
-          <IconButton
-            size="sm"
-            variant={sortBy === 'alpha' ? 'soft' : 'plain'}
-            color="neutral"
-            onClick={() => setSortBy(prev => (prev === 'count' ? 'alpha' : 'count'))}
-            sx={{ flexShrink: 0 }}
-          >
-            <SortByAlphaIcon sx={{ fontSize: 18 }} />
-          </IconButton>
-        </Tooltip>
-      </Box>
-
-      {breadcrumb.length > 0 && (
-        <ListItemButton
-          onClick={() => onNavigate(breadcrumb.slice(0, -1))}
-          sx={{ px: 1.5, py: 0.75, gap: 1, minHeight: 36 }}
-        >
-          <ArrowBackIcon sx={{ fontSize: 16, color: 'text.tertiary' }} />
-          <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-            {breadcrumb.length === 1 ? 'All Categories' : humanizeSegment(breadcrumb[breadcrumb.length - 2])}
-          </Typography>
-        </ListItemButton>
-      )}
-
-      <Box sx={{ flex: 1, overflow: 'auto' }}>
-        {isError ? (
-          <Box sx={{ p: 2, textAlign: 'center' }}>
-            <Typography level="body-xs" sx={{ color: 'danger.400' }}>
-              Failed to load files
-            </Typography>
-          </Box>
-        ) : isLoading ? (
-          <Box sx={{ p: 1.5, display: 'flex', flexDirection: 'column', gap: 1 }}>
-            {[1, 2, 3, 4].map(i => (
-              <Skeleton key={i} variant="rectangular" height={32} sx={{ borderRadius: 'sm' }} />
-            ))}
-          </Box>
-        ) : showFiles ? (
-          <List size="sm" sx={{ '--ListItem-paddingX': '12px', '--ListItem-paddingY': '6px' }}>
-            {files.length === 0 ? (
-              <Box sx={{ p: 2, textAlign: 'center' }}>
-                <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                  No files found
-                </Typography>
-              </Box>
-            ) : (
-              files.map(file => (
-                <ListItem key={file.id}>
-                  <ListItemButton
-                    selected={selectedFileId === file.id}
-                    onClick={() => onSelectFile(file)}
-                    sx={{ borderRadius: 'sm', gap: 1 }}
-                  >
-                    <ArticleIcon sx={{ fontSize: 16, color: 'text.tertiary', flexShrink: 0 }} />
-                    <ListItemContent>
-                      <Typography
-                        level="body-xs"
-                        noWrap
-                        sx={{ fontWeight: selectedFileId === file.id ? 'lg' : undefined }}
-                      >
-                        {file.fileName.replace(/\.[^/.]+$/, '')}
-                      </Typography>
-                    </ListItemContent>
-                  </ListItemButton>
-                </ListItem>
-              ))
-            )}
-          </List>
-        ) : (
-          <List size="sm" sx={{ '--ListItem-paddingX': '12px', '--ListItem-paddingY': '4px' }}>
-            {filteredNodes.map(node => (
-              <ListItem key={node.segment}>
-                <ListItemButton
-                  onClick={() => onNavigate([...breadcrumb, node.segment])}
-                  sx={{ borderRadius: 'sm', gap: 1 }}
-                >
-                  {node.children.length > 0 ? (
-                    <FolderIcon sx={{ fontSize: 18, color: 'warning.400' }} />
-                  ) : (
-                    <FolderOpenIcon sx={{ fontSize: 18, color: 'warning.300' }} />
-                  )}
-                  <ListItemContent>
-                    <Typography level="body-sm" sx={{ fontWeight: 'md' }}>
-                      {humanizeSegment(node.segment)}
-                    </Typography>
-                  </ListItemContent>
-                  <Chip size="sm" variant="soft" color="neutral" sx={{ minHeight: 20, fontSize: '11px' }}>
-                    {node.fileCount}
-                  </Chip>
-                </ListItemButton>
-              </ListItem>
-            ))}
-
-            {/* Fallback bucket: files with no prefix-matching tag, so nothing is hidden. */}
-            {breadcrumb.length === 0 && !searchQuery && uncategorizedFiles.length > 0 && (
-              <ListItem key={UNCATEGORIZED_KEY}>
-                <ListItemButton onClick={() => onNavigate([UNCATEGORIZED_KEY])} sx={{ borderRadius: 'sm', gap: 1 }}>
-                  <FolderOpenIcon sx={{ fontSize: 18, color: 'neutral.400' }} />
-                  <ListItemContent>
-                    <Typography level="body-sm" sx={{ fontWeight: 'md', fontStyle: 'italic', color: 'text.secondary' }}>
-                      Uncategorized
-                    </Typography>
-                  </ListItemContent>
-                  <Chip size="sm" variant="soft" color="neutral" sx={{ minHeight: 20, fontSize: '11px' }}>
-                    {uncategorizedFiles.length}
-                  </Chip>
-                </ListItemButton>
-              </ListItem>
-            )}
-
-            {filteredNodes.length === 0 && !(breadcrumb.length === 0 && uncategorizedFiles.length > 0) && (
-              <Box sx={{ p: 2, textAlign: 'center' }}>
-                <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                  {searchQuery ? 'No matches' : 'No categories'}
-                </Typography>
-              </Box>
-            )}
-          </List>
-        )}
-      </Box>
-    </Box>
+    />
   );
 }
 

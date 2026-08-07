@@ -677,7 +677,7 @@ const OrganizationsTab: React.FC = () => {
       {/* Organization Profile Modal */}
       {selectedOrg && (
         <Modal open={!!selectedOrg} onClose={() => setSelectedOrg(null)}>
-          <ModalDialog size="lg">
+          <ModalDialog size="lg" sx={{ maxHeight: '80vh', overflow: 'auto' }}>
             <ModalClose />
             <OrganizationProfileUpdated
               org={selectedOrg}

@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   findByDatalakeTag: vi.fn(),
   computeDataLakeStats: vi.fn(),
   setStats: vi.fn(),
+  activateIfDraft: vi.fn(),
   storageDelete: vi.fn(),
 }));
 
@@ -149,6 +150,79 @@ describe('bulk-delete - data-lake stats', () => {
     // The unshared file's lake must not be dragged into the recompute: its membership never moved.
     expect(h.findByDatalakeTag).toHaveBeenCalledTimes(1);
     expect(h.findByDatalakeTag).toHaveBeenCalledWith(LAKE.datalakeTag);
+  });
+});
+
+describe('bulk-delete - not-found reporting', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.userFindById.mockResolvedValue({ id: OWNER });
+    h.findAllWithKnowledgeId.mockResolvedValue([]);
+  });
+
+  it('reports a genuinely missing file under notFound, not silently', async () => {
+    h.findById.mockResolvedValue(null);
+    h.findByIdAndUserId.mockResolvedValue(null);
+    const { res, json } = makeRes();
+
+    await run(['507f1f77bcf86cd799439011'], res);
+
+    const body = json.mock.calls[0][0];
+    expect(body.results.notFound).toEqual(['507f1f77bcf86cd799439011']);
+    expect(body.message).toBe('1 file(s) not found');
+  });
+
+  it('reports a file the actor has no access to under the same notFound bucket, not a distinct "denied" one', async () => {
+    // Exists, but the actor is neither owner nor in the share list. The response must not let a
+    // caller distinguish this from genuine absence - that would let bulk-delete be used to probe
+    // for other users' file ids (see fabFileService/get.ts et al for the same no-enumeration rule).
+    const inaccessible = { ...memberFile('507f1f77bcf86cd799439011', 'someone-else'), users: [] };
+    h.findById.mockResolvedValue(inaccessible);
+    h.findByIdAndUserId.mockResolvedValue(null);
+    const { res, json } = makeRes();
+
+    await run(['507f1f77bcf86cd799439011'], res);
+
+    const body = json.mock.calls[0][0];
+    expect(body.results.notFound).toEqual(['507f1f77bcf86cd799439011']);
+    expect(body.results).not.toHaveProperty('denied');
+    expect(body.message).toBe('1 file(s) not found');
+  });
+
+  it('composes the message correctly when a batch deletes, not-founds, and fails all at once', async () => {
+    const DELETED_ID = '507f1f77bcf86cd799439021';
+    const MISSING_ID = '507f1f77bcf86cd799439022';
+    const FAILING_ID = '507f1f77bcf86cd799439023';
+
+    const deletedFile = { id: DELETED_ID, userId: OWNER, fileName: 'a.txt', tags: [], users: [] };
+    const failingFile = {
+      id: FAILING_ID,
+      userId: OWNER,
+      fileName: 'b.txt',
+      tags: [],
+      users: [],
+      filePath: 'uploads/b.txt',
+    };
+
+    h.findByIdAndUserId.mockImplementation(async (id: string) =>
+      id === DELETED_ID ? deletedFile : id === FAILING_ID ? failingFile : null
+    );
+    h.findById.mockImplementation(async (id: string) =>
+      id === DELETED_ID ? deletedFile : id === FAILING_ID ? failingFile : null
+    );
+    h.storageDelete.mockImplementation(async (path: string) => {
+      if (path === 'uploads/b.txt') throw new Error('S3 unavailable');
+    });
+
+    const { res, json } = makeRes();
+
+    await run([DELETED_ID, MISSING_ID, FAILING_ID], res);
+
+    const body = json.mock.calls[0][0];
+    expect(body.results.deleted).toEqual([DELETED_ID]);
+    expect(body.results.notFound).toEqual([MISSING_ID]);
+    expect(body.results.failed).toEqual([{ id: FAILING_ID, error: 'S3 unavailable' }]);
+    expect(body.message).toBe('Deleted 1 file(s), 1 file(s) not found, Failed to process 1 file(s)');
   });
 });
 

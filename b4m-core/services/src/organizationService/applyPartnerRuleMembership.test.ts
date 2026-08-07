@@ -20,6 +20,7 @@ describe('applyPartnerRuleMembership', () => {
         findById: vi.fn(),
         addMemberRaisingSeats: vi.fn(),
         addMemberIfUnderCeiling: vi.fn(),
+        ensureUserDetails: vi.fn(),
       },
     };
     logger = { info: vi.fn() };
@@ -42,6 +43,13 @@ describe('applyPartnerRuleMembership', () => {
     });
     expect(db.organizations.addMemberIfUnderCeiling).not.toHaveBeenCalled();
     expect(db.users.update).toHaveBeenCalledWith({ id: 'user-id', organizationId: 'org-id' });
+    // The atomic seat-add touches only users[]; seed the credit side-table so the new member is
+    // tracked and subject to maxCreditsPerMember (#1460).
+    expect(db.organizations.ensureUserDetails).toHaveBeenCalledWith('org-id', {
+      id: 'user-id',
+      email: 'test@partner.com',
+      name: 'Test User',
+    });
   });
 
   it('raises the seat ceiling to admit a user at capacity instead of rejecting (#1239)', async () => {
@@ -164,6 +172,13 @@ describe('applyPartnerRuleMembership', () => {
     expect(result).toEqual({ added: false, reason: 'already-member' });
     expect(db.organizations.addMemberRaisingSeats).not.toHaveBeenCalled();
     expect(db.users.update).not.toHaveBeenCalled();
+    // Even for an existing member this backfills a missing credit row (idempotent), which is how
+    // members added before grant-point seeding get healed on their next signup/verify (#1460).
+    expect(db.organizations.ensureUserDetails).toHaveBeenCalledWith('org-id', {
+      id: 'user-id',
+      email: 'test@partner.com',
+      name: 'Test User',
+    });
   });
 
   it('repairs a half-set membership: in users[] but organizationId unset', async () => {
@@ -175,6 +190,11 @@ describe('applyPartnerRuleMembership', () => {
     expect(result).toEqual({ added: false, reason: 'already-member' });
     expect(db.organizations.addMemberRaisingSeats).not.toHaveBeenCalled();
     expect(db.users.update).toHaveBeenCalledWith({ id: 'user-id', organizationId: 'org-id' });
+    expect(db.organizations.ensureUserDetails).toHaveBeenCalledWith('org-id', {
+      id: 'user-id',
+      email: 'test@partner.com',
+      name: 'Test User',
+    });
   });
 
   it('reports already-member (and repairs the pointer) when the atomic add loses a race', async () => {

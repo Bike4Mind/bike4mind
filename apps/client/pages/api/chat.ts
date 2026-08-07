@@ -1,5 +1,12 @@
 import { ChatCompletionFeature, ChatCompletionInvoke, ChatCompletionProcess, featureNames } from '@bike4mind/services';
-import { BadRequestError, getSettingsMap, getSettingsValue, NotFoundError, SQSService } from '@bike4mind/utils';
+import {
+  BadRequestError,
+  getSettingsMap,
+  getSettingsValue,
+  normalizeId,
+  NotFoundError,
+  SQSService,
+} from '@bike4mind/utils';
 import { PipelineTimer } from '@bike4mind/llm-adapters';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
@@ -67,11 +74,13 @@ const handler = nextRouteForContract(chatContract, {
   // Pre-compute tool recommendations once (used by both transform and response metadata)
   const recommendations = simplifiedRequest.toolMode === 'smart' ? recommendTools(simplifiedRequest.message) : [];
 
-  // Transform to internal format, including user's organization for team-wide system prompts
+  // Transform to internal format, including user's organization for team-wide system prompts.
+  // req.user.organizationId arrives as a Mongo ObjectId (or a populated Organization doc); a
+  // downstream schema parses it as z.string(), so normalize to a hex string at the boundary.
   const internalRequest = transformToInternalFormat(
     { ...simplifiedRequest, model, sessionId },
     req.user.id,
-    req.user.organizationId ?? undefined,
+    normalizeId(req.user.organizationId),
     recommendations
   );
 

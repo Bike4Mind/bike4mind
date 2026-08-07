@@ -779,7 +779,10 @@ export class SmartChunker {
   private async encodeTokens(text: string): Promise<number[]> {
     if (isEmbeddingModel(this.model, OpenAIEmbeddingModel)) {
       await this.initializeEncoder();
-      return Array.from(this.encoder!.encode(text));
+      // encode_ordinary, not encode: file content is untrusted and a special-token literal in it
+      // ("<|endoftext|>") makes encode reject, failing the whole ingest. See TiktokenTokenizer in
+      // @bike4mind/utils for the full reasoning; the same call is used everywhere we tokenize.
+      return Array.from(this.encoder!.encode_ordinary(text));
     }
     // For non-OpenAI models, pseudo-token IDs are character offsets into the original text.
     // decodeTokens() uses these offsets to slice the original string back out.
@@ -885,9 +888,10 @@ export class SmartChunker {
   // Counts the number of tokens in the given text using the appropriate tokenization method
   private async countTokens(text: string): Promise<number> {
     if (isEmbeddingModel(this.model, OpenAIEmbeddingModel)) {
-      // Use tiktoken for OpenAI models
+      // Use tiktoken for OpenAI models. encode_ordinary for the same reason as encodeTokens above:
+      // a special-token literal in file content must be counted, not rejected.
       await this.initializeEncoder();
-      const tokens = this.encoder!.encode(text);
+      const tokens = this.encoder!.encode_ordinary(text);
       return tokens.length;
     } else if (isEmbeddingModel(this.model, VoyageAIEmbeddingModel)) {
       // VoyageAI uses transformers-style subword tokenization unavailable in JS;

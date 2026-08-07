@@ -45,14 +45,48 @@ async function injectRefreshCookie(page: Page, tokens: SeedTokens): Promise<void
 }
 
 /**
- * Seed auth (refresh cookie) and write a Playwright storageState file.
- * Boots to `/` (never /login) so the seeded session isn't torn down by the login route's
- * on-mount clearClientCaches().
+ * Seed auth by planting the refresh cookie and writing a Playwright storageState file.
+ *
+ * Deliberately does NOT navigate: booting the app here would make the cold-load bootstrap exchange
+ * (and rotate) the refresh token, leaving the saved cookie a spent generation. Every spec now
+ * authenticates via /auth/success (fixtures.ts) and ignores this cookie, EXCEPT @realauth tests
+ * (the hard-reload guard) which drive the app's real refresh-cookie bootstrap and need a PRISTINE,
+ * never-yet-exchanged cookie. Leaving it unspent costs the other specs nothing and keeps that one
+ * honest. storageState() serializes the context cookie jar with no navigation required.
  */
 export async function seedAuthStorageState(page: Page, tokens: SeedTokens, path: string): Promise<void> {
   await injectRefreshCookie(page, tokens);
-  await page.goto('/');
   await page.context().storageState({ path });
+}
+
+export interface SpecAuth {
+  accessToken: string;
+  userId: string;
+}
+
+/**
+ * Build an `/auth/success` URL that re-establishes the in-memory access token and then client-side
+ * redirects to `target`.
+ *
+ * The access token is memory-only (app/hooks/useAccessToken.ts) and does NOT survive a full page
+ * load, so a raw `page.goto('/projects')` cold-loads with no credential and the router guard bounces
+ * to /login. `/auth/success` is the app's own SSO landing route: it calls setVerifiedSession(token)
+ * and redirects THROUGH the client router (not a reload), so the token survives. Routing every
+ * authenticated navigation through it re-seeds the token on each full load - with no single-use
+ * refresh replay (a shared refresh cookie replayed across contexts gets the session revoked by
+ * rotateSession's reuse-detection) and no OTC (rate limited). An access token is not single-use, so
+ * one value works across every parallel context.
+ *
+ * Caveat: the access token has a 30m TTL (server/auth/tokenGenerator.ts) and is minted at spec
+ * setup, so a tail/retry test on a ~30-minute run can outlive it and bounce to /login. A purely
+ * test-side seed cannot mint a fresh token for the seeded user without OTC or a dedicated endpoint.
+ */
+export function buildAuthSuccessUrl(target: string, auth: SpecAuth): string {
+  const params = new URLSearchParams({ token: auth.accessToken, userId: auth.userId });
+  // sanitizeRedirectTo (app/utils/authRedirect.ts) requires a leading '/' and rejects bare '/', so
+  // omit redirectTo for '/' - /auth/success then falls back to the dashboard, which is '/' anyway.
+  if (target !== '/') params.set('redirectTo', target);
+  return `/auth/success?${params.toString()}`;
 }
 
 /**

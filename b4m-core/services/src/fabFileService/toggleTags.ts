@@ -24,7 +24,7 @@ interface FabFileToggleTagsAdapters {
       'shareable' | 'findById' | 'pullTagsByFabFileId' | 'pushTagsByFabFileId' | 'computeDataLakeStats'
     >;
     fileTags: Pick<IFileTagRepository, 'touchLastActivityBy'>;
-    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'find'>;
+    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
     users: { findById: (id: string) => Promise<IUserDocument | null> };
   };
   /** Forwarded to the fallback tagger's skip-path diagnostics; never fails the write on its own. */

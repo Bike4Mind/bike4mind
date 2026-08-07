@@ -4,7 +4,7 @@
 import { sharingService } from '@bike4mind/services';
 import {
   inviteRepository,
-  Organization,
+  organizationRepository,
   sessionRepository,
   projectRepository,
   fabFileRepository,
@@ -88,7 +88,7 @@ const handler = baseApi().post(async (req, res) => {
           projects: projectRepository,
           fabFiles: fabFileRepository,
           groups: Group,
-          organization: Organization,
+          organization: organizationRepository,
           users: userRepository,
         },
       }

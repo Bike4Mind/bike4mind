@@ -49,7 +49,5 @@ export const isSessionActivatablePromptId = (promptId: string | undefined): bool
  * than from the id, which the route cannot do since resolution happens in the completion path.
  * Unreachable while no surface sets `systemPromptId`; revisit when one does.
  */
-export const hasAuthoredSessionPrompt = (session: {
-  systemPromptText?: string;
-  systemPromptId?: string;
-}): boolean => Boolean(session.systemPromptText?.trim()) || isSessionActivatablePromptId(session.systemPromptId);
+export const hasAuthoredSessionPrompt = (session: { systemPromptText?: string; systemPromptId?: string }): boolean =>
+  Boolean(session.systemPromptText?.trim()) || isSessionActivatablePromptId(session.systemPromptId);

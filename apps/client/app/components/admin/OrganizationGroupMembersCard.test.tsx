@@ -112,4 +112,31 @@ describe('OrganizationGroupMembersCard', () => {
     fireEvent.click(screen.getByText('Alice'));
     await waitFor(() => expect(assignGroupMember).toHaveBeenCalledWith('org1', 'g1', 'u1'));
   });
+
+  it('surfaces the billing owner as a non-removable implicit chip on a group they are granted', async () => {
+    fetchOrganizationGroups.mockResolvedValue([
+      { id: 'g1', name: 'Sales', type: 'sales', organizationId: 'org1', memberIds: [], memberCount: 0 },
+    ]);
+    renderCard({ ...org, allowedGroupTypes: ['sales'] } as typeof org);
+
+    const card = await screen.findByTestId('org-group-card-sales');
+    const ownerChip = await screen.findByTestId('org-group-owner-sales');
+    expect(ownerChip).toHaveTextContent('Olivia Owner');
+    expect(ownerChip).toHaveTextContent('implicit');
+    // Not removable: unlike an assigned-member chip, there is no ChipDelete/unassign control on it.
+    expect(ownerChip.querySelector('[data-testid^="org-group-unassign-"]')).not.toBeInTheDocument();
+    // "No members assigned" still shows too - the owner's access is implicit, not an explicit row.
+    expect(card).toHaveTextContent('No members assigned.');
+  });
+
+  it('does not surface the owner chip for a group type the org no longer has granted', async () => {
+    fetchOrganizationGroups.mockResolvedValue([
+      { id: 'g1', name: 'Sales', type: 'sales', organizationId: 'org1', memberIds: [], memberCount: 0 },
+    ]);
+    // allowedGroupTypes omits 'sales' - e.g. the type was revoked after the group was provisioned.
+    renderCard({ ...org, allowedGroupTypes: [] } as typeof org);
+
+    await screen.findByTestId('org-group-card-sales');
+    expect(screen.queryByTestId('org-group-owner-sales')).not.toBeInTheDocument();
+  });
 });
