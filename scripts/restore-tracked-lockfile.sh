@@ -27,7 +27,11 @@ if git diff --quiet HEAD -- "$LOCKFILE"; then
   exit 0
 fi
 
-if ! git diff HEAD -- "$LOCKFILE" | grep -q "^+.*packages/premium/"; then
+# Buffer the diff instead of piping into `grep -q`: grep exits at the first match,
+# and on a large diff that SIGPIPEs git, which under `pipefail` would flip this test.
+lockfile_diff=$(git diff HEAD -- "$LOCKFILE")
+
+if ! grep -q "^+.*packages/premium/" <<<"$lockfile_diff"; then
   echo "ℹ️  $LOCKFILE differs from HEAD but adds no packages/premium/ paths."
   echo "   This looks like a real dependency change, so it was left untouched."
   exit 0
