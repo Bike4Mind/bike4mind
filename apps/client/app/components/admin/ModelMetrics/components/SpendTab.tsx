@@ -1,0 +1,252 @@
+import React from 'react';
+import { Box, Chip, Sheet, Stack, Table, Typography } from '@mui/joy';
+import { useTheme } from '@mui/joy/styles';
+import { ResponsiveLine } from '@nivo/line';
+import { spendMockData, type SpendData, type SpendKpi, type SpendKpiFormat } from '../utils/spendMockData';
+
+// Nivo's generics fight strict TS here; the same assertion is used in AnalyticsTab.
+const ResponsiveLineChart = ResponsiveLine as any;
+
+interface SpendTabProps {
+  /** Defaults to the mock fixture; the wiring ticket swaps in live SpendData. */
+  data?: SpendData;
+}
+
+const formatKpiValue = (value: number, format: SpendKpiFormat): string => {
+  switch (format) {
+    case 'currency':
+      return `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    case 'currencyPrecise':
+      return `$${value.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 })}`;
+    case 'number':
+      return value.toLocaleString('en-US');
+    case 'ms':
+      return `${Math.round(value).toLocaleString('en-US')}ms`;
+    case 'percent':
+      return `${(value * 100).toFixed(1)}%`;
+    default:
+      return String(value);
+  }
+};
+
+const formatCurrency = (value: number): string =>
+  `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/** Percent change vs the prior period; null when there is no prior baseline. */
+const computeDelta = (value: number, priorValue: number): number | null => {
+  if (!priorValue) return null;
+  return (value - priorValue) / priorValue;
+};
+
+const DeltaChip: React.FC<{ delta: number | null; higherIsBetter: boolean }> = ({ delta, higherIsBetter }) => {
+  if (delta === null) {
+    return (
+      <Chip size="sm" variant="soft" color="neutral">
+        --
+      </Chip>
+    );
+  }
+  const isFlat = Math.abs(delta) < 0.0005;
+  const isPositiveChange = delta > 0;
+  const isGood = isFlat ? true : isPositiveChange === higherIsBetter;
+  // Escaped so the source stays ASCII per repo convention; renders as up/down arrows.
+  const arrow = isFlat ? '' : isPositiveChange ? '\u2191' : '\u2193';
+  return (
+    <Chip size="sm" variant="soft" color={isFlat ? 'neutral' : isGood ? 'success' : 'danger'}>
+      {arrow}
+      {Math.abs(delta * 100).toFixed(1)}%
+    </Chip>
+  );
+};
+
+const KpiCard: React.FC<{ kpi: SpendKpi }> = ({ kpi }) => {
+  const delta = computeDelta(kpi.value, kpi.priorValue);
+  return (
+    <Box sx={{ p: 2, bgcolor: 'background.level1', borderRadius: 'md' }}>
+      <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
+        {kpi.label}
+      </Typography>
+      <Typography level="title-lg" sx={{ mt: 0.5 }}>
+        {formatKpiValue(kpi.value, kpi.format)}
+      </Typography>
+      <Box sx={{ mt: 1 }}>
+        <DeltaChip delta={delta} higherIsBetter={kpi.higherIsBetter} />
+      </Box>
+    </Box>
+  );
+};
+
+export const SpendTab: React.FC<SpendTabProps> = ({ data = spendMockData }) => {
+  const theme = useTheme();
+
+  // Shared with AnalyticsTab; keep the two in sync if either changes.
+  const chartTheme = {
+    axis: {
+      ticks: { text: { fill: theme.palette.text.tertiary } },
+      legend: { text: { fill: theme.palette.text.primary } },
+    },
+    grid: { line: { stroke: theme.palette.divider } },
+    tooltip: {
+      container: {
+        background: theme.palette.background.surface,
+        color: theme.palette.text.primary,
+        boxShadow: theme.shadow.md,
+        borderRadius: theme.radius.md,
+      },
+    },
+  };
+
+  const maxModelCost = Math.max(...data.byModel.map(m => m.estCost), 0);
+
+  const lineData = [
+    {
+      id: 'Daily Cost',
+      data: data.dailyCost.map(point => ({ x: point.date, y: point.cost })),
+    },
+  ];
+
+  return (
+    <Stack spacing={3} sx={{ mt: 1 }}>
+      {/* Mockup banner: remove once wired to live data (issue No. 1507). */}
+      <Stack direction="row" alignItems="center" spacing={1}>
+        <Chip color="warning" variant="solid" size="sm" data-testid="spend-mockup-badge">
+          MOCKUP - FAKE DATA
+        </Chip>
+        <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
+          {data.periodLabel} vs {data.priorPeriodLabel}
+        </Typography>
+      </Stack>
+
+      {/* Section 1: KPI row */}
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(3, 1fr)', md: 'repeat(5, 1fr)' },
+          gap: 2,
+        }}
+        data-testid="spend-kpi-row"
+      >
+        {data.kpis.map(kpi => (
+          <KpiCard key={kpi.key} kpi={kpi} />
+        ))}
+      </Box>
+
+      {/* Section 2: Spend by account */}
+      <Box>
+        <Typography level="h4" sx={{ mb: 2 }}>
+          Spend by Account
+        </Typography>
+        <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'auto' }}>
+          <Table stickyHeader hoverRow size="sm" data-testid="spend-by-account-table">
+            <thead>
+              <tr>
+                <th>Account</th>
+                <th style={{ textAlign: 'right' }}>Est. Cost</th>
+                <th style={{ textAlign: 'right' }}>Requests</th>
+                <th style={{ textAlign: 'right' }}>Credits</th>
+                <th style={{ textAlign: 'right' }}>Cost / Req</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.byAccount.map(row => (
+                <tr key={row.accountId}>
+                  <td>{row.accountName}</td>
+                  <td style={{ textAlign: 'right' }}>{formatCurrency(row.estCost)}</td>
+                  <td style={{ textAlign: 'right' }}>{row.requests.toLocaleString('en-US')}</td>
+                  <td style={{ textAlign: 'right' }}>{row.creditsUsed.toLocaleString('en-US')}</td>
+                  <td style={{ textAlign: 'right' }}>${row.costPerRequest.toFixed(4)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        </Sheet>
+      </Box>
+
+      {/* Section 3: Cost by model (bar table) */}
+      <Box>
+        <Typography level="h4" sx={{ mb: 2 }}>
+          Cost by Model
+        </Typography>
+        <Sheet variant="outlined" sx={{ borderRadius: 'md', p: 2 }}>
+          <Stack spacing={1.5} data-testid="spend-by-model-bars">
+            {data.byModel.map(model => (
+              <Box key={model.modelId}>
+                <Stack direction="row" justifyContent="space-between" alignItems="baseline" sx={{ mb: 0.5 }}>
+                  <Typography level="body-sm">{model.modelName}</Typography>
+                  <Stack direction="row" spacing={2} alignItems="baseline">
+                    <Typography level="body-sm">{formatCurrency(model.estCost)}</Typography>
+                    <Typography level="body-xs" sx={{ color: 'text.secondary', minWidth: 40, textAlign: 'right' }}>
+                      {(model.share * 100).toFixed(0)}%
+                    </Typography>
+                  </Stack>
+                </Stack>
+                <Box
+                  sx={{
+                    height: 8,
+                    borderRadius: 'sm',
+                    bgcolor: 'background.level2',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <Box
+                    sx={{
+                      height: '100%',
+                      borderRadius: 'sm',
+                      bgcolor: 'primary.500',
+                      width: `${maxModelCost > 0 ? (model.estCost / maxModelCost) * 100 : 0}%`,
+                    }}
+                  />
+                </Box>
+              </Box>
+            ))}
+          </Stack>
+        </Sheet>
+      </Box>
+
+      {/* Section 4: Daily cost line chart */}
+      <Box>
+        <Typography level="h4" sx={{ mb: 2 }}>
+          Daily Cost
+        </Typography>
+        <Box sx={{ height: 300 }} data-testid="spend-daily-cost-chart">
+          <ResponsiveLineChart
+            data={lineData}
+            theme={chartTheme}
+            margin={{ top: 20, right: 30, bottom: 70, left: 60 }}
+            xScale={{ type: 'point' }}
+            yScale={{ type: 'linear', min: 'auto', max: 'auto' }}
+            curve="catmullRom"
+            axisTop={null}
+            axisRight={null}
+            axisBottom={{
+              tickSize: 5,
+              tickPadding: 5,
+              tickRotation: -45,
+              legend: 'Date',
+              legendPosition: 'middle',
+              legendOffset: 55,
+              format: (value: string) => value.slice(5),
+            }}
+            axisLeft={{
+              tickSize: 5,
+              tickPadding: 5,
+              tickRotation: 0,
+              legend: 'Cost (USD)',
+              legendPosition: 'middle',
+              legendOffset: -50,
+              format: (value: number) => `$${value}`,
+            }}
+            pointSize={6}
+            pointColor={theme.palette.background.surface}
+            pointBorderWidth={2}
+            pointBorderColor={{ from: 'serieColor' }}
+            enableArea={true}
+            areaOpacity={0.15}
+            useMesh={true}
+            colors={[theme.palette.primary[500]]}
+          />
+        </Box>
+      </Box>
+    </Stack>
+  );
+};
