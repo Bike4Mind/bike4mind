@@ -72,6 +72,41 @@ describe('useTokenLimits', () => {
     expect(result.current.isOverContextWindow).toBe(false);
   });
 
+  // A discovery run can overwrite a seeded media row's contextWindow with the literal 0, meaning
+  // "not applicable" to the feed, not a real zero-token budget (see safeInputWindow in
+  // @bike4mind/utils). Before this fix, maxInputTokens landed at 0 and validateChatInput blocked
+  // every send with a misleading "No AI model selected" - even though a model WAS selected.
+  it('falls back to a usable input budget for a media model whose contextWindow arrives as 0', () => {
+    const modelInfo = [{ id: 'flux-pro-1.1', type: 'image', contextWindow: 0, max_tokens: 10_000 }];
+    const { result } = renderHook(() =>
+      useTokenLimits({
+        model: 'flux-pro-1.1',
+        modelInfo,
+        max_tokens: undefined,
+        chatInputLength: 50,
+      })
+    );
+    expect(result.current.maxInputTokens).toBeGreaterThan(0);
+    expect(result.current.isOverContextWindow).toBe(false);
+  });
+
+  it('still reports a zero input budget for a TEXT model whose contextWindow arrives as 0', () => {
+    // Text rows keep 0 literal: this hook's "still loading" suppression (contextWindowLimit > 0)
+    // is what the caller relies on to avoid a false over-limit flash, and a media-only fallback
+    // must not weaken that for a genuinely misconfigured text row.
+    const modelInfo = [{ id: 'broken-text', type: 'text', contextWindow: 0, max_tokens: 4_096 }];
+    const { result } = renderHook(() =>
+      useTokenLimits({
+        model: 'broken-text',
+        modelInfo,
+        max_tokens: undefined,
+        chatInputLength: 50,
+      })
+    );
+    expect(result.current.contextWindowLimit).toBe(0);
+    expect(result.current.maxInputTokens).toBe(0);
+  });
+
   it('flips isOverContextWindow when input genuinely exceeds the available budget', () => {
     const { result } = renderHook(() =>
       useTokenLimits({

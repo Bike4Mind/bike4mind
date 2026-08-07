@@ -169,6 +169,7 @@ export const SettingKeySchema = z.enum([
   'EnableDataLakesDefault',
   'EnableDataLakeSlackAdd',
   'EnableLakeMemory',
+  'EnableDataLakeVectorSearch',
   'EnableBriefcase',
   'EnableBriefcaseDefault',
   'EnableImageTemplates',
@@ -1777,6 +1778,17 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 91,
+    dependsOn: 'EnableDataLakes',
+  }),
+  EnableDataLakeVectorSearch: makeBooleanSetting({
+    key: 'EnableDataLakeVectorSearch',
+    name: 'Data Lakes: Use Atlas $vectorSearch',
+    defaultValue: false,
+    description:
+      'Kill-switch for the Atlas $vectorSearch cutover on Data Lake semantic search. Off by default; even when on, only files whose chunks are fully re-indexed on an Atlas backend actually use it - everything else keeps using the brute-force scan.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 92,
     dependsOn: 'EnableDataLakes',
   }),
   EnableBriefcase: makeBooleanSetting({
