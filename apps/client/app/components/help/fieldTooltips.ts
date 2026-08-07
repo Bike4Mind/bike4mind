@@ -15,6 +15,7 @@ export const FIELD_TOOLTIPS = {
     'Maximum tokens the model can generate in a single response. Higher values allow longer answers but cost more credits.',
   responseHistory: 'How many recent messages from this conversation are sent back to the model as context.',
   spokenWords: 'Approximate length the model targets for voice replies, in spoken words.',
+  reasoningEffort: 'How much reasoning the model does before answering. Lower is faster, higher is more thorough.',
   modelPicker:
     'Pick which AI model handles this request. Different models have different speeds, costs, and capabilities.',
   researchMode:
