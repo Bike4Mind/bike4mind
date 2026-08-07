@@ -252,6 +252,9 @@ export interface IDataLakeBatch {
   vectorizedFiles: number;
   failedFiles: number;
   failedFileNames?: string[];
+  /** Subset of failedFiles caused by chunk/vectorize (vs a browser upload failure) - see the
+   * schema comment on this field for why it's tracked separately. */
+  processingFailedFiles: number;
   skippedFiles: number;
 
   // Size tracking
@@ -302,7 +305,8 @@ export type IDataLakeBatchSummary = Omit<IDataLakeBatchDocument, 'files' | 'taxo
   taxonomySuggestions?: Omit<TaxonomyTagSet, 'fileAssignments'>;
 };
 
-export type BatchCounterField = 'uploadedFiles' | 'chunkedFiles' | 'vectorizedFiles' | 'failedFiles' | 'skippedFiles';
+export type BatchCounterField =
+  'uploadedFiles' | 'chunkedFiles' | 'vectorizedFiles' | 'failedFiles' | 'processingFailedFiles' | 'skippedFiles';
 
 export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatchDocument> {
   findActiveByUserId(userId: string): Promise<IDataLakeBatchSummary[]>;
@@ -328,6 +332,13 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    */
   claimFileStatus(batchId: string, fabFileId: string, from: BatchFileStatus[], to: BatchFileStatus): Promise<boolean>;
   incrementCounter(batchId: string, field: BatchCounterField, amount?: number): Promise<IDataLakeBatchDocument | null>;
+  /** Atomic multi-field variant of incrementCounter - use when two+ counters must land together
+   * (e.g. failedFiles + processingFailedFiles), so a crash between them can't leave one applied
+   * and the other not. */
+  incrementCounters(
+    batchId: string,
+    fields: Partial<Record<BatchCounterField, number>>
+  ): Promise<IDataLakeBatchDocument | null>;
   /**
    * Guarded terminal transition: set the batch terminal only if it is still
    * non-terminal. Returns the post-update doc to the single winner, null to losers,
@@ -347,6 +358,15 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
     batchId: string,
     status: Extract<BatchStatus, 'preparing' | 'uploading' | 'processing'>
   ): Promise<IDataLakeBatchDocument | null>;
+  /**
+   * Bump `updatedAt` on a still-non-terminal batch, without touching status or counters. Used
+   * by the chunk/vectorize handlers on a non-final SQS delivery attempt, so a batch that is
+   * legitimately mid-retry doesn't go idle long enough for the stuck-batch reconciler (which
+   * keys off `updatedAt`) to force it terminal before the next attempt lands. Guarded the same
+   * way as `setStatusIfActive`/`markTerminalIfActive`, so it can never resurrect a batch the
+   * pipeline already finalized.
+   */
+  touchIfActive(batchId: string): Promise<void>;
   /**
    * Guarded taxonomy-phase transition: set `taxonomyStatus` only if it is still one of `from`,
    * so a redelivered queue message or a race between the reconciler and a live worker can only

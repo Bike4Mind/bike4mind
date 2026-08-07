@@ -47,6 +47,7 @@ function buildDb() {
       organizations: {
         findById: vi.fn().mockResolvedValue(org),
         incrementCredits: vi.fn().mockResolvedValue({ ...org, currentCredits: org.currentCredits - 10 }),
+        ensureUserDetails: vi.fn().mockResolvedValue(undefined),
         updateUserDetails: vi.fn().mockResolvedValue(undefined),
       } as never,
     },

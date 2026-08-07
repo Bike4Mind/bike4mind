@@ -3,11 +3,13 @@ import {
   DataLakeConfig,
   getAccessibleDataLakes,
   toDataLakeConfig,
+  type DataLakeMembershipScope,
   type IDataLakeRepository,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { buildDatalakeTag } from './createDataLake';
+import { lakeMembershipScope } from './lakeMembershipScope';
 
 /**
  * An id value `normalizeId` resolves: a plain string, a Mongo ObjectId (via `toHexString`), or a
@@ -51,6 +53,32 @@ export interface DataLakeAccessContext {
 }
 
 /**
+ * One accessible lake, resolved far enough to run a WHOLE-LAKE query against it (counting,
+ * stats) rather than only a tag-matched search. Exists because the tag/prefix sets below are
+ * flattened unions: they answer "may this file be searched" but lose which lake a file belongs
+ * to, the creator its prefix arm is anchored to, and the lake's product-facing name.
+ *
+ * `source` is load-bearing, not decoration. A registry lake's files carry only prefixed content
+ * tags - no write path stamps its meta-tag - so a membership-scope count of one returns 0; it
+ * has to be counted through the OPEN prefix arm instead. See lakeMembershipScope and the
+ * articles route's `isFallback` branch, which this must stay in agreement with.
+ */
+export interface ResolvedLakeAccess {
+  id: string;
+  name: string;
+  slug: string;
+  datalakeTag: string;
+  fileTagPrefix: string;
+  /**
+   * The whole-lake membership predicate, DB lakes only - the same scope the single-lake browse
+   * and every lifecycle write run on, so a count built from it equals the lake page's total.
+   * Absent for registry lakes: they have no creator to anchor the prefix arm to.
+   */
+  membership?: DataLakeMembershipScope;
+  source: 'registry' | 'dynamic';
+}
+
+/**
  * Fetches dynamic data lake configs from DB (if available) and returns
  * the merged datalake: tags for the user.
  *
@@ -80,9 +108,12 @@ export async function getDynamicDataLakeTags(context: DataLakeAccessContext): Pr
  * bypass is org-independent, matching browse: a creator who has since moved orgs still reaches
  * a gated lake they made in the old one, and only they or an admin could have put files in it.
  */
-export async function getDynamicDataLakeAccess(
-  context: DataLakeAccessContext
-): Promise<{ dataLakeTags: string[]; dataLakeTagPrefixes: string[]; scopedTagPrefixes: string[] }> {
+export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): Promise<{
+  dataLakeTags: string[];
+  dataLakeTagPrefixes: string[];
+  scopedTagPrefixes: string[];
+  lakes: ResolvedLakeAccess[];
+}> {
   const userTags = context.user.tags || [];
   const entitlementKeys = context.entitlementKeys ?? [];
   // Coerce to string: the lake's organizationId/createdByUserId are String fields, but a hydrated
@@ -99,6 +130,9 @@ export async function getDynamicDataLakeAccess(
   // members inside the try below, so an absent repo or a failed read leave it empty by
   // construction rather than by a reader's reasoning.
   const ownedDynamicIds = new Set<string>();
+  // Same reason as ownedDynamicIds: createdByUserId survives only on the raw documents, and
+  // whole-lake queries (see ResolvedLakeAccess) cannot anchor a prefix arm without it.
+  const creatorByDynamicId = new Map<string, string>();
   if (context.db.dataLakes) {
     try {
       const dbLakes = await context.db.dataLakes.findActiveByUserTagsAndEntitlements(
@@ -108,6 +142,9 @@ export async function getDynamicDataLakeAccess(
         userId
       );
       dynamicDataLakes = dbLakes.map(toDataLakeConfig);
+      for (const dl of dbLakes) {
+        if (dl.createdByUserId) creatorByDynamicId.set(dl.id, String(dl.createdByUserId));
+      }
       // Only the document side is coerced. `userId` is already a string or undefined, so an
       // id-less caller can never match: leave it uncoerced. Wrapping it too would compare the
       // literal 'undefined' and hand every lake whose creator is the string 'undefined' - a
@@ -166,5 +203,31 @@ export async function getDynamicDataLakeAccess(
     dataLakeTags: resolvedLakes.filter(dl => !isShadowedRegistryTag(dl)).map(dl => dl.datalakeTag),
     dataLakeTagPrefixes: resolvedLakes.filter(dl => !dynamicIds.has(dl.id)).map(dl => dl.fileTagPrefix),
     scopedTagPrefixes: resolvedLakes.filter(dl => dynamicIds.has(dl.id)).map(dl => dl.fileTagPrefix),
+    // A shadowed row is dropped outright rather than degraded: its tag belongs to a registry
+    // lake, so any whole-lake query built from it would run against the wrong corpus.
+    lakes: resolvedLakes
+      .filter(dl => !isShadowedRegistryTag(dl))
+      .map(dl => {
+        const isDynamic = dynamicIds.has(dl.id);
+        return {
+          id: dl.id,
+          name: dl.name,
+          slug: dl.slug,
+          datalakeTag: dl.datalakeTag,
+          fileTagPrefix: dl.fileTagPrefix,
+          // A creator-less row fails closed to meta-tag-only matching inside the filter builder,
+          // which is the safe direction (see buildDataLakeMembershipFilter).
+          ...(isDynamic
+            ? {
+                membership: lakeMembershipScope({
+                  datalakeTag: dl.datalakeTag,
+                  fileTagPrefix: dl.fileTagPrefix,
+                  createdByUserId: creatorByDynamicId.get(dl.id) ?? '',
+                }),
+              }
+            : {}),
+          source: isDynamic ? ('dynamic' as const) : ('registry' as const),
+        };
+      }),
   };
 }

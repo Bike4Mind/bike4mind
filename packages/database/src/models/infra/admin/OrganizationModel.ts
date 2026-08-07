@@ -402,9 +402,43 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   /**
+   * Seed a zero-usage `userDetails` row for a member if one is not already present. Idempotent by
+   * construction: the `userDetails.id != member.id` guard means a member who already has a row
+   * matches no document and the `$push` is skipped, so this is safe to call on every membership
+   * grant and as a self-heal before a spend.
+   *
+   * WHY THIS EXISTS: `updateUserDetails` increments via the positional `$` operator, which can only
+   * update an element that already exists - it cannot create the row it positions on. A member with
+   * no row therefore tracks no usage and is invisible to `maxCreditsPerMember` (reads `usedCredits`
+   * as 0 forever). Every path that adds a member (`create`, `addMember`, `applyPartnerRuleMembership`)
+   * must seed the row so `users[]` and `userDetails[]` stay in sync at the grant point
+   * (schema comment above).
+   */
+  async ensureUserDetails(organizationId: string, member: { id: string; email: string; name: string }): Promise<void> {
+    await this.organizationModel.updateOne(
+      { _id: organizationId, 'userDetails.id': { $ne: member.id } },
+      {
+        $push: {
+          userDetails: {
+            id: member.id,
+            email: member.email,
+            name: member.name,
+            usedCredits: 0,
+            lastCreditUsedAt: null,
+          },
+        },
+      }
+    );
+  }
+
+  /**
    * Update a user's usage details within an organization.
    * Uses $inc for creditsDelta (atomic increment) and $set for lastCreditUsedAt
    * to avoid race conditions with concurrent requests.
+   *
+   * The caller must ensure a `userDetails` row exists first (see `ensureUserDetails`): the positional
+   * `$` operator here updates an existing element and cannot create one, so a missing row makes this
+   * a no-op (logged below).
    *
    * @param organizationId - The ID of the organization
    * @param userId - The ID of the user within the organization

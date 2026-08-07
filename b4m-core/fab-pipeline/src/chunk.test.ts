@@ -32,6 +32,38 @@ describe('SmartChunker', () => {
     chunker.freeEncoder();
   });
 
+  // Fab-file content is untrusted, and a tiktoken special-token literal inside it used to make the
+  // encoder reject - failing the ingest of the whole file over one string in it.
+  describe('chunkText - special-token literals in file content', () => {
+    const LITERAL = '<|endoftext|>';
+
+    it('counts a literal as characters rather than rejecting it', async () => {
+      await expect((chunker as any).countTokens(`what does ${LITERAL} mean`)).resolves.toBeGreaterThan(1);
+    });
+
+    it('round-trips encode -> decode through a literal', async () => {
+      // splitOversizedSegment slices encoded ids and decodes them back, so the pair has to survive
+      // the literal, not just the count.
+      const text = `keep ${LITERAL} intact`;
+      const ids = await (chunker as any).encodeTokens(text);
+
+      expect(ids.length).toBeGreaterThan(1);
+      await expect((chunker as any).decodeTokens(ids)).resolves.toBe(text);
+    });
+
+    it('chunks a document containing literals', async () => {
+      const text = `Section one discusses ${LITERAL} and how the pipeline handles it. `.repeat(40);
+      const chunks: Chunk[] = await (chunker as any).chunkText(text);
+
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunks.map(c => c.text).join('')).toContain(LITERAL);
+      for (const chunk of chunks) {
+        const actualTokens = await (chunker as any).countTokens(chunk.text);
+        expect(actualTokens).toBeLessThanOrEqual(CHUNK_TOKEN_LIMIT);
+      }
+    });
+  });
+
   describe('chunkText — oversized word fallback', () => {
     it('splits text with no punctuation (single giant "sentence")', async () => {
       // 2000 words, no sentence-ending punctuation

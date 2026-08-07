@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { buildModelSelectionPatch, computeDefaultMaxTokens, refitMaxTokensForModel } from '../aiSettingsUtils';
+import {
+  buildModelSelectionPatch,
+  computeDefaultMaxTokens,
+  getModelSpeedFromStats,
+  refitMaxTokensForModel,
+} from '../aiSettingsUtils';
 import type { ModelInfo } from '@bike4mind/common';
 
 describe('computeDefaultMaxTokens', () => {
@@ -123,5 +128,20 @@ describe('buildModelSelectionPatch', () => {
     expect(buildModelSelectionPatch(model({ contextWindow: 32768, max_tokens: 16384 }))).toMatchObject({
       max_tokens: 16384,
     });
+  });
+});
+
+describe('getModelSpeedFromStats', () => {
+  it('returns null when there are no stats, or none for this model', () => {
+    expect(getModelSpeedFromStats('gpt-5', {})).toBeNull();
+    expect(getModelSpeedFromStats('gpt-5', undefined as unknown as Record<string, number>)).toBeNull();
+    expect(getModelSpeedFromStats('gpt-5', { 'claude-opus-4-5': 1000 })).toBeNull();
+  });
+
+  it('buckets the model average against the tooltip thresholds', () => {
+    expect(getModelSpeedFromStats('m', { m: 6999 })).toBe('fast');
+    expect(getModelSpeedFromStats('m', { m: 7000 })).toBe('medium');
+    expect(getModelSpeedFromStats('m', { m: 14999 })).toBe('medium');
+    expect(getModelSpeedFromStats('m', { m: 15000 })).toBe('slow');
   });
 });

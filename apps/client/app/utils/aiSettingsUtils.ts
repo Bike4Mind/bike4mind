@@ -125,26 +125,15 @@ export const getChipStyles = (variant: ChipVariant, isMaximum: boolean, mode: st
   return { ...baseStyles, ...variantStyles[variant] };
 };
 
-// Stats-based helpers (used by non-admin components with pre-aggregated data from /api/models/stats)
+// Stats-based helper (used by non-admin components with pre-aggregated data from /api/models/stats).
+// Keyed by model id like the stats payload and the callers' comparisons - never by display name.
+// Empty stats yield null, not a seed: speed is a claim about observed usage, and a hardcoded seed
+// would go stale silently while still looking authoritative.
 export const getModelSpeedFromStats = (
   modelId: string,
   avgResponseTime: Record<string, number>
 ): 'fast' | 'medium' | 'slow' | null => {
-  if (!avgResponseTime || Object.keys(avgResponseTime).length === 0) {
-    const staticModelSpeeds: Record<string, 'fast' | 'medium' | 'slow'> = {
-      'GPT-4': 'medium',
-      'Claude 3.5 Sonnet': 'fast',
-      'GPT-4 Turbo': 'fast',
-      'GPT-3.5 Turbo': 'fast',
-      'Claude 3 Haiku': 'fast',
-      'Claude 3 Opus': 'slow',
-      'Gemini Pro': 'medium',
-      'Llama 3': 'medium',
-    };
-    return staticModelSpeeds[modelId] || null;
-  }
-
-  const avg = avgResponseTime[modelId];
+  const avg = avgResponseTime?.[modelId];
   if (avg == null) return null;
 
   if (avg < 7000) return 'fast';

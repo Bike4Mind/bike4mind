@@ -41,6 +41,7 @@ vi.mock('@bike4mind/database', () => ({
   // accept.ts adapters + inviteManager's module-load imports
   inviteRepository: {},
   Organization: {},
+  organizationRepository: {},
   sessionRepository: {},
   projectRepository: {},
   fabFileRepository: { findById: tagMocks.fabFileFindById },
