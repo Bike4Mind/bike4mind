@@ -6,7 +6,9 @@ import {
   SOUND_EFFECTS_MAX_INPUT_CHARS,
   SoundGenerationVendor,
   TTS_MAX_INPUT_CHARS,
+  VOICE_VENDOR_SUPPORTED_FORMATS,
   VoiceGenerationVendor,
+  VoiceOutputFormat,
 } from '@bike4mind/common';
 import { aiSoundService, aiVoiceService } from '@bike4mind/utils';
 import { v4 as uuidv4 } from 'uuid';
@@ -88,8 +90,14 @@ export const audioGenerationTool: ToolDefinition = {
         // caller learns the actionable problem (missing key) instead of "insufficient credits".
         const apiKey = await getEffectiveApiKey(context.userId, { type: ApiKeyType.elevenlabs }, { db: context.db });
         if (!apiKey) {
-          context.logger.error('[audio_generation] ElevenLabs API key is not configured; refusing to dispatch');
-          return UNAVAILABLE_MESSAGE;
+          context.logger.error(
+            '[audio_generation] ElevenLabs API key is not configured; refusing to dispatch sound effect'
+          );
+          // serverConfig reports the tool available whenever EITHER key resolves, so an
+          // OpenAI-only user can reach this branch. Speech still works for them, so give the
+          // model an actionable message (it can retry with kind="speech") instead of the
+          // generic UNAVAILABLE_MESSAGE, which reads as "nothing works, try later".
+          return 'Error: sound effects require an ElevenLabs API key; speech (kind="speech") is available.';
         }
 
         const durationSeconds = toolDurationSeconds ?? audioConfig.durationSeconds ?? undefined;
@@ -140,6 +148,11 @@ export const audioGenerationTool: ToolDefinition = {
       // fallback drops the configured voice and lets the fallback provider use its default.
       let provider = audioConfig.ttsProvider ?? DEFAULT_TTS_PROVIDER;
       let voice = audioConfig.voice || undefined;
+      // Chat's output contract is inline playback, and raw PCM has no container <audio> can
+      // decode (see the inline-audio regex in generatedMedia.ts), so coerce a pcm setting to
+      // mp3. The direct Generate Audio UI keeps pcm because it offers a download affordance;
+      // chat does not.
+      let format: VoiceOutputFormat | undefined = audioConfig.format === 'pcm' ? 'mp3' : audioConfig.format;
       let apiKey = await getEffectiveApiKey(context.userId, { type: ttsApiKeyType(provider) }, { db: context.db });
       if (!apiKey) {
         const fallbackProvider: VoiceGenerationVendor = provider === 'elevenlabs' ? 'openai' : 'elevenlabs';
@@ -157,6 +170,11 @@ export const audioGenerationTool: ToolDefinition = {
         );
         provider = fallbackProvider;
         voice = undefined;
+        // Format is provider-specific too (ElevenLabs maps a subset of OpenAI's set and throws
+        // locally on an unmapped one), so drop it if the fallback provider can't produce it and
+        // let that provider use its default - otherwise the very user this fallback rescues
+        // (e.g. openai-default + format 'flac' + ElevenLabs-only key) hard-fails every call.
+        format = format && VOICE_VENDOR_SUPPORTED_FORMATS[fallbackProvider].includes(format) ? format : undefined;
         apiKey = fallbackKey;
       }
 
@@ -189,7 +207,7 @@ export const audioGenerationTool: ToolDefinition = {
           characters,
         } = await aiVoiceService(provider, apiKey, context.logger).synthesize(text, {
           voice,
-          format: audioConfig.format,
+          format,
           language: provider === 'elevenlabs' && audioConfig.languageCode ? audioConfig.languageCode : undefined,
         }));
       } catch (error) {
@@ -216,7 +234,7 @@ export const audioGenerationTool: ToolDefinition = {
     toolSchema: {
       name: 'audio_generation',
       description:
-        '🔊 AUDIO GENERATION TOOL: Generate spoken audio (text-to-speech) or a short sound effect from text. Use kind="speech" when the user wants something read aloud / narrated / voiced ("say this", "read this out loud", "narrate", "voice this"). Use kind="sound_effect" for a short non-speech sound described in words ("a dog barking", "rain on a tin roof", "a whoosh"). Do NOT use this for music or songs (that is music_generation). Voice, provider and format come from the user\'s saved audio settings; just pass the text.',
+        '🔊 AUDIO GENERATION TOOL: Generate spoken audio (text-to-speech) or a short sound effect from text. Use kind="speech" when the user wants something read aloud / narrated / voiced ("say this", "read this out loud", "narrate", "voice this"). Use kind="sound_effect" for a short non-speech sound described in words ("a dog barking", "rain on a tin roof", "a whoosh"); sound effects require an ElevenLabs API key (speech also works with OpenAI). Do NOT use this for music or songs (that is music_generation). Voice, provider and format come from the user\'s saved audio settings; just pass the text.',
       parameters: {
         type: 'object',
         properties: {

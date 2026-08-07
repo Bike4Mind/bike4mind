@@ -209,6 +209,47 @@ describe('audio_generation tool', () => {
     expect(result).toBe('Successfully generated speech');
   });
 
+  it('drops a format the fallback provider cannot produce (openai default + flac -> ElevenLabs default)', async () => {
+    // The exact user this fallback exists for: openai default + a format only openai supports
+    // (flac) + an ElevenLabs-only key. ElevenLabs throws locally on an unmapped format, so the
+    // format must be dropped alongside the voice or every call hard-fails.
+    mockGetEffectiveApiKey.mockReset();
+    mockGetEffectiveApiKey.mockResolvedValueOnce(undefined).mockResolvedValue('el-key');
+    const context = createFakeContext();
+    const result = await run(context, { kind: 'speech', text: 'read me' }, { ttsProvider: 'openai', format: 'flac' });
+
+    expect(mockSynthesize).toHaveBeenCalledWith('read me', expect.objectContaining({ format: undefined }));
+    expect(result).toBe('Successfully generated speech');
+  });
+
+  it('keeps a format the fallback provider does support (openai default + opus -> ElevenLabs opus)', async () => {
+    // opus is in both providers' supported sets, so it should survive the fallback.
+    mockGetEffectiveApiKey.mockReset();
+    mockGetEffectiveApiKey.mockResolvedValueOnce(undefined).mockResolvedValue('el-key');
+    const context = createFakeContext();
+    await run(context, { kind: 'speech', text: 'read me' }, { ttsProvider: 'openai', format: 'opus' });
+    expect(mockSynthesize).toHaveBeenCalledWith('read me', expect.objectContaining({ format: 'opus' }));
+  });
+
+  it('coerces a pcm format setting to mp3 (raw PCM has no container the inline player can decode)', async () => {
+    const context = createFakeContext();
+    await run(context, { kind: 'speech', text: 'hello' }, { ttsProvider: 'openai', format: 'pcm' });
+    expect(mockSynthesize).toHaveBeenCalledWith('hello', expect.objectContaining({ format: 'mp3' }));
+  });
+
+  it('returns an actionable message (not the generic unavailable one) for a sound effect without an ElevenLabs key', async () => {
+    // serverConfig advertises the tool available on an OpenAI-only key; the SFX branch still
+    // hard-requires ElevenLabs, so the model must be told speech is the available fallback.
+    mockGetEffectiveApiKey.mockReset();
+    mockGetEffectiveApiKey.mockResolvedValue(undefined);
+    const context = createFakeContext();
+    const result = await run(context, { kind: 'sound_effect', text: 'dog barking' });
+    expect(result).toBe('Error: sound effects require an ElevenLabs API key; speech (kind="speech") is available.');
+    expect(context.onStart).not.toHaveBeenCalled();
+    expect(mockGenerate).not.toHaveBeenCalled();
+    expect(context.onFinish).not.toHaveBeenCalled();
+  });
+
   it('still fails when neither TTS provider has a key', async () => {
     mockGetEffectiveApiKey.mockReset();
     mockGetEffectiveApiKey.mockResolvedValue(undefined);
