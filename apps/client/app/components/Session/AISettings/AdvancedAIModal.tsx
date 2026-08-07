@@ -446,7 +446,6 @@ const ResetButton: React.FC<{
   BFL_SAFETY_TOLERANCE: { DEFAULT: number; MIN: number; MAX: number };
   INFINITE_VALUE: number;
   ImageModels: typeof ImageModels;
-  tooltip?: string;
   width?: string;
   height?: string;
   top?: string;
@@ -461,7 +460,6 @@ const ResetButton: React.FC<{
   BFL_SAFETY_TOLERANCE,
   INFINITE_VALUE,
   ImageModels,
-  tooltip = 'Reset all settings to defaults',
   height = '32px',
 }) => {
   const handleReset = () => {
@@ -495,6 +493,21 @@ const ResetButton: React.FC<{
     setSpokenWords(200);
     setHistoryLines(INFINITE_VALUE);
   };
+
+  // Names what handleReset above actually clears. The previous copy listed only temperature, tokens,
+  // spoken words and response history, so it understated the scope badly on image models: the reset
+  // also wipes size, quality, style, width, height, aspect ratio, output format, prompt upsampling,
+  // safety tolerance and - the one value nobody can reconstruct from memory - the seed.
+  // Reasoning effort is called out because it is a user-level preference stored server-side, so this
+  // button genuinely cannot reset it despite being labelled "Reset advanced settings".
+  const resetScope = isImageModel(model)
+    ? 'temperature and every image setting, including the seed'
+    : 'temperature, output tokens, response history and spoken words';
+  const resetExclusions = REASONING_SUPPORTED_MODELS.has(model)
+    ? 'Tools and reasoning effort are not affected.'
+    : 'Tools are not affected.';
+  const tooltip = `Resets ${resetScope} to this model's defaults. ${resetExclusions}`;
+
   return (
     <Tooltip title={tooltip}>
       <IconButton
@@ -914,7 +927,6 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                   BFL_SAFETY_TOLERANCE={BFL_SAFETY_TOLERANCE}
                   INFINITE_VALUE={INFINITE_VALUE}
                   ImageModels={ImageModels}
-                  tooltip="Reset advanced settings (temperature, tokens, spoken words, response history) to defaults"
                 />
               </Box>
             )}
