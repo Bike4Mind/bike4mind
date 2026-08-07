@@ -1,6 +1,7 @@
-import { IFabFileRepository, ITagRepository } from '@bike4mind/common';
+import { IDataLakeRepository, IFabFileRepository, ITagRepository, prefixArmTagNames } from '@bike4mind/common';
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
+import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
 import { foldTagName, isDataLakeTagName, normalizeTagName } from './tagName';
 
 const tagUpdateSchema = z.object({
@@ -16,7 +17,8 @@ export type TagUpdateParams = z.infer<typeof tagUpdateSchema>;
 interface TagUpdateAdapters {
   db: {
     tags: Pick<ITagRepository, 'update' | 'findByIdAndUserId' | 'findAllByUserId' | 'delete'>;
-    fabFiles: Pick<IFabFileRepository, 'updateTagsByUserId' | 'dedupeTagByUserId'>;
+    fabFiles: Pick<IFabFileRepository, 'updateTagsByUserId' | 'dedupeTagByUserId' | 'computeDataLakeStats'>;
+    dataLakes: Pick<IDataLakeRepository, 'find' | 'setStats' | 'activateIfDraft'>;
   };
 }
 
@@ -31,6 +33,14 @@ interface TagUpdateAdapters {
  * carried both names ends up with one entry, not two.
  *
  * A `datalake:` name is refused on either side - see tagService/remove.
+ *
+ * Either name in a rename can also be a lake's `fileTagPrefix` content tag - membership since
+ * #1263 - so renaming a file's every-file-they-own tag out of (or into) a prefix can change which
+ * lakes it belongs to. No manage-rights gate is needed for that here, same reasoning as
+ * tagService/remove: this call only ever touches files `userId` owns, and prefix-arm membership
+ * requires the file's owner to BE the lake's creator, so any lake this could affect was created by
+ * this same `userId`. What the rename does NOT do on its own is recompute the affected lakes'
+ * stats.
  */
 export const update = async (userId: string, params: TagUpdateParams, adapters: TagUpdateAdapters) => {
   const { db } = adapters;
@@ -88,6 +98,23 @@ export const update = async (userId: string, params: TagUpdateParams, adapters: 
   };
 
   await db.tags.update(buildData);
+
+  // Every usable fileTagPrefix ends in ':' (see prefixArmTagNames), so a colon-free name on
+  // both sides of the rename can never touch one - skip the lake lookup for the common case.
+  if (renaming && (tag.name.includes(':') || newName.includes(':'))) {
+    const candidateLakes = await db.dataLakes.find({ createdByUserId: userId });
+    // Either the OLD name mattered to a lake's prefix (a possible leave) or the NEW one does (a
+    // possible join) - recompute covers both directions without needing to know which files
+    // actually crossed the boundary, matching tagService/remove's reasoning.
+    const affectedLakes = candidateLakes.filter(
+      lake =>
+        prefixArmTagNames([tag.name], lake.fileTagPrefix).length > 0 ||
+        prefixArmTagNames([newName], lake.fileTagPrefix).length > 0
+    );
+    for (const lake of affectedLakes) {
+      await recomputeLakeStats(lake, { db });
+    }
+  }
 
   return buildData;
 };

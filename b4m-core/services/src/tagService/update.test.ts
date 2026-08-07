@@ -1,15 +1,29 @@
 import { describe, it, expect, beforeEach, Mock, vi } from 'vitest';
 import { update } from './update';
-import { IFabFileRepository, ITagRepository } from '@bike4mind/common';
+import { IDataLakeDocument, IDataLakeRepository, IFabFileRepository, ITagRepository } from '@bike4mind/common';
 
 describe('tagService - update', () => {
   const userId = 'test-user-123';
   const existingTagId = 'existing-tag-123';
   type TagRepo = Pick<ITagRepository, 'update' | 'findByIdAndUserId' | 'findAllByUserId' | 'delete'>;
-  type FabFileRepo = Pick<IFabFileRepository, 'updateTagsByUserId' | 'dedupeTagByUserId'>;
+  type FabFileRepo = Pick<IFabFileRepository, 'updateTagsByUserId' | 'dedupeTagByUserId' | 'computeDataLakeStats'>;
+  type DataLakeRepo = Pick<IDataLakeRepository, 'find' | 'setStats' | 'activateIfDraft'>;
   let mockTagRepo: TagRepo;
   let mockFabFileRepo: FabFileRepo;
-  let adapters: { db: { tags: TagRepo; fabFiles: FabFileRepo } };
+  let mockDataLakeRepo: DataLakeRepo;
+  let adapters: { db: { tags: TagRepo; fabFiles: FabFileRepo; dataLakes: DataLakeRepo } };
+
+  const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
+    ({
+      id: 'lake1',
+      name: 'Lake',
+      slug: 'lake',
+      fileTagPrefix: 'lk:',
+      datalakeTag: 'datalake:lake',
+      createdByUserId: userId,
+      status: 'active',
+      ...overrides,
+    }) as IDataLakeDocument;
 
   const tagDoc = (overrides: Record<string, unknown> = {}) => ({
     id: existingTagId,
@@ -34,11 +48,18 @@ describe('tagService - update', () => {
     mockFabFileRepo = {
       updateTagsByUserId: vi.fn().mockResolvedValue(0),
       dedupeTagByUserId: vi.fn().mockResolvedValue(0),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 }),
+    };
+    mockDataLakeRepo = {
+      find: vi.fn().mockResolvedValue([]),
+      setStats: vi.fn(),
+      activateIfDraft: vi.fn(),
     };
     adapters = {
       db: {
         tags: mockTagRepo,
         fabFiles: mockFabFileRepo,
+        dataLakes: mockDataLakeRepo,
       },
     };
   });
@@ -359,5 +380,62 @@ describe('tagService - update', () => {
         expect(mockTagRepo.update).not.toHaveBeenCalled();
       }
     );
+  });
+
+  describe('renaming a tag that is a lake prefix-arm signal', () => {
+    it('recomputes stats for a lake whose prefix the OLD name matches (a possible leave)', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'lk:invoices' }));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+
+      await update(userId, { id: existingTagId, name: 'archived' }, adapters);
+
+      expect(mockDataLakeRepo.find).toHaveBeenCalledWith({ createdByUserId: userId });
+      expect(mockDataLakeRepo.setStats).toHaveBeenCalledWith('lake1', { fileCount: 0, totalSizeBytes: 0 });
+    });
+
+    it('recomputes stats for a lake whose prefix the NEW name matches (a possible join)', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'archived' }));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+
+      await update(userId, { id: existingTagId, name: 'lk:invoices' }, adapters);
+
+      expect(mockDataLakeRepo.setStats).toHaveBeenCalledWith('lake1', { fileCount: 0, totalSizeBytes: 0 });
+    });
+
+    it('does not recompute when neither the old nor the new name matches any prefix', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'foo' }));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+
+      await update(userId, { id: existingTagId, name: 'bar' }, adapters);
+
+      expect(mockDataLakeRepo.setStats).not.toHaveBeenCalled();
+    });
+
+    it('issues no dataLakes.find call when neither name has a colon', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'foo' }));
+
+      await update(userId, { id: existingTagId, name: 'bar' }, adapters);
+
+      expect(mockDataLakeRepo.find).not.toHaveBeenCalled();
+    });
+
+    it('skips the lookup entirely for a non-renaming edit (icon/colour only)', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'lk:invoices' }));
+
+      await update(userId, { id: existingTagId, name: 'lk:invoices', color: '#FF0000' }, adapters);
+
+      expect(mockDataLakeRepo.find).not.toHaveBeenCalled();
+    });
+
+    it('renames the files before recomputing, so the recompute sees the write', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'lk:invoices' }));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+
+      await update(userId, { id: existingTagId, name: 'archived' }, adapters);
+
+      const renameOrder = (mockFabFileRepo.updateTagsByUserId as Mock).mock.invocationCallOrder[0];
+      const recomputeOrder = (mockDataLakeRepo.setStats as Mock).mock.invocationCallOrder[0];
+      expect(renameOrder).toBeLessThan(recomputeOrder);
+    });
   });
 });

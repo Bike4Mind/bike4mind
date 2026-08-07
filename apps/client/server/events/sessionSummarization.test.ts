@@ -53,7 +53,7 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@bike4mind/services', () => ({
   fabFilesService: { updateFabFile: h.updateFabFile, createFabFile: h.createFabFile },
-  loadPrefixArmCandidateLakes: h.findPrefixArmLakes,
+  dataLakeService: { loadPrefixArmCandidateLakes: h.findPrefixArmLakes },
 }));
 
 vi.mock('@client/services/operationsModelService', () => ({

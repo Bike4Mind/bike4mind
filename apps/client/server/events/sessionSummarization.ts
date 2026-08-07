@@ -21,7 +21,7 @@ import {
   prefixArmTagNames,
   SupportedFabFileMimeTypes,
 } from '@bike4mind/common';
-import { fabFilesService, loadPrefixArmCandidateLakes } from '@bike4mind/services';
+import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { getFilesStorage } from '@server/utils/storage';
 import { logEvent } from '@server/utils/analyticsLog';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
@@ -227,7 +227,7 @@ export const handler = withEventContext(async (event, logger) => {
         const storedTagNames = (fabfile.tags ?? [])
           .map(t => t?.name)
           .filter((name): name is string => typeof name === 'string');
-        const prefixArmLakes = await loadPrefixArmCandidateLakes([fabfile.userId], {
+        const prefixArmLakes = await dataLakeService.loadPrefixArmCandidateLakes([fabfile.userId], {
           db: { dataLakes: dataLakeRepository },
         });
         const lakeTags = (fabfile.tags ?? []).filter(t => {
