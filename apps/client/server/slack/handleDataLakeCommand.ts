@@ -1,32 +1,46 @@
-import { parseDataLakeCommand, type ParsedDataLakeCommand } from '@bike4mind/slack';
-import type { IDataLakeDocument } from '@bike4mind/common';
+import { parseDataLakeCommand, type ParsedDataLakeCommand, type SlackAttachment } from '@bike4mind/slack';
+import { dataLakeService } from '@bike4mind/services';
+import type { IDataLakeRepository } from '@bike4mind/common';
+import {
+  buildSlackAccessContext,
+  ingestSlackFilesIntoLake,
+  type SlackIngestActor,
+  type SlackLakeIngestDeps,
+  type SlackLakeIngestOutcome,
+} from './dataLakeFileIngest';
 
 /**
- * Deterministic handler for the Slack `@datalake` command (PR 1 / M1).
+ * Deterministic handler for the Slack `@datalake` command.
  *
- * PR 1 is DORMANT: `runDataLakeSlackCommand` only calls this once the
- * `EnableDataLakeSlackAdd` admin flag is on. Scope here is the grammar + lake
- * resolution by slug; the FILE/LINK ingest, the server-built AccessContext, and
- * the write gate land in later milestones (M2/M3). `list` needs that AccessContext
- * too, so it stays a placeholder until then.
+ * M1 landed the grammar behind the `EnableDataLakeSlackAdd` flag; M2 fills in the FILE ingest
+ * (see `dataLakeFileIngest.ts`, which owns lake resolution and the write gate) and `list`. LINK
+ * ingest is M3 - a bare URL is refused here rather than silently ignored.
+ *
+ * The whole surface stays DORMANT: `runDataLakeSlackCommand` only reaches this once the admin
+ * flag is on, and the flag stays off until M4.
  */
 
-/** Narrowed DataLake repository surface this handler needs (injected for testability). */
-export interface DataLakeCommandRepo {
-  findBySlug(slug: string, organizationId?: string): Promise<IDataLakeDocument | null>;
-}
+/** DataLake repository surface the command needs (injected for testability). */
+export type DataLakeCommandRepo = Pick<
+  IDataLakeRepository,
+  'findById' | 'findBySlug' | 'findByDatalakeTag' | 'find' | 'findAccessible'
+>;
 
 export interface HandleDataLakeCommandParams {
   /** The full parsed command text, including the leading `@datalake`. */
   command: string;
-  /** organizationId of the resolved B4M user; scopes slug resolution. */
-  organizationId?: string;
-  dataLakes: DataLakeCommandRepo;
+  /** The resolved B4M user behind the Slack message - never derived from the event body. */
+  actor: SlackIngestActor;
+  /** Attachments on the Slack message, if any. */
+  files: SlackAttachment[];
+  channel: string;
+  messageTs: string;
+  deps: SlackLakeIngestDeps & { dataLakes: DataLakeCommandRepo };
 }
 
 const HELP_TEXT = [
   '*Data Lake commands*',
-  '- `@datalake add to <lake> <link>` - add a link (or an attached file) to a lake',
+  '- `@datalake add to <lake>` with a file attached - add that file to a lake',
   '- `@datalake list` - list the lakes you can add to',
   '- `@datalake help` - show this help',
 ].join('\n');
@@ -40,8 +54,7 @@ export async function handleDataLakeCommand(params: HandleDataLakeCommandParams)
     case 'help':
       return HELP_TEXT;
     case 'list':
-      // Listing writable lakes needs the server-built AccessContext (arrives in M2).
-      return 'Listing the lakes you can add to is coming soon.';
+      return handleList(params);
     case 'add':
       return handleAdd(parsed, params);
     default:
@@ -49,46 +62,111 @@ export async function handleDataLakeCommand(params: HandleDataLakeCommandParams)
   }
 }
 
+/**
+ * The lakes the caller may ADD to - i.e. `canManage` (admin or creator), not merely readable.
+ * Listing everything they can read would advertise lakes every add would then refuse.
+ */
+async function handleList(params: HandleDataLakeCommandParams): Promise<string> {
+  const ctx = await buildSlackAccessContext(params.actor, params.deps);
+  const lakes = await dataLakeService.listDataLakes(ctx, { db: { dataLakes: params.deps.dataLakes } });
+  const writable = lakes.filter(lake => lake.canManage);
+
+  if (writable.length === 0) {
+    return 'You cannot add to any data lakes yet. You can add to lakes you created, or ask an admin.';
+  }
+
+  const rows = writable.map(lake => `- \`${lake.slug}\` - ${lake.name}`).join('\n');
+  return `*Data lakes you can add to*\n${rows}\n\nAdd to one with \`@datalake add to <lake>\` and a file attached.`;
+}
+
 async function handleAdd(
   parsed: Extract<ParsedDataLakeCommand, { subcommand: 'add' }>,
   params: HandleDataLakeCommandParams
 ): Promise<string> {
   if (!parsed.lakeSlug) {
-    return 'Please name a target lake, e.g. `@datalake add to <lake> <link>` (with a link or an attached file).';
+    return 'Please name a target lake, e.g. `@datalake add to <lake>` with a file attached.';
   }
 
-  const lake = await params.dataLakes.findBySlug(parsed.lakeSlug, params.organizationId);
-  if (!lake) {
-    return `No Data Lake \`${parsed.lakeSlug}\` found. Use \`@datalake list\` to see the lakes you can add to.`;
+  // LINK ingest is M3. Refuse explicitly: accepting the command and silently ingesting nothing
+  // would read as success to the person who shared the URL.
+  if (params.files.length === 0 && parsed.link) {
+    return 'Adding a link is not supported yet. Attach the file to your message instead.';
   }
 
-  // Ingest (FILE/LINK) and the write-authorization check land in M2/M3.
-  return `Found lake *${lake.name}*. Adding content from Slack is coming soon.`;
+  const outcome = await ingestSlackFilesIntoLake(
+    {
+      actor: params.actor,
+      lakeSlug: parsed.lakeSlug,
+      files: params.files,
+      channel: params.channel,
+      messageTs: params.messageTs,
+    },
+    params.deps
+  );
+
+  return formatIngestOutcome(outcome);
+}
+
+/**
+ * Compose the in-thread reply. Confirms "added, processing" and STOPS - there is no
+ * post-vectorization "now live" update in this rollout, because nothing in the pipeline emits a
+ * signal this handler could await (fabFileVectorize only reaches the browser).
+ */
+export function formatIngestOutcome(outcome: SlackLakeIngestOutcome): string {
+  if (!outcome.ok) return outcome.message;
+
+  const { lakeName, added, duplicates, rejected } = outcome;
+  const lines: string[] = [];
+
+  if (added.length > 0) {
+    const names = added.map(name => `"${name}"`).join(', ');
+    lines.push(
+      `Added ${added.length} file${added.length === 1 ? '' : 's'} to *${lakeName}*: ${names}. ` +
+        'Processing now - it will be searchable once indexing finishes.'
+    );
+  }
+
+  if (duplicates.length > 0) {
+    const names = duplicates.map(name => `"${name}"`).join(', ');
+    lines.push(`Already in *${lakeName}*, skipped: ${names}.`);
+  }
+
+  if (rejected.length > 0) {
+    // Warning sign, escaped so this source file stays ASCII.
+    lines.push(...rejected.map(reason => `\u26a0\ufe0f ${reason}`));
+  }
+
+  if (lines.length === 0) {
+    return `Nothing to add to *${lakeName}*. Attach a file to your message.`;
+  }
+
+  return lines.join('\n');
 }
 
 /** Dependencies for the Slack `@datalake` orchestrator (all injected for testability). */
 export interface RunDataLakeSlackCommandDeps {
   /** The full parsed command text, including the leading `@datalake`. */
   command: string;
-  /** organizationId of the resolved B4M user; scopes slug resolution. */
-  organizationId?: string;
+  actor: SlackIngestActor;
+  files: SlackAttachment[];
   channel: string;
+  messageTs: string;
   threadTs?: string;
   adminSettings: { getSettingsValue(key: 'EnableDataLakeSlackAdd'): Promise<boolean | undefined> };
-  dataLakes: DataLakeCommandRepo;
+  ingest: SlackLakeIngestDeps & { dataLakes: DataLakeCommandRepo };
   sendMessage: (args: { channel: string; text: string; threadTs?: string }) => Promise<unknown>;
   logger: { info: (message: string) => void; error: (message: string, meta?: unknown) => void };
 }
 
 /**
  * Orchestrate a `@datalake` Slack command: enforce the `EnableDataLakeSlackAdd` gate
- * (silent no-op when off, keeping PR 1 dormant), otherwise dispatch and reply in-thread.
+ * (silent no-op when off, keeping the surface dormant), otherwise dispatch and reply in-thread.
  * The caller intercepts this BEFORE the LLM path and always acks Slack with 200.
  */
 export async function runDataLakeSlackCommand(deps: RunDataLakeSlackCommandDeps): Promise<void> {
-  // Never throw: the caller acks Slack with 200 on the next line, and an escaped
-  // exception would unwind past it and trigger Slack's event retry (and, once ingest
-  // lands, duplicate replies). Log, best-effort notify, and swallow.
+  // Never throw: the caller acks Slack with 200 on the next line, and an escaped exception would
+  // unwind past it and trigger Slack's event retry - which, now that this path ingests files,
+  // would re-download and re-create them. Log, best-effort notify, and swallow.
   try {
     const enabled = await deps.adminSettings.getSettingsValue('EnableDataLakeSlackAdd');
     if (!enabled) {
@@ -98,8 +176,11 @@ export async function runDataLakeSlackCommand(deps: RunDataLakeSlackCommandDeps)
 
     const response = await handleDataLakeCommand({
       command: deps.command,
-      organizationId: deps.organizationId,
-      dataLakes: deps.dataLakes,
+      actor: deps.actor,
+      files: deps.files,
+      channel: deps.channel,
+      messageTs: deps.messageTs,
+      deps: deps.ingest,
     });
     await deps.sendMessage({ channel: deps.channel, text: response, threadTs: deps.threadTs });
   } catch (err) {
