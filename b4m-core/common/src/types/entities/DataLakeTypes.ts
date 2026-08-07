@@ -360,9 +360,29 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
   /**
    * Global cross-user scan for the taxonomy stuck-job reconciler: batches whose `taxonomyStatus`
    * is still non-terminal and whose `taxonomyStartedAt` is older than `cutoff`, oldest-first.
-   * Mirrors `findStuck`'s shape, served by the `{ taxonomyStatus: 1, updatedAt: 1 }` index.
+   * Mirrors `findStuck`'s shape, served by the `{ taxonomyStatus: 1, taxonomyStartedAt: 1 }`
+   * index. Filters on `taxonomyStartedAt`, not `updatedAt` - taxonomy runs decoupled from
+   * ingest, so an unrelated write to the same batch (an ingest counter increment, say) keeps
+   * bumping `updatedAt` while `taxonomyStartedAt` - when THIS taxonomy attempt actually began -
+   * stays fixed; filtering on the wrong field could let a genuinely stuck batch dodge every scan.
    */
   findStuckTaxonomy(cutoff: Date, limit?: number): Promise<IDataLakeBatchDocument[]>;
+  /**
+   * Force a stuck taxonomy job to `'failed'`, guarded on BOTH `taxonomyStatus` (must still be
+   * one of `from`) AND staleness (`taxonomyStartedAt` must still be before `startedBefore`) -
+   * the second guard closes a race `setTaxonomyStatusIfActive` alone can't: the reconciler
+   * decides "stuck" from a snapshot read at fetch time, and without re-checking staleness at
+   * write time, a batch that legitimately re-claimed (a manual re-analyze) between the
+   * reconciler's read and its write would still match a status-only guard, discarding real
+   * in-flight work. Used only by `reconcileStuckTaxonomy` - every other taxonomy-status writer
+   * wants a plain status guard and should keep using `setTaxonomyStatusIfActive`.
+   */
+  forceFailStuckTaxonomy(
+    batchId: string,
+    from: TaxonomyStatus[],
+    startedBefore: Date,
+    taxonomyError: string
+  ): Promise<IDataLakeBatchDocument | null>;
   /**
    * Batches whose `taxonomyStatus` is in `TAXONOMY_ATTENTION_STATUSES` - running or awaiting
    * review/dismissal. Deliberately independent of `status` (ingest phase): the common case is

@@ -474,8 +474,12 @@ DataLakeBatchSchema.index({ userId: 1, status: 1 });
 DataLakeBatchSchema.index({ dataLakeId: 1, status: 1 });
 // Read-time reconciler scan: non-terminal batches ordered by staleness.
 DataLakeBatchSchema.index({ status: 1, updatedAt: 1 });
-// Same shape, for the taxonomy stuck-job reconciler.
+// findTaxonomyAttentionByUserId's list-response sort (most-recently-updated first) - NOT the
+// stuck-job reconciler scan, which needs taxonomyStartedAt (see the index below).
 DataLakeBatchSchema.index({ taxonomyStatus: 1, updatedAt: 1 });
+// findStuckTaxonomy's staleness scan - see its doc comment for why taxonomyStartedAt, not
+// updatedAt, is the correct clock for "how long has this taxonomy attempt been stuck."
+DataLakeBatchSchema.index({ taxonomyStatus: 1, taxonomyStartedAt: 1 });
 
 const DataLakeBatchModel =
   (mongoose.models['DataLakeBatch'] as unknown as mongoose.Model<IDataLakeBatchDocument>) ||
@@ -621,13 +625,34 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
   }
 
   async findStuckTaxonomy(cutoff: Date, limit = 500): Promise<IDataLakeBatchDocument[]> {
-    // taxonomyStatus equality prefix + updatedAt range -> served by the
-    // { taxonomyStatus:1, updatedAt:1 } index, mirroring findStuck.
+    // taxonomyStatus equality prefix + taxonomyStartedAt range -> served by the
+    // { taxonomyStatus:1, taxonomyStartedAt:1 } index, mirroring findStuck. Deliberately NOT
+    // updatedAt: an unrelated write to the batch (an ingest counter tick) keeps bumping that
+    // while taxonomyStartedAt - when this taxonomy attempt actually began - stays fixed, so
+    // filtering on updatedAt could let a genuinely stuck batch dodge every scan.
     const results = await this.batchModel
-      .find({ taxonomyStatus: { $in: TAXONOMY_NON_TERMINAL_STATUSES }, updatedAt: { $lt: cutoff } })
+      .find({ taxonomyStatus: { $in: TAXONOMY_NON_TERMINAL_STATUSES }, taxonomyStartedAt: { $lt: cutoff } })
       .sort({ updatedAt: 1 })
       .limit(limit);
     return results.map(r => r.toJSON() as IDataLakeBatchDocument);
+  }
+
+  /**
+   * Force a stuck taxonomy job to 'failed', guarded on BOTH status and staleness - see the
+   * interface doc comment for why the staleness guard is needed on top of a status-only one.
+   */
+  async forceFailStuckTaxonomy(
+    batchId: string,
+    from: TaxonomyStatus[],
+    startedBefore: Date,
+    taxonomyError: string
+  ): Promise<IDataLakeBatchDocument | null> {
+    const doc = await this.batchModel.findOneAndUpdate(
+      { _id: batchId, taxonomyStatus: { $in: from }, taxonomyStartedAt: { $lt: startedBefore } },
+      { $set: { taxonomyStatus: 'failed', taxonomyError } },
+      { new: true }
+    );
+    return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
   }
 
   async findTaxonomyAttentionByUserId(userId: string, limit = 500): Promise<IDataLakeBatchSummary[]> {

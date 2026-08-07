@@ -693,22 +693,113 @@ describe('DataLakeBatchRepository.findStuckTaxonomy - global cross-user stale sc
   setupMongoTest();
 
   const CUTOFF = new Date('2021-01-01T00:00:00Z');
+  const STALE = new Date('2020-01-01T00:00:00Z');
 
-  const seedBatch = async (taxonomyStatus: string, updatedAt?: Date) => {
-    const b = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', taxonomyStatus } as never);
-    if (updatedAt) {
-      await mongoose.models.DataLakeBatch.updateOne({ _id: b.id }, { $set: { updatedAt } }, { timestamps: false });
-    }
-    return b;
-  };
+  const seedBatch = async (taxonomyStatus: string, taxonomyStartedAt?: Date) =>
+    dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', taxonomyStatus, taxonomyStartedAt } as never);
 
   it('returns only stale non-terminal taxonomy phases (excludes fresh, ready, applied, and none)', async () => {
-    const stale = await seedBatch('analyzing', new Date('2020-01-01T00:00:00Z'));
-    await seedBatch('analyzing'); // fresh -> excluded
-    await seedBatch('ready', new Date('2020-01-01T00:00:00Z')); // stale but terminal-ish -> excluded
-    await seedBatch('none', new Date('2020-01-01T00:00:00Z')); // never opted in -> excluded
+    const stale = await seedBatch('analyzing', STALE);
+    await seedBatch('analyzing'); // fresh (no taxonomyStartedAt) -> excluded
+    await seedBatch('ready', STALE); // stale but terminal-ish -> excluded
+    await seedBatch('none', STALE); // never opted in -> excluded
     const stuck = await dataLakeBatchRepository.findStuckTaxonomy(CUTOFF);
     expect(stuck.map(b => b.id)).toEqual([stale.id]);
+  });
+
+  it('filters on taxonomyStartedAt, not updatedAt - an unrelated write must not hide a stuck batch', async () => {
+    const stillStuck = await seedBatch('analyzing', STALE);
+    // Simulates an unrelated write (e.g. an ingest counter tick) bumping updatedAt well past
+    // the cutoff while taxonomyStartedAt - when this taxonomy attempt actually began - stays
+    // fixed. If the query filtered on updatedAt, this batch would wrongly dodge the scan.
+    await mongoose.models.DataLakeBatch.updateOne(
+      { _id: stillStuck.id },
+      { $set: { updatedAt: new Date('2022-01-01T00:00:00Z') } },
+      { timestamps: false }
+    );
+
+    const stuck = await dataLakeBatchRepository.findStuckTaxonomy(CUTOFF);
+    expect(stuck.map(b => b.id)).toEqual([stillStuck.id]);
+  });
+
+  it('excludes a batch whose taxonomyStartedAt is fresh even if its updatedAt looks stale', async () => {
+    const freshlyReclaimed = await seedBatch('analyzing', new Date('2022-01-01T00:00:00Z'));
+    await mongoose.models.DataLakeBatch.updateOne(
+      { _id: freshlyReclaimed.id },
+      { $set: { updatedAt: STALE } },
+      { timestamps: false }
+    );
+
+    const stuck = await dataLakeBatchRepository.findStuckTaxonomy(CUTOFF);
+    expect(stuck).toEqual([]);
+  });
+});
+
+describe('DataLakeBatchRepository.forceFailStuckTaxonomy - reconciler write, guarded on status AND staleness', () => {
+  setupMongoTest();
+
+  const CUTOFF = new Date('2021-01-01T00:00:00Z');
+  const STALE = new Date('2020-01-01T00:00:00Z');
+  const FRESH = new Date('2022-01-01T00:00:00Z');
+
+  it('succeeds when status is in `from` and taxonomyStartedAt is before the cutoff', async () => {
+    const b = await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      taxonomyStatus: 'analyzing',
+      taxonomyStartedAt: STALE,
+    } as never);
+
+    const result = await dataLakeBatchRepository.forceFailStuckTaxonomy(
+      b.id,
+      ['queued', 'analyzing', 'applying'],
+      CUTOFF,
+      'Timed out waiting for AI tag suggestion'
+    );
+
+    expect(result?.taxonomyStatus).toBe('failed');
+    expect(result?.taxonomyError).toBe('Timed out waiting for AI tag suggestion');
+  });
+
+  it('is a no-op when taxonomyStartedAt is NOT before the cutoff, even if status still matches - the exact race this guard closes', async () => {
+    // Simulates a legitimate re-claim (e.g. a manual re-analyze) landing between the
+    // reconciler's read and its write: taxonomyStatus is still non-terminal, but
+    // taxonomyStartedAt now reflects the NEW attempt, not the stale one the reconciler saw.
+    const b = await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      taxonomyStatus: 'analyzing',
+      taxonomyStartedAt: FRESH,
+    } as never);
+
+    const result = await dataLakeBatchRepository.forceFailStuckTaxonomy(
+      b.id,
+      ['queued', 'analyzing', 'applying'],
+      CUTOFF,
+      'Timed out waiting for AI tag suggestion'
+    );
+
+    expect(result).toBeNull();
+    const fresh = await dataLakeBatchRepository.findById(b.id);
+    expect(fresh?.taxonomyStatus).toBe('analyzing'); // untouched - the re-claim's work survives
+  });
+
+  it('is a no-op when status does not match, regardless of staleness', async () => {
+    const b = await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      taxonomyStatus: 'ready',
+      taxonomyStartedAt: STALE,
+    } as never);
+
+    const result = await dataLakeBatchRepository.forceFailStuckTaxonomy(
+      b.id,
+      ['queued', 'analyzing', 'applying'],
+      CUTOFF,
+      'Timed out waiting for AI tag suggestion'
+    );
+
+    expect(result).toBeNull();
   });
 });
 
