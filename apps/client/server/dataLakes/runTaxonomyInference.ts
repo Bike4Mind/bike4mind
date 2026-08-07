@@ -102,10 +102,16 @@ const formatSize = (bytes: number): string => {
 };
 
 /**
- * Call the LLM to infer a tag taxonomy from a sampled folder tree. Never throws - every
- * failure mode (blank/unparseable/malformed response) degrades to `emptyTaxonomyResponse`
- * so a caller can always proceed with folder-only tags. The caller resolves/owns the API
- * key (both the auto post-upload job and a manual re-analyze share this one call site).
+ * Call the LLM to infer a tag taxonomy from a sampled folder tree.
+ *
+ * THROWS on a genuine API-call failure (auth/rate-limit/server error, network failure) - that
+ * is a real, curable problem the caller should surface as a failure, not silently swallow.
+ * Never throws for a malformed/unparseable RESPONSE (blank content, invalid JSON, missing
+ * `categories`) - that degrades to `emptyTaxonomyResponse` so a caller can always proceed with
+ * folder-only tags, since a model that returned *something* just didn't cooperate with the
+ * schema, which isn't the same class of problem as the call itself failing. The caller
+ * resolves/owns the API key (both the auto post-upload job and a manual re-analyze share this
+ * one call site).
  */
 export async function runTaxonomyInference(
   openaiApiKey: string,
@@ -138,35 +144,43 @@ export async function runTaxonomyInference(
 
   userPrompt += `\n\nTotal files in folder tree sample: ${folderTree.length}`;
 
+  // Not wrapped in try/catch: a failure here (auth/rate-limit/server/network) is a genuine
+  // API-call problem, not a response-format one, and is left to propagate so the caller can
+  // treat it as a real failure instead of silently getting an empty "success."
+  const completion = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: userPrompt },
+    ],
+    response_format: { type: 'json_object' },
+    temperature: 0.3,
+    max_tokens: 4000,
+  });
+
+  const rawContent = completion.choices[0]?.message?.content;
+  if (!rawContent) return emptyTaxonomyResponse(options?.existingPrefix);
+
   try {
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userPrompt },
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.3,
-      max_tokens: 4000,
-    });
-
-    const rawContent = completion.choices[0]?.message?.content;
-    if (!rawContent) return emptyTaxonomyResponse(options?.existingPrefix);
-
     const parsed = JSON.parse(rawContent) as InferTaxonomyResponse;
 
-    // Validate structure minimally - degrade to empty rather than failing the caller.
-    if (!parsed.suggestedPrefix || !parsed.categories || !Array.isArray(parsed.categories)) {
+    // Validate structure minimally - degrade to empty rather than failing the caller. Only
+    // `categories` gates the result: `suggestedPrefix` is never read downstream (the lake's
+    // already-fixed prefix is what's actually used, see the caller), so a model that omits it
+    // gets a sane default instead of losing an otherwise-valid taxonomy over an unused field.
+    if (!parsed.categories || !Array.isArray(parsed.categories)) {
       return emptyTaxonomyResponse(options?.existingPrefix);
     }
 
-    if (!parsed.suggestedPrefix.endsWith(':')) {
+    if (!parsed.suggestedPrefix) {
+      parsed.suggestedPrefix = options?.existingPrefix ?? '';
+    } else if (!parsed.suggestedPrefix.endsWith(':')) {
       parsed.suggestedPrefix += ':';
     }
 
     return parsed;
   } catch (error) {
-    console.warn('Taxonomy inference failed; returning empty taxonomy (non-blocking):', error);
+    console.warn('Taxonomy inference response was malformed; returning empty taxonomy (non-blocking):', error);
     return emptyTaxonomyResponse(options?.existingPrefix);
   }
 }

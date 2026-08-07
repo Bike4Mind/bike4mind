@@ -97,6 +97,28 @@ describe('analyzeBatchTaxonomy', () => {
     expect(result).toMatchObject({ outcome: 'failed', error: 'No OpenAI API key configured' });
   });
 
+  it('fails closed with a curated message (not the raw error) when inference throws, without touching taxonomySuggestions', async () => {
+    h.setTaxonomyStatusIfActive.mockResolvedValueOnce({ id: 'b1' }); // claim
+    h.runTaxonomyInference.mockRejectedValue(new Error('401 Incorrect API key provided: sk-***'));
+    h.setTaxonomyStatusIfActive.mockResolvedValueOnce({ id: 'b1', taxonomyStatus: 'failed' }); // fail transition
+
+    const result = await analyzeBatchTaxonomy('b1', 'lake1', 'u1', logger, { from: ['ready', 'failed'] });
+
+    expect(result).toEqual({
+      claimed: true,
+      outcome: 'failed',
+      error: 'AI tagging service is temporarily unavailable - try re-analyzing',
+    });
+    // Raw error text never reaches taxonomyError, and - critically - this write has no
+    // taxonomySuggestions key at all, so a batch re-analyzed from 'ready' keeps whatever good
+    // suggestions it already had instead of losing them to a transient API failure.
+    const failCall = h.setTaxonomyStatusIfActive.mock.calls[1];
+    expect(failCall[2]).toBe('failed');
+    expect(failCall[3]).toEqual({ taxonomyError: 'AI tagging service is temporarily unavailable - try re-analyzing' });
+    expect(failCall[3]).not.toHaveProperty('taxonomySuggestions');
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('401 Incorrect API key provided'));
+  });
+
   it('does not notify a failure if the fail-transition itself lost a concurrent race', async () => {
     h.setTaxonomyStatusIfActive.mockResolvedValueOnce({ id: 'b1' }); // claim wins
     h.fabFindByBatchId.mockResolvedValue([]);

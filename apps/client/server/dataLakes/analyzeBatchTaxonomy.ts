@@ -35,12 +35,21 @@ export interface AnalyzeBatchTaxonomyResult {
  * path, one WebSocket-notification behavior, and one claim/finalize discipline instead of two
  * independently-drifting ~45-line copies.
  *
- * Anticipated failures (no files, no API key, no lake) are handled internally: the batch is
- * transitioned to 'failed' with a real message and the client is notified. An UNEXPECTED
- * exception (DB/network/inference-call error) is left to THROW rather than being swallowed
- * here, because the right recovery differs per caller: the queue handler wants to release the
- * claim so SQS can actually retry; the manual endpoint has no retry mechanism and wants to
- * surface an immediate error to the requester instead. Both callers must catch it themselves.
+ * Anticipated failures (no files, no API key, no lake, and a genuine inference API-call
+ * failure) are handled internally: the batch is transitioned to 'failed' with a real message
+ * and the client is notified. An UNEXPECTED exception (DB/network-outside-inference error) is
+ * left to THROW rather than being swallowed here, because the right recovery differs per
+ * caller: the queue handler wants to release the claim so SQS can actually retry; the manual
+ * endpoint has no retry mechanism and wants to surface an immediate error to the requester
+ * instead. Both callers must catch it themselves.
+ *
+ * Inference-call failures specifically are NOT treated as unexpected: `runTaxonomyInference`
+ * throws only for a genuine API failure (see its doc comment), and that's routed through the
+ * same `fail()` path as every other anticipated failure here rather than left to propagate -
+ * both because it keeps the two callers' behavior consistent (the manual endpoint's own
+ * unexpected-exception handling is a worse experience than its normal failed-outcome response),
+ * and because `fail()` never touches `taxonomySuggestions`, so a failing re-analyze can never
+ * clobber a previously-good suggestion set.
  */
 export async function analyzeBatchTaxonomy(
   batchId: string,
@@ -93,10 +102,18 @@ export async function analyzeBatchTaxonomy(
   if (!lake) return fail('Data lake not found');
 
   const folderTree = sampleFabFilesForTaxonomy(files);
-  const response = await runTaxonomyInference(openaiApiKey, folderTree, {
-    existingPrefix: lake.fileTagPrefix,
-    context: options.context,
-  });
+  let response;
+  try {
+    response = await runTaxonomyInference(openaiApiKey, folderTree, {
+      existingPrefix: lake.fileTagPrefix,
+      context: options.context,
+    });
+  } catch (error) {
+    logger.error(
+      `Taxonomy inference API call failed for batch ${batchId}: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return fail('AI tagging service is temporarily unavailable - try re-analyzing');
+  }
 
   const tags = sanitizeCategories(response.categories, lake.fileTagPrefix);
   const fileAssignments = sanitizeFileAssignments(response.fileAssignments);
