@@ -37,13 +37,21 @@ export function evidenceTierForDoc(tagNames: string[]): EvidenceTier {
 /** Cap the text sent to the extractor per document, so one huge file cannot dominate the LLM budget. */
 const MAX_DOC_CHARS = 24_000;
 /**
- * Timeout-safe bound on LIVE documents per run. Extraction is sequential and each doc costs one LLM
- * call plus embeds/appends (~2-5s), and the job's Lambda has a 10-minute timeout (infra/queues.ts), so
- * ~100 docs is the ceiling that reliably completes in one pass. Chosen to clear the internal eval
- * corpus (47 docs) with headroom. A lake larger than this extracts its first slice and LOGS the
- * remainder (never a silent drop); full coverage for genuinely large lakes is the bounded-continuation
- * follow-up (a cursor + re-enqueue). The cap applies AFTER tombstones are filtered, so it is a bound on
- * real work, not on tombstones.
+ * Bound on LIVE documents per run, sized to clear the internal eval corpus (47 docs). The cap applies
+ * AFTER tombstones are filtered, so it bounds real work rather than tombstones. A lake larger than this
+ * extracts its first slice and LOGS the remainder (never a silent drop); full coverage for genuinely
+ * large lakes is the bounded-continuation follow-up (a cursor + re-enqueue).
+ *
+ * This cap is NOT by itself timeout-safe, and an earlier version of this comment claiming ~2-5s per
+ * document was measured optimistically. A real preview run took **8.8s for a single document** - one
+ * LLM extraction plus 12 facts, each costing an embed round trip and a ledger append whose profile read
+ * grows as the run proceeds. At that rate 100 docs is ~15 minutes against a 10-minute Lambda
+ * (infra/queues.ts). That measurement includes cold start and hit LAKE_FACTS_PER_DOC_MAX exactly, so it
+ * is a high-side sample - but the honest reading is that the cap is an estimate that can be wrong in
+ * the expensive direction.
+ *
+ * What actually keeps a run inside the Lambda is LAKE_EXTRACTION_DEADLINE_BUFFER_MS below. Treat this
+ * number as "how much work we are willing to queue up", and the deadline as the thing that enforces it.
  */
 const MAX_DOCS_PER_RUN = 100;
 /**
