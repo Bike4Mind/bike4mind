@@ -83,7 +83,10 @@ export type Manifest = z.infer<typeof ManifestSchema>;
  * Fork environments fetch and import modals via scheduled cron.
  */
 export class WhatsNewDistributionService {
-  private static s3Client = new S3Client({});
+  // WHEN_REQUIRED: the SDK's flexible-checksums middleware (default since 3.729.0) replaces
+  // content-length with x-amz-decoded-content-length, which fails PutObject with
+  // XAmzContentSHA256Mismatch. This restores the pre-3.729.0 behavior.
+  private static s3Client = new S3Client({ requestChecksumCalculation: 'WHEN_REQUIRED' });
   private static cfClient = new CloudFrontClient({});
   private static logger = new Logger({ metadata: { service: 'WhatsNewDistributionService' } });
 

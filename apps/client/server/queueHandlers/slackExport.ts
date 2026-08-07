@@ -549,7 +549,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     const filename = `slack-${safeChannelName}-${dateSuffix}.${fileExtension}`;
     const s3Key = `exports/${userId}/${jobId}/${filename}`;
 
-    const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-2' });
+    // WHEN_REQUIRED: the SDK's flexible-checksums middleware (default since 3.729.0) replaces
+    // content-length with x-amz-decoded-content-length, which fails PutObject with
+    // XAmzContentSHA256Mismatch. This restores the pre-3.729.0 behavior.
+    const s3Client = new S3Client({
+      region: process.env.AWS_REGION || 'us-east-2',
+      requestChecksumCalculation: 'WHEN_REQUIRED',
+    });
     const s3Bucket = Resource.slackExportBucket.name;
 
     await s3Client.send(

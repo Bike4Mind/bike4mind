@@ -19,7 +19,10 @@ import { z } from 'zod';
 //   4. Follows at most one redirect with SSRF re-check on the Location header
 //      to support Gravatar, GitHub avatars, and other CDN redirects.
 
-const s3Client = new S3Client({});
+// WHEN_REQUIRED: the SDK's flexible-checksums middleware (default since 3.729.0) replaces
+// content-length with x-amz-decoded-content-length, which fails PutObject with
+// XAmzContentSHA256Mismatch. This restores the pre-3.729.0 behavior.
+const s3Client = new S3Client({ requestChecksumCalculation: 'WHEN_REQUIRED' });
 
 const ExternalImageQuery = z.object({
   url: z.string().url('url must be a valid URL'),

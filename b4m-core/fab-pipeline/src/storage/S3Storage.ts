@@ -38,6 +38,12 @@ export class S3Storage extends BaseStorage {
       ...(endpoint ? { endpoint, forcePathStyle: true } : {}),
       maxAttempts: 3,
       retryMode: 'standard',
+      // The SDK's flexible-checksums middleware (default since @aws-sdk/client-s3 3.729.0)
+      // replaces content-length with x-amz-decoded-content-length on outgoing requests, which
+      // disagreed with the SigV4 payload hash on every PutObject observed here (#1535),
+      // failing with XAmzContentSHA256Mismatch. WHEN_REQUIRED restores the pre-3.729.0 behavior
+      // of only sending a checksum when the operation actually requires one.
+      requestChecksumCalculation: 'WHEN_REQUIRED',
       requestHandler: new NodeHttpHandler({
         httpsAgent: new Agent({
           keepAlive: true,
