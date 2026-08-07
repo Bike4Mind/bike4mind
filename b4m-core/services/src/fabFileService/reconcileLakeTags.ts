@@ -70,6 +70,11 @@ const isMetaTag = (name: string): boolean => name.toLowerCase().startsWith(DATAL
  * leave clears every tag under the departing lake's OWN prefix inside `removeFileFromLake` below,
  * which already includes any stamp this reconciler minted, so nothing is left for the tagger to
  * retract by the time `commit()` runs.
+ *
+ * Everything above is keyed by `datalake:*` META-TAGS. A lake a file belongs to ONLY via a
+ * `fileTagPrefix` content tag - no meta-tag ever involved - is a second, independent join/leave
+ * source evaluated after the tagger runs; see the `findPrefixArmLeaves`/`findPrefixArmJoins` call
+ * below for that half.
  */
 export const reconcileLakeTags = async (
   actor: MembershipActor,

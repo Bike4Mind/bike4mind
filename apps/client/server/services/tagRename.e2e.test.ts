@@ -4,7 +4,7 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { KnowledgeType } from '@bike4mind/common';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
-import { FabFile, fabFileRepository, fileTagRepository } from '@bike4mind/database';
+import { DataLakeModel, dataLakeRepository, FabFile, fabFileRepository, fileTagRepository } from '@bike4mind/database';
 import { tagService } from '@bike4mind/services';
 
 /**
@@ -24,7 +24,7 @@ const USER = 'rename-lifecycle-user';
 const OTHER_USER = 'someone-else';
 const SCOPE = { userGroups: [], dataLakeTags: [] };
 
-const db = { tags: fileTagRepository, fabFiles: fabFileRepository };
+const db = { tags: fileTagRepository, fabFiles: fabFileRepository, dataLakes: dataLakeRepository };
 
 // The Tag model is registered by importing @bike4mind/database but is not exported from it.
 const TagModel = () => mongoose.model('Tag');
@@ -38,7 +38,7 @@ afterAll(async () => {
   await mongoServer?.stop();
 }, 30000);
 afterEach(async () => {
-  await Promise.all([FabFile.deleteMany({}), TagModel().deleteMany({})]);
+  await Promise.all([FabFile.deleteMany({}), TagModel().deleteMany({}), DataLakeModel.deleteMany({})]);
 });
 
 const seedFile = async (tags: string[], overrides: Record<string, unknown> = {}) => {
@@ -131,5 +131,47 @@ describe('tagService.update keeps tag documents, file tags and the count aggrega
     expect(await rawTagsOf(duplicated)).toEqual(['Receipts']);
     expect(await rawTagsOf(alreadyHasTarget)).toEqual(['Receipts']);
     expect(await countOf('Receipts')).toBe(4);
+  }, 30000);
+});
+
+// Against REAL Mongo, not a mock: proves the recompute reads the aggregate AFTER the rename has
+// actually persisted, both for a lake the rename joins and one it leaves.
+describe('tagService.update recomputes a lake whose prefix-arm signal the rename crosses', () => {
+  it('picks up fileCount when the new name newly satisfies a lake prefix', async () => {
+    const lake = await DataLakeModel.create({
+      name: 'Lake',
+      slug: 'lake',
+      fileTagPrefix: 'lk:',
+      datalakeTag: 'datalake:lake',
+      createdByUserId: USER,
+      fileCount: 0,
+      totalSizeBytes: 0,
+    });
+    const archived = await fileTagRepository.findOrCreateByNameAndUserId('archived', USER, {});
+    await seedFile(['archived']);
+
+    await tagService.update(USER, { id: archived.id, name: 'lk:invoices' }, { db });
+
+    const persisted = await DataLakeModel.findById(lake.id);
+    expect(persisted?.fileCount).toBe(1);
+  }, 30000);
+
+  it('drops fileCount when the rename moves the file to no longer carry a prefix tag', async () => {
+    const lake = await DataLakeModel.create({
+      name: 'Lake',
+      slug: 'lake',
+      fileTagPrefix: 'lk:',
+      datalakeTag: 'datalake:lake',
+      createdByUserId: USER,
+      fileCount: 1,
+      totalSizeBytes: 10,
+    });
+    const invoices = await fileTagRepository.findOrCreateByNameAndUserId('lk:invoices', USER, {});
+    await seedFile(['lk:invoices']);
+
+    await tagService.update(USER, { id: invoices.id, name: 'archived' }, { db });
+
+    const persisted = await DataLakeModel.findById(lake.id);
+    expect(persisted?.fileCount).toBe(0);
   }, 30000);
 });

@@ -33,6 +33,7 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { __repo: 'fabFiles' },
   fileTagRepository: { __repo: 'fileTags' },
+  dataLakeRepository: { __repo: 'dataLakes' },
 }));
 
 import handler from '../[id]';
@@ -54,6 +55,7 @@ describe('PUT /api/files/tags/[id]', () => {
     const [, , adapters] = h.update.mock.calls[0];
     expect(adapters.db.fabFiles).toEqual({ __repo: 'fabFiles' });
     expect(adapters.db.tags).toEqual({ __repo: 'fileTags' });
+    expect(adapters.db.dataLakes).toEqual({ __repo: 'dataLakes' });
   });
 
   it('acts as the authenticated user, never a userId supplied in the body', async () => {
@@ -92,6 +94,7 @@ describe('DELETE /api/files/tags/[id]', () => {
     const [, , adapters] = h.remove.mock.calls[0];
     expect(adapters.db.fabFiles).toEqual({ __repo: 'fabFiles' });
     expect(adapters.db.tags).toEqual({ __repo: 'fileTags' });
+    expect(adapters.db.dataLakes).toEqual({ __repo: 'dataLakes' });
   });
 
   it('takes the tag id from the query string', async () => {
