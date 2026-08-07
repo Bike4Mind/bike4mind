@@ -224,6 +224,104 @@ function formatSimpleAgentResponse(response: string): { blocks: any[] } {
 }
 
 /**
+ * Clear the quest's pending Slack notification so the "Processing..." status message
+ * is never left waiting on a delivery that already happened or can no longer happen.
+ */
+async function clearSlackNotification(questId: string, logger: Logger, context: string): Promise<void> {
+  try {
+    await Quest.findByIdAndUpdate(questId, { $unset: { slackNotification: 1 } });
+  } catch (cleanupErr) {
+    logger.warn(`[SLACK-NOTIFY] Failed to clear slackNotification ${context}`, { questId, error: cleanupErr });
+  }
+}
+
+/**
+ * Build the Slack client for a quest's pending notification. Returns null when the
+ * workspace, token or decryption is unusable - in that case the pending notification is
+ * cleared so users aren't left hanging on the status message.
+ */
+async function resolveSlackClient(workspaceId: string, questId: string, logger: Logger): Promise<SlackClient | null> {
+  const workspace = await slackDevWorkspaceRepository.findByIdWithCredentials(workspaceId);
+  if (!workspace) {
+    logger.error('[SLACK-NOTIFY] Workspace not found', { workspaceId });
+    await clearSlackNotification(questId, logger, 'on missing workspace');
+    return null;
+  }
+  if (!workspace.slackBotToken) {
+    logger.error('[SLACK-NOTIFY] Workspace found but bot token is missing', {
+      workspaceId,
+      workspaceName: workspace.name,
+    });
+    await clearSlackNotification(questId, logger, 'on missing bot token');
+    return null;
+  }
+
+  const decryptedToken = decryptToken(workspace.slackBotToken);
+  if (!decryptedToken) {
+    logger.error('[SLACK-NOTIFY] Failed to decrypt bot token', {
+      workspaceId,
+      workspaceName: workspace.name,
+    });
+    await clearSlackNotification(questId, logger, 'on decrypt failure');
+    return null;
+  }
+
+  return new SlackClient(decryptedToken, logger);
+}
+
+const SLACK_PROCESSING_FAILURE_TEXT = 'Sorry, something went wrong while processing your request. Please try again.';
+
+/**
+ * Replace the "Processing..." status message with a failure notice when chat processing
+ * throws before any reply is delivered. Without this the Slack message stays pending
+ * forever, since the delivery block below is skipped on the error path.
+ *
+ * Best-effort by contract: it must never mask the original processing error, so every
+ * step swallows its own failures.
+ */
+async function deliverSlackProcessingFailure(questId: string, logger: Logger): Promise<void> {
+  const quest = await Quest.findById(questId);
+  if (!quest?.slackNotification) {
+    return;
+  }
+
+  const { workspaceId, channelId, messageTs } = quest.slackNotification as {
+    workspaceId: string;
+    channelId: string;
+    messageTs: string;
+  };
+
+  const slackClient = await resolveSlackClient(workspaceId, questId, logger);
+  if (!slackClient) {
+    return;
+  }
+
+  // ChatCompletionProcess saves the error as the quest reply before rethrowing, so reuse
+  // it as the detail line when present - it is the same text the web client shows.
+  const detail = quest.type === 'error' && quest.reply ? quest.reply : null;
+  const text = detail ? `${SLACK_PROCESSING_FAILURE_TEXT}\n\n> ${detail}` : SLACK_PROCESSING_FAILURE_TEXT;
+
+  if (messageTs) {
+    try {
+      await slackClient.updateMessage({
+        channel: channelId,
+        ts: messageTs,
+        text,
+        blocks: formatSimpleAgentResponse(text).blocks,
+      });
+    } catch (updateError) {
+      logger.error('[SLACK-NOTIFY] Failed to post failure notice to Slack', {
+        questId,
+        messageTs,
+        error: updateError,
+      });
+    }
+  }
+
+  await clearSlackNotification(questId, logger, 'after failure notice');
+}
+
+/**
  * Slack Quest Processor Lambda Handler
  *
  * Handles Slack-originated completion requests routed via SlackEventBus.
@@ -322,11 +420,27 @@ export const handler = withEventContext(async (event, logger) => {
   // Premium overlay tool implementations merge first so explicit tools win.
   const externalTools = { ...premiumLlmTools, ...withLatticeTools(baseTools, requestBody.enableLattice) };
 
-  await chatCompletion.process({
-    body: requestBody,
-    logger,
-    externalTools,
-  });
+  try {
+    await chatCompletion.process({
+      body: requestBody,
+      logger,
+      externalTools,
+    });
+  } catch (processError) {
+    logger.error('[SLACK-NOTIFY] Chat processing failed before a reply was delivered', {
+      questId: params.questId,
+      error: processError,
+    });
+    try {
+      await deliverSlackProcessingFailure(params.questId, logger);
+    } catch (notifyError) {
+      logger.error('[SLACK-NOTIFY] Failed to deliver failure notice', {
+        questId: params.questId,
+        error: notifyError,
+      });
+    }
+    throw processError;
+  }
 
   // Inline Slack notification delivery - edits the status message with the final AI response
   // and uploads any generated images. Replaces the SlackNotificationEvents EventBridge hop.
@@ -344,45 +458,10 @@ export const handler = withEventContext(async (event, logger) => {
     isPaintCommand?: boolean;
   };
 
-  const workspace = await slackDevWorkspaceRepository.findByIdWithCredentials(workspaceId);
-  if (!workspace) {
-    logger.error('[SLACK-NOTIFY] Workspace not found', { workspaceId });
-    // Best-effort: clear the stuck "Processing..." message so users aren't left hanging
-    try {
-      await Quest.findByIdAndUpdate(params.questId, { $unset: { slackNotification: 1 } });
-    } catch (cleanupErr) {
-      logger.warn('[SLACK-NOTIFY] Failed to clear slackNotification on missing workspace', { cleanupErr });
-    }
+  const slackClient = await resolveSlackClient(workspaceId, params.questId, logger);
+  if (!slackClient) {
     return;
   }
-  if (!workspace.slackBotToken) {
-    logger.error('[SLACK-NOTIFY] Workspace found but bot token is missing', {
-      workspaceId,
-      workspaceName: workspace.name,
-    });
-    try {
-      await Quest.findByIdAndUpdate(params.questId, { $unset: { slackNotification: 1 } });
-    } catch (cleanupErr) {
-      logger.warn('[SLACK-NOTIFY] Failed to clear slackNotification on missing bot token', { cleanupErr });
-    }
-    return;
-  }
-
-  const decryptedToken = decryptToken(workspace.slackBotToken);
-  if (!decryptedToken) {
-    logger.error('[SLACK-NOTIFY] Failed to decrypt bot token', {
-      workspaceId,
-      workspaceName: workspace.name,
-    });
-    try {
-      await Quest.findByIdAndUpdate(params.questId, { $unset: { slackNotification: 1 } });
-    } catch (cleanupErr) {
-      logger.warn('[SLACK-NOTIFY] Failed to clear slackNotification on decrypt failure', { cleanupErr });
-    }
-    return;
-  }
-
-  const slackClient = new SlackClient(decryptedToken, logger);
 
   const aiResponse = quest.reply || quest.replies?.[0] || 'Processing complete.';
   let formatted = formatSimpleAgentResponse(aiResponse);
@@ -459,19 +538,9 @@ export const handler = withEventContext(async (event, logger) => {
     }
   }
 
-  // Wrap cleanup in try-catch: if this fails after successful delivery, EventBridge would retry
-  // the Lambda and the user would receive a duplicate notification.
-  try {
-    await Quest.findByIdAndUpdate(params.questId, { $unset: { slackNotification: 1 } });
-  } catch (cleanupErr) {
-    logger.error(
-      '[SLACK-NOTIFY] Failed to clear slackNotification after delivery — duplicate notification risk on retry',
-      {
-        questId: params.questId,
-        error: cleanupErr,
-      }
-    );
-  }
+  // If this fails after successful delivery, EventBridge would retry the Lambda and the
+  // user would receive a duplicate notification.
+  await clearSlackNotification(params.questId, logger, 'after delivery (duplicate notification risk on retry)');
 
   logger.info('[SLACK-NOTIFY] Slack notification delivered', { questId: params.questId });
 });
