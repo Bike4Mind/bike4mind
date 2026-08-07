@@ -137,6 +137,16 @@ describe('GET /api/subscriptions/checkout-session', () => {
     expect(res._getJSONData()).toMatchObject({ value: 3000, currency: 'JPY' });
   });
 
+  it('divides by 1000 for a three-decimal currency', async () => {
+    // KWD is thousandths: 5.000 KWD arrives as 5000, so value is 5, not 50.
+    mockSessionsRetrieve.mockResolvedValue(paidSession({ currency: 'kwd', amount_total: 5000 }));
+
+    const { promise, res } = call('cs_test_1');
+    await promise;
+
+    expect(res._getJSONData()).toMatchObject({ value: 5, currency: 'KWD' });
+  });
+
   it('falls back cleanly when the line item carries no plan detail', async () => {
     mockSessionsRetrieve.mockResolvedValue(paidSession({ line_items: { data: [] } }));
 
