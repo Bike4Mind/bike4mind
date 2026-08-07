@@ -20,7 +20,7 @@ const requireTagId = (query: TagIdQuery): string => {
   const { id } = query;
 
   if (typeof id !== 'string' || id.length === 0) {
-    throw new BadRequestError('A tag id is required in the URL');
+    throw new BadRequestError('The URL must carry exactly one tag id');
   }
 
   return id;
