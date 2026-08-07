@@ -17,7 +17,7 @@ import {
 import { baseApi } from '@server/middlewares/baseApi';
 import { filterInviteRecipientsToSelf } from '@server/managers/inviteManager';
 import { sendToClient } from '@server/websocket/utils';
-import { InviteType, ProjectEvents } from '@bike4mind/common';
+import { foldTagName, InviteType, ProjectEvents } from '@bike4mind/common';
 import { logEvent } from '@server/utils/analyticsLog';
 import { Resource } from 'sst';
 
@@ -33,43 +33,31 @@ const transferFileTagsToUser = async (fileId: string, userId: string) => {
 
     // Get original tags from the file owner to copy their properties
     const fileOwnerTags = await fileTagRepository.findAllByUserId(file.userId);
-    const ownerTagsByName = new Map(fileOwnerTags.map(tag => [tag.name.toLowerCase(), tag]));
+    // foldTagName, not a local toLowerCase: these keys decide which owner tag a name copies its
+    // icon/colour from, and the repository upsert below folds under the same rule.
+    const ownerTagsByName = new Map(fileOwnerTags.map(tag => [foldTagName(tag.name), tag]));
 
-    // Process file tags: group by lowercase name and count occurrences
-    const tagInfo = new Map<string, { originalName: string; count: number; ownerTag?: any }>();
-
-    console.log('File tags:', file.tags);
+    // Group under the shared collision rule, so two stored casings of one tag copy across as one tag
+    // rather than two. findOrCreateByNameAndUserId matches its name exactly, so it cannot dedup them.
+    const tagInfo = new Map<string, { originalName: string; ownerTag?: any }>();
 
     for (const fileTag of file.tags) {
-      const lowerName = fileTag.name.toLowerCase();
-      const existing = tagInfo.get(lowerName);
-
-      if (existing) {
-        existing.count += 1;
-      } else {
-        tagInfo.set(lowerName, {
+      const foldedName = foldTagName(fileTag.name);
+      if (!tagInfo.has(foldedName)) {
+        tagInfo.set(foldedName, {
           originalName: fileTag.name,
-          count: 1,
-          ownerTag: ownerTagsByName.get(lowerName),
+          ownerTag: ownerTagsByName.get(foldedName),
         });
       }
     }
 
-    console.log('Tag info processed:', Array.from(tagInfo.entries()));
-
     // Create/update tags atomically
-    for (const { originalName, count, ownerTag } of Array.from(tagInfo.values())) {
-      console.log('Processing tag:', { originalName, count, ownerTag });
-      await fileTagRepository.findOrCreateByNameAndUserId(
-        originalName,
-        userId,
-        {
-          icon: ownerTag?.icon || '🏷️',
-          color: ownerTag?.color || '#0B6BCB',
-          description: ownerTag?.description || `Shared tag: ${originalName}`,
-        },
-        count
-      );
+    for (const { originalName, ownerTag } of Array.from(tagInfo.values())) {
+      await fileTagRepository.findOrCreateByNameAndUserId(originalName, userId, {
+        icon: ownerTag?.icon || '🏷️',
+        color: ownerTag?.color || '#0B6BCB',
+        description: ownerTag?.description || `Shared tag: ${originalName}`,
+      });
     }
   } catch (error) {
     console.warn(`Failed to transfer tags from file ${fileId} to user ${userId}:`, error);

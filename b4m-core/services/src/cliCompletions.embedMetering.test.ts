@@ -76,8 +76,16 @@ describe('executeCompletion - unconditional usage metering (alwaysRecordUsage)',
     await executeCompletion({ ...baseParams, db, alwaysRecordUsage: true });
 
     expect(usageEvents.record).toHaveBeenCalledTimes(1);
+    // Denormalized origin rides along: source defaults to 'api' and apiKeyId is
+    // the authing key, so the platform consumer view can attribute this spend.
     expect(usageEvents.record).toHaveBeenCalledWith(
-      expect.objectContaining({ ownerId: 'org1', ownerType: CreditHolderType.Organization, creditsCharged: 10 })
+      expect.objectContaining({
+        ownerId: 'org1',
+        ownerType: CreditHolderType.Organization,
+        creditsCharged: 10,
+        source: 'api',
+        apiKeyId: 'k1',
+      })
     );
   });
 

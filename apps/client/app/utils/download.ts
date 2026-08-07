@@ -7,7 +7,8 @@ export function downloadData(data: BlobPart, filename: string, type?: string) {
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  // Deferred a tick: Safari aborts the download if the object URL is revoked in the same one.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 export function downloadUrl(url: string, filename: string) {

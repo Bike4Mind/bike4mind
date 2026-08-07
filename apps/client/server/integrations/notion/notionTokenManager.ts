@@ -24,8 +24,9 @@ interface NotionTokenResult {
 export class NotionTokenManager {
   /**
    * Notion tokens don't expire, so validity only means "not revoked" - checked via a test API call.
+   * Returns 'valid', 'revoked' (confirmed 401/403), or 'unknown' (network/timeout/5xx).
    */
-  private static async validateToken(accessToken: string): Promise<boolean> {
+  private static async validateToken(accessToken: string): Promise<'valid' | 'revoked' | 'unknown'> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), TOKEN_VALIDATION_TIMEOUT);
     try {
@@ -38,9 +39,12 @@ export class NotionTokenManager {
         },
         signal: controller.signal,
       });
-      return response.ok;
+      if (response.ok) return 'valid';
+      // Only treat explicit auth failures as revocation
+      if (response.status === 401 || response.status === 403) return 'revoked';
+      return 'unknown';
     } catch {
-      return false;
+      return 'unknown';
     } finally {
       clearTimeout(timeoutId);
     }
@@ -83,10 +87,10 @@ export class NotionTokenManager {
         return null;
       }
 
-      const isValid = await this.validateToken(accessToken);
+      const status = await this.validateToken(accessToken);
 
-      if (!isValid) {
-        console.log('Notion token is invalid/revoked. Marking for reconnection.');
+      if (status === 'revoked') {
+        console.log('Notion token is confirmed revoked (401/403). Marking for reconnection.');
 
         await userRepository.update({
           id: userId,
@@ -100,7 +104,14 @@ export class NotionTokenManager {
         throw new NotionReconnectRequiredError();
       }
 
-      console.log('Using valid Notion token');
+      if (status === 'unknown') {
+        // Transient error (timeout, network, 5xx) - use the token optimistically
+        // since Notion tokens don't expire, the most likely cause is a temporary issue
+        console.warn('Notion token validation inconclusive (network/timeout). Using token optimistically.');
+      } else {
+        console.log('Using valid Notion token');
+      }
+
       return {
         accessToken,
         workspaceId: notionConnect.workspaceId,
@@ -173,27 +184,49 @@ export class NotionTokenManager {
       console.log('Created new Notion MCP server');
     }
 
-    // Try to get and store available tools (non-blocking)
-    try {
-      const { invokeMcpHandler } = await import('@server/utils/invokeMcpHandler');
-      const result = await invokeMcpHandler<unknown>({
-        envVariables: envVars,
-        name: 'notion',
-        action: 'getTools',
-        userId,
-      });
+    // Fetch and store available tools, retrying once on failure.
+    // Without toolSchemas the ToolBuilder silently skips the server,
+    // so the LLM never sees Notion tools despite a valid connection.
+    const MAX_TOOL_FETCH_ATTEMPTS = 2;
+    let toolsFetched = false;
 
-      const tools = Array.isArray(result) ? result : [result].flat();
-      if (notionServer) {
-        await mcpServerRepository.update({
-          id: notionServer.id,
-          tools: tools.map((tool: { name: string }) => tool.name),
-          toolSchemas: tools as Array<{ name: string; description?: string; input_schema?: Record<string, unknown> }>,
+    for (let attempt = 1; attempt <= MAX_TOOL_FETCH_ATTEMPTS; attempt++) {
+      try {
+        // Imported inside the try so a module-resolution failure degrades to "no tool schemas"
+        // rather than failing the whole OAuth flow. Repeat imports hit the module cache.
+        const { invokeMcpHandler } = await import('@server/utils/invokeMcpHandler');
+        const result = await invokeMcpHandler<unknown>({
+          envVariables: envVars,
+          name: 'notion',
+          action: 'getTools',
+          userId,
         });
+
+        const tools = Array.isArray(result) ? result : [result].flat();
+        if (notionServer) {
+          await mcpServerRepository.update({
+            id: notionServer.id,
+            tools: tools.map((tool: { name: string }) => tool.name),
+            toolSchemas: tools as Array<{ name: string; description?: string; input_schema?: Record<string, unknown> }>,
+          });
+        }
+        console.log(`Notion MCP server configured with ${tools.length} tools`);
+        toolsFetched = true;
+        break;
+      } catch (toolsError) {
+        console.warn(`Failed to get Notion MCP tools (attempt ${attempt}/${MAX_TOOL_FETCH_ATTEMPTS}):`, toolsError);
+        if (attempt < MAX_TOOL_FETCH_ATTEMPTS) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
       }
-      console.log(`Notion MCP server configured with ${tools.length} tools`);
-    } catch (toolsError) {
-      console.warn('Failed to get Notion MCP tools, but connection saved:', toolsError);
+    }
+
+    if (!toolsFetched) {
+      console.error(
+        'Notion MCP tools could not be fetched after retries. ' +
+          'The server is saved but toolSchemas are empty - the LLM will not see Notion tools ' +
+          'until the next GET /api/mcp-servers request refreshes them.'
+      );
     }
   }
 }

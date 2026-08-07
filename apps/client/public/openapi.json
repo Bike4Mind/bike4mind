@@ -597,11 +597,377 @@
           "error": "Missing or invalid toolName",
           "request_id": "abc-123"
         }
+      },
+      "sendChatMessageResponse200": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "message_received": {
+            "type": "boolean"
+          },
+          "timestamp": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "tracking_info": {
+            "type": "object",
+            "properties": {
+              "quest_id": {
+                "type": "string"
+              },
+              "check_status_url": {
+                "type": "string"
+              },
+              "poll_url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "quest_id",
+              "check_status_url"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "message_received",
+          "timestamp",
+          "model",
+          "tracking_info"
+        ]
+      },
+      "sendChatMessageResponse400": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "sendChatMessageResponse404": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "sendChatMessageResponse429": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "sendChatMessageRequest": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "temperature": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2
+          },
+          "max_tokens": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "maxTokens": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "maxOutputTokens": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "stream": {
+            "type": "boolean",
+            "default": false
+          },
+          "historyCount": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "default": 10
+          },
+          "fileIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "wait": {
+            "type": "boolean",
+            "default": false
+          },
+          "enableTools": {
+            "type": "boolean",
+            "default": false
+          },
+          "toolMode": {
+            "type": "string",
+            "enum": [
+              "fast",
+              "smart"
+            ]
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "enableQuestMaster": {
+            "type": "boolean"
+          },
+          "enableMementos": {
+            "type": "boolean"
+          },
+          "enableAgents": {
+            "type": "boolean"
+          },
+          "promptMode": {
+            "type": "string",
+            "enum": [
+              "raw",
+              "grounded",
+              "surface"
+            ]
+          },
+          "includePromptDetails": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "example": {
+          "message": "How do I reset my password?",
+          "toolMode": "smart"
+        }
       }
     },
     "parameters": {}
   },
   "paths": {
+    "/api/chat": {
+      "post": {
+        "operationId": "sendChatMessage",
+        "summary": "Send a chat message",
+        "description": "Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/sendChatMessageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Message accepted. The default (async) path returns this queued ACK. With `wait: true` the body additionally carries the completed reply (`response`/`responses`), `createdAt`, and `performance` timings - fields not modelled here yet; the synchronous response shape is a follow-up.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/sendChatMessageResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No usable default chat model is configured and none was supplied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/sendChatMessageResponse400"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key does not hold any of the required scopes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No notebook/session exists to attach the message to.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/sendChatMessageResponse404"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request body failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/sendChatMessageResponse429"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "ai:chat",
+          "ai:generate"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/chat\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"message\": \"How do I reset my password?\",\n  \"toolMode\": \"smart\"\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/chat\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"message\": \"How do I reset my password?\",\n  \"toolMode\": \"smart\"\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/chat\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"message\": \"How do I reset my password?\",\n        \"toolMode\": \"smart\"\n    },\n)"
+          }
+        ]
+      }
+    },
     "/api/ai/v1/completions": {
       "post": {
         "operationId": "createCompletion",

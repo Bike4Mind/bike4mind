@@ -5,8 +5,9 @@ import { IBaseRepository, type IMongoDocument } from '.';
 /**
  * Lake lifecycle. Stable states (draft/active/archived/deleted) plus transitional
  * states (archiving/restoring/deleting) that exist to drive UI and make a crashed
- * mid-operation observable. draft -> active is one-way and happens implicitly on
- * first batch creation.
+ * mid-operation observable. draft -> active is one-way. It happens implicitly once the lake
+ * holds its first member file (see `activateIfDraft` below), and unconditionally when an
+ * archived or deleted lake is restored, which is how an empty lake can end up active.
  */
 export type DataLakeStatus = 'draft' | 'active' | 'archiving' | 'archived' | 'restoring' | 'deleting' | 'deleted';
 
@@ -96,6 +97,17 @@ export interface IDataLake {
   totalSizeBytes?: number;
   /** Last time files were synced/uploaded to this data lake */
   lastSyncAt?: Date;
+  /**
+   * The exact `deletedAt` stamp phase-1 delete wrote on this lake's members, so restore can
+   * un-delete that batch and nothing else. Not a time window: it is matched by EQUALITY, which is
+   * what keeps a file the creator deleted independently - before OR during the deleted window -
+   * from riding back in. Claimed set-if-unset, so two overlapping teardowns agree on one stamp
+   * instead of the loser recording a mark no row carries; restore clears it.
+   *
+   * Absent on a lake torn down before this field existed, which restores unbounded (the old
+   * behavior) rather than restoring nothing.
+   */
+  filesDeletedAt?: Date | null;
 }
 
 export interface IDataLakeDocument extends IDataLake, IMongoDocument {}
@@ -155,6 +167,22 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   }): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
   /** Persist recomputed stats (source via IFabFileRepository.computeDataLakeStats). */
   setStats(id: string, stats: { fileCount: number; totalSizeBytes: number }): Promise<IDataLakeDocument | null>;
+  /**
+   * One-way draft -> active, the transition that makes a lake reachable from `findPublicLakes`
+   * and the `findActive*` retrieval arms. Guarded inside the query, so a caller holding a stale
+   * copy of the document cannot resurrect an archived or deleted lake. Returns whether this call
+   * was the one that flipped it.
+   */
+  activateIfDraft(id: string): Promise<boolean>;
+  /**
+   * Claim `filesDeletedAt` for a phase-1 teardown: writes `at` only if the lake carries no stamp,
+   * and returns the stamp now in force - the existing one when a concurrent teardown or a crashed
+   * prior attempt already claimed it. Callers must sweep with the RETURNED value, not their own,
+   * or they stamp rows under a mark the lake does not name. Null means no stamp is in force: the
+   * lake vanished, or a restore cleared it between the claim and the fallback read - so a null
+   * caller sweeps unmarked and must say so, since that lake then restores unbounded.
+   */
+  claimFilesDeletedAt(id: string, at: Date): Promise<Date | null>;
 }
 
 // ── Data Lake Batch ─────────────────────────────────────────────────────────
@@ -193,7 +221,8 @@ export interface IDataLakeBatchFile {
  * "completed" batch look reopened. `'none'` covers both "never opted in" and append-mode
  * batches (which never offer the opt-in at all).
  */
-export type TaxonomyStatus = 'none' | 'queued' | 'analyzing' | 'ready' | 'applying' | 'applied' | 'failed';
+export type TaxonomyStatus =
+  'none' | 'queued' | 'analyzing' | 'ready' | 'applying' | 'applied' | 'failed' | 'dismissed';
 
 /** Non-terminal taxonomy phases - the ones the stuck-job reconciler may force to 'failed'. */
 export const TAXONOMY_NON_TERMINAL_STATUSES: TaxonomyStatus[] = ['queued', 'analyzing', 'applying'];
@@ -201,10 +230,11 @@ export const TAXONOMY_NON_TERMINAL_STATUSES: TaxonomyStatus[] = ['queued', 'anal
 /**
  * Every phase the Data Lakes list needs to show a badge for: still running, OR finished and
  * awaiting the user (ready to review / failed and dismissible). Excludes 'none' (never opted
- * in) and 'applied' (already resolved, nothing left to surface). Includes 'applying' so a
- * batch stuck there (e.g. an apply request that errored or hit the Lambda timeout mid-write)
- * stays visible to the list and the fast read-time reconciler instead of only being reachable
- * by the daily cron sweep.
+ * in) and both resolved terminal outcomes, 'applied' and 'dismissed' (nothing left to surface
+ * for either - a dismissed batch's suggestions are never shown again, same as an applied one).
+ * Includes 'applying' so a batch stuck there (e.g. an apply request that errored or hit the
+ * Lambda timeout mid-write) stays visible to the list and the fast read-time reconciler instead
+ * of only being reachable by the daily cron sweep.
  */
 export const TAXONOMY_ATTENTION_STATUSES: TaxonomyStatus[] = ['queued', 'analyzing', 'ready', 'applying', 'failed'];
 
@@ -261,11 +291,22 @@ export interface IDataLakeBatch {
 
 export interface IDataLakeBatchDocument extends IDataLakeBatch, IMongoDocument {}
 
+/**
+ * Shape returned by the list-surface/reconciler-input queries below, which all project out both
+ * the per-file manifest and `taxonomySuggestions.fileAssignments` for response-size reasons -
+ * neither is genuinely present at runtime, not just empty, so this type (rather than
+ * `IDataLakeBatchDocument`) is what should flow to any consumer of those results, both server-
+ * and client-side.
+ */
+export type IDataLakeBatchSummary = Omit<IDataLakeBatchDocument, 'files' | 'taxonomySuggestions'> & {
+  taxonomySuggestions?: Omit<TaxonomyTagSet, 'fileAssignments'>;
+};
+
 export type BatchCounterField = 'uploadedFiles' | 'chunkedFiles' | 'vectorizedFiles' | 'failedFiles' | 'skippedFiles';
 
 export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatchDocument> {
-  findActiveByUserId(userId: string): Promise<IDataLakeBatchDocument[]>;
-  findActiveByDataLakeId(dataLakeId: string): Promise<IDataLakeBatchDocument[]>;
+  findActiveByUserId(userId: string): Promise<IDataLakeBatchSummary[]>;
+  findActiveByDataLakeId(dataLakeId: string): Promise<IDataLakeBatchSummary[]>;
   /**
    * Global cross-user scan for the reconciler cron: non-terminal batches whose `updatedAt` is
    * older than `cutoff`, oldest-first. `limit` caps a huge backlog per run so the cron stays
@@ -328,9 +369,19 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * Batches whose `taxonomyStatus` is in `TAXONOMY_ATTENTION_STATUSES` - running or awaiting
    * review/dismissal. Deliberately independent of `status` (ingest phase): the common case is
    * an already-'completed' batch whose taxonomy phase is still 'analyzing', which
-   * findActiveByUserId's status-based filter would miss entirely.
+   * findActiveByUserId's status-based filter would miss entirely. `files` is excluded, and the
+   * result is capped (default 500, overridable - see the class implementation for why) to the
+   * most-recently-updated - sized for the list-response use case, NOT suitable as reconciler
+   * input (see `findActiveTaxonomyByUserId`).
    */
-  findTaxonomyAttentionByUserId(userId: string): Promise<IDataLakeBatchDocument[]>;
+  findTaxonomyAttentionByUserId(userId: string, limit?: number): Promise<IDataLakeBatchSummary[]>;
+  /**
+   * Per-user counterpart to `findStuckTaxonomy`: the full non-terminal (`queued`/`analyzing`/
+   * `applying`) taxonomy working set for one user, unbounded and unsorted. Use this - not
+   * `findTaxonomyAttentionByUserId` - as reconciler input, since that method's capped/sorted
+   * result would silently exclude exactly the stale, stuck batches a reconciler exists to find.
+   */
+  findActiveTaxonomyByUserId(userId: string): Promise<IDataLakeBatchSummary[]>;
 }
 
 // ── AI Taxonomy Inference ───────────────────────────────────────────────────

@@ -493,6 +493,14 @@ export interface ISession {
    */
   systemPromptText?: string;
   /**
+   * Optional reference to a curated system prompt in the admin registry (SystemPromptModel), by
+   * `promptId`. When set to a session-activatable id (e.g. 'triage_router'), that registry prompt's
+   * current content is injected as the session's system message - the versioned, admin-editable
+   * counterpart to the raw `systemPromptText`, so the prompt can be tuned with no deploy. Like
+   * `systemPromptText`, it suppresses the generic brand-identity prompt.
+   */
+  systemPromptId?: string;
+  /**
    * Optional product surface that owns this session (e.g. 'libreoncology').
    * Default sessions have no surface. Generic capability - lets any product surface
    * mark its sessions so they stay out of the main B4M list and can scope their own

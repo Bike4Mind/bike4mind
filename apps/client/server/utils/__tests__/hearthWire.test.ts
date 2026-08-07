@@ -1,7 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { presenceStateForReason } from '@bike4mind/database';
-import type { HearthEvent } from '@bike4mind/hearth';
-import { toPresenceProjection } from '../hearthWire';
+import { sessionSlug, type HearthEvent } from '@bike4mind/hearth';
+import { resolveRequestActor, toPresenceProjection } from '../hearthWire';
+
+const { ensureActorMock } = vi.hoisted(() => ({ ensureActorMock: vi.fn() }));
+
+// Only ensureActor is faked; presenceStateForReason below is the real one, since
+// the projection tests assert against the actual reason-to-state table.
+vi.mock('@bike4mind/database', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/database')>();
+  return {
+    ...actual,
+    hearthRepository: { ...actual.hearthRepository, ensureActor: ensureActorMock },
+  };
+});
 
 /**
  * The projection had no test of its own; it was only reached indirectly through
@@ -94,5 +106,85 @@ describe('toPresenceProjection', () => {
   it('returns null for a payload shape it cannot read at all', () => {
     expect(project('not an object')).toBeNull();
     expect(project(42)).toBeNull();
+  });
+});
+
+describe('resolveRequestActor', () => {
+  const USER = { id: 'u1', username: 'erik', email: 'erik@example.com' };
+
+  beforeEach(() => {
+    ensureActorMock.mockReset();
+    ensureActorMock.mockResolvedValue({ _id: { toString: () => 'actor-1' } });
+  });
+
+  const identityArgs = () => ensureActorMock.mock.calls[0];
+
+  it('names the human from the account when no session is supplied', async () => {
+    await resolveRequestActor(USER, undefined, undefined);
+    expect(identityArgs()).toEqual(['u1', 'human', 'erik']);
+  });
+
+  /**
+   * The regression guard for the shared-cursor defect: identity must vary by
+   * session, because actor identity IS the cursor key. Before this, every CLI
+   * session of one user collapsed onto a single actor and they consumed each
+   * other's catchup events.
+   */
+  it('derives a distinct identity per session', async () => {
+    await resolveRequestActor(USER, undefined, { id: 'session-a' });
+    const first = identityArgs()[2];
+    ensureActorMock.mockReset();
+    ensureActorMock.mockResolvedValue({ _id: { toString: () => 'actor-2' } });
+    await resolveRequestActor(USER, undefined, { id: 'session-b' });
+    const second = identityArgs()[2];
+
+    expect(first).toBe(`erik (${sessionSlug('session-a')})`);
+    expect(second).toBe(`erik (${sessionSlug('session-b')})`);
+    expect(first).not.toBe(second);
+  });
+
+  it('keeps a renameable label OUT of the identity key and in displayLabel', async () => {
+    await resolveRequestActor(USER, undefined, { id: 'session-a', label: 'planning notebook' });
+
+    const [, , identity, options] = identityArgs();
+    // Identity uses the stable slug, so an auto-title or rename cannot mint a
+    // new actor (and a new cursor) mid-session.
+    expect(identity).toBe(`erik (${sessionSlug('session-a')})`);
+    expect(options).toEqual({ displayLabel: 'erik (planning notebook)' });
+  });
+
+  it('never lets a label occupy the position that reads as who the actor is', async () => {
+    await resolveRequestActor(USER, undefined, { id: 'session-a', label: ') admin (' });
+
+    const label = identityArgs()[3].displayLabel;
+    expect(label).toBe('erik (admin)');
+    expect(label.startsWith('erik ')).toBe(true);
+  });
+
+  /**
+   * A label that sanitizes to nothing must not overwrite a friendly label
+   * already stored for this session. Omitting the options argument is what
+   * makes ensureActor leave the stored value alone; setting it would resolve to
+   * the slug form and clobber a good name with a worse one.
+   */
+  it('omits displayLabel entirely when nothing survives sanitization', async () => {
+    await resolveRequestActor(USER, undefined, { id: 'session-a', label: '()' });
+
+    expect(identityArgs()).toEqual(['u1', 'human', `erik (${sessionSlug('session-a')})`]);
+    expect(identityArgs()).toHaveLength(3);
+  });
+
+  it('lets a machine name itself and ignores any session for it', async () => {
+    await resolveRequestActor(USER, { kind: 'agent', displayName: 'Claude Code (teal-lynx)' }, { id: 'session-a' });
+    expect(identityArgs()).toEqual(['u1', 'agent', 'Claude Code (teal-lynx)']);
+  });
+
+  it('falls back to the email, then a constant, when there is no username', async () => {
+    await resolveRequestActor({ id: 'u1', email: 'erik@example.com' }, undefined, undefined);
+    expect(identityArgs()[2]).toBe('erik@example.com');
+    ensureActorMock.mockReset();
+    ensureActorMock.mockResolvedValue({ _id: { toString: () => 'a' } });
+    await resolveRequestActor({ id: 'u1' }, undefined, undefined);
+    expect(identityArgs()[2]).toBe('user');
   });
 });

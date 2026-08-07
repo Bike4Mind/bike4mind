@@ -122,8 +122,10 @@ export interface IUserPreferences {
   agentModeDefault?: 'off' | 'auto' | 'on';
   /** Whether to show fun/novelty tools (chess, dice, ISS tracker, etc.) in the tools catalog. Default: false. */
   showFunTools?: boolean;
-  /** Whether generated TTS / sound-effect audio is saved to storage as a browsable FabFile. Default: true. */
+  /** Whether generated audio (TTS, sound-effect, music) is saved to storage as a browsable FabFile. Default: true. */
   saveGeneratedAudio?: boolean;
+  /** Whether to show the prompt suggestion cards on the splash screen. Default: false. */
+  showSplashCards?: boolean;
 }
 
 /** Source of a moderation flag - which moderation backend produced the hit. */

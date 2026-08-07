@@ -11,6 +11,7 @@ export * from './createByUrl';
 export * from './search';
 export * from './addFavorite';
 export * from './deleteFavorite';
+export * from './reconcileLakeTags';
 export * from './toggleTags';
 export * from './edit';
 export * from './applyEdit';

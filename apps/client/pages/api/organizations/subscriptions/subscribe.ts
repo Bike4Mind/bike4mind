@@ -60,7 +60,12 @@ const handler = baseApi()
         await organizationRepository.update(organization);
       }
 
-      minSeats = Math.max(ORGANIZATION_SUBSCRIPTION_MIN_SEATS, organization.users.length + 1);
+      // Clamp at the ceiling so an over-cap org's checkout minimum can't exceed the maximum (#1424) -
+      // without this, minimum > maximum makes Stripe reject the session and the self-serve checkout wedges.
+      minSeats = Math.min(
+        Math.max(ORGANIZATION_SUBSCRIPTION_MIN_SEATS, organization.users.length + 1),
+        ORGANIZATION_SUBSCRIPTION_MAX_SEATS
+      );
       customerId = organization.stripeCustomerId;
     } else {
       customer = await createCustomer({

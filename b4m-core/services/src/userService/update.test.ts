@@ -285,6 +285,91 @@ describe('applyBaseUserUpdates', () => {
   });
 });
 
+describe('applyBaseUserUpdates - preferences merge', () => {
+  const storedPreferences = {
+    language: 'en',
+    showDebug: true,
+    showHelp: false,
+    maxVisibleLines: 20,
+    favoriteTags: ['alpha', 'beta'],
+    optiSessionId: 'session-1',
+    fileBrowserViewMode: 'grid' as const,
+    experimentalFeatures: { agentMode: true, newComposer: false },
+  };
+
+  const makeUser = (preferences: IUserDocument['preferences']): IUserDocument =>
+    ({
+      id: 'user-prefs',
+      username: 'prefsuser',
+      name: 'Prefs User',
+      email: 'prefs@example.com',
+      password: undefined,
+      isAdmin: false,
+      tags: [],
+      level: 'DemoUser',
+      systemFiles: [],
+      preferences,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }) as unknown as IUserDocument;
+
+  it('keeps omitted stored keys when a partial preferences object is written', () => {
+    const result = applyBaseUserUpdates(makeUser(storedPreferences), { preferences: { showHelp: true } });
+
+    expect(result.preferences).toEqual({ ...storedPreferences, showHelp: true });
+  });
+
+  it('keeps other experimental flags when a partial experimentalFeatures object is written', () => {
+    const result = applyBaseUserUpdates(makeUser(storedPreferences), {
+      preferences: { experimentalFeatures: { newComposer: true } },
+    });
+
+    expect(result.preferences?.experimentalFeatures).toEqual({ agentMode: true, newComposer: true });
+    expect(result.preferences?.language).toBe('en');
+  });
+
+  it('produces the same result as a replace when the caller sends the full object', () => {
+    const fullObject = { ...storedPreferences, showDebug: false };
+
+    const result = applyBaseUserUpdates(makeUser(storedPreferences), { preferences: fullObject });
+
+    expect(result.preferences).toEqual(fullObject);
+  });
+
+  it('clears the whole object when preferences is explicitly null', () => {
+    const result = applyBaseUserUpdates(makeUser(storedPreferences), { preferences: null });
+
+    expect(result.preferences).toBeNull();
+  });
+
+  it('leaves stored preferences untouched when preferences is absent', () => {
+    const result = applyBaseUserUpdates(makeUser(storedPreferences), { name: 'Renamed' });
+
+    expect(result.preferences).toEqual(storedPreferences);
+  });
+
+  it('clears a single nullable sub-key when it is explicitly null', () => {
+    const result = applyBaseUserUpdates(makeUser(storedPreferences), { preferences: { optiSessionId: null } });
+
+    expect(result.preferences?.optiSessionId).toBeNull();
+    expect(result.preferences?.language).toBe('en');
+  });
+
+  it('replaces array-valued prefs wholesale rather than merging elements', () => {
+    const result = applyBaseUserUpdates(makeUser(storedPreferences), { preferences: { favoriteTags: ['gamma'] } });
+
+    expect(result.preferences?.favoriteTags).toEqual(['gamma']);
+  });
+
+  it('merges onto a user that has no preferences at all', () => {
+    const result = applyBaseUserUpdates(makeUser(undefined), {
+      preferences: { showHelp: true, experimentalFeatures: { agentMode: true } },
+    });
+
+    expect(result.preferences).toEqual({ showHelp: true, experimentalFeatures: { agentMode: true } });
+  });
+});
+
 describe('updateUser', () => {
   it('should update OAuth user without password', async () => {
     // Arrange
@@ -387,5 +472,85 @@ describe('updateUser', () => {
     expect(result.tags).toEqual(['Customer']);
     const persisted = mockUserRepository.update.mock.calls[0][0] as IUserDocument;
     expect(persisted.tags).toEqual(['Customer']);
+  });
+
+  it('coerces an ISO-string contextTelemetryConsentedAt on write (telemetry level is not write-once)', async () => {
+    // The settings UI echoes the whole `preferences` object back on each write, so
+    // `contextTelemetryConsentedAt` round-trips from GET /users/{id} as an ISO string.
+    // A strict z.date() rejected it with a 422 on every write after the first, stranding
+    // users on the level they first picked. z.coerce.date() must accept and coerce it.
+    const isoConsentedAt = '2026-07-31T04:40:29.874Z';
+    const user = {
+      id: 'user-telemetry',
+      username: 'telemetryuser',
+      name: 'Telemetry User',
+      email: 'telemetry@example.com',
+      password: undefined,
+      isAdmin: false,
+      tags: [],
+      level: 'DemoUser',
+      systemFiles: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as unknown as IUserDocument;
+
+    const mockUserRepository = {
+      findByIdWithPassword: vi.fn().mockResolvedValue(user),
+      update: vi.fn().mockImplementation((u: IUserDocument) => Promise.resolve(u)),
+    };
+
+    const result = await updateUser(
+      'user-telemetry',
+      {
+        preferences: {
+          contextTelemetryLevel: 'basic',
+          contextTelemetryConsentedAt: isoConsentedAt,
+        },
+      } as unknown as UpdateUserParameters,
+      { db: { users: mockUserRepository as any } }
+    );
+
+    const persisted = mockUserRepository.update.mock.calls[0][0] as IUserDocument;
+    expect(persisted.preferences?.contextTelemetryLevel).toBe('basic');
+    expect(persisted.preferences?.contextTelemetryConsentedAt).toBeInstanceOf(Date);
+    expect((persisted.preferences?.contextTelemetryConsentedAt as Date).toISOString()).toBe(isoConsentedAt);
+    expect(result.preferences?.contextTelemetryLevel).toBe('basic');
+  });
+
+  it('preserves boolean display preferences that the client sends through', async () => {
+    // updateUserSchema is an allowlist: Zod strips any preference key not declared on
+    // it, so a pref added only to the client types silently never persists (the toggle
+    // reverts on reload). Remove showSplashCards from the schema and this fails.
+    const user = {
+      id: 'user-prefs',
+      username: 'prefsuser',
+      name: 'Prefs User',
+      email: 'prefs@example.com',
+      password: undefined,
+      isAdmin: false,
+      tags: [],
+      level: 'DemoUser',
+      systemFiles: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as unknown as IUserDocument;
+
+    const mockUserRepository = {
+      findByIdWithPassword: vi.fn().mockResolvedValue(user),
+      update: vi.fn().mockImplementation((u: IUserDocument) => Promise.resolve(u)),
+    };
+
+    await updateUser(
+      'user-prefs',
+      {
+        preferences: { showSplashCards: true, showFunTools: false, saveGeneratedAudio: true },
+      } as unknown as UpdateUserParameters,
+      { db: { users: mockUserRepository as any } }
+    );
+
+    const persisted = mockUserRepository.update.mock.calls[0][0] as IUserDocument;
+    expect(persisted.preferences?.showSplashCards).toBe(true);
+    expect(persisted.preferences?.showFunTools).toBe(false);
+    expect(persisted.preferences?.saveGeneratedAudio).toBe(true);
   });
 });

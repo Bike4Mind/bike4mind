@@ -40,6 +40,7 @@ import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
+import { openInNewTab } from '@client/app/utils/externalLinks';
 
 /**
  * Gears - the earned-nav progression page.
@@ -137,7 +138,7 @@ const GearsPage = () => {
       return;
     }
     if (action.startsWith('external:')) {
-      window.open(action.slice('external:'.length), '_blank', 'noopener');
+      openInNewTab(action.slice('external:'.length));
       claimStamp();
       return;
     }

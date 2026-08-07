@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CONTEXT_TELEMETRY_SCHEMA_VERSION, ToolTelemetrySchema } from './contextTelemetry';
+import { CONTEXT_TELEMETRY_SCHEMA_VERSION, PrimaryAnomalySchema, ToolTelemetrySchema } from './contextTelemetry';
 
 describe('ToolTelemetrySchema web_fetch size fields (issue #452)', () => {
   const base = {
@@ -32,5 +32,26 @@ describe('ToolTelemetrySchema web_fetch size fields (issue #452)', () => {
 
   it('bumped the schema version to 1.2', () => {
     expect(CONTEXT_TELEMETRY_SCHEMA_VERSION).toBe('1.2');
+  });
+});
+
+describe('PrimaryAnomalySchema', () => {
+  it('accepts high_utilization', () => {
+    expect(PrimaryAnomalySchema.parse('high_utilization')).toBe('high_utilization');
+  });
+
+  // Widening the value domain only; pre-existing entries must still parse.
+  it('still accepts the pre-existing values', () => {
+    for (const value of [
+      'none',
+      'context_overflow',
+      'high_truncation',
+      'tool_failure',
+      'subagent_timeout',
+      'slow_response',
+      'multiple',
+    ]) {
+      expect(PrimaryAnomalySchema.parse(value)).toBe(value);
+    }
   });
 });

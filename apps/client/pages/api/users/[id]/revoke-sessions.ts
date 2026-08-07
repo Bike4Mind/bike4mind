@@ -1,6 +1,6 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { userRepository } from '@bike4mind/database';
+import { userRepository, authSessionRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { logAuthAudit } from '@server/utils/authAudit';
 
@@ -15,7 +15,7 @@ const handler = baseApi().post(
     const tokenVersion = await userService.adminRevokeUserSessions(
       req.user.id,
       { id: targetId },
-      { db: { users: userRepository }, logger: req.logger }
+      { db: { users: userRepository, authSessions: authSessionRepository }, logger: req.logger }
     );
     // Forensic trail for the admin force-logout (best-effort; never blocks the response).
     await logAuthAudit(req, {
