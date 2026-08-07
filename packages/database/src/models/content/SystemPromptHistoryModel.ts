@@ -35,10 +35,19 @@ export class SystemPromptHistoryRepository {
   constructor(private historyModel: Model<IAdminSystemPromptHistoryDocument>) {}
 
   /**
-   * Save a version to history
+   * Save a version to history, replacing any existing entry for the same
+   * {promptId, version}. Several flows legitimately re-record a version that is
+   * already in history - deleting a prompt snapshots its current version, and
+   * recreating a deleted promptId restarts at v1 over the old rows - and a plain
+   * insert there violates the unique {promptId, version} index.
    */
   async saveVersion(historyEntry: Omit<IAdminSystemPromptHistory, 'createdAt'>): Promise<IAdminSystemPromptHistory> {
-    const result = await this.historyModel.create(historyEntry);
+    const { promptId, version, ...rest } = historyEntry;
+    const result = await this.historyModel.findOneAndUpdate(
+      { promptId, version },
+      { $set: rest },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
     return result.toJSON() as IAdminSystemPromptHistory;
   }
 

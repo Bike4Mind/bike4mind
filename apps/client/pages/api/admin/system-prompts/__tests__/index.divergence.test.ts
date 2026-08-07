@@ -95,6 +95,7 @@ describe('GET /api/admin/system-prompts — code-default divergence flag', () =>
 
     const prompt = byId(res).get('opti_optimizer') as Record<string, unknown>;
     expect(prompt.divergesFromCodeDefault).toBe(true);
+    expect(prompt.hasCodeDefault).toBe(true);
     // Common case short-circuits: no extra Mongo roundtrip via getActiveContent.
     expect(mockGetActiveContent).not.toHaveBeenCalled();
   });
@@ -134,6 +135,7 @@ describe('GET /api/admin/system-prompts — code-default divergence flag', () =>
 
     const prompt = byId(res).get('opti_sales_intelligence') as Record<string, unknown>;
     expect(prompt.source).toBe('code');
+    expect(prompt.hasCodeDefault).toBe(true);
     expect(prompt.divergesFromCodeDefault).toBe(false);
     expect(mockGetActiveContent).not.toHaveBeenCalled();
   });
@@ -146,6 +148,7 @@ describe('GET /api/admin/system-prompts — code-default divergence flag', () =>
     await captured.getHandler!(req, res);
 
     const prompt = byId(res).get('custom_db_only') as Record<string, unknown>;
+    expect(prompt.hasCodeDefault).toBe(false);
     expect(prompt.divergesFromCodeDefault).toBe(false);
   });
 });

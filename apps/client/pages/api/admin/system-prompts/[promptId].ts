@@ -36,6 +36,7 @@ const handler = baseApi()
 
       // Check DB first
       const dbPrompt = await systemPromptRepository.findByPromptId(promptId);
+      const defaultPrompts = getDefaultSystemPrompts();
 
       if (dbPrompt) {
         return res.status(200).json({
@@ -43,13 +44,12 @@ const handler = baseApi()
           data: {
             ...dbPrompt,
             hasOverride: true,
+            hasCodeDefault: defaultPrompts.some(p => p.promptId === promptId),
             source: 'db' as const,
           },
         });
       }
 
-      // Check defaults
-      const defaultPrompts = getDefaultSystemPrompts();
       const defaultPrompt = defaultPrompts.find(p => p.promptId === promptId);
 
       if (defaultPrompt) {
@@ -58,6 +58,7 @@ const handler = baseApi()
           data: {
             ...defaultPrompt,
             hasOverride: false,
+            hasCodeDefault: true,
             source: 'code' as const,
           },
         });
@@ -198,10 +199,11 @@ const handler = baseApi()
         req.user?.name || 'Admin'
       );
 
+      // Lost a race with a concurrent delete - the row is gone either way
       if (!result.deleted) {
-        return res.status(500).json({
-          error: 'Delete failed',
-          message: 'Failed to delete the database prompt.',
+        return res.status(404).json({
+          error: 'Prompt not found',
+          message: `System prompt with ID "${promptId}" not found`,
         });
       }
 

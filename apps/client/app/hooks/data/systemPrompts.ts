@@ -160,7 +160,9 @@ export function useDeleteSystemPrompt() {
 
   return useMutation({
     mutationFn: async (promptId: string) => {
-      const { data } = await api.delete<{ success: boolean; message: string }>(`/api/admin/system-prompts/${promptId}`);
+      const { data } = await api.delete<{ success: boolean; message: string }>(
+        `/api/admin/system-prompts/${encodeURIComponent(promptId)}`
+      );
       return data;
     },
     onSuccess: (_data, promptId) => {

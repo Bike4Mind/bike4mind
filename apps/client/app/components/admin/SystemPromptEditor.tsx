@@ -278,8 +278,13 @@ const SystemPromptEditor: React.FC = () => {
       await deletePrompt.mutateAsync(deletingPrompt.promptId);
       toast.success(`System prompt "${deletingPrompt.name}" deleted`);
       setDeletingPrompt(null);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to delete system prompt');
+    } catch (err: unknown) {
+      console.error('Error deleting system prompt:', err);
+      const errorObj = err as { response?: { data?: { error?: string; message?: string } } };
+      // Prefer `message`: the delete endpoint puts its actionable guidance there
+      toast.error(
+        errorObj?.response?.data?.message || errorObj?.response?.data?.error || 'Failed to delete system prompt'
+      );
     }
   };
 
