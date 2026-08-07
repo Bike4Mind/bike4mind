@@ -349,8 +349,8 @@ describe('UserSettingsContext - preferences write failure feedback', () => {
 
   // The api interceptor already refreshes then redirects on 401; a toast would stack noise
   // on top of a session teardown the user cannot act on.
-  it('stays quiet on a 401', async () => {
-    vi.mocked(updateUserToServer).mockRejectedValue(axiosError(401));
+  it('stays quiet on a mid-MFA 401', async () => {
+    vi.mocked(updateUserToServer).mockRejectedValue(axiosError(401, { mfaPending: true }));
     const { result } = renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
 
     await act(async () => {
@@ -360,13 +360,12 @@ describe('UserSettingsContext - preferences write failure feedback', () => {
     expect(mockToastError).not.toHaveBeenCalled();
   });
 
-  // The interceptor has 401 exits that do NOT redirect: a transient refresh-endpoint failure,
-  // and a retry that 401'd again. The user keeps a working page, so the lost change needs saying.
-  // `_retryCount` is what distinguishes "tore the session down" from "tried and failed".
-  it('toasts a 401 the interceptor tried and failed to recover from', async () => {
-    const err = axiosError(401);
-    (err as unknown as { config: { _retryCount: number } }).config = { _retryCount: 1 };
-    vi.mocked(updateUserToServer).mockRejectedValue(err);
+  // The interceptor's two non-redirecting 401 exits leave the user on a working page with the
+  // change lost. `_retryCount` cannot distinguish them - it is only incremented AFTER a
+  // successful refresh (ApiContext.tsx:206 and :265), so a transient refresh-endpoint failure
+  // (the deploy-window case) arrives with a count of 0 and must still toast.
+  it('toasts a 401 the interceptor could not recover from, including a transient refresh failure', async () => {
+    vi.mocked(updateUserToServer).mockRejectedValue(axiosError(401));
     const { result } = renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
 
     await act(async () => {
