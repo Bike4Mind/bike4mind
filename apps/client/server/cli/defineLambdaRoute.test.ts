@@ -65,3 +65,41 @@ describe('defineLambdaRoute + chatContract', () => {
     expect(res.statusCode).toBe(401);
   });
 });
+
+/**
+ * The adapter owns the auth -> rate limit -> validation ordering so both transports
+ * meter identically regardless of where a handler happens to call the limiter.
+ */
+describe('defineLambdaRoute rate-limit ordering', () => {
+  const rateLimit = vi.fn();
+  const route = defineLambdaRoute(chatContract, async () => ({ statusCode: 200, body: { ok: true } }), {
+    rateLimit: (ctx: unknown) => rateLimit(ctx),
+  });
+
+  beforeEach(() => {
+    mockResolveAuth.mockReset().mockResolvedValue({ method: 'jwt', userId: 'u1', user: {} });
+    rateLimit.mockReset().mockResolvedValue(undefined);
+  });
+
+  it('meters a malformed body BEFORE validation (429 beats 422)', async () => {
+    rateLimit.mockRejectedValueOnce(new Error('Rate limit exceeded'));
+    // Body is invalid too, but the limiter runs first, so the status is 429 (not 422).
+    const res = asResult(await route(makeEvent({ notMessage: 1 })));
+    expect(res.statusCode).toBe(429);
+    expect(rateLimit).toHaveBeenCalledOnce();
+  });
+
+  it('runs the limiter after auth, with the resolved caller', async () => {
+    await route(makeEvent({ message: 'hi' }));
+    expect(rateLimit).toHaveBeenCalledWith(
+      expect.objectContaining({ auth: expect.objectContaining({ userId: 'u1' }) })
+    );
+  });
+
+  it('does not meter when auth fails (401 short-circuits the limiter)', async () => {
+    mockResolveAuth.mockRejectedValueOnce(new Error('nope'));
+    const res = asResult(await route(makeEvent({ message: 'hi' })));
+    expect(res.statusCode).toBe(401);
+    expect(rateLimit).not.toHaveBeenCalled();
+  });
+});

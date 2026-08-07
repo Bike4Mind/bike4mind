@@ -101,6 +101,20 @@ describe('buildOpenApiDocument', () => {
     expect(toolsCurl).not.toContain('b4m_live_');
   });
 
+  it('auto-injects 401 (and 403 for scoped ops) on non-streaming authenticated endpoints', () => {
+    // Guards the central auth-response injection in registerContract. chatContract
+    // declares neither 401 nor 403 itself, so both come purely from the injection;
+    // dropping it silently narrows /api/chat's published spec and generated SDKs
+    // stop modelling the missing-credential / under-scoped-key paths.
+    expect(chat.responses['401'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
+    expect(chat.responses['403'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
+    // Streaming completions opens the stream first, so auth/scope failures are
+    // in-band SSE events - it must NOT declare HTTP 401/403 even though it is
+    // authenticated and scoped.
+    expect(completions.responses['401']).toBeUndefined();
+    expect(completions.responses['403']).toBeUndefined();
+  });
+
   it('documents OR semantics for required scopes in info.description', () => {
     expect(doc.info.description.toLowerCase()).toContain('any one');
   });

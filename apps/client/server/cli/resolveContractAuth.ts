@@ -30,7 +30,12 @@ export async function resolveContractAuth(
 
   if (contract.auth === 'apiKeyOrJwt') {
     try {
-      const apiKeyInfo = await verifyApiKey(headers);
+      // Gate on the contract's declared scopes - the same set registerContract
+      // publishes as `x-required-scopes`. Empty/absent falls back to verifyApiKey's
+      // default completion scopes.
+      const apiKeyInfo = await verifyApiKey(headers, {
+        requiredScopes: contract.scopes?.length ? [...contract.scopes] : undefined,
+      });
       return { method: 'apiKey', userId: apiKeyInfo.userId, apiKeyInfo };
     } catch {
       // No valid API key - fall through to JWT (a valid-but-rate-limited key never

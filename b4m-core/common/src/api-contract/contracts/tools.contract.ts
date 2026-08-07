@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { defineEndpoint } from '../defineEndpoint';
 // Import the specific schema files, NOT the barrel (`../../schemas`): the barrel
 // re-exports actions.ts, which imports @bike4mind/hearth, whose dist is absent in
@@ -38,14 +39,16 @@ export const executeToolContract = defineEndpoint({
         request_id: 'abc-123',
       },
     },
-    400: { description: 'Missing/invalid `toolName` or `input`.', schema: ApiErrorSchema },
+    400: { description: 'Malformed JSON body.', schema: ApiErrorSchema },
     401: { description: 'Missing or invalid JWT (an API key is rejected here).', schema: ApiErrorSchema },
     429: { description: 'Rate limit exceeded (100 requests/hour).', schema: ApiErrorSchema },
-    // The handler returns the full ToolExecutionResponse (`success: false`) on a
-    // failed-but-executed tool, not the bare error envelope - match that shape.
+    // Two 500 shapes: a failed-but-executed tool returns the full ToolExecutionResponse
+    // (`success: false` with `error`); an unexpected throw is shaped by defineLambdaRoute
+    // into the bare error envelope. Model both so neither trips the adapter's response
+    // check.
     500: {
-      description: 'Tool execution failed; body carries `success: false` with `error`.',
-      schema: ToolExecutionResponseSchema,
+      description: 'Tool execution failed (`success: false` with `error`) or an unexpected server error.',
+      schema: z.union([ToolExecutionResponseSchema, ApiErrorSchema]),
     },
   },
   codeSample: {
