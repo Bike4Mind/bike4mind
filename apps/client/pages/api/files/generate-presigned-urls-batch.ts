@@ -21,7 +21,10 @@ import { Resource } from 'sst';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
 
-const s3Client = new S3Client();
+// WHEN_REQUIRED: without it, getSignedUrl bakes a checksum of the (empty, at sign-time) body
+// into the presigned URL's query string, which then mismatches whatever the browser actually
+// uploads. Same root cause as the direct-PutObject XAmzContentSHA256Mismatch bug (#1535).
+const s3Client = new S3Client({ requestChecksumCalculation: 'WHEN_REQUIRED' });
 const EXPIRES = 600; // 10 minutes
 
 const handler = baseApi().post(async (req: Request, res) => {

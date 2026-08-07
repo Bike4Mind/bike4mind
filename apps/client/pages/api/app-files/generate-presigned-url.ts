@@ -16,7 +16,10 @@ import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { Resource } from 'sst';
 
-const s3Client = new S3Client();
+// WHEN_REQUIRED: without it, getSignedUrl bakes a checksum of the (empty, at sign-time) body
+// into the presigned URL's query string, which then mismatches whatever the browser actually
+// uploads. Same root cause as the direct-PutObject XAmzContentSHA256Mismatch bug (#1535).
+const s3Client = new S3Client({ requestChecksumCalculation: 'WHEN_REQUIRED' });
 
 const handler = baseApi().post(
   asyncHandler<unknown, FileGeneratePresignedUrlResponseType, FileGeneratePresignedUrlRequestInputType>(

@@ -5,6 +5,7 @@ const h = vi.hoisted(() => ({
   findByDatalakeTag: vi.fn(),
   batchFindById: vi.fn(),
   getSettingsValue: vi.fn(),
+  s3ClientConfigs: [] as unknown[],
 }));
 
 // The route calls `baseApi().post(...)` directly, with no `.use(...)` in the chain.
@@ -14,7 +15,11 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-bucket' } } }));
 vi.mock('@aws-sdk/client-s3', () => ({
-  S3Client: class {},
+  S3Client: class {
+    constructor(config: unknown) {
+      h.s3ClientConfigs.push(config);
+    }
+  },
   PutObjectCommand: class {
     constructor(public input: unknown) {}
   },
@@ -78,6 +83,14 @@ const tagNamesOf = (callIndex = 0) => {
   const persisted = h.createFabFile.mock.calls[callIndex][0] as { tags?: { name: string }[] };
   return persisted.tags?.map(t => t.name).sort();
 };
+
+describe('POST /api/files/generate-presigned-url - S3 client config', () => {
+  it('sets requestChecksumCalculation to WHEN_REQUIRED (#1535)', () => {
+    // Without this, getSignedUrl signs in a checksum of the empty sign-time body, which then
+    // mismatches whatever the browser actually PUTs.
+    expect(h.s3ClientConfigs[0]).toMatchObject({ requestChecksumCalculation: 'WHEN_REQUIRED' });
+  });
+});
 
 describe('POST /api/files/generate-presigned-url - data-lake tags', () => {
   beforeEach(() => {
