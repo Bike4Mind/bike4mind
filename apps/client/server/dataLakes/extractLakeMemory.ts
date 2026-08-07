@@ -91,10 +91,11 @@ const CHUNK_PAGE_LIMIT = 1_000;
  * Fold a data lake's documents into its memory profile (#1440 producer): enumerate the lake's live
  * docs, extract durable facts from each with an LLM, and append them to the `{ kind: 'lake' }` ledger
  * owned by the lake's creator. Runs on ingest-finalize (a sibling of the taxonomy job) and is idempotent
- * by construction: `appendFactToLedger` semantically de-dups against the lake's own ledger, so a
- * re-scan re-asserts an existing fact under its subject (a fresh presentation that keeps it hot) rather
- * than duplicating it. That is what makes a full-lake re-scan on each finalize SAFE - correctness does
- * not depend on batch-scoping the docs (a per-batch incremental scan is a later cost optimization).
+ * by construction: the ledger append session (`createLedgerAppendSession`) semantically de-dups
+ * against the lake's own ledger, so a re-scan re-asserts an existing fact under its subject (a fresh
+ * presentation that keeps it hot) rather than duplicating it. That is what makes a full-lake re-scan
+ * on each finalize SAFE - correctness does not depend on batch-scoping the docs (a per-batch
+ * incremental scan is a later cost optimization).
  *
  * Best-effort throughout: a doc that will not read or extract simply contributes no beliefs. Embeddings
  * are best-effort too - a vectorless write stays lexically recallable and can be re-embedded later.
