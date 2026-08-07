@@ -1,5 +1,6 @@
 import {
   IChatHistoryItemDocument,
+  IFabFileDocument,
   IMessage,
   IUserDocument,
   LLMEvents,
@@ -540,7 +541,13 @@ export interface ResolveEnabledToolsInput {
   sessionEnabledTools?: string[];
   /** `session.disabledTools` - tools a curated surface forbids. Wins over everything else. */
   sessionDisabledTools?: string[];
-  /** True when the session has documents attached (`session.knowledgeIds`). */
+  /**
+   * True when the session has a document attached (`session.knowledgeIds`) whose chunk text is
+   * actually readable by the knowledge tools right now - not merely present. The caller computes
+   * this (see `process()` and `attachmentHasIndexedContent`) so a file still chunking, whose
+   * content is already inlined elsewhere in the prompt, does not trigger an offer that can only
+   * return a zero-content reply.
+   */
   hasAttachedKnowledge: boolean;
   /**
    * True when the caller can retrieve from at least one data lake - their own, their org's, or a
@@ -636,6 +643,22 @@ export function shouldDeferCorpusToRetrieval(input: {
 }
 
 /**
+ * Whether an attached file's chunk TEXT is actually readable by the knowledge tools right now.
+ * `vectorized` is set true at CHUNKING completion, not embedding completion (see
+ * fabFileService/chunk.ts: `vectorized = chunks.length > 0`, written in the same update as
+ * `chunkCount`), and `retrieve_knowledge_content`'s zero-result path is a chunk-TEXT read
+ * (findTextsByFabFileId) with no embedding dependency. So this is deliberately looser than
+ * `resolveCorpusInlinePlan`'s fully-vectorized-and-same-embedding-space bar, which gates semantic
+ * RANKING quality, not whether the tool has any text to hand back at all. Do not tighten this to
+ * `vectorizedChunkCount >= chunkCount` - that would withhold the tool from files it can serve fine.
+ */
+export function attachmentHasIndexedContent(
+  file: Pick<IFabFileDocument, 'vectorized' | 'chunkCount' | 'deletedAt' | 'archivedAt'>
+): boolean {
+  return !file.deletedAt && !file.archivedAt && (Boolean(file.vectorized) || (file.chunkCount ?? 0) > 0);
+}
+
+/**
  * Tools this process auto-adds server-side regardless of user selection. Two auto-add sites feed
  * this: the request-parse method (blog_publish/blog_edit/blog_draft for admins, navigate_view,
  * skill) and `resolveEnabledTools` (the attached-knowledge offer). Small local (Ollama) models get
@@ -703,6 +726,13 @@ export class ChatCompletionProcess {
    */
   private accessibleDataLakeAccessMemo:
     { dataLakeTags: string[]; dataLakeTagPrefixes: string[]; scopedTagPrefixes: string[] } | undefined;
+  /**
+   * Per-turn memo for the session's attached-knowledge file docs (`session.knowledgeIds`), shared
+   * by the tool-offer gate (`hasAttachedKnowledge`, see `process()`) and `resolveCorpusInlinePlan`
+   * so the turn pays for this DB read at most once. `null` means the lookup failed this turn (see
+   * `getAttachedKnowledgeFiles`), distinct from `[]` (looked up, none accessible).
+   */
+  private attachedKnowledgeFilesMemo: IFabFileDocument[] | null | undefined;
   private storage: IChatCompletionServiceOptions['storage'];
   private imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
   private imageProcessorLambdaName?: string;
@@ -846,6 +876,27 @@ export class ChatCompletionProcess {
   }
 
   /**
+   * The session's attached-knowledge file docs (`session.knowledgeIds`), memoized per turn.
+   * Returns `null` on a lookup failure rather than throwing - callers decide their own fail
+   * direction (the tool-offer gate fails toward offering; `resolveCorpusInlinePlan` fails toward
+   * keeping content inline), so this method must not force one on them.
+   */
+  private async getAttachedKnowledgeFiles(ids: string[]): Promise<IFabFileDocument[] | null> {
+    if (this.attachedKnowledgeFilesMemo === undefined) {
+      try {
+        const scope = this.getScopeFilter(this.user, Permission.read, 'FabFile');
+        this.attachedKnowledgeFilesMemo = await this.db.fabfiles.getAccessibleFiles(ids, scope);
+      } catch (err) {
+        this.logger.warn(
+          `[knowledge] attached-file lookup failed; treating attached knowledge as indexed (fail open): ${(err as Error)?.message}`
+        );
+        this.attachedKnowledgeFilesMemo = null;
+      }
+    }
+    return this.attachedKnowledgeFilesMemo;
+  }
+
+  /**
    * Decide which attached-knowledge documents to STOP inlining and leave to the offered
    * search_knowledge_base tool. Returns the deferred id subset plus telemetry. See
    * `shouldDeferCorpusToRetrieval` for the size rule and `CORPUS_RETRIEVAL_MIN_INLINE_TOKENS_PER_DOC`
@@ -914,8 +965,8 @@ export class ChatCompletionProcess {
       if (access.dataLakeTags.length === 0) return noDefer; // no accessible lake -> nothing retrievable
 
       const accessibleTags = new Set(access.dataLakeTags);
-      const scope = this.getScopeFilter(this.user, Permission.read, 'FabFile');
-      const files = await this.db.fabfiles.getAccessibleFiles(sessionKnowledgeIds, scope);
+      const files = await this.getAttachedKnowledgeFiles(sessionKnowledgeIds);
+      if (files === null) return noDefer; // lookup failed -> never lose content over an optimization
 
       // Retrievability = tag membership AND real vector-search reachability. A lake-tagged doc is
       // deferrable only if search_knowledge_base's semantic arm can actually surface it: it must be
@@ -1393,9 +1444,22 @@ export class ChatCompletionProcess {
       // denylist last (so a curated "approved sources only" surface still wins). `enabledTools`
       // is the array reference handed to buildTools, so splice the result back in place rather
       // than reassigning the binding.
-      const hasAttachedKnowledge = (session.knowledgeIds?.length ?? 0) > 0;
+      const hasAnyAttachment = (session.knowledgeIds?.length ?? 0) > 0;
       // Any promptMode is an eval/passthrough that must not receive our server-side offers.
       const skipAutoOffers = Boolean(promptMode);
+      // "Attached knowledge" for the offer means the caller has an attachment the tool can
+      // actually read RIGHT NOW - not merely an attachment. A file still chunking has its raw
+      // content already inlined by processFabFilesServer, so offering the tool for it can only
+      // return a zero-content reply that a tool-eager model reads as "I cannot access this file",
+      // discarding the content already in front of it. Skips the DB lookup when there's nothing
+      // to check (no attachment) or the offer is skipped anyway (promptMode).
+      let hasAttachedKnowledge = hasAnyAttachment;
+      if (hasAnyAttachment && !skipAutoOffers) {
+        const attachedFiles = await this.getAttachedKnowledgeFiles(session.knowledgeIds!);
+        // null => the lookup failed; fail toward offering rather than stranding a genuinely
+        // indexed corpus with no retrieval path (see getAttachedKnowledgeFiles).
+        hasAttachedKnowledge = attachedFiles === null || attachedFiles.some(attachmentHasIndexedContent);
+      }
       // Only pay the accessible-lake lookup when it could change the offer: not skipped
       // (prompt-mode), and attached knowledge hasn't already triggered the offer anyway.
       const hasAccessibleDataLake =
