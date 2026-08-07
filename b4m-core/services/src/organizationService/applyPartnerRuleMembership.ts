@@ -72,8 +72,11 @@ export async function applyPartnerRuleMembership(
   const alreadyMember = organization.users.some(u => u.userId === userId);
   if (alreadyMember) {
     // Repair a half-set membership (in the ACL but organizationId never set) without
-    // touching the org. Partial update so no other user field is disturbed.
+    // touching the org. Partial update so no other user field is disturbed. Also seed the
+    // credit side-table: an existing member added before grant-point seeding has no
+    // `userDetails` row, so this re-run (every signup/verify) backfills it - idempotent.
     await repairOrgPointer(user, userId, organizationId, db);
+    await seedUserDetails(user, organizationId, db);
     return { added: false, reason: 'already-member' };
   }
 
@@ -90,6 +93,7 @@ export async function applyPartnerRuleMembership(
       if (outcome.state === 'gone') return { added: false, reason: 'org-missing' };
       if (outcome.state === 'member') {
         await repairOrgPointer(user, userId, organizationId, db);
+        await seedUserDetails(user, organizationId, db);
         return { added: false, reason: 'already-member' };
       }
       logger?.info(
@@ -99,6 +103,7 @@ export async function applyPartnerRuleMembership(
       return { added: false, reason: 'at-capacity', seats: outcome.seats };
     }
     await db.users.update({ id: userId, organizationId } as Partial<IUserDocument>);
+    await seedUserDetails(user, organizationId, db);
     logger?.info(
       `Partner-rule auto-added user ${userId} to Stripe-billed org ${organizationId} under the existing ceiling`
     );
@@ -113,8 +118,10 @@ export async function applyPartnerRuleMembership(
     const outcome = await inspectAfterNoMatch(organizationId, userId, db);
     if (outcome.state === 'gone') return { added: false, reason: 'org-missing' };
     if (outcome.state === 'member') {
-      // A concurrent signup won the race and already added this user - a safe no-op; repair the pointer.
+      // A concurrent signup won the race and already added this user - a safe no-op; repair the
+      // pointer and seed the credit side-table (idempotent) so a race can't drop the member's row.
       await repairOrgPointer(user, userId, organizationId, db);
+      await seedUserDetails(user, organizationId, db);
       return { added: false, reason: 'already-member' };
     }
     // 'absent': the raise is now clamped at ORGANIZATION_SUBSCRIPTION_MAX_SEATS (#1424), so a full org
@@ -128,6 +135,7 @@ export async function applyPartnerRuleMembership(
   }
 
   await db.users.update({ id: userId, organizationId } as Partial<IUserDocument>);
+  await seedUserDetails(user, organizationId, db);
 
   const previousSeats = pre.seats;
   // Mirror the model's `$max($seats, $size(users) + 1)`: the pre-image `users` is the pre-add array,
@@ -147,6 +155,23 @@ export async function applyPartnerRuleMembership(
     previousSeats,
     newSeats,
   };
+}
+
+/**
+ * Seed the member's zero-usage `userDetails` row (idempotent). Mirrors `addMember` / `accept`: the
+ * atomic seat-add pipelines here touch only `users[]`, so `userDetails[]` must be seeded separately
+ * to keep the two in sync at the grant point (see `ensureUserDetails`).
+ */
+async function seedUserDetails(
+  user: IUserDocument,
+  organizationId: string,
+  db: ApplyPartnerRuleMembershipAdapters['db']
+): Promise<void> {
+  await db.organizations.ensureUserDetails(organizationId, {
+    id: user.id,
+    email: user.email ?? user.username,
+    name: user.name,
+  });
 }
 
 /** Set the user's org pointer if unset - a partial update so no other user field is disturbed. */

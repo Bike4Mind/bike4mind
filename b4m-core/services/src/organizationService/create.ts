@@ -1,5 +1,5 @@
 import { IOrganizationDocument, IOrganizationRepository, IUserDocument, IUserRepository } from '@bike4mind/common';
-import { secureParameters } from '@bike4mind/utils';
+import { secureParameters, NotFoundError } from '@bike4mind/utils';
 import { z } from 'zod';
 
 const createSchema = z.object({
@@ -32,6 +32,16 @@ export const create = async (user: IUserDocument, params: CreateParameters, adap
     throw new Error('Manager cannot be the same as the billing owner');
   }
 
+  // Resolve the billing owner up front so the seeded `userDetails` row (and the active-org
+  // pointer below) both describe the OWNER, not the acting caller: on an on-behalf create
+  // (`POST /api/organizations` with an explicit `billingOwnerId`) the admin issuing the call
+  // is not the member whose usage the org tracks. A provided-but-unresolvable owner is a broken
+  // request - the org's `userId` would point at a non-existent user - so fail loudly.
+  const owner = billingOwnerId === user.id ? user : await adapters.db.users.findById(billingOwnerId);
+  if (!owner) {
+    throw new NotFoundError(`Billing owner ${billingOwnerId} not found`);
+  }
+
   const buildOrganization: Omit<IOrganizationDocument, 'id'> = {
     ...validatedParams,
 
@@ -46,11 +56,14 @@ export const create = async (user: IUserDocument, params: CreateParameters, adap
     users: [],
     seats: validatedParams.seats,
     billingContact: user.email!,
+    // Seed the credit side-table for the billing OWNER (not the acting caller), so an on-behalf
+    // create tracks the member the org actually bills. Keep in sync with `users[]` at every grant
+    // point (see `ensureUserDetails`).
     userDetails: [
       {
-        id: user.id,
-        email: user.email ?? user.username,
-        name: user.name,
+        id: owner.id,
+        email: owner.email ?? owner.username,
+        name: owner.name,
         usedCredits: 0,
         lastCreditUsedAt: null,
       },
@@ -81,8 +94,7 @@ export const create = async (user: IUserDocument, params: CreateParameters, adap
   // own owner, so they cannot undo it themselves. Do NOT "fix" that by gating this write on the org
   // being funded: that reintroduces #1388 for unfunded-org owners. The fields need separating; see
   // #1428.
-  const owner = billingOwnerId === user.id ? user : await adapters.db.users.findById(billingOwnerId);
-  if (owner && !owner.organizationId) {
+  if (!owner.organizationId) {
     // Best-effort, and intentionally NOT fatal: the org is already committed (there is no surrounding
     // transaction at every call site), so letting a failed pointer write bubble would 500 a create
     // that actually succeeded and leave the owner in exactly the no-active-org state this repairs.
