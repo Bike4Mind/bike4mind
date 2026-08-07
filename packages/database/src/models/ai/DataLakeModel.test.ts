@@ -606,6 +606,73 @@ describe('DataLakeBatchRepository.setStatusIfActive - guarded non-terminal trans
   });
 });
 
+describe('DataLakeBatchRepository.claimFileStatus - from-set gating', () => {
+  setupMongoTest();
+
+  const batchWithFile = async (status: import('@bike4mind/common').BatchFileStatus) => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 1 } as never);
+    await dataLakeBatchRepository.appendFiles(batch.id, [{ fabFileId: 'ff1', fileName: 'a.pdf', status }]);
+    return batch;
+  };
+
+  it('claims a manifest file from uploaded to chunking', async () => {
+    const batch = await batchWithFile('uploaded');
+    const claimed = await dataLakeBatchRepository.claimFileStatus(batch.id, 'ff1', ['uploaded', 'pending'], 'chunking');
+    expect(claimed).toBe(true);
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.files[0].status).toBe('chunking');
+  });
+
+  it('is a no-op once the entry is failed - the exact mechanism a premature failure exploits (#1412): no success path can ever claim a file back out of failed, so marking one failed before a retry has a chance to succeed is unrecoverable', async () => {
+    const batch = await batchWithFile('failed');
+    const claimed = await dataLakeBatchRepository.claimFileStatus(
+      batch.id,
+      'ff1',
+      ['chunking', 'uploaded', 'pending'],
+      'complete'
+    );
+    expect(claimed).toBe(false);
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.files[0].status).toBe('failed');
+  });
+
+  it('a repeated claim to the same target is a no-op (redelivery safety)', async () => {
+    const batch = await batchWithFile('uploaded');
+    const first = await dataLakeBatchRepository.claimFileStatus(batch.id, 'ff1', ['uploaded', 'pending'], 'chunking');
+    const second = await dataLakeBatchRepository.claimFileStatus(batch.id, 'ff1', ['uploaded', 'pending'], 'chunking');
+    expect(first).toBe(true);
+    expect(second).toBe(false);
+  });
+});
+
+describe('DataLakeBatchRepository.touchIfActive - guarded heartbeat', () => {
+  setupMongoTest();
+
+  const activeBatch = () => dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1' });
+
+  it('advances updatedAt on a non-terminal batch', async () => {
+    const batch = await activeBatch();
+    const before = batch.updatedAt.getTime();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    await dataLakeBatchRepository.touchIfActive(batch.id);
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh!.updatedAt.getTime()).toBeGreaterThan(before);
+  });
+
+  it('is a no-op on an already-terminal batch, so it cannot resurrect one the pipeline finalized', async () => {
+    const batch = await activeBatch();
+    const finalized = await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed_with_errors');
+    const terminalUpdatedAt = finalized!.updatedAt.getTime();
+
+    await new Promise(resolve => setTimeout(resolve, 5));
+    await dataLakeBatchRepository.touchIfActive(batch.id);
+
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.status).toBe('completed_with_errors');
+    expect(fresh!.updatedAt.getTime()).toBe(terminalUpdatedAt);
+  });
+});
+
 describe('DataLakeBatchRepository.incrementCounter - additive, not clobbering', () => {
   setupMongoTest();
 
@@ -617,6 +684,53 @@ describe('DataLakeBatchRepository.incrementCounter - additive, not clobbering', 
     await dataLakeBatchRepository.incrementCounter(batch.id, 'failedFiles', 2);
     const after = await dataLakeBatchRepository.incrementCounter(batch.id, 'failedFiles', 1);
     expect(after?.failedFiles).toBe(3);
+  });
+});
+
+describe('DataLakeBatchRepository.incrementCounters - atomic multi-field increment', () => {
+  setupMongoTest();
+
+  it('bumps two counters in one write, so neither can land without the other', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 5 } as never);
+    const after = await dataLakeBatchRepository.incrementCounters(batch.id, {
+      failedFiles: 1,
+      processingFailedFiles: 1,
+    });
+    expect(after?.failedFiles).toBe(1);
+    expect(after?.processingFailedFiles).toBe(1);
+  });
+
+  it('composes with prior single-field increments rather than clobbering them', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 5 } as never);
+    await dataLakeBatchRepository.incrementCounter(batch.id, 'vectorizedFiles', 2);
+    const after = await dataLakeBatchRepository.incrementCounters(batch.id, {
+      failedFiles: 1,
+      processingFailedFiles: 1,
+    });
+    expect(after?.vectorizedFiles).toBe(2);
+    expect(after?.failedFiles).toBe(1);
+    expect(after?.processingFailedFiles).toBe(1);
+  });
+
+  it('is a no-op on an already-terminal batch, so a late-arriving increment cannot push a counter past what a caller already treated as final', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 5 } as never);
+    await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed');
+
+    const result = await dataLakeBatchRepository.incrementCounters(batch.id, {
+      failedFiles: 1,
+      processingFailedFiles: 1,
+    });
+    expect(result).toBeNull();
+
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.failedFiles).toBe(0);
+    expect(fresh?.processingFailedFiles).toBe(0);
+    expect(fresh?.status).toBe('completed');
+  });
+
+  it('returns null without querying Mongo for an empty fields object', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 5 } as never);
+    await expect(dataLakeBatchRepository.incrementCounters(batch.id, {})).resolves.toBeNull();
   });
 });
 

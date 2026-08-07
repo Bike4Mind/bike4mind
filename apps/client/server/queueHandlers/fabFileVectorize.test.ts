@@ -13,6 +13,12 @@ const h = vi.hoisted(() => ({
   markFailedIfNotAlready: vi.fn(),
   getVector: vi.fn(),
   getEmbedding: vi.fn(),
+  updateFileStatus: vi.fn(),
+  incrementCounter: vi.fn(async () => ({ failedFiles: 1, processingFailedFiles: 1 })),
+  incrementCounters: vi.fn(async () => ({ failedFiles: 1, processingFailedFiles: 1 })),
+  claimFileStatus: vi.fn(),
+  deferFailureIfRetryable: vi.fn(),
+  fabFileUpdate: vi.fn(),
   countTerminalChunks: vi.fn(),
   chunkUpdate: vi.fn(),
   getAtlasIndexForModel: vi.fn(() => ({ name: 'idx', numDimensions: 3 })),
@@ -23,16 +29,17 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: vi.fn() },
   apiKeyRepository: {},
   dataLakeBatchRepository: {
-    updateFileStatus: vi.fn(),
-    incrementCounter: vi.fn(async () => ({ failedFiles: 1 })),
-    claimFileStatus: vi.fn(),
+    updateFileStatus: h.updateFileStatus,
+    incrementCounter: h.incrementCounter,
+    incrementCounters: h.incrementCounters,
+    claimFileStatus: h.claimFileStatus,
   },
   embeddingCacheRepository: {},
   fabFileChunkRepository: { findById: vi.fn(), countTerminalChunks: h.countTerminalChunks, update: h.chunkUpdate },
   fabFileRepository: {
     shareable: { findAccessibleById: h.findAccessibleById },
     markFailedIfNotAlready: h.markFailedIfNotAlready,
-    update: vi.fn(),
+    update: h.fabFileUpdate,
   },
   User: { findById: vi.fn(async () => ({ id: 'u1' })) },
   withTransaction: vi.fn((fn: () => unknown) => fn()),
@@ -46,8 +53,9 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: vi.fn(),
   isBatchComplete: vi.fn(),
+  deferFailureIfRetryable: (...a: unknown[]) => h.deferFailureIfRetryable(...a),
 }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
+vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@server/utils/errors', () => ({ NotFoundError: class NotFoundError extends Error {} }));
 // Module-load zod schemas used by VectorizePayload.
@@ -70,6 +78,8 @@ vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => new Proxy({}, { get
 const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() } as never;
 
 import { fabFileChunkRepository } from '@bike4mind/database';
+import { sendToClient } from '@server/websocket/utils';
+import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from './sqsDelivery';
 import { dispatch } from './fabFileVectorize';
 
 const makeEvent = (body: Record<string, unknown>) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
@@ -153,6 +163,154 @@ describe('fabFileVectorize handler - stored error copy on vectorization failure'
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
 
     expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', 'rate limit exceeded');
+  });
+
+  it('turn-attached file (no batchId) also only persists its error when not deferred', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
+    h.getVector.mockRejectedValue(new Error('rate limit exceeded'));
+
+    h.deferFailureIfRetryable.mockResolvedValue(true);
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+
+    h.deferFailureIfRetryable.mockResolvedValue(false);
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', 'rate limit exceeded');
+  });
+});
+
+describe('fabFileVectorize handler - notification failures are non-fatal (human review)', () => {
+  // This message must actually complete vectorization DURING this call (not already be
+  // fully vectorized) so it reaches the isFileVectorized branch at lines 233-253 rather than
+  // returning early at the top-of-handler idempotency check (lines 81-88). A throw from the
+  // vectorize-complete push there must not stop the batch claim/increment that follows it:
+  // the file is already persisted vectorized:true by that point, so a stranded claim here
+  // would never get another chance (the next retry hits the idempotency early-return).
+  const unvectorizedFile = (batchId?: string) => ({
+    id: 'ff1',
+    batchId,
+    vectorized: false,
+    chunkCount: 1,
+    vectorizedChunkCount: 0,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text: 'hello world',
+      tokenCount: 5,
+    });
+    h.getEmbedding.mockResolvedValue(null);
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+    h.countTerminalChunks.mockResolvedValue(1);
+    h.claimFileStatus.mockResolvedValue(true);
+    h.incrementCounter.mockResolvedValue({ vectorizedFiles: 1, failedFiles: 0, totalFiles: 1 });
+  });
+
+  it('a rejecting sendToClient does not prevent the batch claim/increment from completing', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    (sendToClient as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('socket gone'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['chunking', 'uploaded', 'pending'], 'complete');
+    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'vectorizedFiles');
+  });
+});
+
+describe('fabFileVectorize handler - retry gating (#1412)', () => {
+  // The gate's own attempt-counting/heartbeat behavior is unit-tested directly against
+  // deferFailureIfRetryable in dataLakeBatchProgress.test.ts; here we only need to prove the
+  // handler wires it correctly: defer -> rethrow with nothing accounted, no-defer -> account
+  // exactly like before this fix existed.
+  const unvectorizedFile = (batchId?: string) => ({
+    id: 'ff1',
+    batchId,
+    vectorized: false,
+    chunkCount: 1,
+    vectorizedChunkCount: 0,
+  });
+  const RATE_LIMIT_ERR = 'rate limit exceeded';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text: 'hello world',
+      tokenCount: 5,
+    });
+    h.getEmbedding.mockResolvedValue(null);
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+  });
+
+  it('when deferred (non-final attempt), rethrows with no batch/file accounting', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.getVector.mockRejectedValue(new Error(RATE_LIMIT_ERR));
+    h.deferFailureIfRetryable.mockResolvedValue(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(RATE_LIMIT_ERR);
+    expect(h.deferFailureIfRetryable).toHaveBeenCalledWith(expect.anything(), FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT, {
+      fabFileId: 'ff1',
+      batchId: 'batch-1',
+      action: 'Vectorization',
+      errorMessage: RATE_LIMIT_ERR,
+      logger: mockLogger,
+    });
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+    expect(h.updateFileStatus).not.toHaveBeenCalled();
+    expect(h.incrementCounters).not.toHaveBeenCalled();
+  });
+
+  it('the operator-facing auth-failure warning still fires when deferred, even though nothing persists', async () => {
+    const authError = Object.assign(new Error('OPENAI_API_KEY is not set'), { name: 'EmbeddingAuthError' });
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.getVector.mockRejectedValue(authError);
+    h.deferFailureIfRetryable.mockResolvedValue(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('embedding auth'));
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+  });
+
+  it('when not deferred (final attempt), accounts the failure into both counters atomically', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.getVector.mockRejectedValue(new Error(RATE_LIMIT_ERR));
+    h.deferFailureIfRetryable.mockResolvedValue(false);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(RATE_LIMIT_ERR);
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', RATE_LIMIT_ERR);
+    expect(h.updateFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', 'failed', RATE_LIMIT_ERR);
+    // One atomic call for both counters, so a crash between two sequential $inc writes can
+    // never misclassify a processing failure as an upload one (#1412).
+    expect(h.incrementCounters).toHaveBeenCalledWith('batch-1', { failedFiles: 1, processingFailedFiles: 1 });
+  });
+
+  it('a deferred failure followed by a successful retry never touches failedFiles', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.getVector.mockRejectedValue(new Error(RATE_LIMIT_ERR));
+    h.deferFailureIfRetryable.mockResolvedValue(true);
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(RATE_LIMIT_ERR);
+    expect(h.incrementCounters).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text: 'hello world',
+      tokenCount: 5,
+    });
+    h.getEmbedding.mockResolvedValue(null);
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+    h.countTerminalChunks.mockResolvedValue(1);
+    h.claimFileStatus.mockResolvedValue(true);
+    h.incrementCounter.mockResolvedValue({ vectorizedFiles: 1, failedFiles: 0, totalFiles: 1 });
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.claimFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', ['chunking', 'uploaded', 'pending'], 'complete');
+    expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'vectorizedFiles');
+    expect(h.incrementCounters).not.toHaveBeenCalled();
+    expect(h.updateFileStatus).not.toHaveBeenCalledWith('batch-1', 'ff1', 'failed', expect.anything());
   });
 });
 

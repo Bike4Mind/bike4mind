@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   DATA_LAKES,
   UpdateDataLakeRequestInput,
@@ -1481,6 +1483,33 @@ describe('reconcileStuckBatches — guarded read-time reconciliation', () => {
   let db: ReturnType<typeof makeDb>;
   beforeEach(() => {
     db = makeDb();
+  });
+
+  it('is at least the worst-case chunk-queue SQS retry window (2 full visibility waits + the final Lambda run), so a legitimately-retrying batch is never forced terminal mid-retry (#1412)', () => {
+    // infra/queues.ts constructs real SST cloud resources at import time, so it can't be
+    // imported here - read its source text instead, so a future change to the visibility
+    // timeout, Lambda timeout, or retry count actually moves this test rather than leaving two
+    // hardcoded numbers to silently drift from the config they claim to mirror.
+    const infraSrc = readFileSync(join(__dirname, '../../../../infra/queues.ts'), 'utf8');
+    const visibilityMatch = infraSrc.match(
+      /const fabFileChunkQueue\s*=\s*new sst\.aws\.Queue\([^)]*?visibilityTimeout:\s*'(\d+) minutes'/
+    );
+    const lambdaTimeoutMatch = infraSrc.match(/fabFileChunkQueue\.subscribe\([\s\S]*?timeout:\s*'(\d+) minutes'/);
+    const retryMatch = infraSrc.match(
+      /const fabFileChunkQueue\s*=\s*new sst\.aws\.Queue\([^)]*?dlq:\s*\{[^}]*?retry:\s*(\d+)/
+    );
+    if (!visibilityMatch || !lambdaTimeoutMatch || !retryMatch) {
+      throw new Error('Could not find fabFileChunkQueue visibility/timeout/retry in infra/queues.ts');
+    }
+    const visibilityMinutes = Number(visibilityMatch[1]);
+    const lambdaTimeoutMinutes = Number(lambdaTimeoutMatch[1]);
+    const retryCount = Number(retryMatch[1]);
+
+    // Each visibility wait already covers that attempt's own Lambda execution time (the timeout
+    // starts at receipt, not completion), so only the FINAL attempt's own run adds on top of the
+    // waits between the (retryCount - 1) earlier attempts - mirrors this constant's own doc comment.
+    const chunkQueueWorstCaseMs = ((retryCount - 1) * visibilityMinutes + lambdaTimeoutMinutes) * 60 * 1000;
+    expect(DEFAULT_STUCK_BATCH_TIMEOUT_MS).toBeGreaterThan(chunkQueueWorstCaseMs);
   });
 
   it('forces a stuck non-terminal batch terminal (marked reconciler) and recomputes stats', async () => {

@@ -21,7 +21,12 @@ import {
   getAtlasIndexForModel,
 } from '@bike4mind/fab-pipeline';
 import { apiKeyService, embeddingCacheService, fabFilesService } from '@bike4mind/services';
-import { finalizeBatchIfComplete, isBatchComplete } from '@server/queueHandlers/dataLakeBatchProgress';
+import {
+  finalizeBatchIfComplete,
+  isBatchComplete,
+  deferFailureIfRetryable,
+} from '@server/queueHandlers/dataLakeBatchProgress';
+import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getProviderFromModel } from '@bike4mind/fab-pipeline';
@@ -275,11 +280,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     fabFile.isVectorizing = !isFileVectorized;
 
     if (isFileVectorized) {
+      // Non-fatal: a throw here must never reach the outer catch. This file is ALREADY
+      // persisted vectorized:true above, so a deferred (non-final) retry would hit this
+      // function's own idempotency early-return next attempt and skip straight past the
+      // batch claim below - stranding the batch's vectorizedFiles forever instead of just
+      // missing one UI push (a prior version of this bug: a human reviewer caught it).
       await sendToClient(userId, Resource.websocket.managementEndpoint, {
         action: 'update_file_chunk_vector_status',
         fabFileId,
         vectorizeStatus: 'complete',
-      });
+      }).catch(err => logger.error(`Error notifying vectorize-complete for ${fabFileId}: ${err}`));
 
       // Track batch progress if file belongs to a data lake batch.
       // Atomic claim gates the increment so a redelivered "complete" message is a no-op.
@@ -314,9 +324,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       await fabFileRepository.update({ id: fabFileId, error: null });
     }
   } catch (err) {
-    // On vectorization failure, increment the batch's failedFiles counter so
+    // On the FINAL vectorization attempt, increment the batch's failedFiles counter so
     // the batch can transition out of 'processing' state when all files are accounted for.
-    // Use atomic mark-failed to prevent double-counting on SQS retries.
+    // Use atomic mark-failed to prevent double-counting on SQS retries. An earlier, non-final
+    // attempt just logs and rethrows (see the gate below) - it may still succeed on retry.
     const errorMessage = err instanceof Error ? err.message : String(err);
     // The stored message surfaces to the end user on the file. An embedding-auth failure carries
     // operator instructions (set OPENAI_API_KEY / OLLAMA_BASE_URL) that a user can neither see nor
@@ -335,13 +346,35 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     if (isAuthFailure) {
       logger.warn(`Vectorization failed for ${fabFileId} (embedding auth): ${errorMessage}`);
     }
+
+    // Only account a failure into the batch/file state on the LAST SQS delivery attempt -
+    // see deferFailureIfRetryable's doc comment for why an earlier attempt must leave
+    // 'failed' status untouched.
+    if (
+      await deferFailureIfRetryable(event, FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT, {
+        fabFileId,
+        batchId: existingFabFile.batchId,
+        action: 'Vectorization',
+        errorMessage,
+        logger,
+      })
+    ) {
+      throw err; // Re-throw so SQS retries
+    }
+
     // markFailedIfNotAlready is the file-level idempotency guard: only the first
     // failure increments the counter, so SQS redelivery of a failed message is a no-op.
     const isFirstFailure = await fabFileRepository.markFailedIfNotAlready(fabFileId, storedError);
     if (existingFabFile.batchId && isFirstFailure) {
       try {
         await dataLakeBatchRepository.updateFileStatus(existingFabFile.batchId, fabFileId, 'failed', storedError);
-        const batch = await dataLakeBatchRepository.incrementCounter(existingFabFile.batchId, 'failedFiles');
+        // One atomic $inc for both counters - two sequential incrementCounter calls could
+        // leave failedFiles bumped without processingFailedFiles on a crash between them,
+        // misclassifying this as an upload failure with no automatic recovery (#1412).
+        const batch = await dataLakeBatchRepository.incrementCounters(existingFabFile.batchId, {
+          failedFiles: 1,
+          processingFailedFiles: 1,
+        });
         await finalizeBatchIfComplete(batch, logger);
 
         const isComplete = isBatchComplete(batch);
@@ -349,6 +382,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           action: 'data_lake_batch_progress',
           batchId: existingFabFile.batchId,
           failedFiles: batch?.failedFiles ?? 1,
+          processingFailedFiles: batch?.processingFailedFiles ?? 1,
           status: isComplete ? (batch!.failedFiles > 0 ? 'completed_with_errors' : 'completed') : undefined,
         });
       } catch (innerErr) {

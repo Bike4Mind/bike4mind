@@ -24,7 +24,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
-    DEFAULT_STUCK_BATCH_TIMEOUT_MS: 30 * 60 * 1000,
+    DEFAULT_STUCK_BATCH_TIMEOUT_MS: 180 * 60 * 1000,
     reconcileStuckBatches: h.reconcile,
     DEFAULT_STUCK_TAXONOMY_TIMEOUT_MS: 10 * 60 * 1000,
     reconcileStuckTaxonomy: h.reconcileTaxonomy,
@@ -59,7 +59,7 @@ vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
 
 import { handler } from './dataLakeBatchReconcile';
 
-const TIMEOUT = 30 * 60 * 1000;
+const TIMEOUT = 180 * 60 * 1000;
 
 describe('dataLakeBatchReconcile cron handler', () => {
   beforeEach(() => {
