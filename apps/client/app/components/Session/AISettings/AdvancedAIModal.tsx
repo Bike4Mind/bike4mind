@@ -701,6 +701,11 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   const outputCeiling = modelInfo.max_tokens ?? 16384;
   const contextWindow = modelInfo.contextWindow ?? 0;
   const inputTokens = Math.max(0, contextWindow - outputTokens);
+  // A slider needs a range to be worth drawing. Four Llama models in the catalog advertise exactly
+  // MIN_OUTPUT_TOKENS as their ceiling, so min and max coincide and the handle cannot move; below it
+  // the bounds would invert outright, which MUI leaves undefined. The read-out and the sentence below
+  // still state the budget, so nothing is lost by omitting the track.
+  const isOutputAdjustable = outputCeiling > MIN_OUTPUT_TOKENS;
 
   // The session-wide switches, defined once and rendered two ways. Desktop keeps them inline beside
   // the section title; mobile has no room for four controls on that row, so there the title keeps
@@ -1039,52 +1044,59 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                   </Box>
                 </Typography>
               </Box>
-              <Box sx={{ position: 'relative', width: '100%' }}>
-                {/* No valueLabelDisplay: the bubble is centred on the thumb, so at max value half of
-                  it sat past the container's right edge. With overflowY auto the browser resolves
-                  overflowX to auto as well, so hovering there produced a horizontal scrollbar
-                  across the whole dialog. The read-out above tracks the drag anyway. */}
-                <Slider
-                  aria-label="Max output tokens"
-                  value={outputTokens}
-                  min={MIN_OUTPUT_TOKENS}
-                  max={outputCeiling}
-                  step={256}
-                  onChange={(_, newValue) => {
-                    if (typeof newValue === 'number') {
-                      setLLM({ max_tokens: newValue });
-                    }
-                  }}
-                  disableSwap
-                  sx={{
-                    '--Slider-trackSize': '8px',
-                    '--Slider-thumbSize': '16px',
-                    '--Slider-thumbWidth': '16px',
-                    width: '100%',
-                    '& .MuiSlider-mark': {
-                      display: 'none',
-                    },
-                    '& .MuiSlider-markLabel': {
-                      display: 'none',
-                    },
-                    // The filled bar carries the value, so it goes inert with everything else -
-                    // primary blue on a dimmed row still read as the one live control.
-                    '& .MuiSlider-track': {
-                      backgroundColor: readOnly ? 'text.tertiary' : 'primary.main',
-                    },
-                    // No handle while previewing: there is nothing to drag, and a handle reads as
-                    // grabbable however it is coloured. The filled bar still shows the value.
-                    '& .MuiSlider-thumb': readOnly ? { display: 'none' } : { backgroundColor: 'primary.main' },
-                  }}
-                />
-              </Box>
+              {isOutputAdjustable && (
+                <Box sx={{ position: 'relative', width: '100%' }}>
+                  {/* No valueLabelDisplay: the bubble is centred on the thumb, so at max value half of
+                    it sat past the container's right edge. With overflowY auto the browser resolves
+                    overflowX to auto as well, so hovering there produced a horizontal scrollbar
+                    across the whole dialog. The read-out above tracks the drag anyway. */}
+                  <Slider
+                    aria-label="Max output tokens"
+                    value={outputTokens}
+                    min={MIN_OUTPUT_TOKENS}
+                    max={outputCeiling}
+                    step={256}
+                    onChange={(_, newValue) => {
+                      if (typeof newValue === 'number') {
+                        setLLM({ max_tokens: newValue });
+                      }
+                    }}
+                    disableSwap
+                    sx={{
+                      '--Slider-trackSize': '8px',
+                      '--Slider-thumbSize': '16px',
+                      '--Slider-thumbWidth': '16px',
+                      width: '100%',
+                      '& .MuiSlider-mark': {
+                        display: 'none',
+                      },
+                      '& .MuiSlider-markLabel': {
+                        display: 'none',
+                      },
+                      // The filled bar carries the value, so it goes inert with everything else -
+                      // primary blue on a dimmed row still read as the one live control.
+                      '& .MuiSlider-track': {
+                        backgroundColor: readOnly ? 'text.tertiary' : 'primary.main',
+                      },
+                      // No handle while previewing: there is nothing to drag, and a handle reads as
+                      // grabbable however it is coloured. The filled bar still shows the value.
+                      '& .MuiSlider-thumb': readOnly ? { display: 'none' } : { backgroundColor: 'primary.main' },
+                    }}
+                  />
+                </Box>
+              )}
               {/* The effect of the setting, not a second control: the reserved budget is what the
                 remainder is left over from, which is also where the context total now lives. */}
               <Typography
                 level="body-sm"
                 data-testid="token-allocation-input-note"
                 // Negative top margin closes the gap left by the Slider's own bottom padding.
-                sx={{ color: 'text.primary50', fontSize: '12px', lineHeight: 1.4, mt: '-12px' }}
+                sx={{
+                  color: 'text.primary50',
+                  fontSize: '12px',
+                  lineHeight: 1.4,
+                  mt: isOutputAdjustable ? '-12px' : 0,
+                }}
               >
                 Reserved from the {formatTokenCount(contextWindow)} token context window, leaving{' '}
                 {formatTokenCount(inputTokens)} for input.
@@ -1246,9 +1258,15 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                     the cap forbids. It also duplicated a number input on the same value. */}
                   <SettingsRow label="Safety Tolerance" tooltip={FIELD_TOOLTIPS.safetyTolerance}>
                     <Select
-                      // Sessions saved before the cap can hold up to LEGACY_INPUT_MAX; the schema
-                      // clamps them on parse, so clamp here too or the Select renders blank.
-                      value={Math.min(safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT, BFL_SAFETY_TOLERANCE.MAX)}
+                      // Clamped both ways, because any value without a matching Option renders the
+                      // Select blank. Above MAX is the real case - sessions saved before the cap can
+                      // hold up to LEGACY_INPUT_MAX, and the schema clamps them on parse. Below MIN
+                      // should be impossible, but a stored value is not something this component
+                      // controls, so it is not worth trusting for a one-expression guard.
+                      value={Math.min(
+                        Math.max(safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT, BFL_SAFETY_TOLERANCE.MIN),
+                        BFL_SAFETY_TOLERANCE.MAX
+                      )}
                       onChange={(_, newValue) => newValue !== null && setLLM({ safety_tolerance: newValue })}
                       indicator={<KeyboardArrowDownIcon />}
                       sx={settingsSelectSx(mode || 'light')}
