@@ -88,7 +88,14 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const [preferredSystemPromptId, setPreferredSystemPromptId] = useState('');
   // Only fetch the picker options when an editor is actually viewing the settings (a lake is open
   // and manageable) - a reader never sees the field, so never pays for the list.
-  const { data: activatablePrompts } = useActivatablePrompts(!!lake?.canManage);
+  const { data: activatablePrompts, isLoading: promptsLoading } = useActivatablePrompts(!!lake?.canManage);
+  const activatable = activatablePrompts ?? [];
+  // The bound prompt's <Option> may be absent: the allowlist loads async (not there on first open),
+  // or an admin delisted a prompt this lake was bound to. A controlled Joy Select whose value has
+  // no matching <Option> resolves the value to '' and fires onChange - which would silently clear
+  // the binding on the next save. Track whether the current value is represented so we can always
+  // render an Option for it (see the fallback Option below).
+  const boundPromptListed = activatable.some(prompt => prompt.promptId === preferredSystemPromptId);
 
   // Seed the form once per opened lake, keyed on id (NOT the object): `lake` is now derived
   // from the live list, so it changes identity on every refetch - keying on id keeps a
@@ -210,7 +217,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                     <Option value="" data-testid="datalake-preferred-prompt-none">
                       None
                     </Option>
-                    {(activatablePrompts ?? []).map(prompt => (
+                    {activatable.map(prompt => (
                       <Option
                         key={prompt.promptId}
                         value={prompt.promptId}
@@ -219,6 +226,16 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                         {prompt.name}
                       </Option>
                     ))}
+                    {/* Keep an Option for the currently-bound value so the controlled Select can
+                        always hold it - otherwise a first-open (list still loading) or a delisted
+                        prompt collapses the value to '' and a save clears the binding. While the
+                        list loads we don't have the display name yet, so show a neutral label; a
+                        genuinely delisted id is shown verbatim so the editor can see it. */}
+                    {preferredSystemPromptId && !boundPromptListed && (
+                      <Option value={preferredSystemPromptId} data-testid="datalake-preferred-prompt-bound-fallback">
+                        {promptsLoading ? 'Loading...' : preferredSystemPromptId}
+                      </Option>
+                    )}
                   </Select>
                   <FormHelperText data-testid="datalake-preferred-prompt-help">
                     Applied when someone starts a chat with this lake, unless they picked their own prompt. Leave as

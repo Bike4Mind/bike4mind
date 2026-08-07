@@ -15,6 +15,23 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useSetLakeVisibility: () => ({ mutate: visibilityMutate, isPending: false }),
 }));
 
+// The picker's options come from an async react-query hook. Mock it so the modal renders
+// without a QueryClientProvider, and so each test can control the two states that matter:
+// options not-yet-arrived (data undefined, isLoading true) vs loaded. The seed/read-back bug
+// lives entirely in that timing, so the mock IS the seam under test.
+type MockActivatable = { promptId: string; name: string; description: string };
+let activatablePrompts: MockActivatable[] | undefined;
+let activatableLoading = false;
+vi.mock('@client/app/hooks/data/useActivatablePrompts', () => ({
+  useActivatablePrompts: () => ({ data: activatablePrompts, isLoading: activatableLoading }),
+}));
+
+const TRIAGE_ROUTER: MockActivatable = {
+  promptId: 'triage_router',
+  name: 'Triage Router',
+  description: 'Grounding-first routing prompt.',
+};
+
 // The settings modal derives org-visibility state from the account switcher (useAccounts),
 // which internally uses react-query - stub it so these clear-tag tests don't need a
 // QueryClientProvider. No org / no selection -> the Organization toggle is simply disabled,
@@ -32,6 +49,13 @@ const Wrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
+// Steady state for the tests that don't care about the picker: allowlist loaded, router present.
+// The preferred-prompt suite below overrides these per test to exercise the load-timing edges.
+beforeEach(() => {
+  activatablePrompts = [TRIAGE_ROUTER];
+  activatableLoading = false;
+});
+
 const gatedLake = {
   id: 'lake-1',
   name: 'Test Lake',
@@ -41,6 +65,7 @@ const gatedLake = {
   organizationId: '',
   isPublic: false,
   systemPrompt: '',
+  preferredSystemPromptId: '',
   canManage: true,
 };
 
@@ -53,6 +78,7 @@ const openLake = {
   organizationId: '',
   isPublic: false,
   systemPrompt: '',
+  preferredSystemPromptId: '',
   canManage: true,
 };
 
@@ -65,6 +91,7 @@ const entitlementGatedLake = {
   organizationId: '',
   isPublic: false,
   systemPrompt: '',
+  preferredSystemPromptId: '',
   canManage: true,
 };
 
@@ -325,5 +352,110 @@ describe('DataLakeSettingsModal — per-lake system prompt', () => {
 
     const textarea = screen.getByTestId('datalake-systemprompt-input').querySelector('textarea')!;
     expect(textarea).toHaveValue('');
+  });
+});
+
+describe('DataLakeSettingsModal \u2014 preferred prompt binding', () => {
+  const boundLake = { ...openLake, id: 'lake-6', preferredSystemPromptId: 'triage_router' };
+
+  beforeEach(() => {
+    updateMutate.mockReset();
+  });
+
+  // The data-loss regression: the bound prompt's <Option> comes from an async allowlist, so on
+  // the first Settings-open it is not in the DOM yet. A controlled Joy Select with no option
+  // matching its value resolves the value to '' and fires onChange, so a Save that never touched
+  // the picker used to silently clear the binding. Saving an untouched picker must round-trip.
+  it('preserves the bound prompt on save when the allowlist has not loaded yet', async () => {
+    activatablePrompts = undefined;
+    activatableLoading = true;
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={boundLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ preferredSystemPromptId: 'triage_router' });
+  });
+
+  it('preserves the bound prompt on save once the allowlist has loaded', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={boundLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ preferredSystemPromptId: 'triage_router' });
+  });
+
+  // A bound prompt an admin later removed from the allowlist must not be silently dropped either:
+  // the fallback <Option> keeps the Select holding the value so an untouched save preserves it.
+  it('preserves a bound prompt that is no longer in the allowlist', async () => {
+    activatablePrompts = [];
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={boundLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ preferredSystemPromptId: 'triage_router' });
+  });
+
+  it('sends the empty clear-sentinel when an editor selects None', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={boundLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-preferred-prompt-button'));
+    await user.click(screen.getByTestId('datalake-preferred-prompt-none'));
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    // '' is the deliberate clear here (an editor chose None), as opposed to the accidental ''
+    // the first-open bug produced - the value the user actually picked round-trips.
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ preferredSystemPromptId: '' });
+  });
+
+  it('binds a prompt when an editor picks one on a None lake', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-preferred-prompt-button'));
+    await user.click(screen.getByTestId('datalake-preferred-prompt-triage_router'));
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ preferredSystemPromptId: 'triage_router' });
+  });
+
+  it('never sends preferredSystemPromptId from a non-editor save', async () => {
+    const readerLake = { ...boundLake, id: 'lake-7', canManage: false };
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={readerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    expect(updateMutate.mock.calls[0][0]).not.toHaveProperty('preferredSystemPromptId');
   });
 });
