@@ -68,4 +68,11 @@ describe('MetadataFilterPanel - field allowlist', () => {
 
     expect(screen.queryByTestId('metadata-filter-field-error')).toBeNull();
   });
+
+  it('rejects a disallowed field name even when it came from the suggestion dropdown', () => {
+    renderPanel({ metadataFields: ['2fa'], initialFilters: [{ field: '2fa', operator: 'exists' }] });
+
+    expect(screen.getByTestId('metadata-filter-field-error')).toBeTruthy();
+    expect(screen.getByText('Apply Filters').closest('button')).toBeDisabled();
+  });
 });

@@ -90,9 +90,9 @@ const FilterRow: React.FC<FilterRowProps> = ({ filter, onChange, onDelete, metad
           </FormControl>
         )}
         <FormControl size="sm" sx={{ flex: 1 }}>
-          <Select
+          <Select<MetadataFilter['operator']>
             value={filter.operator}
-            onChange={(_, value) => onChange({ ...filter, operator: value as MetadataFilter['operator'] })}
+            onChange={(_, value) => value && onChange({ ...filter, operator: value })}
           >
             {METADATA_OPERATORS.map(({ value, label }) => (
               <Option key={value} value={value}>
@@ -229,11 +229,13 @@ export const MetadataFilterPanel: React.FC<MetadataFilterPanelProps> = ({
               Active Filters:
             </Typography>
             <Stack direction="row" spacing={1} flexWrap="wrap">
-              {filterState.filters.map((filter, index) => (
-                <Chip key={index} variant="soft" color="primary" component="div">
-                  {`${filter.field} ${filter.operator} ${filter.value || 'any'}`}
-                </Chip>
-              ))}
+              {filterState.filters
+                .filter(filter => isFieldValid(filter.field))
+                .map((filter, index) => (
+                  <Chip key={index} variant="soft" color="primary" component="div">
+                    {`${filter.field} ${filter.operator} ${filter.value || 'any'}`}
+                  </Chip>
+                ))}
             </Stack>
           </Box>
         )}

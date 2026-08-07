@@ -38,4 +38,25 @@ describe('DailyReportTab', () => {
 
     expect(screen.queryByTestId('daily-report-error')).toBeNull();
   });
+
+  // useAnalyticsData scopes placeholderData off for report mode (apps/client/app/hooks/useAnalyticsData.ts),
+  // so isLoading - not isFetching - is this tab's only loading signal; a background refetch must not
+  // hide the previously loaded reports.
+  it('keeps showing the loaded reports during a background refetch', () => {
+    useAnalyticsData.mockReturnValue({
+      data: { reports: [{ date: '2026-08-01', report: 'Some activity' }] },
+      isLoading: false,
+      isFetching: true,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(
+      <TestWrapper>
+        <DailyReportTab loading={false} onRefresh={vi.fn()} />
+      </TestWrapper>
+    );
+
+    expect(screen.getByText('Report for 2026-08-01')).toBeTruthy();
+  });
 });

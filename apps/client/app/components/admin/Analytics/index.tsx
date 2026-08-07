@@ -16,11 +16,11 @@ const AnalyticsTab: React.FC = () => {
 
   const analyticsQuery = useAnalyticsData();
 
-  const { isLoading, isFetching } = analyticsQuery;
+  const { isLoading, isFetching, refetch } = analyticsQuery;
 
   const handleRefresh = useCallback(() => {
-    analyticsQuery.refetch();
-  }, [analyticsQuery]);
+    refetch();
+  }, [refetch]);
 
   const getTabIcon = (tabId: AnalyticsSubTab) => {
     switch (tabId) {
@@ -65,10 +65,13 @@ const AnalyticsTab: React.FC = () => {
           </Stack>
         </Grid>
 
-        {isFetching && <LinearProgress size={'lg'} sx={{ marginX: '5px', width: '100%' }} />}
+        {/* Reserved height keeps the bar from shifting the content below it on every page turn. */}
+        <Box sx={{ width: '100%', height: 4, mx: '5px' }}>
+          {isFetching && <LinearProgress size={'lg'} sx={{ width: '100%' }} />}
+        </Box>
 
         {!isLoading && (
-          <Grid xs={12} mt={0.5}>
+          <Grid xs={12} mt={0.5} sx={{ opacity: isFetching ? 0.55 : 1, transition: 'opacity 0.15s ease-in-out' }}>
             <Sheet sx={{ width: '100%' }}>
               {activeSubTab === AnalyticsSubTab.UserActivity && (
                 <UserActivityTab

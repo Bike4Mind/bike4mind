@@ -112,7 +112,9 @@ export function useAnalyticsData(params?: UseAnalyticsDataParams) {
     },
     staleTime: 1000 * 60 * 5, // 5 minutes
     // A page turn or refresh re-runs an 8-9s aggregation; the previous page is still the right
-    // thing to show while it does, rather than blanking the whole tab.
-    placeholderData: keepPreviousData,
+    // thing to show while it does, rather than blanking the whole tab. Scoped to the paged grid:
+    // the report tabs have no "stale but visible" affordance wired up, so keeping their previous
+    // range on screen with no progress indicator would read as a stuck request.
+    placeholderData: isReportMode ? undefined : keepPreviousData,
   });
 }
