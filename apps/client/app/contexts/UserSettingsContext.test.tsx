@@ -59,7 +59,13 @@ const storedUser = () => useUser.getState().currentUser as MockUser;
 const storedPrefs = () => storedUser().preferences as Record<string, unknown>;
 const storedFeatures = () => storedPrefs().experimentalFeatures as Record<string, boolean>;
 
-/** An axios-shaped rejection: `isAxiosError` keys off the flag, `isCancel` off `__CANCEL__`. */
+/**
+ * An axios-shaped rejection. Deliberately a plain object rather than a real `AxiosError`:
+ * axios resolves both predicates by property, not prototype - `isAxiosError` is
+ * `isObject(payload) && payload.isAxiosError === true`, and `isCancel` is `!!value.__CANCEL__`.
+ * If a future axios tightened either to a prototype check, these helpers would need real
+ * instances instead.
+ */
 function axiosError(status: number, data?: unknown) {
   return Object.assign(new Error(`Request failed with status code ${status}`), {
     isAxiosError: true,
