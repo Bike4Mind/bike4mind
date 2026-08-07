@@ -25,6 +25,7 @@ import {
   isExperimentalFeatureEnabled,
   isImageAttachment,
   isImageServeable,
+  isMediaModelType,
   isUnlimitedHistory,
   normalizeRequestedHistoryCount,
   resolveHistoryFetchLimit,
@@ -61,6 +62,7 @@ import {
   getLastBuildDebugInfo,
   getSettingsByNames,
   attachedContentExtractionBudget,
+  effectiveContextWindow,
   safeInputWindow,
 } from '@bike4mind/utils';
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
@@ -1601,13 +1603,13 @@ export class ChatCompletionProcess {
 
       // Dynamic history adjustment: now that we have modelInfo, adjust history count
       // based on model's actual context window
-      const contextWindow = modelInfo.contextWindow ?? 200000;
+      const contextWindow = effectiveContextWindow(modelInfo);
 
-      // Image models generate from the current prompt alone: the image backend
+      // Image and video models generate from the current prompt alone: the media backend
       // ignores conversation history. Sending history only inflates the token count
-      // and trips a false context-overflow against the image model's small context
+      // and trips a false context-overflow against the media model's small context
       // window (e.g. FLUX Pro 1.1 at 10k).
-      if (modelInfo.type === 'image') {
+      if (isMediaModelType(modelInfo.type)) {
         historyCount = 0;
       }
 
@@ -1974,7 +1976,7 @@ export class ChatCompletionProcess {
       this.sendStatusUpdate(quest, 'Gathering data sources...', { statusAt: new Date() });
       // Input-window limits, needed BEFORE building messages because the amount of
       // attached-file content we extract has to be derived from them.
-      const contextLimit = modelInfo.contextWindow ?? 200000;
+      const contextLimit = effectiveContextWindow(modelInfo);
       // safeMaxTokens is resolved once further up, where the verbatim-history window
       // needs it too. An explicit caller budget is honored as-is; only its absence is
       // sized for the model. See resolveOutputMaxTokens for why raising an explicit

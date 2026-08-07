@@ -448,7 +448,9 @@ export const DataLakeBatchProgressAction = z.object({
     .enum(['preparing', 'uploading', 'processing', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
     .optional(),
   /** Background AI-tagging phase - orthogonal to `status`, see `TaxonomyStatus`. */
-  taxonomyStatus: z.enum(['none', 'queued', 'analyzing', 'ready', 'applying', 'applied', 'failed']).optional(),
+  taxonomyStatus: z
+    .enum(['none', 'queued', 'analyzing', 'ready', 'applying', 'applied', 'failed', 'dismissed'])
+    .optional(),
 });
 
 /** Verdict for a freshly-uploaded FabFile after the S3-event moderation scan. */
