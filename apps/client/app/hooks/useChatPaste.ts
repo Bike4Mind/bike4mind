@@ -6,6 +6,7 @@ import { generateSmartFileName } from '@client/app/utils/generateSmartFileName';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
 import { detectContentType } from '@client/app/utils/contentTypes';
 import { LexicalChatInputRef } from '@client/app/components/Session/LexicalChatInput';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 
 interface UseChatPasteDeps {
   currentSession: ISessionDocument | null;
@@ -23,7 +24,7 @@ interface UseChatPasteDeps {
  * Optimistically add a newly created FabFile to the file browser cache.
  */
 function addToFileBrowserCache(queryClient: QueryClient, fabFile: IFabFileDocument) {
-  queryClient.setQueriesData({ queryKey: ['fabFiles'] }, (oldData: unknown) => {
+  queryClient.setQueriesData({ queryKey: fabFileKeys.all }, (oldData: unknown) => {
     const data = oldData as { pages?: { data: IFabFileDocument[]; total: number }[] } | undefined;
     if (!data?.pages?.[0]?.data) return oldData;
     return {
@@ -137,7 +138,7 @@ export function useChatPaste(deps: UseChatPasteDeps) {
               const fileTag = `[[${fabFile.fileName}]]`;
               insertFileTag(fileTag, lexicalInputRef, chatInputValue, setChatInputValue);
             } catch (error) {
-              queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+              queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
               console.error('Failed to upload pasted image:', error);
               toast.dismiss(loadingToast);
               toast.error('Failed to upload image');
@@ -188,7 +189,7 @@ export function useChatPaste(deps: UseChatPasteDeps) {
           const fileTag = `[[${fabFile.fileName}]]`;
           insertFileTag(fileTag, lexicalInputRef, chatInputValue, setChatInputValue);
         } catch (error) {
-          queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+          queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
           console.error('Failed to upload pasted text as file:', error);
           toast.dismiss(loadingToast);
           toast.error('Failed to upload text as file');

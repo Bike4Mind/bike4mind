@@ -47,6 +47,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useGetSessionAgents } from '@client/app/hooks/data/agents';
 import CountBadge from '@client/app/components/common/CountBadge';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 
 const GOOGLE_DRIVE_PICKER_STYLE_ID = 'b4m-google-drive-picker-styles';
 
@@ -268,7 +269,7 @@ const AttachFileButton = ({
             }
 
             // Optimistically add to file browser cache
-            queryClient.setQueriesData({ queryKey: ['fabFiles'] }, (oldData: any) => {
+            queryClient.setQueriesData({ queryKey: fabFileKeys.all }, (oldData: any) => {
               if (!oldData?.pages?.[0]?.data) return oldData;
               return {
                 ...oldData,

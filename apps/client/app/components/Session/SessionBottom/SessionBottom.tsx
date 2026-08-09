@@ -29,6 +29,7 @@ import { MessageFileThumbnails } from '@client/app/components/Session/MessageFil
 import { useNotebookFilepond } from '@client/app/components/Session/NotebookFilepondProvider';
 import { setKnowledgeViewer } from '@client/app/components/Knowledge/KnowledgeViewer';
 import { useGetAgents, useGetSessionAgents } from '@client/app/hooks/data/agents';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { useGetSessionQuests } from '@client/app/hooks/data/sessions';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useChatInput, NEW_NOTEBOOK_DRAFT_KEY } from '@client/app/hooks/useChatInput';
@@ -376,7 +377,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
 
       // Also invalidate fab files if needed
       await queryClient.invalidateQueries({
-        queryKey: ['fabFiles'],
+        queryKey: fabFileKeys.all,
         exact: false,
       });
     };

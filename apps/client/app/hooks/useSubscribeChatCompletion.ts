@@ -15,6 +15,7 @@ import { useStreamingQueryUpdates } from './useStreamingQueryUpdates';
 import { useStreamingMetrics } from './useStreamingMetrics';
 import { useStreamingArtifactPersistence } from './useStreamingArtifactPersistence';
 import { dispatchUiSideEffects } from '../utils/uiSideEffectDispatcher';
+import { fabFileKeys } from './data/fabFileKeys';
 
 export type IChatCompletion = {
   completed: boolean;
@@ -315,7 +316,7 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
               // Base without requiring a manual reload. The hook's 30-min staleTime
               // would otherwise hide them until navigation.
               queryClient.invalidateQueries({
-                queryKey: ['fabFiles', 'own', { sessionId: sessionIdToInvalidate }],
+                queryKey: fabFileKeys.ownBySession(sessionIdToInvalidate),
               });
             }, 2000);
           }

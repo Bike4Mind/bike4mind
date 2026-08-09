@@ -5,6 +5,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { AxiosError, isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import { generateMockProjects } from '@client/app/mocks/mockProjects';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 
 // Set true to use mock projects for UI testing
 const USE_MOCK_PROJECTS = false;
@@ -127,7 +128,7 @@ export const useAddSessionsToProject = (callbacks?: { onSuccess?: () => void; on
     },
     onSuccess: (value: ISessionDocument[]) => {
       queryClient.invalidateQueries({ queryKey: ['projects', 'search'] });
-      queryClient.invalidateQueries({ queryKey: ['fabFiles', 'own'] });
+      queryClient.invalidateQueries({ queryKey: fabFileKeys.own });
       toast.success('Sessions added to project successfully');
       callbacks?.onSuccess?.();
     },
@@ -150,7 +151,7 @@ export const useAddFilesToProject = (callbacks?: { onSuccess?: () => void; onErr
     },
     onSuccess: (project: IProjectDocument) => {
       updateAllQueryData(queryClient, 'projects', 'write', project);
-      queryClient.invalidateQueries({ queryKey: ['fabFiles', 'own'] });
+      queryClient.invalidateQueries({ queryKey: fabFileKeys.own });
 
       toast.success('Files added to project successfully');
       callbacks?.onSuccess?.();
@@ -232,7 +233,7 @@ export const useRemoveSessionsFromProject = (callbacks?: { onSuccess?: () => voi
       queryClient.invalidateQueries({ queryKey: ['projects', project.id] });
       queryClient.invalidateQueries({ queryKey: ['projects', 'search'] });
       queryClient.invalidateQueries({ queryKey: ['sessions', 'projects', project.id] });
-      queryClient.invalidateQueries({ queryKey: ['fabFiles', 'own'] });
+      queryClient.invalidateQueries({ queryKey: fabFileKeys.own });
       queryClient.invalidateQueries({ queryKey: ['activities'] });
       updateAllQueryData(queryClient, 'projects', 'write', project);
       toast.success('Sessions removed from project successfully');
@@ -257,7 +258,7 @@ export const useRemoveFilesFromProject = (callbacks?: { onSuccess?: () => void; 
       return response.data;
     },
     onSuccess: (project: IProjectDocument) => {
-      queryClient.invalidateQueries({ queryKey: ['fabFiles', 'own'] });
+      queryClient.invalidateQueries({ queryKey: fabFileKeys.own });
       queryClient.invalidateQueries({ queryKey: ['projects', project.id, 'files'] });
       updateAllQueryData(queryClient, 'projects', 'write', project);
 
@@ -301,7 +302,7 @@ export const useRemoveNonExistentFiles = (callbacks?: { onSuccess?: () => void; 
       });
 
       queryClient.invalidateQueries({ queryKey: ['projects', 'search'] });
-      queryClient.invalidateQueries({ queryKey: ['fabFiles', 'own'] });
+      queryClient.invalidateQueries({ queryKey: fabFileKeys.own });
 
       toast.success('Non-existent files removed from projects successfully');
       callbacks?.onSuccess?.();
@@ -328,7 +329,7 @@ export const useAddSystemPromptsToProject = (callbacks?: { onSuccess?: () => voi
     },
     onSuccess: (project: IProjectDocument) => {
       updateAllQueryData(queryClient, 'projects', 'write', project);
-      queryClient.invalidateQueries({ queryKey: ['fabFiles', 'own'] });
+      queryClient.invalidateQueries({ queryKey: fabFileKeys.own });
       toast.success('System prompts added successfully');
       callbacks?.onSuccess?.();
     },
@@ -381,7 +382,7 @@ export const useRemoveSystemPromptsFromProject = (callbacks?: { onSuccess?: () =
     },
     onSuccess: (project: IProjectDocument, { fileIds }) => {
       updateAllQueryData(queryClient, 'projects', 'write', project);
-      queryClient.invalidateQueries({ queryKey: ['fabFiles', 'own'] });
+      queryClient.invalidateQueries({ queryKey: fabFileKeys.own });
       // Same hook serves the bulk picker and the single-row kebab, so pluralize by count.
       toast.success(`System prompt${fileIds.length === 1 ? '' : 's'} removed successfully`);
       callbacks?.onSuccess?.();

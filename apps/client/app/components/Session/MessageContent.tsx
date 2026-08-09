@@ -36,6 +36,7 @@ import BugReportModal from '@client/app/components/BugReportModal';
 import { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useGetFabFilesByQuestId } from '@client/app/hooks/data/fabFiles';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { Save as SaveIcon, Add as AddIcon } from '@mui/icons-material';
 import { DataLakeIcon, DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
@@ -346,7 +347,7 @@ const MessageContent: React.FC<ContentProps> = memo(
         if (msg.action !== 'image_moderation_status') return;
         if (!messageData.fabFileIds?.includes(msg.fabFileId)) return;
 
-        queryClient.invalidateQueries({ queryKey: ['fabFiles', 'quest', messageData.id] });
+        queryClient.invalidateQueries({ queryKey: fabFileKeys.quest(messageData.id!) });
       });
 
       return () => {

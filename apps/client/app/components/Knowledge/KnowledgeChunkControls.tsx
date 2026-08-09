@@ -4,6 +4,7 @@ import SegmentIcon from '@mui/icons-material/Segment';
 import CheckIcon from '@mui/icons-material/Check';
 import { DEFAULT_PASSAGE_TOKEN_TARGET, IFabFileDocument } from '@bike4mind/common';
 import { useChunkFile } from '@client/app/hooks/data/fabFiles';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { toast } from 'sonner';
 import { updateFileUtility } from '@client/app/utils/filesAPICalls';
@@ -144,7 +145,7 @@ export const KnowledgeChunkControls: React.FC<IKnowledgeChunkControlsProps> = ({
                 error: null,
               });
 
-              await queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+              await queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
 
               toast.success(`Successfully vectorized "${fabFile?.fileName}"`);
               setRecheckingVectorization(false);

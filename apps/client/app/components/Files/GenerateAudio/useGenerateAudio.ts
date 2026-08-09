@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { VOICE_VENDOR_LABELS, type VoiceGenerationVendor } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { getErrorMessage } from '@client/app/utils/error';
 import { useAudioGenSettings } from '@client/app/stores/useAudioGenSettings';
 
@@ -108,7 +109,7 @@ export function useGenerateAudio() {
   }, [releaseObjectUrl]);
 
   const refreshFiles = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+    queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
   }, [queryClient]);
 
   const generate = useCallback(

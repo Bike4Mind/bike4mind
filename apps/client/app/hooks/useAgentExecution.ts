@@ -38,6 +38,7 @@ import {
 import type { IAgentStep, GenerateImageToolCall } from '@bike4mind/common';
 import { appendReplyToLatestOptimisticBubble, swapOptimisticPromptBubbleId } from '@client/app/utils/llm';
 import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 
 // Mirror the shape the server validates in
 // `apps/client/server/websocket/agentExecute.ts`. Kept inline because the
@@ -280,7 +281,7 @@ export function useAgentExecutionSubscriptions(): void {
         // 30-min staleTime hides them until the user navigates away and back. The FabFiles are
         // written mid-run, so they're already committed by the time `completed` fires.
         if (sessionId) {
-          queryClient.invalidateQueries({ queryKey: ['fabFiles', 'own', { sessionId }] });
+          queryClient.invalidateQueries({ queryKey: fabFileKeys.ownBySession(sessionId) });
         }
       })
     );
