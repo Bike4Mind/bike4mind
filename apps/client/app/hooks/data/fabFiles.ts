@@ -14,16 +14,15 @@ import {
   deleteFileUtility,
   getContentFromFabfile,
   getFabFileByIdFromServer,
-  getFabFileNameByIdFromServer,
   updateFabFileOnServer,
 } from '@client/app/utils/filesAPICalls';
-import { getContentFromFabfile as getContentFromFabfileInString } from '@client/app/utils/fabFileUtils';
-import { isOptimisticId } from '@client/app/utils/llm';
 import { getErrorMessage } from '@client/app/utils/error';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
 import { ActualFileObject } from 'filepond';
 import { toast } from 'sonner';
+
+export * from './fabFileQueries';
 
 export function useDeleteAllFiles(options: { onSuccess?: () => void } = {}) {
   const { onSuccess } = options;
@@ -211,101 +210,6 @@ export function useChunkFile(options: { onSuccess?: () => void } = {}) {
   });
 }
 
-export function useGetFabFiles(
-  search: string = '',
-  filters: {
-    tags?: string;
-    type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
-    shared?: boolean;
-    projectId?: string;
-  } = {},
-  sort: string = 'asc',
-  sortField: string = 'createdAt'
-) {
-  const queryClient = useQueryClient();
-
-  return useInfiniteQuery({
-    queryKey: ['fabFiles', 'own', { search, filters, sort, sortField }],
-    initialPageParam: { page: 1 },
-    queryFn: async params => {
-      const { page = 1 } = params.pageParam || {};
-      const response = await api.get<{ data: IFabFileDocument[]; hasMore: boolean; total: number }>('/api/files', {
-        params: {
-          search,
-          filters,
-          pagination: {
-            page,
-            limit: 20,
-          },
-          order: {
-            by: sortField,
-            direction: sort,
-          },
-        },
-      });
-
-      response.data.data.forEach(files => {
-        queryClient.setQueryData(['fabFiles', files.id], () => files);
-      });
-      return response.data;
-    },
-    getNextPageParam: (lastPage, _allPages, { page }) => {
-      if (lastPage.hasMore) {
-        return {
-          page: page + 1,
-        };
-      }
-      return undefined;
-    },
-    refetchOnWindowFocus: false,
-  });
-}
-
-export function useGetFabFilesBySessionId(sessionId: string, options: { enabled?: boolean; queryKey?: string[] } = {}) {
-  const queryClient = useQueryClient();
-
-  return useQuery({
-    queryKey: options?.queryKey || ['fabFiles', 'own', { sessionId }],
-    queryFn: async () => {
-      const result = await api.get<IFabFileDocument[]>(`/api/sessions/${sessionId}/files`);
-
-      result.data.forEach(file => {
-        queryClient.setQueryData(['fabFiles', file.id], file);
-      });
-
-      return result.data;
-    },
-    staleTime: 1000 * 60 * 30,
-    // Suppress the fetch while the id is still a client-only optimistic
-    // placeholder - the server's ObjectId validator rejects it 400.
-    // `isOptimisticId` matches both `optimistic-session-*` and
-    // `optimistic-quest-*` prefixes, so the same gate works for any by-id hook.
-    enabled: (options.enabled ?? true) && !isOptimisticId(sessionId),
-  });
-}
-
-export function useGetFabFilesByQuestId(questId: string, options: { enabled?: boolean } = {}) {
-  const queryClient = useQueryClient();
-
-  return useQuery({
-    queryKey: ['fabFiles', 'quest', questId],
-    queryFn: async () => {
-      const result = await api.get<IFabFileDocument[]>(`/api/quests/${questId}/files`);
-
-      result.data.forEach(file => {
-        queryClient.setQueryData(['fabFiles', file.id], file);
-      });
-
-      return result.data;
-    },
-    staleTime: 1000 * 60 * 30,
-    // Same class of bug: quest ids can be optimistic placeholders too
-    // (`optimistic-quest-*`, see utils/llm.ts). Push the guard into the hook so
-    // new callers can't re-introduce the 400.
-    enabled: (options.enabled ?? true) && !!questId && !isOptimisticId(questId),
-  });
-}
-
 export function useUploadKnowledgeFromUrl() {
   const queryClient = useQueryClient();
 
@@ -317,47 +221,6 @@ export function useUploadKnowledgeFromUrl() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
     },
-  });
-}
-
-export function useGetFabFile(id: string | null) {
-  return useQuery({
-    queryKey: ['fabFiles', id],
-    queryFn: () => getFabFileByIdFromServer(id!),
-    staleTime: !!id ? undefined : 1000 * 60 * 30, // 30 minutes
-    enabled: !!id,
-  });
-}
-
-export function useGetFabFileName(id: string) {
-  return useQuery({
-    queryKey: ['fabFiles', 'name', id],
-    queryFn: () => getFabFileNameByIdFromServer(id),
-    staleTime: !!id ? undefined : 1000 * 60 * 30, // 30 minutes
-    enabled: !!id,
-  });
-}
-
-export function useGetProjectFiles(projectId: string) {
-  const queryClient = useQueryClient();
-
-  return useQuery({
-    queryKey: ['projects', projectId, 'files'],
-    queryFn: async () => {
-      try {
-        const response = await api.get<IFabFileDocument[]>(`/api/projects/${projectId}/files`);
-
-        response.data.forEach(file => {
-          queryClient.setQueryData(['fabFiles', file.id], () => file);
-        });
-
-        return response.data;
-      } catch (e) {
-        return [];
-      }
-    },
-    staleTime: 1000 * 60 * 5, // 5 minutes
-    refetchOnWindowFocus: false,
   });
 }
 
@@ -670,39 +533,6 @@ export function useGetPresignedUrl() {
       // Toast removed: Components should handle user-facing error messages
       // This hook is too low-level to show UI notifications
     },
-  });
-}
-
-export function useGetFabFileContent(fabFile: IFabFileDocument | null | undefined) {
-  return useQuery({
-    queryKey: ['fabFiles', fabFile?.id, 'content'],
-    queryFn: async () => {
-      if (!fabFile) return '';
-
-      // Lazy-fetch a signed URL on demand if the file doesn't already have one.
-      // The data lake list endpoints no longer pre-sign all URLs (perf optimization),
-      // so the article viewer must request a URL when the user actually opens a file.
-      let fileUrl = fabFile.fileUrl;
-      if (!fileUrl && fabFile.filePath) {
-        try {
-          const response = await api.get<{ urls: string[] }>('/api/files/presigned-url', {
-            params: { 'filePaths[]': fabFile.filePath },
-          });
-          fileUrl = response.data.urls?.[0];
-        } catch (err) {
-          console.error('Failed to fetch signed URL for fab file content', err);
-        }
-      }
-
-      return getContentFromFabfileInString({
-        mimeType: fabFile.mimeType,
-        fileUrl,
-      });
-    },
-    enabled: !!fabFile,
-    // Article content is static - cache aggressively to avoid redundant S3 fetches
-    staleTime: 1000 * 60 * 10,
-    refetchOnWindowFocus: false,
   });
 }
 
