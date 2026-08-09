@@ -21,6 +21,17 @@ export const CreateDataLakeRequestInput = z.object({
     .min(2)
     .max(30)
     .refine(s => s.endsWith(':'), 'Tag prefix must end with ":" (e.g. "acme:")')
+    // A prefix with an empty or whitespace-only segment ("::", "a::", ":a:", "a: :") makes
+    // every derived tag carry a blank tree segment, which the tag-tree UIs can only paper
+    // over (empty node labels, orphaned back rows). Reject it at the source instead.
+    .refine(
+      s =>
+        s
+          .slice(0, -1)
+          .split(':')
+          .every(part => part.trim().length > 0),
+      'Tag prefix segments must be non-empty (e.g. "acme:" or "acme:legal:")'
+    )
     .refine(s => !isReservedTagPrefix(s), `Tag prefix cannot use the reserved "${DATALAKE_TAG_PREFIX}" namespace`),
   requiredUserTag: z.string().min(1).max(100).optional(),
   // Entitlement keys are namespaced (must contain ":") so a bare user-tag value can never

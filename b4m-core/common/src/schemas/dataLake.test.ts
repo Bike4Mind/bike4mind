@@ -25,6 +25,21 @@ describe('CreateDataLakeRequestInput.fileTagPrefix', () => {
   it('rejects the reserved namespace behind leading whitespace', () => {
     expect(CreateDataLakeRequestInput.safeParse(input('  datalake:')).success).toBe(false);
   });
+
+  // A degenerate prefix ("::", "a::", ":a:", "a: :") gives every derived tag a blank tree
+  // segment; the tag-tree UIs can only guard around it downstream, so the schema is the
+  // durable gate. Whitespace-only segments are the same failure mode as bare "::".
+  it.each(['::', 'a::', ':a:', 'a::b:', 'a: :', 'acme: :'])('rejects a prefix with an empty segment (%s)', prefix => {
+    const result = CreateDataLakeRequestInput.safeParse(input(prefix));
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some(i => /non-empty/i.test(i.message))).toBe(true);
+    }
+  });
+
+  it('accepts a multi-segment prefix with non-empty segments', () => {
+    expect(CreateDataLakeRequestInput.safeParse(input('acme:legal:')).success).toBe(true);
+  });
 });
 
 // Bounds cap worst-case request size/storage/CPU from a crafted body (see comment in
