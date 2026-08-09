@@ -1272,4 +1272,108 @@ describe('AgentExecutionRepository', () => {
       expect(rows).toHaveLength(1);
     });
   });
+
+  // These two back the QuestMaster v5 graph view, which polls run summaries for
+  // a whole graph and fetches exactly one reply on demand. `hasAnswer` is
+  // computed in the database, so it can only be verified against a real one.
+  describe('findRunSummariesByIds / findAnswerByExecutionId', () => {
+    // `result` is Mixed, so shapes the type says are impossible are reachable in
+    // stored data - which is the point of most of what follows.
+    async function withResult(over: Record<string, unknown>, result: unknown, error?: unknown) {
+      const doc = await agentExecutionRepository.create(makeBaseExecution(over));
+      await AgentExecutionModel.updateOne(
+        { _id: new mongoose.Types.ObjectId(doc.id) },
+        { $set: { result, ...(error === undefined ? {} : { error }) } }
+      );
+      return doc.id;
+    }
+
+    it('remaps the nested fields it projects to the top level', async () => {
+      const questId = new mongoose.Types.ObjectId().toString();
+      const id = await withResult(
+        { questId, status: 'failed', totalCreditsUsed: 42 },
+        { totalIterations: 7 },
+        {
+          message: 'the model gave up',
+        }
+      );
+
+      const [row] = await agentExecutionRepository.findRunSummariesByIds([id]);
+
+      expect(row).toMatchObject({
+        id,
+        questId,
+        status: 'failed',
+        totalIterations: 7,
+        errorMessage: 'the model gave up',
+        totalCreditsUsed: 42,
+      });
+    });
+
+    it('reports hasAnswer for a non-empty reply, and returns that reply on demand', async () => {
+      const userId = new mongoose.Types.ObjectId().toString();
+      const id = await withResult({ userId }, { answer: 'the reply' });
+
+      const [row] = await agentExecutionRepository.findRunSummariesByIds([id]);
+      expect(row.hasAnswer).toBe(true);
+      await expect(agentExecutionRepository.findAnswerByExecutionId(id, userId)).resolves.toBe('the reply');
+    });
+
+    // hasAnswer exists to gate the on-demand fetch, so a true it cannot honour
+    // renders an empty panel. Every not-a-non-empty-string shape must agree.
+    it.each([
+      ['an empty string', { answer: '' }],
+      ['a null answer', { answer: null }],
+      ['no answer key', { totalIterations: 1 }],
+      ['no result at all', undefined],
+    ])('agrees with findAnswerByExecutionId for %s', async (_label, result) => {
+      const userId = new mongoose.Types.ObjectId().toString();
+      const id = await withResult({ userId }, result);
+
+      const [row] = await agentExecutionRepository.findRunSummariesByIds([id]);
+      expect(row.hasAnswer).toBe(false);
+      await expect(agentExecutionRepository.findAnswerByExecutionId(id, userId)).resolves.toBeNull();
+    });
+
+    // The regression: `$toString` on an object throws inside the aggregation,
+    // which fails the whole batch - one malformed row would blank every node in
+    // the graph, not just its own.
+    it('survives a non-string answer without dropping the rest of the batch', async () => {
+      const userId = new mongoose.Types.ObjectId().toString();
+      const malformed = await withResult({ userId }, { answer: { text: 'wrapped in an object' } });
+      const healthy = await withResult({ userId }, { answer: 'the reply' });
+
+      const rows = await agentExecutionRepository.findRunSummariesByIds([malformed, healthy]);
+
+      expect(rows).toHaveLength(2);
+      expect(rows.find(r => r.id === malformed)?.hasAnswer).toBe(false);
+      expect(rows.find(r => r.id === healthy)?.hasAnswer).toBe(true);
+      await expect(agentExecutionRepository.findAnswerByExecutionId(malformed, userId)).resolves.toBeNull();
+    });
+
+    // The endpoint takes the execution id from the client, so this scope is what
+    // stops one user reading another's reply.
+    it('does not return a reply to a user who does not own the run', async () => {
+      const owner = new mongoose.Types.ObjectId().toString();
+      const id = await withResult({ userId: owner }, { answer: 'private' });
+
+      const stranger = new mongoose.Types.ObjectId().toString();
+      await expect(agentExecutionRepository.findAnswerByExecutionId(id, stranger)).resolves.toBeNull();
+      await expect(agentExecutionRepository.findAnswerByExecutionId(id, owner)).resolves.toBe('private');
+    });
+
+    it('drops ids that are not ObjectIds rather than throwing', async () => {
+      const id = await withResult({}, { answer: 'kept' });
+
+      const rows = await agentExecutionRepository.findRunSummariesByIds(['not-an-id', id]);
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0].id).toBe(id);
+      await expect(agentExecutionRepository.findAnswerByExecutionId('not-an-id', 'anyone')).resolves.toBeNull();
+    });
+
+    it('returns nothing for an empty id list without querying', async () => {
+      await expect(agentExecutionRepository.findRunSummariesByIds([])).resolves.toEqual([]);
+    });
+  });
 });

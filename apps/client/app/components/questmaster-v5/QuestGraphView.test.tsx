@@ -9,6 +9,7 @@ const addMutate = vi.fn();
 let nodes: QuestNode[] = [];
 let currentModel = 'claude-opus-5';
 let nodeAnswer: string | null = null;
+let nodeAnswerUnavailableReason: string | null = null;
 let answersByExecution: Record<string, string> = {};
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: vi.fn(), get: vi.fn() } }));
@@ -33,7 +34,10 @@ vi.mock('@client/app/hooks/data/questGraphs', () => ({
   // The reply is fetched on demand now, not carried in the graph payload.
   useQuestNodeAnswer: (_nodeId: string, executionId: string | null) => ({
     // Mirrors the real key: a reply belongs to an execution, not a node.
-    data: { answer: executionId ? (answersByExecution[executionId] ?? nodeAnswer) : null },
+    data: {
+      answer: executionId ? (answersByExecution[executionId] ?? nodeAnswer) : null,
+      unavailableReason: nodeAnswerUnavailableReason,
+    },
     isLoading: false,
     isError: false,
   }),
@@ -77,6 +81,7 @@ describe('QuestGraphView', () => {
     addMutate.mockReset().mockResolvedValue({ node: makeNode({ id: 'n2' }) });
     currentModel = 'claude-opus-5';
     nodeAnswer = null;
+    nodeAnswerUnavailableReason = null;
     answersByExecution = {};
     nodes = [];
   });
@@ -159,6 +164,79 @@ describe('QuestGraphView', () => {
 
     expect(screen.getByTestId('questmaster-v5-answer')).toHaveTextContent('The logs show 42 errors.');
     expect(screen.getByTestId('questmaster-v5-node-status-chip')).toHaveTextContent('completed');
+  });
+
+  // `hasAnswer` comes from the polled summary and the reply from a separate
+  // request, so they can disagree - a retry in flight, or a reply too large to
+  // ship. Neither may render as a blank box with no explanation.
+  it('explains an advertised reply that comes back empty', () => {
+    nodeAnswer = null;
+    nodes = [
+      makeNode({
+        id: 'n1',
+        status: 'completed',
+        run: {
+          executionId: 'exec-1',
+          status: 'completed',
+          hasAnswer: true,
+          totalIterations: 1,
+          totalCreditsUsed: 1,
+          errorMessage: null,
+        },
+      }),
+    ];
+    renderView();
+    selectGraph();
+    fireEvent.click(screen.getByTestId('questmaster-v5-node-row'));
+
+    expect(screen.getByTestId('questmaster-v5-answer-unavailable')).toHaveTextContent('not available yet');
+  });
+
+  it('points at the notebook when a reply is too large to ship', () => {
+    nodeAnswer = null;
+    nodeAnswerUnavailableReason = 'too_large';
+    nodes = [
+      makeNode({
+        id: 'n1',
+        status: 'completed',
+        run: {
+          executionId: 'exec-1',
+          status: 'completed',
+          hasAnswer: true,
+          totalIterations: 1,
+          totalCreditsUsed: 1,
+          errorMessage: null,
+        },
+      }),
+    ];
+    renderView();
+    selectGraph();
+    fireEvent.click(screen.getByTestId('questmaster-v5-node-row'));
+
+    expect(screen.getByTestId('questmaster-v5-answer-unavailable')).toHaveTextContent('too large');
+  });
+
+  it('does not claim a reply is unavailable when one rendered', () => {
+    nodeAnswer = 'The logs show 42 errors.';
+    nodes = [
+      makeNode({
+        id: 'n1',
+        status: 'completed',
+        run: {
+          executionId: 'exec-1',
+          status: 'completed',
+          hasAnswer: true,
+          totalIterations: 1,
+          totalCreditsUsed: 1,
+          errorMessage: null,
+        },
+      }),
+    ];
+    renderView();
+    selectGraph();
+    fireEvent.click(screen.getByTestId('questmaster-v5-node-row'));
+
+    expect(screen.queryByTestId('questmaster-v5-answer-unavailable')).toBeNull();
   });
 
   it('selects a node from the keyboard', () => {

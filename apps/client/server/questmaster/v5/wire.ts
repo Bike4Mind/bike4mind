@@ -107,6 +107,13 @@ export const QuestNodeAnswerResponseSchema = z.object({
   nodeId: z.string(),
   executionId: z.string().nullable(),
   answer: z.string().nullable(),
+  /**
+   * Why `answer` is null despite the run summary advertising one. Lets the view
+   * say something specific instead of rendering an empty box - the run summary
+   * and the reply are read at different moments, so they can legitimately
+   * disagree (a retry in flight, a reply too large to ship).
+   */
+  unavailableReason: z.enum(['too_large']).nullable(),
 });
 
 export const QuestNodeRunResponseSchema = z.object({

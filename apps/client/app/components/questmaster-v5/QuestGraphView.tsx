@@ -468,6 +468,20 @@ function NodeAnswer({ node, sessionId }: { node: QuestNode; sessionId?: string }
         </Stack>
       )}
 
+      {/*
+        `hasAnswer` comes from the polled run summary, `answer` from a separate
+        request, so the two can legitimately disagree - a retry in flight, or a
+        reply too large to ship. Without this the panel falls through every
+        branch at once and renders an empty box with no explanation.
+      */}
+      {!isLoading && !isError && !prose.trim() && artifacts.length === 0 && (
+        <Typography level="body-xs" data-testid="questmaster-v5-answer-unavailable">
+          {data?.unavailableReason === 'too_large'
+            ? 'This reply is too large to show here. Open the run in the notebook to read it.'
+            : 'This reply is not available yet. It will appear on the next refresh.'}
+        </Typography>
+      )}
+
       {isLoading && (
         <Typography level="body-xs" data-testid="questmaster-v5-answer-loading">
           Loading the reply...

@@ -1712,8 +1712,19 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
           completedAt: 1,
           totalIterations: '$result.totalIterations',
           errorMessage: '$error.message',
+          // `$cond` rather than `$toString`: `result` is Mixed, so a legacy or
+          // malformed row can hold an object there, and `$toString` on one
+          // throws and fails the aggregation for EVERY id in the batch - one bad
+          // document would blank the whole graph. Only the taken branch
+          // evaluates, and the string test matches findAnswerByExecutionId
+          // exactly, so `hasAnswer: true` cannot promise a reply it returns null
+          // for.
           hasAnswer: {
-            $gt: [{ $strLenCP: { $ifNull: [{ $toString: '$result.answer' }, ''] } }, 0],
+            $cond: [
+              { $eq: [{ $type: '$result.answer' }, 'string'] },
+              { $gt: [{ $strLenCP: '$result.answer' }, 0] },
+              false,
+            ],
           },
         },
       },
@@ -1738,11 +1749,20 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * of these is requested at a time (the node the user selected), so there is no
    * N-replies-per-poll problem to cap against - and capping is what previously
    * sliced a reply mid-`<artifact>` and left it unrenderable.
+   *
+   * `userId` is required, not optional: callers pass an execution id supplied by
+   * the client, so the scope is what stops one from reading another user's run.
+   * A miss and a wrong owner are both `null` - indistinguishable by design.
    */
-  async findAnswerByExecutionId(id: string): Promise<string | null> {
+  async findAnswerByExecutionId(id: string, userId: string): Promise<string | null> {
     if (!mongoose.Types.ObjectId.isValid(id)) return null;
-    const doc = await this.model.findById(id, { 'result.answer': 1 }).lean<{ result?: { answer?: unknown } } | null>();
-    return typeof doc?.result?.answer === 'string' ? doc.result.answer : null;
+    const doc = await this.model
+      .findOne({ _id: new mongoose.Types.ObjectId(id), userId }, { 'result.answer': 1 })
+      .lean<{ result?: { answer?: unknown } } | null>();
+    const answer = doc?.result?.answer;
+    // Empty reads as absent, so this agrees exactly with the `hasAnswer` that
+    // gates it: a summary promising a reply always has one to hand back.
+    return typeof answer === 'string' && answer.length > 0 ? answer : null;
   }
 
   async findDagChildrenLean(parentExecutionId: string): Promise<

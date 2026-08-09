@@ -20,22 +20,54 @@ import { NextApiRequest, NextApiResponse } from 'next';
  * Fetching one at a time removes the reason to cap at all, so this returns the
  * reply whole.
  */
+
+/**
+ * Past this, the response would risk the 6MB API Gateway/Lambda limit, which
+ * fails opaquely. No model realistically emits this much, so the point is a
+ * legible failure if one ever does - NOT a cap: truncating is the exact bug this
+ * endpoint exists to fix, so an oversized reply is withheld whole and the user
+ * is pointed at the notebook instead.
+ */
+const MAX_DELIVERABLE_ANSWER_CHARS = 4_000_000;
+
 const handler = baseApi()
   .use(requireUser)
   .use(requireExperimentalFeature('enableQuestMasterV5'))
   .get<NextApiRequest, NextApiResponse>(async (req, res) => {
     if (!req.user?.id) throw new UnauthorizedError('User required');
-    const { id } = req.query;
+    const { id, executionId: requestedExecutionId } = req.query;
     if (typeof id !== 'string') throw new BadRequestError('Node id required');
 
     // Same ownership rule as every other v5 route: a node you do not own is a
     // 404, not a 403, so this cannot be used to probe for node ids.
     const { node } = await requireOwnedNode(id, req.user.id);
 
-    const executionId = node.execution?.agentExecutionId ?? null;
-    const answer = executionId ? await agentExecutionRepository.findAnswerByExecutionId(executionId) : null;
+    // Answer for the execution the CLIENT asked about, not whichever one the
+    // node points at now. The two diverge on the retry path: a retry mints a new
+    // execution, so between the poll that told the client `exec-1` and this
+    // request the document can already say `exec-2`. Re-resolving here would
+    // return exec-2's reply, which the client then caches under exec-1's key
+    // with staleTime: Infinity - the wrong reply, kept forever.
+    //
+    // The id is client-supplied, so findAnswerByExecutionId scopes it to the
+    // caller; an execution belonging to someone else reads as absent.
+    const executionId =
+      typeof requestedExecutionId === 'string' && requestedExecutionId
+        ? requestedExecutionId
+        : (node.execution?.agentExecutionId ?? null);
 
-    respond(res, QuestNodeAnswerResponseSchema, { nodeId: node.id, executionId, answer });
+    const stored = executionId
+      ? await agentExecutionRepository.findAnswerByExecutionId(executionId, req.user.id)
+      : null;
+
+    const tooLarge = (stored?.length ?? 0) > MAX_DELIVERABLE_ANSWER_CHARS;
+
+    respond(res, QuestNodeAnswerResponseSchema, {
+      nodeId: node.id,
+      executionId,
+      answer: tooLarge ? null : stored,
+      unavailableReason: tooLarge ? 'too_large' : null,
+    });
   });
 
 export default handler;

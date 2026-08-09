@@ -108,8 +108,14 @@ export function useQuestNodeAnswer(nodeId: string | null, executionId: string | 
     // serving the previous run's reply forever - on the retry path this module
     // deliberately supports.
     queryKey: ['questNodeAnswer', nodeId, executionId],
-    queryFn: async (): Promise<{ answer: string | null }> => {
-      const { data } = await api.get<{ answer: string | null }>(`/api/quest-nodes/${nodeId}/answer`);
+    queryFn: async (): Promise<{ answer: string | null; unavailableReason?: string | null }> => {
+      // The execution goes on the wire, not just in the key: the server must
+      // answer for the run this entry is keyed on, or a retry lands the new
+      // run's reply under the old run's key and staleTime: Infinity keeps it.
+      const { data } = await api.get<{ answer: string | null; unavailableReason?: string | null }>(
+        `/api/quest-nodes/${nodeId}/answer`,
+        { params: { executionId } }
+      );
       return data;
     },
     enabled: Boolean(nodeId) && Boolean(executionId) && enabled,
