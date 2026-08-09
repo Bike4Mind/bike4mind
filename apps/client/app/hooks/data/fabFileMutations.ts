@@ -1,8 +1,8 @@
 /**
  * Write-side fab-file hooks: create/upload, delete (single, bulk, all), chunk, clone,
- * rename, update, download, and presigned-url minting. Every mutation that changes
- * which files exist or what tags they carry invalidates fabFileKeys.all plus the
- * cross-domain ['file-tags'] key (owned by tag.ts - per-tag counts derive from files).
+ * rename, update, download, and presigned-url minting. The delete paths,
+ * useCreateFabFileWithUpload, and useUpdateFabFile also invalidate the cross-domain
+ * ['file-tags'] key (owned by tag.ts - per-tag counts derive from files).
  */
 import {
   CreateFabFileRequestInputType,

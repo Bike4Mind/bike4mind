@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { fabFileKeys } from './fabFileKeys';
 
 // Each assertion pins a registry entry to the exact literal it replaced in
-// fabFiles.ts (and the 16 files converged in the final task). If one of these
+// fabFiles.ts (and the 15 files converged in the final task). If one of these
 // changes shape, cached data silently detaches from its invalidations.
 describe('fabFileKeys parity with pre-registry literals', () => {
   it('doc-level keys', () => {

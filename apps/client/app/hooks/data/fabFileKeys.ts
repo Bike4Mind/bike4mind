@@ -1,7 +1,7 @@
 /**
  * The single registry for every fab-file react-query key. Mirrors dataLakeKeys.ts:
  * the fab-file cache had ~30 inline `['fabFiles', ...]` literals inside fabFiles.ts and
- * ~28 more across 16 other files; invalidations only cohere when every producer and
+ * ~28 more across 15 other files; invalidations only cohere when every producer and
  * consumer names keys through here. Never write a fab-file query key as a literal
  * outside this file (the parity test is the one exception).
  *
