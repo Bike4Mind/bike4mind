@@ -11,7 +11,7 @@ import ShareDocumentModal from './ShareModal';
 // in isolation. useShareDocument's options are captured so a test can simulate
 // react-query's real onError-then-reject sequence on shareDocument.mutateAsync.
 const mocks = vi.hoisted(() => ({
-  toast: { success: vi.fn(), error: vi.fn() },
+  toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
   mutateAsync: vi.fn(),
   shareDocumentOptions: null as { onError?: (error: unknown) => void } | null,
   currentUser: { id: 'u1', email: 'me@test.com', username: 'me' } as {
@@ -147,5 +147,39 @@ describe('ShareModal - By Users tab', () => {
 
     await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('File no longer exists'));
     expect(mocks.toast.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('aggregates a bulk share failure into one toast instead of a per-item duplicate', async () => {
+    // First file shares fine; the second's mutateAsync fails (e.g. an unresolved recipient),
+    // exercising the same onError path as the single-item case but through the bulk loop.
+    mocks.mutateAsync
+      .mockImplementationOnce(async () => ({}))
+      .mockImplementationOnce(async () => {
+        const error = { isAxiosError: true, response: { data: { message: 'Could not find a user for: x' } } };
+        mocks.shareDocumentOptions?.onError?.(error);
+        throw error;
+      });
+
+    render(
+      <TestWrapper>
+        <ShareDocumentModal
+          files={[{ id: 'file-1', fileName: 'a.pdf' } as never, { id: 'file-2', fileName: 'b.pdf' } as never]}
+          type={InviteType.FabFile}
+          open
+          onClose={vi.fn()}
+        />
+      </TestWrapper>
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByText('By Users'));
+    const input = screen.getByPlaceholderText('Enter email or username - press Enter to add multiple recipients');
+    await user.type(input, 'friend@test.com{Enter}');
+    await user.click(screen.getByTestId('share-modal-submit-button'));
+
+    await waitFor(() => expect(mocks.mutateAsync).toHaveBeenCalledTimes(2));
+    // showBulkFeedback's own aggregate toast (a partial success -> toast.warning) is the only
+    // one that should fire; the per-item onError toast must stay suppressed for bulk shares.
+    expect(mocks.toast.warning).toHaveBeenCalledTimes(1);
+    expect(mocks.toast.error).not.toHaveBeenCalled();
   });
 });
