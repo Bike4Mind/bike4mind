@@ -62,8 +62,11 @@ export function buildSlackLakeIngestDeps(args: {
                 });
                 return filepath;
               },
-              generateSignedUrl: (filepath: string, expireInSeconds: number) =>
-                getFilesStorage().getSignedUrl(filepath, 'put', { expiresIn: expireInSeconds }),
+              // Thread `type` through rather than hardcoding 'put': createFabFile asks for 'get'
+              // when it stores fileUrl, and a PUT URL parked there costs a wasted round-trip on
+              // first read (get.ts test-fetches and regenerates). Mirrors researchEngineQueue.
+              generateSignedUrl: (filepath: string, expireInSeconds: number, type = 'get') =>
+                getFilesStorage().getSignedUrl(filepath, type, { expiresIn: expireInSeconds }),
             },
             // Server-supplied: the request body can never reach this, so a Slack origin stamp
             // cannot be forged by a caller who merely uploaded a file.
