@@ -78,7 +78,9 @@ export function validateSlackFileForIngest(file: SlackAttachment): SlackFileVali
     return {
       ok: false,
       reason: 'too_large',
-      message: `File "${file.name}" (${sizeMB}MB) exceeds the ${maxMB}MB limit.`,
+      // Wording is load-bearing: processSlackFiles has surfaced this exact sentence to Slack
+      // users since before the validator was extracted. Keep it byte-identical.
+      message: `File "${file.name}" (${sizeMB}MB) exceeds ${maxMB}MB limit.`,
     };
   }
 
