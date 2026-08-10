@@ -11,6 +11,7 @@ import {
   Modal,
   ModalDialog,
   Stack,
+  Tooltip,
   Typography,
 } from '@mui/joy';
 import { useTheme } from '@mui/joy/styles';
@@ -137,19 +138,23 @@ const TagCard = memo(function TagCard({ tag, prefix, onUpdate, onDelete }: TagCa
             autoFocus
             sx={{ flex: 1, fontFamily: 'monospace' }}
           />
-          <IconButton
-            size="sm"
-            variant="soft"
-            color="success"
-            disabled={!canSave}
-            data-testid="taxonomy-tag-save"
-            onClick={handleSave}
-          >
-            <CheckIcon sx={{ fontSize: 14 }} />
-          </IconButton>
-          <IconButton size="sm" variant="soft" color="neutral" onClick={handleCancel}>
-            <CloseIcon sx={{ fontSize: 14 }} />
-          </IconButton>
+          <Tooltip title="Save" size="sm">
+            <IconButton
+              size="sm"
+              variant="soft"
+              color="success"
+              disabled={!canSave}
+              data-testid="taxonomy-tag-save"
+              onClick={handleSave}
+            >
+              <CheckIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Cancel" size="sm">
+            <IconButton size="sm" variant="soft" color="neutral" onClick={handleCancel}>
+              <CloseIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Tooltip>
         </Stack>
       ) : (
         <Typography
@@ -180,24 +185,28 @@ const TagCard = memo(function TagCard({ tag, prefix, onUpdate, onDelete }: TagCa
       {/* Actions */}
       {!isEditing && (
         <Stack direction="row" gap={0}>
-          <IconButton
-            size="sm"
-            variant="plain"
-            color="neutral"
-            data-testid="taxonomy-tag-edit"
-            onClick={() => setIsEditing(true)}
-          >
-            <EditIcon sx={{ fontSize: 14 }} />
-          </IconButton>
-          <IconButton
-            size="sm"
-            variant="plain"
-            color="danger"
-            data-testid="taxonomy-tag-delete"
-            onClick={() => onDelete(tag.originalName)}
-          >
-            <DeleteOutlineIcon sx={{ fontSize: 14 }} />
-          </IconButton>
+          <Tooltip title="Edit" size="sm">
+            <IconButton
+              size="sm"
+              variant="plain"
+              color="neutral"
+              data-testid="taxonomy-tag-edit"
+              onClick={() => setIsEditing(true)}
+            >
+              <EditIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Delete" size="sm">
+            <IconButton
+              size="sm"
+              variant="plain"
+              color="danger"
+              data-testid="taxonomy-tag-delete"
+              onClick={() => onDelete(tag.originalName)}
+            >
+              <DeleteOutlineIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Tooltip>
         </Stack>
       )}
     </Box>
@@ -228,11 +237,17 @@ export default function TaxonomyReviewPanel({
   const dismissMutation = useDismissTaxonomy(batch.id);
   const confirm = useConfirmation();
 
-  // Re-seed local edits whenever the batch's stored suggestions change identity (e.g. after
-  // a re-analyze completes and the list refetches with a fresh taxonomySuggestions object).
+  // Re-seed local edits when the stored suggestions actually CHANGE, e.g. after a re-analyze
+  // completes. Deliberately keyed on tag CONTENT, not batch.taxonomySuggestions's object
+  // identity: the batches-list response is rebuilt via a Map + array spread on every poll, so
+  // when any other batch leaves the list, every later element shifts index - React Query's
+  // default structural sharing compares arrays positionally, so a batch that merely moved
+  // position (its own suggestions unc  hanged) gets a brand-new object reference, which would
+  // wipe this panel's in-progress edits with no warning.
+  const suggestionsKey = JSON.stringify(batch.taxonomySuggestions?.tags ?? []);
   useEffect(() => {
     setTags(batch.taxonomySuggestions?.tags ?? []);
-  }, [batch.taxonomySuggestions]);
+  }, [suggestionsKey]);
 
   const updateTag = (originalName: string, updates: Partial<TaxonomyTag>) =>
     setTags(prev => prev.map(t => (t.originalName === originalName ? { ...t, ...updates } : t)));
