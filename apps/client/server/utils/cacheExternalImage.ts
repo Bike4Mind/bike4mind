@@ -1,13 +1,11 @@
-import { S3Client, PutObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import { PutObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import { createS3Client } from '@bike4mind/fab-pipeline';
 import { Resource } from 'sst';
 import crypto from 'crypto';
 import { withRetry, isRetryableError } from '@bike4mind/utils';
 import { validateTargetUrl } from './ssrfProtection';
 
-// WHEN_REQUIRED: the SDK's flexible-checksums middleware (default since 3.729.0) replaces
-// content-length with x-amz-decoded-content-length, which fails PutObject with
-// XAmzContentSHA256Mismatch. This restores the pre-3.729.0 behavior.
-const s3Client = new S3Client({ requestChecksumCalculation: 'WHEN_REQUIRED' });
+const s3Client = createS3Client();
 
 // Generate a deterministic key from the URL for caching
 function generateCacheKey(url: string): string {

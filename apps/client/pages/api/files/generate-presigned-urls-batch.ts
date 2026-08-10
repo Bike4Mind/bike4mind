@@ -1,5 +1,6 @@
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { createS3Client } from '@bike4mind/fab-pipeline';
 import {
   BatchPresignedUrlRequestInput,
   DATALAKE_TAG_PREFIX,
@@ -21,10 +22,7 @@ import { Resource } from 'sst';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
 
-// WHEN_REQUIRED: without it, getSignedUrl bakes a checksum of the (empty, at sign-time) body
-// into the presigned URL's query string, which then mismatches whatever the browser actually
-// uploads. Same root cause as the direct-PutObject XAmzContentSHA256Mismatch bug (#1535).
-const s3Client = new S3Client({ requestChecksumCalculation: 'WHEN_REQUIRED' });
+const s3Client = createS3Client();
 const EXPIRES = 600; // 10 minutes
 
 const handler = baseApi().post(async (req: Request, res) => {

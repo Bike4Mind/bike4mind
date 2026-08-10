@@ -1,4 +1,5 @@
-import { HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { createS3Client } from '@bike4mind/fab-pipeline';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
@@ -19,10 +20,7 @@ import { z } from 'zod';
 //   4. Follows at most one redirect with SSRF re-check on the Location header
 //      to support Gravatar, GitHub avatars, and other CDN redirects.
 
-// WHEN_REQUIRED: the SDK's flexible-checksums middleware (default since 3.729.0) replaces
-// content-length with x-amz-decoded-content-length, which fails PutObject with
-// XAmzContentSHA256Mismatch. This restores the pre-3.729.0 behavior.
-const s3Client = new S3Client({ requestChecksumCalculation: 'WHEN_REQUIRED' });
+const s3Client = createS3Client();
 
 const ExternalImageQuery = z.object({
   url: z.string().url('url must be a valid URL'),

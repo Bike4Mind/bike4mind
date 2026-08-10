@@ -1,4 +1,5 @@
-import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { createS3Client } from '@bike4mind/fab-pipeline';
 import { CloudFrontClient, CreateInvalidationCommand } from '@aws-sdk/client-cloudfront';
 import { createHash } from 'crypto';
 import { Logger } from '@bike4mind/observability';
@@ -83,10 +84,7 @@ export type Manifest = z.infer<typeof ManifestSchema>;
  * Fork environments fetch and import modals via scheduled cron.
  */
 export class WhatsNewDistributionService {
-  // WHEN_REQUIRED: the SDK's flexible-checksums middleware (default since 3.729.0) replaces
-  // content-length with x-amz-decoded-content-length, which fails PutObject with
-  // XAmzContentSHA256Mismatch. This restores the pre-3.729.0 behavior.
-  private static s3Client = new S3Client({ requestChecksumCalculation: 'WHEN_REQUIRED' });
+  private static s3Client = createS3Client();
   private static cfClient = new CloudFrontClient({});
   private static logger = new Logger({ metadata: { service: 'WhatsNewDistributionService' } });
 
