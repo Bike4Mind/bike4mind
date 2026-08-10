@@ -136,8 +136,17 @@ export async function computeToolAvailability(userId: string | undefined): Promi
     // getEffectiveLLMApiKeys would add an env fallback the tool never sees.
     const imageProviders = [ApiKeyType.bfl, ApiKeyType.openai, ApiKeyType.gemini, ApiKeyType.xai];
 
-    const [webSearchProvider, openWeatherKey, wolframKey, fmpKey, firecrawlConfig, llmKeys, imageKeys] =
-      await Promise.all([
+    const [
+      webSearchProvider,
+      openWeatherKey,
+      wolframKey,
+      fmpKey,
+      firecrawlConfig,
+      llmKeys,
+      imageKeys,
+      elevenLabsKey,
+      openAiKey,
+    ] = await Promise.all([
         // web_search resolves to SerpAPI or a local SearXNG instance; mirror the tool's own resolver
         // so the picker never disables a working provider (and vice versa).
         resolveWebSearchProvider(dbAdapters),
@@ -152,6 +161,16 @@ export async function computeToolAvailability(userId: string | undefined): Promi
         userId
           ? Promise.all(imageProviders.map(type => apiKeyService.getEffectiveApiKey(userId, { type }, dbAdapters)))
           : Promise.resolve<(string | undefined)[]>([]),
+        // music_generation resolves its ElevenLabs key via the same getEffectiveApiKey
+        // path (user key -> admin demo key), so availability must mirror it.
+        userId
+          ? apiKeyService.getEffectiveApiKey(userId, { type: ApiKeyType.elevenlabs }, dbAdapters)
+          : Promise.resolve<string | undefined>(undefined),
+        // audio_generation speech can use OpenAI TTS; resolve its key via the same
+        // getEffectiveApiKey path the tool uses (user key -> admin demo key).
+        userId
+          ? apiKeyService.getEffectiveApiKey(userId, { type: ApiKeyType.openai }, dbAdapters)
+          : Promise.resolve<string | undefined>(undefined),
       ]);
 
     // getEffectiveLLMApiKeys returns the sentinel 'expired' (truthy) for an expired
@@ -185,6 +204,11 @@ export async function computeToolAvailability(userId: string | undefined): Promi
       fmp_financial_data: !!fmpKey,
       // Available with a provider key OR a self-hosted local image backend (which needs none).
       image_generation: hasImageKey || isLocalImageBackendAvailable(),
+      // Background-music generation needs an ElevenLabs key (user or admin demo key).
+      music_generation: usable(elevenLabsKey),
+      // audio_generation: speech works with OpenAI OR ElevenLabs; sound effects need
+      // ElevenLabs. Available when either provider key resolves.
+      audio_generation: usable(openAiKey) || usable(elevenLabsKey),
       // Only search_knowledge_base needs an embeddings key; retrieve_knowledge_content
       // is a direct file/keyword lookup that needs no external key, so it isn't gated.
       // Available with a cloud embeddings key OR a self-hosted local Ollama embedder (keyless).

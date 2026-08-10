@@ -12,6 +12,7 @@ import {
   isMaskedSensitiveSettingValue,
   type AdminSettingDoc,
 } from './settings';
+import { DEFAULT_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET } from '../constants/chunking';
 import { SRE_SECRET_PLACEHOLDER } from '../types/entities/SreTypes';
 
 describe('makeObjectSetting JSON preprocess', () => {
@@ -369,5 +370,30 @@ describe('experimentalFeatureSettingKeys (#9516)', () => {
 
   it('has no duplicate keys', () => {
     expect(new Set(experimentalFeatureSettingKeys).size).toBe(experimentalFeatureSettingKeys.length);
+  });
+});
+
+describe('DefaultChunkSize agrees with the chunker', () => {
+  // The whole point of moving DEFAULT_PASSAGE_TOKEN_TARGET into this package: before it, the
+  // number was hand-copied and had drifted four ways, and the admin setting is sent to
+  // /api/files/chunk as an explicit chunkSize override - so a divergence here silently produces a
+  // different chunk granularity through the UI than through /api/files/reprocess. Nothing tested
+  // that invariant, which is exactly how it drifted the first time.
+  it('defaults to the chunker passage target, not a hand-copied literal', () => {
+    expect(settingsMap.DefaultChunkSize.defaultValue).toBe(DEFAULT_PASSAGE_TOKEN_TARGET);
+  });
+
+  it('cannot be set below the floor the chunker would silently clamp to', () => {
+    // Without a min, an admin could save 10, the UI would report 10, and chunk.ts would quietly
+    // use MIN_PASSAGE_TOKEN_TARGET instead - the same class of silent disagreement.
+    expect(settingsMap.DefaultChunkSize.min).toBe(MIN_PASSAGE_TOKEN_TARGET);
+    expect(() => settingsMap.DefaultChunkSize.schema.parse(MIN_PASSAGE_TOKEN_TARGET - 1)).toThrow();
+    expect(settingsMap.DefaultChunkSize.schema.parse(MIN_PASSAGE_TOKEN_TARGET)).toBe(MIN_PASSAGE_TOKEN_TARGET);
+  });
+
+  it('prefaults to the chunker target rather than makeNumberSetting fallback 0', () => {
+    // makeNumberSetting does `prefault(config.defaultValue ?? 0)`, so a broken import resolves to
+    // 0 silently instead of throwing. Pin it.
+    expect(settingsMap.DefaultChunkSize.schema.parse(undefined)).toBe(DEFAULT_PASSAGE_TOKEN_TARGET);
   });
 });

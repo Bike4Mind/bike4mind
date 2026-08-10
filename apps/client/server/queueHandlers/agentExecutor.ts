@@ -75,7 +75,7 @@ import {
   type ToolBuilderDeps,
   type ToolBuilderCallbacks,
 } from '@bike4mind/services';
-import { creditService, apiKeyService } from '@bike4mind/services';
+import { creditService, apiKeyService, estimateGeneratedMediaUsd } from '@bike4mind/services';
 // Lattice launch-gate. `resolveLatticeTools` owns the `enableLattice` flag
 // resolution and the Lattice tool contribution (names + `externalTools`
 // definitions); see that module's header for the Next-tracing split and the
@@ -105,6 +105,7 @@ import {
   billIteration,
   addToolUsage,
   takeToolUsage,
+  foldGeneratedMediaUsd,
   type BillingCounters,
   type PendingToolUsage,
 } from './agentExecutor.billing';
@@ -134,8 +135,8 @@ import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage
 import { emitMetric } from '@server/utils/cloudwatch';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
 import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
-import { publishMementoCompletion } from '@server/utils/publishMementoCompletion';
-import { getFirstIterationMementosPreamble } from '@server/utils/getFirstIterationMementosPreamble';
+import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
+import { resolveAndBuildMementosPreamble } from '@server/utils/getFirstIterationMementosPreamble';
 import { getFirstIterationSkillsPreamble } from '@server/utils/getFirstIterationSkillsPreamble';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 import { loadAgentMcpTools, type AgentMcpTools } from '@server/utils/loadAgentMcpTools';
@@ -938,6 +939,11 @@ async function processExecution(
           // required" (no picker UI in a headless run). Omitted when the parent
           // had none, so the tool falls back to its built-in default.
           ...(execution.imageConfig && { imageConfig: execution.imageConfig }),
+          // Inherit the parent's audio config for the same reason as imageConfig:
+          // a subagent that calls audio_generation should reach for the provider/
+          // voice the parent resolved, not the tool's built-in OpenAI default.
+          // Omitted when the parent had none.
+          ...(execution.audioConfig && { audioConfig: execution.audioConfig }),
           // NOTE: `enableLattice` (and other parent-only launch-gate flags) is
           // intentionally omitted here - subagents / DAG children do NOT inherit
           // it. The parent's Lattice toolbelt is scoped to the parent run; a
@@ -1232,11 +1238,47 @@ async function processExecution(
           await sendWs('progress', { executionId, status });
         }
       },
-      onToolStart: async () => {
-        // Agent Executor handles credit billing per-iteration, not per-tool-call
+      onToolStart: async (toolName, data) => {
+        // Agent mode bills LLM tokens per-iteration; a generative tool's provider media
+        // cost (image/music/audio USD) is NOT LLM spend, so classic chat's per-tool
+        // toolCreditsMap drain never runs here. Fold the media USD into the same
+        // per-iteration bucket (`pendingToolUsage.costUsd`) that `onToolLlmUsage` feeds, so
+        // `billIteration` charges it on the existing agent rail - otherwise agent-mode
+        // generation is free. Image cost is known up front (n/size/quality), so it is read
+        // at start (mirrors classic reserve-on-start); music/audio settle at finish (see
+        // onToolFinish). The phase->tool routing + `usd > 0` guard live in the billing
+        // module so they are covered by agentExecutor.billing.test.ts.
+        // Subagent-dispatch tool cost stays unbilled until its Phase-1 credit deduction
+        // lands (see processSubagentDispatch) - tracked as a follow-up.
+        foldGeneratedMediaUsd({
+          phase: 'start',
+          toolName,
+          data,
+          models,
+          pending: pendingToolUsage,
+          estimateUsd: estimateGeneratedMediaUsd,
+          onError: err =>
+            logger.warn(`[agentExecutor] failed to estimate ${toolName} media cost; not billed this iteration`, {
+              err,
+            }),
+        });
       },
-      onToolFinish: async () => {
-        // Tool finish side effects tracked via ReActAgent steps
+      onToolFinish: async (toolName, data) => {
+        // Settle music/audio media cost on delivery (see onToolStart for the rail rationale):
+        // the tools' failure paths return before onFinish, so an undelivered clip is never
+        // billed. Charged into the current iteration's pendingToolUsage.
+        foldGeneratedMediaUsd({
+          phase: 'finish',
+          toolName,
+          data,
+          models,
+          pending: pendingToolUsage,
+          estimateUsd: estimateGeneratedMediaUsd,
+          onError: err =>
+            logger.warn(`[agentExecutor] failed to estimate ${toolName} media cost; not billed this iteration`, {
+              err,
+            }),
+        });
       },
       onUiSideEffect: async sideEffect => {
         // Fires inside the wrapped toolFn (sharedToolBuilder extraction), i.e. between the
@@ -1288,6 +1330,7 @@ async function processExecution(
       model: execution.model,
       apiKeyTable: apiKeyTable as ApiKeyTable,
       imageConfig: execution.imageConfig,
+      audioConfig: execution.audioConfig,
     });
 
     // Lattice opt-in pool for delegated subagents. Built UNCONDITIONALLY (unlike
@@ -1879,10 +1922,10 @@ async function processExecution(
       // single materialized string that gets persisted into the checkpoint.
       // Continuation Lambdas, gate-resumes, and DAG-resumes inherit it via
       // the checkpoint replay - same handoff contract as the file preamble.
-      // The helper itself guards on `enableMementos` + `parentExecutionId`,
+      // The helper guards on `parentExecutionId` and the resolved `MementoGates`,
       // matching `publishMementoCompletion` on the write side.
       if (firstIterationQuery !== undefined) {
-        const { preamble: mementoPreamble, mementoIds } = await getFirstIterationMementosPreamble(
+        const { preamble: mementoPreamble, mementoIds } = await resolveAndBuildMementosPreamble(
           execution,
           {
             db: {
@@ -2293,13 +2336,13 @@ async function processExecution(
       allSideEffects
     );
 
-    // Memento parity with chat_completion. Fires only when the user
-    // (or admin default) opted into mementos for this run; skipped for
-    // subagent / DAG children via the `parentExecutionId` guard inside the
-    // helper. Reads `execution` (loaded at the top of this function) so
-    // continuation Lambdas see the persisted flag the WS handler stamped at
-    // dispatch.
-    await publishMementoCompletion(execution, logger);
+    // Memento parity with chat_completion. Resolve the same gates the read side
+    // resolves (one authority, `resolveExecutionMementoGates`) and hand them to the
+    // publisher; it fires only when a gate is live and skips subagent / DAG children
+    // via the `parentExecutionId`/`spawnedByExecutionId` guard inside the helper. Reads `execution` (loaded
+    // at the top of this function) so continuation Lambdas see the persisted tri-state
+    // flag the WS handler stamped at dispatch.
+    await resolveAndPublishMementoCompletion(execution, { db: { adminSettings: adminSettingsRepository } }, logger);
 
     logger.info('[Complete] Agent execution finished', {
       iterations: finalCheckpoint.iteration,
@@ -2572,6 +2615,7 @@ async function processSubagentDispatch(
       model: child.model,
       apiKeyTable: apiKeyTable as ApiKeyTable,
       imageConfig: child.imageConfig,
+      audioConfig: child.audioConfig,
     });
 
     // Lattice opt-in pool for this subagent (and any grandchildren it delegates

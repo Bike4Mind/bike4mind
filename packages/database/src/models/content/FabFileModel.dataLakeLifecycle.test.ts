@@ -125,6 +125,18 @@ describe('FabFile data lake lifecycle membership', () => {
 
       expect((await fabFileRepository.computeDataLakeStats(scope)).fileCount).toBe(0);
     });
+
+    it('excludes a presigned member whose bytes have not landed yet (#1342)', async () => {
+      // Same exclusion countDataLakeFilesByMembership pins - counting an orphan 'pending' row
+      // would let an abandoned upload permanently activate the lake.
+      const rows = await seedLakeRows();
+      await FabFile.updateOne({ _id: rows.metaTagged._id }, { $set: { status: 'pending' } });
+
+      const stats = await fabFileRepository.computeDataLakeStats(scope);
+
+      expect(stats.fileCount).toBe(1);
+      expect(stats.totalSizeBytes).toBe(100);
+    });
   });
 
   describe('archiveByDataLakeTag / unarchiveByDataLakeTag', () => {
@@ -207,6 +219,112 @@ describe('FabFile data lake lifecycle membership', () => {
       const found = await fabFileRepository.findDeletedByDataLakeTag(scope);
 
       expect(found).toHaveLength(2);
+    });
+  });
+
+  // A teardown stamps one shared value across the rows it flips and the lake records it, so the
+  // reversal can name that batch exactly. What these pin is that "exactly" is equality: a range
+  // would readmit a file the creator deleted on their own on either side of the teardown.
+  describe('stamp-keyed teardown batches', () => {
+    const EARLIER = new Date('2026-01-01T00:00:00.000Z');
+    const STAMP = new Date('2026-06-01T00:00:00.000Z');
+    const LATER = new Date('2026-07-01T00:00:00.000Z');
+
+    /** A member the creator had already deleted on their own, at its own unrelated stamp. */
+    const deleteIndependently = (id: mongoose.Types.ObjectId, at: Date) =>
+      FabFile.updateOne({ _id: id }, { $set: { deletedAt: at } });
+
+    describe('delete axis', () => {
+      it('writes the caller stamp on every row it flips', async () => {
+        const rows = await seedLakeRows();
+
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        for (const id of rows.memberIds) {
+          expect((await readRaw(id))?.deletedAt?.getTime()).toBe(STAMP.getTime());
+        }
+      });
+
+      it('leaves an independently deleted member on its own stamp', async () => {
+        const rows = await seedLakeRows();
+        await deleteIndependently(rows.prefixOwned._id, EARLIER);
+
+        const flipped = await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        expect(flipped).toEqual([rows.metaTagged._id.toString()]);
+        expect((await readRaw(rows.prefixOwned._id.toString()))?.deletedAt?.getTime()).toBe(EARLIER.getTime());
+      });
+
+      it('un-deletes the named batch and nothing deleted before it', async () => {
+        const rows = await seedLakeRows();
+        await deleteIndependently(rows.prefixOwned._id, EARLIER);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP);
+
+        expect(restored).toBe(1);
+        expect((await readRaw(rows.metaTagged._id.toString()))?.deletedAt ?? null).toBeNull();
+        expect((await readRaw(rows.prefixOwned._id.toString()))?.deletedAt?.getTime()).toBe(EARLIER.getTime());
+      });
+
+      it('un-deletes a row stamped exactly at the mark', async () => {
+        // The boundary a `$gt` bound would drop on the floor - every row a teardown flips carries
+        // the mark itself, so an exclusive comparison skips the whole batch.
+        await seedLakeRows();
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        expect(await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP)).toBe(2);
+      });
+
+      it('leaves a member deleted DURING the window deleted', async () => {
+        // The case a lower bound readmits: the per-file delete routes keep stamping members while
+        // the lake sits deleted, and those deletions are the creator's, not the teardown's.
+        const rows = await seedLakeRows();
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+        const laterMember = await makeFile({
+          fileName: 'added-later.txt',
+          userId: CREATOR,
+          tags: [{ name: 'acme:x' }],
+        });
+        await deleteIndependently(laterMember._id, LATER);
+
+        const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP);
+
+        expect(restored).toBe(2);
+        expect((await readRaw(laterMember._id.toString()))?.deletedAt?.getTime()).toBe(LATER.getTime());
+        for (const id of rows.memberIds) {
+          expect((await readRaw(id))?.deletedAt ?? null).toBeNull();
+        }
+      });
+
+      it('reverses everything when no stamp is given, for a lake torn down before the mark existed', async () => {
+        const rows = await seedLakeRows();
+        await deleteIndependently(rows.prefixOwned._id, EARLIER);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        expect(await fabFileRepository.undeleteByDataLakeTag(scope)).toBe(2);
+      });
+
+      it('narrows the dedup read to the batch', async () => {
+        const rows = await seedLakeRows();
+        await deleteIndependently(rows.prefixOwned._id, EARLIER);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        expect((await fabFileRepository.findDeletedByDataLakeTag(scope, STAMP)).map(f => f.fileName)).toEqual([
+          'meta.txt',
+        ]);
+        expect(await fabFileRepository.findDeletedByDataLakeTag(scope)).toHaveLength(2);
+      });
+
+      it('composes the stamp with excludeIds', async () => {
+        const rows = await seedLakeRows();
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [rows.prefixOwned._id.toString()], STAMP);
+
+        expect(restored).toBe(1);
+        expect((await readRaw(rows.prefixOwned._id.toString()))?.deletedAt?.getTime()).toBe(STAMP.getTime());
+      });
     });
   });
 

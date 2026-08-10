@@ -48,7 +48,7 @@ export function useUserCreditsManager(onRefresh?: () => void) {
     onRefresh?.();
   };
 
-  const users = (allUsers.data?.users ?? []) as any[];
+  const users = allUsers.data?.users ?? [];
 
   const handleCreditAdjustment = async (userId: string, currentCredits: number, adjustment: number, note?: string) => {
     const newCredits = Math.max(0, currentCredits + adjustment);

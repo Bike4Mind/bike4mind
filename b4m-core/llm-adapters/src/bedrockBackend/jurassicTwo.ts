@@ -43,7 +43,9 @@ export default class JurassicTwoBedrockBackend extends BaseBedrockBackend {
         backend: ModelBackend.Bedrock,
         contextWindow: 8192,
         supportsImageVariation: false,
-        max_tokens: 8192,
+        // Half the window, matching the GPT-4 row's 8192/4096 split. The full 8192 left
+        // context - output - buffer negative, which empties the prompt.
+        max_tokens: 4096,
         can_stream: false,
         pricing: {
           4000: { input: 0.0188 / 1000, output: 0.0188 / 1000 }, // $0.0188 / 1,000 Input tokens, $0.0188 / 1,000 Output tokens. @see https://aws.amazon.com/bedrock/pricing/
@@ -61,7 +63,7 @@ export default class JurassicTwoBedrockBackend extends BaseBedrockBackend {
         backend: ModelBackend.Bedrock,
         contextWindow: 8192,
         supportsImageVariation: false,
-        max_tokens: 8192,
+        max_tokens: 4096,
         can_stream: false,
         pricing: {
           4000: { input: 0.0125 / 1000, output: 0.0125 / 1000 }, // $0.0125 / 1,000 Input tokens, $0.0125 / 1,000 Output tokens. @see https://aws.amazon.com/bedrock/pricing/

@@ -15,12 +15,24 @@ const deleteFabFileSchema = z.object({
 
 type DeleteFabFileParameters = z.infer<typeof deleteFabFileSchema>;
 
-export type DeleteFabFileAction = 'deleted' | 'unshared' | 'not_found';
+export type DeleteFabFileAction = 'deleted' | 'unshared' | 'not_found' | 'denied';
 
 export interface DeleteFabFileResult {
   action: DeleteFabFileAction;
   fabFile: IFabFileDocument | null;
 }
+
+export type PublicDeleteFabFileAction = Exclude<DeleteFabFileAction, 'denied'>;
+
+/**
+ * Maps deleteFabFile's action to what's safe to expose to a caller. Collapses 'denied' into
+ * 'not_found' so a response can never be used to tell "doesn't exist" apart from "exists but you
+ * can't access it" - the same no-enumeration convention as get.ts, edit.ts, addFavorite.ts, et al.
+ * Every consumer that returns deleteFabFile's action to a client must go through this, rather than
+ * re-deriving the fold inline, so a future action value can't slip through unmapped.
+ */
+export const toPublicDeleteAction = (action: DeleteFabFileAction): PublicDeleteFabFileAction =>
+  action === 'denied' ? 'not_found' : action;
 
 export interface DeleteFabFileAdapter {
   db: {
@@ -101,11 +113,12 @@ export const deleteFabFile = async (
 
   const userShareIndex = sharedFile.users?.findIndex(u => u.userId.toString() === userId);
   if (userShareIndex === undefined || userShareIndex === -1) {
-    // File exists but user has no direct share - may be group-shared or data-lake
+    // File exists but user has no direct share - may be group-shared or data-lake. Distinct from
+    // genuine absence: callers must not report this identically to a no-op (see bulk-delete.ts).
     Logger.globalInstance.warn(
       `[deleteFabFile] File exists but user is not in share list — fileId: ${id}, userId: ${userId}. Cannot unshare.`
     );
-    return { action: 'not_found', fabFile: null };
+    return { action: 'denied', fabFile: null };
   }
 
   // 3. Remove the user from the share list (self-unshare)

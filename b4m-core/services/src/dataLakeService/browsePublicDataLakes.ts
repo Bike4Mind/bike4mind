@@ -17,7 +17,12 @@ interface BrowsePublicDataLakesOptions {
   offset?: number;
 }
 
-/** Minimal owner projection the browse card needs. Deliberately excludes `email` (see below). */
+/**
+ * Owner fields this service reads. This type narrows what the code below is allowed to touch,
+ * not what the query fetches: `userRepository.findByIds` is shared with other callers that do
+ * need `email` (e.g. admin usage reports), so its Mongo projection still includes it, and the
+ * real result object carries it in memory - this service just never reads or maps it out.
+ */
 type OwnerLookup = { id: string; name?: string; username?: string }[];
 
 interface BrowsePublicDataLakesAdapters {

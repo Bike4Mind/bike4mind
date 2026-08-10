@@ -1,6 +1,8 @@
 import {
   BedrockEmbeddingModel,
+  DEFAULT_PASSAGE_TOKEN_TARGET,
   IFabFile,
+  MIN_PASSAGE_TOKEN_TARGET,
   OllamaEmbeddingModel,
   isAudioMimeType,
   OpenAIEmbeddingModel,
@@ -28,16 +30,11 @@ export const ChunkSchema = z.object({
 });
 export type Chunk = z.infer<typeof ChunkSchema>;
 
-/**
- * Default soft cap on chunk size, in tokens. Retrieval quality is the reason this exists:
- * without it, chunks grow to the embedding model's context window (~6.5K tokens / ~26KB of
- * prose), so one vector averages a whole document and cosine ranking cannot discriminate a
- * specific fact from the rest of the file. ~512 tokens is passage granularity: large enough
- * to carry a coherent idea, small enough that the vector is about one thing.
- */
-export const DEFAULT_PASSAGE_TOKEN_TARGET = 512;
-/** Floor for caller-supplied passage targets; below this, chunks lose usable context. */
-export const MIN_PASSAGE_TOKEN_TARGET = 64;
+// Canonical in @bike4mind/common (see constants/chunking) so the admin-settings schema and the
+// React controls can share them without importing this module, which pulls in mammoth, JSZip,
+// tiktoken, unpdf and the S3 client. Re-exported so existing `from './chunk'` importers are
+// unaffected.
+export { DEFAULT_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET };
 
 export interface SmartChunkerOptions {
   /** Buffer as a percent (0-1) or absolute value (if >= 1) to subtract from maxTokens. */
@@ -782,7 +779,10 @@ export class SmartChunker {
   private async encodeTokens(text: string): Promise<number[]> {
     if (isEmbeddingModel(this.model, OpenAIEmbeddingModel)) {
       await this.initializeEncoder();
-      return Array.from(this.encoder!.encode(text));
+      // encode_ordinary, not encode: file content is untrusted and a special-token literal in it
+      // ("<|endoftext|>") makes encode reject, failing the whole ingest. See TiktokenTokenizer in
+      // @bike4mind/utils for the full reasoning; the same call is used everywhere we tokenize.
+      return Array.from(this.encoder!.encode_ordinary(text));
     }
     // For non-OpenAI models, pseudo-token IDs are character offsets into the original text.
     // decodeTokens() uses these offsets to slice the original string back out.
@@ -888,9 +888,10 @@ export class SmartChunker {
   // Counts the number of tokens in the given text using the appropriate tokenization method
   private async countTokens(text: string): Promise<number> {
     if (isEmbeddingModel(this.model, OpenAIEmbeddingModel)) {
-      // Use tiktoken for OpenAI models
+      // Use tiktoken for OpenAI models. encode_ordinary for the same reason as encodeTokens above:
+      // a special-token literal in file content must be counted, not rejected.
       await this.initializeEncoder();
-      const tokens = this.encoder!.encode(text);
+      const tokens = this.encoder!.encode_ordinary(text);
       return tokens.length;
     } else if (isEmbeddingModel(this.model, VoyageAIEmbeddingModel)) {
       // VoyageAI uses transformers-style subword tokenization unavailable in JS;

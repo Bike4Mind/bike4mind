@@ -52,6 +52,21 @@ export const usePromptMetaInspector = create<{
   setPosition: (x, y) => set({ position: { x, y } }),
 }));
 
+type PromptMetaTool = { toolSchema?: { name?: string }; name?: string };
+
+/**
+ * `tools` sits outside PromptMetaZodSchema, so an ABSENT field is the ordinary case and means the
+ * turn captured nothing - not that zero tools were sent. Returns undefined for absent so callers
+ * can keep the two apart; conflating them reads as a confident "no tools were sent" and sends
+ * readers hunting a tool-pipeline bug when the real signal is "promptMeta was never populated".
+ */
+const readPromptMetaTools = (promptMeta: PromptMeta): PromptMetaTool[] | undefined => {
+  const tools = (promptMeta as PromptMeta & { tools?: unknown }).tools;
+  return Array.isArray(tools) ? (tools as PromptMetaTool[]) : undefined;
+};
+
+const promptMetaToolName = (tool: PromptMetaTool) => tool.toolSchema?.name || tool.name || 'unknown';
+
 const PromptMetaInspector = () => {
   const [position, setPosition] = usePromptMetaInspector(useShallow(state => [state.position, state.setPosition]));
   const promptMeta = usePromptMetaInspector(state => state.promptMeta);
@@ -60,6 +75,7 @@ const PromptMetaInspector = () => {
   const closeMetaInspector = useCallback(() => setPromptMeta(null), [setPromptMeta]);
   const totalActualTokens =
     (promptMeta?.tokenUsage?.actualInputTokens || 0) + (promptMeta?.tokenUsage?.actualOutputTokens || 0);
+  const promptMetaTools = promptMeta ? readPromptMetaTools(promptMeta) : undefined;
 
   const [activeTab, setActiveTab] = useState<string>('details');
 
@@ -100,6 +116,14 @@ const PromptMetaInspector = () => {
       ? `${dayjs(generatedAtRaw).format('YYYY-MM-DD HH:mm:ss')} (${generatedAtRaw})`
       : `${dayjs().format('YYYY-MM-DD HH:mm:ss')} (report copy time — server did not stamp generatedAt)`;
 
+    const tools = readPromptMetaTools(promptMeta);
+    const toolsSent =
+      tools === undefined
+        ? 'not captured (promptMeta.tools absent)'
+        : tools.length > 0
+          ? tools.map(promptMetaToolName).join(', ')
+          : 'NONE (empty array)';
+
     const markdown = `# AI Request Debug Report
 
 **Generated:** ${generatedDisplay}
@@ -111,8 +135,8 @@ const PromptMetaInspector = () => {
 - **Max Tokens**: ${promptMeta.model?.parameters?.maxTokens ?? 'N/A'}
 
 ## Tools Configuration
-- **Tools Sent to Model**: ${(promptMeta as any).tools?.length > 0 ? (promptMeta as any).tools.map((t: any) => t.toolSchema?.name || t.name || 'unknown').join(', ') : 'NONE (empty array)'}
-- **Tools Count**: ${(promptMeta as any).tools?.length ?? 0}
+- **Tools Sent to Model**: ${toolsSent}
+- **Tools Count**: ${tools === undefined ? 'not captured' : tools.length}
 - **Function Calls Made**: ${promptMeta.functionCalls?.length ?? 0}
 
 ## Token Usage
@@ -139,8 +163,9 @@ const PromptMetaInspector = () => {
 - **Quest ID**: ${(promptMeta.questId as string) || 'N/A'}
 
 ## Issues
-${(promptMeta as any).tools?.length === 0 ? '⚠️ **CRITICAL**: Tools array is empty - no tools were sent to the model!' : ''}
-${promptMeta.functionCalls?.length === 0 && (promptMeta as any).tools?.length > 0 ? '⚠️ **WARNING**: Tools were sent but none were called by the model' : ''}
+${tools === undefined ? '⚠️ **NOT CAPTURED**: promptMeta.tools is absent, so this report says nothing either way about the tool pipeline. If the fields above also read N/A, promptMeta was never populated for this turn.' : ''}
+${tools?.length === 0 ? 'Note: zero tools were sent to the model. Expected under forced knowledge retrieval and other tool-free modes; a defect only if this turn was supposed to have tools.' : ''}
+${promptMeta.functionCalls?.length === 0 && (tools?.length ?? 0) > 0 ? '⚠️ **WARNING**: Tools were sent but none were called by the model' : ''}
 ${promptMeta.warnings?.length ? promptMeta.warnings.map((w: string) => `⚠️ ${w}`).join('\n') : ''}
 ${promptMeta.promptErrors?.length ? promptMeta.promptErrors.map((e: string) => `❌ ${e}`).join('\n') : ''}
 `;
@@ -231,7 +256,13 @@ ${promptMeta.promptErrors?.length ? promptMeta.promptErrors.map((e: string) => `
             <TabPanel value="details" sx={{ p: 0 }}>
               <Stack direction="row" spacing={1} sx={{ mb: 2, justifyContent: 'flex-end' }}>
                 <Tooltip title="Copy details as Markdown">
-                  <IconButton size="sm" variant="soft" color="success" onClick={handleCopyMarkdown}>
+                  <IconButton
+                    size="sm"
+                    variant="soft"
+                    color="success"
+                    onClick={handleCopyMarkdown}
+                    data-testid="prompt-meta-copy-md-btn"
+                  >
                     <ContentCopy />
                     MD
                   </IconButton>
@@ -596,25 +627,36 @@ ${promptMeta.promptErrors?.length ? promptMeta.promptErrors.map((e: string) => `
                         <Chip
                           size="sm"
                           variant="soft"
-                          color={(promptMeta as any).tools?.length > 0 ? 'success' : 'danger'}
+                          color={
+                            promptMetaTools === undefined
+                              ? 'neutral'
+                              : promptMetaTools.length > 0
+                                ? 'success'
+                                : 'warning'
+                          }
+                          data-testid="prompt-meta-tools-count-chip"
                         >
-                          {(promptMeta as any).tools?.length ?? 0} tools
+                          {promptMetaTools === undefined ? 'not captured' : `${promptMetaTools.length} tools`}
                         </Chip>
                       </Stack>
-                      {(promptMeta as any).tools && (promptMeta as any).tools.length > 0 ? (
+                      {promptMetaTools === undefined ? (
+                        <Chip size="sm" variant="soft" color="neutral" data-testid="prompt-meta-tools-absent-chip">
+                          promptMeta.tools absent - nothing was recorded for this turn
+                        </Chip>
+                      ) : promptMetaTools.length > 0 ? (
                         <Box>
                           <Typography level="body-xs">Available Tools:</Typography>
                           <Stack direction="row" spacing={1} flexWrap="wrap">
-                            {(promptMeta as any).tools.map((tool: any, index: number) => (
+                            {promptMetaTools.map((tool, index) => (
                               <Chip key={index} size="sm" variant="soft" color="primary">
-                                {tool.toolSchema?.name || tool.name || 'unknown'}
+                                {promptMetaToolName(tool)}
                               </Chip>
                             ))}
                           </Stack>
                         </Box>
                       ) : (
-                        <Chip size="sm" variant="soft" color="danger">
-                          ⚠️ No tools sent (empty array)
+                        <Chip size="sm" variant="soft" color="warning" data-testid="prompt-meta-tools-empty-chip">
+                          No tools sent (empty array)
                         </Chip>
                       )}
                     </Stack>

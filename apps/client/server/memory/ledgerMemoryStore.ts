@@ -2,6 +2,7 @@ import type { IMemoryLedgerEvent, MemoryPrincipalKind } from '@bike4mind/databas
 import { MEMENTO_EMBEDDING_ID } from '@bike4mind/common';
 import {
   foldEvents,
+  activationConfigForKind,
   sealEvent,
   type Belief,
   type EvidenceTier,
@@ -268,7 +269,12 @@ export function createLedgerMemoryStore(deps: {
       if (docs.length === 0) return null;
 
       const chain = docs.map(d => toMemoryEvent(d, dek));
-      const beliefs = foldEvents(chain, { now: deps.now ?? new Date().toISOString() });
+      // Salience is per-principalKind: a lake decays far slower than a chat, so months-old reference
+      // beliefs don't floor to cold (activationConfigForKind / LAKE_ACTIVATION).
+      const beliefs = foldEvents(chain, {
+        now: deps.now ?? new Date().toISOString(),
+        activation: activationConfigForKind(principal.kind),
+      });
 
       await attachEmbeddings(deps, principal, beliefs, dek);
 

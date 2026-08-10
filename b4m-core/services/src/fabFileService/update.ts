@@ -1,5 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import {
+  FAB_FILE_CONTENT_REWRITE_PATCH,
   IDataLakeRepository,
   IFabFileDocument,
   IFabFileRepository,
@@ -46,7 +47,7 @@ interface UpdateFabFileAdapters {
       IFabFileRepository,
       'shareable' | 'update' | 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'
     >;
-    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'find'>;
+    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
   };
   /** Forwarded to `reconcileLakeTags`; see its own adapter for what this is for. */
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };
@@ -96,6 +97,14 @@ export const updateFabFile = async (
 
     fabFile.fileUrl = await storage.generateSignedUrl(filePath, EXPIRE_IN_SECONDS);
     fabFile.fileUrlExpireAt = new Date(Date.now() + EXPIRE_IN_SECONDS * 1000);
+
+    // The bytes just changed, so any cached extracted length now describes the previous content, and a
+    // stale count leaves the pre-send attachment warning silent about a file that no longer fits.
+    // Invalidated at the write rather than second-guessed at the read.
+    //
+    // The shared patch rather than a literal: this is one of several rewrite sites, not "the one place"
+    // an earlier version of this comment claimed, and a guard test enumerates them all.
+    Object.assign(fabFile, FAB_FILE_CONTENT_REWRITE_PATCH);
   }
 
   // A tag replacement can join or leave a data lake, which is more than an array write: leaving

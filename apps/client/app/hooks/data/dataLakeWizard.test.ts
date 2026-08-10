@@ -9,12 +9,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
  * and the rollback of orphan state (lake / FabFiles / batch) when an upload fails (#816).
  */
 
-const { toastMock, apiPost, apiPut, apiDelete, uploadFileToUrlMock } = vi.hoisted(() => ({
+const { toastMock, apiPost, apiPut, apiDelete, uploadFileToUrlMock, subscribeToAction } = vi.hoisted(() => ({
   toastMock: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
   apiPost: vi.fn(),
   apiPut: vi.fn(() => Promise.resolve({ data: {} })),
   apiDelete: vi.fn(() => Promise.resolve({ data: {} })),
   uploadFileToUrlMock: vi.fn(() => Promise.resolve()),
+  subscribeToAction: vi.fn(() => () => {}),
 }));
 
 vi.mock('sonner', () => ({ toast: toastMock }));
@@ -25,14 +26,14 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 // can make individual file PUTs succeed or fail deterministically.
 vi.mock('@client/app/utils/uploadFileToUrl', () => ({ uploadFileToUrl: uploadFileToUrlMock }));
 vi.mock('@client/app/contexts/WebsocketContext', () => ({
-  useWebsocket: () => ({ subscribeToAction: () => () => {} }),
+  useWebsocket: () => ({ subscribeToAction }),
 }));
 // Create mode reads the active org and reveals nav slots after the first upload -
 // both reached only once a test runs past the offline short-circuit.
 vi.mock('@client/app/hooks/data/dataLakes', () => ({ activeOrgId: () => undefined }));
 vi.mock('@client/app/hooks/useGearsStatus', () => ({ invalidateGearsStatusWhileLocked: () => {} }));
 
-import { useBatchUpload, useRemoveFileFromDataLake } from './dataLakeWizard';
+import { useBatchUpload, useBatchProgressListener } from './dataLakeWizard';
 import { slugifyDataLakeName } from './dataLakeSlug';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 
@@ -605,30 +606,53 @@ describe('useBatchUpload rollback (#816)', () => {
   });
 });
 
-describe('useRemoveFileFromDataLake cache invalidation', () => {
-  it('invalidates every tag-derived view, not just the lake file list', async () => {
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
-    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
-      React.createElement(QueryClientProvider, { client: queryClient }, children);
-    apiDelete.mockResolvedValueOnce({ data: { success: true, fileCount: 0, totalSizeBytes: 0 } });
+describe('useBatchProgressListener - processingFailedFiles (#1412)', () => {
+  beforeEach(() => {
+    subscribeToAction.mockClear();
+    useDataLakeWizardStore.setState({
+      uploadProgress: {
+        totalFiles: 1,
+        uploadedFiles: 1,
+        chunkedFiles: 0,
+        vectorizedFiles: 0,
+        failedFiles: 0,
+        failedFileNames: [],
+        processingFailedFiles: 0,
+        status: 'uploading',
+        currentBatchId: 'batch1',
+      },
+    });
+  });
 
-    const { result } = renderHook(() => useRemoveFileFromDataLake('lake1'), { wrapper });
-    await act(async () => {
-      await result.current.mutateAsync('f1');
+  it('applies processingFailedFiles from a data_lake_batch_progress message for the active batch', () => {
+    mountHook(useBatchProgressListener);
+    const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+
+    act(() => {
+      onMessage({
+        action: 'data_lake_batch_progress',
+        batchId: 'batch1',
+        failedFiles: 1,
+        processingFailedFiles: 1,
+      });
     });
 
-    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
-    expect(keys).toContain(JSON.stringify(['dataLakeFiles', 'lake1']));
-    expect(keys).toContain(JSON.stringify(['data-lakes']));
-    // Removal now drops the file's tags under the lake prefix, so the tag tree and the article
-    // surfaces are stale too. Bare key prefixes: both are keyed by a source discriminator, and
-    // a fully-specified key would refresh only one of the two surfaces.
-    expect(keys).toContain(JSON.stringify(['dataLakeTagCounts']));
-    expect(keys).toContain(JSON.stringify(['dataLakeArticles']));
-    // The bare file-tags prefix, not ['file-tags','counts']: the tag list itself now carries a
-    // fileCount derived from the files holding each tag, and invalidating only the longer key
-    // leaves that list stale. Prefix matching covers the counts endpoint too.
-    expect(keys).toContain(JSON.stringify(['file-tags']));
+    expect(useDataLakeWizardStore.getState().uploadProgress.processingFailedFiles).toBe(1);
+    expect(useDataLakeWizardStore.getState().uploadProgress.failedFiles).toBe(1);
+  });
+
+  it('ignores a message for a different batch', () => {
+    mountHook(useBatchProgressListener);
+    const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+
+    act(() => {
+      onMessage({
+        action: 'data_lake_batch_progress',
+        batchId: 'someone-elses-batch',
+        processingFailedFiles: 5,
+      });
+    });
+
+    expect(useDataLakeWizardStore.getState().uploadProgress.processingFailedFiles).toBe(0);
   });
 });

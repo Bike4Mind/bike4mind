@@ -111,29 +111,11 @@ POST /api/chat
 
 **Required API-key scope:** \`ai:chat\` or \`ai:generate\` (either grants access).
 
-**Request Body:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| message | string | Yes | The user message content |
-| sessionId | string | No | Session ID to continue a conversation (creates new session if omitted) |
-| model | string | No | LLM model identifier (e.g., \`gpt-4o\`, \`claude-sonnet-4-20250514\`) |
-| temperature | number | No | Sampling temperature (0.0 - 2.0, default 0.7) |
-| stream | boolean | No | Enable streaming response via WebSocket |
-| tools | string[] | No | Tool names to enable for this request |
-| agentId | string | No | Agent ID to use for this conversation |
-| fileIds | string[] | No | File IDs to attach as context |
-| projectId | string | No | Project ID for RAG grounding |
-
-**Response:**
-
-\`\`\`json
-{
-  "questId": "quest_abc123",
-  "sessionId": "sess_xyz789",
-  "status": "pending"
-}
-\`\`\`
+> **This endpoint is now generated from its contract.** The full request/response
+> reference — every field, its type, defaults, and validation rules — lives in the
+> [generated API docs](/api/v1/docs) under \`sendChatMessage\`, derived from the same
+> object the handler validates with. The hand-written table that used to sit here
+> drifted from the code; it is not reproduced so the two cannot disagree again.
 
 #### Poll Quest Status
 
@@ -490,7 +472,7 @@ Multi-tenant organization management with roles and integrations.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | /api/organizations | List user organizations |
-| POST | /api/organizations | Create an organization |
+| POST | /api/organizations | Create an organization (admin) |
 | GET | /api/organizations/[id] | Get organization details |
 | PUT | /api/organizations/[id] | Update organization |
 | DELETE | /api/organizations/[id] | Delete organization |
@@ -575,6 +557,8 @@ Multi-tenant organization management with roles and integrations.
 | DELETE | /api/users/[id]/delete | Delete user account |
 | POST | /api/users/[id]/upload-photo | Upload profile photo |
 | GET | /api/users/[id]/organizations | List user organizations |
+| GET | /api/users/[id]/organization | Get active organization (self or admin) |
+| DELETE | /api/users/[id]/organization | Clear active-organization pointer (self or admin) |
 | GET | /api/users/[id]/projects | List user projects |
 | GET | /api/users/[id]/agents | List user agents |
 | GET | /api/users/[id]/activities | User activity log |

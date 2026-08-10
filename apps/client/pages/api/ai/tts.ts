@@ -6,8 +6,8 @@ import {
   UnprocessableEntityError,
   VoiceGenerationVendor,
 } from '@bike4mind/common';
-import { aiVoiceService } from '@bike4mind/utils';
-import { resolveTtsProvider, TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
+import { TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
+import { synthesizeTts, upstreamStatus, isCredentialRejection } from '@server/utils/synthesizeTts';
 import { exceedsTtsResponseLimit, TTS_RESPONSE_TOO_LARGE_MESSAGE } from '@server/utils/ttsResponseLimit';
 import {
   assertTtsCreditsAvailable,
@@ -25,6 +25,9 @@ const DEFAULT_PROVIDER: VoiceGenerationVendor = 'openai';
  * - provider defaults to openai; model/voice/format fall back to per-provider defaults.
  * - encoding 'binary' (default) streams raw audio bytes with an audio/* Content-Type;
  *   'base64' returns JSON { audio, format, contentType }.
+ * - when the chosen provider has no usable key or rejects our credentials, another
+ *   configured provider stands in (see synthesizeTts) and the response reports the
+ *   substitution via { provider, fallbackFrom } / the X-B4M-Tts-Provider* headers.
  *
  * Mirrors the multi-vendor image API (aiImageService). The legacy
  * /api/ai/text-to-speech and /api/elabs/text-to-speech routes remain as thin
@@ -56,23 +59,7 @@ const handler = baseApi().post(async (req, res) => {
     );
   }
 
-  let resolved;
-  try {
-    resolved = await resolveTtsProvider({
-      provider: vendor,
-      userId: req.user?.id,
-      requestedVoice: voice,
-      preferredVoice: req.user?.preferredVoice,
-    });
-  } catch (error) {
-    if (error instanceof TtsProviderNotConfiguredError) {
-      return res.status(401).json({ error: error.message });
-    }
-    throw error;
-  }
-
-  // Pre-flight credit gate: reject before incurring provider cost. userId is
-  // guaranteed here (resolveTtsProvider throws without one).
+  // Pre-flight credit gate: reject before incurring provider cost.
   const userId = req.user?.id;
   if (userId) {
     try {
@@ -86,14 +73,31 @@ const handler = baseApi().post(async (req, res) => {
   }
 
   try {
-    const result = await aiVoiceService(vendor, resolved.apiKey, req.logger).synthesize(text, {
-      voice: resolved.voice,
+    const synthesized = await synthesizeTts({
+      provider: vendor,
+      text,
+      userId,
+      requestedVoice: voice,
+      preferredVoice: req.user?.preferredVoice,
       model,
       format,
       stability,
       similarityBoost,
-      language: languageCode,
+      languageCode,
+      logger: req.logger,
     });
+    // usedVendor is the provider that actually produced the audio: synthesizeTts
+    // may stand in another one, and billing/reporting must follow the vendor
+    // that did the work.
+    const { result, fallbackFrom, vendor: usedVendor } = synthesized;
+
+    // A substituted provider means a different voice, so the caller is always
+    // told. Header form too, for the binary encoding, which has no JSON body.
+    const providerInfo = fallbackFrom ? { provider: usedVendor, fallbackFrom } : undefined;
+    if (fallbackFrom) {
+      res.setHeader('X-B4M-Tts-Provider', usedVendor);
+      res.setHeader('X-B4M-Tts-Provider-Fallback-From', fallbackFrom);
+    }
 
     // Charge for the successful synthesis. Done before the size guard below
     // because the provider cost is already incurred regardless of whether we
@@ -101,7 +105,7 @@ const handler = baseApi().post(async (req, res) => {
     if (userId) {
       await deductTtsCredits({
         userId,
-        vendor,
+        vendor: usedVendor,
         model: result.model,
         characters: result.characters,
         logger: req.logger,
@@ -143,7 +147,7 @@ const handler = baseApi().post(async (req, res) => {
     if (exceedsTtsResponseLimit(result.audio.length)) {
       return res.status(413).json({
         error: TTS_RESPONSE_TOO_LARGE_MESSAGE,
-        provider: vendor,
+        provider: usedVendor,
         ...(saveInfo?.saved ? { saved: true, fabFileId: saveInfo.fabFileId, fileUrl: saveInfo.fileUrl } : {}),
       });
     }
@@ -154,6 +158,7 @@ const handler = baseApi().post(async (req, res) => {
         format: result.format,
         contentType: result.contentType,
         ...(saveInfo ?? {}),
+        ...(providerInfo ?? {}),
       });
     }
 
@@ -161,12 +166,26 @@ const handler = baseApi().post(async (req, res) => {
     res.setHeader('Content-Length', result.audio.length);
     return res.send(result.audio);
   } catch (error) {
+    // No provider is usable (the requested one and every alternate lack a key).
+    // errorCode lets the client separate this from a configured-but-rejected
+    // key, which needs different advice.
+    if (error instanceof TtsProviderNotConfiguredError) {
+      return res.status(401).json({ error: error.message, errorCode: 'provider_not_configured' });
+    }
+
     // Pass through client-actionable upstream errors (bad voice/param, invalid
     // key, rate limit) with a generic body so the provider's raw error text
     // never leaks; treat everything else as an upstream (502) failure.
-    const status = (error as { status?: number })?.status;
+    const status = upstreamStatus(error);
     if (typeof status === 'number' && status >= 400 && status < 500) {
-      return res.status(status).json({ error: `TTS request rejected by the ${vendor} provider`, provider: vendor });
+      return res.status(status).json({
+        error: `TTS request rejected by the ${vendor} provider`,
+        provider: vendor,
+        // Reaching here on a credential rejection means no alternate could
+        // cover for it either, so the actionable next step is a different
+        // provider (or a fixed key), not a different request.
+        ...(isCredentialRejection(error) ? { errorCode: 'provider_rejected' } : {}),
+      });
     }
     req.logger.error('TTS synthesis failed', { error, provider: vendor });
     return res.status(502).json({ error: 'Failed to generate speech', provider: vendor });

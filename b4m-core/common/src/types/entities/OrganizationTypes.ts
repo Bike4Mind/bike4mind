@@ -96,9 +96,12 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
   /**
    * Atomically add a member and raise the seat ceiling to fit, in a single update (#1239).
    * Race-safe: idempotent on a duplicate add, and raises `seats` only to the post-add member count
-   * (never a double-raise). Returns the PRE-image (before/after seats are derived from it), or null
-   * if the user is already a member or the org is gone. Domain-signup auto-add path for orgs NOT
-   * billed through Stripe - it does not sync Stripe's billed quantity (see `addMemberIfUnderCeiling`).
+   * (never a double-raise). The raise is clamped at `ORGANIZATION_SUBSCRIPTION_MAX_SEATS` (#1424), so
+   * a full org matches no doc and returns null - the caller routes that to 'at-capacity' rather than
+   * growing a seat floor no `setSeats` value can satisfy. Returns the PRE-image (before/after seats are
+   * derived from it), or null if the user is already a member, the org is gone, OR the org is at the
+   * ceiling. Domain-signup auto-add path for orgs NOT billed through Stripe - it does not sync Stripe's
+   * billed quantity (see `addMemberIfUnderCeiling`).
    */
   addMemberRaisingSeats(
     organizationId: string,
@@ -140,8 +143,21 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
   incrementCurrentStorage(organizationId: string, count: number): Promise<void>;
 
   /**
+   * Seed a zero-usage `userDetails` row for a member if absent (idempotent). Must be called wherever
+   * membership is granted so `userDetails[]` stays in sync with `users[]`: `updateUserDetails` uses a
+   * positional update that cannot create the row it positions on, so a member with no row tracks no
+   * usage and escapes `maxCreditsPerMember` entirely.
+   *
+   * @param organizationId - The ID of the organization
+   * @param member - The member identity to seed (id + email/name for the row's display fields)
+   */
+  ensureUserDetails(organizationId: string, member: { id: string; email: string; name: string }): Promise<void>;
+
+  /**
    * Update a user's usage details within an organization.
    * Uses $inc for creditsDelta (atomic increment) and $set for lastCreditUsedAt.
+   * The caller must ensure the row exists first (see `ensureUserDetails`); the positional update
+   * cannot create a missing row and no-ops if one is absent.
    *
    * @param organizationId - The ID of the organization
    * @param userId - The ID of the user within the organization

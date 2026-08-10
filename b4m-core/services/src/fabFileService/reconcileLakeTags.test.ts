@@ -31,6 +31,7 @@ const makeAdapters = (
     dataLakes: {
       findByDatalakeTag: vi.fn().mockResolvedValue(lakeDoc),
       setStats: vi.fn(),
+      activateIfDraft: vi.fn(),
       // No prefix collisions in these tests; the fallback tagger's own logic is covered by
       // fallbackLakeTags.test.ts.
       find: vi.fn().mockResolvedValue([]),

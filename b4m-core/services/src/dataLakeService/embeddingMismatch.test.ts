@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  classifyAnnHit,
   classifyLoadedChunk,
   createEmbeddingMismatchAccumulator,
   describeEmbeddingMismatch,
@@ -66,6 +67,16 @@ describe('classifyLoadedChunk', () => {
     expect(classifyLoadedChunk({ ...q, vector: [1, 2], parentFile: { embeddingModel: ADA } })).toBe(
       'dimensionMismatch'
     );
+  });
+});
+
+describe('classifyAnnHit', () => {
+  it('includes a hit whose parent file is still in scope', () => {
+    expect(classifyAnnHit({ parentFile: { embeddingModel: ADA } })).toBeNull();
+  });
+
+  it('reports a hit for a file no longer in scope as unknownFile', () => {
+    expect(classifyAnnHit({ parentFile: undefined })).toBe('unknownFile');
   });
 });
 

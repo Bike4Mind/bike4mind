@@ -5,8 +5,9 @@ import { IBaseRepository, type IMongoDocument } from '.';
 /**
  * Lake lifecycle. Stable states (draft/active/archived/deleted) plus transitional
  * states (archiving/restoring/deleting) that exist to drive UI and make a crashed
- * mid-operation observable. draft -> active is one-way and happens implicitly on
- * first batch creation.
+ * mid-operation observable. draft -> active is one-way. It happens implicitly once the lake
+ * holds its first member file (see `activateIfDraft` below), and unconditionally when an
+ * archived or deleted lake is restored, which is how an empty lake can end up active.
  */
 export type DataLakeStatus = 'draft' | 'active' | 'archiving' | 'archived' | 'restoring' | 'deleting' | 'deleted';
 
@@ -96,6 +97,34 @@ export interface IDataLake {
   totalSizeBytes?: number;
   /** Last time files were synced/uploaded to this data lake */
   lastSyncAt?: Date;
+  /**
+   * The exact `deletedAt` stamp phase-1 delete wrote on this lake's members, so restore can
+   * un-delete that batch and nothing else. Not a time window: it is matched by EQUALITY, which is
+   * what keeps a file the creator deleted independently - before OR during the deleted window -
+   * from riding back in. Claimed set-if-unset, so two overlapping teardowns agree on one stamp
+   * instead of the loser recording a mark no row carries; restore clears it.
+   *
+   * Absent on a lake torn down before this field existed, which restores unbounded (the old
+   * behavior) rather than restoring nothing.
+   */
+  filesDeletedAt?: Date | null;
+  /**
+   * Lake-memory producer (#1440) bookkeeping - server-managed, never client input.
+   *
+   * A concurrency LEASE, not a status: a run stamps it to claim the lake and clears it when done, so a
+   * second near-simultaneous batch finalize that finds a fresh stamp skips its (LLM-billed, redundant)
+   * extraction. A lease rather than a boolean so a crashed run frees itself once the stamp ages past the
+   * lease window, without needing a reconciler. Absent/null = no run holds the lease.
+   */
+  lakeMemoryExtractionAt?: Date | null;
+  /**
+   * Bounded-continuation watermark for the lake-memory producer (#1440): the id of the last document an
+   * interrupted run ATTEMPTED. The next run resumes from the document after it (keyset), so a lake too
+   * large for one Lambda invocation is covered across chained runs instead of silently truncated.
+   * Cleared once a scan reaches the end, so the following finalize does a fresh whole-lake re-scan (which
+   * re-asserts existing facts and keeps them hot). Absent/null = start from the beginning.
+   */
+  lakeMemoryCursor?: string | null;
 }
 
 export interface IDataLakeDocument extends IDataLake, IMongoDocument {}
@@ -155,6 +184,41 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   }): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
   /** Persist recomputed stats (source via IFabFileRepository.computeDataLakeStats). */
   setStats(id: string, stats: { fileCount: number; totalSizeBytes: number }): Promise<IDataLakeDocument | null>;
+  /**
+   * One-way draft -> active, the transition that makes a lake reachable from `findPublicLakes`
+   * and the `findActive*` retrieval arms. Guarded inside the query, so a caller holding a stale
+   * copy of the document cannot resurrect an archived or deleted lake. Returns whether this call
+   * was the one that flipped it.
+   */
+  activateIfDraft(id: string): Promise<boolean>;
+  /**
+   * Claim `filesDeletedAt` for a phase-1 teardown: writes `at` only if the lake carries no stamp,
+   * and returns the stamp now in force - the existing one when a concurrent teardown or a crashed
+   * prior attempt already claimed it. Callers must sweep with the RETURNED value, not their own,
+   * or they stamp rows under a mark the lake does not name. Null means no stamp is in force: the
+   * lake vanished, or a restore cleared it between the claim and the fallback read - so a null
+   * caller sweeps unmarked and must say so, since that lake then restores unbounded.
+   */
+  claimFilesDeletedAt(id: string, at: Date): Promise<Date | null>;
+  /**
+   * Per-lake concurrency claim for the memory producer (#1440): stamp `lakeMemoryExtractionAt = at` only
+   * if no run currently holds the lease - the field is unset, OR its stamp is older than `staleBefore`
+   * (a crashed run's expired lease). Returns whether THIS caller won the claim. Guarded in the query, so
+   * a concurrent claimer that already stamped a FRESH value makes this a no-op; exactly one run wins.
+   */
+  claimLakeMemoryExtraction(id: string, at: Date, staleBefore: Date): Promise<boolean>;
+  /**
+   * Release the extraction lease, but only if THIS run still holds it (the stamp still equals
+   * `claimedAt`). The guard matters when a stale takeover occurred mid-run: a late finish must not clear
+   * the lease a newer run has since claimed.
+   */
+  releaseLakeMemoryExtraction(id: string, claimedAt: Date): Promise<void>;
+  /**
+   * Persist (with a doc id) or clear (with null) the bounded-continuation cursor - the id of the last
+   * document the current scan attempted. Null marks the scan complete, so the next finalize re-scans the
+   * whole lake.
+   */
+  setLakeMemoryCursor(id: string, cursor: string | null): Promise<void>;
 }
 
 // ── Data Lake Batch ─────────────────────────────────────────────────────────
@@ -193,7 +257,8 @@ export interface IDataLakeBatchFile {
  * "completed" batch look reopened. `'none'` covers both "never opted in" and append-mode
  * batches (which never offer the opt-in at all).
  */
-export type TaxonomyStatus = 'none' | 'queued' | 'analyzing' | 'ready' | 'applying' | 'applied' | 'failed';
+export type TaxonomyStatus =
+  'none' | 'queued' | 'analyzing' | 'ready' | 'applying' | 'applied' | 'failed' | 'dismissed';
 
 /** Non-terminal taxonomy phases - the ones the stuck-job reconciler may force to 'failed'. */
 export const TAXONOMY_NON_TERMINAL_STATUSES: TaxonomyStatus[] = ['queued', 'analyzing', 'applying'];
@@ -201,10 +266,11 @@ export const TAXONOMY_NON_TERMINAL_STATUSES: TaxonomyStatus[] = ['queued', 'anal
 /**
  * Every phase the Data Lakes list needs to show a badge for: still running, OR finished and
  * awaiting the user (ready to review / failed and dismissible). Excludes 'none' (never opted
- * in) and 'applied' (already resolved, nothing left to surface). Includes 'applying' so a
- * batch stuck there (e.g. an apply request that errored or hit the Lambda timeout mid-write)
- * stays visible to the list and the fast read-time reconciler instead of only being reachable
- * by the daily cron sweep.
+ * in) and both resolved terminal outcomes, 'applied' and 'dismissed' (nothing left to surface
+ * for either - a dismissed batch's suggestions are never shown again, same as an applied one).
+ * Includes 'applying' so a batch stuck there (e.g. an apply request that errored or hit the
+ * Lambda timeout mid-write) stays visible to the list and the fast read-time reconciler instead
+ * of only being reachable by the daily cron sweep.
  */
 export const TAXONOMY_ATTENTION_STATUSES: TaxonomyStatus[] = ['queued', 'analyzing', 'ready', 'applying', 'failed'];
 
@@ -222,6 +288,9 @@ export interface IDataLakeBatch {
   vectorizedFiles: number;
   failedFiles: number;
   failedFileNames?: string[];
+  /** Subset of failedFiles caused by chunk/vectorize (vs a browser upload failure) - see the
+   * schema comment on this field for why it's tracked separately. */
+  processingFailedFiles: number;
   skippedFiles: number;
 
   // Size tracking
@@ -272,7 +341,8 @@ export type IDataLakeBatchSummary = Omit<IDataLakeBatchDocument, 'files' | 'taxo
   taxonomySuggestions?: Omit<TaxonomyTagSet, 'fileAssignments'>;
 };
 
-export type BatchCounterField = 'uploadedFiles' | 'chunkedFiles' | 'vectorizedFiles' | 'failedFiles' | 'skippedFiles';
+export type BatchCounterField =
+  'uploadedFiles' | 'chunkedFiles' | 'vectorizedFiles' | 'failedFiles' | 'processingFailedFiles' | 'skippedFiles';
 
 export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatchDocument> {
   findActiveByUserId(userId: string): Promise<IDataLakeBatchSummary[]>;
@@ -298,6 +368,13 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    */
   claimFileStatus(batchId: string, fabFileId: string, from: BatchFileStatus[], to: BatchFileStatus): Promise<boolean>;
   incrementCounter(batchId: string, field: BatchCounterField, amount?: number): Promise<IDataLakeBatchDocument | null>;
+  /** Atomic multi-field variant of incrementCounter - use when two+ counters must land together
+   * (e.g. failedFiles + processingFailedFiles), so a crash between them can't leave one applied
+   * and the other not. */
+  incrementCounters(
+    batchId: string,
+    fields: Partial<Record<BatchCounterField, number>>
+  ): Promise<IDataLakeBatchDocument | null>;
   /**
    * Guarded terminal transition: set the batch terminal only if it is still
    * non-terminal. Returns the post-update doc to the single winner, null to losers,
@@ -318,6 +395,15 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
     status: Extract<BatchStatus, 'preparing' | 'uploading' | 'processing'>
   ): Promise<IDataLakeBatchDocument | null>;
   /**
+   * Bump `updatedAt` on a still-non-terminal batch, without touching status or counters. Used
+   * by the chunk/vectorize handlers on a non-final SQS delivery attempt, so a batch that is
+   * legitimately mid-retry doesn't go idle long enough for the stuck-batch reconciler (which
+   * keys off `updatedAt`) to force it terminal before the next attempt lands. Guarded the same
+   * way as `setStatusIfActive`/`markTerminalIfActive`, so it can never resurrect a batch the
+   * pipeline already finalized.
+   */
+  touchIfActive(batchId: string): Promise<void>;
+  /**
    * Guarded taxonomy-phase transition: set `taxonomyStatus` only if it is still one of `from`,
    * so a redelivered queue message or a race between the reconciler and a live worker can only
    * let one caller win. `extra` carries fields that travel with the transition (e.g.
@@ -332,9 +418,30 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
   /**
    * Global cross-user scan for the taxonomy stuck-job reconciler: batches whose `taxonomyStatus`
    * is still non-terminal and whose `taxonomyStartedAt` is older than `cutoff`, oldest-first.
-   * Mirrors `findStuck`'s shape, served by the `{ taxonomyStatus: 1, updatedAt: 1 }` index.
+   * Mirrors `findStuck`'s shape, served by the `{ taxonomyStatus: 1, taxonomyStartedAt: 1 }`
+   * index. Filters on `taxonomyStartedAt`, not `updatedAt` - taxonomy runs decoupled from
+   * ingest, so an unrelated write to the same batch (an ingest counter increment, say) keeps
+   * bumping `updatedAt` while `taxonomyStartedAt` - when THIS taxonomy attempt actually began -
+   * stays fixed; filtering on the wrong field could let a genuinely stuck batch dodge every scan.
    */
   findStuckTaxonomy(cutoff: Date, limit?: number): Promise<IDataLakeBatchDocument[]>;
+  /**
+   * Force a stuck taxonomy job to `'failed'`, guarded on BOTH `taxonomyStatus` (must still be
+   * one of `from`) AND staleness (`taxonomyStartedAt` must still be before `startedBefore`) -
+   * the second guard closes a race `setTaxonomyStatusIfActive` alone can't: the reconciler
+   * decides "stuck" from a snapshot read at fetch time, and without re-checking staleness at
+   * write time, a batch that legitimately re-claimed (the ordinary worker's own
+   * `queued -> analyzing` claim, which refreshes `taxonomyStartedAt`) between the reconciler's
+   * read and its write would still match a status-only guard, discarding real in-flight work.
+   * Used only by `reconcileStuckTaxonomy` - every other taxonomy-status writer wants a plain
+   * status guard and should keep using `setTaxonomyStatusIfActive`.
+   */
+  forceFailStuckTaxonomy(
+    batchId: string,
+    from: TaxonomyStatus[],
+    startedBefore: Date,
+    taxonomyError: string
+  ): Promise<IDataLakeBatchDocument | null>;
   /**
    * Batches whose `taxonomyStatus` is in `TAXONOMY_ATTENTION_STATUSES` - running or awaiting
    * review/dismissal. Deliberately independent of `status` (ingest phase): the common case is

@@ -4,7 +4,7 @@
 import { sharingService } from '@bike4mind/services';
 import {
   inviteRepository,
-  Organization,
+  organizationRepository,
   sessionRepository,
   projectRepository,
   fabFileRepository,
@@ -37,37 +37,27 @@ const transferFileTagsToUser = async (fileId: string, userId: string) => {
     // icon/colour from, and the repository upsert below folds under the same rule.
     const ownerTagsByName = new Map(fileOwnerTags.map(tag => [foldTagName(tag.name), tag]));
 
-    // Process file tags: group under the shared collision rule and count occurrences, so two stored
-    // casings of one tag copy across as one tag rather than two.
-    const tagInfo = new Map<string, { originalName: string; count: number; ownerTag?: any }>();
+    // Group under the shared collision rule, so two stored casings of one tag copy across as one tag
+    // rather than two. findOrCreateByNameAndUserId matches its name exactly, so it cannot dedup them.
+    const tagInfo = new Map<string, { originalName: string; ownerTag?: any }>();
 
     for (const fileTag of file.tags) {
       const foldedName = foldTagName(fileTag.name);
-      const existing = tagInfo.get(foldedName);
-
-      if (existing) {
-        existing.count += 1;
-      } else {
+      if (!tagInfo.has(foldedName)) {
         tagInfo.set(foldedName, {
           originalName: fileTag.name,
-          count: 1,
           ownerTag: ownerTagsByName.get(foldedName),
         });
       }
     }
 
     // Create/update tags atomically
-    for (const { originalName, count, ownerTag } of Array.from(tagInfo.values())) {
-      await fileTagRepository.findOrCreateByNameAndUserId(
-        originalName,
-        userId,
-        {
-          icon: ownerTag?.icon || '🏷️',
-          color: ownerTag?.color || '#0B6BCB',
-          description: ownerTag?.description || `Shared tag: ${originalName}`,
-        },
-        count
-      );
+    for (const { originalName, ownerTag } of Array.from(tagInfo.values())) {
+      await fileTagRepository.findOrCreateByNameAndUserId(originalName, userId, {
+        icon: ownerTag?.icon || '🏷️',
+        color: ownerTag?.color || '#0B6BCB',
+        description: ownerTag?.description || `Shared tag: ${originalName}`,
+      });
     }
   } catch (error) {
     console.warn(`Failed to transfer tags from file ${fileId} to user ${userId}:`, error);
@@ -98,7 +88,7 @@ const handler = baseApi().post(async (req, res) => {
           projects: projectRepository,
           fabFiles: fabFileRepository,
           groups: Group,
-          organization: Organization,
+          organization: organizationRepository,
           users: userRepository,
         },
       }

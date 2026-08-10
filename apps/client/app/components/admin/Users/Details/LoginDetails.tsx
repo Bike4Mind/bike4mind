@@ -1,4 +1,4 @@
-import { IUserDocument, WithOrgRef } from '@bike4mind/common';
+import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { Card, Stack, Typography } from '@mui/joy';
 import React from 'react';
 import LoginsView from '../LoginsView';
@@ -9,7 +9,7 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 dayjs.extend(relativeTime);
 
 interface LoginDetailsProps {
-  user: WithOrgRef<IUserDocument>;
+  user: AdminUserListItem;
 }
 
 const LoginDetails: React.FC<LoginDetailsProps> = React.memo(({ user }) => {

@@ -33,6 +33,15 @@ const MessageTruncationSchema = subSchema({
   },
 });
 
+// A dedicated sub-schema (not an inline nested object) so `default: undefined` can suppress Mongoose
+// auto-vivification: the `dataLakeTags` array would otherwise default to `[]` and materialize a
+// `lakeMemory: { dataLakeTags: [] }` on EVERY quest, which then fails the Zod re-parse on read (the Zod
+// `beliefCount` is required). Absent-or-fully-present, matching how the feature writes it.
+const LakeMemorySchema = subSchema({
+  beliefCount: { type: Number, required: false },
+  dataLakeTags: [{ type: String, required: false }],
+});
+
 // `content` is deliberately absent - see the exclusion note on the context path below.
 const SystemPromptSourceSchema = subSchema({
   fileId: { type: String, required: false },
@@ -212,6 +221,18 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       globalSystemFileIds: { type: [String], required: false, default: undefined },
       userSystemFileIds: { type: [String], required: false, default: undefined },
       projectSystemFileIds: { type: [String], required: false, default: undefined },
+      // Corpus inline-vs-retrieve decision for the turn (ChatCompletionProcess.resolveCorpusInlinePlan).
+      // Must stay in sync with the Zod PromptMeta `context.knowledgeInlining` (parity test enforces it).
+      knowledgeInlining: {
+        attachedCount: { type: Number, required: false },
+        retrievableCount: { type: Number, required: false },
+        deferredCount: { type: Number, required: false },
+        deferredToRetrieval: { type: Boolean, required: false },
+        minInlineTokensPerDoc: { type: Number, required: false },
+      },
+      // Must stay in sync with the Zod PromptMeta `context.lakeMemory` (parity test enforces it).
+      // Sub-schema + default:undefined so it never auto-vivifies to a partial object (see above).
+      lakeMemory: { type: LakeMemorySchema, required: false, default: undefined },
       messageTruncation: { type: MessageTruncationSchema, required: false, default: undefined },
       tokensBySource: {
         systemPrompts: { type: Number, required: false },

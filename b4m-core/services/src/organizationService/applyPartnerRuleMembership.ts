@@ -10,8 +10,9 @@ import { IOrganizationRepository, IUserDocument, IUserRepository, Permission } f
  *  - 'added'             fit under the existing ceiling; seats unchanged.
  *  - 'added-seat-raised' the org was at capacity and the ceiling was raised to admit the user
  *                        (#1239, non-Stripe orgs only). The signup caller fires the alert + audit.
- *  - 'at-capacity'       a Stripe-billed org was full and its ceiling is deliberately NOT raised
- *                        out of band; the caller alerts an admin to add seats through billing.
+ *  - 'at-capacity'       the org was full and its ceiling was NOT raised: a Stripe-billed org (never
+ *                        raised out of band), or a non-Stripe org already at ORGANIZATION_SUBSCRIPTION_MAX_SEATS
+ *                        (the raise is clamped there, #1424). The caller alerts an admin to add seats.
  */
 export type ApplyPartnerRuleMembershipResult =
   | { added: true; reason: 'added' | 'added-seat-raised'; previousSeats: number; newSeats: number }
@@ -46,7 +47,8 @@ interface ApplyPartnerRuleMembershipAdapters {
  * At capacity the behaviour splits on how the org is billed (#1239):
  *  - NOT Stripe-billed: raise the seat ceiling to admit the user rather than rejecting a legit
  *    domain signup at the door; the caller fires the resulting alert + audit so the grown seat
- *    count is never a silent change.
+ *    count is never a silent change. The raise is clamped at ORGANIZATION_SUBSCRIPTION_MAX_SEATS
+ *    (#1424) - an org already there returns 'at-capacity' instead of wedging seats past the ceiling.
  *  - Stripe-billed: do NOT raise the ceiling out of band (a raise Stripe doesn't know about is
  *    force-reverted by the next `customer.subscription.updated` webhook, which floors seat count at
  *    `users.length + 1 + pendingInvites` and force-writes back to Stripe's quantity). Reject with
@@ -70,8 +72,11 @@ export async function applyPartnerRuleMembership(
   const alreadyMember = organization.users.some(u => u.userId === userId);
   if (alreadyMember) {
     // Repair a half-set membership (in the ACL but organizationId never set) without
-    // touching the org. Partial update so no other user field is disturbed.
+    // touching the org. Partial update so no other user field is disturbed. Also seed the
+    // credit side-table: an existing member added before grant-point seeding has no
+    // `userDetails` row, so this re-run (every signup/verify) backfills it - idempotent.
     await repairOrgPointer(user, userId, organizationId, db);
+    await seedUserDetails(user, organizationId, db);
     return { added: false, reason: 'already-member' };
   }
 
@@ -88,6 +93,7 @@ export async function applyPartnerRuleMembership(
       if (outcome.state === 'gone') return { added: false, reason: 'org-missing' };
       if (outcome.state === 'member') {
         await repairOrgPointer(user, userId, organizationId, db);
+        await seedUserDetails(user, organizationId, db);
         return { added: false, reason: 'already-member' };
       }
       logger?.info(
@@ -97,6 +103,7 @@ export async function applyPartnerRuleMembership(
       return { added: false, reason: 'at-capacity', seats: outcome.seats };
     }
     await db.users.update({ id: userId, organizationId } as Partial<IUserDocument>);
+    await seedUserDetails(user, organizationId, db);
     logger?.info(
       `Partner-rule auto-added user ${userId} to Stripe-billed org ${organizationId} under the existing ceiling`
     );
@@ -110,15 +117,25 @@ export async function applyPartnerRuleMembership(
   if (!pre) {
     const outcome = await inspectAfterNoMatch(organizationId, userId, db);
     if (outcome.state === 'gone') return { added: false, reason: 'org-missing' };
-    // 'member' (a concurrent signup won the race) or the vanishingly-rare 'absent' anomaly (the org
-    // exists but the guarded add matched nothing without a capacity guard) - both are safe no-ops.
     if (outcome.state === 'member') {
+      // A concurrent signup won the race and already added this user - a safe no-op; repair the
+      // pointer and seed the credit side-table (idempotent) so a race can't drop the member's row.
       await repairOrgPointer(user, userId, organizationId, db);
+      await seedUserDetails(user, organizationId, db);
+      return { added: false, reason: 'already-member' };
     }
-    return { added: false, reason: 'already-member' };
+    // 'absent': the raise is now clamped at ORGANIZATION_SUBSCRIPTION_MAX_SEATS (#1424), so a full org
+    // matches no doc. Fall through to 'at-capacity' - the same alert-an-admin outcome the Stripe path
+    // uses - rather than growing a seat floor no later `setSeats` value could satisfy.
+    logger?.info(
+      `Partner-rule did not add user ${userId} to non-Stripe org ${organizationId}: at capacity ` +
+        `(seats ${outcome.seats}); ceiling clamped at the maximum, alerting an admin to add seats`
+    );
+    return { added: false, reason: 'at-capacity', seats: outcome.seats };
   }
 
   await db.users.update({ id: userId, organizationId } as Partial<IUserDocument>);
+  await seedUserDetails(user, organizationId, db);
 
   const previousSeats = pre.seats;
   // Mirror the model's `$max($seats, $size(users) + 1)`: the pre-image `users` is the pre-add array,
@@ -140,6 +157,23 @@ export async function applyPartnerRuleMembership(
   };
 }
 
+/**
+ * Seed the member's zero-usage `userDetails` row (idempotent). Mirrors `addMember` / `accept`: the
+ * atomic seat-add pipelines here touch only `users[]`, so `userDetails[]` must be seeded separately
+ * to keep the two in sync at the grant point (see `ensureUserDetails`).
+ */
+async function seedUserDetails(
+  user: IUserDocument,
+  organizationId: string,
+  db: ApplyPartnerRuleMembershipAdapters['db']
+): Promise<void> {
+  await db.organizations.ensureUserDetails(organizationId, {
+    id: user.id,
+    email: user.email ?? user.username,
+    name: user.name,
+  });
+}
+
 /** Set the user's org pointer if unset - a partial update so no other user field is disturbed. */
 async function repairOrgPointer(
   user: { organizationId?: string | null },
@@ -155,9 +189,10 @@ async function repairOrgPointer(
 /**
  * Re-read the org after an atomic add matched no document, to tell apart the causes the guarded
  * update collapses into a single null: the org vanished mid-flight ('gone'), a concurrent signup
- * already added this user ('member'), or the user is genuinely absent - at capacity on the Stripe
- * path ('absent'). Distinguishing them keeps us from mislabelling a reject or writing an org
- * pointer to a deleted org.
+ * already added this user ('member'), or the user is genuinely absent because the org is at capacity
+ * ('absent') - the Stripe ceiling on `addMemberIfUnderCeiling`, or MAX_SEATS on the clamped
+ * `addMemberRaisingSeats` (#1424). Distinguishing them keeps us from mislabelling a reject or writing
+ * an org pointer to a deleted org.
  */
 async function inspectAfterNoMatch(
   organizationId: string,

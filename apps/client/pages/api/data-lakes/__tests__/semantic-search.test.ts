@@ -160,11 +160,33 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
     expect(searchParams().embeddingModel).toBe('voyage-3-large');
   });
 
-  it('still honours an explicit embedding_model without reading the admin setting', async () => {
+  it('still honours an explicit embedding_model without reading the defaultEmbeddingModel setting', async () => {
     await handler(makeReq({ query: 'onboarding', embedding_model: 'text-embedding-3-small' }), makeRes());
 
     expect(searchParams().embeddingModel).toBe('text-embedding-3-small');
-    expect(mockGetSettingsValue).not.toHaveBeenCalled();
+    // Not a blanket "never calls getSettingsValue": the vector-search kill-switch is read
+    // regardless of how embeddingModel was resolved, since it gates a separate concern.
+    expect(mockGetSettingsValue).not.toHaveBeenCalledWith('defaultEmbeddingModel');
+  });
+
+  it('threads the EnableDataLakeVectorSearch setting through as vectorSearchEnabled', async () => {
+    mockGetSettingsValue.mockImplementation(async (key: string) =>
+      key === 'EnableDataLakeVectorSearch' ? true : 'text-embedding-ada-002'
+    );
+
+    await handler(makeReq({ query: 'onboarding' }), makeRes());
+
+    expect(searchParams().vectorSearchEnabled).toBe(true);
+  });
+
+  it('defaults vectorSearchEnabled to false when the setting is unset', async () => {
+    mockGetSettingsValue.mockImplementation(async (key: string) =>
+      key === 'EnableDataLakeVectorSearch' ? undefined : 'text-embedding-ada-002'
+    );
+
+    await handler(makeReq({ query: 'onboarding' }), makeRes());
+
+    expect(searchParams().vectorSearchEnabled).toBe(false);
   });
 
   it('falls back to ada-002 when the admin setting is unset or no longer supported', async () => {

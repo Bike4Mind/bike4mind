@@ -28,9 +28,13 @@ export const CHUNK_SCAN_BATCH = 50;
  *
  * Two more churn guards, matching how the chunk handler records a terminal outcome
  * (fabFileChunk.ts): a file that chunked to zero gets a 'No extractable text' note, and a file
- * whose chunking threw gets `error` set. Both are terminal for this scan - re-enqueueing them
- * would re-fail identically every cycle; recovery for those is the explicit reprocess path,
- * which clears the markers.
+ * whose chunking exhausted its SQS retries gets `error` set. Both are terminal for this scan -
+ * re-enqueueing them would re-fail identically every cycle; recovery for those is the explicit
+ * reprocess path, which clears the markers. `error` is deliberately NOT set on a non-final
+ * attempt (fabFileChunk.ts's deferFailureIfRetryable gate, #1412) so a file mid-retry can still
+ * match this filter and get swept again - bounded, self-resolving churn (each pass caps at
+ * CHUNK_SCAN_BATCH, and the final attempt sets `error`, closing the window), not corruption,
+ * since claimFileStatus/markFailedIfNotAlready gate all the accounting either path takes.
  *
  * Audio, images and video are excluded up front: SmartChunker returns 0 chunks for all three
  * BY DESIGN (audio is never vectorizable; images are passed to models as URLs; video has no

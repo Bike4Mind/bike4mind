@@ -30,7 +30,7 @@ import dayjs from 'dayjs';
 import { useTheme } from '@mui/joy/styles';
 import { useTranslation } from 'react-i18next';
 import { getModels } from '@client/app/utils/llm';
-import { ModelInfo, usdToCredits } from '@bike4mind/common';
+import { ModelInfo, resolveModelName, usdToCredits } from '@bike4mind/common';
 import SectionContainer from './SectionContainer';
 import { TYPE } from './settingsStyles';
 import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
@@ -185,19 +185,10 @@ const CreditAnalyticsTabContent: React.FC = () => {
       }
     }
 
-    // Track model usage if available in metadata
     const modelUsageMap: Record<string, number> = {};
 
     allDeductTransactions.forEach(transaction => {
-      let modelName = 'Unknown';
-
-      // Check metadata first
-      if (transaction.metadata?.modelName) {
-        modelName = transaction.metadata.modelName;
-      } else if ('model' in transaction) {
-        // Type-safe check for model property on usage transactions
-        modelName = (transaction as { model?: string }).model || 'Unknown';
-      }
+      const modelName = resolveModelName(transaction);
 
       if (!modelUsageMap[modelName]) {
         modelUsageMap[modelName] = 0;
