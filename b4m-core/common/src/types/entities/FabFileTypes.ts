@@ -223,6 +223,18 @@ export interface IFabFile {
   /** Original relative path from folder upload (preserves directory structure) */
   relativePath?: string;
 
+  // Google Drive ingest provenance (#1589). Populated when sourceType === GOOGLE_DRIVE.
+  /** Drive file id this FabFile was ingested from - the stable dedup key within a lake. */
+  driveFileId?: string;
+  /** Drive modifiedTime captured at ingest, for change detection on re-sync. */
+  driveModifiedTime?: Date;
+  /** Drive md5Checksum captured at ingest (native binaries only), for change detection. */
+  driveMd5Checksum?: string;
+  /** The data lake this file was ingested into (provenance). */
+  sourceLakeId?: string;
+  /** The OrgGoogleDriveConnection that ingested this file (provenance). */
+  driveConnectionId?: string;
+
   sessionId?: string; // For session summaries
 
   /** Soft-archive marker set when the file's data lake is archived (reversible). */
@@ -670,6 +682,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * prefix match here would risk the wrong file for no gain.
    */
   findByContentHashesInDataLake(hashes: string[], datalakeTag: string): Promise<IFabFileDocument[]>;
+  /**
+   * Files in a lake ingested from any of the given Google Drive file ids (META-TAG ONLY,
+   * mirroring findByContentHashesInDataLake). driveFileId is the Drive re-sync dedup key:
+   * it is stable across edits where contentHash is not, so it decides create-vs-skip-vs-update.
+   */
+  findByDriveFileIdsInDataLake(driveFileIds: string[], datalakeTag: string): Promise<IFabFileDocument[]>;
   markFailedIfNotAlready(fabFileId: string, errorMessage: string): Promise<boolean>;
 
   // ── Data lake lifecycle. Scoped by DataLakeMembershipScope - the lake's meta-tag OR a
