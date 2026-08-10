@@ -257,7 +257,11 @@ export async function ingestSlackFilesIntoLake(
       rejected.push(validation.message);
       continue;
     }
-    if (maxFileSizeBytes && validation.file.size > maxFileSizeBytes) {
+    // `>=`, matching create.ts:120 exactly. With `>`, a file of precisely maxFileSizeBytes passed
+    // here and was then refused after a full download - the one case the pre-check exists for.
+    // Compared against undefined rather than truthiness so an admin-set 0 (refuse everything,
+    // which is what create.ts does with it) is not read as "no limit".
+    if (maxFileSizeBytes !== undefined && validation.file.size >= maxFileSizeBytes) {
       const limitMB = (maxFileSizeBytes / (1024 * 1024)).toFixed(0);
       const sizeMB = (validation.file.size / (1024 * 1024)).toFixed(1);
       rejected.push(`File "${validation.file.name}" (${sizeMB}MB) exceeds ${limitMB}MB limit.`);
