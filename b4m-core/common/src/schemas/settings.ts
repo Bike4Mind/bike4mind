@@ -434,6 +434,7 @@ export const OrchestrationDefaultsSchema = z.object({
     'image_generation',
     'edit_image',
     'music_generation',
+    'audio_generation',
     'excel_generation',
     // Inline visualization artifacts: these emit an <artifact> block in the
     // tool result and write nothing - no storage, no user-data mutation - so

@@ -160,6 +160,16 @@ export async function runQuestNode(args: {
       totalCreditsUsed: 0,
       lambdaInvocationCount: 1,
       childExecutionIds: [],
+      // A node query is machine-generated text, not a user turn, and a node run
+      // is a genuinely top-level execution with no upward lineage - so neither
+      // the tri-state opt-out (there is no per-request memory toggle on this
+      // dispatch path) nor the lineage guard (`parentExecutionId` /
+      // `spawnedByExecutionId`) would otherwise fire. Stamp an explicit `false`
+      // so `resolveExecutionMementoGates` short-circuits both the read
+      // (`getFirstIterationMementosPreamble`) and write (`publishMementoCompletion`)
+      // pipelines: a V5 node never reads a user's beliefs into its prompt nor
+      // writes machine-authored ones back.
+      enableMementos: false,
     });
 
     executionId = execution.id;

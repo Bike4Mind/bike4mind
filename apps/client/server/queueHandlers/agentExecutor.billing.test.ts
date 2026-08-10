@@ -11,11 +11,13 @@ import {
   billIteration,
   addToolUsage,
   takeToolUsage,
+  foldGeneratedMediaUsd,
   type BillingCounters,
   type IterationBillingEffects,
   type PendingToolUsage,
 } from './agentExecutor.billing';
 import type { ModelInfo } from '@bike4mind/common';
+import { estimateGeneratedMediaUsd } from '@bike4mind/services';
 
 // input rate = 1, everything else 0, so `getTextModelCost` reduces to
 // `1 * inputTokens` and cost math in the assertions stays trivial.
@@ -390,5 +392,124 @@ describe('tool-usage accumulator (addToolUsage / takeToolUsage)', () => {
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
     });
+  });
+});
+
+// Drives the SAME `estimateGeneratedMediaUsd` + phase routing the real agentExecutor
+// onToolStart/onToolFinish closures call, on payloads shaped like the tools actually emit.
+// Without this, deleting the media-cost fold from agentExecutor.ts (reverting to empty
+// stubs), a typo'd tool name, or an inverted `usd > 0` guard leaves the suite green while
+// agent-mode generation silently goes unbilled.
+describe('foldGeneratedMediaUsd', () => {
+  const zeroPending = (): PendingToolUsage => ({
+    costUsd: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  });
+
+  it('folds audio_generation speech cost into pending on finish (matches the estimator)', () => {
+    const pending = zeroPending();
+    const data = { kind: 'speech', provider: 'openai', model: 'tts-1', characters: 4096, paths: ['a.mp3'] };
+    const expected = estimateGeneratedMediaUsd('audio_generation', data, []);
+
+    foldGeneratedMediaUsd({
+      phase: 'finish',
+      toolName: 'audio_generation',
+      data,
+      models: [],
+      pending,
+      estimateUsd: estimateGeneratedMediaUsd,
+    });
+
+    expect(expected).toBeGreaterThan(0);
+    expect(pending.costUsd).toBe(expected);
+    // Media cost folds in as USD only; token counts stay untouched.
+    expect(pending.inputTokens).toBe(0);
+    expect(pending.outputTokens).toBe(0);
+  });
+
+  it('does NOT fold audio_generation on start - audio settles at finish', () => {
+    const pending = zeroPending();
+    const data = { kind: 'sound_effect', provider: 'elevenlabs', durationSeconds: 3, paths: ['a.mp3'] };
+
+    foldGeneratedMediaUsd({
+      phase: 'start',
+      toolName: 'audio_generation',
+      data,
+      models: [],
+      pending,
+      estimateUsd: estimateGeneratedMediaUsd,
+    });
+
+    expect(pending.costUsd).toBe(0);
+  });
+
+  it('does NOT fold image_generation on finish - image reserves at start', () => {
+    const pending = zeroPending();
+    const data = { model: 'unpriced-so-zero', n: 1, prompt: 'x' };
+
+    foldGeneratedMediaUsd({
+      phase: 'finish',
+      toolName: 'image_generation',
+      data,
+      models: [],
+      pending,
+      estimateUsd: estimateGeneratedMediaUsd,
+    });
+
+    expect(pending.costUsd).toBe(0);
+  });
+
+  it('is a no-op for a non-media tool', () => {
+    const pending = zeroPending();
+    const estimateUsd = vi.fn();
+
+    foldGeneratedMediaUsd({ phase: 'finish', toolName: 'web_search', data: {}, models: [], pending, estimateUsd });
+
+    // Routing short-circuits before the estimator is even consulted.
+    expect(estimateUsd).not.toHaveBeenCalled();
+    expect(pending.costUsd).toBe(0);
+  });
+
+  it('skips the fold when the estimate is <= 0', () => {
+    const pending = zeroPending();
+    // Speech payload missing `characters` prices at 0.
+    const data = { kind: 'speech', provider: 'openai', model: 'tts-1', paths: ['a.mp3'] };
+
+    foldGeneratedMediaUsd({
+      phase: 'finish',
+      toolName: 'audio_generation',
+      data,
+      models: [],
+      pending,
+      estimateUsd: estimateGeneratedMediaUsd,
+    });
+
+    expect(pending.costUsd).toBe(0);
+  });
+
+  it('routes an estimator error to onError and bills the iteration without the media cost', () => {
+    const pending = zeroPending();
+    const onError = vi.fn();
+    const boom = new Error('estimator blew up');
+    const estimateUsd = vi.fn(() => {
+      throw boom;
+    });
+
+    expect(() =>
+      foldGeneratedMediaUsd({
+        phase: 'finish',
+        toolName: 'audio_generation',
+        data: {},
+        models: [],
+        pending,
+        estimateUsd,
+        onError,
+      })
+    ).not.toThrow();
+    expect(onError).toHaveBeenCalledWith(boom);
+    expect(pending.costUsd).toBe(0);
   });
 });

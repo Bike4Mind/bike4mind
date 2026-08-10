@@ -108,6 +108,23 @@ export interface IDataLake {
    * behavior) rather than restoring nothing.
    */
   filesDeletedAt?: Date | null;
+  /**
+   * Lake-memory producer (#1440) bookkeeping - server-managed, never client input.
+   *
+   * A concurrency LEASE, not a status: a run stamps it to claim the lake and clears it when done, so a
+   * second near-simultaneous batch finalize that finds a fresh stamp skips its (LLM-billed, redundant)
+   * extraction. A lease rather than a boolean so a crashed run frees itself once the stamp ages past the
+   * lease window, without needing a reconciler. Absent/null = no run holds the lease.
+   */
+  lakeMemoryExtractionAt?: Date | null;
+  /**
+   * Bounded-continuation watermark for the lake-memory producer (#1440): the id of the last document an
+   * interrupted run ATTEMPTED. The next run resumes from the document after it (keyset), so a lake too
+   * large for one Lambda invocation is covered across chained runs instead of silently truncated.
+   * Cleared once a scan reaches the end, so the following finalize does a fresh whole-lake re-scan (which
+   * re-asserts existing facts and keeps them hot). Absent/null = start from the beginning.
+   */
+  lakeMemoryCursor?: string | null;
 }
 
 export interface IDataLakeDocument extends IDataLake, IMongoDocument {}
@@ -183,6 +200,25 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * caller sweeps unmarked and must say so, since that lake then restores unbounded.
    */
   claimFilesDeletedAt(id: string, at: Date): Promise<Date | null>;
+  /**
+   * Per-lake concurrency claim for the memory producer (#1440): stamp `lakeMemoryExtractionAt = at` only
+   * if no run currently holds the lease - the field is unset, OR its stamp is older than `staleBefore`
+   * (a crashed run's expired lease). Returns whether THIS caller won the claim. Guarded in the query, so
+   * a concurrent claimer that already stamped a FRESH value makes this a no-op; exactly one run wins.
+   */
+  claimLakeMemoryExtraction(id: string, at: Date, staleBefore: Date): Promise<boolean>;
+  /**
+   * Release the extraction lease, but only if THIS run still holds it (the stamp still equals
+   * `claimedAt`). The guard matters when a stale takeover occurred mid-run: a late finish must not clear
+   * the lease a newer run has since claimed.
+   */
+  releaseLakeMemoryExtraction(id: string, claimedAt: Date): Promise<void>;
+  /**
+   * Persist (with a doc id) or clear (with null) the bounded-continuation cursor - the id of the last
+   * document the current scan attempted. Null marks the scan complete, so the next finalize re-scans the
+   * whole lake.
+   */
+  setLakeMemoryCursor(id: string, cursor: string | null): Promise<void>;
 }
 
 // ── Data Lake Batch ─────────────────────────────────────────────────────────
@@ -382,9 +418,30 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
   /**
    * Global cross-user scan for the taxonomy stuck-job reconciler: batches whose `taxonomyStatus`
    * is still non-terminal and whose `taxonomyStartedAt` is older than `cutoff`, oldest-first.
-   * Mirrors `findStuck`'s shape, served by the `{ taxonomyStatus: 1, updatedAt: 1 }` index.
+   * Mirrors `findStuck`'s shape, served by the `{ taxonomyStatus: 1, taxonomyStartedAt: 1 }`
+   * index. Filters on `taxonomyStartedAt`, not `updatedAt` - taxonomy runs decoupled from
+   * ingest, so an unrelated write to the same batch (an ingest counter increment, say) keeps
+   * bumping `updatedAt` while `taxonomyStartedAt` - when THIS taxonomy attempt actually began -
+   * stays fixed; filtering on the wrong field could let a genuinely stuck batch dodge every scan.
    */
   findStuckTaxonomy(cutoff: Date, limit?: number): Promise<IDataLakeBatchDocument[]>;
+  /**
+   * Force a stuck taxonomy job to `'failed'`, guarded on BOTH `taxonomyStatus` (must still be
+   * one of `from`) AND staleness (`taxonomyStartedAt` must still be before `startedBefore`) -
+   * the second guard closes a race `setTaxonomyStatusIfActive` alone can't: the reconciler
+   * decides "stuck" from a snapshot read at fetch time, and without re-checking staleness at
+   * write time, a batch that legitimately re-claimed (the ordinary worker's own
+   * `queued -> analyzing` claim, which refreshes `taxonomyStartedAt`) between the reconciler's
+   * read and its write would still match a status-only guard, discarding real in-flight work.
+   * Used only by `reconcileStuckTaxonomy` - every other taxonomy-status writer wants a plain
+   * status guard and should keep using `setTaxonomyStatusIfActive`.
+   */
+  forceFailStuckTaxonomy(
+    batchId: string,
+    from: TaxonomyStatus[],
+    startedBefore: Date,
+    taxonomyError: string
+  ): Promise<IDataLakeBatchDocument | null>;
   /**
    * Batches whose `taxonomyStatus` is in `TAXONOMY_ATTENTION_STATUSES` - running or awaiting
    * review/dismissal. Deliberately independent of `status` (ingest phase): the common case is

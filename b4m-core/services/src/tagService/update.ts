@@ -15,9 +15,23 @@ const tagUpdateSchema = z.object({
 
 export type TagUpdateParams = z.infer<typeof tagUpdateSchema>;
 
+/** Exactly what this service hands to `tags.update` - see the note on TagUpdateAdapters. */
+type TagUpdateWrite = TagUpdateParams & { updatedAt: Date };
+
 interface TagUpdateAdapters {
   db: {
-    tags: Pick<ITagRepository, 'update' | 'findByIdAndUserId' | 'findAllByUserId' | 'delete'>;
+    // `update` is spelled out rather than picked off ITagRepository, deliberately. IBaseRepository
+    // declares it as a property-syntax function type, so strictFunctionTypes checks its parameter
+    // contravariantly and a `Partial<IBaseTag>` one refuses the IFileTag-typed repository the
+    // file-tag route passes (`TagType` vs `TagType.FILE`) - which is what forced a double cast at
+    // that call site. Naming the narrow shape this service actually writes takes both repositories
+    // cast-free. tagService/remove needs no equivalent: nothing in its Pick has a tag in parameter
+    // position.
+    tags: Pick<ITagRepository, 'findByIdAndUserId' | 'findAllByUserId' | 'delete'> & {
+      update: (data: TagUpdateWrite) => Promise<unknown>;
+    };
+    // computeDataLakeStats stays in this Pick even though this file never calls it directly:
+    // recomputeLakeStats below forwards this same `db` object and requires it on `fabFiles`.
     fabFiles: Pick<IFabFileRepository, 'updateTagsByUserId' | 'dedupeTagByUserId' | 'computeDataLakeStats'>;
     dataLakes: Pick<IDataLakeRepository, 'find' | 'setStats' | 'activateIfDraft'>;
   };

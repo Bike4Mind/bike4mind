@@ -38,6 +38,7 @@ import {
   b4mLLMTools,
   ResearchModeParamsSchema,
   GenerateImageToolCallSchema,
+  AudioGenerationToolCallSchema,
   ILatticeModel,
   IDataLakeRepository,
   CitableSource,
@@ -334,6 +335,7 @@ export const QuestStartBodySchema = z.object({
   embeddingModel: z.string().optional(),
   queryComplexity: z.string(),
   imageConfig: GenerateImageToolCallSchema.optional(),
+  audioConfig: AudioGenerationToolCallSchema.optional(),
   deepResearchConfig: z
     .object({
       maxDepth: z.number().optional(),
