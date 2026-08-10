@@ -98,7 +98,11 @@ const ReplyStatus = ({ renderSpinnerStatusNull = false, status, createdAt, userM
         {status && (
           <Typography
             className="reply-status-text"
-            sx={{ color: 'text.primary50', lineHeight: '100%', fontSize: '16px' }}
+            data-testid="reply-status-text"
+            // Unitless line-height so the nested 14px elapsed badge gets a proportional
+            // line box too. A percentage here resolves against this element's own
+            // font-size, which meant zero leading and wrapped lines colliding.
+            sx={{ color: 'text.primary50', lineHeight: 1.5, fontSize: '16px', textAlign: 'center' }}
             level="body-lg"
           >
             {status}
