@@ -27,7 +27,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
-import { consumeTrustedDevice } from '@server/auth/trustedDevice';
+import { consumeTrustedDevice, trustedDevicesAllowed } from '@server/auth/trustedDevice';
 import { setRefreshCookie } from '@server/auth/refreshCookie';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { Config } from '@server/utils/config';
@@ -166,9 +166,7 @@ const handler = baseApi({ auth: false })
       // stand in for MFA *enrollment* either: the enforceMFA/!userHasMFA branch below is
       // deliberately outside this check.
       const trustedDevice =
-        userHasMFA && getSettingsValue('allowTrustedDevices', settings) !== false
-          ? await consumeTrustedDevice(req, existingUser.id)
-          : null;
+        userHasMFA && (await trustedDevicesAllowed()) ? await consumeTrustedDevice(req, existingUser.id) : null;
 
       if ((userHasMFA && !trustedDevice) || (enforceMFA && !userHasMFA)) {
         // Only issue the short-lived mfaPending access token (no refresh token).

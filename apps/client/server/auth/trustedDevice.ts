@@ -1,6 +1,12 @@
 import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 import type { Request, Response } from 'express';
-import { TRUSTED_DEVICE_TTL_MS, trustedDeviceRepository, type ITrustedDeviceDocument } from '@bike4mind/database';
+import {
+  TRUSTED_DEVICE_TTL_MS,
+  adminSettingsRepository,
+  trustedDeviceRepository,
+  type ITrustedDeviceDocument,
+} from '@bike4mind/database';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { getClientIp } from '@server/utils/ip';
 
 // "Remember this device": lets a returning user skip the SECOND factor (TOTP) for
@@ -13,6 +19,22 @@ import { getClientIp } from '@server/utils/ip';
 // /api/otc/verify, revocation in /api/auth/trusted-devices.
 
 export const TRUSTED_DEVICE_COOKIE = 'b4m_td';
+
+/**
+ * The `allowTrustedDevices` admin kill switch, read UNCACHED on purpose. The shared
+ * settings cache is per-process with a 5-minute TTL and its invalidation only reaches the
+ * process that saved the setting, so a cached read would leave every other warm instance
+ * honoring trusts for minutes after an admin flips the switch mid-incident. That would
+ * contradict the setting's own "ignores existing ones immediately" copy. One indexed
+ * single-document read, and only on the login path - not a hot loop.
+ */
+export async function trustedDevicesAllowed(): Promise<boolean> {
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { skipCache: true, names: ['allowTrustedDevices'] }
+  );
+  return getSettingsValue('allowTrustedDevices', settings) !== false;
+}
 
 /**
  * Only what the trust check actually reads. Structural rather than express's `Request`
@@ -106,7 +128,9 @@ export function describeDevice(userAgent: string | undefined): string {
  *
  * If the request already carries a live trust for THIS user the existing record is
  * re-used and its window slid forward, so re-checking the box on every login does not
- * accumulate a row per sign-in. Returns the device record.
+ * accumulate a row per sign-in. Sliding here is safe because this whole function sits
+ * behind a fresh TOTP pass: the 30 days always run from a proven second factor, never
+ * from mere use of the trust (see `trustedDeviceRepository.touch`). Returns the record.
  */
 export async function grantTrustedDevice(
   req: TrustedDeviceRequest,
@@ -149,9 +173,9 @@ function secretMatches(secret: string, storedHash: string): boolean {
 
 /**
  * The live trust for `userId` carried by this request, or null. Records the use but
- * does NOT extend the window - the 30 days run from the grant, so a device always
- * re-proves the second factor eventually. Never throws: any failure means "not
- * trusted", so a database blip degrades to the normal MFA challenge, not to a bypass.
+ * does NOT extend the window - the 30 days run from the last genuine second-factor
+ * pass, so a device always re-proves TOTP eventually. Never throws: any failure means
+ * "not trusted", so a database blip degrades to the normal MFA challenge, not a bypass.
  */
 export async function consumeTrustedDevice(
   req: TrustedDeviceRequest,

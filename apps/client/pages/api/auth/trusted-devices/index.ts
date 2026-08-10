@@ -36,7 +36,9 @@ const handler = baseApi()
       const userId = req.user.id;
       const revoked = await trustedDeviceRepository.revokeAllForUser(userId);
       clearTrustedDeviceCookie(res);
-      await logAuthAudit(req, { userId, event: 'trusted_device_revoked', metadata: { revoked, scope: 'all' } });
+      if (revoked > 0) {
+        await logAuthAudit(req, { userId, event: 'trusted_device_revoked', metadata: { revoked, scope: 'all' } });
+      }
       return res.status(200).json({ revoked });
     })
   );

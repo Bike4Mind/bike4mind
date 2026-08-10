@@ -1,12 +1,11 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService } from '@bike4mind/services';
-import { adminSettingsRepository, userRepository } from '@bike4mind/database';
+import { userRepository } from '@bike4mind/database';
 import { issueBrowserSession } from '@server/auth/issueSession';
-import { grantTrustedDevice } from '@server/auth/trustedDevice';
+import { grantTrustedDevice, trustedDevicesAllowed } from '@server/auth/trustedDevice';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
-import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import * as z from 'zod';
 
 const tokenBodySchema = z.object({
@@ -70,8 +69,7 @@ const handler = baseApi() // Now requires authentication
         let deviceRemembered = false;
         if (rememberDevice) {
           try {
-            const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-            if (getSettingsValue('allowTrustedDevices', settings) !== false) {
+            if (await trustedDevicesAllowed()) {
               const device = await grantTrustedDevice(req, res, tokenUserId);
               deviceRemembered = !!device;
               if (device) {

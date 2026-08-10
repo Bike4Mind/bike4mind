@@ -10,6 +10,7 @@ const mockTouch = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   TRUSTED_DEVICE_TTL_MS: 30 * 24 * 60 * 60 * 1000,
+  adminSettingsRepository: { findAll: vi.fn(), findBySettingNames: vi.fn() },
   trustedDeviceRepository: {
     findValidForUser: (...a: any[]) => mockFindValidForUser(...a),
     create: (...a: any[]) => mockCreate(...a),
@@ -20,6 +21,13 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@server/utils/ip', () => ({ getClientIp: () => '203.0.113.9' }));
 
+const mockGetSettingsMap = vi.fn(() => Promise.resolve({} as Record<string, string>));
+let allowTrustedDevicesValue: unknown;
+vi.mock('@bike4mind/utils', () => ({
+  getSettingsMap: (...a: any[]) => mockGetSettingsMap(...(a as [])),
+  getSettingsValue: () => allowTrustedDevicesValue,
+}));
+
 import {
   TRUSTED_DEVICE_COOKIE,
   clearTrustedDeviceCookie,
@@ -27,6 +35,7 @@ import {
   describeDevice,
   grantTrustedDevice,
   identifyTrustedDevice,
+  trustedDevicesAllowed,
 } from './trustedDevice';
 
 const sha256 = (v: string) => createHash('sha256').update(v).digest('hex');
@@ -227,5 +236,28 @@ describe('describeDevice', () => {
 
   it('falls back when the header is absent', () => {
     expect(describeDevice(undefined)).toBe('Unknown device');
+  });
+});
+
+describe('trustedDevicesAllowed', () => {
+  beforeEach(() => {
+    allowTrustedDevicesValue = undefined;
+  });
+
+  it('reads the kill switch uncached so a flip takes effect on every warm instance', async () => {
+    await trustedDevicesAllowed();
+
+    expect(mockGetSettingsMap).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ skipCache: true, names: ['allowTrustedDevices'] })
+    );
+  });
+
+  it('denies once the switch is off', async () => {
+    allowTrustedDevicesValue = false;
+    expect(await trustedDevicesAllowed()).toBe(false);
+
+    allowTrustedDevicesValue = true;
+    expect(await trustedDevicesAllowed()).toBe(true);
   });
 });

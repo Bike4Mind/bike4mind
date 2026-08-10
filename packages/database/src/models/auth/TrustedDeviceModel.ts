@@ -91,15 +91,20 @@ export class TrustedDeviceRepository {
   }
 
   /**
-   * Record a successful use. Deliberately does NOT move `expiresAt`: the window is an
-   * absolute 30 days from the grant, so a remembered device always re-proves the second
-   * factor eventually instead of renewing itself indefinitely.
+   * Record a successful use. Deliberately does NOT move `expiresAt`: only a fresh
+   * second-factor pass may move the window (see `extend`), so a device that merely keeps
+   * skipping the challenge cannot renew itself indefinitely and always re-proves TOTP
+   * once the 30 days from its last genuine grant run out.
    */
   async touch(id: string, ip?: string): Promise<void> {
     await TrustedDeviceModel.updateOne({ _id: id }, { $set: { lastUsedAt: new Date(), lastUsedIp: ip } });
   }
 
-  /** Re-grant: slide the window forward when the user opts in again on a known device. */
+  /**
+   * Re-grant: slide the window forward when the user opts in again on a known device.
+   * Reachable only from /api/auth/mfa/verify, i.e. behind a fresh TOTP pass -- so the
+   * window is anchored to the last proven second factor, never to mere use.
+   */
   async extend(id: string, expiresAt: Date, ip?: string): Promise<void> {
     await TrustedDeviceModel.updateOne({ _id: id }, { $set: { lastUsedAt: new Date(), lastUsedIp: ip, expiresAt } });
   }

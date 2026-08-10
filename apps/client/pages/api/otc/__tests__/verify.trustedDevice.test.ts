@@ -27,6 +27,7 @@ vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: (...a: any[]) => mockL
 const mockConsumeTrustedDevice = vi.fn();
 vi.mock('@server/auth/trustedDevice', () => ({
   consumeTrustedDevice: (...a: any[]) => mockConsumeTrustedDevice(...a),
+  trustedDevicesAllowed: () => Promise.resolve(settingsValues.allowTrustedDevices !== false),
 }));
 
 // Settings are read through getSettingsValue; drive both flags from one map.
