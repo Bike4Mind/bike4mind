@@ -7,6 +7,7 @@ import {
   Casino as DiceIcon,
   Image as ImageIcon,
   MusicNote as MusicIcon,
+  GraphicEq as AudioIcon,
   Calculate as MathIcon,
   Schema as MermaidIcon,
   Search as SearchIcon,
@@ -81,6 +82,7 @@ export const MISSING_KEY_TOOLTIPS: Partial<Record<B4MLLMTools, string>> = {
   image_generation:
     'Requires an image generation API key (e.g. BFL or OpenAI) in Admin > API Keys, or a self-hosted local image server (IMAGE_GEN_BASE_URL).',
   music_generation: 'Requires an ElevenLabs API key, configured in Admin > API Keys.',
+  audio_generation: 'Requires an OpenAI or ElevenLabs API key, configured in Admin > API Keys.',
   search_knowledge_base:
     'Requires an embeddings API key (VoyageAI or OpenAI) in Admin > API Keys, or a self-hosted local Ollama embedder (OLLAMA_BASE_URL).',
 };
@@ -1148,6 +1150,28 @@ const ToolsSection = ({
                 onChange={() => handleToggleTool('music_generation')}
                 checked={displayTools.includes('music_generation')}
                 data-testid="tool-toggle-music-generation"
+              />
+            </ToolContainer>
+          </Grid>
+          {/* Audio Generation (TTS + sound effects) */}
+          <Grid xs={12} className="tool-item tool-item-audio-generation">
+            <ToolContainer sx={toolContainerSx} toolId="audio_generation">
+              <Box
+                className="tool-content"
+                sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+              >
+                <AudioIcon
+                  sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
+                />
+                <ToolLabel
+                  name={getToolDisplayName('audio_generation')}
+                  description={getToolDescription('audio_generation')}
+                />
+              </Box>
+              <SquareSlideToggle
+                onChange={() => handleToggleTool('audio_generation')}
+                checked={displayTools.includes('audio_generation')}
+                data-testid="tool-toggle-audio-generation"
               />
             </ToolContainer>
           </Grid>

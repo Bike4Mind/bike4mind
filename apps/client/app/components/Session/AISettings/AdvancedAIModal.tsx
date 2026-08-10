@@ -2039,7 +2039,10 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                       <TabIntro
                         title="Audio Generation"
                         description={
-                          <>Defaults for the in-app audio generator (Files Manager &rarr; Generate Audio).</>
+                          <>
+                            Defaults for both the direct audio generator (Files Manager &rarr; Generate Audio) and the
+                            model-callable audio_generation tool in chat.
+                          </>
                         }
                       />
                       <Box sx={{ mt: 2 }}>

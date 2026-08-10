@@ -44,7 +44,7 @@ import type { ChessArtifact, MermaidArtifact } from '@bike4mind/common';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import EditModeContent from './EditModeContent';
 import { ExpandCollapseButton } from './ExpandCollapseButton';
-import { IAgent } from '@bike4mind/common';
+import { IAgent, GENERATED_AUDIO_EXTENSION_RE, GENERATED_IMAGE_EXTENSION_RE } from '@bike4mind/common';
 import { ArtifactElisionBanner } from './ArtifactElisionBanner';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
@@ -456,16 +456,6 @@ function omitBetweenTags(input: string, openTag: string, closeTag: string): stri
   return result;
 }
 
-// Generated audio (music_generation) rides quest.images alongside images/xlsx; this
-// splits it out for the inline player and excludes it from the download-chip list.
-// Kept to the formats music_generation actually emits: .webm and .ogg are omitted
-// because both are predominantly video containers, so a future generated-video path
-// routed through quest.images must not be claimed here for the <audio> player.
-const GENERATED_AUDIO_EXT = /\.(mp3|wav|m4a|aac|flac)$/i;
-// Actual raster/vector images belong in the inline grid; anything else (e.g. an .xlsx
-// from excel_generation) would render as a broken <img>.
-const GENERATED_IMAGE_EXT = /\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i;
-
 /**
  * Partition the files a tool dropped into `quest.images` this turn into three disjoint
  * buckets by extension: the inline <img> grid, inline <audio> players, and download
@@ -482,8 +472,8 @@ export function classifyGeneratedFiles(files: string[]): {
   const audio: string[] = [];
   const others: string[] = [];
   for (const file of files) {
-    if (GENERATED_IMAGE_EXT.test(file)) images.push(file);
-    else if (GENERATED_AUDIO_EXT.test(file)) audio.push(file);
+    if (GENERATED_IMAGE_EXTENSION_RE.test(file)) images.push(file);
+    else if (GENERATED_AUDIO_EXTENSION_RE.test(file)) audio.push(file);
     else others.push(file);
   }
   return { images, audio, others };
