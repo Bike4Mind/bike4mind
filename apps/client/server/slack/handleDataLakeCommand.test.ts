@@ -66,6 +66,22 @@ describe('handleDataLakeCommand', () => {
       expect(reply).not.toContain('public-readonly');
     });
 
+    it('caps a long list with a "+N more" tail instead of overrunning Slack', async () => {
+      // For an admin, findAccessible returns every draft/active lake on the platform, all
+      // canManage. Past Slack's 40k-character text limit chat.postMessage errors and the
+      // orchestrator's catch turns the whole reply into "something went wrong".
+      listDataLakes.mockResolvedValue(
+        Array.from({ length: 63 }, (_, i) => ({ slug: `lake-${i}`, name: `Lake ${i}`, canManage: true }))
+      );
+
+      const reply = await handleDataLakeCommand(baseParams());
+
+      expect(reply).toContain('lake-0');
+      expect(reply).toContain('lake-49');
+      expect(reply).not.toContain('lake-50');
+      expect(reply).toContain('and 13 more');
+    });
+
     it('explains the empty case rather than printing an empty list', async () => {
       listDataLakes.mockResolvedValue([{ slug: 'x', name: 'X', canManage: false }]);
 
@@ -148,6 +164,27 @@ describe('handleDataLakeCommand', () => {
       // read as if the link had been taken too.
       expect(reply).toContain('Added 1 file to *Sales*');
       expect(reply).toMatch(/ignored the link/i);
+    });
+
+    it('does NOT mention the ignored link when the ingest was refused', async () => {
+      // Appending it to a refusal tells someone denied by the write gate that their link was
+      // "ignored", which implies the rest of the request went through.
+      parseDataLakeCommand.mockReturnValue({
+        subcommand: 'add',
+        lakeSlug: 'sales',
+        link: 'https://example.com/doc',
+        rawArgs: '',
+      });
+      ingestSlackFilesIntoLake.mockResolvedValue({
+        ok: false,
+        reason: 'not_authorized',
+        message: 'You can only add files to a data lake you created.',
+      });
+
+      const reply = await handleDataLakeCommand(baseParams({ files: [{ id: 'F1' }] }));
+
+      expect(reply).toBe('You can only add files to a data lake you created.');
+      expect(reply).not.toMatch(/ignored the link/i);
     });
   });
 });
