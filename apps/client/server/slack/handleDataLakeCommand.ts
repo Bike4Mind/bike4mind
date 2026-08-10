@@ -177,7 +177,9 @@ export interface RunDataLakeSlackCommandDeps {
   messageTs: string;
   threadTs?: string;
   adminSettings: {
-    getSettingsValue(key: 'EnableDataLakeSlackAdd' | 'enableAutoChunk'): Promise<boolean | undefined>;
+    getSettingsValue(
+      key: 'EnableDataLakes' | 'EnableDataLakeSlackAdd' | 'enableAutoChunk'
+    ): Promise<boolean | undefined>;
   };
   ingest: SlackLakeIngestDeps & { dataLakes: DataLakeCommandRepo };
   sendMessage: (args: { channel: string; text: string; threadTs?: string }) => Promise<unknown>;
@@ -185,15 +187,26 @@ export interface RunDataLakeSlackCommandDeps {
 }
 
 /**
- * Orchestrate a `@datalake` Slack command: enforce the `EnableDataLakeSlackAdd` gate
- * (silent no-op when off, keeping the surface dormant), otherwise dispatch and reply in-thread.
- * The caller intercepts this BEFORE the LLM path and always acks Slack with 200.
+ * Orchestrate a `@datalake` Slack command: enforce the admin gates (silent no-op when off, keeping
+ * the surface dormant), otherwise dispatch and reply in-thread. The caller intercepts this BEFORE
+ * the LLM path and always acks Slack with 200.
+ *
+ * BOTH `EnableDataLakes` and `EnableDataLakeSlackAdd` must be on. The child flag declares
+ * `dependsOn: 'EnableDataLakes'`, so the admin UI hides it while the parent is off - but that is a
+ * UI affordance, not an enforcement point, and a direct settings-store write could leave the child
+ * on under a disabled parent. Checking the parent here is what actually holds.
  */
 export async function runDataLakeSlackCommand(deps: RunDataLakeSlackCommandDeps): Promise<void> {
   // Never throw: the caller acks Slack with 200 on the next line, and an escaped exception would
   // unwind past it and trigger Slack's event retry - which, now that this path ingests files,
   // would re-download and re-create them. Log, best-effort notify, and swallow.
   try {
+    const parentEnabled = await deps.adminSettings.getSettingsValue('EnableDataLakes');
+    if (!parentEnabled) {
+      deps.logger.info('Ignoring @datalake command: EnableDataLakes is off');
+      return;
+    }
+
     const enabled = await deps.adminSettings.getSettingsValue('EnableDataLakeSlackAdd');
     if (!enabled) {
       deps.logger.info('Ignoring @datalake command: EnableDataLakeSlackAdd is off');
