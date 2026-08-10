@@ -1110,7 +1110,7 @@ describe('archiveDataLake - retrieval-index removal', () => {
         archiveByDataLakeTag: vi.fn().mockResolvedValue(2),
         computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 }),
         findIdsByDataLakeTag: vi.fn().mockResolvedValue(memberIds),
-        findArchivedByDataLakeTag: vi.fn().mockResolvedValue([]),
+        hasArchivedByDataLakeTag: vi.fn().mockResolvedValue(false),
       },
     },
     logger: { warn: vi.fn() },
@@ -1161,10 +1161,12 @@ describe('archiveDataLake - retrieval-index removal', () => {
     );
   });
 
-  it('skips the claim when unstamped archived members already exist (a legacy pre-field lake, or a claim-without-sweep crash), archiving unstamped instead of naming a batch narrower than what is actually archived', async () => {
+  // Covers a legacy pre-field lake and a claim-without-sweep crash alike (see archiveDataLake's
+  // hasUnstampedArchive guard): naming a fresh batch here would be narrower than what's archived.
+  it('skips the claim when unstamped archived members already exist, archiving unstamped instead', async () => {
     const adapters = makeAdapters();
     adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(lake({ filesArchivedAt: undefined }));
-    adapters.db.fabFiles.findArchivedByDataLakeTag = vi.fn().mockResolvedValue([{ id: 'already-archived' }]);
+    adapters.db.fabFiles.hasArchivedByDataLakeTag = vi.fn().mockResolvedValue(true);
 
     await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
 
@@ -1179,7 +1181,7 @@ describe('archiveDataLake - retrieval-index removal', () => {
 
     await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
 
-    expect(adapters.db.fabFiles.findArchivedByDataLakeTag).toHaveBeenCalledWith(lakeScope);
+    expect(adapters.db.fabFiles.hasArchivedByDataLakeTag).toHaveBeenCalledWith(lakeScope);
     expect(adapters.db.dataLakes.claimFilesArchivedAt).toHaveBeenCalledWith('lake1', expect.any(Date));
     expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, stamp);
   });
@@ -1189,13 +1191,13 @@ describe('archiveDataLake - retrieval-index removal', () => {
     const stamp = new Date('2026-05-01');
     adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(lake({ status: 'archiving', filesArchivedAt: stamp }));
     adapters.db.dataLakes.claimFilesArchivedAt = vi.fn().mockResolvedValue(stamp);
-    adapters.db.fabFiles.findArchivedByDataLakeTag = vi.fn().mockResolvedValue([{ id: 'already-archived' }]);
+    adapters.db.fabFiles.hasArchivedByDataLakeTag = vi.fn().mockResolvedValue(true);
 
     await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
 
     // filesArchivedAt is already set, so the unstamped-archive check short-circuits false without
     // even needing to ask - the lake already knows the mark those rows carry.
-    expect(adapters.db.fabFiles.findArchivedByDataLakeTag).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.hasArchivedByDataLakeTag).not.toHaveBeenCalled();
     expect(adapters.db.dataLakes.claimFilesArchivedAt).toHaveBeenCalledWith('lake1', expect.any(Date));
     expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, stamp);
   });

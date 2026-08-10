@@ -687,16 +687,16 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
 
   /**
    * Soft-archive (reversible) all live member files, stamped `at`. Returns affected count.
-   * Omitting `at` does NOT mean "unstamped" at the row level - it defaults to `new Date()`, so
-   * each row still gets a real timestamp. The caller's actual intent when it omits `at` is "don't
-   * record this batch's key on the lake" (see archiveDataLake's hasUnstampedArchive guard); the
-   * row-level Date exists, it is just orphaned rather than absent.
+   * Omitting `at` still writes a real per-row timestamp - it is orphaned (no lake names it), not
+   * absent. See archiveDataLake's `hasUnstampedArchive` guard for when that's intentional.
    */
   archiveByDataLakeTag(scope: DataLakeMembershipScope, at?: Date): Promise<number>;
   /** Reverse archive for all archived member files. Unbounded - matches on archivedAt alone. */
   unarchiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number>;
   /** Archived member files - used by the unarchive dedup pass. */
   findArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]>;
+  /** Existence-only form of findArchivedByDataLakeTag, for a caller that just needs "any?". */
+  hasArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<boolean>;
   /** Soft-deleted member files stamped `stampedAt` - used by the deleted->active restore dedup pass. */
   findDeletedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]>;
   /**

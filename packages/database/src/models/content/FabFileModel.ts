@@ -950,6 +950,19 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.map(d => d.toJSON());
   }
 
+  // Same predicate as findArchivedByDataLakeTag, but an existence probe rather than a full read -
+  // for a caller (archiveDataLake's hasUnstampedArchive guard) that only needs to know "any?", not
+  // the documents themselves, and would otherwise materialize every archived row on every archive.
+  async hasArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<boolean> {
+    return (
+      (await this.fabFileModel.exists({
+        ...buildDataLakeMembershipFilter(scope),
+        deletedAt: null,
+        archivedAt: { $ne: null },
+      })) != null
+    );
+  }
+
   async findDeletedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]> {
     // `includeDeleted` is load-bearing for BOTH forms, not just tidiness: the soft-delete plugin's
     // find hook does `this.where({ deletedAt: null })`, which REPLACES the condition on that key, so

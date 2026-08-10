@@ -19,7 +19,7 @@ interface ArchiveDataLakeAdapters {
     batches: Pick<IDataLakeBatchRepository, 'findActiveByDataLakeId' | 'markTerminalIfActive'>;
     fabFiles: Pick<
       IFabFileRepository,
-      'archiveByDataLakeTag' | 'computeDataLakeStats' | 'findIdsByDataLakeTag' | 'findArchivedByDataLakeTag'
+      'archiveByDataLakeTag' | 'computeDataLakeStats' | 'findIdsByDataLakeTag' | 'hasArchivedByDataLakeTag'
     >;
   };
   retrievalIndex?: RetrievalIndexPort;
@@ -71,17 +71,11 @@ export const archiveDataLake = async (
   // mark. Archiving unstamped instead leaves those rows exactly as unrecoverable as they already
   // were, which is the safe direction to fail in.
   //
-  // Deliberately conservative, and wider than just the legacy case: `findArchivedByDataLakeTag`
-  // matches the membership SCOPE, so a row a prefix-sharing sibling archived under its OWN stamp
-  // also counts here even though it is not "unstamped" from the sibling's point of view - we
-  // simply have no way to tell "pre-field legacy" apart from "someone else's batch" from this
-  // query alone. Either way we skip claiming, which also unstamps rows the sweep is ABOUT to
-  // archive fresh (a lake that gains new files and gets re-archived), even though those specific
-  // rows would be safe to bound. Such a lake stays unbounded on every future archive until someone
-  // unarchives it once (which clears the unstamped population) - a known limitation, not a full
-  // fix for either case.
-  const hasUnstampedArchive =
-    !existing.filesArchivedAt && (await db.fabFiles.findArchivedByDataLakeTag(scope)).length > 0;
+  // Also wider than the legacy case: the scope-matched query can't tell "pre-field legacy" apart
+  // from "a prefix-sharing sibling's own stamp", so either one skips the claim here - and with it,
+  // any freshly-archived rows this same sweep is about to write. Such a lake stays unbounded until
+  // someone unarchives it once; a known limitation, not a full fix for either case.
+  const hasUnstampedArchive = !existing.filesArchivedAt && (await db.fabFiles.hasArchivedByDataLakeTag(scope));
   let stamp: Date | undefined;
   if (!hasUnstampedArchive) {
     stamp = (await db.dataLakes.claimFilesArchivedAt(dataLakeId, new Date())) ?? undefined;

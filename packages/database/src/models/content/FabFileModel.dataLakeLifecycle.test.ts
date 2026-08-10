@@ -178,6 +178,16 @@ describe('FabFile data lake lifecycle membership', () => {
 
       expect(found.map(f => f.fileName).sort()).toEqual(['meta.txt', 'prefix-owned.txt']);
     });
+
+    it('hasArchivedByDataLakeTag reports existence without materializing the rows', async () => {
+      await seedLakeRows();
+
+      expect(await fabFileRepository.hasArchivedByDataLakeTag(scope)).toBe(false);
+
+      await fabFileRepository.archiveByDataLakeTag(scope);
+
+      expect(await fabFileRepository.hasArchivedByDataLakeTag(scope)).toBe(true);
+    });
   });
 
   describe('softDeleteByDataLakeTag / undeleteByDataLakeTag', () => {
