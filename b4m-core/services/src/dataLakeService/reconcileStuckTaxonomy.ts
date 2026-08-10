@@ -23,8 +23,9 @@ interface ReconcileStuckTaxonomyAdapters {
  * The write itself is ALSO guarded on staleness (`forceFailStuckTaxonomy`, not the plain
  * status-only `setTaxonomyStatusIfActive`): the `stuck` filter below only proves a batch
  * *looked* stale in the snapshot read above, not that it's still stale at write time - a batch
- * that legitimately re-claimed (a manual re-analyze) in between would otherwise still pass a
- * status-only guard, discarding real in-flight work.
+ * that legitimately re-claimed (the ordinary worker's own `queued -> analyzing` claim, which
+ * refreshes `taxonomyStartedAt`) in between would otherwise still pass a status-only guard,
+ * discarding real in-flight work.
  */
 export const reconcileStuckTaxonomy = async (
   batches: IDataLakeBatchSummary[],

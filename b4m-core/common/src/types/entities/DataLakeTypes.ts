@@ -372,10 +372,11 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * one of `from`) AND staleness (`taxonomyStartedAt` must still be before `startedBefore`) -
    * the second guard closes a race `setTaxonomyStatusIfActive` alone can't: the reconciler
    * decides "stuck" from a snapshot read at fetch time, and without re-checking staleness at
-   * write time, a batch that legitimately re-claimed (a manual re-analyze) between the
-   * reconciler's read and its write would still match a status-only guard, discarding real
-   * in-flight work. Used only by `reconcileStuckTaxonomy` - every other taxonomy-status writer
-   * wants a plain status guard and should keep using `setTaxonomyStatusIfActive`.
+   * write time, a batch that legitimately re-claimed (the ordinary worker's own
+   * `queued -> analyzing` claim, which refreshes `taxonomyStartedAt`) between the reconciler's
+   * read and its write would still match a status-only guard, discarding real in-flight work.
+   * Used only by `reconcileStuckTaxonomy` - every other taxonomy-status writer wants a plain
+   * status guard and should keep using `setTaxonomyStatusIfActive`.
    */
   forceFailStuckTaxonomy(
     batchId: string,
