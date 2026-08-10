@@ -1,6 +1,7 @@
 import type { IDataLakeBatchRepository, IDataLakeRepository, IFabFileRepository, TaxonomyTag } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, folderTagForFile, tagsForFile } from '@bike4mind/common';
 import { canManageLake } from './authorizeLakeWrite';
+import { collidesWithRegistryPrefix } from './tagPrefixCollision';
 
 interface ApplyTaxonomySuggestionsAdapters {
   db: {
@@ -49,6 +50,15 @@ export const applyTaxonomySuggestions = async (
   if (!lake) throw new NotFoundError('Data lake not found');
   if (!canManageLake(lake, actor)) {
     throw new BadRequestError('Only the creator can apply tag suggestions for this data lake');
+  }
+  // A prefix colliding with a STATIC REGISTRY lake (e.g. opti:) has no owning document, so its
+  // read arm is an ownership BYPASS - stamping tags under it would expose this lake's files to
+  // everyone entitled to the registry lake. Create already refuses such a prefix (see
+  // createDataLake.ts); this only catches a row that predates that check.
+  if (collidesWithRegistryPrefix(lake.fileTagPrefix)) {
+    throw new BadRequestError(
+      "This lake's tag prefix overlaps a built-in data lake, so new tags cannot be applied. Ask an admin to update the lake's prefix."
+    );
   }
 
   // Guarded claim: only a batch whose suggestions are 'ready' (and not already being applied
