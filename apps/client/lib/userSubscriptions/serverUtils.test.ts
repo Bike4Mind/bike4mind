@@ -285,6 +285,33 @@ describe('handleOrganizationSubscriptionInvoice - seat sync on initial purchase'
 
     expect(organizationRepository.update).not.toHaveBeenCalled();
   });
+
+  it('does not rewrite seats when a different active Stripe subscription exists (refused duplicate)', async () => {
+    // Double-checkout race: a first Stripe sub (quantity 12) is already active when a
+    // second subscription_create (the buildSubscription() 4-seat sub) arrives. The
+    // handler refuses to create the duplicate, so it must NOT adopt the refused sub's
+    // quantity into organization.seats.
+    (organizationRepository.findById as any).mockResolvedValue({ id: 'org_dup', name: 'Acme', users: [], seats: 12 });
+    (subscriptionRepository.findActiveSubscriptionsByOwner as any).mockResolvedValue([
+      { id: 's_first', source: SubscriptionSource.Stripe, subscriptionId: 'sub_first', quantity: 12 },
+    ]);
+
+    await handleOrganizationSubscriptionInvoice(
+      buildInvoice(),
+      buildSubscription(),
+      {
+        userId: 'u1',
+        stage: 'test',
+        ownerType: SubscriptionOwnerType.Organization,
+        organizationId: 'org_dup',
+      } as any,
+      logger
+    );
+
+    expect(organizationRepository.update).not.toHaveBeenCalled();
+    expect(subscriptionRepository.create).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('already has an active Stripe subscription'));
+  });
 });
 
 describe('handleUserSubscriptionInvoice — plan lookup', () => {

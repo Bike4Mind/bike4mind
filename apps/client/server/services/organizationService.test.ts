@@ -281,5 +281,20 @@ describe('organizationService', () => {
       expect(result).toBeNull();
       expect(organizationRepository.update).not.toHaveBeenCalled();
     });
+
+    it('returns null (no repair) when the only active subscription is an admin_grant', async () => {
+      // A grant has no billed quantity, so the skip-validation rationale does not
+      // hold; grant-org seat changes must go through setSeats instead. Reconcile
+      // must not pull seats down to the grant quantity.
+      (organizationRepository.findById as any).mockResolvedValue(orgFixture({ id: 'orgR', seats: 20, users: [] }));
+      (subscriptionRepository.findActiveSubscriptionsByOwner as any).mockResolvedValue([
+        { id: 'g1', source: SubscriptionSource.AdminGrant, subscriptionId: 'admin_grant_x', quantity: 5 },
+      ]);
+
+      const result = await reconcileOrgSeatsFromSubscription('orgR');
+
+      expect(result).toBeNull();
+      expect(organizationRepository.update).not.toHaveBeenCalled();
+    });
   });
 });

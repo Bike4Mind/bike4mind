@@ -130,6 +130,8 @@ export const handleOrganizationSubscriptionInvoice = async (
     // Handle different billing scenarios
     switch (invoice.billing_reason) {
       case 'subscription_create': {
+        let activeSubs: Awaited<ReturnType<typeof subscriptionRepository.findActiveSubscriptionsByOwner>> = [];
+
         // For new subscriptions, handle organization creation or use existing one
         if (metadata.organizationId) {
           organization = await organizationRepository.findById(metadata.organizationId);
@@ -138,17 +140,26 @@ export const handleOrganizationSubscriptionInvoice = async (
             return;
           }
 
-          // Sync the org's seat count to the quantity Stripe just billed for. The
-          // new-org branch below sets seats at creation; the existing-org branch
-          // historically never did, so organization.seats stayed at its default (10)
-          // even though billing, the Subscription row, and credits all reflected the
-          // purchased quantity. setSeats only runs on customer.subscription.updated,
-          // which Stripe does not emit for a fresh subscription. Write directly (not
-          // via setSeats) so we never reject a quantity Stripe already charged for;
-          // idempotent, so webhook retries self-heal.
-          if (organization.seats !== subscriptionQuantity) {
+          activeSubs = await subscriptionRepository.findActiveSubscriptionsByOwner(
+            SubscriptionOwnerType.Organization,
+            organization.id
+          );
+
+          // Sync seats to the billed quantity (the new-org branch sets this at
+          // creation). Written directly, not via setSeats, so a paid quantity can
+          // never be rejected, and placed above the idempotency break so a webhook
+          // resend re-heals seats. Skipped when a DIFFERENT active Stripe sub exists:
+          // that sub is about to be refused below, so adopting its quantity would
+          // desync seats from what is actually billed.
+          const strayStripeSub = activeSubs.find(
+            s =>
+              resolveSubscriptionSource(s) === SubscriptionSource.Stripe &&
+              s.subscriptionId &&
+              s.subscriptionId !== subscription.id
+          );
+          if (!strayStripeSub && organization.seats !== subscriptionQuantity) {
             organization.seats = subscriptionQuantity;
-            await organizationRepository.update(organization);
+            await organizationRepository.update({ id: organization.id, seats: subscriptionQuantity });
             logger.info(
               `Synced org ${organization.id} seats to ${subscriptionQuantity} from subscription ${subscription.id}`
             );
@@ -199,10 +210,14 @@ export const handleOrganizationSubscriptionInvoice = async (
         // Conversion flip: if an admin_grant sub already exists for this org,
         // upgrade it to Stripe in place rather than inserting a duplicate row.
         // Keeps a single Subscription row across the grant->paid lifecycle.
-        const activeSubs = await subscriptionRepository.findActiveSubscriptionsByOwner(
-          SubscriptionOwnerType.Organization,
-          org.id
-        );
+        // The existing-org branch already loaded activeSubs above; a freshly
+        // created org has none yet, so only the new-org path looks them up.
+        if (!metadata.organizationId) {
+          activeSubs = await subscriptionRepository.findActiveSubscriptionsByOwner(
+            SubscriptionOwnerType.Organization,
+            org.id
+          );
+        }
         const adminGrant = activeSubs.find(s => resolveSubscriptionSource(s) === SubscriptionSource.AdminGrant);
 
         if (adminGrant) {

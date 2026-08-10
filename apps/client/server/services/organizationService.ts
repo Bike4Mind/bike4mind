@@ -167,15 +167,19 @@ export async function setSeats(orgId: string, newSeats: number, actor: SeatChang
  * checkout granted credits and created the Subscription row but left
  * `organization.seats` at its default).
  *
- * Pulls FROM `subscription.quantity` - the Stripe-synced billed quantity kept
+ * Pulls FROM a Stripe-managed `subscription.quantity` - the billed quantity kept
  * current by the webhooks - so, unlike `setSeats` from the admin panel, it is
  * safe on Stripe-billed orgs: it aligns the local seat count to what Stripe
  * already invoices and never changes the invoiced quantity itself. Validation
  * is intentionally skipped for the same reason (we must reflect a paid
  * quantity, not reject it).
  *
+ * admin_grant subs are deliberately excluded: a grant has no billed quantity, so
+ * that skip-validation rationale does not hold. Grant-org seat changes must go
+ * through setSeats (the admin seats endpoint), which validates against team size.
+ *
  * Returns the before/after seat counts, or null when the org has no active
- * subscription to reconcile from.
+ * Stripe subscription to reconcile from.
  */
 export async function reconcileOrgSeatsFromSubscription(
   orgId: string
@@ -187,7 +191,10 @@ export async function reconcileOrgSeatsFromSubscription(
     SubscriptionOwnerType.Organization,
     organization.id
   );
-  const primary = pickPrimarySubscription(activeSubs);
+  const stripeSubs = activeSubs.filter(
+    s => resolveSubscriptionSource(s) === SubscriptionSource.Stripe && Boolean(s.subscriptionId)
+  );
+  const primary = pickPrimarySubscription(stripeSubs);
   if (!primary) return null;
 
   const before = organization.seats;
@@ -195,7 +202,7 @@ export async function reconcileOrgSeatsFromSubscription(
   if (before === after) return { organization, before, after };
 
   organization.seats = after;
-  await organizationRepository.update(organization);
+  await organizationRepository.update({ id: organization.id, seats: after });
 
   return { organization, before, after };
 }

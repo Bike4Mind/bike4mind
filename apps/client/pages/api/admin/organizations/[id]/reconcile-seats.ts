@@ -30,29 +30,33 @@ const handler = baseApi().post(
 
     const result = await reconcileOrgSeatsFromSubscription(id);
     if (!result) {
-      throw new BadRequestError('Organization has no active subscription to reconcile seats from');
+      throw new BadRequestError('Organization has no active Stripe subscription to reconcile seats from');
     }
 
-    await logAuditEvent(
-      {
-        userId: result.organization.userId,
-        action: AdminOrgAuditEvents.ORG_SEATS_CHANGED,
-        adminUserId: req.user!.id,
-        adminUsername: req.user!.username,
-        metadata: {
-          organizationId: result.organization.id,
-          seats: result.after,
-          previousSeats: result.before,
-          reconciledFrom: 'subscription',
+    // Only audit + notify on an actual change so a no-op reconcile does not emit a
+    // misleading ORG_SEATS_CHANGED entry or a spurious client invalidation.
+    if (result.before !== result.after) {
+      await logAuditEvent(
+        {
+          userId: result.organization.userId,
+          action: AdminOrgAuditEvents.ORG_SEATS_CHANGED,
+          adminUserId: req.user!.id,
+          adminUsername: req.user!.username,
+          metadata: {
+            organizationId: result.organization.id,
+            seats: result.after,
+            previousSeats: result.before,
+            reconciledFrom: 'subscription',
+          },
         },
-      },
-      req.logger
-    );
+        req.logger
+      );
 
-    await sendToClient(result.organization.userId, Resource.websocket.managementEndpoint, {
-      action: 'invalidate_query',
-      queryKey: ['organizations'],
-    });
+      await sendToClient(result.organization.userId, Resource.websocket.managementEndpoint, {
+        action: 'invalidate_query',
+        queryKey: ['organizations'],
+      });
+    }
 
     return res.status(200).json({
       organizationId: result.organization.id,
