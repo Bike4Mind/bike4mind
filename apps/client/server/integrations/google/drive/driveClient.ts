@@ -8,6 +8,14 @@ export function isFolder(file: DriveFile): boolean {
   return file.mimeType === FOLDER_MIME_TYPE;
 }
 
+// Drive file/folder ids are URL-safe tokens ([A-Za-z0-9_-]); the alias 'root' also matches.
+// Validate before interpolating into the `q` string so a crafted id can't break out of the query.
+const DRIVE_FOLDER_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+export function isValidDriveFolderId(id: unknown): id is string {
+  return typeof id === 'string' && DRIVE_FOLDER_ID_PATTERN.test(id);
+}
+
 /**
  * Build a per-call Drive v3 client from an OAuth access token.
  *
@@ -30,6 +38,12 @@ export function createDriveClient(accessToken: string): drive_v3.Drive {
  * ingest job (issue C); this is the read primitive the smoke test and ingest both build on.
  */
 export async function listFolderChildren(drive: drive_v3.Drive, folderId: string): Promise<DriveFile[]> {
+  // Defense-in-depth: never interpolate an unvalidated id into the query (callers should also
+  // validate at their trust boundary).
+  if (!isValidDriveFolderId(folderId)) {
+    throw new Error(`Invalid Drive folder id: ${folderId}`);
+  }
+
   const files: DriveFile[] = [];
   let pageToken: string | undefined;
 

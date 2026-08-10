@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { drive_v3 } from 'googleapis';
-import { listFolderChildren, isFolder, FOLDER_MIME_TYPE } from './driveClient';
+import { listFolderChildren, isFolder, isValidDriveFolderId, FOLDER_MIME_TYPE } from './driveClient';
 
 /**
  * Mocks just the `files.list` surface listFolderChildren uses, returning a queue of pages so
@@ -51,6 +51,26 @@ describe('listFolderChildren', () => {
 
     const files = await listFolderChildren(drive, 'FOLDER_X');
     expect(files).toEqual([{ id: '1', name: 'ok.txt', mimeType: 'text/plain' }]);
+  });
+
+  it('throws on an invalid folder id before issuing any query (injection guard)', async () => {
+    const { drive, list } = mockDrive([{ files: [] }]);
+    await expect(listFolderChildren(drive, "x' in parents or '1'='1")).rejects.toThrow(/Invalid Drive folder id/);
+    expect(list).not.toHaveBeenCalled();
+  });
+});
+
+describe('isValidDriveFolderId', () => {
+  it('accepts real Drive ids and the root alias', () => {
+    expect(isValidDriveFolderId('1_BPIetEv-aLXcWp5Tvhc0miCMA2Hwc11')).toBe(true);
+    expect(isValidDriveFolderId('root')).toBe(true);
+  });
+
+  it('rejects ids with quotes, spaces, or empty/non-string input', () => {
+    expect(isValidDriveFolderId("x' in parents")).toBe(false);
+    expect(isValidDriveFolderId('has space')).toBe(false);
+    expect(isValidDriveFolderId('')).toBe(false);
+    expect(isValidDriveFolderId(undefined)).toBe(false);
   });
 });
 
