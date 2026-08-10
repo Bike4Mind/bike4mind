@@ -22,8 +22,9 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
 type MockActivatable = { promptId: string; name: string; description: string };
 let activatablePrompts: MockActivatable[] | undefined;
 let activatableLoading = false;
+let activatableError = false;
 vi.mock('@client/app/hooks/data/useActivatablePrompts', () => ({
-  useActivatablePrompts: () => ({ data: activatablePrompts, isLoading: activatableLoading }),
+  useActivatablePrompts: () => ({ data: activatablePrompts, isLoading: activatableLoading, isError: activatableError }),
 }));
 
 const TRIAGE_ROUTER: MockActivatable = {
@@ -54,6 +55,7 @@ const Wrapper = ({ children }: { children: ReactNode }) => (
 beforeEach(() => {
   activatablePrompts = [TRIAGE_ROUTER];
   activatableLoading = false;
+  activatableError = false;
 });
 
 const gatedLake = {
@@ -362,10 +364,12 @@ describe('DataLakeSettingsModal \u2014 preferred prompt binding', () => {
     updateMutate.mockReset();
   });
 
-  // The data-loss regression: the bound prompt's <Option> comes from an async allowlist, so on
-  // the first Settings-open it is not in the DOM yet. A controlled Joy Select with no option
-  // matching its value resolves the value to '' and fires onChange, so a Save that never touched
-  // the picker used to silently clear the binding. Saving an untouched picker must round-trip.
+  // The data-loss regression: the bound prompt's <Option> comes from an async allowlist, so on the
+  // first Settings-open it is not in the DOM yet. A controlled Joy Select with no option matching
+  // its value resolves the value to '' and fires onChange, so a Save that never touched the picker
+  // used to silently clear the binding. Preservation is now proven by OMISSION: an unchanged value
+  // is left out of the payload ("leave as-is" server-side), so the binding cannot be cleared. The
+  // fallback <Option> keeps the Select from resetting the value to '' (which would look changed).
   it('preserves the bound prompt on save when the allowlist has not loaded yet', async () => {
     activatablePrompts = undefined;
     activatableLoading = true;
@@ -379,10 +383,10 @@ describe('DataLakeSettingsModal \u2014 preferred prompt binding', () => {
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
-    expect(updateMutate.mock.calls[0][0]).toMatchObject({ preferredSystemPromptId: 'triage_router' });
+    expect(updateMutate.mock.calls[0][0]).not.toHaveProperty('preferredSystemPromptId');
   });
 
-  it('preserves the bound prompt on save once the allowlist has loaded', async () => {
+  it('omits an unchanged binding on save once the allowlist has loaded', async () => {
     const user = userEvent.setup();
     render(
       <Wrapper>
@@ -393,12 +397,14 @@ describe('DataLakeSettingsModal \u2014 preferred prompt binding', () => {
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
-    expect(updateMutate.mock.calls[0][0]).toMatchObject({ preferredSystemPromptId: 'triage_router' });
+    expect(updateMutate.mock.calls[0][0]).not.toHaveProperty('preferredSystemPromptId');
   });
 
-  // A bound prompt an admin later removed from the allowlist must not be silently dropped either:
-  // the fallback <Option> keeps the Select holding the value so an untouched save preserves it.
-  it('preserves a bound prompt that is no longer in the allowlist', async () => {
+  // A bound prompt an admin later removed from the allowlist would 400 at the write boundary if
+  // re-sent, blocking every OTHER field's save until the editor noticed the picker and chose None.
+  // An untouched save must therefore omit the unchanged (now-delisted) id, so name/description/gate
+  // still save and the binding is left intact.
+  it('does not re-send a now-delisted binding, so other fields still save', async () => {
     activatablePrompts = [];
     const user = userEvent.setup();
     render(
@@ -409,7 +415,9 @@ describe('DataLakeSettingsModal \u2014 preferred prompt binding', () => {
 
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
-    expect(updateMutate.mock.calls[0][0]).toMatchObject({ preferredSystemPromptId: 'triage_router' });
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ name: 'Open Lake' });
+    expect(updateMutate.mock.calls[0][0]).not.toHaveProperty('preferredSystemPromptId');
   });
 
   it('sends the empty clear-sentinel when an editor selects None', async () => {
@@ -442,6 +450,22 @@ describe('DataLakeSettingsModal \u2014 preferred prompt binding', () => {
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     expect(updateMutate.mock.calls[0][0]).toMatchObject({ preferredSystemPromptId: 'triage_router' });
+  });
+
+  // finding 4: a failed allowlist fetch left an unbound editor staring at only "None" with no idea
+  // why - the helper text now says the list failed and the existing binding is untouched.
+  it('surfaces an error in the helper text when the allowlist fetch fails', () => {
+    activatablePrompts = undefined;
+    activatableError = true;
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-preferred-prompt-help')).toHaveTextContent(
+      /couldn't load the available prompts/i
+    );
   });
 
   it('never sends preferredSystemPromptId from a non-editor save', async () => {

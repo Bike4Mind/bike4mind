@@ -88,7 +88,11 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const [preferredSystemPromptId, setPreferredSystemPromptId] = useState('');
   // Only fetch the picker options when an editor is actually viewing the settings (a lake is open
   // and manageable) - a reader never sees the field, so never pays for the list.
-  const { data: activatablePrompts, isLoading: promptsLoading } = useActivatablePrompts(!!lake?.canManage);
+  const {
+    data: activatablePrompts,
+    isLoading: promptsLoading,
+    isError: promptsFailed,
+  } = useActivatablePrompts(!!lake?.canManage);
   const activatable = activatablePrompts ?? [];
   // The bound prompt's <Option> may be absent: the allowlist loads async (not there on first open),
   // or an admin delisted a prompt this lake was bound to. A controlled Joy Select whose value has
@@ -148,8 +152,14 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         // guards a path no user can currently take. Blank from an EDITOR is a deliberate clear,
         // and '' is what unsets it.
         ...(lake.canManage ? { systemPrompt: systemPrompt.trim() } : {}),
-        // Same manage gate + '' clear sentinel as systemPrompt. Sent as-is: '' removes the binding.
-        ...(lake.canManage ? { preferredSystemPromptId } : {}),
+        // Send only when the editor actually changed the binding. Omitting an unchanged value is
+        // "leave as-is" server-side, which (a) never re-sends a now-delisted id that the write
+        // boundary would 400 on - that would block saving name/description/gate too - and (b) still
+        // lets an explicit None ('') through as a deliberate clear. Pairs with the fallback <Option>
+        // above, which keeps the Select from silently resetting the value to '' before we get here.
+        ...(lake.canManage && preferredSystemPromptId !== (lake.preferredSystemPromptId ?? '')
+          ? { preferredSystemPromptId }
+          : {}),
       },
       { onSuccess: onClose }
     );
@@ -238,8 +248,9 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                     )}
                   </Select>
                   <FormHelperText data-testid="datalake-preferred-prompt-help">
-                    Applied when someone starts a chat with this lake, unless they picked their own prompt. Leave as
-                    None for the default behavior.
+                    {promptsFailed
+                      ? "Couldn't load the available prompts. Any existing binding is unchanged; reopen settings to try again."
+                      : 'Applied when someone starts a chat with this lake, unless they picked their own prompt. Leave as None for the default behavior.'}
                   </FormHelperText>
                 </FormControl>
               )}

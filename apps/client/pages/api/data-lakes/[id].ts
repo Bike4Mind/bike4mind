@@ -31,6 +31,9 @@ const handler = baseApi()
     // that owns the session-activatable allowlist. Reject a non-activatable id here (fail loud, 400)
     // rather than storing a value the session resolver would silently refuse to inject later. '' is
     // the clear sentinel and passes (falsy), so removing the binding is always allowed.
+    // INVARIANT: this route is the ONLY caller of updateDataLake with preferredSystemPromptId, so
+    // the check is not bypassable today. A second write path must repeat this allowlist check (core
+    // cannot host it - see the schema comment on preferredSystemPromptId in common/schemas/dataLake).
     if (params.preferredSystemPromptId && !isSessionActivatablePromptId(params.preferredSystemPromptId)) {
       throw new BadRequestError(`"${params.preferredSystemPromptId}" is not a valid preferred system prompt`);
     }

@@ -1049,6 +1049,9 @@ function LakeInfoPanel({
                 await startChatWithLake(lake.id);
               } catch {
                 toast.error('Could not start a chat with this lake');
+              } finally {
+                // Reset in finally, not only on error: a success that does not unmount this panel
+                // (e.g. navigation interrupted) would otherwise leave the spinner stuck forever.
                 setStartingChat(false);
               }
             }}
