@@ -38,9 +38,9 @@ import UsernameText from './UsernameText';
 import { FormEvent, useEffect, useState } from 'react';
 import { cloneDeep } from 'lodash';
 import { toast } from 'sonner';
-import { isAxiosError } from 'axios';
 import { brandAlpha } from '../../utils/themes/colors';
 import { api } from '@client/app/contexts/ApiContext';
+import { getErrorMessage } from '@client/app/utils/error';
 
 // Helper to show bulk operation feedback with success/partial/failure states
 const showBulkFeedback = (
@@ -128,8 +128,7 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
       // Bulk sharing aggregates its own per-item failures into one showBulkFeedback toast
       // below; showing this hook's toast too would double up per failed item.
       if (isBulkSharing) return;
-      const serverMessage = isAxiosError(error) ? error.response?.data?.message : undefined;
-      toast.error(serverMessage || 'Failed to share document');
+      toast.error(getErrorMessage(error));
     },
     onSettled: () => {
       if (!isBulkSharing) {
@@ -158,8 +157,9 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
       }
 
       if (recipientValue.length === 0) {
-        setRecipients({ ...recipients, error: 'Recipients is required' });
-        toast.error('Recipients is required');
+        const message = 'Recipients is required';
+        setRecipients({ ...recipients, error: message });
+        toast.error(message);
         isInvalid = true;
       } else if (
         tabIndex === 0 &&
@@ -171,8 +171,9 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
         )
       ) {
         // Prevent self-sharing and show error message (only for "By Users" tab)
-        setRecipients({ ...recipients, error: 'You cannot share files to yourself' });
-        toast.error('You cannot share files to yourself');
+        const message = 'You cannot share files to yourself';
+        setRecipients({ ...recipients, error: message });
+        toast.error(message);
         isInvalid = true;
       } else {
         setRecipients({ ...recipients, error: null });

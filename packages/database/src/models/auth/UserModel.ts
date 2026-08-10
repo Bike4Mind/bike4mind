@@ -893,6 +893,12 @@ UserSchema.index(
   }
 );
 
+// Case-insensitive username index for collation-based lookups (findAllByEmailsOrUsernames).
+// Same reasoning as email_ci above: the case-sensitive username_1 index above won't be used
+// by a .collation() query, and without a matching collated index that $in falls back to a
+// full collection scan.
+UserSchema.index({ username: 1 }, { collation: { locale: 'en', strength: 2 }, name: 'username_ci' });
+
 // resetPasswordToken index intentionally removed - password reset flow replaced by OTC email auth
 // Non-unique multikey index for the two-stage OAuth lookup (stage-1 matches by provider identity).
 // NOT unique: legacy rows carry id:null; a unique multikey would collide every (strategy, null).
