@@ -62,11 +62,14 @@ const handler = baseApi().post(
 
       // Applying a lake's `datalake:*` meta-tag is a WRITE into that lake - gate it so this
       // presign door can't be used to inject files into a lake the caller only reads.
-      await dataLakeService.assertCanWriteDataLakeTags(
-        { userId, isAdmin: !!req.user.isAdmin },
-        (data.tags ?? []).map(t => t.name),
-        { db: { dataLakes: dataLakeRepository } }
-      );
+      const requestedTagNames = (data.tags ?? []).map(t => t.name);
+      await dataLakeService.assertCanWriteDataLakeTags({ userId, isAdmin: !!req.user.isAdmin }, requestedTagNames, {
+        db: { dataLakes: dataLakeRepository },
+      });
+      // This route creates the FabFile through the manager's direct FabFile.create(), not the
+      // fabFileService.createFabFile door that gates the static-registry namespace centrally -
+      // so it needs its own check, same as the meta-tag one above.
+      dataLakeService.assertCanWriteStaticRegistryTags({ userId, isAdmin: !!req.user.isAdmin }, requestedTagNames);
 
       // A file joining a lake must also land under that lake's content prefix, or it is
       // invisible to tag-counts and to the Explorer's tag tree.

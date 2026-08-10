@@ -217,6 +217,18 @@ describe('POST /api/files/generate-presigned-urls-batch - data-lake tags', () =>
     const persisted = (h.createFabFile.mock.calls[0][0] as { tags: { name: string; strength: number }[] }).tags;
     expect(persisted.find(t => t.name === 'datalake:orga:acme-2026')?.strength).toBe(1.0);
   });
+
+  // This route creates each FabFile through the manager's direct FabFile.create(), not the
+  // fabFileService.createFabFile door that gates this namespace centrally - it needs its own
+  // check, same as the meta-tag one above. assertCanWriteDataLakeTags is mocked to a no-op above,
+  // so a throw here can only come from the real assertCanWriteStaticRegistryTags.
+  it('refuses a non-admin self-applying a static-registry-prefixed tag (e.g. opti:)', async () => {
+    const { res } = makeRes();
+    await expect(run({ files: [file({ tags: [{ name: 'opti:report', strength: 1 }] })] }, res)).rejects.toThrow(
+      /only an admin can change this data lake/i
+    );
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/files/generate-presigned-urls-batch - lake targeting', () => {
