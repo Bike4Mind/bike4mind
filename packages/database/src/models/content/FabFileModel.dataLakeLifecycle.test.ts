@@ -421,6 +421,24 @@ describe('FabFile data lake lifecycle membership', () => {
         expect(independentlyDeleted?.deletedAt?.getTime()).toBe(EARLIER.getTime());
         expect(independentlyDeleted?.archivedAt?.getTime()).toBe(ARCHIVE_STAMP.getTime());
       });
+
+      it('the displayed file count agrees with the Files browser after restore (the stale-count symptom)', async () => {
+        const rows = await seedLakeRows();
+        await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
+
+        // computeDataLakeStats is what the lake's displayed fileCount is recomputed from - it must
+        // count both restored members now that neither carries a deletedAt or archivedAt marker.
+        const stats = await fabFileRepository.computeDataLakeStats(scope);
+        expect(stats.fileCount).toBe(rows.memberIds.length);
+        for (const id of rows.memberIds) {
+          const row = await readRaw(id);
+          expect(row?.deletedAt ?? null).toBeNull();
+          expect(row?.archivedAt ?? null).toBeNull();
+        }
+      });
     });
   });
 
