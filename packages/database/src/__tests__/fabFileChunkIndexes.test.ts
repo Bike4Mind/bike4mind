@@ -26,11 +26,11 @@ describe('fabfilechunks indexes', () => {
     expect(names).toEqual(['_id_', 'fabFileId_1__id_1']);
   });
 
-  // Name-derivation contract for the drop migration that still has to remove the two orphans left
-  // in already-deployed environments. It cannot fail on a regression in this file's own subject -
-  // it builds the legacy indexes itself - so it is documentation of what safeDropIndex must be
-  // passed, not a guard on the declared set. Worth pinning because safeDropIndex swallows
-  // index-not-found, making a wrong name an invisible no-op.
+  // Name-derivation contract for 20260810000000_drop-legacy-fabfilechunk-indexes.ts, which removes
+  // the two orphans left in already-deployed environments. This test cannot fail on a regression in
+  // this file's own subject - it builds the legacy indexes itself - so it is documentation of what
+  // safeDropIndex must be passed, not a guard on the declared set. Worth pinning because
+  // safeDropIndex swallows index-not-found, making a wrong name an invisible no-op.
   it('derives the legacy index names a drop migration has to reference', async () => {
     await FabFileChunk.collection.createIndex({ _id: 1, fabFileId: 1 });
     await FabFileChunk.collection.createIndex({ fabFileId: 1 });
