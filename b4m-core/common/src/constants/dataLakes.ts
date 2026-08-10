@@ -94,9 +94,21 @@ export const tagPrefixesOverlap = (a: string | undefined | null, b: string | und
 };
 
 /**
+ * True when any ":"-separated segment of the prefix (ignoring the trailing colon) has no
+ * visible character. `trim()` alone is not enough: zero-width/format characters (U+200B,
+ * U+2060 - Unicode category Cf, not whitespace) survive it and render as the same blank
+ * tree node. Shared by CreateDataLakeRequestInput's schema refine and the wizard mirror
+ * below so the server and client rules cannot drift.
+ */
+export const hasBlankTagPrefixSegment = (prefix: string): boolean => {
+  const body = prefix.endsWith(':') ? prefix.slice(0, -1) : prefix;
+  return body.split(':').some(part => !/[^\s\p{Cf}\p{Cc}]/u.test(part));
+};
+
+/**
  * The reason a `fileTagPrefix` is unusable, as user-facing copy, or null when it is fine. Shared
  * by the wizard steps that can both edit a prefix so their wording cannot drift apart; the server
- * rejects both cases at create.
+ * rejects all three cases at create.
  */
 export const tagPrefixIssue = (
   prefix: string | undefined | null,
@@ -104,6 +116,9 @@ export const tagPrefixIssue = (
 ): string | null => {
   if (isReservedTagPrefix(prefix)) {
     return `"${DATALAKE_TAG_PREFIX}" is reserved for lake membership. Pick another prefix, such as legal:`;
+  }
+  if (prefix && hasBlankTagPrefixSegment(prefix)) {
+    return 'Every ":" segment of the prefix needs a visible character (e.g. legal: or legal:contracts:).';
   }
   if (overlapping) {
     return `This prefix overlaps the data lake "${overlapping.name}" (${overlapping.fileTagPrefix}). They would share files, so deleting either one would take the other's.`;

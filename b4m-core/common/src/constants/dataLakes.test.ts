@@ -10,6 +10,8 @@ import {
   normalizeTagPrefix,
   toDataLakeConfig,
   tagPrefixesOverlap,
+  tagPrefixIssue,
+  hasBlankTagPrefixSegment,
   satisfiesTagPrefix,
 } from './dataLakes';
 
@@ -282,5 +284,42 @@ describe('satisfiesTagPrefix', () => {
   it('ignores malformed entries rather than throwing', () => {
     expect(satisfiesTagPrefix([null, undefined, 42, { name: 'acme:legal' }], 'acme:')).toBe(false);
     expect(satisfiesTagPrefix([null, 'acme:legal'], 'acme:')).toBe(true);
+  });
+});
+
+describe('hasBlankTagPrefixSegment', () => {
+  it.each(['::', 'a::', ':a:', 'a::b:', 'a: :', ' :'])('flags an empty or whitespace segment (%s)', prefix => {
+    expect(hasBlankTagPrefixSegment(prefix)).toBe(true);
+  });
+
+  // trim() strips WhiteSpace but not Cf format characters - these render as the same
+  // blank tree node, so the check requires a visible character instead.
+  it.each(['a:\u200b:', 'a:\u2060:'])('flags a zero-width segment (%s)', prefix => {
+    expect(hasBlankTagPrefixSegment(prefix)).toBe(true);
+  });
+
+  it('accepts ordinary single- and multi-segment prefixes', () => {
+    expect(hasBlankTagPrefixSegment('acme:')).toBe(false);
+    expect(hasBlankTagPrefixSegment('acme:legal:')).toBe(false);
+  });
+
+  // A colon-less value must not manufacture a phantom blank segment out of its last
+  // character - the trailing-colon rule is a separate check with its own message.
+  it('does not flag a colon-less prefix', () => {
+    expect(hasBlankTagPrefixSegment('a:b')).toBe(false);
+    expect(hasBlankTagPrefixSegment('acme')).toBe(false);
+  });
+});
+
+describe('tagPrefixIssue - blank segments', () => {
+  it('reports a blank segment as user-facing copy', () => {
+    expect(tagPrefixIssue('legal::')).toMatch(/visible character/);
+    expect(tagPrefixIssue('legal: :')).toMatch(/visible character/);
+  });
+
+  it('stays quiet for a healthy prefix and still reports the other two cases first', () => {
+    expect(tagPrefixIssue('legal:')).toBeNull();
+    expect(tagPrefixIssue('datalake:')).toMatch(/reserved/);
+    expect(tagPrefixIssue('legal:', { name: 'Docs', fileTagPrefix: 'legal:' })).toMatch(/overlaps/);
   });
 });
