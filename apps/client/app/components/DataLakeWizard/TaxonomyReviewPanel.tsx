@@ -138,17 +138,23 @@ const TagCard = memo(function TagCard({ tag, prefix, onUpdate, onDelete }: TagCa
             autoFocus
             sx={{ flex: 1, fontFamily: 'monospace' }}
           />
+          {/* A disabled Joy button emits no pointer events, so the tooltip needs the span - but
+              that also means Tooltip's usual aria-label clone lands on the span, not the button
+              (which has no text content), so it needs an explicit one too. */}
           <Tooltip title="Save" size="sm">
-            <IconButton
-              size="sm"
-              variant="soft"
-              color="success"
-              disabled={!canSave}
-              data-testid="taxonomy-tag-save"
-              onClick={handleSave}
-            >
-              <CheckIcon sx={{ fontSize: 14 }} />
-            </IconButton>
+            <span>
+              <IconButton
+                size="sm"
+                variant="soft"
+                color="success"
+                disabled={!canSave}
+                data-testid="taxonomy-tag-save"
+                aria-label="Save"
+                onClick={handleSave}
+              >
+                <CheckIcon sx={{ fontSize: 14 }} />
+              </IconButton>
+            </span>
           </Tooltip>
           <Tooltip title="Cancel" size="sm">
             <IconButton size="sm" variant="soft" color="neutral" onClick={handleCancel}>
@@ -242,7 +248,7 @@ export default function TaxonomyReviewPanel({
   // identity: the batches-list response is rebuilt via a Map + array spread on every poll, so
   // when any other batch leaves the list, every later element shifts index - React Query's
   // default structural sharing compares arrays positionally, so a batch that merely moved
-  // position (its own suggestions unc  hanged) gets a brand-new object reference, which would
+  // position (its own suggestions unchanged) gets a brand-new object reference, which would
   // wipe this panel's in-progress edits with no warning.
   const suggestionsKey = JSON.stringify(batch.taxonomySuggestions?.tags ?? []);
   useEffect(() => {
