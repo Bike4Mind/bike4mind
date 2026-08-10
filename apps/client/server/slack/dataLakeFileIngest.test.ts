@@ -11,6 +11,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 import { FabFileSourceType, KnowledgeType } from '@bike4mind/common';
+import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { SLACK_MOCK_USER_ID } from '@bike4mind/slack';
 import { ingestSlackFilesIntoLake, type SlackLakeIngestDeps } from './dataLakeFileIngest';
 
@@ -96,7 +97,7 @@ describe('authorization comes before any side effect', () => {
   });
 
   it('does NOT download or create anything when the write gate denies', async () => {
-    assertLakeWriteAccess.mockRejectedValue(new Error('Only the creator can add files to this data lake'));
+    assertLakeWriteAccess.mockRejectedValue(new BadRequestError('Only the creator can add files to this data lake'));
 
     const outcome = await run();
 
@@ -107,7 +108,7 @@ describe('authorization comes before any side effect', () => {
   });
 
   it('maps an unreadable lake to not-found so existence is not leaked', async () => {
-    assertLakeWriteAccess.mockRejectedValue(new Error('Data lake not found'));
+    assertLakeWriteAccess.mockRejectedValue(new NotFoundError('Data lake not found'));
 
     const outcome = await run();
 
@@ -115,6 +116,33 @@ describe('authorization comes before any side effect', () => {
     if (outcome.ok) throw new Error('expected refusal');
     // Same wording a genuinely missing lake gets - a reader cannot distinguish the two.
     expect(outcome.message).toContain('No Data Lake `sales` found');
+  });
+
+  it('surfaces the built-in-lake reason instead of blaming the creator', async () => {
+    // A built-in lake is read-only for EVERYONE, admins included, so the generic
+    // "ask an admin, or the creator" sentence is advice nobody can act on. Message-regex
+    // matching sent this case down that arm because it does not contain "not found".
+    assertLakeWriteAccess.mockRejectedValue(
+      new BadRequestError('This data lake is built into the platform and is read-only')
+    );
+
+    const outcome = await run();
+
+    expect(outcome).toMatchObject({ ok: false, reason: 'not_authorized' });
+    if (outcome.ok) throw new Error('expected refusal');
+    expect(outcome.message).toContain('built into the platform and is read-only');
+    expect(outcome.message).not.toContain('Ask an admin');
+  });
+
+  it('rethrows an infrastructure failure instead of reporting it as a permission denial', async () => {
+    // `findBySlug` is unguarded inside the gate, so a DB outage propagates here. Reporting it as
+    // "you can only add files to a lake you created" both misleads the user and hides the outage
+    // behind an info log; the orchestrator's catch logs at error and says "something went wrong".
+    assertLakeWriteAccess.mockRejectedValue(new Error('connection timed out'));
+
+    await expect(run()).rejects.toThrow('connection timed out');
+    expect(downloadFile).not.toHaveBeenCalled();
+    expect(createLakeFile).not.toHaveBeenCalled();
   });
 
   it('refuses a lake that is not draft or active', async () => {
@@ -137,7 +165,9 @@ describe('authorization comes before any side effect', () => {
   });
 
   it('reports a meta-tag denial as a permission refusal, not a generic failure', async () => {
-    assertCanWriteDataLakeTags.mockRejectedValue(new Error("Only the creator can change this data lake's files"));
+    assertCanWriteDataLakeTags.mockRejectedValue(
+      new BadRequestError("Only the creator can change this data lake's files")
+    );
 
     const outcome = await run();
 
@@ -197,7 +227,10 @@ describe('ingest', () => {
     // Attribution is the resolved B4M user, not any Slack-supplied identity.
     expect(userId).toBe('user-1');
     expect(params.type).toBe(KnowledgeType.FILE);
-    expect(params.organizationId).toBe('org-1');
+    // Deliberately NOT passed: FabFileSchema does not declare organizationId, so strict mode drops
+    // it - the same silent discard this PR fixes for sourceType. Plumbing it would imply a
+    // persistence that does not happen, and it cannot reach the storage check from this path.
+    expect(params.organizationId).toBeUndefined();
     // The downloaded buffer's real length, NOT the attachment's claimed `size` (1024): this value
     // becomes the S3 Content-Length and the storage charge.
     expect(params.fileSize).toBe(Buffer.from('hello').length);
@@ -248,6 +281,30 @@ describe('ingest', () => {
     if (!outcome.ok) throw new Error('expected success');
     expect(outcome.added).toEqual(['notes.pdf']);
     expect(outcome.rejected.join(' ')).toContain('app.exe');
+  });
+
+  it('refuses a file over the MaxFileSize admin limit BEFORE downloading it', async () => {
+    // The Slack validator's 50MB ceiling is not the binding one - createFabFile enforces
+    // MaxFileSize (default 20MB) after the transfer, so without this the bytes move and are then
+    // thrown away. 30MB is under the Slack limit and over a 20MB MaxFileSize.
+    deps.resolveMaxFileSizeBytes = vi.fn().mockResolvedValue(20 * 1024 * 1024);
+
+    const outcome = await run({ files: [attachment({ name: 'big.pdf', size: 30 * 1024 * 1024 })] });
+
+    if (!outcome.ok) throw new Error('expected success');
+    expect(outcome.added).toEqual([]);
+    expect(outcome.rejected.join(' ')).toContain('big.pdf');
+    expect(outcome.rejected.join(' ')).toContain('20MB');
+    expect(downloadFile).not.toHaveBeenCalled();
+  });
+
+  it('applies only the Slack ceiling when no MaxFileSize is configured', async () => {
+    // The dep is optional; absent it, behaviour is unchanged and createFabFile still re-checks.
+    const outcome = await run({ files: [attachment({ name: 'big.pdf', size: 30 * 1024 * 1024 })] });
+
+    if (!outcome.ok) throw new Error('expected success');
+    expect(outcome.added).toEqual(['big.pdf']);
+    expect(downloadFile).toHaveBeenCalled();
   });
 
   it('surfaces an incomplete Slack file object rather than dropping it silently', async () => {
