@@ -1,6 +1,9 @@
 import { FabFileChunk, safeDropIndex } from '@bike4mind/database';
 import { type MigrationFile } from './index';
 
+const KEYSET_COMPOUND_KEY = { fabFileId: 1, _id: 1 };
+const LEGACY_KEYS = [{ _id: 1, fabFileId: 1 }, { fabFileId: 1 }];
+
 /**
  * Drop the two obsolete fabfilechunks indexes that predate the `{ fabFileId: 1, _id: 1 }` keyset
  * compound: `{ _id: 1, fabFileId: 1 }` (usually named `_id_1_fabFileId_1`) and `{ fabFileId: 1 }`
@@ -21,9 +24,6 @@ import { type MigrationFile } from './index';
  * environment that never created it) is checked for up front and treated as nothing to do, rather
  * than reaching a NamespaceNotFound throw from the drop calls themselves.
  */
-const KEYSET_COMPOUND_KEY = { fabFileId: 1, _id: 1 };
-const LEGACY_KEYS = [{ _id: 1, fabFileId: 1 }, { fabFileId: 1 }];
-
 const migration: MigrationFile = {
   id: 20260810000000,
   name: 'drop legacy fabfilechunk indexes',
@@ -51,7 +51,7 @@ const migration: MigrationFile = {
     ) {
       throw new Error(
         'Refusing to drop the legacy fabfilechunks indexes: a usable { fabFileId: 1, _id: 1 } ' +
-          'keyset compound is missing (absent, hidden, or partial). Run migration 20260728000000 ' +
+          'keyset compound is missing (absent, hidden, partial, or non-default collation). Run migration 20260728000000 ' +
           '(ensure fabfilechunk keyset index) first and confirm it applied - dropping the legacy ' +
           'indexes without it would leave the collection unable to serve a fabFileId read from an ' +
           'index, turning every such query into a full collection scan.'
