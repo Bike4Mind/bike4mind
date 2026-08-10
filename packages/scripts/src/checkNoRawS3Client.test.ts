@@ -29,14 +29,18 @@ const ALLOWLIST = new Set([
   'packages/scripts/src/uploadTavernIcons.ts',
 ]);
 
+// This file's own path relative to REPO_ROOT, so it excludes itself by exact match rather
+// than by basename (grep's --exclude matches any file with this name, anywhere in the tree).
+const SELF_PATH = path.relative(REPO_ROOT, fileURLToPath(import.meta.url)).replace(/\\/g, '/'); // normalize on Windows
+
 describe('every S3Client construction routes through createS3Client', () => {
   it('has no raw `new S3Client(` outside the allowlist', () => {
-    const out = execSync(
-      'grep -rln "new S3Client(" --include="*.ts" --exclude="checkNoRawS3Client.test.ts" apps/client b4m-core packages || true',
-      { cwd: REPO_ROOT, encoding: 'utf8' }
-    );
+    const out = execSync('grep -rln "new S3Client(" --include="*.ts" apps/client b4m-core packages || true', {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+    });
     const hits = out.split('\n').filter(Boolean);
-    const unexpected = hits.filter(f => !ALLOWLIST.has(f));
+    const unexpected = hits.filter(f => f !== SELF_PATH && !ALLOWLIST.has(f));
 
     expect(
       unexpected,
