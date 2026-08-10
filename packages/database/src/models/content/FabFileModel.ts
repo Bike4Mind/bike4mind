@@ -917,14 +917,18 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   // Omitting `stampedAt` matches every stamped row, which is the pre-mark behavior and the fallback
   // for a lake torn down before the mark existed.
   //
-  // The archive axis deliberately stays unstamped: `archiveByDataLakeTag` is the only writer of a
-  // non-null `archivedAt`, so there is no independently-archived file to protect, and bounding it
-  // would strand any row still holding a stamp its lake no longer names.
+  // The archive axis is stamped the same way (`at`, from `IDataLake.filesArchivedAt`), because
+  // restore now also clears `archivedAt` (an archive->delete->restore must not leave files
+  // archived-and-invisible) - so equality-bounding that clear against the stamp is what stops it
+  // from freeing a prefix-sharing sibling's independently-archived files, the same way the delete
+  // axis avoids reviving a file the creator deleted on their own. `unarchiveByDataLakeTag` still
+  // matches on `archivedAt` alone (unbounded) - that reversal's own bounding is separate,
+  // unresolved scope.
 
-  async archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number> {
+  async archiveByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<number> {
     const result = await this.fabFileModel.updateMany(
       { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: null },
-      { $set: { archivedAt: new Date() } }
+      { $set: { archivedAt: at } }
     );
     return result.modifiedCount;
   }
@@ -959,15 +963,37 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async undeleteByDataLakeTag(
     scope: DataLakeMembershipScope,
     excludeIds: string[] = [],
-    stampedAt?: Date
+    stampedAt?: Date,
+    archiveStampToClear?: Date
   ): Promise<number> {
-    const filter: Record<string, unknown> = {
+    const base: Record<string, unknown> = {
       ...buildDataLakeMembershipFilter(scope),
       deletedAt: stampedAt ?? { $ne: null },
     };
-    if (excludeIds.length > 0) filter._id = { $nin: excludeIds };
-    const result = await this.fabFileModel.updateMany(filter, { $set: { deletedAt: null } });
-    return result.modifiedCount;
+    if (excludeIds.length > 0) base._id = { $nin: excludeIds };
+
+    if (!archiveStampToClear) {
+      const result = await this.fabFileModel.updateMany(base, { $set: { deletedAt: null } });
+      return result.modifiedCount;
+    }
+
+    // Two queries partitioned on `archivedAt`, not one update followed by another: both read the
+    // pre-image, so a row's own `archivedAt` value (not whether a prior write already flipped
+    // `deletedAt`) decides which branch it falls into. A row stamped by THIS lake's own archive
+    // gets both fields cleared; any other value (a different lake's stamp, or none) only un-deletes,
+    // leaving its archive marker exactly as it was - the equality bound that keeps this from
+    // freeing a prefix-sharing sibling's independently-archived files.
+    const [ownStamp, otherStamp] = await Promise.all([
+      this.fabFileModel.updateMany(
+        { ...base, archivedAt: archiveStampToClear },
+        { $set: { deletedAt: null, archivedAt: null } }
+      ),
+      this.fabFileModel.updateMany(
+        { ...base, archivedAt: { $ne: archiveStampToClear } },
+        { $set: { deletedAt: null } }
+      ),
+    ]);
+    return ownStamp.modifiedCount + otherStamp.modifiedCount;
   }
 
   async softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<string[]> {

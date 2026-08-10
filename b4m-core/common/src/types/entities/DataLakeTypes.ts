@@ -109,6 +109,19 @@ export interface IDataLake {
    */
   filesDeletedAt?: Date | null;
   /**
+   * The exact `archivedAt` stamp archive wrote on this lake's members, so restore (after a
+   * delete of an already-archived lake) can clear that batch's archive marker and nothing
+   * else's - mirrors `filesDeletedAt` but on the archive axis. Matched by EQUALITY, so a
+   * prefix-sharing sibling lake's independently-archived files (a different or absent stamp)
+   * are never touched. Claimed set-if-unset; cleared by unarchive (so a later re-archive gets
+   * a fresh stamp, not a stale reused one) and by a restore that clears it.
+   *
+   * Absent on a lake archived before this field existed, which leaves its archive marker
+   * unbounded-unclearable on restore (the old, known behavior) rather than clearing a marker
+   * no stamp names.
+   */
+  filesArchivedAt?: Date | null;
+  /**
    * Lake-memory producer (#1440) bookkeeping - server-managed, never client input.
    *
    * A concurrency LEASE, not a status: a run stamps it to claim the lake and clears it when done, so a
@@ -200,6 +213,8 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * caller sweeps unmarked and must say so, since that lake then restores unbounded.
    */
   claimFilesDeletedAt(id: string, at: Date): Promise<Date | null>;
+  /** Claim `filesArchivedAt` for an archive sweep - same set-if-unset contract as `claimFilesDeletedAt`. */
+  claimFilesArchivedAt(id: string, at: Date): Promise<Date | null>;
   /**
    * Per-lake concurrency claim for the memory producer (#1440): stamp `lakeMemoryExtractionAt = at` only
    * if no run currently holds the lease - the field is unset, OR its stamp is older than `staleBefore`

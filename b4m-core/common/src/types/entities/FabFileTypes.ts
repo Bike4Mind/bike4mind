@@ -681,12 +681,13 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   // lower bound, which would also match a file the creator deleted during the deleted window (the
   // per-file delete routes stamp `deletedAt` too) and revive it on restore. Omitting `stampedAt`
   // matches every stamped row: the pre-mark behavior, and the fallback for a lake torn down before
-  // the mark existed. The archive axis is deliberately NOT stamped - archiveByDataLakeTag is the
-  // only writer of a non-null archivedAt, so no independently-archived file exists to protect.
+  // the mark existed. The archive axis is stamped the same way (`at`, `filesArchivedAt`) so restore
+  // can also clear `archivedAt` for exactly the batch this lake's own archive wrote, without
+  // freeing a prefix-sharing sibling's independently-archived files.
 
-  /** Soft-archive (reversible) all live member files. Returns affected count. */
-  archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number>;
-  /** Reverse archive for all archived member files. */
+  /** Soft-archive (reversible) all live member files, stamped `at`. Returns affected count. */
+  archiveByDataLakeTag(scope: DataLakeMembershipScope, at?: Date): Promise<number>;
+  /** Reverse archive for all archived member files. Unbounded - matches on archivedAt alone. */
   unarchiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number>;
   /** Archived member files - used by the unarchive dedup pass. */
   findArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]>;
@@ -694,9 +695,16 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   findDeletedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]>;
   /**
    * Reverse soft-delete for member files stamped `stampedAt`, minus `excludeIds` (discarded
-   * duplicates). Returns count.
+   * duplicates). When `archiveStampToClear` is given, also clears `archivedAt` on the subset of
+   * the restored batch whose archivedAt equals it (the batch this lake's own archive wrote) -
+   * everything else keeps its archive marker untouched. Returns count restored.
    */
-  undeleteByDataLakeTag(scope: DataLakeMembershipScope, excludeIds?: string[], stampedAt?: Date): Promise<number>;
+  undeleteByDataLakeTag(
+    scope: DataLakeMembershipScope,
+    excludeIds?: string[],
+    stampedAt?: Date,
+    archiveStampToClear?: Date
+  ): Promise<number>;
   /** Soft-delete (phase 1) all member files, stamped `at`. Returns affected file ids. */
   softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at?: Date): Promise<string[]>;
   /**
