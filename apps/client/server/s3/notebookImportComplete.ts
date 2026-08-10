@@ -86,22 +86,15 @@ const processNotebookImport = async (
 
       // Create service adapters (matching the export service pattern)
       const adapters = {
+        // No `ctx` here: transactionAsyncLocalStorage already carries the session into these
+        // queries, and assigning it would strand a finished session on the shared repository
+        // instance - the next caller to read it fails with "Use of expired sessions".
         sessionRepository: {
           ...sessionRepository,
-          ctx: session,
-          create: async (data: any) => {
-            sessionRepository.ctx = session;
-            return sessionRepository.create(data);
-          },
-          find: async (query: any) => {
-            sessionRepository.ctx = session;
-            return sessionRepository.find(query);
-          },
-          updateById: async (id: string, data: any) => {
-            // sessionRepository.update expects the full object with _id
-            sessionRepository.ctx = session;
-            return sessionRepository.update({ _id: id, ...data });
-          },
+          create: async (data: any) => sessionRepository.create(data),
+          find: async (query: any) => sessionRepository.find(query),
+          // sessionRepository.update expects the full object with _id
+          updateById: async (id: string, data: any) => sessionRepository.update({ _id: id, ...data }),
         },
         chatHistoryRepository: {
           ...questRepository,

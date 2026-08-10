@@ -191,7 +191,12 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
 
 export class SessionRepository extends BaseRepository<ISessionDocument> implements ISessionRepository {
   shareable: ISessionRepository['shareable'];
-  /** Explicit session for the queries below. Null means "let transactionAsyncLocalStorage decide". */
+  /**
+   * Explicit session for the queries below. Null means "let transactionAsyncLocalStorage decide",
+   * which is what callers should want: this instance is shared, so a session assigned here
+   * outlives the transaction that created it and the next reader fails with "Use of expired
+   * sessions". Nothing sets it today.
+   */
   ctx: mongoose.mongo.ClientSession | null;
   private questModel?: Model<unknown>;
 
