@@ -8,15 +8,18 @@ import { useEffect, RefObject } from 'react';
  * @param options - Optional configuration
  * @param options.enabled - Whether auto-focus is enabled (default: true)
  * @param options.focusOnClick - Whether to refocus when clicking outside the element (default: false)
+ * @param options.focusTrigger - Refocus whenever this value changes, in addition to on mount
+ *   (e.g. a store counter bumped by an external "prefill and focus" action).
  */
 export function useAutoFocus<T extends HTMLElement>(
   ref: RefObject<T>,
   options?: {
     enabled?: boolean;
     focusOnClick?: boolean;
+    focusTrigger?: unknown;
   }
 ) {
-  const { enabled = true, focusOnClick = false } = options || {};
+  const { enabled = true, focusOnClick = false, focusTrigger } = options || {};
 
   useEffect(() => {
     if (!enabled) return;
@@ -38,7 +41,7 @@ export function useAutoFocus<T extends HTMLElement>(
     return () => {
       clearTimeout(timeoutId);
     };
-  }, [ref, enabled]);
+  }, [ref, enabled, focusTrigger]);
 
   // Optionally refocus when clicking outside the element
   useEffect(() => {
