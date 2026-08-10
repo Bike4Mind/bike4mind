@@ -36,6 +36,12 @@ export interface HandleDataLakeCommandParams {
   channel: string;
   messageTs: string;
   deps: SlackLakeIngestDeps & { dataLakes: DataLakeCommandRepo };
+  /**
+   * Whether the `enableAutoChunk` admin setting is on. Only affects the wording of the success
+   * reply: with it off, `objectCreated.ts` never enqueues the chunk job, so promising the file
+   * will become searchable would be untrue. Defaults to the setting's own default (true).
+   */
+  autoChunkEnabled?: boolean;
 }
 
 const HELP_TEXT = [
@@ -104,7 +110,17 @@ async function handleAdd(
     params.deps
   );
 
-  return formatIngestOutcome(outcome);
+  const reply = formatIngestOutcome(outcome, { autoChunkEnabled: params.autoChunkEnabled });
+
+  // A message carrying BOTH files and a link falls past the refusal above, so say what happened
+  // to the link too - ingesting the files and staying silent about the URL reads as if both
+  // were taken.
+  if (parsed.link) {
+    // Warning sign escaped so this source file stays ASCII (same as formatIngestOutcome).
+    return `${reply}\n\u26a0\ufe0f Ignored the link - links are not supported yet. Attach it as a file instead.`;
+  }
+
+  return reply;
 }
 
 /**
@@ -112,18 +128,26 @@ async function handleAdd(
  * post-vectorization "now live" update in this rollout, because nothing in the pipeline emits a
  * signal this handler could await (fabFileVectorize only reaches the browser).
  */
-export function formatIngestOutcome(outcome: SlackLakeIngestOutcome): string {
+export function formatIngestOutcome(
+  outcome: SlackLakeIngestOutcome,
+  opts: { autoChunkEnabled?: boolean } = {}
+): string {
   if (!outcome.ok) return outcome.message;
 
   const { lakeName, added, duplicates, rejected } = outcome;
+  // Mirrors the setting's own default (settings.ts `enableAutoChunk`, defaultValue true), so an
+  // unset flag reads as on rather than warning about indexing that is in fact running.
+  const autoChunkEnabled = opts.autoChunkEnabled ?? true;
   const lines: string[] = [];
 
   if (added.length > 0) {
     const names = added.map(name => `"${name}"`).join(', ');
-    lines.push(
-      `Added ${added.length} file${added.length === 1 ? '' : 's'} to *${lakeName}*: ${names}. ` +
-        'Processing now - it will be searchable once indexing finishes.'
-    );
+    // With enableAutoChunk off, objectCreated.ts never enqueues the chunk job, so the file is
+    // stored but never indexed - promising searchability would be a lie the user cannot act on.
+    const tail = autoChunkEnabled
+      ? 'Processing now - it will be searchable once indexing finishes.'
+      : 'Automatic indexing is off, so it will not be searchable until an admin reprocesses it.';
+    lines.push(`Added ${added.length} file${added.length === 1 ? '' : 's'} to *${lakeName}*: ${names}. ` + tail);
   }
 
   if (duplicates.length > 0) {
@@ -152,7 +176,9 @@ export interface RunDataLakeSlackCommandDeps {
   channel: string;
   messageTs: string;
   threadTs?: string;
-  adminSettings: { getSettingsValue(key: 'EnableDataLakeSlackAdd'): Promise<boolean | undefined> };
+  adminSettings: {
+    getSettingsValue(key: 'EnableDataLakeSlackAdd' | 'enableAutoChunk'): Promise<boolean | undefined>;
+  };
   ingest: SlackLakeIngestDeps & { dataLakes: DataLakeCommandRepo };
   sendMessage: (args: { channel: string; text: string; threadTs?: string }) => Promise<unknown>;
   logger: { info: (message: string) => void; error: (message: string, meta?: unknown) => void };
@@ -174,6 +200,10 @@ export async function runDataLakeSlackCommand(deps: RunDataLakeSlackCommandDeps)
       return;
     }
 
+    // Read alongside the gate rather than inside the formatter: it only shapes the reply wording,
+    // and a settings read per reply is cheaper here than threading a repository into formatting.
+    const autoChunkEnabled = await deps.adminSettings.getSettingsValue('enableAutoChunk');
+
     const response = await handleDataLakeCommand({
       command: deps.command,
       actor: deps.actor,
@@ -181,6 +211,7 @@ export async function runDataLakeSlackCommand(deps: RunDataLakeSlackCommandDeps)
       channel: deps.channel,
       messageTs: deps.messageTs,
       deps: deps.ingest,
+      autoChunkEnabled,
     });
     await deps.sendMessage({ channel: deps.channel, text: response, threadTs: deps.threadTs });
   } catch (err) {
