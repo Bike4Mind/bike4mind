@@ -171,9 +171,8 @@ async function run() {
 
   console.log('\n=== Admin Settings + API Key Encryption Migration ===');
   console.log(`Stage: ${Resource.App.stage}`);
-  let mode = 'LIVE';
-  if (DRY_RUN) mode = 'DRY RUN (no changes)';
-  else if (REENCRYPT) mode = 'RE-ENCRYPT (key rotation)';
+  const action = REENCRYPT ? 'RE-ENCRYPT (key rotation)' : 'ENCRYPT';
+  const mode = DRY_RUN ? `DRY RUN - ${action} (no changes)` : `LIVE - ${action}`;
   console.log(`Mode: ${mode}\n`);
 
   await connectDB(mongoURI);

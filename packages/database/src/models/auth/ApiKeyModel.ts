@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { softDeletePlugin } from '../../utils/mongo';
 import { ApiKeyType, IApiKeyDocument, IApiKeyRepository } from '@bike4mind/common';
-import { decryptAtRest, encryptAtRest } from '@bike4mind/utils';
+import { decryptAtRest, encryptAtRest, isSecretsAtRestConfigured } from '@bike4mind/utils';
 import BaseRepository from '@bike4mind/db-core';
 
 interface IApiKeyModel extends mongoose.Model<IApiKeyDocument> {}
@@ -28,12 +28,16 @@ class ApiKeyRepository extends BaseRepository<IApiKeyDocument> implements IApiKe
   // Encrypt the provider key at rest on the way in (createApiKey stores through
   // BaseRepository.create). The returned object echoes the submitted plaintext rather
   // than the stored ciphertext, preserving the create response shape callers expect.
+  //
+  // Fail closed in a cloud stage: if no key is configured we must not silently persist a
+  // provider key in plaintext. Only a deliberate self-host install (B4M_SELF_HOST) is allowed
+  // to store plaintext, matching how the rest of the app degrades without SECRET_ENCRYPTION_KEY.
   async create(data: Omit<IApiKeyDocument, 'id' | 'updatedAt' | 'createdAt'>) {
+    if (!isSecretsAtRestConfigured() && process.env.B4M_SELF_HOST !== 'true') {
+      throw new Error('SECRET_ENCRYPTION_KEY is not configured - cannot store a provider API key');
+    }
     const stored = await super.create({ ...data, apiKey: encryptAtRest(data.apiKey) });
     return { ...stored, apiKey: data.apiKey };
-  }
-  createe(apiKey: Omit<IApiKeyDocument, 'id' | 'updatedAt' | 'createdAt'>) {
-    return this.model.create({ ...apiKey, apiKey: encryptAtRest(apiKey.apiKey) });
   }
   async findByUserIdAndType(userId: string, type: ApiKeyType) {
     const doc = await this.model.findOne({ userId, type, isActive: true }).lean().exec();

@@ -30,6 +30,10 @@ let warnedDecryptFailure = false;
 export function configureSecretsAtRest(key: string | undefined, previous?: string | undefined): void {
   currentKey = key && isValidEncryptionKey(key) ? key : undefined;
   previousKey = previous && isValidEncryptionKey(previous) ? previous : undefined;
+  // Reset the log-once guards so a genuinely new misconfiguration or decrypt failure after a
+  // (re)configuration - e.g. a key rotation - is still surfaced once.
+  warnedMissingKey = false;
+  warnedDecryptFailure = false;
 }
 
 /** True when a usable encryption key is registered. */
