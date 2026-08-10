@@ -7,6 +7,7 @@ export * from './models';
 export * from './modelPriceCatalog';
 export * from './modelCatalog';
 export * from './modelIdJoin';
+export * from './successorCostDelta';
 export * from './pricing';
 export * from './realtimeVoicePricing';
 export * from './imageGeneration';
