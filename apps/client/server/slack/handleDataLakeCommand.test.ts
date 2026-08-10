@@ -240,7 +240,8 @@ describe('runDataLakeSlackCommand (gate + dispatch)', () => {
   });
 
   it('is a silent no-op when the flag is off (dormant): no reply, no ingest', async () => {
-    getSettingsValue.mockResolvedValue(false);
+    // Parent on, child off - isolates the EnableDataLakeSlackAdd gate.
+    getSettingsValue.mockImplementation(async (key: string) => key === 'EnableDataLakes');
 
     await runDataLakeSlackCommand(baseDeps());
 
@@ -248,6 +249,21 @@ describe('runDataLakeSlackCommand (gate + dispatch)', () => {
     expect(sendMessage).not.toHaveBeenCalled();
     expect(ingestSlackFilesIntoLake).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalled();
+  });
+
+  it('is also a no-op when the PARENT EnableDataLakes flag is off', async () => {
+    // The child declares dependsOn: 'EnableDataLakes', so the admin UI hides it while the parent
+    // is off - but that is a UI affordance, not enforcement. A direct settings-store write could
+    // leave the child on under a disabled parent; this check is what actually holds.
+    getSettingsValue.mockImplementation(async (key: string) => key !== 'EnableDataLakes');
+
+    await runDataLakeSlackCommand(baseDeps());
+
+    expect(getSettingsValue).toHaveBeenCalledWith('EnableDataLakes');
+    // Short-circuits before the child flag is even read.
+    expect(getSettingsValue).not.toHaveBeenCalledWith('EnableDataLakeSlackAdd');
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(ingestSlackFilesIntoLake).not.toHaveBeenCalled();
   });
 
   it('treats an unset flag (undefined) as off', async () => {
@@ -270,8 +286,8 @@ describe('runDataLakeSlackCommand (gate + dispatch)', () => {
   });
 
   it('reads enableAutoChunk and reflects it in the reply wording', async () => {
-    // Gate on, auto-chunk off - so the confirmation must not promise the file becomes searchable.
-    getSettingsValue.mockImplementation(async (key: string) => key === 'EnableDataLakeSlackAdd');
+    // Both gates on, auto-chunk off - so the confirmation must not promise searchability.
+    getSettingsValue.mockImplementation(async (key: string) => key !== 'enableAutoChunk');
     parseDataLakeCommand.mockReturnValue({ subcommand: 'add', lakeSlug: 'sales', rawArgs: '' });
     ingestSlackFilesIntoLake.mockResolvedValue({
       ok: true,
