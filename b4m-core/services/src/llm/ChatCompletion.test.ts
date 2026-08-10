@@ -124,6 +124,14 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 vi.mock('../apiKeyService', () => ({
   getEffectiveApiKey: vi.fn(),
   getEffectiveLLMApiKeys: vi.fn(),
+  // Consumed by resolveToolAvailability (toolAvailability.ts), threaded through
+  // ChatCompletionProcess into ToolBuilder.buildTools - default to "not configured" so
+  // resolveToolAvailability computes real (all-false) values instead of hitting its
+  // outer catch, which would silently return {} and mask a wiring regression.
+  getOpenWeatherKey: vi.fn().mockResolvedValue(undefined),
+  getWolframAlphaKey: vi.fn().mockResolvedValue(undefined),
+  getFmpApiKey: vi.fn().mockResolvedValue(undefined),
+  getFirecrawlConfig: vi.fn().mockResolvedValue({}),
 }));
 
 const mockedGetLlmByModel = vi.mocked(getLlmByModel);
@@ -1953,6 +1961,50 @@ describe('ChatCompletionProcess', () => {
         allowedAgents: [],
       });
       expect(agentStore).toBeUndefined();
+    });
+  });
+
+  // Unavailable tools must not reach the model as a real schema, even when the client's
+  // persisted preference still requests them - see toolAvailability.ts and sharedToolBuilder.ts's
+  // enabledTools filter. Asserted at this layer because toolAvailability.ts's own tests cover the
+  // resolver's logic in isolation, not whether ChatCompletionProcess actually computes and threads
+  // the result into ToolBuilder.buildTools.
+  describe('tool-availability computed and threaded into buildTools', () => {
+    it('passes a resolved toolAvailability into buildTools', async () => {
+      const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([]);
+      buildToolsSpy.mockClear();
+      const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!'])),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }] as any);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      const toolAvailability = buildToolsSpy.mock.calls[0]?.[0]?.toolAvailability;
+      buildToolsSpy.mockRestore();
+      buildToolPromptSpy.mockRestore();
+
+      expect(toolAvailability).toBeTypeOf('object');
     });
   });
 

@@ -25,6 +25,7 @@ import {
   getConversationContextSystemMessage,
 } from '../../conversationContextService';
 import { buildSharedTools } from '../sharedToolBuilder';
+import type { ToolAvailability } from '../toolAvailability';
 import type { SubagentTelemetryData } from './implementation/delegateToAgent';
 import type { IChatCompletionServiceOptions, QuestStartBodySchema } from '../ChatCompletionFeatures';
 
@@ -285,6 +286,7 @@ export interface BuildToolsArgs {
   thinking?: { enabled: boolean; budget_tokens: number };
   agentStore?: ServerAgentStore;
   externalTools?: Record<string, ToolDefinition>;
+  toolAvailability?: ToolAvailability;
 }
 
 // Reuse the role enum validated at the API boundary by QuestStartBodySchema so the
@@ -667,6 +669,7 @@ export class ToolBuilder {
     thinking,
     agentStore,
     externalTools,
+    toolAvailability,
   }: BuildToolsArgs): ICompletionOptionTools[] | undefined {
     return buildSharedTools(
       {
@@ -872,6 +875,7 @@ export class ToolBuilder {
         agentOnlyMcpServers,
         getAbortSignal,
         externalTools,
+        toolAvailability,
       }
     );
   }
