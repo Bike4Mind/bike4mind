@@ -242,9 +242,11 @@ export async function ingestSlackFilesIntoLake(
   const accepted: Array<{ fileName: string; mimeType: string; url: string }> = [];
 
   // The Slack validator's 50MB ceiling is not the binding one: createFabFile enforces the
-  // `MaxFileSize` admin setting (default 20MB) AFTER the download, so without this a 30MB file is
-  // transferred in full and then refused. Checked against Slack's claimed size, which is all we
-  // have pre-download; createFabFile still re-checks the real buffer, so this only saves transfer.
+  // `MaxFileSize` admin setting AFTER the download, so without this an over-limit file is
+  // transferred in full and then refused. That setting's schema default is 30MB (create.ts's
+  // DEFAULT_MAX_FILE_SIZE of 20 applies only when the settings map has no entry at all).
+  // Checked against Slack's claimed size, which is all we have pre-download; createFabFile still
+  // re-checks the real buffer, so this only saves the wasted transfer.
   const maxFileSizeBytes = await deps.resolveMaxFileSizeBytes?.();
 
   for (const file of files) {
