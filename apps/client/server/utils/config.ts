@@ -1,4 +1,5 @@
 import { Resource } from 'sst';
+import { configureSecretsAtRest } from '@bike4mind/utils';
 
 /**
  * Safe read for a manifest-optional secret (see b4m-core/resource manifest.ts
@@ -114,5 +115,11 @@ const isE2EEnabled = () => {
   if (process.env.E2E_ENDPOINTS_ENABLED === 'true') return true;
   return isDevelopment();
 };
+
+// Inject the at-rest encryption key into the shared secrets module once, at module
+// load. Config is imported by every server context before it reaches Mongo (each
+// connectDB call reads Config.MONGODB_URI), so this runs before any repository read
+// decrypts a stored secret. The database layer cannot import Config directly.
+configureSecretsAtRest(Config.SECRET_ENCRYPTION_KEY, Config.SECRET_ENCRYPTION_KEY_PREVIOUS);
 
 export { Config, isProduction, isDevelopment, isE2EEnabled };

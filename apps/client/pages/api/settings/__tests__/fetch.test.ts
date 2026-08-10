@@ -7,6 +7,11 @@ let stored: Array<Record<string, unknown>> = [];
 vi.mock('@bike4mind/database/infra', () => ({
   AdminSettings: { find: () => ({ lean: () => Promise.resolve(stored) }) },
 }));
+// `enc:` marks ciphertext so a test can prove the mask is derived from decrypted plaintext.
+// A non-`enc:` value passes through, matching decryptAtRest's plaintext-coexistence contract.
+vi.mock('@bike4mind/utils', () => ({
+  decryptAtRest: (v: unknown) => (typeof v === 'string' && v.startsWith('enc:') ? v.slice(4) : v),
+}));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({ get: (handler: (...a: unknown[]) => unknown) => handler }),
 }));
@@ -68,6 +73,15 @@ describe('settings/fetch sensitive value redaction', () => {
       expect(entry?.settingValue).toBe(`${SENSITIVE_SETTING_MASK}tail`);
       expect(serialized).not.toContain(`sk-live-${key}-tail`);
     }
+  });
+
+  it('masks the decrypted plaintext, so the mask carries the real last-4 not the ciphertext tail', async () => {
+    // Stored as ciphertext ending in a hash tail; decrypted plaintext ends in "real".
+    stored = [{ settingName: 'anthropicDemoKey', settingValue: 'enc:sk-ant-api03-real' }];
+    const result = await runHandler();
+    const entry = result.find(s => s.settingName === 'anthropicDemoKey');
+    expect(entry?.settingValue).toBe(`${SENSITIVE_SETTING_MASK}real`);
+    expect(JSON.stringify(result)).not.toContain('sk-ant-api03-real');
   });
 
   it('still returns non-sensitive values in full', async () => {

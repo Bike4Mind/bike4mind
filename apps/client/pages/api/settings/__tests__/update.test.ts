@@ -12,7 +12,17 @@ vi.mock('@bike4mind/database/infra', () => ({
     findOneAndUpdate: (...args: unknown[]) => findOneAndUpdate(...args),
   },
 }));
-vi.mock('@bike4mind/utils', () => ({ invalidateSettingsCache: vi.fn() }));
+// Deterministic stand-ins for the shared crypto. `enc:` marks ciphertext so the tests can
+// assert a value was encrypted at rest without depending on real AES output. update.ts pulls
+// encryptSecret/isEncrypted/isValidEncryptionKey through @server/security/secretEncryption,
+// which re-exports from @bike4mind/utils, so mocking utils covers those too.
+vi.mock('@bike4mind/utils', () => ({
+  invalidateSettingsCache: vi.fn(),
+  decryptAtRest: (v: unknown) => (typeof v === 'string' && v.startsWith('enc:') ? v.slice(4) : v),
+  encryptSecret: (v: string) => `enc:${v}`,
+  isEncrypted: (v: unknown) => typeof v === 'string' && v.startsWith('enc:'),
+  isValidEncryptionKey: (k: unknown) => typeof k === 'string' && k.length === 64,
+}));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => ({ put: (handler: (...a: unknown[]) => unknown) => handler }),
 }));
@@ -55,15 +65,18 @@ describe('settings/update sensitive value handling', () => {
     vi.clearAllMocks();
   });
 
-  it('writes a newly submitted secret through', async () => {
-    stageWriteResult('anthropicDemoKey', 'sk-ant-api03-brandnew');
+  it('encrypts a newly submitted secret at rest, never storing the plaintext', async () => {
+    stageWriteResult('anthropicDemoKey', 'enc:sk-ant-api03-brandnew');
     await runHandler('anthropicDemoKey', 'sk-ant-api03-brandnew');
 
     expect(findOneAndUpdate).toHaveBeenCalledWith(
       { settingName: 'anthropicDemoKey' },
-      { $set: { settingValue: 'sk-ant-api03-brandnew' } },
+      { $set: { settingValue: 'enc:sk-ant-api03-brandnew' } },
       expect.anything()
     );
+    // The plaintext must never be the value handed to the store.
+    const storedArg = findOneAndUpdate.mock.calls[0][1] as { $set: { settingValue: string } };
+    expect(storedArg.$set.settingValue).not.toBe('sk-ant-api03-brandnew');
   });
 
   it('never echoes the submitted secret back in the write response', async () => {
@@ -75,7 +88,9 @@ describe('settings/update sensitive value handling', () => {
   });
 
   it('treats a mask written back as "keep the stored secret" and does not overwrite it', async () => {
-    stored = { settingName: 'anthropicDemoKey', settingValue: 'sk-ant-api03-original' };
+    // Stored value is ciphertext; the preserve path must decrypt before masking so the
+    // response carries the real last-4, and must never expose the plaintext.
+    stored = { settingName: 'anthropicDemoKey', settingValue: 'enc:sk-ant-api03-original' };
     const result = await runHandler('anthropicDemoKey', `${SENSITIVE_SETTING_MASK}inal`);
 
     expect(findOneAndUpdate).not.toHaveBeenCalled();
@@ -120,5 +135,31 @@ describe('settings/update sensitive value handling', () => {
     stageWriteResult('enforceMFA', 'true');
     const result = await runHandler('enforceMFA', 'true');
     expect(result.settingValue).toBe('true');
+  });
+
+  it('stores a non-sensitive string verbatim, never encrypting it', async () => {
+    stageWriteResult('tagLineMain', 'Welcome aboard');
+    await runHandler('tagLineMain', 'Welcome aboard');
+    expect(findOneAndUpdate).toHaveBeenCalledWith(
+      { settingName: 'tagLineMain' },
+      { $set: { settingValue: 'Welcome aboard' } },
+      expect.anything()
+    );
+  });
+
+  it('refuses to persist a sensitive value when no valid encryption key is configured', async () => {
+    // Fail closed: a misconfigured stage must not silently store a provider key in plaintext.
+    vi.stubGlobal('__noop__', undefined);
+    const { Config } = (await import('@server/utils/config')) as unknown as {
+      Config: { SECRET_ENCRYPTION_KEY: string };
+    };
+    const original = Config.SECRET_ENCRYPTION_KEY;
+    Config.SECRET_ENCRYPTION_KEY = 'too-short';
+    try {
+      await expect(runHandler('anthropicDemoKey', 'sk-ant-api03-brandnew')).rejects.toThrow(/SECRET_ENCRYPTION_KEY/);
+      expect(findOneAndUpdate).not.toHaveBeenCalled();
+    } finally {
+      Config.SECRET_ENCRYPTION_KEY = original;
+    }
   });
 });

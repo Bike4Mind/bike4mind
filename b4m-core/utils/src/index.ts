@@ -105,3 +105,4 @@ export * from './circuitBreaker';
 export * from './rateLimitHeaders';
 export * from './voiceHistory';
 export * from './lambdaErrorHandler';
+export * from './security';

@@ -7,13 +7,13 @@ import {
   settingsMap,
 } from '@bike4mind/common';
 import { AdminSettings } from '@bike4mind/database/infra';
-import { invalidateSettingsCache } from '@bike4mind/utils';
+import { decryptAtRest, invalidateSettingsCache } from '@bike4mind/utils';
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@server/utils/config';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
-import { encryptSecret, isEncrypted } from '@server/security/secretEncryption';
+import { encryptSecret, isEncrypted, isValidEncryptionKey } from '@server/security/secretEncryption';
 import { materializePublicSettingsArtifactSafe } from '@server/utils/publicSettingsArtifact';
 
 // Update Admin Setting
@@ -43,7 +43,11 @@ const handler = baseApi().put(
     if (isSensitiveSetting && isMaskedSensitiveSettingValue(value)) {
       const existing = await AdminSettings.findOne({ settingName: key }).lean();
       if (!existing) throw new NotFoundError('Admin setting not found');
-      return res.json({ ...existing, settingValue: maskSensitiveSettingValue(existing.settingValue) });
+      // The stored value is ciphertext; mask the decrypted plaintext so the admin still
+      // sees the real last-4, not the ciphertext tail. decryptAtRest passes plaintext
+      // (not-yet-migrated) values through unchanged.
+      const existingPlaintext = typeof existing.settingValue === 'string' ? decryptAtRest(existing.settingValue) : '';
+      return res.json({ ...existing, settingValue: maskSensitiveSettingValue(existingPlaintext) });
     }
 
     // Clearing a sensitive setting is a legitimate admin action, but it destroys a live
@@ -90,9 +94,22 @@ const handler = baseApi().put(
       value = sreValue;
     }
 
+    // Encrypt sensitive scalar values at rest. sreAgentConfig (an object handled above) is
+    // not isSensitive and never reaches this branch. A confirmed clear ('') is stored as-is,
+    // and an already-encrypted value is left untouched (idempotent). The submitted plaintext
+    // stays in `value` for the response mask below so the admin sees the real last-4.
+    let settingValueToStore: unknown = value;
+    if (isSensitiveSetting && typeof value === 'string' && value !== '' && !isEncrypted(value)) {
+      const encryptionKey = Config.SECRET_ENCRYPTION_KEY;
+      if (!encryptionKey || !isValidEncryptionKey(encryptionKey)) {
+        throw new Error('SECRET_ENCRYPTION_KEY is not configured - cannot store a sensitive setting');
+      }
+      settingValueToStore = encryptSecret(value, encryptionKey);
+    }
+
     const updatedSetting = await AdminSettings.findOneAndUpdate(
       { settingName: key },
-      { $set: { settingValue: value } },
+      { $set: { settingValue: settingValueToStore } },
       { upsert: true, new: true }
     );
 
@@ -136,11 +153,12 @@ const handler = baseApi().put(
     }
 
     // Never echo a sensitive value back, not even the one just submitted - the write
-    // response is the other way a stored secret could land in the browser payload.
+    // response is the other way a stored secret could land in the browser payload. Mask
+    // the submitted plaintext (`value`), not the stored ciphertext, so the last-4 is real.
     if (isSensitiveSetting) {
       const redacted = updatedSetting.toObject();
       (redacted as unknown as Record<string, unknown>).settingValue = maskSensitiveSettingValue(
-        updatedSetting.settingValue
+        typeof value === 'string' ? value : ''
       );
       return res.json(redacted);
     }
