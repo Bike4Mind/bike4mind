@@ -165,3 +165,64 @@ describe('createFabFile (upload moderation gate root cause)', () => {
     expect(persistedData.filePath).toMatch(/^generated-audio\/.+\.mp3$/);
   });
 });
+
+// This is the door researchTaskService/process.ts and downloadRelevantLinks.ts create files
+// through - it had NO lake-tag gating at all before this, unlike the update/toggle doors.
+describe('createFabFile - lake-tag gate at create time', () => {
+  const findByDatalakeTag = vi.fn().mockResolvedValue(null);
+
+  const mockAdaptersFor = (isAdmin: boolean): CreateFabFileAdapters =>
+    ({
+      db: {
+        fabFiles: { create: vi.fn().mockImplementation(async data => ({ id: 'fab-1', ...data })) },
+        adminSettings: { findAll: vi.fn().mockResolvedValue([]), findBySettingNames: vi.fn().mockResolvedValue([]) },
+        users: { findById: vi.fn().mockResolvedValue({ id: 'u1', isAdmin }) },
+        dataLakes: { findByDatalakeTag },
+      },
+      storage: { generateSignedUrl: vi.fn().mockResolvedValue('url'), upload: vi.fn() },
+    }) as unknown as CreateFabFileAdapters;
+
+  it('refuses a non-admin creating a file with a static-registry-prefixed tag', async () => {
+    await expect(
+      createFabFile(
+        'u1',
+        { ...base, fileName: 'notes.txt', mimeType: 'text/plain', tags: [{ name: 'opti:report', strength: 1 }] },
+        mockAdaptersFor(false)
+      )
+    ).rejects.toThrow(/only an admin can change this data lake/i);
+  });
+
+  it('allows an admin to create a file with a static-registry-prefixed tag', async () => {
+    const result = await createFabFile(
+      'u1',
+      { ...base, fileName: 'notes.txt', mimeType: 'text/plain', tags: [{ name: 'opti:report', strength: 1 }] },
+      mockAdaptersFor(true)
+    );
+    expect(result.id).toBe('fab-1');
+  });
+
+  it('refuses a datalake:* meta-tag naming no lake, even for the fallback researchTaskService path', async () => {
+    await expect(
+      createFabFile(
+        'u1',
+        {
+          ...base,
+          fileName: 'notes.txt',
+          mimeType: 'text/plain',
+          tags: [{ name: 'datalake:ghost-lake', strength: 1 }],
+        },
+        mockAdaptersFor(false)
+      )
+    ).rejects.toThrow(/only the creator can change this data lake/i);
+  });
+
+  it('does not touch the dataLakes adapter for a create with no lake-related tags', async () => {
+    findByDatalakeTag.mockClear();
+    await createFabFile(
+      'u1',
+      { ...base, fileName: 'notes.txt', mimeType: 'text/plain', tags: [{ name: 'notes', strength: 1 }] },
+      mockAdaptersFor(false)
+    );
+    expect(findByDatalakeTag).not.toHaveBeenCalled();
+  });
+});

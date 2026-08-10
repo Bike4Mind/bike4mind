@@ -340,6 +340,7 @@ async function ingest(lake: LakeTarget, opts: Options): Promise<number> {
       // Wrap instead of passing the model: createFabFile detaches this method
       // (`db.organizations?.findById`), and an unbound Model.findById throws.
       organizations: { findById: (id: string) => Organization.findById(id).exec() },
+      dataLakes: dataLakeRepository,
     },
     storage: {
       upload: async (

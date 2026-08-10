@@ -289,6 +289,7 @@ export const handler = withEventContext(async (event, logger) => {
             fabFiles: fabFileRepository,
             adminSettings: adminSettingsRepository,
             users: userRepository,
+            dataLakes: dataLakeRepository,
           },
           storage: {
             upload: (filepath, content, option) => {

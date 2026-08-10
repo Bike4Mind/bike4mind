@@ -14,6 +14,7 @@ vi.mock('@bike4mind/database', () => ({
   FabFile: {},
   User: {},
   adminSettingsRepository: {},
+  dataLakeRepository: {},
 }));
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: vi.fn(() => ({ upload: vi.fn(), getSignedUrl: vi.fn() })),
