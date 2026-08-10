@@ -174,6 +174,14 @@ describe('search_knowledge_base semantic fallback logging', () => {
     );
     expect(fallbackWarnings).toHaveLength(0);
   });
+
+  it('warns when fabfilechunks is not wired, before resolveEmbeddingContext ever runs', async () => {
+    // The default makeContext() only wires fabfiles, not fabfilechunks - this is the earlier,
+    // real-production-reachable gate trySemanticKbSearch checks before calling
+    // resolveEmbeddingContext at all (unlike the type-guaranteed adminSettings/apiKeys check).
+    await run(makeContext());
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('fabfiles/fabfilechunks not wired'));
+  });
 });
 
 describe('search_knowledge_base agent kbScope enforcement', () => {

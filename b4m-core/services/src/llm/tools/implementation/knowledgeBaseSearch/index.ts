@@ -256,6 +256,7 @@ async function trySemanticKbSearch(
 ): Promise<SemanticArmResult> {
   const chunkRepo = context.db.fabfilechunks;
   if (!context.db.fabfiles || !chunkRepo?.findVectorsByFabFileIds) {
+    context.logger.warn('📚 [semantic] falling back to keyword search: fabfiles/fabfilechunks not wired');
     return NO_SEMANTIC_RESULT; // semantic deps not wired - use keyword
   }
   try {
@@ -332,6 +333,7 @@ async function tryScopedSemanticKbSearch(
 ): Promise<SemanticArmResult> {
   const chunkRepo = context.db.fabfilechunks;
   if (!context.db.fabfiles || !chunkRepo?.findVectorsByFabFileIds) {
+    context.logger.warn('📚 [semantic] falling back to keyword search: fabfiles/fabfilechunks not wired');
     return NO_SEMANTIC_RESULT;
   }
   try {

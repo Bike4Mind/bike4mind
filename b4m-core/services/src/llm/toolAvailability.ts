@@ -8,9 +8,7 @@
  *   keyless) - the Tools picker UI depends on this to grey out a row and show the right tooltip.
  * - `isToolOfferable` is the ENFORCEMENT-only wrapper used when building the tool schema list sent
  *   to the model: it forces search_knowledge_base to stay offerable (it degrades to keyword search
- *   rather than failing, so hiding its schema would be strictly worse) and follows a companion tool
- *   back to its gating parent (edit_image -> image_generation), since `resolveEnabledTools`
- *   (ChatCompletionProcess.ts) auto-pairs them and edit_image has no availability entry of its own.
+ *   rather than failing, so hiding its schema would be strictly worse).
  *
  * Moved out of apps/client/pages/api/settings/serverConfig.ts (which keeps a thin wrapper of the
  * same name) so b4m-core/services can filter the model-facing tool list by availability, not just
@@ -89,6 +87,24 @@ type Taint = Partial<
 >;
 
 /**
+ * Every tool id this module gates, for the outer-catch fallback below. Keep in sync with the
+ * `return` in `resolveToolAvailability` - nothing enforces that automatically, so a tool added
+ * there without a matching entry here silently keeps fail-open behavior on that one rare path.
+ */
+const GATED_TOOLS: readonly B4MLLMTools[] = [
+  'web_search',
+  'deep_research',
+  'weather_info',
+  'wolfram_alpha',
+  'fmp_financial_data',
+  'image_generation',
+  'edit_image',
+  'music_generation',
+  'audio_generation',
+  'search_knowledge_base',
+];
+
+/**
  * Resolves which key-gated tools are usable, mirroring the same key getters the tools themselves
  * use so a caller never disables a tool that would actually work (and vice versa). Only booleans
  * are returned - never the key values.
@@ -98,9 +114,11 @@ type Taint = Partial<
  * any one lookup throwing defaulted EVERY tool to available. This function itself never rejects:
  * callers thread it through an existing Promise.all on a request's critical path.
  *
- * LOCK-STEP: the tool ids returned here must have a matching entry in
- * `MISSING_KEY_TOOLTIPS` in `apps/client/app/components/Session/AISettings/ToolsSection.tsx`,
- * which supplies the user-facing "why it's disabled" text.
+ * LOCK-STEP: every tool id here that also has its own Tools-picker row must have a matching
+ * entry in `MISSING_KEY_TOOLTIPS` in `apps/client/app/components/Session/AISettings/ToolsSection.tsx`,
+ * which supplies the user-facing "why it's disabled" text. `edit_image` is exempt - it is a
+ * companion of `image_generation` (see `addPairedTool` in ChatCompletionProcess.ts) with no
+ * picker row of its own, so nothing ever calls `isToolKeyMissing('edit_image', ...)`.
  */
 export async function resolveToolAvailability(
   userId: string | undefined,
@@ -169,6 +187,11 @@ export async function resolveToolAvailability(
 
     const hasFirecrawl = !!(firecrawlConfig.apiKey || firecrawlConfig.apiUrl);
     const hasImageKey = imageKeys.some(usable);
+    // edit_image supports fewer providers than image_generation (bfl/gemini/openai - no xAI, per
+    // imageEdit/index.ts) and has no self-hosted local-backend path, so it needs its own check
+    // rather than reusing image_generation's: a user with only an xAI key would otherwise read as
+    // edit_image-available and hit a tool that has no branch for that provider at all.
+    const hasEditImageKey = imageKeys.slice(0, 3).some(usable); // [bfl, openai, gemini] of imageProviders
     // Knowledge Base semantic search needs an embeddings provider key (VoyageAI/OpenAI).
     // Note: this checks "any embeddings key present", not the admin's `defaultEmbeddingModel`
     // provider specifically. If the admin selects a Voyage model but only an OpenAI key is set
@@ -201,6 +224,8 @@ export async function resolveToolAvailability(
       fmp_financial_data: maybeFailOpen(!!fmpKey, taint.fmpKey),
       // Available with a provider key OR a self-hosted local image backend (which needs none).
       image_generation: maybeFailOpen(hasImageKey || isLocalImageBackendAvailable(), taint.imageKeys),
+      // No xAI, no local-backend path - see hasEditImageKey's comment above.
+      edit_image: maybeFailOpen(hasEditImageKey, taint.imageKeys),
       // Background-music generation needs an ElevenLabs key (user or admin demo key).
       music_generation: maybeFailOpen(usable(elevenLabsKey), taint.elevenLabsKey),
       // audio_generation: speech works with OpenAI OR ElevenLabs; sound effects need
@@ -216,19 +241,18 @@ export async function resolveToolAvailability(
     };
   } catch (err) {
     // Last-resort safety net for anything outside the per-lookup Promise.allSettled above (this
-    // function must never reject - see the doc comment). Always fails open, matching the original
-    // behavior this replaced, since a bug here should never take down the whole tool list.
-    logger?.warn('resolveToolAvailability: unexpected error, defaulting every tool to available', err);
+    // function must never reject - see the doc comment). Honors onLookupError like every
+    // individual lookup does: fails open under the UI's default policy (an empty map reads as
+    // "every tool unconditional" downstream), fails closed under the enforcement policy (every
+    // known gated tool explicit false) rather than silently reverting a 'unavailable' caller to
+    // fail-open on this one unexpected path.
+    logger?.warn(`resolveToolAvailability: unexpected error, defaulting to ${onLookupError}`, err);
+    if (onLookupError === 'unavailable') {
+      return Object.fromEntries(GATED_TOOLS.map(tool => [tool, false])) as ToolAvailability;
+    }
     return {};
   }
 }
-
-/** Tools with no availability entry of their own that ride on a companion tool's key/config. */
-const COMPANION_AVAILABILITY_KEY: Partial<Record<B4MLLMTools, B4MLLMTools>> = {
-  // resolveEnabledTools (ChatCompletionProcess.ts) auto-pairs image_generation -> edit_image;
-  // edit_image needs the same key, but has no entry of its own in ToolAvailability.
-  edit_image: 'image_generation',
-};
 
 /** search_knowledge_base degrades to keyword search rather than failing, so it is always offered
  * regardless of `availability` - this is the ENFORCEMENT-only carve-out; the Tools-picker UI must
@@ -244,6 +268,5 @@ const ALWAYS_OFFERABLE = new Set<B4MLLMTools>(['search_knowledge_base']);
 export function isToolOfferable(tool: string, availability: ToolAvailability | undefined): boolean {
   if (ALWAYS_OFFERABLE.has(tool as B4MLLMTools)) return true;
   if (!availability) return true;
-  const key = COMPANION_AVAILABILITY_KEY[tool as B4MLLMTools] ?? (tool as B4MLLMTools);
-  return availability[key] !== false;
+  return availability[tool as B4MLLMTools] !== false;
 }

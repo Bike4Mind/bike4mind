@@ -171,6 +171,62 @@ describe('resolveToolAvailability - per-lookup failure isolation', () => {
 
     await expect(resolveToolAvailability('user-1', { db })).resolves.toBeTypeOf('object');
   });
+
+  it('outer-catch safety net honors onLookupError instead of always failing open', async () => {
+    // A synchronous throw (not a rejection) bypasses Promise.allSettled entirely and lands in
+    // the outer catch - this must still respect the caller's policy, not silently revert an
+    // 'unavailable' (fail-closed) caller to an empty, effectively fail-open map.
+    resolveWebSearchProvider.mockImplementation(() => {
+      throw new Error('sync boom');
+    });
+
+    const failOpen = await resolveToolAvailability('user-1', { db });
+    expect(failOpen).toEqual({});
+
+    const failClosed = await resolveToolAvailability('user-1', { db }, { onLookupError: 'unavailable' });
+    expect(failClosed.weather_info).toBe(false);
+    expect(failClosed.image_generation).toBe(false);
+    expect(failClosed.edit_image).toBe(false);
+    // search_knowledge_base's ENFORCEMENT carve-out lives in isToolOfferable, not in this raw
+    // map - the raw map itself is honestly false here too.
+    expect(failClosed.search_knowledge_base).toBe(false);
+  });
+});
+
+describe('resolveToolAvailability - edit_image (own provider set, no xAI, no local backend)', () => {
+  it('is available when an eligible provider key resolves (bfl/openai/gemini)', async () => {
+    getEffectiveApiKey.mockImplementation(async (_userId: string, sel: { type: ApiKeyType }) =>
+      sel.type === ApiKeyType.gemini ? 'gemini-key' : undefined
+    );
+    const availability = await resolveToolAvailability('user-1', { db });
+    expect(availability.edit_image).toBe(true);
+    expect(availability.image_generation).toBe(true);
+  });
+
+  it('is unavailable with only an xAI key, even though image_generation is available', async () => {
+    getEffectiveApiKey.mockImplementation(async (_userId: string, sel: { type: ApiKeyType }) =>
+      sel.type === ApiKeyType.xai ? 'xai-key' : undefined
+    );
+    const availability = await resolveToolAvailability('user-1', { db });
+    expect(availability.image_generation).toBe(true);
+    expect(availability.edit_image).toBe(false);
+  });
+
+  it('stays unavailable under a self-hosted local image backend, unlike image_generation', async () => {
+    // image_generation's local-backend exemption is imageEdit-specific plumbing edit_image has
+    // none of (no IMAGE_GEN_BASE_URL branch in imageEdit/index.ts) - a keyless self-host box
+    // must not report edit_image as usable just because image_generation is.
+    process.env.B4M_SELF_HOST = 'true';
+    process.env.IMAGE_GEN_BASE_URL = 'http://imagegen:7860';
+    try {
+      const availability = await resolveToolAvailability('user-1', { db });
+      expect(availability.image_generation).toBe(true);
+      expect(availability.edit_image).toBe(false);
+    } finally {
+      delete process.env.B4M_SELF_HOST;
+      delete process.env.IMAGE_GEN_BASE_URL;
+    }
+  });
 });
 
 describe('isLocalImageBackendAvailable (image_generation self-host availability rule)', () => {
@@ -262,8 +318,10 @@ describe('isToolOfferable (enforcement-only wrapper)', () => {
     expect(isToolOfferable('search_knowledge_base', { search_knowledge_base: false })).toBe(true);
   });
 
-  it('edit_image follows its companion image_generation entry (no entry of its own)', () => {
-    expect(isToolOfferable('edit_image', { image_generation: false })).toBe(false);
-    expect(isToolOfferable('edit_image', { image_generation: true })).toBe(true);
+  it('edit_image follows its own entry, independent of image_generation', () => {
+    // Not aliased to image_generation: it supports fewer providers (no xAI), so a user
+    // available for one can genuinely be unavailable for the other.
+    expect(isToolOfferable('edit_image', { edit_image: false, image_generation: true })).toBe(false);
+    expect(isToolOfferable('edit_image', { edit_image: true, image_generation: false })).toBe(true);
   });
 });
