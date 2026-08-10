@@ -77,6 +77,11 @@ const handler = baseApi()
     // Data-lake membership is conferred by the lake's `datalake:*` meta-tag. Applying one is a
     // WRITE into that lake, so gate it with the same creator/admin check the remove path uses -
     // otherwise a read-only member could inject files via Send-to-Data-Lake.
+    //
+    // A `fileTagPrefix` content tag is membership too (since #1263), but this route-level gate
+    // is NOT extended to cover it: it has no resolved file, so it cannot know the owner a
+    // prefix-arm leave/join is anchored to. `reconcileLakeTags` (inside `updateFabFile` below)
+    // owns that check.
     const candidateTagNames = [
       ...(req.body.tags?.map(t => t.name) ?? []),
       ...(req.body.primaryTag ? [req.body.primaryTag] : []),

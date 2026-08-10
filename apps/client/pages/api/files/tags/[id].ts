@@ -2,7 +2,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { tagService } from '@bike4mind/services';
-import { fabFileRepository, fileTagRepository } from '@bike4mind/database';
+import { dataLakeRepository, fabFileRepository, fileTagRepository } from '@bike4mind/database';
 
 type TagIdQuery = { id?: string | string[] };
 
@@ -43,6 +43,7 @@ const handler = baseApi()
           db: {
             tags: fileTagRepository,
             fabFiles: fabFileRepository,
+            dataLakes: dataLakeRepository,
           },
         }
       );
@@ -65,6 +66,7 @@ const handler = baseApi()
           db: {
             tags: fileTagRepository,
             fabFiles: fabFileRepository,
+            dataLakes: dataLakeRepository,
           },
         }
       );
