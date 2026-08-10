@@ -105,10 +105,20 @@ async function resolveEmbeddingContext(context: ToolContext): Promise<{
 } | null> {
   const adminSettings = context.db.adminSettings;
   const apiKeys = context.db.apiKeys;
-  if (!adminSettings || !apiKeys) return null;
+  if (!adminSettings || !apiKeys) {
+    context.logger.warn(
+      `📚 [semantic] falling back to keyword search: ${!adminSettings ? 'adminSettings' : 'apiKeys'} adapter not wired`
+    );
+    return null;
+  }
 
   const modelRaw = await adminSettings.getSettingsValue('defaultEmbeddingModel');
-  if (!modelRaw || !isSupportedEmbeddingModel(modelRaw)) return null;
+  if (!modelRaw || !isSupportedEmbeddingModel(modelRaw)) {
+    context.logger.warn(
+      `📚 [semantic] falling back to keyword search: ${!modelRaw ? 'no defaultEmbeddingModel configured' : `unsupported defaultEmbeddingModel "${modelRaw}"`}`
+    );
+    return null;
+  }
   const embeddingModel = modelRaw as SupportedEmbeddingModel;
 
   const apiKeyTable = await getEffectiveLLMApiKeys(
@@ -120,7 +130,10 @@ async function resolveEmbeddingContext(context: ToolContext): Promise<{
   // A missing credential means the semantic arm cannot run, so fall back to keyword search.
   // Keyless providers (Bedrock, authenticating through the AWS credential chain) report
   // nothing missing and proceed.
-  if (resolveEmbeddingConfig(provider, apiKeyTable).missing) return null;
+  if (resolveEmbeddingConfig(provider, apiKeyTable).missing) {
+    context.logger.warn(`📚 [semantic] falling back to keyword search: no credential for provider "${provider}"`);
+    return null;
+  }
 
   const budgets = await resolveSearchBudgets({ adminSettings }, context.logger);
   const vectorSearchEnabled = (await adminSettings.getSettingsValue('EnableDataLakeVectorSearch')) ?? false;
