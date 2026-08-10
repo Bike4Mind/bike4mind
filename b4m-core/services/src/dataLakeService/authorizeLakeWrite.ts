@@ -1,5 +1,5 @@
 import type { AccessContext, IDataLakeBatchDocument, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
-import { DATALAKE_TAG_PREFIX } from '@bike4mind/common';
+import { DATA_LAKES, DATALAKE_TAG_PREFIX, normalizeTagPrefix } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { assertLakeAccess, assertLakeWritable } from './assertLakeAccess';
 
@@ -93,6 +93,42 @@ export const assertCanWriteDataLakeTags = async (
       // told a caller their removal was refused for the wrong reason.
       throw new BadRequestError("Only the creator can change this data lake's files");
     }
+  }
+};
+
+/**
+ * The tag names in a raw list that fall under a STATIC REGISTRY lake's `fileTagPrefix` (e.g.
+ * `opti:report`). These lakes have no owning DB document, so `canManageLake` and the prefix-arm
+ * membership checks (both anchored to a lake's `createdByUserId`) never see them - a caller could
+ * otherwise self-apply one with no gate at all.
+ *
+ * Case-SENSITIVE plain prefix match, deliberately not `satisfiesTagPrefix`'s stricter
+ * category-worthiness rule (non-empty suffix): the read-side bypass this guards against
+ * (`buildOwnershipConditions`'s OPEN prefix arm) builds an unflagged `^(prefix)` regex with no
+ * suffix requirement, so a bare `opti:` would still leak through that arm and must be caught here
+ * too.
+ */
+export const extractStaticRegistryPrefixedTags = (tagNames: readonly unknown[]): string[] => {
+  const prefixes = DATA_LAKES.map(lake => normalizeTagPrefix(lake.fileTagPrefix)).filter(
+    (prefix): prefix is string => prefix !== null
+  );
+  if (prefixes.length === 0) return [];
+  return tagNames.filter(
+    (name): name is string => typeof name === 'string' && prefixes.some(prefix => name.startsWith(prefix))
+  );
+};
+
+/**
+ * Gate a write against the STATIC REGISTRY namespace (e.g. `opti:`) the same way
+ * `assertCanWriteDataLakeTags` gates `datalake:*` meta-tags: those lakes are a shared knowledge
+ * base with no owning document, so only a platform admin may apply one of their content prefixes
+ * to a file - never the lake's own read-side entitlement, which grants browsing, not writing.
+ * Pure (no DB): the registry is a static, in-memory list.
+ */
+export const assertCanWriteStaticRegistryTags = (actor: ManageActor, tagNames: readonly unknown[]): void => {
+  if (actor.isAdmin) return;
+  if (extractStaticRegistryPrefixedTags(tagNames).length > 0) {
+    throw new BadRequestError("Only an admin can change this data lake's files");
   }
 };
 

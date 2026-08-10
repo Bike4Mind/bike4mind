@@ -2,9 +2,11 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   assertBatchBelongsToLake,
   assertCanWriteDataLakeTags,
+  assertCanWriteStaticRegistryTags,
   assertMetaTagsMatchLake,
   canManageLake,
   extractDataLakeMetaTags,
+  extractStaticRegistryPrefixedTags,
 } from './authorizeLakeWrite';
 
 const LAKE = {
@@ -144,5 +146,45 @@ describe('extractDataLakeMetaTags', () => {
     expect(
       extractDataLakeMetaTags(['DataLake:OrgA:Acme-2026', 'datalake:orga:acme-2026', 'notes', null, undefined, 42])
     ).toEqual(['datalake:orga:acme-2026']);
+  });
+});
+
+// 'opti:' is the hardcoded opti-knowledge entry in DATA_LAKES, present regardless of the
+// PREMIUM_DATA_LAKES env var - the one registry prefix these tests can rely on in any environment.
+describe('extractStaticRegistryPrefixedTags', () => {
+  it('finds a tag under a registry prefix', () => {
+    expect(extractStaticRegistryPrefixedTags(['opti:report', 'notes'])).toEqual(['opti:report']);
+  });
+
+  it('is case-sensitive, matching the OPEN read arm which builds an unflagged regex', () => {
+    expect(extractStaticRegistryPrefixedTags(['Opti:report'])).toEqual([]);
+  });
+
+  it('matches a bare prefix with no suffix, unlike satisfiesTagPrefix', () => {
+    // The OPEN prefix arm's regex has no suffix-length requirement, so a bare 'opti:' still
+    // leaks through it and must be caught here too.
+    expect(extractStaticRegistryPrefixedTags(['opti:'])).toEqual(['opti:']);
+  });
+
+  it('drops non-string entries and tags matching no registry prefix', () => {
+    expect(extractStaticRegistryPrefixedTags(['notes', null, undefined, 42, 'acme:legal'])).toEqual([]);
+  });
+});
+
+describe('assertCanWriteStaticRegistryTags', () => {
+  it('rejects a non-admin self-applying a registry prefix', () => {
+    expect(() => assertCanWriteStaticRegistryTags({ userId: 'user-1', isAdmin: false }, ['opti:report'])).toThrow(
+      "Only an admin can change this data lake's files"
+    );
+  });
+
+  it('accepts an admin', () => {
+    expect(() => assertCanWriteStaticRegistryTags({ userId: 'admin-1', isAdmin: true }, ['opti:report'])).not.toThrow();
+  });
+
+  it('ignores tags that match no registry prefix', () => {
+    expect(() =>
+      assertCanWriteStaticRegistryTags({ userId: 'user-1', isAdmin: false }, ['notes', 'acme:legal'])
+    ).not.toThrow();
   });
 });
