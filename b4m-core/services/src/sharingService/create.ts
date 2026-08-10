@@ -125,9 +125,11 @@ export const createInvite = async (
   const users = await db.users.findAllByEmailsOrUsernames(recipientsArray, recipientsArray);
 
   // By-Users sharing (FabFile/Session) sends real emails/usernames and must not silently
-  // create a share nobody can see. Organization/Project/Group invites send raw user ids
-  // through this same recipients array via a different resolution path (inviteToOrg above,
-  // and organizationService/groupMembership for Group), so this check does not apply to them.
+  // create a share nobody can see. Organization/Project invites send raw user ids through
+  // this same recipients array (Organization resolves them separately via inviteToOrg
+  // above); Group invites do not use recipients at all (membership authority is checked via
+  // assertCanManageOrgGroups above, and the join itself happens on accept - see accept.ts).
+  // None of that is this check's concern, so it stays scoped to FabFile/Session only.
   if ((type === InviteType.FabFile || type === InviteType.Session) && recipientsArray.length > 0) {
     const matched = new Set(
       users.flatMap(u => [u.email, u.username].filter((v): v is string => Boolean(v)).map(v => v.toLowerCase()))
