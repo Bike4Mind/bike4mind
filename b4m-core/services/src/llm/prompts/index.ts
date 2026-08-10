@@ -1,4 +1,25 @@
 /**
+ * Anti-fabrication clause for the grounded/data-lake retrieval path, shared byte-identically by
+ * every surface that puts retrieved knowledge-base content in front of the model:
+ *  - the forced-retrieval feature's success header (KnowledgeRetrievalFeature),
+ *  - the model-driven semantic search result (search_knowledge_base).
+ *
+ * Under a leading question ("what did we win against <competitor>", "what was the <customer>
+ * contract worth"), a grounded model tends to answer from the retrieved passages AND top them off
+ * with a specific customer, deal or dollar figure the corpus never contained - volunteered with
+ * citation-like framing, so it reads as sourced and quotable. The existing "ground your answer /
+ * say so if not covered" framing does not name that failure, so this states it: attribute only the
+ * checkable specifics the retrieved content supports, and never dress an unsupported one as a
+ * citation. Kept as one shared const so the two surfaces cannot drift apart.
+ */
+export const GROUNDED_NO_INVENTION_RULE =
+  'Ground every specific claim in the retrieved content shown here. Do not state a specific customer, ' +
+  'organization, person, competitive win or comparison, deal, price, or figure unless it appears in that ' +
+  'content - even if the question presents it as already given - and never attach a citation to a claim the ' +
+  'content does not support. If a specific fact is not in the retrieved content, say it is not covered rather ' +
+  'than supplying one from general knowledge or assumption.';
+
+/**
  * Shared prompt snippet for preview-first tool confirmation rules.
  * Used by both GithubManagerAgent and ProjectManagerAgent.
  */
