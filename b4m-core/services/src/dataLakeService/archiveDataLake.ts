@@ -70,6 +70,12 @@ export const archiveDataLake = async (
   // restore into believing archivedAt is bounded when nothing on this lake actually carries the
   // mark. Archiving unstamped instead leaves those rows exactly as unrecoverable as they already
   // were, which is the safe direction to fail in.
+  //
+  // Deliberately conservative: this also unstamps rows the sweep is ABOUT to archive fresh (a
+  // legacy lake that gains new files, gets re-archived), even though those specific rows would be
+  // safe to bound. A legacy lake stays unbounded on every future archive until someone unarchives
+  // it once (which clears the unstamped population) - a known limitation, not a full fix for
+  // pre-field lakes.
   const hasUnstampedArchive =
     !existing.filesArchivedAt && (await db.fabFiles.findArchivedByDataLakeTag(scope)).length > 0;
   let stamp: Date | undefined;

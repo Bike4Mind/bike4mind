@@ -977,12 +977,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       return result.modifiedCount;
     }
 
-    // Two queries partitioned on `archivedAt`, not one update followed by another: both read the
-    // pre-image, so a row's own `archivedAt` value (not whether a prior write already flipped
-    // `deletedAt`) decides which branch it falls into. A row stamped by THIS lake's own archive
-    // gets both fields cleared; any other value (a different lake's stamp, or none) only un-deletes,
-    // leaving its archive marker exactly as it was - the equality bound that keeps this from
-    // freeing a prefix-sharing sibling's independently-archived files.
+    // Two parallel queries partitioned on `archivedAt`, not one update followed by another - not
+    // for snapshot isolation (Mongo gives none across separate updateMany calls), but because the
+    // shared `deletedAt: stampedAt` base filter is a barrier: once either query flips a row's
+    // `deletedAt` to null, that row no longer matches EITHER filter, so it cannot be picked up
+    // twice. A row stamped by THIS lake's own archive gets both fields cleared; any other value (a
+    // different lake's stamp, or none) only un-deletes, leaving its archive marker exactly as it
+    // was - the equality bound that keeps this from freeing a prefix-sharing sibling's
+    // independently-archived files.
     const [ownStamp, otherStamp] = await Promise.all([
       this.fabFileModel.updateMany(
         { ...base, archivedAt: archiveStampToClear },
