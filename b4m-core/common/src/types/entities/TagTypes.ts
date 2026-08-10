@@ -99,13 +99,6 @@ export interface IFileTagRepository extends IBaseRepository<IFileTag> {
   findByIdAndUserId(id: string, userId: string): Promise<IFileTag | null>;
 
   /**
-   * Find a tag by name and user id
-   * @param name The tag name
-   * @param userId The user id
-   */
-  findByNameAndUserId(name: string, userId: string): Promise<IFileTag | null>;
-
-  /**
    * Find a tag by name and user id under the shared collision rule (trimmed, case folded - see
    * utils/tagName). Every path that mints a tag document checks this first, so one user cannot end
    * up with two tags whose names differ only by case.
