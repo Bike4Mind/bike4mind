@@ -84,7 +84,7 @@ export class OpenSearchClient {
     // Strip any scheme the caller already included (e.g. OPENSEARCH_ENDPOINT set to
     // "http://opensearch:9200" instead of the documented bare "opensearch:9200") so we
     // don't double it up into "http://http://...", which fails with an opaque connection error.
-    const host = endpoint.replace(/^https?:\/\//, '');
+    const host = endpoint.replace(/^https?:\/\//i, '');
     this.client = options?.selfHosted
       ? new Client({
           node: `http://${host}`,

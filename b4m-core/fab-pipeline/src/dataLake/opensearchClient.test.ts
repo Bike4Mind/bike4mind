@@ -250,4 +250,9 @@ describe('OpenSearchClient self-host construction', () => {
     new OpenSearchClient('https://search.example.com');
     expect(lastClientConstructorArgs).toMatchObject({ node: 'https://search.example.com' });
   });
+
+  it('strips a mixed-case scheme too', async () => {
+    new OpenSearchClient('HTTP://opensearch:9200', { selfHosted: true });
+    expect(lastClientConstructorArgs).toMatchObject({ node: 'http://opensearch:9200' });
+  });
 });
