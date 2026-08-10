@@ -1019,6 +1019,26 @@ describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
     expect(result.skippedDuplicates).toBe(1);
     expect(result.restoredCount).toBe(1);
   });
+
+  it('clears filesArchivedAt so a later re-archive claims a fresh stamp, not a stale reused one', async () => {
+    const fabFiles = {
+      findArchivedByDataLakeTag: vi.fn().mockResolvedValue([]),
+      findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
+      unarchiveByDataLakeTag: vi.fn().mockResolvedValue(0),
+      deleteManyInIds: vi.fn().mockResolvedValue(undefined),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 }),
+    };
+    const dataLakes = {
+      findById: vi.fn().mockResolvedValue(lake({ status: 'archived', filesArchivedAt: new Date('2026-05-01') })),
+      update: vi.fn().mockResolvedValue(lake()),
+      setStats: vi.fn().mockResolvedValue(lake()),
+      activateIfDraft: vi.fn(),
+    };
+    await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { db: { dataLakes, fabFiles } });
+
+    const settle = dataLakes.update.mock.calls.at(-1)?.[0];
+    expect(settle).toEqual({ id: 'lake1', status: 'active', filesArchivedAt: null });
+  });
 });
 
 describe('restoreDeletedDataLake — deleted→active with dedup', () => {
@@ -1061,7 +1081,7 @@ describe('restoreDeletedDataLake — deleted→active with dedup', () => {
     const result = await restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
       db: { dataLakes, fabFiles },
     });
-    expect(fabFiles.undeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, ['d1'], undefined);
+    expect(fabFiles.undeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, ['d1'], undefined, undefined);
     // Same narrow probe as the unarchive path, for the same reason.
     expect(fabFiles.findByContentHashesInDataLake).toHaveBeenCalledWith(['h1', 'h2'], 'datalake:lake');
     expect(result.skippedDuplicates).toBe(1);
@@ -1080,6 +1100,7 @@ describe('archiveDataLake - retrieval-index removal', () => {
         setStats: vi.fn().mockResolvedValue(undefined),
         activateIfDraft: vi.fn(),
         find: vi.fn().mockResolvedValue([]),
+        claimFilesArchivedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
       },
       batches: {
         findActiveByDataLakeId: vi.fn().mockResolvedValue([]),
@@ -1123,7 +1144,7 @@ describe('archiveDataLake - retrieval-index removal', () => {
     const adapters = makeAdapters();
     await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
     expect(adapters.db.fabFiles.findIdsByDataLakeTag).not.toHaveBeenCalled();
-    expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope);
+    expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, expect.any(Date));
   });
 
   it('survives a member-id lookup that itself fails', async () => {
@@ -1137,6 +1158,30 @@ describe('archiveDataLake - retrieval-index removal', () => {
       expect.stringContaining('Best-effort index removal failed for datalake:lake'),
       expect.any(Error)
     );
+  });
+
+  it('skips the claim on a pre-mark crash re-run, archiving unstamped rather than naming a batch narrower than what is archived', async () => {
+    const adapters = makeAdapters();
+    adapters.db.dataLakes.findById = vi
+      .fn()
+      .mockResolvedValue(lake({ status: 'archiving', filesArchivedAt: undefined }));
+
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+
+    expect(adapters.db.dataLakes.claimFilesArchivedAt).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
+  });
+
+  it('claims normally on a re-run that already holds a mark', async () => {
+    const adapters = makeAdapters();
+    const stamp = new Date('2026-05-01');
+    adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(lake({ status: 'archiving', filesArchivedAt: stamp }));
+    adapters.db.dataLakes.claimFilesArchivedAt = vi.fn().mockResolvedValue(stamp);
+
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+
+    expect(adapters.db.dataLakes.claimFilesArchivedAt).toHaveBeenCalledWith('lake1', expect.any(Date));
+    expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, stamp);
   });
 });
 
@@ -1210,6 +1255,7 @@ describe('deleteDataLake - phase 1 retrieval-index removal', () => {
 
 describe('teardown stamp bookkeeping', () => {
   const RECORDED = new Date('2026-06-01T00:00:00.000Z');
+  const ARCHIVE_RECORDED = new Date('2026-05-01T00:00:00.000Z');
 
   const teardownAdapters = (existing: IDataLakeDocument) => ({
     db: {
@@ -1328,17 +1374,18 @@ describe('teardown stamp bookkeeping', () => {
       await restoreDeletedDataLake(owner, 'lake1', adapters);
 
       expect(adapters.db.fabFiles.findDeletedByDataLakeTag).toHaveBeenCalledWith(lakeScope, RECORDED);
-      expect(adapters.db.fabFiles.undeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, [], RECORDED);
+      expect(adapters.db.fabFiles.undeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, [], RECORDED, undefined);
     });
 
-    it('clears the spent stamp with null as it settles', async () => {
+    it('clears the spent delete AND archive stamps with null as it settles', async () => {
       const adapters = reversalAdapters(lake({ status: 'deleted', filesDeletedAt: RECORDED }));
       await restoreDeletedDataLake(owner, 'lake1', adapters);
 
       const settle = adapters.db.dataLakes.update.mock.calls.at(-1)?.[0];
-      expect(settle).toEqual({ id: 'lake1', status: 'active', filesDeletedAt: null });
+      expect(settle).toEqual({ id: 'lake1', status: 'active', filesDeletedAt: null, filesArchivedAt: null });
       // undefined would be dropped on the way to mongo and leave the spent mark in place.
       expect(settle.filesDeletedAt).toBeNull();
+      expect(settle.filesArchivedAt).toBeNull();
     });
 
     it('reverses unbounded when the lake carries no stamp', async () => {
@@ -1346,7 +1393,21 @@ describe('teardown stamp bookkeeping', () => {
       await restoreDeletedDataLake(owner, 'lake1', adapters);
 
       expect(adapters.db.fabFiles.findDeletedByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
-      expect(adapters.db.fabFiles.undeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, [], undefined);
+      expect(adapters.db.fabFiles.undeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, [], undefined, undefined);
+    });
+
+    it('hands the recorded archive stamp to the flip, bounding the archive-clear to this lake', async () => {
+      const adapters = reversalAdapters(
+        lake({ status: 'deleted', filesDeletedAt: RECORDED, filesArchivedAt: ARCHIVE_RECORDED })
+      );
+      await restoreDeletedDataLake(owner, 'lake1', adapters);
+
+      expect(adapters.db.fabFiles.undeleteByDataLakeTag).toHaveBeenCalledWith(
+        lakeScope,
+        [],
+        RECORDED,
+        ARCHIVE_RECORDED
+      );
     });
   });
 });

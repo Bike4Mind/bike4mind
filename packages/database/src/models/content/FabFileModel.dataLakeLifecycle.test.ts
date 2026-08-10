@@ -326,6 +326,102 @@ describe('FabFile data lake lifecycle membership', () => {
         expect((await readRaw(rows.prefixOwned._id.toString()))?.deletedAt?.getTime()).toBe(STAMP.getTime());
       });
     });
+
+    // Archive->delete->restore: restore also clears archivedAt, bounded the same way as the
+    // delete axis - by equality against the stamp this lake's own archive wrote.
+    describe('archive axis (restore also clears archivedAt)', () => {
+      const ARCHIVE_STAMP = new Date('2026-05-01T00:00:00.000Z');
+      const OTHER_STAMP = new Date('2026-04-01T00:00:00.000Z');
+
+      it('writes the caller stamp on every row archiveByDataLakeTag flips', async () => {
+        const rows = await seedLakeRows();
+
+        await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
+
+        for (const id of rows.memberIds) {
+          expect((await readRaw(id))?.archivedAt?.getTime()).toBe(ARCHIVE_STAMP.getTime());
+        }
+      });
+
+      it('clears archivedAt alongside deletedAt when the archive stamp matches this lake', async () => {
+        const rows = await seedLakeRows();
+        await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
+
+        expect(restored).toBe(2);
+        for (const id of rows.memberIds) {
+          const row = await readRaw(id);
+          expect(row?.deletedAt ?? null).toBeNull();
+          expect(row?.archivedAt ?? null).toBeNull();
+        }
+      });
+
+      it('leaves a member archived under a DIFFERENT stamp untouched (a prefix-sharing sibling lake)', async () => {
+        const rows = await seedLakeRows();
+        // Simulates a file this lake's delete swept up (matching deletedAt) but whose archivedAt
+        // was written by a different lake's archive - a different stamp this restore does not own.
+        await FabFile.updateOne({ _id: rows.metaTagged._id }, { $set: { archivedAt: OTHER_STAMP } });
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
+
+        expect(restored).toBe(2);
+        const row = await readRaw(rows.metaTagged._id.toString());
+        expect(row?.deletedAt ?? null).toBeNull();
+        expect(row?.archivedAt?.getTime()).toBe(OTHER_STAMP.getTime());
+      });
+
+      it('leaves archivedAt untouched when no archive stamp is given (pre-mark lake, the known limitation)', async () => {
+        const rows = await seedLakeRows();
+        await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP);
+
+        expect(restored).toBe(2);
+        for (const id of rows.memberIds) {
+          const row = await readRaw(id);
+          expect(row?.deletedAt ?? null).toBeNull();
+          expect(row?.archivedAt?.getTime()).toBe(ARCHIVE_STAMP.getTime());
+        }
+      });
+
+      it('never clears archivedAt on a dedup-discarded duplicate (excludeIds)', async () => {
+        const rows = await seedLakeRows();
+        await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        const restored = await fabFileRepository.undeleteByDataLakeTag(
+          scope,
+          [rows.prefixOwned._id.toString()],
+          STAMP,
+          ARCHIVE_STAMP
+        );
+
+        expect(restored).toBe(1);
+        const excluded = await readRaw(rows.prefixOwned._id.toString());
+        expect(excluded?.deletedAt).not.toBeNull();
+        expect(excluded?.archivedAt?.getTime()).toBe(ARCHIVE_STAMP.getTime());
+      });
+
+      it('leaves a file archived-by-lake but individually deleted (a different delete stamp) untouched', async () => {
+        const rows = await seedLakeRows();
+        await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
+        // Deleted on its own, at a stamp the teardown never wrote.
+        await deleteIndependently(rows.metaTagged._id, EARLIER);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
+
+        // Only prefixOwned matched the teardown's stamp; metaTagged kept its own earlier one.
+        expect(restored).toBe(1);
+        const independentlyDeleted = await readRaw(rows.metaTagged._id.toString());
+        expect(independentlyDeleted?.deletedAt?.getTime()).toBe(EARLIER.getTime());
+        expect(independentlyDeleted?.archivedAt?.getTime()).toBe(ARCHIVE_STAMP.getTime());
+      });
+    });
   });
 
   describe('findIdsByDataLakeTag / hardDeleteByDataLakeTag', () => {
