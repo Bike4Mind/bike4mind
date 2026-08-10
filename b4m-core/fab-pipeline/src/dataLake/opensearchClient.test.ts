@@ -29,7 +29,12 @@ vi.mock('@aws-sdk/credential-provider-node', () => ({
   defaultProvider: vi.fn(() => () => Promise.resolve({})),
 }));
 
-import { OpenSearchClient, isTransientOpenSearchError, getOpenSearchRetryAfterMs } from './opensearchClient';
+import {
+  OpenSearchClient,
+  isTransientOpenSearchError,
+  isIndexAlreadyExistsError,
+  getOpenSearchRetryAfterMs,
+} from './opensearchClient';
 
 /** Build an opensearch-js-style ResponseError carrying an HTTP status code. */
 function responseError(statusCode: number, message = `status ${statusCode}`): Error {
@@ -72,6 +77,32 @@ describe('isTransientOpenSearchError', () => {
 
   it('does not retry an arbitrary application error', () => {
     expect(isTransientOpenSearchError(new Error('mapper_parsing_exception'))).toBe(false);
+  });
+});
+
+describe('isIndexAlreadyExistsError', () => {
+  it('detects a 400 with a resource_already_exists_exception body', () => {
+    const err = Object.assign(new Error('index [x] already exists'), {
+      statusCode: 400,
+      body: { error: { type: 'resource_already_exists_exception' } },
+    });
+    expect(isIndexAlreadyExistsError(err)).toBe(true);
+  });
+
+  it('detects it from the message alone when the body is absent', () => {
+    expect(isIndexAlreadyExistsError(new Error('resource_already_exists_exception: index exists'))).toBe(true);
+  });
+
+  it('does not flag an unrelated 400', () => {
+    const err = Object.assign(new Error('mapper_parsing_exception'), {
+      statusCode: 400,
+      body: { error: { type: 'mapper_parsing_exception' } },
+    });
+    expect(isIndexAlreadyExistsError(err)).toBe(false);
+  });
+
+  it('does not flag a transient error', () => {
+    expect(isIndexAlreadyExistsError(responseError(503))).toBe(false);
   });
 });
 
@@ -201,13 +232,39 @@ describe('OpenSearchClient retry/backoff', () => {
     mockClient.search.mockResolvedValueOnce({ body: { hits: { hits: [] } } });
     const filter = { terms: { fabFileId: ['f1', 'f2'] } };
 
-    await client.knnQuery('idx', [0.1, 0.2], 5, filter);
+    await client.knnQuery('idx', [0.1, 0.2], 5, { filter });
 
     expect(mockClient.search).toHaveBeenCalledWith({
       index: 'idx',
       body: {
         size: 5,
         query: { knn: { vector: { vector: [0.1, 0.2], k: 5, filter } } },
+      },
+    });
+  });
+
+  it('knnQuery separates size (response page) from k (candidate pool) when size is given', async () => {
+    mockClient.search.mockResolvedValueOnce({ body: { hits: { hits: [] } } });
+
+    await client.knnQuery('idx', [0.1, 0.2], 5000, { size: 10 });
+
+    expect(mockClient.search).toHaveBeenCalledWith({
+      index: 'idx',
+      body: { size: 10, query: { knn: { vector: { vector: [0.1, 0.2], k: 5000 } } } },
+    });
+  });
+
+  it('knnQuery excludes requested _source fields (e.g. the embedding vector) from the response', async () => {
+    mockClient.search.mockResolvedValueOnce({ body: { hits: { hits: [] } } });
+
+    await client.knnQuery('idx', [0.1, 0.2], 5, { excludeSource: ['vector'] });
+
+    expect(mockClient.search).toHaveBeenCalledWith({
+      index: 'idx',
+      body: {
+        size: 5,
+        query: { knn: { vector: { vector: [0.1, 0.2], k: 5 } } },
+        _source: { excludes: ['vector'] },
       },
     });
   });

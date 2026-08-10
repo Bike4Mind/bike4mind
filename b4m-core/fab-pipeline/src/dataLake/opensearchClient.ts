@@ -42,6 +42,22 @@ export function isTransientOpenSearchError(error: Error): boolean {
 }
 
 /**
+ * Whether an index-create failure is a `resource_already_exists_exception` - the outcome of
+ * losing a create race to a concurrent caller for the same index, not a real error. A 400 with
+ * this body means the index exists now regardless of who created it, so the loser should treat
+ * it as success rather than propagate the throw (which would otherwise abort every chunk in the
+ * same `Promise.all` batch, not just the one racing index create).
+ */
+export function isIndexAlreadyExistsError(error: Error): boolean {
+  const statusCode = (error as { statusCode?: number }).statusCode;
+  const body = (error as { body?: { error?: { type?: string } } }).body;
+  if (statusCode === 400 && body?.error?.type === 'resource_already_exists_exception') {
+    return true;
+  }
+  return (error.message ?? '').toLowerCase().includes('resource_already_exists_exception');
+}
+
+/**
  * Extract a `Retry-After` delay (ms) from an opensearch-js `ResponseError`, if the cluster
  * sent one. opensearch-js exposes response headers on `error.headers` (and `error.meta.headers`).
  * `Retry-After` is either a number of seconds or an HTTP date. Returns null when absent/unparseable.
@@ -155,19 +171,27 @@ export class OpenSearchClient {
    * post-filter would rank the whole index first and could return zero in-scope hits even when
    * the caller's files ARE indexed, since their chunks may not make the global top-k.
    */
+  /**
+   * `k` is the candidate pool the kNN engine ranks internally, NOT the number of hits to return -
+   * conflating them (passing `k` as `size` too) ships the whole candidate pool (up to 10,000
+   * documents) back over the wire for every query. `options.size` is the actual page size the
+   * caller wants; `options.excludeSource` drops fields the caller never reads (the indexed
+   * `vector` array in particular - a 1536-float embedding on every one of thousands of candidate
+   * hits is the dominant cost of an unbounded response).
+   */
   async knnQuery(
     indexName: string,
     vector: number[],
     k: number,
-    filter?: Record<string, any>
+    options?: { filter?: Record<string, any>; size?: number; excludeSource?: string[] }
   ): Promise<Array<{ id: string; score: number; source: Record<string, any> }>> {
+    const { filter, size = k, excludeSource } = options ?? {};
     const query = { knn: { vector: filter ? { vector, k, filter } : { vector, k } } };
-    const response = await this.withRetry(() =>
-      this.client.search({
-        index: indexName,
-        body: { size: k, query },
-      })
-    );
+    const body: Record<string, any> = { size, query };
+    if (excludeSource?.length) {
+      body._source = { excludes: excludeSource };
+    }
+    const response = await this.withRetry(() => this.client.search({ index: indexName, body }));
     return response.body.hits.hits.map((hit: { _id: string; _score: number; _source: Record<string, any> }) => ({
       id: hit._id,
       score: hit._score,

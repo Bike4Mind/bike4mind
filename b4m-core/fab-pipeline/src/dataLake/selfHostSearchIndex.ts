@@ -1,7 +1,7 @@
 import type { IFabFileChunkDocument } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { BaseSearchIndex } from './BaseSearchIndex';
-import { OpenSearchClient } from './opensearchClient';
+import { OpenSearchClient, isIndexAlreadyExistsError } from './opensearchClient';
 import { getEmbeddingDimensions, atlasVectorIndexName } from './atlasSearchIndex';
 import { SearchDocument, buildSearchIndexSettings } from './config';
 
@@ -20,12 +20,31 @@ let cachedClient: OpenSearchClient | null = null;
  * OpenSearch document per FabFileChunk, id = chunk id.
  */
 export class FabFileChunkSearchIndex extends BaseSearchIndex {
-  constructor(chunk: IFabFileChunkDocument) {
+  constructor(
+    chunk: IFabFileChunkDocument,
+    private onIndexFailure?: (chunk: IFabFileChunkDocument) => void
+  ) {
     const indexName = chunk.embeddingModel ? selfHostVectorIndexName(chunk.embeddingModel) : null;
     // BaseSearchIndex requires a name at construction time; an unresolvable name is caught in
     // mapDocument below (which returns null and skips the write) rather than here, so a bad
     // model never throws mid-batch.
     super(chunk, indexName ?? '');
+  }
+
+  /**
+   * Overrides the base's throw-on-failure contract: a chunk failure here must not also stop
+   * `processInParallel`'s runner from picking up its NEXT chunk (a throw from `asyncFn` ends
+   * that runner's loop - see @bike4mind/common's `parallelLimit`), and `indexChunks` below needs
+   * to know WHICH file to fail closed, not just that something somewhere failed.
+   */
+  async addDocument(): Promise<SearchDocument | null> {
+    try {
+      return await super.addDocument();
+    } catch {
+      // Already logged by the base class. Swallow here so the batch keeps going.
+      this.onIndexFailure?.(this.rawData as IFabFileChunkDocument);
+      return null;
+    }
   }
 
   static async loadSearchIndexClient(): Promise<OpenSearchClient> {
@@ -70,7 +89,16 @@ export class FabFileChunkSearchIndex extends BaseSearchIndex {
     const indexName = selfHostVectorIndexName(model);
     const dimension = getEmbeddingDimensions(model);
     if (!indexName || dimension == null) return;
-    await this.ensureIndex(indexName, buildSearchIndexSettings(dimension));
+    try {
+      await this.ensureIndex(indexName, buildSearchIndexSettings(dimension));
+    } catch (error) {
+      // Two concurrent indexChunks batches for a model with no index yet both see
+      // ensuredModels.has(model) === false and both reach createIndex - the loser gets this
+      // error, and the index exists now regardless of who created it. Without this guard the
+      // error propagates out of indexChunks' Promise.all and skips EVERY chunk in the batch,
+      // not just the ones for this model.
+      if (!isIndexAlreadyExistsError(error as Error)) throw error;
+    }
     this.ensuredModels.add(model);
   }
 
@@ -78,7 +106,35 @@ export class FabFileChunkSearchIndex extends BaseSearchIndex {
   static async indexChunks(chunks: IFabFileChunkDocument[]): Promise<void> {
     const models = new Set(chunks.map(c => c.embeddingModel).filter((m): m is string => !!m));
     await Promise.all([...models].map(model => FabFileChunkSearchIndex.ensureIndexForModel(model)));
-    await BaseSearchIndex.processInParallel(chunks.map(chunk => new FabFileChunkSearchIndex(chunk)));
+
+    const failedChunks: IFabFileChunkDocument[] = [];
+    await BaseSearchIndex.processInParallel(
+      chunks.map(chunk => new FabFileChunkSearchIndex(chunk, failed => failedChunks.push(failed)))
+    );
+
+    if (failedChunks.length === 0) return;
+
+    // Fail CLOSED per file: at query time a file with ANY hit is treated as fully indexed (only
+    // a file with ZERO hits gets rebucketed onto the scan path - see semanticDataLakeSearch.ts),
+    // so a file left partially indexed by this failure would be silently, permanently missing
+    // its other chunks from every future search. Dropping what DID get written forces it back
+    // onto the scan path instead, which searches the real (complete) chunk set in Mongo.
+    const failedByFile = new Map<string, Set<string>>();
+    for (const chunk of failedChunks) {
+      if (!chunk.fabFileId || !chunk.embeddingModel) continue;
+      if (!failedByFile.has(chunk.fabFileId)) failedByFile.set(chunk.fabFileId, new Set());
+      failedByFile.get(chunk.fabFileId)!.add(chunk.embeddingModel);
+    }
+    await Promise.all(
+      [...failedByFile.entries()].flatMap(([fabFileId, models]) =>
+        [...models].map(model => {
+          Logger.globalInstance.warn(
+            `Chunk indexing failed for FabFile ${fabFileId} (model ${model}) - removing its partial OpenSearch state so it falls back to scan`
+          );
+          return FabFileChunkSearchIndex.deleteByFabFileId(fabFileId, model);
+        })
+      )
+    );
   }
 
   /** Remove every OpenSearch doc for a deleted/re-chunked file, across the given model's index. */
