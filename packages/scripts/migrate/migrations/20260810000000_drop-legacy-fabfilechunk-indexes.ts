@@ -3,20 +3,26 @@ import { type MigrationFile } from './index';
 
 /**
  * Drop the two obsolete fabfilechunks indexes that predate the `{ fabFileId: 1, _id: 1 }` keyset
- * compound: `{ _id: 1, fabFileId: 1 }` (name `_id_1_fabFileId_1`) and `{ fabFileId: 1 }` (name
- * `fabFileId_1`). Neither declaration exists on the schema anymore, so autoIndex will not recreate
- * them, but they still exist in every environment deployed before the declarations were removed.
+ * compound: `{ _id: 1, fabFileId: 1 }` (usually named `_id_1_fabFileId_1`) and `{ fabFileId: 1 }`
+ * (usually named `fabFileId_1`). Neither declaration exists on the schema anymore, so autoIndex
+ * will not recreate them, but they still exist in every environment deployed before the
+ * declarations were removed.
  *
- * The precondition below matches by key pattern rather than the compound's auto-derived name,
- * since that name is not guaranteed to be generated identically on every engine (prod runs
- * DocumentDB) and a mismatch there must not silently skip the safety check.
+ * Both the precondition and the two drops below match by key pattern rather than by name, since an
+ * auto-derived name is not guaranteed identical on every engine (prod runs DocumentDB). Dropping by
+ * a hardcoded name would let a name mismatch make `safeDropIndex` silently swallow the drop as
+ * "not found" while this migration still gets recorded as applied - permanently un-retryable.
  *
- * Refuses to drop if the keyset compound is missing: doing so before it exists would leave the
- * collection with only `_id_`, turning every bare `fabFileId` read into a full collection scan.
+ * Refuses to drop if the keyset compound is missing, or present but not actually usable to serve a
+ * query (hidden, or narrowed by a partial filter): doing so would leave the collection unable to
+ * serve a bare `fabFileId` read from an index, turning it into a full collection scan.
  * `safeDropIndex` only swallows index-not-found, so a genuinely absent collection (a fresh
  * environment that never created it) is checked for up front and treated as nothing to do, rather
  * than reaching a NamespaceNotFound throw from the drop calls themselves.
  */
+const KEYSET_COMPOUND_KEY = { fabFileId: 1, _id: 1 };
+const LEGACY_KEYS = [{ _id: 1, fabFileId: 1 }, { fabFileId: 1 }];
+
 const migration: MigrationFile = {
   id: 20260810000000,
   name: 'drop legacy fabfilechunk indexes',
@@ -35,23 +41,28 @@ const migration: MigrationFile = {
     }
 
     const indexes = await FabFileChunk.collection.indexes();
-    const hasKeysetCompound = indexes.some(
-      index => JSON.stringify(index.key) === JSON.stringify({ fabFileId: 1, _id: 1 })
-    );
-    if (!hasKeysetCompound) {
+    const keysetCompound = indexes.find(index => JSON.stringify(index.key) === JSON.stringify(KEYSET_COMPOUND_KEY));
+    if (!keysetCompound || keysetCompound.hidden || keysetCompound.partialFilterExpression) {
       throw new Error(
-        'Refusing to drop the legacy fabfilechunks indexes: the { fabFileId: 1, _id: 1 } keyset ' +
-          'compound is missing. Run migration 20260728000000 (ensure fabfilechunk keyset index) ' +
-          'first and confirm it applied - dropping _id_1_fabFileId_1 and fabFileId_1 without it ' +
-          'would leave only _id_, turning every fabFileId query into a full collection scan.'
+        'Refusing to drop the legacy fabfilechunks indexes: a usable { fabFileId: 1, _id: 1 } ' +
+          'keyset compound is missing (absent, hidden, or partial). Run migration 20260728000000 ' +
+          '(ensure fabfilechunk keyset index) first and confirm it applied - dropping the legacy ' +
+          'indexes without it would leave the collection unable to serve a fabFileId read from an ' +
+          'index, turning every such query into a full collection scan.'
       );
     }
 
-    await safeDropIndex(FabFileChunk.collection, '_id_1_fabFileId_1');
-    await safeDropIndex(FabFileChunk.collection, 'fabFileId_1');
+    for (const key of LEGACY_KEYS) {
+      const match = indexes.find(index => JSON.stringify(index.key) === JSON.stringify(key));
+      if (match?.name) {
+        await safeDropIndex(FabFileChunk.collection, match.name);
+      }
+    }
   },
 
-  down: async () => {},
+  down: async () => {
+    // Recreating undeclared legacy indexes is never wanted, so this drop is intentionally one-way.
+  },
 };
 
 export default migration;
