@@ -83,13 +83,15 @@ export const update = async (userId: string, params: TagUpdateParams, adapters: 
     throw new BadRequestError('Tag Service - Update: a data lake membership tag cannot be renamed here');
   }
 
-  // Only a NEW entry into the static-registry namespace is gated - a legacy tag already there
-  // (predating this gate) can still be renamed to something else, or left alone, by its owner.
-  if (
-    newName !== undefined &&
-    extractStaticRegistryPrefixedTags([tag.name]).length === 0 &&
-    extractStaticRegistryPrefixedTags([newName]).length > 0
-  ) {
+  // Gated on the DESTINATION alone, not on whether the old name was already in the namespace:
+  // the file-side rewrite (`updateTagsByUserId`) matches case-insensitively, while this check is
+  // deliberately case-sensitive (see extractStaticRegistryPrefixedTags), so a case-variant tag
+  // that slipped past every apply-time gate (e.g. "Opti:x") could otherwise be laundered into the
+  // canonical, read-arm-matching name by renaming FROM a same-prefix "old" name TO it - skipping
+  // the check because the old name already "counted". Gating on the destination only still lets a
+  // non-admin rename AWAY from a legacy registry tag (self-cleanup): the new name isn't registry,
+  // so the check is skipped.
+  if (newName !== undefined && extractStaticRegistryPrefixedTags([newName]).length > 0) {
     const user = await db.users.findById(userId);
     assertCanWriteStaticRegistryTags({ userId, isAdmin: !!user?.isAdmin }, [newName]);
   }

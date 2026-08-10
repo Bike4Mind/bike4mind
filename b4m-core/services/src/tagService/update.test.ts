@@ -422,6 +422,21 @@ describe('tagService - update', () => {
       expect(mockFabFileRepo.updateTagsByUserId).toHaveBeenCalledWith(userId, 'opti:legacy', 'harmless');
     });
 
+    // The gate must key on the DESTINATION alone: an earlier version skipped the check whenever
+    // the OLD name was already registry-prefixed, which let a non-admin launder a case-variant
+    // file tag (invisible to every apply-time gate) into the canonical, read-arm-matching name by
+    // renaming from one registry name to another - the "already there" old name never actually
+    // left the namespace.
+    it('refuses a non-admin renaming FROM one static-registry-prefixed tag TO another', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'opti:legacy' }));
+
+      await expect(update(userId, { id: existingTagId, name: 'opti:new' }, adapters)).rejects.toThrow(
+        "Only an admin can change this data lake's files"
+      );
+      expect(mockFabFileRepo.updateTagsByUserId).not.toHaveBeenCalled();
+      expect(mockTagRepo.update).not.toHaveBeenCalled();
+    });
+
     it('does not check admin status for an edit that never touches a registry prefix', async () => {
       (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'reports' }));
 
