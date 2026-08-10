@@ -10,6 +10,7 @@ import {
   ACTIVE_AGENT_EXECUTION_STATUSES,
   type AgentExecutionStatus,
   type GenerateImageToolCall,
+  type AudioGenerationToolCall,
 } from '@bike4mind/common';
 export { AGENT_EXECUTION_STATUSES, ACTIVE_AGENT_EXECUTION_STATUSES, type AgentExecutionStatus };
 
@@ -250,6 +251,18 @@ export interface IAgentExecution {
    * required on the base `GenerateImageToolCall` but defaulted by the tool.
    */
   imageConfig?: Partial<GenerateImageToolCall>;
+
+  /**
+   * The user's selected audio-generation config (TTS provider/voice/format/
+   * language, SFX duration/prompt-influence), forwarded once at dispatch and
+   * persisted so the `audio_generation` tool resolves the saved settings on
+   * every iteration including continuation Lambdas. Same lifecycle as
+   * `imageConfig`: consumed ONLY by `buildSubagentToolConfig`, never injected
+   * into the ReActAgent context. Absent when the user never touched the Audio
+   * tab; the tool then falls back to its built-in defaults. `Partial` because
+   * the client may omit fields.
+   */
+  audioConfig?: Partial<AudioGenerationToolCall>;
 
   /**
    * When true, the executor fires `LLMEvents.CompletionCompleted` on terminal
@@ -585,6 +598,24 @@ const AgentExecutionSchema = new mongoose.Schema(
           prompt_upsampling: { type: Boolean },
           seed: { type: Number },
           safety_tolerance: { type: Number },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
+
+    // User's selected audio-generation config. Explicit typed sub-schema (not
+    // Mixed) covering every field the audio_generation tool reads, mirroring
+    // imageConfig above. All optional - a config may carry only a provider.
+    audioConfig: {
+      type: new mongoose.Schema(
+        {
+          ttsProvider: { type: String },
+          voice: { type: String },
+          format: { type: String },
+          languageCode: { type: String },
+          durationSeconds: { type: Number },
+          promptInfluence: { type: Number },
         },
         { _id: false }
       ),

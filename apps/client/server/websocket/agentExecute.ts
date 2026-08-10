@@ -35,7 +35,7 @@ import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import type { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { z } from 'zod';
-import { GenerateImageToolCallSchema } from '@bike4mind/common';
+import { GenerateImageToolCallSchema, AudioGenerationToolCallSchema } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
 /**
@@ -136,6 +136,12 @@ const StartCommandSchema = BaseMessageSchema.extend({
   // Consumed only by `buildSubagentToolConfig`; never enters the checkpoint, so
   // it doesn't reintroduce the prior `structuredClone` failure.
   imageConfig: GenerateImageToolCallSchema.partial().optional(),
+  // User's selected audio-generation config, forwarded so the audio_generation
+  // tool resolves the user's saved provider/voice/format instead of its built-in
+  // defaults (the agent-mode analogue of imageConfig). Same lifecycle: consumed
+  // only by `buildSubagentToolConfig`, never enters the checkpoint. `.partial()`
+  // because the client may omit fields.
+  audioConfig: AudioGenerationToolCallSchema.partial().optional(),
   // Provenance of the routing decision. Persisted on the
   // dispatch-time Quest so the client renders the `AutoRouteBadge` over
   // classifier-routed responses on reload. Pure metadata - the executor
@@ -404,6 +410,9 @@ async function handleStart(
     // Snapshot the user's image config so image tools resolve a model on the
     // first AND continuation iterations (#agent-mode-image-gen).
     imageConfig: cmd.imageConfig,
+    // Snapshot the user's audio config so the audio_generation tool resolves the
+    // saved provider/voice/format on the first AND continuation iterations.
+    audioConfig: cmd.audioConfig,
   });
 
   const executionId = execution.id;
