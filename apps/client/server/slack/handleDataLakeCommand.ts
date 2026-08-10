@@ -53,6 +53,9 @@ const HELP_TEXT = [
 
 const USAGE_HINT = 'Try `@datalake help`.';
 
+/** Rows shown by `list` before a "+N more" tail. Keeps the reply well inside Slack's 40k limit. */
+const LIST_LIMIT = 50;
+
 export async function handleDataLakeCommand(params: HandleDataLakeCommandParams): Promise<string> {
   const parsed = parseDataLakeCommand(params.command);
 
@@ -81,8 +84,13 @@ async function handleList(params: HandleDataLakeCommandParams): Promise<string> 
     return 'You cannot add to any data lakes yet. You can add to lakes you created, or ask an admin.';
   }
 
-  const rows = writable.map(lake => `- \`${lake.slug}\` - ${lake.name}`).join('\n');
-  return `*Data lakes you can add to*\n${rows}\n\nAdd to one with \`@datalake add to <lake>\` and a file attached.`;
+  // Capped: for an ADMIN, findAccessible short-circuits to every draft/active lake on the
+  // platform, all canManage. Past Slack's 40k-character `text` limit chat.postMessage errors, the
+  // orchestrator catches it, and the admin gets "something went wrong" instead of any list at all.
+  const shown = writable.slice(0, LIST_LIMIT);
+  const rows = shown.map(lake => `- \`${lake.slug}\` - ${lake.name}`).join('\n');
+  const more = writable.length > shown.length ? `\n- ...and ${writable.length - shown.length} more` : '';
+  return `*Data lakes you can add to*\n${rows}${more}\n\nAdd to one with \`@datalake add to <lake>\` and a file attached.`;
 }
 
 async function handleAdd(
@@ -114,8 +122,9 @@ async function handleAdd(
 
   // A message carrying BOTH files and a link falls past the refusal above, so say what happened
   // to the link too - ingesting the files and staying silent about the URL reads as if both
-  // were taken.
-  if (parsed.link) {
+  // were taken. Only on success: appending it to a refusal would tell someone denied by the write
+  // gate that their link was "ignored", implying the rest went through.
+  if (parsed.link && outcome.ok) {
     // Warning sign escaped so this source file stays ASCII (same as formatIngestOutcome).
     return `${reply}\n\u26a0\ufe0f Ignored the link - links are not supported yet. Attach it as a file instead.`;
   }
