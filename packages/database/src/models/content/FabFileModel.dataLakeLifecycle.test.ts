@@ -358,6 +358,27 @@ describe('FabFile data lake lifecycle membership', () => {
         }
       });
 
+      it('splits a single mixed batch correctly: one row matches the stamp, the other does not', async () => {
+        // Proves the two-partition update's arithmetic in the one case that actually exercises
+        // both branches at once - every other test here has all-or-nothing rows, which cannot
+        // catch a double-count or a dropped row in ownStamp.modifiedCount + otherStamp.modifiedCount.
+        const rows = await seedLakeRows();
+        await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
+        // One member's stamp diverges after the fact (e.g. re-archived by another mechanism).
+        await FabFile.updateOne({ _id: rows.prefixOwned._id }, { $set: { archivedAt: OTHER_STAMP } });
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
+
+        expect(restored).toBe(2);
+        const matched = await readRaw(rows.metaTagged._id.toString());
+        expect(matched?.deletedAt ?? null).toBeNull();
+        expect(matched?.archivedAt ?? null).toBeNull();
+        const diverged = await readRaw(rows.prefixOwned._id.toString());
+        expect(diverged?.deletedAt ?? null).toBeNull();
+        expect(diverged?.archivedAt?.getTime()).toBe(OTHER_STAMP.getTime());
+      });
+
       it('leaves a member archived under a DIFFERENT stamp untouched (a prefix-sharing sibling lake)', async () => {
         const rows = await seedLakeRows();
         // Simulates a file this lake's delete swept up (matching deletedAt) but whose archivedAt

@@ -111,14 +111,18 @@ export interface IDataLake {
   /**
    * The exact `archivedAt` stamp archive wrote on this lake's members, so restore (after a
    * delete of an already-archived lake) can clear that batch's archive marker and nothing
-   * else's - mirrors `filesDeletedAt` but on the archive axis. Matched by EQUALITY, so a
-   * prefix-sharing sibling lake's independently-archived files (a different or absent stamp)
-   * are never touched. Claimed set-if-unset; cleared by unarchive (so a later re-archive gets
-   * a fresh stamp, not a stale reused one) and by a restore that clears it.
+   * else's - mirrors `filesDeletedAt` but on the archive axis. Matched by EQUALITY: a
+   * prefix-sharing sibling lake's own archive of that same file (a different stamp) is never
+   * touched, provided the sibling archived first - `archiveByDataLakeTag` only ever stamps
+   * `archivedAt: null` rows, so whichever lake archives a shared file first owns its marker.
+   * Claimed set-if-unset; cleared by unarchive (so a later re-archive gets a fresh stamp, not a
+   * stale reused one) and by a restore that clears it.
    *
-   * Absent on a lake archived before this field existed, which leaves its archive marker
-   * unbounded-unclearable on restore (the old, known behavior) rather than clearing a marker
-   * no stamp names.
+   * Absent on a lake archived before this field existed (or one whose members already carry an
+   * unstamped `archivedAt` for any other reason): restore leaves that archive marker exactly as
+   * it is instead of guessing at a batch it cannot prove, and archive itself skips claiming a
+   * fresh stamp in that case too (see archiveDataLake) rather than recording a mark that would
+   * name none of the pre-existing archived rows.
    */
   filesArchivedAt?: Date | null;
   /**
