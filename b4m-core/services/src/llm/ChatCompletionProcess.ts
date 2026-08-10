@@ -101,6 +101,7 @@ import { MongoAbility } from '@casl/ability';
 import { Mutex } from 'async-mutex';
 import { z } from 'zod';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
+import { resolveToolAvailability } from './toolAvailability';
 import { applyModerationHit, MODERATION_POLICY, moderationThrottleKey } from '../userService/moderationPolicy';
 import { ToolDefinition } from './tools/base/types';
 import { ServerAgentStore } from './agents/ServerAgentStore';
@@ -1381,7 +1382,7 @@ export class ChatCompletionProcess {
         );
       };
 
-      const [session, organization, apiKeyTable] = await Promise.all([
+      const [session, organization, apiKeyTable, toolAvailability] = await Promise.all([
         timeCall('session', Promise.resolve(prefetchedSession ?? this.db.sessions.findById(sessionId))),
         timeCall(
           'organization',
@@ -1392,6 +1393,14 @@ export class ChatCompletionProcess {
               : Promise.resolve(null)
         ),
         timeCall('apiKeys', getEffectiveLLMApiKeys(this.user.id, { db: this.db, getSettingsByNames }, { logger })),
+        // Never rejects (see resolveToolAvailability's doc comment), so it's safe alongside the
+        // "essential" calls above that re-throw on failure. Fail-closed here (unlike the Tools
+        // picker UI's fail-open default): a tool this lookup couldn't confirm works should not
+        // reach the model rather than risk offering one that will throw or refuse.
+        timeCall(
+          'toolAvailability',
+          resolveToolAvailability(this.user.id, { db: this.db }, { onLookupError: 'unavailable', logger })
+        ),
       ]);
 
       if (!session) {
@@ -2200,6 +2209,7 @@ export class ChatCompletionProcess {
         thinking: thinking ? { enabled: thinking.enabled, budget_tokens: thinking.budget_tokens ?? 16000 } : undefined,
         agentStore,
         externalTools,
+        toolAvailability,
       });
 
       // Final denylist pass on the built tool list. The enabledTools filter above

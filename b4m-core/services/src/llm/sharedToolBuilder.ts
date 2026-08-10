@@ -23,6 +23,7 @@ import type { ToolDefinition } from './tools/base/types';
 import { createDelegateToAgentTool, type SubagentUsageMeta } from './tools/implementation/delegateToAgent';
 import { createCoordinateTaskTool } from './tools/implementation/coordinateTask';
 import type { DagDispatcher, DagHandoffSignal } from './tools/implementation/coordinateTask';
+import { isToolOfferable, type ToolAvailability } from './toolAvailability';
 import { extractAndSaveEntitiesFromToolResult, shouldExtractEntitiesFromTool } from '../conversationContextService';
 import type { MinimalSessionRepository } from '../conversationContextService/types';
 
@@ -198,6 +199,13 @@ export interface BuildSharedToolsOptions {
   agentOnlyMcpServers?: string[];
   getAbortSignal?: () => AbortSignal | undefined;
   externalTools?: Record<string, ToolDefinition>;
+  /**
+   * Per-request key-gated tool availability (from `resolveToolAvailability`). Omitted ->
+   * every enabled tool is offered unfiltered (callers that haven't wired it yet keep today's
+   * behavior). Passed, a tool the caller enabled but that has no working key/config is dropped
+   * from the schema sent to the model instead of reaching it and then throwing or refusing.
+   */
+  toolAvailability?: ToolAvailability;
 }
 
 // Sentinel types for wrapping. A tool may emit one of these generic
@@ -244,6 +252,7 @@ export function buildSharedTools(
     agentOnlyMcpServers = [],
     getAbortSignal,
     externalTools,
+    toolAvailability,
   } = options;
 
   const {
@@ -295,11 +304,20 @@ export function buildSharedTools(
   // Filter to enabled tools only
   let tools: ICompletionOptionTools[] | undefined = undefined;
   if (enabledTools.length > 0) {
-    const mappedTools = enabledTools.filter(tool => tool in llmToolDefinitions).map(tool => llmToolDefinitions[tool]);
+    const mappedTools = enabledTools
+      .filter(tool => tool in llmToolDefinitions && isToolOfferable(tool, toolAvailability))
+      .map(tool => llmToolDefinitions[tool]);
 
     const undefinedTools = enabledTools.filter(tool => !llmToolDefinitions[tool]);
     if (undefinedTools.length > 0) {
       logger.warn(`Undefined tools requested (will be skipped): ${undefinedTools.join(', ')}`);
+    }
+
+    const unavailableTools = enabledTools.filter(
+      tool => tool in llmToolDefinitions && !isToolOfferable(tool, toolAvailability)
+    );
+    if (unavailableTools.length > 0) {
+      logger.info(`Enabled tools dropped as unavailable (no working key/config): ${unavailableTools.join(', ')}`);
     }
 
     tools = mappedTools.filter((tool): tool is ICompletionOptionTools => tool !== undefined);
