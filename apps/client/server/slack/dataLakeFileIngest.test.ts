@@ -299,6 +299,19 @@ describe('ingest', () => {
     expect(downloadFile).not.toHaveBeenCalled();
   });
 
+  it('refuses a file EXACTLY at the MaxFileSize limit, matching createFabFile', async () => {
+    // create.ts:120 throws on `fileSize >= maxFileSize`. A `>` here let the exact-boundary file
+    // through the pre-check and into a full download, only to be refused after transfer - the one
+    // case the pre-check exists to prevent.
+    deps.resolveMaxFileSizeBytes = vi.fn().mockResolvedValue(20 * 1024 * 1024);
+
+    const outcome = await run({ files: [attachment({ name: 'exact.pdf', size: 20 * 1024 * 1024 })] });
+
+    if (!outcome.ok) throw new Error('expected success');
+    expect(outcome.added).toEqual([]);
+    expect(downloadFile).not.toHaveBeenCalled();
+  });
+
   it('applies only the Slack ceiling when no MaxFileSize is configured', async () => {
     // The dep is optional; absent it, behaviour is unchanged and createFabFile still re-checks.
     const outcome = await run({ files: [attachment({ name: 'big.pdf', size: 30 * 1024 * 1024 })] });
