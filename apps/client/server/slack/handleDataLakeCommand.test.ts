@@ -126,6 +126,29 @@ describe('handleDataLakeCommand', () => {
 
       expect(reply).toBe('You can only add files to a data lake you created.');
     });
+
+    it('says the link was ignored when a message carries BOTH a file and a link', async () => {
+      parseDataLakeCommand.mockReturnValue({
+        subcommand: 'add',
+        lakeSlug: 'sales',
+        link: 'https://example.com/doc',
+        rawArgs: '',
+      });
+      ingestSlackFilesIntoLake.mockResolvedValue({
+        ok: true,
+        lakeName: 'Sales',
+        added: ['a.pdf'],
+        duplicates: [],
+        rejected: [],
+      });
+
+      const reply = await handleDataLakeCommand(baseParams({ files: [{ id: 'F1', name: 'a.pdf' }] }));
+
+      // The files-present case falls past the bare-link refusal, so silence about the URL would
+      // read as if the link had been taken too.
+      expect(reply).toContain('Added 1 file to *Sales*');
+      expect(reply).toMatch(/ignored the link/i);
+    });
   });
 });
 
@@ -168,6 +191,28 @@ describe('formatIngestOutcome', () => {
   it('does not claim success when nothing happened at all', () => {
     const text = formatIngestOutcome({ ok: true, lakeName: 'S', added: [], duplicates: [], rejected: [] });
     expect(text).toMatch(/nothing to add/i);
+  });
+
+  it('does not promise searchability when auto-chunk is off', () => {
+    // With enableAutoChunk off, objectCreated.ts never enqueues the chunk job, so the stored file
+    // is never indexed - the default wording would be a promise the user cannot act on.
+    const text = formatIngestOutcome(
+      { ok: true, lakeName: 'S', added: ['a.pdf'], duplicates: [], rejected: [] },
+      { autoChunkEnabled: false }
+    );
+
+    expect(text).toContain('Added 1 file to *S*');
+    expect(text).toMatch(/automatic indexing is off/i);
+    expect(text).not.toMatch(/searchable once indexing finishes/i);
+  });
+
+  it('treats an unset auto-chunk flag as on, matching the setting default', () => {
+    const text = formatIngestOutcome(
+      { ok: true, lakeName: 'S', added: ['a.pdf'], duplicates: [], rejected: [] },
+      { autoChunkEnabled: undefined }
+    );
+
+    expect(text).toMatch(/searchable once indexing finishes/i);
   });
 });
 
@@ -222,6 +267,26 @@ describe('runDataLakeSlackCommand (gate + dispatch)', () => {
       text: expect.stringContaining('Data Lake commands'),
       threadTs: 'T1',
     });
+  });
+
+  it('reads enableAutoChunk and reflects it in the reply wording', async () => {
+    // Gate on, auto-chunk off - so the confirmation must not promise the file becomes searchable.
+    getSettingsValue.mockImplementation(async (key: string) => key === 'EnableDataLakeSlackAdd');
+    parseDataLakeCommand.mockReturnValue({ subcommand: 'add', lakeSlug: 'sales', rawArgs: '' });
+    ingestSlackFilesIntoLake.mockResolvedValue({
+      ok: true,
+      lakeName: 'Sales',
+      added: ['a.pdf'],
+      duplicates: [],
+      rejected: [],
+    });
+
+    await runDataLakeSlackCommand({ ...baseDeps(), files: [{ id: 'F1' }] as never });
+
+    expect(getSettingsValue).toHaveBeenCalledWith('enableAutoChunk');
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringMatching(/automatic indexing is off/i) })
+    );
   });
 
   it('swallows errors so the caller still acks 200 (logs + best-effort error reply)', async () => {
