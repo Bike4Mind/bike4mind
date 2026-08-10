@@ -45,10 +45,16 @@ describe('secretsAtRest', () => {
     expect(decryptAtRest(legacyCipher)).toBe('rotated-secret');
   });
 
-  it('returns ciphertext unchanged (never a plaintext guess) when no key can decrypt it', () => {
+  it('returns "" (not the ciphertext) when no key can decrypt it, so downstream guards fire', () => {
     const cipher = encryptSecret('secret', generateEncryptionKey());
     configureSecretsAtRest(KEY); // neither current nor previous can decrypt this
-    expect(decryptAtRest(cipher)).toBe(cipher);
+    expect(decryptAtRest(cipher)).toBe('');
+  });
+
+  it('returns "" for a ciphertext value when no key is configured at all', () => {
+    const cipher = encryptSecret('secret', KEY);
+    configureSecretsAtRest(undefined);
+    expect(decryptAtRest(cipher)).toBe('');
   });
 
   it('leaves an empty string alone', () => {

@@ -56,7 +56,9 @@ class AdminSettingsRepository extends BaseRepository<IAdminSettings> implements 
   }
 
   async findBySettingName(settingName: IAdminSettings['settingName']) {
-    const setting = await this.model.findOne({ settingName }).lean();
+    // lean({ virtuals: true }) keeps the id virtual the prior hydrated toJSON produced
+    // (mongoose-lean-virtuals only fires with the flag - see packages/database/src/index.ts).
+    const setting = await this.model.findOne({ settingName }).lean({ virtuals: true });
     return decryptSettingInPlace(setting as (IAdminSettings & { settingName: string }) | null);
   }
 

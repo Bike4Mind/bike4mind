@@ -2,9 +2,12 @@
  * Secrets-at-rest key injection.
  *
  * The database layer (packages/database) and core services must encrypt/decrypt
- * stored secrets, but cannot import SST `Config` (that lives in apps/client). The
- * app injects the encryption key once at boot via `configureSecretsAtRest`, and the
- * repository read paths call `decryptAtRest` / write paths call `encryptAtRest`.
+ * stored secrets, but cannot import SST `Config` (that lives in apps/client). The key
+ * is registered via `configureSecretsAtRest`; in practice `connectDB`
+ * (packages/database/src/priceCatalogBootstrap.ts) calls it from `Resource` on first
+ * connect, so every process that reaches Mongo - API routes, cron/queue handlers, and
+ * the packages/scripts CLIs - is covered without an apps/client-only boot import.
+ * Read paths call `decryptAtRest`; write paths call `encryptAtRest`.
  *
  * Mirrors the `setModelCatalogProvider` one-time-injection pattern used by connectDB.
  *
@@ -56,9 +59,11 @@ export function encryptAtRest(plaintext: string): string {
 
 /**
  * Decrypt a value read from storage. Plaintext (pre-migration) values and any
- * non-ciphertext input pass through unchanged. On a genuine decrypt failure the
- * ciphertext is returned as-is (fail-broken, never a silent plaintext leak) and the
- * failure is logged once.
+ * non-ciphertext input pass through unchanged. When a ciphertext value cannot be
+ * decrypted (no key configured, or none of the keys work after a botched rotation) it
+ * returns '' rather than the raw ciphertext: '' makes downstream `if (!key)` guards fire
+ * and degrade to the demo-key fallback, whereas returning the hex blob would be sent
+ * upstream as a live credential and read as "configured". The failure is logged once.
  */
 export function decryptAtRest(value: string): string {
   if (!value || !isEncrypted(value)) return value;
@@ -70,7 +75,7 @@ export function decryptAtRest(value: string): string {
         '[secrets-at-rest] read an encrypted value but no SECRET_ENCRYPTION_KEY is configured; cannot decrypt'
       );
     }
-    return value;
+    return '';
   }
 
   for (const key of [currentKey, previousKey]) {
@@ -86,5 +91,5 @@ export function decryptAtRest(value: string): string {
     warnedDecryptFailure = true;
     Logger.globalInstance.error('[secrets-at-rest] failed to decrypt a stored secret with the configured key(s)');
   }
-  return value;
+  return '';
 }

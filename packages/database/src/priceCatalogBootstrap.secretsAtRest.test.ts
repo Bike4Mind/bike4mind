@@ -22,8 +22,9 @@ describe('connectDB seam registers the at-rest key from SST resources', () => {
   it('lets a config-less process decrypt a stored sensitive value after the seam runs', async () => {
     const cipher = encryptSecret('sk-secret-from-a-script', KEY);
 
-    // Before the seam runs this is the P1 gap: unconfigured -> ciphertext returned as-is.
-    expect(decryptAtRest(cipher)).toBe(cipher);
+    // Before the seam runs this is the P1 gap: unconfigured, so it cannot decrypt and
+    // returns '' (never the raw ciphertext).
+    expect(decryptAtRest(cipher)).toBe('');
 
     const { configureSecretsAtRestFromResource } = await import('./priceCatalogBootstrap');
     configureSecretsAtRestFromResource();

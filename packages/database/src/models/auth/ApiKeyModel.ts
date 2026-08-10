@@ -34,25 +34,32 @@ class ApiKeyRepository extends BaseRepository<IApiKeyDocument> implements IApiKe
   // to store plaintext, matching how the rest of the app degrades without SECRET_ENCRYPTION_KEY.
   async create(data: Omit<IApiKeyDocument, 'id' | 'updatedAt' | 'createdAt'>) {
     if (!isSecretsAtRestConfigured() && process.env.B4M_SELF_HOST !== 'true') {
-      throw new Error('SECRET_ENCRYPTION_KEY is not configured - cannot store a provider API key');
+      throw new Error(
+        'SECRET_ENCRYPTION_KEY is not configured, refusing to store a provider API key in plaintext. ' +
+          'Set a 64-hex key on this stage (sst secret set SECRET_ENCRYPTION_KEY <value>), or set B4M_SELF_HOST=true to opt into plaintext.'
+      );
     }
     const stored = await super.create({ ...data, apiKey: encryptAtRest(data.apiKey) });
     return { ...stored, apiKey: data.apiKey };
   }
   async findByUserIdAndType(userId: string, type: ApiKeyType) {
-    const doc = await this.model.findOne({ userId, type, isActive: true }).lean().exec();
+    // lean({ virtuals: true }) so the id virtual survives (mongoose-lean-virtuals only fires
+    // with the flag - see packages/database/src/index.ts); callers spread the result.
+    const doc = await this.model.findOne({ userId, type, isActive: true }).lean({ virtuals: true }).exec();
     return decryptApiKeyInPlace(doc as (IApiKeyDocument & { apiKey?: string }) | null);
   }
   async findByUserIdAndTypes(userId: string, types: ApiKeyType[]) {
     const result = await this.model
       .find({ userId, type: { $in: types }, isActive: true })
-      .lean()
+      .lean({ virtuals: true })
       .exec();
     return result.map(doc => decryptApiKeyInPlace(doc as IApiKeyDocument & { apiKey?: string }));
   }
-  async findByIdAndUserId(id: string, userId: string) {
-    const doc = await this.model.findOne({ _id: id, userId }).lean();
-    return decryptApiKeyInPlace(doc as (IApiKeyDocument & { apiKey?: string }) | null);
+  // Consumed only by deleteApiKey, whose result is returned in the DELETE response. Do NOT
+  // decrypt here: that would put a live plaintext provider key in a browser payload (the delete
+  // route strips apiKey regardless). Hydrated (not lean) so the id virtual survives.
+  findByIdAndUserId(id: string, userId: string) {
+    return this.model.findOne({ _id: id, userId });
   }
   // Returns a hydrated document (not lean) and does NOT decrypt: setApiKey mutates
   // isActive on the result and writes it straight back, so the stored apiKey must

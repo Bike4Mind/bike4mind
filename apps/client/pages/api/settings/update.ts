@@ -103,7 +103,10 @@ const handler = baseApi().put(
     if (isSensitiveSetting && typeof value === 'string' && value !== '' && !isEncrypted(value)) {
       const encryptionKey = Config.SECRET_ENCRYPTION_KEY;
       if (!encryptionKey || !isValidEncryptionKey(encryptionKey)) {
-        throw new Error('SECRET_ENCRYPTION_KEY is not configured - cannot store a sensitive setting');
+        throw new Error(
+          'SECRET_ENCRYPTION_KEY is not configured (needs a 64-hex value), refusing to store a sensitive ' +
+            'setting in plaintext. Set it on this stage: sst secret set SECRET_ENCRYPTION_KEY <value>.'
+        );
       }
       settingValueToStore = encryptSecret(value, encryptionKey);
     }
