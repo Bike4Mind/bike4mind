@@ -83,6 +83,7 @@ export * from './JiraWebhookConfigTypes';
 export * from './JiraWebhookSubscriptionTypes';
 export * from './JiraWebhookDeliveryTypes';
 export * from './OrgGitHubConnectionTypes';
+export * from './OrgGoogleDriveConnectionTypes';
 export * from './OrgJiraConnectionTypes';
 export * from './QuestCapabilityTypes';
 export * from './SystemPromptTypes';
