@@ -2,9 +2,8 @@ import {
   FileGeneratePresignedUrlResponseType,
   FileGeneratePresignedUrlRequestInputType,
   IUser,
-  IUserDocument,
-  WithOrgRef,
 } from '@bike4mind/common';
+import type { AdminUserListItem } from './adminUserProjection';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import axios, { AxiosResponse } from 'axios';
@@ -30,7 +29,10 @@ export interface IGetUsersParams {
 }
 
 export interface IGetUsersResponse {
-  users: WithOrgRef<IUserDocument>[];
+  // Derived from the endpoint's projection, so reading a field GET /api/users does not
+  // emit is a compile error. publicView requests return only the PUBLIC_USER_LIST_PROJECTION
+  // subset of these fields.
+  users: AdminUserListItem[];
   currentPage: number;
   totalPages: number;
   totalUsers: number;
