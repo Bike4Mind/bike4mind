@@ -517,8 +517,16 @@ DataLakeBatchSchema.index({ userId: 1, status: 1 });
 DataLakeBatchSchema.index({ dataLakeId: 1, status: 1 });
 // Read-time reconciler scan: non-terminal batches ordered by staleness.
 DataLakeBatchSchema.index({ status: 1, updatedAt: 1 });
-// Same shape, for the taxonomy stuck-job reconciler.
-DataLakeBatchSchema.index({ taxonomyStatus: 1, updatedAt: 1 });
+// findTaxonomyAttentionByUserId's list-response query (userId equality + taxonomyStatus $in,
+// sorted updatedAt desc) - the batches-list poll hits this on every call. Previously this was
+// { taxonomyStatus: 1, updatedAt: 1 }, which was never actually an equality prefix for that
+// query (userId comes first) - replaced rather than just re-commented, since the old shape
+// served no query at all. NOT the stuck-job reconciler scan, which needs taxonomyStartedAt
+// (see the index below).
+DataLakeBatchSchema.index({ userId: 1, taxonomyStatus: 1, updatedAt: -1 });
+// findStuckTaxonomy's staleness scan - see its doc comment for why taxonomyStartedAt, not
+// updatedAt, is the correct clock for "how long has this taxonomy attempt been stuck."
+DataLakeBatchSchema.index({ taxonomyStatus: 1, taxonomyStartedAt: 1 });
 
 const DataLakeBatchModel =
   (mongoose.models['DataLakeBatch'] as unknown as mongoose.Model<IDataLakeBatchDocument>) ||
@@ -697,13 +705,45 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
   }
 
   async findStuckTaxonomy(cutoff: Date, limit = 500): Promise<IDataLakeBatchDocument[]> {
-    // taxonomyStatus equality prefix + updatedAt range -> served by the
-    // { taxonomyStatus:1, updatedAt:1 } index, mirroring findStuck.
+    // taxonomyStatus equality prefix + taxonomyStartedAt range -> served by the
+    // { taxonomyStatus:1, taxonomyStartedAt:1 } index, mirroring findStuck. Deliberately NOT
+    // updatedAt: an unrelated write to the batch (an ingest counter tick) keeps bumping that
+    // while taxonomyStartedAt - when this taxonomy attempt actually began - stays fixed, so
+    // filtering on updatedAt could let a genuinely stuck batch dodge every scan.
+    // $not/$gte (not $lt), matching forceFailStuckTaxonomy's write guard: a plain $lt never
+    // matches a document missing taxonomyStartedAt entirely, which would let such a batch dodge
+    // this scan forever - the write guard's missing-field handling is dead code otherwise, since
+    // the scan is what selects candidates for it in the first place.
     const results = await this.batchModel
-      .find({ taxonomyStatus: { $in: TAXONOMY_NON_TERMINAL_STATUSES }, updatedAt: { $lt: cutoff } })
-      .sort({ updatedAt: 1 })
+      .find({
+        taxonomyStatus: { $in: TAXONOMY_NON_TERMINAL_STATUSES },
+        taxonomyStartedAt: { $not: { $gte: cutoff } },
+      })
+      .sort({ taxonomyStartedAt: 1 })
       .limit(limit);
     return results.map(r => r.toJSON() as IDataLakeBatchDocument);
+  }
+
+  /**
+   * Force a stuck taxonomy job to 'failed', guarded on BOTH status and staleness - see the
+   * interface doc comment for why the staleness guard is needed on top of a status-only one.
+   */
+  async forceFailStuckTaxonomy(
+    batchId: string,
+    from: TaxonomyStatus[],
+    startedBefore: Date,
+    taxonomyError: string
+  ): Promise<IDataLakeBatchDocument | null> {
+    const doc = await this.batchModel.findOneAndUpdate(
+      // $not/$gte (not $lt) so a batch with no taxonomyStartedAt at all still matches - every
+      // current writer sets it alongside a non-terminal status, but a doc missing it shouldn't
+      // be able to dodge this guard the way it dodges a plain $lt (Mongo's range operators never
+      // match a missing field).
+      { _id: batchId, taxonomyStatus: { $in: from }, taxonomyStartedAt: { $not: { $gte: startedBefore } } },
+      { $set: { taxonomyStatus: 'failed', taxonomyError } },
+      { new: true }
+    );
+    return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
   }
 
   async findTaxonomyAttentionByUserId(userId: string, limit = 500): Promise<IDataLakeBatchSummary[]> {
