@@ -39,6 +39,10 @@ export type IUsageEventDocument = IUsageEvent & IMongoDocument;
 // spend spans many accounts.
 const SPEND_ACCOUNT_LIMIT = 50;
 
+// Same payload guard for the "by model" list: a catalog with many provider/model
+// variants would otherwise ship every one. Comfortably above a realistic catalog.
+const SPEND_MODEL_LIMIT = 100;
+
 /**
  * One row per provider API call: provider-side quantities and
  * frozen USD cost next to the credits actually debited. Dual-written at
@@ -214,9 +218,12 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
 
     const match: Record<string, unknown> = {};
     if (from || to) {
+      // Half-open window [from, to): the upper bound is exclusive so adjacent
+      // windows (current vs the equal-length prior window, whose `to` is the
+      // current window's `from`) don't both count an event at the shared instant.
       const createdAt: Record<string, Date> = {};
       if (from) createdAt.$gte = from;
-      if (to) createdAt.$lte = to;
+      if (to) createdAt.$lt = to;
       match.createdAt = createdAt;
     }
     if (userId) match.userId = userId;
@@ -261,6 +268,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
             { $group: { _id: { provider: '$provider', model: '$model' }, ...spendSums } },
             { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...spendFields } },
             { $sort: { creditsCharged: -1 } },
+            { $limit: SPEND_MODEL_LIMIT },
           ],
           byAccount: [
             { $group: { _id: { ownerId: '$ownerId', ownerType: '$ownerType' }, ...spendSums } },
@@ -268,6 +276,9 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
             { $sort: { creditsCharged: -1 } },
             { $limit: SPEND_ACCOUNT_LIMIT },
           ],
+          // Uncapped by design: one row per UTC day in the window feeds the line
+          // chart, which needs every point. Bounded by the window length (days),
+          // not by event volume, so it stays small even for wide ranges.
           dailyCost: [
             {
               $group: {

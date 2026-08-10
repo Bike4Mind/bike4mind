@@ -216,8 +216,11 @@ async function buildSpendData(query: Omit<SpendQuery, 'recache'>): Promise<Spend
 
   const totalCogs = currentSummary.totals.cogsUsd;
   const byModel: CostByModelRow[] = currentSummary.byModel.map(m => ({
-    modelId: m.model,
-    modelName: m.model,
+    // Key and label on provider+model: the same model id can be served by more than
+    // one backend, so collapsing to model alone would merge rows and collide React
+    // keys. Matches the sibling usage dashboard's `${provider} / ${model}` identity.
+    modelId: `${m.provider}/${m.model}`,
+    modelName: `${m.provider} / ${m.model}`,
     estCost: m.cogsUsd,
     requests: m.requests,
     share: totalCogs > 0 ? m.cogsUsd / totalCogs : 0,

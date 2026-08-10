@@ -56,8 +56,10 @@ export const CacheKeys = {
       normalizedFilters.modelFilter = filters.modelFilter;
     }
 
+    // JSON-serialize the sorted pairs so a value containing the delimiter can't
+    // collide with a different set of filters (e.g. "a|userFilter:b").
     const sortedKeys = Object.keys(normalizedFilters).sort();
-    const filterString = sortedKeys.map(key => `${key}:${normalizedFilters[key]}`).join('|');
+    const filterString = JSON.stringify(sortedKeys.map(key => [key, normalizedFilters[key]]));
 
     const hash = crypto.createHash('sha256').update(filterString).digest('hex').substring(0, 16);
 

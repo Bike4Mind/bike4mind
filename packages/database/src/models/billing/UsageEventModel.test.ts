@@ -644,6 +644,25 @@ describe('UsageEventRepository', () => {
       expect(byModel.totals.requests).toBe(1);
     });
 
+    it('treats the window as half-open [from, to): excludes an event at exactly `to`', async () => {
+      const boundary = new Date('2024-06-01T00:00:00Z');
+      const inside = await record();
+      await UsageEvent.collection.updateOne(
+        { _id: inside!._id },
+        { $set: { createdAt: new Date('2024-05-31T23:59:59Z') } }
+      );
+      const onBoundary = await record();
+      await UsageEvent.collection.updateOne({ _id: onBoundary!._id }, { $set: { createdAt: boundary } });
+
+      // The prior window's upper bound abuts the current window's `from`; an event
+      // on that instant must land in exactly one window, not both.
+      const summary = await usageEventRepository.spendSummary({
+        from: new Date('2024-05-01T00:00:00Z'),
+        to: boundary,
+      });
+      expect(summary.totals.requests).toBe(1);
+    });
+
     it('returns zeroed structure for an empty window', async () => {
       const summary = await usageEventRepository.spendSummary({ from: new Date('2099-01-01T00:00:00Z') });
 

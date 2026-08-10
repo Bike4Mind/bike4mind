@@ -108,11 +108,26 @@ describe('GET /api/admin/spend', () => {
     expect(byKey.refusalRate).toBeCloseTo(0.05);
 
     expect(data.byAccount[0]).toMatchObject({ accountId: 'user-1', accountName: 'Ada Lovelace' });
-    expect(data.byModel[0]).toMatchObject({ modelId: 'opus', share: 12 / 20 });
+    // modelId keys on provider+model so distinct backends serving the same model don't merge.
+    expect(data.byModel[0]).toMatchObject({ modelId: 'bedrock/opus', modelName: 'bedrock / opus', share: 12 / 20 });
     expect(data.periodLabel).toBe('Last 30 days');
     // Authoritative empty/truncation signals emitted on the contract, not inferred.
     expect(data.hasData).toBe(true);
     expect(data.activeAccounts).toBe(3);
+  });
+
+  it('feeds the current summary to KPI values and the prior summary to priorValues', async () => {
+    // Distinct fixtures per window so a swapped argument order (or reading a KPI
+    // from the wrong summary) can't pass. Order matches buildSpendData's Promise.all.
+    mockSpendSummary
+      .mockResolvedValueOnce(summary({ totals: { requests: 100, cogsUsd: 20, creditsCharged: 2000 } }))
+      .mockResolvedValueOnce(summary({ totals: { requests: 50, cogsUsd: 8, creditsCharged: 900 } }));
+
+    const { res, run } = call({ query: {} });
+    await run();
+
+    const estCost = res._getJSONData().kpis.find((k: { key: string }) => k.key === 'estCost');
+    expect(estCost).toMatchObject({ value: 20, priorValue: 8 });
   });
 
   it('reports hasData=false when the window has no requests', async () => {
