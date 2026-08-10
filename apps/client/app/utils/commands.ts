@@ -59,14 +59,7 @@ export type CommandArgExtra = {
 };
 
 export type CommandKey =
-  | '/llm'
-  | '/roll'
-  | '/key'
-  | '/models'
-  | '/gen_image'
-  | '/gen_video'
-  | '/edit_image'
-  | '/create_agent';
+  '/llm' | '/roll' | '/key' | '/models' | '/gen_image' | '/gen_video' | '/edit_image' | '/create_agent';
 
 export type CommandHandlers = {
   [key in CommandKey]?: (args: any) => Promise<void | { session: ISessionDocument; quest: IChatHistoryItemDocument }>;

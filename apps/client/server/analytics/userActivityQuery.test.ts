@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildUserActivityPipeline, parseMetadataFilters } from './userActivityQuery';
+import { buildUserActivityPipeline, parseMetadataFilters, SPLIT_METADATA_KEYS } from './userActivityQuery';
 
 const baseQuery = { startDate: '2026-07-21', endDate: '2026-07-28', skip: 0, limit: 25 };
 
@@ -28,6 +28,42 @@ describe('buildUserActivityPipeline - pagination', () => {
     // A second $group is what re-nested rows into users[] and blew up the payload.
     expect(pipeline.filter(s => Object.keys(s)[0] === '$group')).toHaveLength(1);
     expect(JSON.stringify(facetStages.rows)).not.toContain('$push');
+  });
+
+  it('keeps the metadata subdocument out of the group key', () => {
+    const { pipeline } = buildUserActivityPipeline(baseQuery);
+
+    // The whole subdocument in the key made almost every raw event its own row, because most
+    // of what it carries (sessionId, requestId, token counts) is per-event identity.
+    const key = stage(pipeline, '$group').$group._id;
+    expect(Object.values(key)).not.toContain('$metadata');
+    expect(Object.keys(key.metadataKey)).toEqual([...SPLIT_METADATA_KEYS]);
+  });
+
+  it('normalises a missing split key so it does not group apart from an explicit null', () => {
+    const { pipeline } = buildUserActivityPipeline(baseQuery);
+
+    const key = stage(pipeline, '$group').$group._id;
+    for (const field of SPLIT_METADATA_KEYS) {
+      expect(key.metadataKey[field]).toEqual({ $ifNull: [`$metadata.${field}`, null] });
+    }
+  });
+
+  it('returns a representative metadata sample for the collapsed row', () => {
+    const { pipeline, facetStages } = buildUserActivityPipeline(baseQuery);
+
+    expect(stage(pipeline, '$group').$group.metadata).toEqual({ $first: '$metadata' });
+    expect(facetStages.rows.find(s => s.$project)!.$project.metadata).toBe(1);
+  });
+
+  it('reads the organization off the counter log rather than the joined user', () => {
+    const { pipeline, facetStages } = buildUserActivityPipeline(baseQuery);
+
+    // The User document has no `organization` field, so the previous `$user.organization`
+    // projection was undefined on every row. The counter log denormalises it at write time,
+    // and it is the same field the org filters match on.
+    expect(stage(pipeline, '$group').$group.userOrganization).toEqual({ $first: '$userOrganization' });
+    expect(JSON.stringify(facetStages.rows)).not.toContain('$user.organization');
   });
 
   it('joins the user only once per grouped row, not once per raw event', () => {

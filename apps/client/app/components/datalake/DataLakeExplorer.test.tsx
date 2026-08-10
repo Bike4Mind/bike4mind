@@ -55,8 +55,7 @@ vi.mock('@client/app/contexts/UserContext', () => ({
     selector ? selector({ isAdmin: true }) : { isAdmin: true },
 }));
 vi.mock('@client/app/stores/useDataLakeWizardStore', () => ({
-  useDataLakeWizardStore: (selector: (s: { openManager: () => void }) => unknown) =>
-    selector({ openManager: vi.fn() }),
+  useDataLakeWizardStore: (selector: (s: { openManager: () => void }) => unknown) => selector({ openManager: vi.fn() }),
 }));
 
 // Collapsed-sidenav clearance reads this store; default open (no extra indent) for these tests.

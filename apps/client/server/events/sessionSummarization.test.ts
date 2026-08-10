@@ -17,6 +17,9 @@ const h = vi.hoisted(() => ({
   publishTag: vi.fn(),
   logEvent: vi.fn(),
   upload: vi.fn(),
+  findPrefixArmLakes: vi.fn(
+    async () => [] as { createdByUserId: string; fileTagPrefix: string; datalakeTag: string }[]
+  ),
   session: {} as Record<string, unknown>,
 }));
 
@@ -42,7 +45,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   sessionRepository: { update: h.sessionUpdate },
   fabFileRepository: { findOne: h.findOne },
-  dataLakeRepository: {},
+  dataLakeRepository: { find: vi.fn() },
   adminSettingsRepository: {},
   userRepository: {},
   withTransaction: (fn: () => Promise<unknown>) => fn(),
@@ -50,6 +53,7 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@bike4mind/services', () => ({
   fabFilesService: { updateFabFile: h.updateFabFile, createFabFile: h.createFabFile },
+  dataLakeService: { loadPrefixArmCandidateLakes: h.findPrefixArmLakes },
 }));
 
 vi.mock('@client/services/operationsModelService', () => ({
@@ -168,5 +172,64 @@ describe('sessionSummarization summary-file lookup', () => {
       expect.objectContaining({ id: 'fabfile-owner' }),
       expect.anything()
     );
+  });
+
+  // Since #1263, a prefix-arm content tag is lake membership on its own (no meta-tag required),
+  // and reconcileLakeTags now gates losing it the same as a meta-tag leave. Re-summarizing must
+  // carry that tag through too, or it silently evicts the file from a lake it never left.
+  it('carries a prefix-arm-only membership tag through re-summarization', async () => {
+    h.fabFileStore.push({
+      id: 'fabfile-owner',
+      userId: OWNER,
+      sessionId: SESSION_ID,
+      fileName: 'Notebook Summary.txt',
+      tags: [{ name: 'lk:invoices', strength: 1 }],
+    });
+    h.findPrefixArmLakes.mockResolvedValueOnce([
+      { createdByUserId: OWNER, fileTagPrefix: 'lk:', datalakeTag: 'datalake:lake1' },
+    ]);
+
+    await run();
+
+    expect(h.updateFabFile).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tags: expect.arrayContaining([expect.objectContaining({ name: 'lk:invoices' })]) }),
+      expect.anything()
+    );
+  });
+
+  it('skips the candidate-lake query when no stored tag could carry a prefix arm', async () => {
+    h.fabFileStore.push({
+      id: 'fabfile-owner',
+      userId: OWNER,
+      sessionId: SESSION_ID,
+      fileName: 'Notebook Summary.txt',
+      tags: [{ name: 'plain', strength: 1 }],
+    });
+
+    await run();
+
+    expect(h.findPrefixArmLakes).not.toHaveBeenCalled();
+  });
+
+  // The doc comment above the carry-through says the session's own tags never overlap a
+  // membership signal - true in the normal case, but not an invariant the code can lean on.
+  it('does not duplicate a membership tag the session itself also carries', async () => {
+    h.session = { id: SESSION_ID, _id: SESSION_ID, userId: OWNER, name: 'Notebook', tags: [{ name: 'lk:invoices' }] };
+    h.fabFileStore.push({
+      id: 'fabfile-owner',
+      userId: OWNER,
+      sessionId: SESSION_ID,
+      fileName: 'Notebook Summary.txt',
+      tags: [{ name: 'lk:invoices', strength: 1 }],
+    });
+    h.findPrefixArmLakes.mockResolvedValueOnce([
+      { createdByUserId: OWNER, fileTagPrefix: 'lk:', datalakeTag: 'datalake:lake1' },
+    ]);
+
+    await run();
+
+    const call = h.updateFabFile.mock.calls[0][1] as { tags: { name: string }[] };
+    expect(call.tags.filter(t => t.name === 'lk:invoices')).toHaveLength(1);
   });
 });

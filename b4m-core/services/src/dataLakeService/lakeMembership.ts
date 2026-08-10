@@ -1,4 +1,4 @@
-import { DATALAKE_TAG_PREFIX, DATALAKE_TAG_STRENGTH, isReservedTagPrefix, normalizeTagPrefix } from '@bike4mind/common';
+import { DATALAKE_TAG_PREFIX, DATALAKE_TAG_STRENGTH, prefixArmTagNames } from '@bike4mind/common';
 import type { IDataLakeDocument, IFabFileRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from './assertLakeAccess';
@@ -47,12 +47,6 @@ export const removeFileFromLake = async (
 
   const file = await db.fabFiles.findById(fabFileId);
   const tagNames = (file?.tags ?? []).map(t => t.name).filter((name): name is string => typeof name === 'string');
-  // Normalized through the same predicate buildDataLakeMembershipFilter uses, so a lake whose
-  // prefix no query matches (empty, missing its trailing colon, or - a legacy row predating the
-  // create-time guard - inside the reserved datalake: namespace) also gets nothing cleared by
-  // prefix, matching that its read arm drops the same cases rather than matching every OTHER
-  // lake's meta-tag.
-  const prefix = isReservedTagPrefix(lake.fileTagPrefix) ? null : normalizeTagPrefix(lake.fileTagPrefix);
   // Positive ownership, anchored to the LAKE'S CREATOR (not the acting admin) so this matches
   // buildDataLakeMembershipFilter's own ownership conjunct on the single-lake browse: both ids
   // must be present AND equal, so a file with no owner does not fall through as a match, and an
@@ -65,8 +59,9 @@ export const removeFileFromLake = async (
   // admin added a stranger's file with addFileToLake, which checks only the ACTOR's access, not
   // the file's ownership) must not also have its unrelated tags stripped just because one
   // happens to start with this lake's prefix - the read path's prefix arm never admitted this
-  // file, so the write must not touch prefix-matching tags on it either.
-  const prefixedTags = prefix && ownsFile ? tagNames.filter(name => name.startsWith(prefix)) : [];
+  // file, so the write must not touch prefix-matching tags on it either. `prefixArmTagNames`
+  // itself drops an empty/reserved-namespace prefix, matching what the read arm's query would.
+  const prefixedTags = ownsFile ? prefixArmTagNames(tagNames, lake.fileTagPrefix) : [];
   const inLake = !!file && (tagNames.includes(lake.datalakeTag) || prefixedTags.length > 0);
   if (!file || !inLake) {
     throw new NotFoundError('File not found in this data lake');

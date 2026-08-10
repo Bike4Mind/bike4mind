@@ -273,9 +273,9 @@ const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
 // serves the bare `fabFileId` reads (findByFabFileId, findTextsByFabFileId, countByFabFileId,
 // deleteManyByFabFileId, countTerminalChunks),
 // and a `{ _id: 1, fabFileId: 1 }` buys nothing over `_id_` since `vector` is in neither index, so
-// both plans fetch anyway. Environments deployed before this still hold those two as orphans until
-// a drop migration removes them; nothing recreates them, because autoIndex only builds what is
-// declared here. fabFileChunkIndexes.test.ts pins the set.
+// both plans fetch anyway. Environments deployed before this still held those two as orphans;
+// 20260810000000_drop-legacy-fabfilechunk-indexes.ts drops them. Nothing recreates them, because
+// autoIndex only builds what is declared here. fabFileChunkIndexes.test.ts pins the set.
 FabFileChunkSchema.index({ fabFileId: 1, _id: 1 });
 
 export const FabFileChunk =

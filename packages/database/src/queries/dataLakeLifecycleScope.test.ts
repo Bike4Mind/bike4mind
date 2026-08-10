@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { matchesTagPrefixArm, prefixArmTagNames } from '@bike4mind/common';
 import { buildDataLakeMembershipFilter } from './dataLakeLifecycleScope';
 
 const TAG = 'datalake:org1:acme-docs';
@@ -101,6 +102,59 @@ describe('buildDataLakeMembershipFilter', () => {
       const prefixArm = (filter.$or as Record<string, unknown>[])[1].$and as Record<string, unknown>[];
       const { $regex } = prefixArm[0]['tags.name'] as { $regex: RegExp };
       expect($regex.source).toBe('^acme:');
+    });
+  });
+
+  describe('parity with prefixArmTagNames (@bike4mind/common)', () => {
+    /**
+     * `prefixArmTagNames` is the JS-side mirror of this filter's prefix arm, used by the write
+     * doors to detect a prefix-arm leave/join before anything is persisted. Extracts the regex
+     * this filter builds so both sides are asserted against the SAME fixtures - see
+     * `satisfiesTagPrefix` <-> `buildLacksContentPrefixTagFilter` above for the existing parity
+     * pattern this mirrors.
+     */
+    const membershipRegex = (fileTagPrefix: string): RegExp | null => {
+      const filter = buildDataLakeMembershipFilter({ datalakeTag: TAG, fileTagPrefix, creatorUserId: 'creator-1' });
+      if (!('$or' in filter)) return null;
+      const prefixArm = (filter.$or as Record<string, unknown>[])[1].$and as Record<string, unknown>[];
+      return (prefixArm[0]['tags.name'] as { $regex: RegExp }).$regex;
+    };
+
+    it.each([
+      ['acme:', 'acme:report'],
+      ['acme:', 'acme:'],
+      ['a+b(c).*:', 'a+b(c).*:report'],
+      ['docs:legal:', 'docs:legal:contract'],
+    ])('agrees a tag under prefix %s is a signal: %s', (prefix, tag) => {
+      const regex = membershipRegex(prefix);
+      expect(regex?.test(tag)).toBe(true);
+      expect(matchesTagPrefixArm([tag], prefix)).toBe(true);
+      expect(prefixArmTagNames([tag], prefix)).toEqual([tag]);
+    });
+
+    it.each([
+      ['acme:', 'not-acme:report'],
+      ['acme:', 'other'],
+      ['docs:', 'docs'],
+    ])('agrees a tag NOT under prefix %s is not a signal: %s', (prefix, tag) => {
+      const regex = membershipRegex(prefix);
+      expect(regex?.test(tag) ?? false).toBe(false);
+      expect(matchesTagPrefixArm([tag], prefix)).toBe(false);
+    });
+
+    it.each([
+      ['reserved namespace', 'datalake:'],
+      ['unusable - no colon', 'acme'],
+      ['unusable - empty', ''],
+    ])('agrees %s yields no signal at all', (_label, fileTagPrefix) => {
+      expect(membershipRegex(fileTagPrefix)).toBeNull();
+      expect(prefixArmTagNames(['acme:report', 'datalake:x'], fileTagPrefix)).toEqual([]);
+    });
+
+    it('agrees mixed casing does not satisfy the prefix (case-sensitive)', () => {
+      const regex = membershipRegex('acme:');
+      expect(regex?.test('Acme:report')).toBe(false);
+      expect(matchesTagPrefixArm(['Acme:report'], 'acme:')).toBe(false);
     });
   });
 });

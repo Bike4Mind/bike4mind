@@ -1,7 +1,7 @@
 /**
  * Builds the User Activity aggregation for GET /api/users/counterLogs.
  *
- * The pipeline emits one flat row per (day, counter, user, metadata) and pages it
+ * The pipeline emits one flat row per (day, counter, user, split metadata) and pages it
  * server-side. The previous shape re-grouped rows into a nested `users[]` array and returned
  * every match unpaginated, which reached ~17MB on production data and tripped Lambda's 6MB
  * response cap (413 -> 502).
@@ -10,11 +10,9 @@
  * costs the same whether the facet returns 25 rows or 25,000. The route therefore asks for a
  * whole window of rows and slices pages out of it - see userActivityCache.ts.
  *
- * ROW UNIT: `metadata` is part of the group key, so two events that differ only in metadata
- * stay separate rows. The pre-pagination client merged them (per day/counter/user), so the
- * grid shows more, finer rows than it used to and `total` counts those finer rows. That is a
- * deliberate interim state - defragmenting the group key is tracked separately, and has to
- * come with a decision about which metadata keys are worth splitting on.
+ * ROW UNIT: one row per day/counter/user, split further only by SPLIT_METADATA_KEYS. The
+ * remaining metadata is per-event identity, so keeping the whole subdocument in the group key
+ * made almost every raw event its own row.
  *
  * Every filter that decides which rows are visible must be applied here, not in the browser:
  * with server-side paging, a client-side filter would only ever filter the current page.
@@ -31,6 +29,17 @@ import { DEFAULT_PAGE_SIZE, MetadataFilterSchema, type MetadataFilter } from './
 export { DEFAULT_PAGE_SIZE, type MetadataFilter };
 /** Keeps one page comfortably under Lambda's 6MB response cap even for wide metadata. */
 export const MAX_PAGE_SIZE = 5000;
+
+/**
+ * The only metadata keys that split the row unit. A key belongs here when two rows differing
+ * on it read as two different activities; everything else (sessionId, requestId, token counts,
+ * durations) is per-event identity and would fragment the output back to one row per event.
+ *
+ * `reportId` reproduces the pre-pagination client's key, which split report views per report.
+ * Widening this list is a product decision, not a mechanical one: adding `source` or
+ * `modelName` would split rows the client used to merge.
+ */
+export const SPLIT_METADATA_KEYS = ['reportId'] as const;
 
 /** Parses the JSON-encoded `metadataFilters` query param. Throws ZodError on anything unsafe. */
 export function parseMetadataFilters(raw: string | undefined): MetadataFilter[] {
@@ -168,10 +177,20 @@ export function buildUserActivityPipeline({
           date: '$dateString',
           counterName: '$counterName',
           userId: '$userId',
-          metadata: '$metadata',
+          // $ifNull normalises a missing key to null, so "absent" and "explicitly null" do not
+          // become two group keys for what the reader sees as the same row.
+          metadataKey: Object.fromEntries(
+            SPLIT_METADATA_KEYS.map(key => [key, { $ifNull: [`$metadata.${key}`, null] }])
+          ),
         },
         totalValue: { $sum: '$counterValue' },
         count: { $sum: 1 },
+        // A sample, not a summary: the row now spans events whose non-split metadata differs,
+        // and the grid renders this subdocument as an example of what the group contains.
+        metadata: { $first: '$metadata' },
+        // The counter log's own denormalised org, which is also what the org filters match on.
+        // The User document carries no organization field, so joining for it yields undefined.
+        userOrganization: { $first: '$userOrganization' },
       },
     },
     {
@@ -181,13 +200,13 @@ export function buildUserActivityPipeline({
     },
     {
       // Aggregation $lookup bypasses Mongoose select:false, so project off the shared
-      // secret-free baseline plus the extra non-secret fields this route reads (email,
-      // organization). Never add credential/secret fields here.
+      // secret-free baseline plus the one extra non-secret field this route reads (email).
+      // Never add credential/secret fields here.
       $lookup: {
         from: usersCollection,
         localField: 'userObjectId',
         foreignField: '_id',
-        pipeline: [{ $project: { ...SAFE_USER_LOOKUP_PROJECT, email: 1, organization: 1 } }],
+        pipeline: [{ $project: { ...SAFE_USER_LOOKUP_PROJECT, email: 1 } }],
         as: 'user',
       },
     },
@@ -198,7 +217,7 @@ export function buildUserActivityPipeline({
     // Sort before the facet: a $sort inside a $facet sub-pipeline is held to the 100MB
     // in-memory limit. The tiebreak has to be TOTAL or a row can straddle or skip a window
     // across the two facet executions - userEmail cannot do it, since every row whose join
-    // missed shares the same '' fallback. Covering the whole group key (userId + metadata,
+    // missed shares the same '' fallback. Covering the whole group key (userId + metadataKey,
     // ordered by BSON comparison) makes the order unique, because the key is unique per row.
     {
       $sort: {
@@ -207,7 +226,7 @@ export function buildUserActivityPipeline({
         '_id.counterName': 1,
         userEmail: 1,
         '_id.userId': 1,
-        '_id.metadata': 1,
+        '_id.metadataKey': 1,
       },
     },
   ];
@@ -223,8 +242,8 @@ export function buildUserActivityPipeline({
           counterName: '$_id.counterName',
           userId: '$_id.userId',
           userEmail: 1,
-          userOrganization: '$user.organization',
-          metadata: '$_id.metadata',
+          userOrganization: 1,
+          metadata: 1,
           count: 1,
           totalValue: 1,
         },
