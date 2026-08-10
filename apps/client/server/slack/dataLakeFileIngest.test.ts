@@ -285,8 +285,9 @@ describe('ingest', () => {
 
   it('refuses a file over the MaxFileSize admin limit BEFORE downloading it', async () => {
     // The Slack validator's 50MB ceiling is not the binding one - createFabFile enforces
-    // MaxFileSize (default 20MB) after the transfer, so without this the bytes move and are then
-    // thrown away. 30MB is under the Slack limit and over a 20MB MaxFileSize.
+    // MaxFileSize after the transfer, so without this the bytes move and are then thrown away.
+    // 20MB here is a fixture, not the default (the setting's schema default is 30MB); 30MB of
+    // payload is under Slack's 50MB ceiling and over it.
     deps.resolveMaxFileSizeBytes = vi.fn().mockResolvedValue(20 * 1024 * 1024);
 
     const outcome = await run({ files: [attachment({ name: 'big.pdf', size: 30 * 1024 * 1024 })] });
