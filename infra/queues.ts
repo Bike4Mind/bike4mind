@@ -42,6 +42,19 @@ const lakeMemoryQueue = new sst.aws.Queue('lakeMemoryQueue', {
   },
 });
 
+// Google Drive -> data lake ingest (#1589). Walks a connected Drive folder, fetches/exports each
+// file, and lands bytes in fabFileBucket for the existing chunk/vectorize pipeline. Long ingest, so
+// a generous timeout; idempotent by driveFileId, so a dropped run is safe to retry.
+const driveLakeIngestQueueDLQ = new sst.aws.Queue('driveLakeIngestQueueDLQ', {});
+const driveLakeIngestQueue = new sst.aws.Queue('driveLakeIngestQueue', {
+  // Must exceed the handler's 10-minute timeout (below) or SQS redelivers mid-run.
+  visibilityTimeout: '12 minutes',
+  dlq: {
+    queue: driveLakeIngestQueueDLQ.arn,
+    retry: 2,
+  },
+});
+
 // FabFile Vectorize Queue
 const fabFileVectorizeQueueDLQ = new sst.aws.Queue('fabFileVectorizeQueueDLQ', {});
 const fabFileVectorizeQueue = new sst.aws.Queue('fabFileVectorizeQueue', {
@@ -742,6 +755,25 @@ const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
+const driveLakeIngestQueueSubscription = driveLakeIngestQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/driveLakeIngest.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    // fabFileBucket: the handler streams fetched Drive bytes into the FabFile bucket via
+    // getFilesStorage().upload, which fires the existing objectCreated -> chunk -> vectorize pipeline.
+    link: [...allSecrets, fabFileBucket],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
 // What's New Highlights Queue
 // Generates weekly highlights summary from What's New modals and posts to Slack
 const whatsNewHighlightsQueueDLQ = new sst.aws.Queue('whatsNewHighlightsQueueDLQ', {
@@ -1351,6 +1383,7 @@ export {
   dataLakeCleanupQueue,
   dataLakeTaxonomyQueue,
   lakeMemoryQueue,
+  driveLakeIngestQueue,
   liveOpsTriageQueue,
   tavernHeartbeatQueue,
   deepAgentWakeQueue,
@@ -1409,6 +1442,7 @@ export {
   dataLakeCleanupQueueSubscription,
   dataLakeTaxonomyQueueSubscription,
   lakeMemoryQueueSubscription,
+  driveLakeIngestQueueSubscription,
   liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,

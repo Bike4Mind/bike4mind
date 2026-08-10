@@ -386,6 +386,10 @@ declare module "sst" {
       "type": "sst.aws.Queue"
       "url": string
     }
+    "driveLakeIngestQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
     "dataLakeTaxonomyQueueDLQ": {
       "type": "sst.aws.Queue"
       "url": string
