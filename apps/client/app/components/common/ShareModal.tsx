@@ -38,6 +38,7 @@ import UsernameText from './UsernameText';
 import { FormEvent, useEffect, useState } from 'react';
 import { cloneDeep } from 'lodash';
 import { toast } from 'sonner';
+import { isAxiosError } from 'axios';
 import { brandAlpha } from '../../utils/themes/colors';
 import { api } from '@client/app/contexts/ApiContext';
 
@@ -123,6 +124,13 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
       // Don't close the modal here; handleShareSubmit closes it after the toast is visible.
       // Bulk completion is handled in the loop; link generation in the useEffect below.
     },
+    onError: error => {
+      // Bulk sharing aggregates its own per-item failures into one showBulkFeedback toast
+      // below; showing this hook's toast too would double up per failed item.
+      if (isBulkSharing) return;
+      const serverMessage = isAxiosError(error) ? error.response?.data?.message : undefined;
+      toast.error(serverMessage || 'Failed to share document');
+    },
     onSettled: () => {
       if (!isBulkSharing) {
         setLoading(false);
@@ -151,6 +159,7 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
 
       if (recipientValue.length === 0) {
         setRecipients({ ...recipients, error: 'Recipients is required' });
+        toast.error('Recipients is required');
         isInvalid = true;
       } else if (
         tabIndex === 0 &&
@@ -163,6 +172,7 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
       ) {
         // Prevent self-sharing and show error message (only for "By Users" tab)
         setRecipients({ ...recipients, error: 'You cannot share files to yourself' });
+        toast.error('You cannot share files to yourself');
         isInvalid = true;
       } else {
         setRecipients({ ...recipients, error: null });
@@ -368,11 +378,10 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
         }
       }
     } catch (error) {
-      // This catch handles single-item sharing failures only
-      // Bulk sharing errors are handled within the loops above
+      // Single-item failures are toasted by useShareDocument's onError above; bulk failures
+      // are aggregated within the loops above. Just log here to avoid a duplicate toast.
       if (!isBulkSharing) {
         console.error('Error in sharing:', error);
-        toast.error('Failed to share file');
       }
     } finally {
       if (isBulkSharing) {
@@ -552,9 +561,11 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
                       onChange={(_, value) => {
                         // Filter out current user's email/username (only for "By Users" tab)
                         if (tabIndex === 0) {
+                          // A not-yet-loaded currentUser (e.g. mid rehydrate) must never drop
+                          // every recipient -- only filter once we can actually name the user.
                           const filteredValue = value.filter(
                             recipient =>
-                              currentUser && recipient !== currentUser.email && recipient !== currentUser.username
+                              !currentUser || (recipient !== currentUser.email && recipient !== currentUser.username)
                           );
                           if (filteredValue.length !== value.length) {
                             setRecipients({ value: filteredValue, error: 'You cannot share files to yourself' });
