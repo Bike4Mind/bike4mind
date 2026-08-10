@@ -9,14 +9,16 @@ import { useEffect, RefObject } from 'react';
  * @param options.enabled - Whether auto-focus is enabled (default: true)
  * @param options.focusOnClick - Whether to refocus when clicking outside the element (default: false)
  * @param options.focusTrigger - Refocus whenever this value changes, in addition to on mount
- *   (e.g. a store counter bumped by an external "prefill and focus" action).
+ *   (e.g. a store counter bumped by an external "prefill and focus" action). Must be a
+ *   primitive (number/string) compared by value across renders -- an inline object/array/
+ *   function literal has a new identity every render and would refocus on every render.
  */
 export function useAutoFocus<T extends HTMLElement>(
   ref: RefObject<T>,
   options?: {
     enabled?: boolean;
     focusOnClick?: boolean;
-    focusTrigger?: unknown;
+    focusTrigger?: string | number;
   }
 ) {
   const { enabled = true, focusOnClick = false, focusTrigger } = options || {};

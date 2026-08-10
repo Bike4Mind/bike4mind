@@ -338,8 +338,10 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     }
   };
 
-  // Auto-focus the chat input when component mounts or session changes, or when an
-  // external prefill requests focus without a session change.
+  // Auto-focus the chat input on mount, and again whenever an external prefill (via
+  // useChatInput.requestFocus()) asks for focus without a session change. SessionBottom
+  // itself is never remounted on a session switch, so a session-change refocus is not
+  // this hook's doing -- if one is observed, it comes from elsewhere.
   useAutoFocus(lexicalInputRef as any, { enabled: true, focusTrigger: focusRequestId });
 
   // Persists draft per session and restores it on session switch

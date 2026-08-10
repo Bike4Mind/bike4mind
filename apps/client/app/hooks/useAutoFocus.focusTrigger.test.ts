@@ -52,4 +52,24 @@ describe('useAutoFocus - focusTrigger', () => {
 
     el.remove();
   });
+
+  it('does not focus on a focusTrigger bump while disabled', () => {
+    const el = document.createElement('input');
+    document.body.appendChild(el);
+    const ref = createRef<HTMLInputElement>();
+    (ref as { current: HTMLInputElement }).current = el;
+    const focusSpy = vi.spyOn(el, 'focus');
+
+    const { rerender } = renderHook(({ trigger }) => useAutoFocus(ref, { enabled: false, focusTrigger: trigger }), {
+      initialProps: { trigger: 0 },
+    });
+    vi.runAllTimers();
+    expect(focusSpy).not.toHaveBeenCalled();
+
+    rerender({ trigger: 1 });
+    vi.runAllTimers();
+    expect(focusSpy).not.toHaveBeenCalled();
+
+    el.remove();
+  });
 });
