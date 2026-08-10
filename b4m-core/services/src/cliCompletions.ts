@@ -554,6 +554,22 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         // together: a null holder fetch skips both, never advancing usedCredits
         // without a matching transaction.
         if (billToOrg) {
+          // Self-heal a member with no `userDetails` row (added before grant-point seeding existed):
+          // the positional $inc in updateUserDetails cannot create the row it positions on, so without
+          // this their org-billed usage is never tracked and `maxCreditsPerMember` never trips. Only
+          // pays the extra read/write when the row is actually absent.
+          const member = organization!.userDetails?.find(u => u.id === userId);
+          if (!member) {
+            const actingUser = await db.users.findById(userId);
+            if (actingUser) {
+              await db.organizations!.ensureUserDetails(holderId, {
+                id: userId,
+                email: actingUser.email ?? actingUser.username,
+                name: actingUser.name,
+              });
+            }
+          }
+
           await db.organizations!.updateUserDetails(holderId, userId, {
             creditsDelta: actualCredits,
             lastCreditUsedAt: new Date(),

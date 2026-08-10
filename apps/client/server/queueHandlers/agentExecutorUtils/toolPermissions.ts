@@ -41,6 +41,7 @@ const REQUIRES_APPROVAL_TOOLS = new Set([
   'image_generation',
   'edit_image',
   'music_generation',
+  'audio_generation',
   'video_generation',
 ]);
 

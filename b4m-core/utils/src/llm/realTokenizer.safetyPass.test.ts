@@ -264,3 +264,55 @@ describe('final safety pass measured with the real tokenizer', () => {
     }
   });
 });
+
+/**
+ * Untrusted text - a user message, a fab-file chunk, a fetched page - can contain a tiktoken
+ * special-token literal. tiktoken's encode() rejects those by default, so both of the paths below
+ * used to reject on content a user can type. Only this file can catch it: every other suite mocks
+ * the tokenizer at a fixed chars/token and never reaches a real encoder.
+ *
+ * The literals differ per encoding, so they are not interchangeable: under cl100k_base these three
+ * are special (and rejected), while e.g. `<|im_start|>` is ordinary text and proves nothing.
+ */
+const SPECIAL_TOKEN_LITERALS = ['<|endoftext|>', '<|endofprompt|>', '<|fim_prefix|>'];
+
+describe('special-token literals in untrusted content', () => {
+  it.each(SPECIAL_TOKEN_LITERALS)('counts a message containing %s instead of rejecting', async literal => {
+    const sentence = (marker: string) => `what does ${marker} mean`;
+    const messages: IMessage[] = [{ role: 'user', content: sentence(literal) }];
+
+    const realTokens = await calculateTotalTokenLength(messages, { estimateOnly: false, tokenizer });
+
+    // A zero here is the billing bug: ChatCompletionProcess catches the reject and leaves
+    // inputTokens at 0, which under-bills backends that report no provider usage.
+    expect(realTokens).toBeGreaterThan(0);
+    // The literal must cost what its characters cost, not the single token it would encode to if it
+    // were admitted as a real special token - that direction under-counts the turn. Same sentence
+    // with a one-token marker in the literal's place, so the delta is the literal's own cost.
+    const withOneToken = await calculateTotalTokenLength([{ role: 'user', content: sentence('x') }], {
+      estimateOnly: false,
+      tokenizer,
+    });
+    expect(realTokens).toBeGreaterThan(withOneToken);
+  });
+
+  it.each(SPECIAL_TOKEN_LITERALS)('assembles a prompt whose user message contains %s', async literal => {
+    const result = await buildAndSortMessages(
+      historyOf(4, i => prose(3, i)),
+      [attachment('notes.txt', prose(6))],
+      [{ role: 'user' as const, content: `${ASK} ${literal}` }],
+      16384,
+      {},
+      5,
+      logger as never,
+      tokenizer as never
+    );
+
+    // buildAndSortMessages encodes the user prompt directly, and its caller does not guard the call,
+    // so a reject here killed the whole completion rather than degrading a count.
+    expect(result.length).toBeGreaterThan(0);
+    const text = result.map(m => (typeof m.content === 'string' ? m.content : '')).join('\n');
+    expect(text).toContain('ASK-MARKER');
+    expect(text).toContain(literal);
+  });
+});

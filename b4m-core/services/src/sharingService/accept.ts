@@ -38,7 +38,8 @@ interface AcceptInviteAdapters {
     };
     organization: {
       findById: (id: string) => Promise<IOrganizationDocument | null>;
-      update: (data: IOrganizationDocument) => Promise<unknown>;
+      update: (data: Partial<IOrganizationDocument>) => Promise<unknown>;
+      ensureUserDetails: (organizationId: string, member: { id: string; email: string; name: string }) => Promise<void>;
     };
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
@@ -201,17 +202,19 @@ const acceptOrganization = async (
   }
 
   pushShareable(organization, { userId: user.id, permissions });
-  organization.userDetails ||= [];
 
-  organization.userDetails.push({
+  // Persist ONLY the users[] edit with a targeted write. A whole-document write would $set the entire
+  // userDetails array from this stale snapshot and could revert a concurrent credit increment
+  // (updateUserDetails' atomic positional $inc); see organizationService/addMember.
+  await db.organization.update({ id: organization.id, users: organization.users });
+
+  // Seed the credit side-table via the idempotent guarded $push - keeps users[]/userDetails[] in sync
+  // and, unlike the previous unconditional push, never creates a duplicate row on a re-accept.
+  await db.organization.ensureUserDetails(organizationId, {
     id: user.id,
     email: user.email ?? user.username,
     name: user.name,
-    usedCredits: 0,
-    lastCreditUsedAt: null,
   });
-
-  await db.organization.update(organization);
 
   // Establish full membership on the user document. Without this, the accepting
   // user's `organizationId` stays null and every org-scoped feature that reads

@@ -10,6 +10,7 @@ import {
   KnowledgeType,
 } from '@bike4mind/common';
 import mongoose, { Model, Schema } from 'mongoose';
+import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
 import { convertId, convertIds, softDeletePlugin } from '../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 import { addLowercaseField } from '../../utils/documentdb-compat';
@@ -146,6 +147,95 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
       $or: [{ 'vector.0': { $exists: true } }, { tokenCount: { $gt: contextWindow } }],
     });
   }
+
+  async updateEmbeddingModel(fabFileId: string, embeddingModel: string): Promise<void> {
+    await this.fabFileChunkModel.updateMany({ fabFileId }, { $set: { embeddingModel } });
+  }
+
+  /**
+   * One page of vector-bearing chunks that predate the `embeddingModel` discriminator field,
+   * ascending by `_id` - the backfill script's keyset cursor (see packages/scripts/datalake).
+   * Vectorless chunks are excluded: there is nothing to attribute a model to. Only `vector`'s
+   * LENGTH is projected, not its contents - the backfill only needs the width to guess a
+   * legacy file's model, and pulling full vectors here would be a large, pointless payload.
+   */
+  async findChunksMissingEmbeddingModel(options: { limit?: number; afterChunkId?: string } = {}) {
+    const { limit = 5_000, afterChunkId } = options;
+    const docs = await this.fabFileChunkModel
+      .find({
+        embeddingModel: { $exists: false },
+        vector: { $exists: true, $ne: [] },
+        ...(afterChunkId ? { _id: { $gt: afterChunkId } } : {}),
+      })
+      .select({ _id: 1, fabFileId: 1, vector: 1 })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean();
+    return docs.map(d => ({
+      id: String(d._id),
+      fabFileId: String(d.fabFileId),
+      vectorLength: Array.isArray(d.vector) ? d.vector.length : 0,
+    }));
+  }
+
+  /**
+   * Atlas `$vectorSearch` over a bounded file subset, scoped to one embedding model - the
+   * caller (see dataLakeService/atlasVectorSearch.ts) is responsible for only passing files it
+   * has already established are Atlas-eligible for `model`. Returns [] rather than throwing when
+   * `model` has no registered Atlas index, so a caller that forgets the eligibility check fails
+   * closed (falls back to the brute-force scan) instead of hitting a server-side index-not-found
+   * error.
+   */
+  async vectorSearch(
+    fileIds: string[],
+    queryVector: number[],
+    model: string,
+    options: { limit?: number } = {}
+  ): Promise<Array<{ id: string; fabFileId: string; text: string; score: number }>> {
+    if (fileIds.length === 0) return [];
+    const target = getAtlasIndexForModel(model);
+    if (!target) return [];
+
+    const { limit = 50 } = options;
+    // Atlas applies `filter` DURING HNSW traversal, not as a post-filter, but recall still
+    // degrades as the filter gets more selective relative to the collection - and `fabfilechunks`
+    // holds every user's chunks, while `fileIds` here is usually a handful of files out of that
+    // whole collection. Scaling candidates with the file-set size (not just `limit`) keeps the
+    // pool wide enough for a highly selective query; the per-file multiplier is a starting point,
+    // not a measured constant - retune against a real lake if recall still looks low in practice.
+    // Floored at 100, capped at Atlas's 10_000 max.
+    const numCandidates = Math.min(10_000, Math.max(limit * 10, fileIds.length * 50, 100));
+
+    const pipeline = [
+      {
+        $vectorSearch: {
+          index: target.name,
+          path: 'vector',
+          queryVector,
+          numCandidates,
+          limit,
+          filter: { $and: [{ fabFileId: { $in: fileIds } }, { embeddingModel: model }] },
+        },
+      },
+      { $project: { _id: 1, fabFileId: 1, text: 1, score: { $meta: 'vectorSearchScore' } } },
+    ];
+
+    // any: $vectorSearch and the $meta vectorSearchScore projection are Atlas-only aggregation
+    // syntax outside Mongoose's typed PipelineStage union; see documentdb-compat.ts's module
+    // header for the same any-at-the-aggregation-boundary rationale.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const docs = await this.fabFileChunkModel.aggregate(pipeline as any);
+    return docs.map((d: { _id: unknown; fabFileId: unknown; text?: string; score: number }) => ({
+      id: String(d._id),
+      fabFileId: String(d.fabFileId),
+      text: d.text ?? '',
+      score: d.score,
+    }));
+  }
+
+  async getAtlasIndexStatus(model: string): Promise<{ queryable: boolean; status: string } | null> {
+    return getAtlasIndexStatusForModel(mongoose.connection, model);
+  }
 }
 
 const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
@@ -158,6 +248,7 @@ const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
     },
     tokenCount: { type: Number, required: true },
     vector: { type: [Number], required: false },
+    embeddingModel: { type: String, required: false },
   },
   {
     timestamps: true,
@@ -1091,6 +1182,7 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     isVectorizing: { type: Boolean, default: false },
     vectorized: { type: Boolean, default: false },
     embeddingModel: { type: String, required: false },
+    chunkEmbeddingModelStampedAt: { type: Date, required: false },
 
     system: { type: Boolean, default: false },
     systemPriority: { type: Number, default: 999 },

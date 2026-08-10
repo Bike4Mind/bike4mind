@@ -436,6 +436,7 @@ interface ProcessInitContext {
   embeddingModel?: string;
   queryComplexity: string;
   imageConfig?: z.infer<typeof QuestStartBodySchema>['imageConfig'];
+  audioConfig?: z.infer<typeof QuestStartBodySchema>['audioConfig'];
   deepResearchConfig?: z.infer<typeof QuestStartBodySchema>['deepResearchConfig'];
   userTimezone?: string;
 }
@@ -608,6 +609,9 @@ export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
   const survivors = tools.filter(tool => !denied.has(tool));
   let paired = addPairedTool(survivors, 'image_generation', 'edit_image');
   paired = addPairedTool(paired, 'search_knowledge_base', 'retrieve_knowledge_content');
+  // Cardinality rides along with search: a corpus you can search but not count is what made the
+  // model treat a count question as proof it had no access at all.
+  paired = addPairedTool(paired, 'search_knowledge_base', 'count_knowledge_base');
   return paired.filter(tool => !denied.has(tool));
 }
 
@@ -1031,6 +1035,7 @@ export class ChatCompletionProcess {
       embeddingModel,
       queryComplexity,
       imageConfig,
+      audioConfig,
       deepResearchConfig,
       timezone: userTimezone,
     } = parsedBody;
@@ -1122,6 +1127,7 @@ export class ChatCompletionProcess {
       embeddingModel,
       queryComplexity,
       imageConfig,
+      audioConfig,
       deepResearchConfig,
       userTimezone,
     };
@@ -1177,6 +1183,7 @@ export class ChatCompletionProcess {
       embeddingModel,
       queryComplexity,
       imageConfig,
+      audioConfig,
       deepResearchConfig,
       userTimezone,
     } = initContext;
@@ -2179,6 +2186,7 @@ export class ChatCompletionProcess {
           },
           image_generation: imageConfig,
           edit_image: imageConfig,
+          audio_generation: audioConfig,
         },
         model,
         organization,
@@ -2567,6 +2575,9 @@ export class ChatCompletionProcess {
 
       const mementoMessages = featureContextMessages['mementos'] ?? [];
       let inputTokens = 0;
+      // Whether inputTokens came from the char estimator rather than the encoder. The overflow guard
+      // below reads this: an estimate is fine to bill and reserve against, but not to reject a turn on.
+      let inputTokensEstimated = false;
 
       try {
         const [totalTokens, mementoTokens, fabTokens, urlTokens, historyTokens, userPromptTokens] = await Promise.all([
@@ -2692,6 +2703,20 @@ export class ChatCompletionProcess {
         logger.info(`📊 Token breakdown by source calculated`, tokensBySource);
       } catch (tokenBreakdownError) {
         logger.warn(`📊 Failed to calculate token breakdown:`, tokenBreakdownError);
+        if (inputTokens === 0) {
+          // Zero is not a neutral "unknown" downstream: it disables the context-overflow guard and
+          // the pre-reservation eligibility check, and on backends that report no provider usage
+          // (DeepSeek, Llama-on-Bedrock streaming) settlement falls back to this figure and
+          // under-bills the turn. The estimate is pure char math with no encoder involved
+          // (estimateTokenLength), so it cannot fail the way the real count just did.
+          try {
+            inputTokens = await calculateTotalTokenLength(messages, { ...tokenCalcOptions, estimateOnly: true });
+            inputTokensEstimated = true;
+            logger.warn(`📊 Input tokens fell back to the char-based estimate: ${inputTokens}`);
+          } catch (estimateFallbackError) {
+            logger.error(`📊 Estimate fallback failed; input tokens stay 0 for this turn`, estimateFallbackError);
+          }
+        }
       }
 
       // Per-source breakdown, derived from the same tagged list the prompt was assembled
@@ -2789,8 +2814,17 @@ export class ChatCompletionProcess {
         quest.promptMeta!.context!.tokensBySource = tokensBySource;
       }
 
-      // Detect and handle context overflow with detailed breakdown
-      if (inputTokens > maxSafeInputTokens) {
+      // Detect and handle context overflow with detailed breakdown.
+      // Measured counts only: the estimator assumes 3.5 chars/token against prose that really runs
+      // ~6, so it over-counts prose by up to ~1.7x. Rejecting a turn on that figure would fail
+      // perfectly valid requests, and the recovery loop above never ran on the estimate path either.
+      if (inputTokensEstimated && inputTokens > maxSafeInputTokens) {
+        logger.warn(
+          `⚠️ Skipping the context-overflow guard: input tokens are an estimate (${inputTokens} vs ` +
+            `${maxSafeInputTokens} limit), not an encoder count. Letting the provider be the judge.`
+        );
+      }
+      if (!inputTokensEstimated && inputTokens > maxSafeInputTokens) {
         logger.error(`🚨 CRITICAL: Context overflow detected!`, {
           inputTokens,
           maxTokens: safeMaxTokens,

@@ -35,6 +35,8 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
     data: { data: params?.id ? [{ id: params.id, fileName: 'Deep Book', tags: [] }] : [] },
     isLoading: false,
   }),
+  // Page mode renders DataLakeArticle, which reads file content.
+  useGetFabFileContent: () => ({ data: null, isLoading: false }),
 }));
 vi.mock('@client/app/hooks/data/fabFiles', () => ({
   // Page mode renders DataLakeArticle, which reads the selected file's body.
@@ -42,6 +44,20 @@ vi.mock('@client/app/hooks/data/fabFiles', () => ({
 }));
 
 vi.mock('@client/app/components/DataLakeWizard/DataLakeIngestPickerModal', () => ({ default: () => null }));
+
+// The page-mode header's ManageKnowledgeButton folds in the EnableDataLakes gate, which
+// reaches the admin settings cache; mirror manageKnowledge.test's stubs for that chain.
+vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
+  useFeatureEnabled: () => ({ isAdminFeatureEnabled: () => true, isFeatureEnabled: () => true, isLoading: false }),
+}));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: (selector?: (s: { isAdmin: boolean }) => unknown) =>
+    selector ? selector({ isAdmin: true }) : { isAdmin: true },
+}));
+vi.mock('@client/app/stores/useDataLakeWizardStore', () => ({
+  useDataLakeWizardStore: (selector: (s: { openManager: () => void }) => unknown) =>
+    selector({ openManager: vi.fn() }),
+}));
 
 // Collapsed-sidenav clearance reads this store; default open (no extra indent) for these tests.
 vi.mock('@client/app/components/layouts/Notebook', () => ({
@@ -193,6 +209,47 @@ describe('DataLakeExplorer chat-first surface', () => {
     expect(setWorkBenchFiles).not.toHaveBeenCalled();
     expect(setSessionLayout).not.toHaveBeenCalled();
     errSpy.mockRestore();
+  });
+});
+
+// Page mode (no chatSlot) is the only arrangement that renders the header action row.
+const renderPageExplorer = (props: Partial<React.ComponentProps<typeof DataLakeExplorer>> = {}) =>
+  render(
+    <TestWrapper>
+      <DataLakeExplorer source="datalakes" onBack={vi.fn()} {...props} />
+    </TestWrapper>
+  );
+
+describe('DataLakeExplorer - Create primary alongside Manage secondary', () => {
+  it('renders both buttons, Create first, each wired to its own handler', () => {
+    const onCreate = vi.fn();
+    const onManage = vi.fn();
+    renderPageExplorer({ onCreate, onManage });
+
+    const createBtn = screen.getByTestId('datalake-create-btn');
+    const manageBtn = screen.getByTestId('datalake-manage-btn');
+    expect(createBtn.compareDocumentPosition(manageBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(createBtn);
+    expect(onCreate).toHaveBeenCalledTimes(1);
+    expect(onManage).not.toHaveBeenCalled();
+
+    fireEvent.click(manageBtn);
+    expect(onManage).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives Create the primary treatment and Manage the secondary one', () => {
+    renderPageExplorer({ onCreate: vi.fn(), onManage: vi.fn() });
+
+    // Joy's variant/color modifier classes are a stable public API (unlike its emotion
+    // hashes), so they are the only way to assert visual hierarchy without a snapshot.
+    const createBtn = screen.getByTestId('datalake-create-btn');
+    expect(createBtn.className).toMatch(/MuiButton-variantSolid/);
+    expect(createBtn.className).toMatch(/MuiButton-colorPrimary/);
+
+    const manageBtn = screen.getByTestId('datalake-manage-btn');
+    expect(manageBtn.className).toMatch(/MuiButton-variantOutlined/);
+    expect(manageBtn.className).toMatch(/MuiButton-colorNeutral/);
   });
 });
 

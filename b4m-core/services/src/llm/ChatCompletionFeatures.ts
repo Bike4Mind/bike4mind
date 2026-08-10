@@ -38,6 +38,7 @@ import {
   b4mLLMTools,
   ResearchModeParamsSchema,
   GenerateImageToolCallSchema,
+  AudioGenerationToolCallSchema,
   ILatticeModel,
   IDataLakeRepository,
   CitableSource,
@@ -334,6 +335,7 @@ export const QuestStartBodySchema = z.object({
   embeddingModel: z.string().optional(),
   queryComplexity: z.string(),
   imageConfig: GenerateImageToolCallSchema.optional(),
+  audioConfig: AudioGenerationToolCallSchema.optional(),
   deepResearchConfig: z
     .object({
       maxDepth: z.number().optional(),
@@ -1978,6 +1980,25 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           'incomplete - do not state or imply the library was searched exhaustively, and say so if the question ' +
           'calls for a comprehensive survey.\n\n'
         : '';
+      // Names the collection the way the product does, and states the one thing this path cannot
+      // do. Without that lexical bridge, a model asked something it cannot satisfy stops treating
+      // "data lake" as this corpus at all and answers about generic cloud infrastructure - offering
+      // SQL, storage consoles, recursive object counts. Cardinality is what triggers it, because
+      // retrieval returns ranked passages and never a total, and the coverage note below pushes
+      // toward refusal on any comprehensive-survey question. So name the limit explicitly rather
+      // than leaving the model to infer "no access" and improvise from there.
+      //
+      // Worded to hold whether or not the turn also carries tools: count_knowledge_base is paired
+      // with knowledge-base SEARCH, not with forced retrieval, so this path cannot know whether it
+      // was sent - and a flat "you cannot count" would talk a tool-carrying turn out of using it.
+      const capabilityNote =
+        'About this library: it is the curated library, shown in the product as the knowledge base or Data Lake. ' +
+        'The retrieved content above is your only view of it, and it is ranked passages - never a total - so it ' +
+        'cannot tell you how many documents the library holds. You have no database, SQL or storage-console access ' +
+        'to it. If asked how many documents it holds or for a full inventory: use a knowledge-base counting tool if ' +
+        'one is available to you, and otherwise say plainly that you can search this library but cannot count it, ' +
+        'and that the total is shown on its page in the product. Never guess a number, and never suggest queries, ' +
+        'consoles or other infrastructure steps for counting it.\n\n';
       const header =
         this.citationStyle === 'indexed'
           ? '[Knowledge Base — Retrieved Context]\n' +
@@ -1991,7 +2012,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             'cite documents by name. If it does not address the question, say so rather than relying on outside knowledge.\n\n';
       const retrievedContext: IMessage = {
         role: 'system' as const,
-        content: header + coverageNote + sections.join('\n\n---\n\n'),
+        content: header + capabilityNote + coverageNote + sections.join('\n\n---\n\n'),
       };
 
       // Retrieval-scoped lake-prompt injection (#1108): attach the operating instructions of ONLY

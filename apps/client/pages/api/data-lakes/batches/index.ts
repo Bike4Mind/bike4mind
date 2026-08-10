@@ -89,6 +89,7 @@ const handler = baseApi()
       chunkedFiles: 0,
       vectorizedFiles: 0,
       failedFiles: 0,
+      processingFailedFiles: 0,
       skippedFiles: 0,
       uploadedSizeBytes: 0,
       files: [],
