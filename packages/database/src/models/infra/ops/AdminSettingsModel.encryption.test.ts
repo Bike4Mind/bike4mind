@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { configureSecretsAtRest, encryptSecret, generateEncryptionKey, isEncrypted } from '@bike4mind/utils';
+import { configureSecretsAtRest, encryptSecret, generateEncryptionKey, isEncrypted } from '@bike4mind/utils/security';
 import { setupMongoTest } from '../../../__test__/utils';
 import { AdminSettings, adminSettingsRepository } from './AdminSettingsModel';
 

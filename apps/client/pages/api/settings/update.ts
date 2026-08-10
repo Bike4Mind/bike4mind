@@ -7,7 +7,8 @@ import {
   settingsMap,
 } from '@bike4mind/common';
 import { AdminSettings } from '@bike4mind/database/infra';
-import { decryptAtRest, invalidateSettingsCache } from '@bike4mind/utils';
+import { invalidateSettingsCache } from '@bike4mind/utils';
+import { decryptAtRest } from '@bike4mind/utils/security';
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';

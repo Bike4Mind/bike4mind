@@ -1,6 +1,6 @@
 import mongoose, { Model, Schema } from 'mongoose';
 import { IAdminSettings, IAdminSettingsRepository, SettingKey, settingsMap, SettingValue } from '@bike4mind/common';
-import { decryptAtRest } from '@bike4mind/utils';
+import { decryptAtRest } from '@bike4mind/utils/security';
 import { softDeletePlugin } from '../../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 

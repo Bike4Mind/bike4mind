@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { softDeletePlugin } from '../../utils/mongo';
 import { ApiKeyType, IApiKeyDocument, IApiKeyRepository } from '@bike4mind/common';
-import { decryptAtRest, encryptAtRest, isSecretsAtRestConfigured } from '@bike4mind/utils';
+import { decryptAtRest, encryptAtRest, isSecretsAtRestConfigured } from '@bike4mind/utils/security';
 import BaseRepository from '@bike4mind/db-core';
 
 interface IApiKeyModel extends mongoose.Model<IApiKeyDocument> {}

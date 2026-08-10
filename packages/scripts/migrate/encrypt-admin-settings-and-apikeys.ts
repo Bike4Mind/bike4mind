@@ -26,7 +26,7 @@
 
 import { connectDB } from '@bike4mind/database';
 import { settingsMap, SENSITIVE_SETTING_MASK } from '@bike4mind/common';
-import { decryptSecret, encryptSecret, isEncrypted, isValidEncryptionKey } from '@bike4mind/utils';
+import { decryptSecret, encryptSecret, isEncrypted, isValidEncryptionKey } from '@bike4mind/utils/security';
 import { Resource } from 'sst';
 import mongoose from 'mongoose';
 

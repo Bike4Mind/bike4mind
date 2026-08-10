@@ -12,4 +12,4 @@ export {
   isEncrypted,
   generateEncryptionKey,
   isValidEncryptionKey,
-} from '@bike4mind/utils';
+} from '@bike4mind/utils/security';

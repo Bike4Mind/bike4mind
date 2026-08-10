@@ -1,6 +1,6 @@
 import { connectDB as baseConnectDB } from '@bike4mind/db-core';
 import { setModelCatalogProvider, setModelPriceRowsProvider } from '@bike4mind/llm-adapters';
-import { configureSecretsAtRest } from '@bike4mind/utils';
+import { configureSecretsAtRest } from '@bike4mind/utils/security';
 import { Resource } from 'sst';
 import { modelPriceRepository } from './models/billing/ModelPriceModel';
 import { ModelCatalog, modelCatalogRepository } from './models/ai/ModelCatalogModel';

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { configureSecretsAtRest, decryptAtRest, encryptSecret, generateEncryptionKey } from '@bike4mind/utils';
+import { configureSecretsAtRest, decryptAtRest, encryptSecret, generateEncryptionKey } from '@bike4mind/utils/security';
 
 const KEY = generateEncryptionKey();
 

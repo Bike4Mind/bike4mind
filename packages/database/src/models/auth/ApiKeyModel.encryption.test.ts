@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { ApiKeyType } from '@bike4mind/common';
-import { configureSecretsAtRest, generateEncryptionKey, isEncrypted } from '@bike4mind/utils';
+import { configureSecretsAtRest, generateEncryptionKey, isEncrypted } from '@bike4mind/utils/security';
 import { setupMongoTest } from '../../__test__/utils';
 import { ApiKey, apiKeyRepository } from './ApiKeyModel';
 

@@ -1,6 +1,6 @@
 import { AdminSettings } from '@bike4mind/database/infra';
 import { redactSettingSecrets, settingsMap, type AdminSettingDoc } from '@bike4mind/common';
-import { decryptAtRest } from '@bike4mind/utils';
+import { decryptAtRest } from '@bike4mind/utils/security';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensurePublicSettingsArtifactOncePerInstance } from '@server/utils/publicSettingsArtifact';
 

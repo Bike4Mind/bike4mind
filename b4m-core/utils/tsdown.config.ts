@@ -20,6 +20,10 @@ export default defineConfig({
     'src/normalizeId.ts',
     'src/retrievalExclusion.ts',
     'src/registrableDomain.ts',
+    // Own entry so callers that only need at-rest crypto (apps/client server routes, the
+    // database repositories, migration scripts) import it without dragging the whole utils
+    // barrel - which reaches artifactParser and other modules - into their graph or tests.
+    'src/security/index.ts',
   ],
   format: ['esm', 'cjs'],
   dts: true,

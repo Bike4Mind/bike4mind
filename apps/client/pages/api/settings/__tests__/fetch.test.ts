@@ -9,7 +9,7 @@ vi.mock('@bike4mind/database/infra', () => ({
 }));
 // `enc:` marks ciphertext so a test can prove the mask is derived from decrypted plaintext.
 // A non-`enc:` value passes through, matching decryptAtRest's plaintext-coexistence contract.
-vi.mock('@bike4mind/utils', () => ({
+vi.mock('@bike4mind/utils/security', () => ({
   decryptAtRest: (v: unknown) => (typeof v === 'string' && v.startsWith('enc:') ? v.slice(4) : v),
 }));
 vi.mock('@server/middlewares/baseApi', () => ({

@@ -12,12 +12,12 @@ vi.mock('@bike4mind/database/infra', () => ({
     findOneAndUpdate: (...args: unknown[]) => findOneAndUpdate(...args),
   },
 }));
+vi.mock('@bike4mind/utils', () => ({ invalidateSettingsCache: vi.fn() }));
 // Deterministic stand-ins for the shared crypto. `enc:` marks ciphertext so the tests can
 // assert a value was encrypted at rest without depending on real AES output. update.ts pulls
 // encryptSecret/isEncrypted/isValidEncryptionKey through @server/security/secretEncryption,
-// which re-exports from @bike4mind/utils, so mocking utils covers those too.
-vi.mock('@bike4mind/utils', () => ({
-  invalidateSettingsCache: vi.fn(),
+// which re-exports from @bike4mind/utils/security, so mocking the subpath covers those too.
+vi.mock('@bike4mind/utils/security', () => ({
   decryptAtRest: (v: unknown) => (typeof v === 'string' && v.startsWith('enc:') ? v.slice(4) : v),
   encryptSecret: (v: string) => `enc:${v}`,
   isEncrypted: (v: unknown) => typeof v === 'string' && v.startsWith('enc:'),
