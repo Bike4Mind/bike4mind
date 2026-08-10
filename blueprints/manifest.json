@@ -1,5 +1,5 @@
 {
-  "product": "polaris",
+  "product": "lumina5",
   "applied": [
     {
       "blueprint": "data-lake",
@@ -87,7 +87,7 @@
     {
       "blueprint": "sre-autofix",
       "entry": "base",
-      "blueprintHash": "ef21c4f",
+      "blueprintHash": "abbdf3c91e0d",
       "appliedAt": "2026-07-02T00:00:00.000Z",
       "generatedFiles": [],
       "notes": "Source of the sre-autofix blueprint (extracted from b4m-core/services SreAgentService + the applier workflows). Recorded retroactively."
