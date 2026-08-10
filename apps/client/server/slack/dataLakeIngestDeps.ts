@@ -25,6 +25,13 @@ export function buildSlackLakeIngestDeps(args: {
     fabFiles: fabFileRepository,
     downloadFile: args.downloadFile,
     logger: args.logger,
+    // Same setting createFabFile enforces post-download, read here so an over-limit file is
+    // refused before the transfer. Stored in MB; undefined leaves the Slack ceiling as the only
+    // pre-download bound.
+    resolveMaxFileSizeBytes: async () => {
+      const mb = await adminSettingsRepository.getSettingsValue('MaxFileSize');
+      return typeof mb === 'number' && mb > 0 ? mb * 1024 * 1024 : undefined;
+    },
     resolveEntitlementKeys: actor =>
       getUserEntitlements({
         id: actor.id,
@@ -46,7 +53,6 @@ export function buildSlackLakeIngestDeps(args: {
             contentType: params.contentType,
             contentHash: params.contentHash,
             tags: params.tags,
-            ...(params.organizationId && { organizationId: params.organizationId }),
           },
           {
             db: {
