@@ -9,6 +9,7 @@ import {
 } from '@bike4mind/common';
 import { SLACK_MOCK_USER_ID, validateSlackFileForIngest, type SlackAttachment } from '@bike4mind/slack';
 import { dataLakeService } from '@bike4mind/services';
+import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 
 /**
  * FILE ingest bridge for `@datalake add` (M2).
@@ -23,6 +24,13 @@ import { dataLakeService } from '@bike4mind/services';
  * `canManageLake` = admin-or-creator, plus `assertCanWriteDataLakeTags` as defense in depth).
  * Slack gets no bypass: reading a lake in the web app does not let you write to it, and reaching
  * it from Slack must not change that.
+ *
+ * KNOWN GAP - per-lake dedup has a short blind window. `createFabFile` leaves `status` at its
+ * `pending` default and `findByContentHashesInDataLake` filters `status: { $ne: 'pending' }`, so
+ * the same bytes re-added in a SECOND message before the S3 ObjectCreated event completes the
+ * first copy will land twice. In-message dedup (`seenHashes`) is unaffected. Skip-not-replace
+ * semantics mean the worst case is a duplicate row, not data loss; nothing enforces uniqueness at
+ * the index level either, so a genuinely concurrent pair can race the same way.
  */
 
 /** The resolved B4M user behind the Slack message. Never built from the Slack event body. */
@@ -45,7 +53,11 @@ export interface CreateLakeFileParams {
   contentType: string;
   contentHash: string;
   tags: Array<{ name: string; strength: number }>;
-  organizationId?: string;
+  // No organizationId: FabFileSchema does not declare it (nor does the spread
+  // ShareableDocumentSchema), so strict mode drops it on save - the same silent-drop this PR fixes
+  // for sourceType. It could not reach the storage check either, since this path supplies no
+  // db.organizations adapter and checkStorageLimitForFile then falls back to the user limit.
+  // The web data-lake batch door does not set it either. Declaring the field is a repo-wide call.
   provenance: { sourceType: FabFileSourceType; sourceMetadata: Record<string, unknown> };
 }
 
@@ -60,6 +72,12 @@ export interface SlackLakeIngestDeps {
   /** Entitlement keys for the actor; admins skip resolution, mirroring `toAccessContext`. */
   resolveEntitlementKeys(actor: SlackIngestActor): Promise<string[]>;
   downloadFile(url: string, fileName: string): Promise<Buffer>;
+  /**
+   * The `MaxFileSize` admin setting in bytes, so an over-limit file is refused BEFORE it is
+   * downloaded. Optional: omitted, the Slack ceiling alone applies and createFabFile still
+   * enforces the real limit after transfer.
+   */
+  resolveMaxFileSizeBytes?: () => Promise<number | undefined>;
   logger: {
     info: (message: string, meta?: unknown) => void;
     warn: (message: string, ...args: unknown[]) => void;
@@ -146,23 +164,34 @@ export async function ingestSlackFilesIntoLake(
   try {
     lake = await dataLakeService.assertLakeWriteAccess(lakeSlug, ctx, { db: { dataLakes: deps.dataLakes } });
   } catch (err) {
-    // assertLakeWriteAccess throws not-found when the lake is unreadable (deliberately no
-    // existence leak) and a manage-denied error when it is readable but not the actor's to write.
-    // Both are expected refusals, not failures, so they are mapped rather than rethrown.
-    const message = err instanceof Error ? err.message : 'Data lake not found';
-    const notFound = /not found/i.test(message);
-    deps.logger.info('@datalake add refused by the lake write gate', { lakeSlug, message });
-    return notFound
-      ? {
-          ok: false,
-          reason: 'lake_not_found',
-          message: `No Data Lake \`${lakeSlug}\` found. Use \`@datalake list\` to see the lakes you can add to.`,
-        }
-      : {
-          ok: false,
-          reason: 'not_authorized',
-          message: `You can only add files to a data lake you created. Ask an admin, or the creator of \`${lakeSlug}\`.`,
-        };
+    // Branch on the error CLASS, not the message. Matching /not found/i sent two reachable cases
+    // down the wrong arm: a built-in lake (BadRequestError "...built into the platform and is
+    // read-only") was reported as "ask an admin", advice no admin can satisfy because built-in
+    // lakes are read-only for everyone; and an unguarded `findBySlug` failure - a DB outage - was
+    // reported to the user as a permission denial and logged at info instead of error.
+    if (err instanceof NotFoundError) {
+      deps.logger.info('@datalake add refused: lake not found or unreadable', { lakeSlug });
+      return {
+        ok: false,
+        reason: 'lake_not_found',
+        message: `No Data Lake \`${lakeSlug}\` found. Use \`@datalake list\` to see the lakes you can add to.`,
+      };
+    }
+
+    if (err instanceof BadRequestError) {
+      // Surface the thrown message: it distinguishes "built into the platform and is read-only"
+      // from "only the creator can add files", which the generic sentence cannot.
+      deps.logger.info('@datalake add refused by the lake write gate', { lakeSlug, message: err.message });
+      return {
+        ok: false,
+        reason: 'not_authorized',
+        message: `Cannot add to \`${lakeSlug}\`: ${err.message}`,
+      };
+    }
+
+    // Anything else is a failure, not a refusal. Rethrow so the orchestrator's catch logs at
+    // error and replies "something went wrong" rather than blaming the user's permissions.
+    throw err;
   }
 
   // Same rule as the web upload doors: only a draft (first batch) or active lake takes new files,
@@ -192,10 +221,14 @@ export async function ingestSlackFilesIntoLake(
       db: { dataLakes: deps.dataLakes },
     });
   } catch (err) {
+    // Same class-based split as the gate above: only a refusal is reported as one, and anything
+    // that is not a refusal is rethrown rather than blamed on the user's permissions.
+    if (!(err instanceof NotFoundError) && !(err instanceof BadRequestError)) throw err;
+
     deps.logger.info('@datalake add refused by the meta-tag write gate', {
       lakeSlug,
       datalakeTag,
-      message: err instanceof Error ? err.message : String(err),
+      message: err.message,
     });
     return {
       ok: false,
@@ -208,12 +241,24 @@ export async function ingestSlackFilesIntoLake(
   // No `size` here on purpose - the authoritative length is the downloaded buffer's, below.
   const accepted: Array<{ fileName: string; mimeType: string; url: string }> = [];
 
+  // The Slack validator's 50MB ceiling is not the binding one: createFabFile enforces the
+  // `MaxFileSize` admin setting (default 20MB) AFTER the download, so without this a 30MB file is
+  // transferred in full and then refused. Checked against Slack's claimed size, which is all we
+  // have pre-download; createFabFile still re-checks the real buffer, so this only saves transfer.
+  const maxFileSizeBytes = await deps.resolveMaxFileSizeBytes?.();
+
   for (const file of files) {
     const validation = validateSlackFileForIngest(file);
     if (!validation.ok) {
       // Unlike the plain attachment path, an incomplete file is surfaced here too: silence after
       // an explicit "add this to the lake" would read as success.
       rejected.push(validation.message);
+      continue;
+    }
+    if (maxFileSizeBytes && validation.file.size > maxFileSizeBytes) {
+      const limitMB = (maxFileSizeBytes / (1024 * 1024)).toFixed(0);
+      const sizeMB = (validation.file.size / (1024 * 1024)).toFixed(1);
+      rejected.push(`File "${validation.file.name}" (${sizeMB}MB) exceeds ${limitMB}MB limit.`);
       continue;
     }
     accepted.push({
@@ -289,7 +334,6 @@ export async function ingestSlackFilesIntoLake(
         contentType: file.mimeType,
         contentHash: hash,
         tags,
-        organizationId: actor.organizationId,
         provenance: {
           sourceType: FabFileSourceType.SLACK,
           sourceMetadata: { channel, messageTs },
