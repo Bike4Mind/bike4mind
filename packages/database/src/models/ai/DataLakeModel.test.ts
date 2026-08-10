@@ -563,6 +563,62 @@ describe('DataLakeRepository - fileTagPrefix is unique per creator (DB backstop)
   });
 });
 
+describe('DataLakeRepository - lake-memory extraction lease + continuation cursor (#1501)', () => {
+  setupMongoTest();
+
+  const makeLake = () => dataLakeRepository.create(baseLake({ slug: 'mem-lake' }));
+
+  it('claims the lease when free, blocks a fresh concurrent claim, and frees it on release', async () => {
+    const lake = await makeLake();
+    const t1 = new Date('2026-01-01T00:00:00Z');
+    const staleBefore1 = new Date(t1.getTime() - 15 * 60_000);
+    expect(await dataLakeRepository.claimLakeMemoryExtraction(lake.id, t1, staleBefore1)).toBe(true);
+
+    // A run a minute later sees a FRESH stamp (not older than its staleBefore) and loses.
+    const t2 = new Date('2026-01-01T00:01:00Z');
+    const staleBefore2 = new Date(t2.getTime() - 15 * 60_000);
+    expect(await dataLakeRepository.claimLakeMemoryExtraction(lake.id, t2, staleBefore2)).toBe(false);
+
+    // The holder releases and the lease is claimable again.
+    await dataLakeRepository.releaseLakeMemoryExtraction(lake.id, t1);
+    expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryExtractionAt ?? null).toBeNull();
+    expect(await dataLakeRepository.claimLakeMemoryExtraction(lake.id, t2, staleBefore2)).toBe(true);
+  });
+
+  it('reclaims a lease whose stamp has aged past the window (crashed run, no reconciler)', async () => {
+    const lake = await makeLake();
+    await DataLakeModel.updateOne(
+      { _id: lake.id },
+      { $set: { lakeMemoryExtractionAt: new Date('2026-01-01T00:00:00Z') } }
+    );
+
+    const now = new Date('2026-01-01T01:00:00Z'); // an hour later - well past the 15-minute lease
+    const staleBefore = new Date(now.getTime() - 15 * 60_000);
+    expect(await dataLakeRepository.claimLakeMemoryExtraction(lake.id, now, staleBefore)).toBe(true);
+  });
+
+  it('release is a compare-and-clear: a late finish does not clear a newer run lease', async () => {
+    const lake = await makeLake();
+    const mine = new Date('2026-01-01T00:00:00Z');
+    // A stale takeover has since replaced my stamp with a newer one.
+    const newer = new Date('2026-01-01T00:30:00Z');
+    await DataLakeModel.updateOne({ _id: lake.id }, { $set: { lakeMemoryExtractionAt: newer } });
+
+    await dataLakeRepository.releaseLakeMemoryExtraction(lake.id, mine);
+    const after = await dataLakeRepository.findById(lake.id);
+    expect(after?.lakeMemoryExtractionAt?.getTime()).toBe(newer.getTime());
+  });
+
+  it('persists and clears the continuation cursor', async () => {
+    const lake = await makeLake();
+    await dataLakeRepository.setLakeMemoryCursor(lake.id, 'doc-42');
+    expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryCursor).toBe('doc-42');
+
+    await dataLakeRepository.setLakeMemoryCursor(lake.id, null);
+    expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryCursor ?? null).toBeNull();
+  });
+});
+
 describe('DataLakeBatchRepository.markTerminalIfActive — completionReason', () => {
   setupMongoTest();
 

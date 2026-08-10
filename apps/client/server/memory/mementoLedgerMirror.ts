@@ -32,43 +32,148 @@ export async function isMementosV2Enabled(userId: string): Promise<boolean> {
   return isExperimentalFeatureEnabled(user, 'enableMementosV2');
 }
 
+/** One in-memory de-dup candidate for a write session, matched by embedding cosine. */
+type DedupEntry = {
+  /** The value to pass as the assert's subject to coalesce with this belief. */
+  subject: string;
+  /** Whether `subject` is ALREADY the stored HMAC (an existing belief) or plaintext (a fresh subject). */
+  subjectIsHashed: boolean;
+  embedding: number[];
+};
+
+/** The best (highest-cosine) entry at or above the de-dup threshold, or null. Pure. */
+function bestDedupMatch(entries: DedupEntry[], embedding: number[]): DedupEntry | null {
+  let best: DedupEntry | null = null;
+  let bestSimilarity = -Infinity;
+  for (const entry of entries) {
+    const similarity = cosineSimilarity(embedding, entry.embedding);
+    if (similarity >= MEMENTO_DEDUP_SIMILARITY && similarity > bestSimilarity) {
+      best = entry;
+      bestSimilarity = similarity;
+    }
+  }
+  return best;
+}
+
+/** A batched append session for one principal's ledger. See `createLedgerAppendSession`. */
+export interface LedgerAppendSession {
+  append(fact: {
+    summary: string;
+    evidenceTier: EvidenceTier;
+    sources?: string[];
+    embedding?: number[];
+  }): Promise<void>;
+}
+
 /**
- * Write one extracted fact into the user's ledger as an `assert`. This is V2's OWN write path - it
- * does not require, read, or produce a V1 memento, which is what lets V1 be switched off (and one day
- * deleted) without memory going deaf.
+ * Open a batched write session for ONE principal's ledger. This is the principal-generic core of the V2
+ * write path: `appendFactToLedger` is the single-fact convenience wrapper, `writeFactToLedger` is the
+ * user specialization, and the lake-memory producer (#1440) is the batch caller, writing under
+ * `{ kind: 'lake', id: datalakeTag }` owned by the lake's creator. `ownerUserId` is the DEK owner (whose
+ * key seals the fact + vector at rest), which is a user even when the principal is not.
  *
- * The fact is the LLM's summary; the evidence tier is the lowest (`engineering-proxy`) because a
- * memento is an unverified extraction. The fact and its vector are encrypted at rest under the user's
- * key, so a crypto-shred takes both.
+ * SUBJECT SELECTION is the whole game, because the subject is the belief's identity: the fold keys
+ * beliefs by it, so an assert on an EXISTING subject updates that belief in place and counts as another
+ * presentation of it (raising its ACT-R activation), while an assert on a NEW subject creates a second
+ * belief. The default subject is derived from the fact's words (`resolveSubject`), a sorted token bag
+ * that coalesces only on near-identical wording ("favorite color is green" vs "favourite colour is
+ * green" would fork into two). So when an embedding is supplied we first look for a semantic
+ * near-duplicate and, if one exists, assert under ITS subject.
  *
- * SUBJECT SELECTION is the whole game here, because the subject is the belief's identity: the fold
- * keys beliefs by it, so an assert on an EXISTING subject replaces that belief's content and counts as
- * another presentation of it (raising its ACT-R activation), while an assert on a NEW subject creates
- * a second belief.
+ * WHY A SESSION rather than a per-fact function: finding that near-duplicate means reading the
+ * principal's profile, which decrypts the whole append-only chain. A producer folding a data lake
+ * appends hundreds of facts in a loop, so re-reading per fact is O(facts x chain) - quadratic in the
+ * run, and worsening as the run's OWN writes lengthen the chain. The session reads the profile ONCE
+ * (lazily, on the first fact that actually carries an embedding) and de-dups every fact against an
+ * in-memory set it keeps current as it writes - so a later fact still coalesces with an earlier one from
+ * the same run, exactly as the per-fact re-read used to, without re-decrypting the chain.
  *
- * The default subject is derived from the fact's words (`resolveSubject`), which coalesces only on
- * near-identical WORDING - it is a sorted bag of tokens. That is too brittle on its own: "User's
- * favorite color is green" and "User said their favourite colour is green" are the same belief stated
- * twice, and would become two. So we first look for a semantic near-duplicate among the beliefs the
- * user already has and, if one exists, assert under ITS subject. The fact then updates in place and
- * the re-mention makes it hotter - which is exactly what a user repeating themselves should do, and
- * strictly more than V1 managed (it bumped a weight and lost the frequency signal entirely).
+ * Best-effort: a profile read that fails leaves the set empty and is logged, so facts still get written
+ * (possibly as duplicate beliefs - a cosmetic loss, never a lost fact), mirroring the old per-fact path.
  */
+export async function createLedgerAppendSession(params: {
+  principal: Principal;
+  /** DEK owner - the user whose key seals this principal's facts at rest. */
+  ownerUserId: string;
+}): Promise<LedgerAppendSession> {
+  const keys = createKeyProvider(memoryPrincipalKeyRepository);
+  const entries: DedupEntry[] = [];
+  let profileLoaded = false;
+
+  // Lazy: a run with no embeddings (no API key) never needs the profile, so it never pays the decrypt -
+  // the same "no embedding -> no read" shortcut the single-fact path had.
+  const ensureProfileLoaded = async (): Promise<void> => {
+    if (profileLoaded) return;
+    profileLoaded = true;
+    try {
+      const store = createLedgerMemoryStore({
+        ledger: memoryLedgerRepository,
+        keys,
+        ownerUserId: params.ownerUserId,
+      });
+      const profile = await store.readProfile(params.principal);
+      for (const belief of profile?.beliefs ?? []) {
+        if (belief.shredded || !belief.embedding?.length) continue;
+        // A folded belief's id IS its stored subject HMAC (subjects are never kept in plaintext), so it
+        // re-asserts with subjectIsHashed to avoid a double-hash that would fork instead of coalesce.
+        entries.push({ subject: belief.id, subjectIsHashed: true, embedding: belief.embedding });
+      }
+    } catch (error) {
+      console.warn(
+        `[Mementos V2] de-dup profile read failed; facts this run may store as duplicate beliefs: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  };
+
+  return {
+    async append(fact) {
+      const derivedSubject = resolveSubject({ fact: fact.summary });
+      if (!derivedSubject) return; // nothing to key on (content-free summary)
+
+      let match: DedupEntry | null = null;
+      if (fact.embedding?.length) {
+        await ensureProfileLoaded();
+        match = bestDedupMatch(entries, fact.embedding);
+      }
+
+      await appendMemoryEvent(
+        memoryLedgerRepository,
+        keys,
+        params.ownerUserId,
+        {
+          principal: params.principal,
+          kind: 'assert',
+          subject: match ? match.subject : derivedSubject,
+          fact: fact.summary,
+          evidenceTier: fact.evidenceTier,
+          at: new Date().toISOString(),
+          sources: fact.sources,
+          embedding: fact.embedding,
+        },
+        // Carry the matched entry's OWN flag - a match can be an existing belief (id is already the
+        // stored HMAC) OR a same-run new belief (its subject is still the plaintext derived one, so it
+        // must be hashed here to land on the SAME stored HMAC and coalesce). No match -> a fresh
+        // plaintext subject that needs hashing. Forcing `match !== null` would store a same-run new
+        // subject as if already hashed and silently fork instead of coalescing.
+        { subjectIsHashed: match ? match.subjectIsHashed : false }
+      );
+
+      // Keep the in-memory set current so a later fact in this run coalesces with this one, exactly as
+      // the per-fact profile re-read used to. On a coalesce the assert's embedding wins (mirrors the
+      // fold), so update it; a genuinely new belief joins the set under its plaintext derived subject.
+      if (fact.embedding?.length) {
+        if (match) match.embedding = fact.embedding;
+        else entries.push({ subject: derivedSubject, subjectIsHashed: false, embedding: fact.embedding });
+      }
+    },
+  };
+}
+
 /**
- * Write one extracted fact into an ARBITRARY principal's ledger as an `assert`. The principal-generic
- * core of the write path: `writeFactToLedger` is its user specialization, and the lake-memory producer
- * (#1440) is the other caller, writing under `{ kind: 'lake', id: datalakeTag }` owned by the lake's
- * creator. `ownerUserId` is the DEK owner (whose key encrypts the fact + vector at rest), which is a
- * user even when the principal is not - a lake's beliefs are readable only to a chat resolving that
- * owner's key, exactly as owner-scoped reads require.
- *
- * SUBJECT SELECTION is the whole game here, because the subject is the belief's identity: the fold
- * keys beliefs by it, so an assert on an EXISTING subject replaces that belief's content and counts as
- * another presentation of it (raising its ACT-R activation), while an assert on a NEW subject creates
- * a second belief. The default subject is derived from the fact's words (`resolveSubject`), a sorted
- * token bag that coalesces only on near-identical wording; when an embedding is supplied we first look
- * for a semantic near-duplicate among the principal's existing beliefs and, if one exists, assert under
- * ITS subject so the fact updates in place and the re-mention makes it hotter.
+ * Write ONE extracted fact into an arbitrary principal's ledger as an `assert` - the single-fact
+ * convenience wrapper over `createLedgerAppendSession` (see there for subject-selection and de-dup).
  */
 export async function appendFactToLedger(params: {
   principal: Principal;
@@ -79,34 +184,13 @@ export async function appendFactToLedger(params: {
   sources?: string[];
   embedding?: number[];
 }): Promise<void> {
-  const derivedSubject = resolveSubject({ fact: params.summary });
-  if (!derivedSubject) return; // nothing to key on (content-free summary)
-
-  const keys = createKeyProvider(memoryPrincipalKeyRepository);
-  const existing = params.embedding?.length
-    ? await findExistingSubject(params.principal, params.ownerUserId, keys, params.embedding)
-    : null;
-
-  await appendMemoryEvent(
-    memoryLedgerRepository,
-    keys,
-    params.ownerUserId,
-    {
-      principal: params.principal,
-      kind: 'assert',
-      subject: existing ?? derivedSubject,
-      fact: params.summary,
-      evidenceTier: params.evidenceTier,
-      at: new Date().toISOString(),
-      sources: params.sources,
-      embedding: params.embedding,
-    },
-    // A subject recovered from an existing belief is ALREADY the HMAC (the ledger never stores it in
-    // plaintext), so it must not be hashed a second time - that would key the assert to nothing and
-    // duplicate the belief instead of coalescing it. A freshly derived subject is plaintext and does
-    // need hashing.
-    { subjectIsHashed: existing !== null }
-  );
+  const session = await createLedgerAppendSession({ principal: params.principal, ownerUserId: params.ownerUserId });
+  await session.append({
+    summary: params.summary,
+    evidenceTier: params.evidenceTier,
+    sources: params.sources,
+    embedding: params.embedding,
+  });
 }
 
 /**
@@ -132,51 +216,4 @@ export async function writeFactToLedger(params: {
     sources: params.sources,
     embedding: params.embedding,
   });
-}
-
-/**
- * The subject of the principal's existing belief that this fact is a restatement of, or null if it is
- * new.
- *
- * Compares against the LEDGER's own beliefs only - not the V1 union. A V1 memento's belief id is a
- * Mongo id, not a subject key, so asserting under it would mint a belief the fold can never coalesce.
- * The read path already de-dups the union by fact text, and legacy mementos age out.
- *
- * Returns the belief's id, which IS its subject - and note that the ledger stores subjects HMAC'd, so
- * what comes back is the HASH. The caller must pass it to `appendMemoryEvent` with
- * `subjectIsHashed`, or it gets hashed twice and coalesces with nothing.
- *
- * Best-effort: if the ledger cannot be read, fall back to a fresh subject. A duplicate belief is a
- * cosmetic loss; failing the write would lose the fact entirely. The failure is LOGGED rather than
- * swallowed silently - a de-dup that has quietly stopped working looks exactly like a user who repeats
- * themselves a lot, which is to say it looks like nothing at all.
- */
-async function findExistingSubject(
-  principal: Principal,
-  ownerUserId: string,
-  keys: ReturnType<typeof createKeyProvider>,
-  embedding: number[]
-): Promise<string | null> {
-  try {
-    const store = createLedgerMemoryStore({ ledger: memoryLedgerRepository, keys, ownerUserId });
-    const profile = await store.readProfile(principal);
-    if (!profile) return null;
-
-    let best: { subject: string; similarity: number } | null = null;
-    for (const belief of profile.beliefs) {
-      if (belief.shredded || !belief.embedding?.length) continue;
-      const similarity = cosineSimilarity(embedding, belief.embedding);
-      if (similarity >= MEMENTO_DEDUP_SIMILARITY && (!best || similarity > best.similarity)) {
-        best = { subject: belief.id, similarity }; // the fold keys beliefs BY subject, so id IS subject
-      }
-    }
-    return best?.subject ?? null;
-  } catch (error) {
-    console.warn(
-      `[Mementos V2] de-dup lookup failed; this fact may be stored as a duplicate belief: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-    return null;
-  }
 }

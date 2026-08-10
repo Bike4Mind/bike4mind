@@ -728,7 +728,10 @@ const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi],
+    // lakeMemoryQueue: this handler self-re-enqueues for bounded continuation (a lake too large for one
+    // run sends the next slice's message to its own queue), so it needs Resource.lakeMemoryQueue.url and
+    // the sqs:SendMessage grant that linking the queue confers.
+    link: [...allSecrets, websocketApi, lakeMemoryQueue],
     logging: {
       retention: '3 days',
     },
