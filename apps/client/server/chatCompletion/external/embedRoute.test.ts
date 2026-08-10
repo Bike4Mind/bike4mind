@@ -556,6 +556,11 @@ describe('POST /api/embed/chat - server-side tools', () => {
     expect(deps.kbScope).toEqual({ fileIds: ['f1', 'f2'] });
     expect(deps.entitlementKeys).toEqual([]);
 
+    // The resolved availability map must reach buildSharedTools' options (not just
+    // enabledTools/kbScope) - see toolAvailability.ts's enforcement filter.
+    const opts = mockBuildSharedTools.mock.calls[0][2] as { toolAvailability: unknown };
+    expect(opts.toolAvailability).toEqual({});
+
     const params = executeParams();
     expect(params.serverTools.map((t: { toolSchema: { name: string } }) => t.toolSchema.name)).toEqual([
       'search_knowledge_base',
