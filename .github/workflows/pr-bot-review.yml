@@ -296,8 +296,18 @@ jobs:
           # timestamps are UTC `...Z` of fixed width, so a string compare is a
           # correct time compare. Prints nothing and returns 1 on API failure.
           count_since() {
-            local out
-            out=$(gh api --paginate "$1" --jq "$2" 2>&1) || { echo "::warning::gh api $1 failed: $out" >&2; return 1; }
+            local out err status=0
+            err=$(mktemp)
+            # stderr must stay OUT of $out: it is counted line-by-line below, so
+            # folding the streams would let a warning on a successful call read
+            # as a posted review.
+            out=$(gh api --paginate "$1" --jq "$2" 2>"$err") || status=$?
+            if [ "$status" -ne 0 ]; then
+              echo "::warning::gh api $1 failed: $(cat "$err")" >&2
+              rm -f "$err"
+              return 1
+            fi
+            rm -f "$err"
             printf '%s\n' "$out" | grep -c . || true
           }
 
@@ -321,7 +331,7 @@ jobs:
         # skill's own text is stripped first, and the upload is abandoned entirely
         # if a fingerprint of it survives. Short retention: this is a debugging
         # aid, not a record.
-        if: always() && (steps.bot_review.outcome == 'failure' || (steps.bot_review.outcome == 'success' && steps.review_posted.outputs.posted != 'true'))
+        if: always() && (steps.bot_review.outcome == 'failure' || (steps.bot_review.outcome == 'success' && steps.bot_review.outputs.conclusion == 'success')) && steps.review_posted.outputs.posted != 'true'
         env:
           EXECUTION_FILE: ${{ steps.bot_review.outputs.execution_file }}
           SKILL_FILE: ${{ steps.skill_fetch.outputs.skill_file }}
@@ -355,7 +365,15 @@ jobs:
         # PR — not when the size guard skipped it (outcome == 'skipped'), which
         # posts its own comment. Without this, such a run leaves the author with
         # nothing on the PR, and in the no-post case a green check as well.
-        if: always() && (steps.bot_review.outcome == 'failure' || (steps.bot_review.outcome == 'success' && steps.review_posted.outputs.posted != 'true'))
+        #
+        # `outputs.conclusion` (not just `outcome == 'success'`) is the gate for the
+        # success branch: claude-code-action deliberately no-ops with a SUCCESSFUL
+        # exit when the calling workflow file differs from the default-branch copy,
+        # returning before it sets `conclusion`. Without this check, every PR that
+        # edits this file gets a red check and a comment claiming a review was lost.
+        # `posted != 'true'` also gates the failure branch, so a run that posts a
+        # review and then errors does not contradict the measurement above.
+        if: always() && (steps.bot_review.outcome == 'failure' || (steps.bot_review.outcome == 'success' && steps.bot_review.outputs.conclusion == 'success')) && steps.review_posted.outputs.posted != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
