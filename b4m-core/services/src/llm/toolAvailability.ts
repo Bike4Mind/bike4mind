@@ -190,8 +190,10 @@ export async function resolveToolAvailability(
     // edit_image supports fewer providers than image_generation (bfl/gemini/openai - no xAI, per
     // imageEdit/index.ts) and has no self-hosted local-backend path, so it needs its own check
     // rather than reusing image_generation's: a user with only an xAI key would otherwise read as
-    // edit_image-available and hit a tool that has no branch for that provider at all.
-    const hasEditImageKey = imageKeys.slice(0, 3).some(usable); // [bfl, openai, gemini] of imageProviders
+    // edit_image-available and hit a tool that has no branch for that provider at all. Indexed by
+    // ApiKeyType (not position) so reordering imageProviders can't silently include xAI here.
+    const EDIT_IMAGE_PROVIDERS = new Set([ApiKeyType.bfl, ApiKeyType.openai, ApiKeyType.gemini]);
+    const hasEditImageKey = imageProviders.some((type, i) => EDIT_IMAGE_PROVIDERS.has(type) && usable(imageKeys[i]));
     // Knowledge Base semantic search needs an embeddings provider key (VoyageAI/OpenAI).
     // Note: this checks "any embeddings key present", not the admin's `defaultEmbeddingModel`
     // provider specifically. If the admin selects a Voyage model but only an OpenAI key is set
