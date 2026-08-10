@@ -43,6 +43,13 @@ interface ChatInputStore {
   briefcaseLaunchInFlight: boolean;
   setBriefcaseLaunchInFlight: (inFlight: boolean) => void;
 
+  // Bumped to ask the mounted composer to focus itself (e.g. after a prefill
+  // that doesn't change session/mount, so useAutoFocus's mount effect won't
+  // refire on its own). A counter rather than a boolean so two requests in a
+  // row are both observable as distinct changes.
+  focusRequestId: number;
+  requestFocus: () => void;
+
   // Actions
   resetHistoryNavigation: () => void;
 }
@@ -94,6 +101,10 @@ export const useChatInput = create<ChatInputStore>()(
       // Briefcase single-flight (shared across launcher instances)
       briefcaseLaunchInFlight: false,
       setBriefcaseLaunchInFlight: inFlight => set({ briefcaseLaunchInFlight: inFlight }),
+
+      // Composer focus request
+      focusRequestId: 0,
+      requestFocus: () => set(state => ({ focusRequestId: state.focusRequestId + 1 })),
 
       // Reset history navigation (called when user types)
       resetHistoryNavigation: () => {
