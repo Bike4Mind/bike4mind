@@ -474,11 +474,13 @@ DataLakeBatchSchema.index({ userId: 1, status: 1 });
 DataLakeBatchSchema.index({ dataLakeId: 1, status: 1 });
 // Read-time reconciler scan: non-terminal batches ordered by staleness.
 DataLakeBatchSchema.index({ status: 1, updatedAt: 1 });
-// Pre-existing index, kept for now though no current query shape has taxonomyStatus as an
-// equality-prefix without userId leading it - findTaxonomyAttentionByUserId (the closest
-// candidate) filters on userId first, so this index isn't its equality prefix. NOT the
-// stuck-job reconciler scan either, which needs taxonomyStartedAt (see the index below).
-DataLakeBatchSchema.index({ taxonomyStatus: 1, updatedAt: 1 });
+// findTaxonomyAttentionByUserId's list-response query (userId equality + taxonomyStatus $in,
+// sorted updatedAt desc) - the batches-list poll hits this on every call. Previously this was
+// { taxonomyStatus: 1, updatedAt: 1 }, which was never actually an equality prefix for that
+// query (userId comes first) - replaced rather than just re-commented, since the old shape
+// served no query at all. NOT the stuck-job reconciler scan, which needs taxonomyStartedAt
+// (see the index below).
+DataLakeBatchSchema.index({ userId: 1, taxonomyStatus: 1, updatedAt: -1 });
 // findStuckTaxonomy's staleness scan - see its doc comment for why taxonomyStartedAt, not
 // updatedAt, is the correct clock for "how long has this taxonomy attempt been stuck."
 DataLakeBatchSchema.index({ taxonomyStatus: 1, taxonomyStartedAt: 1 });
