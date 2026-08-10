@@ -15,7 +15,11 @@ import type { IChatHistoryItem } from '@bike4mind/common';
 
 export interface NotebookImportAdapters {
   sessionRepository: any; // SessionRepository
-  chatHistoryRepository: any; // ChatHistoryRepository
+  /** Typed because the caller's implementation of these two carries the insert-never-upsert rule. */
+  chatHistoryRepository: {
+    bulkCreate(items: IChatHistoryItem[]): Promise<unknown>;
+    deleteMany(filter: { sessionId: string }): Promise<unknown>;
+  };
   knowledgeRepository: any; // KnowledgeRepository
   artifactRepository: any; // ArtifactRepository
   toolRepository: any; // ToolRepository
@@ -249,7 +253,7 @@ export class NotebookImportService {
     ownerUserId: string,
     options: NotebookImportOptions
   ): Promise<void> {
-    const chatItems: (IChatHistoryItem & { id?: string })[] = chatHistory.map(message => ({
+    const chatItems: IChatHistoryItem[] = chatHistory.map(message => ({
       // A generated id is not a valid key for the message store; omit the field so it assigns one.
       ...(options.preserveIds && message.id && { id: message.id }),
       sessionId,

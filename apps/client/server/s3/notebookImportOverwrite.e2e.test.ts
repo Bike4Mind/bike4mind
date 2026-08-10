@@ -138,6 +138,7 @@ describe('notebook import does not overwrite existing messages', () => {
     expect(String(result.errors?.[0])).toMatch(/duplicate key/i);
 
     // The invariant. Before the fix these were 0 and 5: the messages were moved, not copied.
+    // Nothing partial lands: bulkWrite is ordered and every id collides on the first op.
     expect(await Quest.countDocuments({ sessionId })).toBe(5);
     expect(await Quest.countDocuments({})).toBe(5);
   }, 60000);

@@ -16,7 +16,8 @@ import {
   importHistoryJobRepository,
 } from '@bike4mind/database';
 import { withContext } from '@server/s3/utils';
-import type { ClientSession } from 'mongoose';
+import type { ClientSession, FilterQuery } from 'mongoose';
+import type { IChatHistoryItem, IChatHistoryItemDocument } from '@bike4mind/common';
 import { Resource } from 'sst';
 import { getFilesStorage } from '@server/utils/storage';
 import { v4 as uuidv4 } from 'uuid';
@@ -28,27 +29,33 @@ const { NotebookImportService } = notebookImportService;
  * The message writes an import performs. Exported so the invariant below is testable against a
  * real database rather than a copy of it - see notebookImportOverwrite.e2e.test.ts.
  */
-export const createChatHistoryWrites = (session?: ClientSession) => ({
-  bulkCreate: async (items: any[]) => {
-    // Insert, never upsert: an upsert on the incoming id re-pointed the *source* documents at
-    // the new notebook when an export was imported back into its own database, emptying the
-    // original.
-    //
-    // skipValidation keeps this as lenient as the update it replaces. Inserts validate where
-    // updates do not, and ChatHistoryItemSchema marks `prompt` required (QuestModel.ts) while
-    // the system writes empty ones - an assistant-first turn has no prompt - so validating here
-    // would fail imports that currently work.
-    const ops = items.map(({ id, ...rest }) => ({
-      insertOne: { document: id ? { _id: id, ...rest } : rest },
-    }));
-    return Quest.bulkWrite(ops, { session, skipValidation: true });
-  },
-  deleteMany: async (filter: any) => {
-    // Hard delete: the soft-delete default leaves the rows with their ids, so the replacement
-    // insert in bulkCreate collides with the documents it supersedes.
-    return Quest.deleteMany(filter, { session, hardDelete: true });
-  },
-});
+export const createChatHistoryWrites = (session?: ClientSession) => {
+  // The key must be absent, not present-and-undefined: the session guards are presence checks, so
+  // `{ session: undefined }` makes the write escape the caller's transaction. See BaseModel.delete.
+  const txn = session ? { session } : {};
+  return {
+    bulkCreate: async (items: IChatHistoryItem[]) => {
+      // Insert, never upsert: an upsert on the incoming id re-pointed the *source* documents at
+      // the new notebook when an export was imported back into its own database, emptying the
+      // original.
+      //
+      // skipValidation keeps this as lenient as the update it replaces. Inserts validate where
+      // updates do not, and ChatHistoryItemSchema marks `prompt` required (QuestModel.ts) while
+      // the system writes empty ones - an assistant-first turn has no prompt - so validating here
+      // would fail imports that currently work. Note it waives every validator on the schema, not
+      // just that one; bulkWrite has no per-field opt-out.
+      const ops = items.map(({ id, ...rest }) => ({
+        insertOne: { document: id ? { _id: id, ...rest } : rest },
+      }));
+      return Quest.bulkWrite(ops, { ...txn, skipValidation: true });
+    },
+    deleteMany: async (filter: FilterQuery<IChatHistoryItemDocument>) => {
+      // Hard delete: the soft-delete default leaves the rows with their ids, so the replacement
+      // insert in bulkCreate collides with the documents it supersedes.
+      return Quest.deleteMany(filter, { ...txn, hardDelete: true });
+    },
+  };
+};
 
 const processNotebookImport = async (
   userId: string,
@@ -189,9 +196,8 @@ const processNotebookImport = async (
       const importService = new NotebookImportService(adapters);
       const result = await importService.importNotebooks(userId, importData, options);
 
-      // A failed write has already aborted this transaction server-side, so nothing persists -
-      // not even the notebooks the service counted as imported. Its collected errors must not
-      // reach the user as success.
+      // Any per-notebook failure rolls the whole import back. A failed write usually aborts the
+      // transaction server-side already, but a client-side cast error leaves it healthy.
       if (result.errors?.length) {
         throw new Error(`Imported no notebooks: ${result.errors.join('; ')}`);
       }
@@ -351,8 +357,13 @@ export const dispatch = withContext(async (event, context, logger) => {
             stack: error instanceof Error ? error.stack : undefined,
           });
         }
+      } catch (markFailedErr) {
+        logger.error('Failed to mark import as failed:', markFailedErr);
+      }
 
-        await inboxRepository.createInboxMessage({
+      // Outside the try above, so a failed job lookup does not swallow the user's notification.
+      await inboxRepository
+        .createInboxMessage({
           type: InboxType.COMMON,
           title: '❌ Notebook Import Failed',
           message: `Failed to import notebooks. Error: ${
@@ -360,10 +371,8 @@ export const dispatch = withContext(async (event, context, logger) => {
           }. Please try again or contact support if the issue persists.`,
           receiverId: userId,
           userId,
-        });
-      } catch (markFailedErr) {
-        logger.error('Failed to report import failure:', markFailedErr);
-      }
+        })
+        .catch(notifyErr => logger.error('Failed to notify import failure:', notifyErr));
     }
   }
 });
