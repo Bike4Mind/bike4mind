@@ -176,7 +176,7 @@ const ALLOWLIST: Record<string, string> = {
   // --- Upload-only / delete-only: no read path. ---
   'apps/client/pages/api/files/createFabFile.ts': 'upload-only presigned PUT (getSignedUrl mode "put"), no read',
   'apps/client/server/slack/dataLakeIngestDeps.ts':
-    'DI passthrough to the already-gated fabFileService.createFabFile, which withholds fileUrl for images. The adapter forwards whichever mode createFabFile asks for (default "get", "put" for the upload presign) rather than choosing one itself, so it never widens what the caller could already mint - unlike createFabFile.ts above, which hardcodes "put" because that route never requests a read URL',
+    'DI passthrough to the already-gated fabFileService.createFabFile, which withholds fileUrl for images; the adapter only forwards the mode createFabFile asks for',
 
   // --- Audio-only generation, never an image. ---
   'apps/client/server/utils/persistGeneratedAudio.ts':
