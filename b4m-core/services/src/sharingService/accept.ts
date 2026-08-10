@@ -273,10 +273,11 @@ export const pushShareable = (
   if (userIndex === -1) {
     entity.users.push({ userId: data.userId, permissions: data.permissions, projectId: data.projectId });
   } else {
-    // Merge, don't replace: every call site here is an additive invite-accept, so accepting a
-    // new invite must never silently drop the existing entry's projectId/extraData or narrow
-    // permissions it already carries (e.g. from a broader project-cascaded share) down to just
-    // what this invite grants.
+    // Merge, don't replace: pushShareable's callers are this file's own invite-accept arms plus
+    // projectService's addFiles/addSessions/addSystemPrompts (propagating a member's current
+    // project access onto a newly-added file/session) - every one of them grants or refreshes
+    // access, none narrows it, so an update here must never silently drop the existing entry's
+    // projectId/extraData or narrow permissions it already carries down to just this grant.
     const existing = entity.users[userIndex];
     entity.users[userIndex] = {
       ...existing,
