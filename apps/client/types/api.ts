@@ -58,8 +58,9 @@ export const CreateSessionRequestSchema = z.object({
   disabledTools: z.array(z.string()).optional(),
   forceKnowledgeRetrieval: z.boolean().optional(),
   retrievalTags: z.array(z.string()).optional(),
-  // Resolved from the lake by the create route (resolveLakeSessionDefaults), so the merged
-  // create params carry it through to core; declared here for the shared type, not for clients.
+  // Resolved from the lake by the create route (resolveLakeSessionDefaults) so the merged create
+  // params carry it through to core; declared here for the shared type only. NOT client-supplied:
+  // the route strips any client-sent value, so the lake stays authoritative for the grounding mode.
   corpusGroundingMode: z.enum(DATA_LAKE_GROUNDING_MODES).optional(),
   retrievalExcludeFilenameMarkers: z
     .array(z.string().trim().min(1).max(RETRIEVAL_EXCLUDE_MARKER_MAX_LENGTH))

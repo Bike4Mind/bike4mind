@@ -168,6 +168,7 @@ export const SettingKeySchema = z.enum([
   'EnableDataLakes',
   'EnableDataLakesDefault',
   'EnableDataLakeSlackAdd',
+  'EnableDataLakeGroundingMode',
   'EnableLakeMemory',
   'EnableDataLakeVectorSearch',
   'EnableBriefcase',
@@ -1769,6 +1770,17 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 90,
+    dependsOn: 'EnableDataLakes',
+  }),
+  EnableDataLakeGroundingMode: makeBooleanSetting({
+    key: 'EnableDataLakeGroundingMode',
+    name: 'Data Lakes: Per-lake grounding mode',
+    defaultValue: true,
+    description:
+      "Global rollback lever for the per-lake grounding mode (inline vs retrieve vs auto-by-size). On by default. Turn OFF to ignore every lake's configured mode and fall back to pure size-only corpus deferral (CorpusRetrievalMinInlineTokensPerDoc), reverting the retrieve-by-default behavior for all lakes at once without editing each lake.",
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 92,
     dependsOn: 'EnableDataLakes',
   }),
   EnableLakeMemory: makeBooleanSetting({

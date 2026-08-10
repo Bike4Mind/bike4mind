@@ -900,7 +900,9 @@ export class ChatCompletionProcess {
      * The session's resolved per-lake grounding mode (`session.corpusGroundingMode`), set at
      * create time for a lake session. Overrides the size heuristic: `inline` never defers,
      * `retrieve` always defers the retrievable subset. Absent on a non-lake session -> the
-     * pre-existing size-only behavior (byte-identical to before this field existed).
+     * pre-existing size-only behavior (byte-identical to before this field existed). The
+     * `EnableDataLakeGroundingMode` admin kill switch (default on) neutralizes this to the
+     * size-only path globally when turned off - see the resolution below.
      */
     groundingMode?: DataLakeGroundingMode;
   }): Promise<{
@@ -928,6 +930,15 @@ export class ChatCompletionProcess {
         ? rawThreshold
         : CORPUS_RETRIEVAL_MIN_INLINE_TOKENS_PER_DOC;
 
+    // Global rollback lever (default ON). Turning it OFF makes this path IGNORE the per-lake
+    // grounding mode and fall back to pure size-only behavior (as if no mode were set), for every
+    // lake at once - so an operator can revert the retrieve-by-default rollout without editing lakes
+    // one settings modal at a time. This is the escape hatch the per-lake mode otherwise lacks:
+    // CorpusRetrievalMinInlineTokensPerDoc at 0 ("always inline") stops being an off-switch once
+    // every lake session carries `retrieve`, so 0 alone can no longer revert the behavior.
+    const groundingModeEnabled = getSettingsValue('EnableDataLakeGroundingMode', defaultAdminSettings) === true;
+    const mode = groundingModeEnabled ? groundingMode : undefined;
+
     const noDefer = {
       deferredKnowledgeIds: [] as string[],
       attachedCount,
@@ -936,15 +947,20 @@ export class ChatCompletionProcess {
       minInlineTokensPerDoc,
     };
 
+    // Nothing attached -> nothing to defer OR strand, in any mode. Gated FIRST so the anti-strand
+    // warning below never fires for a lake session that simply has no corpus - the common case, since
+    // the "start chat with this lake" entry point creates the session with empty knowledgeIds.
+    if (attachedCount === 0) return noDefer;
+
     // These two gates are MODE-INDEPENDENT: they hold even for an explicit `retrieve`, because
-    // deferring to a tool that isn't there strands the corpus with no reader. When a lake asked for
-    // `retrieve` but the tool path is unavailable, log the anti-strand inline fallback: a lake
-    // configured to retrieve silently inlining is otherwise invisible in a smoke test.
-    if ((skipAutoOffers || knowledgeSearchDisabled) && groundingMode === 'retrieve') {
+    // deferring to a tool that isn't there strands the corpus with no reader. When a lake WITH a
+    // corpus asked for `retrieve` but the tool path is unavailable, log the anti-strand inline
+    // fallback: a lake configured to retrieve silently inlining is otherwise invisible in a smoke test.
+    if ((skipAutoOffers || knowledgeSearchDisabled) && mode === 'retrieve') {
       this.logger.warn(
         `[dataLakes] grounding mode 'retrieve' requested but the knowledge tool is ${
           skipAutoOffers ? 'not offered (promptMode)' : 'disabled for this session'
-        }; inlining the corpus to avoid stranding it.`
+        }; inlining the corpus (${attachedCount} doc(s)) to avoid stranding it.`
       );
     }
     // promptMode is an eval/passthrough surface where the tool is NOT offered - deferring there
@@ -955,13 +971,12 @@ export class ChatCompletionProcess {
     // denied tool loses the corpus outright. Read from the session rather than the resolved tool
     // list because the list is filtered again downstream of this call.
     if (knowledgeSearchDisabled) return noDefer;
-    if (attachedCount === 0) return noDefer;
     // `inline` never defers, so skip the DB reads entirely (gate the work, not just its use).
-    if (groundingMode === 'inline') return noDefer;
+    if (mode === 'inline') return noDefer;
     // The size feature-flag off-switch short-circuits before the reads for auto-by-size and for a
     // non-lake session (absent mode). `retrieve` deliberately does NOT short-circuit here - it
     // defers by policy, not by size, so it proceeds even when the size threshold is 0.
-    if (groundingMode !== 'retrieve' && minInlineTokensPerDoc <= 0) return noDefer;
+    if (mode !== 'retrieve' && minInlineTokensPerDoc <= 0) return noDefer;
 
     try {
       const access = await this.getAccessibleDataLakeAccess();
@@ -1007,11 +1022,25 @@ export class ChatCompletionProcess {
         })
         .map(file => file.id);
 
+      // The most reachable retrieve->inline fallback: `retrieve` was asked for, but nothing in the
+      // corpus is retrievable yet (not fully vectorized, or embedded under a different model than the
+      // query), so shouldDeferCorpusToRetrieval declines to defer and the corpus is inlined rather
+      // than stranded. Log it with the attached count so an operator can tell "nothing vectorized
+      // yet" from "nothing attached" - this is the anti-strand case the tool-availability gates above
+      // do NOT cover, and the one most likely to be hit in practice.
+      if (mode === 'retrieve' && retrievableIds.length === 0) {
+        this.logger.warn(
+          `[dataLakes] grounding mode 'retrieve' requested but 0 of ${attachedCount} attached doc(s) are ` +
+            `retrievable (not fully vectorized, or embedded under a different model than the query); ` +
+            `inlining the corpus to avoid stranding it.`
+        );
+      }
+
       const deferredToRetrieval = shouldDeferCorpusToRetrieval({
         retrievableCount: retrievableIds.length,
         attachedFileTokenBudget,
         minInlineTokensPerDoc,
-        groundingMode,
+        groundingMode: mode,
       });
 
       return {
