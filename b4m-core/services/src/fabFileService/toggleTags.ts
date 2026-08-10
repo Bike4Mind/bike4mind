@@ -9,7 +9,7 @@ import {
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from '../dataLakeService/assertLakeAccess';
-import { canManageLake } from '../dataLakeService/authorizeLakeWrite';
+import { assertCanWriteStaticRegistryTags, canManageLake } from '../dataLakeService/authorizeLakeWrite';
 import { createDataLakeFallbackTagger } from '../dataLakeService/fallbackLakeTags';
 import { addFileToLake, removeFileFromLake, type MembershipLake } from '../dataLakeService/lakeMembership';
 import {
@@ -134,6 +134,11 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
       fabFiles.map(async file => {
         const currentTagNames = storedTagNames(file);
         const resultingTagNames = predictToggleResult(currentTagNames, tags);
+        // Gate only tags NEWLY becoming present: a non-admin toggling OFF a legacy tag they
+        // already carry under a registry prefix (predating this gate) must still be able to,
+        // matching reconcileLakeTags' whole-array counterpart.
+        const newlyAppearing = resultingTagNames.filter(name => !currentTagNames.includes(name));
+        assertCanWriteStaticRegistryTags(actor, newlyAppearing);
         const { leaves, joins } = await findPrefixArmChanges(
           { fileOwnerUserId: file.userId, currentTagNames, resultingTagNames },
           { db, candidateLakes }

@@ -2,7 +2,11 @@ import { DATALAKE_TAG_PREFIX, DATALAKE_TAG_STRENGTH } from '@bike4mind/common';
 import type { IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from '../dataLakeService/assertLakeAccess';
-import { canManageLake, extractDataLakeMetaTags } from '../dataLakeService/authorizeLakeWrite';
+import {
+  assertCanWriteStaticRegistryTags,
+  canManageLake,
+  extractDataLakeMetaTags,
+} from '../dataLakeService/authorizeLakeWrite';
 import { reconcileDataLakeFallbackTags } from '../dataLakeService/fallbackLakeTags';
 import { removeFileFromLake, type MembershipActor, type MembershipLake } from '../dataLakeService/lakeMembership';
 import { findPrefixArmChanges } from '../dataLakeService/prefixArmMembership';
@@ -83,6 +87,12 @@ export const reconcileLakeTags = async (
   { db, logger, fileOwnerUserId }: ReconcileLakeTagsAdapters
 ): Promise<LakeTagReconciliation> => {
   const ordinaryTags = desiredTags.filter(tag => !isMetaTag(tag.name));
+  // Gate only NEWLY-appearing static-registry tags, not ones already stored: a whole-array write
+  // must not brick an unrelated edit to a file that already illegitimately carries a legacy
+  // registry-prefixed tag (predating this gate). Mirrors toggleTags' equivalent gate, so the two
+  // whole-array/element-level doors cannot disagree about what a "join" is.
+  const newlyAppearingOrdinaryNames = ordinaryTags.map(tag => tag.name).filter(name => !currentTagNames.includes(name));
+  assertCanWriteStaticRegistryTags(actor, newlyAppearingOrdinaryNames);
   const desiredKeys = new Set(extractDataLakeMetaTags(desiredTags.map(tag => tag.name)));
   const currentKeys = new Set(extractDataLakeMetaTags(currentTagNames));
 

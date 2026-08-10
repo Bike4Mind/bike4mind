@@ -1,6 +1,10 @@
-import { IDataLakeRepository, IFabFileRepository, ITagRepository } from '@bike4mind/common';
+import { IDataLakeRepository, IFabFileRepository, ITagRepository, IUserDocument } from '@bike4mind/common';
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
+import {
+  assertCanWriteStaticRegistryTags,
+  extractStaticRegistryPrefixedTags,
+} from '../dataLakeService/authorizeLakeWrite';
 import { couldMatchTagPrefixArmLoosely, loadPrefixArmCandidateLakes } from '../dataLakeService/prefixArmMembership';
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
 import { foldTagName, isDataLakeTagName, normalizeTagName } from './tagName';
@@ -34,6 +38,9 @@ interface TagUpdateAdapters {
     // recomputeLakeStats below forwards this same `db` object and requires it on `fabFiles`.
     fabFiles: Pick<IFabFileRepository, 'updateTagsByUserId' | 'dedupeTagByUserId' | 'computeDataLakeStats'>;
     dataLakes: Pick<IDataLakeRepository, 'find' | 'setStats' | 'activateIfDraft'>;
+    // Only for the static-registry admin check below - this door had no actor beyond a raw
+    // userId string until that check needed isAdmin.
+    users: { findById: (id: string) => Promise<Pick<IUserDocument, 'isAdmin'> | null> };
   };
 }
 
@@ -51,11 +58,14 @@ interface TagUpdateAdapters {
  *
  * Either name in a rename can also be a lake's `fileTagPrefix` content tag - membership since
  * #1263 - so renaming a file's every-file-they-own tag out of (or into) a prefix can change which
- * lakes it belongs to. No manage-rights gate is needed for that here, same reasoning as
+ * lakes it belongs to. No manage-rights gate is needed for a DYNAMIC lake, same reasoning as
  * tagService/remove: this call only ever touches files `userId` owns, and prefix-arm membership
- * requires the file's owner to BE the lake's creator, so any lake this could affect was created by
- * this same `userId`. What the rename does NOT do on its own is recompute the affected lakes'
- * stats.
+ * requires the file's owner to BE the lake's creator, so any dynamic lake this could affect was
+ * created by this same `userId`. That reasoning does NOT extend to a STATIC REGISTRY lake (e.g.
+ * `opti:`) - it has no creator to anchor on, so renaming a tag INTO its prefix is gated below the
+ * same as every other write door. Renaming AWAY from one is left alone (self-cleanup of a legacy
+ * tag predating this gate). What the rename does NOT do on its own is recompute the affected
+ * lakes' stats.
  */
 export const update = async (userId: string, params: TagUpdateParams, adapters: TagUpdateAdapters) => {
   const { db } = adapters;
@@ -71,6 +81,17 @@ export const update = async (userId: string, params: TagUpdateParams, adapters: 
 
   if (isDataLakeTagName(tag.name) || (newName !== undefined && isDataLakeTagName(newName))) {
     throw new BadRequestError('Tag Service - Update: a data lake membership tag cannot be renamed here');
+  }
+
+  // Only a NEW entry into the static-registry namespace is gated - a legacy tag already there
+  // (predating this gate) can still be renamed to something else, or left alone, by its owner.
+  if (
+    newName !== undefined &&
+    extractStaticRegistryPrefixedTags([tag.name]).length === 0 &&
+    extractStaticRegistryPrefixedTags([newName]).length > 0
+  ) {
+    const user = await db.users.findById(userId);
+    assertCanWriteStaticRegistryTags({ userId, isAdmin: !!user?.isAdmin }, [newName]);
   }
 
   // Exact comparison, deliberately. The client PUTs the whole tag, so an icon-only or colour-only
