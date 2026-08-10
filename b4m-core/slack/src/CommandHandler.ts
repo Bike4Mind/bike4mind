@@ -529,7 +529,7 @@ export class CommandHandler {
           mimeType: file.mimetype,
         });
       } catch (error) {
-        const errorMsg = `❌ Failed to process file "${rawFile.name}": ${
+        const errorMsg = `\u274c Failed to process file "${rawFile.name}": ${
           error instanceof Error ? error.message : 'Unknown error'
         }`;
         this.logger.error(errorMsg, error);
