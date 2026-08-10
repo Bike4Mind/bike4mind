@@ -242,4 +242,12 @@ describe('OpenSearchClient self-host construction', () => {
     expect(AwsSigv4Signer).not.toHaveBeenCalled();
     expect(lastClientConstructorArgs).toMatchObject({ node: 'http://localhost:9200' });
   });
+
+  it('strips a scheme the caller already included instead of doubling it up', async () => {
+    new OpenSearchClient('http://opensearch:9200', { selfHosted: true });
+    expect(lastClientConstructorArgs).toMatchObject({ node: 'http://opensearch:9200' });
+
+    new OpenSearchClient('https://search.example.com');
+    expect(lastClientConstructorArgs).toMatchObject({ node: 'https://search.example.com' });
+  });
 });

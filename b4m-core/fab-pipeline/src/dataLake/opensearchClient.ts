@@ -81,9 +81,13 @@ export class OpenSearchClient {
    * sign requests against, unlike the managed AWS OpenSearch Service the default path targets.
    */
   constructor(endpoint: string, options?: { selfHosted?: boolean }) {
+    // Strip any scheme the caller already included (e.g. OPENSEARCH_ENDPOINT set to
+    // "http://opensearch:9200" instead of the documented bare "opensearch:9200") so we
+    // don't double it up into "http://http://...", which fails with an opaque connection error.
+    const host = endpoint.replace(/^https?:\/\//, '');
     this.client = options?.selfHosted
       ? new Client({
-          node: `http://${endpoint}`,
+          node: `http://${host}`,
           requestTimeout: OPENSEARCH_REQUEST_TIMEOUT_MS,
           maxRetries: 0,
         })
@@ -96,7 +100,7 @@ export class OpenSearchClient {
               return credentialsProvider();
             },
           }),
-          node: `https://${endpoint}`,
+          node: `https://${host}`,
           requestTimeout: OPENSEARCH_REQUEST_TIMEOUT_MS,
           // Disable the client's built-in retry - it does not retry 429 and skips non-idempotent
           // writes, so it gives a pressured cluster no relief. We own retry via `withRetry` below.
