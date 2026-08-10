@@ -93,8 +93,9 @@ const processNotebookImport = async (
           ...sessionRepository,
           create: async (data: any) => sessionRepository.create(data),
           find: async (query: any) => sessionRepository.find(query),
-          // sessionRepository.update expects the full object with _id
-          updateById: async (id: string, data: any) => sessionRepository.update({ _id: id, ...data }),
+          // `update` identifies the row by `id` and throws without it - `_id` here silently made
+          // every overwrite and merge import fail.
+          updateById: async (id: string, data: any) => sessionRepository.update({ id, ...data }),
         },
         chatHistoryRepository: {
           ...questRepository,

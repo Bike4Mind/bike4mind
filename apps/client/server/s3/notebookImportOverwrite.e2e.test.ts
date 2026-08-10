@@ -91,7 +91,9 @@ function makeService() {
     sessionRepository: {
       create: async (d: unknown) => sessionRepository.create(d as never),
       find: async (q: unknown) => sessionRepository.find(q as never),
-      updateById: async (id: string, d: unknown) => Session.updateOne({ _id: id }, { $set: d }),
+      // Delegates to the real repository, as the handler does. Stubbing this with a raw
+      // Session.updateOne is what hid `update` rejecting `_id` and failing every overwrite/merge.
+      updateById: async (id: string, d: Record<string, unknown>) => sessionRepository.update({ id, ...d } as never),
     },
     // the real thing, not a copy
     chatHistoryRepository: createChatHistoryWrites(),
@@ -180,6 +182,28 @@ describe('notebook import does not overwrite existing messages', () => {
     expect(result.errors).toEqual([]);
     expect(await Quest.countDocuments({ sessionId })).toBe(5);
     expect(await Quest.countDocuments({})).toBe(5);
+  }, 60000);
+
+  it('updates the existing notebook metadata when overwriting', async () => {
+    const { sessionId, ids } = await seedNotebook('Same Name', 2);
+    const payload = exportPayload('Same Name', ids);
+    payload.notebooks[0].lastUpdated = '2027-03-04T05:06:07.000Z';
+
+    const result = await makeService().importNotebooks(
+      USER,
+      payload as never,
+      {
+        ...OPTIONS,
+        conflictResolution: 'overwrite',
+        preserveIds: true,
+      } as never
+    );
+
+    // The metadata write goes through the real repository; passing the wrong identity field made
+    // it throw and took the whole import with it.
+    expect(result.errors).toEqual([]);
+    const after = await Session.findById(sessionId);
+    expect(after?.lastUpdated?.toISOString()).toBe('2027-03-04T05:06:07.000Z');
   }, 60000);
 
   it('imports a message whose prompt is empty, as the exporter emits', async () => {
