@@ -191,6 +191,8 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
 
 export class SessionRepository extends BaseRepository<ISessionDocument> implements ISessionRepository {
   shareable: ISessionRepository['shareable'];
+  /** Explicit session for the queries below. Null means "let transactionAsyncLocalStorage decide". */
+  ctx: mongoose.mongo.ClientSession | null;
   private questModel?: Model<unknown>;
 
   constructor(
@@ -204,10 +206,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     this.sessionModel = sessionModel;
     this.shareable = extensions.shareable;
     this.questModel = extensions.questModel;
-  }
-
-  set ctx(ctx: mongoose.mongo.ClientSession | null) {
-    this.ctx = ctx;
+    this.ctx = null;
   }
 
   async search(
