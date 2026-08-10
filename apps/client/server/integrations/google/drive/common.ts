@@ -1,7 +1,7 @@
 import { Config } from '@server/utils/config';
 import { google } from 'googleapis';
 import dayjs from 'dayjs';
-import { User } from '@bike4mind/database';
+import { User, orgGoogleDriveConnectionRepository } from '@bike4mind/database';
 import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
 import { BadRequestError } from '@server/utils/errors';
 
@@ -93,4 +93,36 @@ export async function getValidUserDriveAccessToken(userId: string): Promise<stri
   );
 
   return credentials.access_token;
+}
+
+/**
+ * Resolve a valid Drive access token for an ORG connection (the ingest job's credential).
+ *
+ * Prefers the connection's own org-owned refresh token; until the org-owned connect flow (issue D)
+ * populates it, falls back to the connecting user's personal Drive credential (`connectedBy`). On a
+ * credential failure it marks the connection `credential_error` so the failure is observable rather
+ * than silent. Loads the encrypted token via the credential-scoped accessor, never a default read.
+ */
+export async function getValidConnectionDriveAccessToken(connectionId: string): Promise<string> {
+  const connection = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(connectionId);
+  if (!connection) throw new Error('Google Drive connection not found');
+
+  if (connection.oauthRefreshToken) {
+    try {
+      const refreshToken = decryptToken(connection.oauthRefreshToken);
+      if (refreshToken) {
+        const credentials = await refreshAccessToken(refreshToken);
+        if (credentials.access_token) return credentials.access_token;
+      }
+    } catch (e) {
+      await orgGoogleDriveConnectionRepository.updateHealth(connection.id, {
+        status: 'credential_error',
+        lastError: e instanceof Error ? e.message : String(e),
+      });
+      throw e;
+    }
+  }
+
+  // Fallback: the connecting user's personal Drive token (today's connect flow stores there).
+  return getValidUserDriveAccessToken(connection.connectedBy);
 }

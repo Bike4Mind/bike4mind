@@ -1,6 +1,16 @@
 import { google, drive_v3 } from 'googleapis';
 
-export type DriveFile = { id: string; name: string; mimeType: string };
+export type DriveFile = {
+  id: string;
+  name: string;
+  mimeType: string;
+  /** RFC-3339 last-modified time - change detection on re-sync. */
+  modifiedTime?: string;
+  /** md5 of the content (native binaries only; absent for Google Editors files). */
+  md5Checksum?: string;
+  /** Size in bytes (native binaries only; absent for Google Editors files). */
+  size?: number;
+};
 
 export const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 
@@ -57,7 +67,7 @@ export async function listFolderChildren(drive: drive_v3.Drive, folderId: string
   do {
     const res = await drive.files.list({
       q: `'${folderId}' in parents and trashed = false`,
-      fields: 'nextPageToken, files(id, name, mimeType)',
+      fields: 'nextPageToken, files(id, name, mimeType, modifiedTime, md5Checksum, size)',
       pageSize: 1000,
       supportsAllDrives: true,
       includeItemsFromAllDrives: true,
@@ -67,7 +77,11 @@ export async function listFolderChildren(drive: drive_v3.Drive, folderId: string
     for (const f of res.data.files ?? []) {
       // Skip anything missing an id/name/mimeType - it isn't a usable ingest candidate.
       if (f.id && f.name && f.mimeType) {
-        files.push({ id: f.id, name: f.name, mimeType: f.mimeType });
+        const file: DriveFile = { id: f.id, name: f.name, mimeType: f.mimeType };
+        if (f.modifiedTime) file.modifiedTime = f.modifiedTime;
+        if (f.md5Checksum) file.md5Checksum = f.md5Checksum;
+        if (f.size != null) file.size = Number(f.size);
+        files.push(file);
       }
     }
 
