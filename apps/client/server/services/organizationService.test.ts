@@ -6,6 +6,7 @@ import {
   setSeats,
   pickPrimarySubscription,
   resolveSubscriptionSource,
+  reconcileOrgSeatsFromSubscription,
 } from './organizationService';
 import { SubscriptionSource } from '@client/lib/subscriptions/types';
 import { ORGANIZATION_SUBSCRIPTION_MAX_SEATS } from '@client/lib/subscriptions/constants';
@@ -237,6 +238,47 @@ describe('organizationService', () => {
       await expect(setSeats('org1', 2, { type: 'admin', userId: 'a1' })).rejects.toThrow(
         /Minimum required seats: 5.*including 4 pending invites/
       );
+      expect(organizationRepository.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('reconcileOrgSeatsFromSubscription', () => {
+    it('pulls seats up to the active subscription quantity, skipping seat-change validation', async () => {
+      // Stale org: seats stuck at the default 10 while the billed sub is 30.
+      // Note there are no members, so validateSeatChange is irrelevant here -
+      // reconcile must set 30 regardless of team-size rules.
+      const org = orgFixture({ id: 'orgR', seats: 10, users: [] });
+      (organizationRepository.findById as any).mockResolvedValue(org);
+      (subscriptionRepository.findActiveSubscriptionsByOwner as any).mockResolvedValue([
+        { id: 's1', source: SubscriptionSource.Stripe, subscriptionId: 'sub_x', quantity: 30 },
+      ]);
+
+      const result = await reconcileOrgSeatsFromSubscription('orgR');
+
+      expect(result).toEqual({ organization: org, before: 10, after: 30 });
+      expect(organizationRepository.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'orgR', seats: 30 }));
+    });
+
+    it('is a no-op when seats already match the billed quantity', async () => {
+      const org = orgFixture({ id: 'orgR', seats: 30, users: [] });
+      (organizationRepository.findById as any).mockResolvedValue(org);
+      (subscriptionRepository.findActiveSubscriptionsByOwner as any).mockResolvedValue([
+        { id: 's1', source: SubscriptionSource.Stripe, subscriptionId: 'sub_x', quantity: 30 },
+      ]);
+
+      const result = await reconcileOrgSeatsFromSubscription('orgR');
+
+      expect(result).toEqual({ organization: org, before: 30, after: 30 });
+      expect(organizationRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('returns null when the org has no active subscription to reconcile from', async () => {
+      (organizationRepository.findById as any).mockResolvedValue(orgFixture({ id: 'orgR', seats: 10, users: [] }));
+      (subscriptionRepository.findActiveSubscriptionsByOwner as any).mockResolvedValue([]);
+
+      const result = await reconcileOrgSeatsFromSubscription('orgR');
+
+      expect(result).toBeNull();
       expect(organizationRepository.update).not.toHaveBeenCalled();
     });
   });

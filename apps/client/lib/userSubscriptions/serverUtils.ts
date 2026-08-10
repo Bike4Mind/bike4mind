@@ -137,6 +137,22 @@ export const handleOrganizationSubscriptionInvoice = async (
             logger.debug(`Ignoring unknown organization: ${metadata.organizationId}`);
             return;
           }
+
+          // Sync the org's seat count to the quantity Stripe just billed for. The
+          // new-org branch below sets seats at creation; the existing-org branch
+          // historically never did, so organization.seats stayed at its default (10)
+          // even though billing, the Subscription row, and credits all reflected the
+          // purchased quantity. setSeats only runs on customer.subscription.updated,
+          // which Stripe does not emit for a fresh subscription. Write directly (not
+          // via setSeats) so we never reject a quantity Stripe already charged for;
+          // idempotent, so webhook retries self-heal.
+          if (organization.seats !== subscriptionQuantity) {
+            organization.seats = subscriptionQuantity;
+            await organizationRepository.update(organization);
+            logger.info(
+              `Synced org ${organization.id} seats to ${subscriptionQuantity} from subscription ${subscription.id}`
+            );
+          }
         } else if (metadata.newOrganizationName) {
           // Create a new organization only during subscription creation
           organization = await organizationService.create(
