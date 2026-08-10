@@ -236,4 +236,55 @@ describe('sharingService - createInvite (recipient resolution)', () => {
     expect(db.invites.create).toHaveBeenCalled();
     expect((invite as any).recipients.pending).toEqual([]);
   });
+
+  it('throws for a recipient matched only by username with no email, instead of silently dropping them', async () => {
+    // accept.ts keys recipients.pending/accepted on email and rejects an emailless accepter
+    // outright, so a username-only match is not actually shareable - it must fail loudly here,
+    // not vanish from pending while the sharer is told the share succeeded.
+    db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: null, username: 'noemail' }]);
+
+    await expect(createFabFile(['noemail'])).rejects.toSatisfy(
+      (e: Error) => e instanceof BadRequestError && e.message.includes('noemail')
+    );
+    expect(db.invites.create).not.toHaveBeenCalled();
+  });
+
+  it('throws when one recipient string matches more than one distinct user (case-insensitive collision)', async () => {
+    // Uniqueness on the User schema is case-sensitive, so "Bob" and "bob" can be two real,
+    // distinct accounts. The now-case-insensitive lookup can return both for one input - that
+    // must fail as ambiguous, not silently grant access to whichever one happened to match.
+    db.users.findAllByEmailsOrUsernames = vi.fn(async () => [
+      { email: 'bob@x.com', username: 'Bob' },
+      { email: 'BOB@x.com', username: 'bob' },
+    ]);
+
+    await expect(createFabFile(['bob'])).rejects.toSatisfy(
+      (e: Error) => e instanceof BadRequestError && e.message.includes('bob')
+    );
+    expect(db.invites.create).not.toHaveBeenCalled();
+  });
+
+  it('sets remaining to the number of distinct resolved recipients, not a flat 1, for a multi-recipient share', async () => {
+    // Previously every By-Users invite defaulted to remaining:1 regardless of recipient count,
+    // so only the first of several recipients could ever accept while the sharer was told all
+    // of them succeeded (#1151 acceptance criteria 1).
+    db.users.findAllByEmailsOrUsernames = vi.fn(async () => [
+      { email: 'a@x.com', username: 'a' },
+      { email: 'b@x.com', username: 'b' },
+    ]);
+
+    const invite = await createFabFile(['a@x.com', 'b@x.com']);
+
+    expect((invite as any).remaining).toBe(2);
+    expect((invite as any).recipients.pending).toEqual(['a@x.com', 'b@x.com']);
+  });
+
+  it('dedupes when two recipient strings resolve to the same person, and remaining matches the unique count', async () => {
+    db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: 'a@x.com', username: 'a' }]);
+
+    const invite = await createFabFile(['a@x.com', 'a']);
+
+    expect((invite as any).remaining).toBe(1);
+    expect((invite as any).recipients.pending).toEqual(['a@x.com']);
+  });
 });

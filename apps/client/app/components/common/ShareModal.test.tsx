@@ -144,6 +144,33 @@ describe('ShareModal - By Users tab', () => {
     expect(mocks.mutateAsync).not.toHaveBeenCalled();
   });
 
+  it('blocks a case-varied self-share too, matching the server side case-insensitive resolution', async () => {
+    // Regression guard: the server now resolves recipients case-insensitively, so a
+    // differently-cased self-share must still be caught client-side or it would silently
+    // create a real self-invite instead of erroring. Pressing Enter would route this through
+    // the onChange filter instead (also fixed, but then the array is empty by submit time and
+    // "Recipients is required" fires first) - the backstop path is what this test targets.
+    const user = await openByUsersTab();
+    const input = screen.getByPlaceholderText(RECIPIENT_INPUT_PLACEHOLDER);
+    await user.type(input, 'Me@Test.com');
+    await user.click(screen.getByTestId('share-modal-submit-button'));
+
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('You cannot share files to yourself'));
+    expect(mocks.mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('the onChange filter also strips a case-varied self-share chip before submit', async () => {
+    // Exercises the OTHER guard (the Autocomplete onChange filter, not the submit backstop):
+    // committing a case-varied self-share with Enter must still end up with nothing to submit.
+    const user = await openByUsersTab();
+    const input = screen.getByPlaceholderText(RECIPIENT_INPUT_PLACEHOLDER);
+    await user.type(input, 'Me@Test.com{Enter}');
+    await user.click(screen.getByTestId('share-modal-submit-button'));
+
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith('Recipients is required'));
+    expect(mocks.mutateAsync).not.toHaveBeenCalled();
+  });
+
   it('shows exactly one error toast, with the server message, when the share request fails', async () => {
     rejectWith({ isAxiosError: true, response: { data: { message: 'File no longer exists' } } });
     const user = await openByUsersTab();

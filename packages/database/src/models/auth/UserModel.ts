@@ -290,6 +290,10 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   async findAllByEmailsOrUsernames(emails: string[], usernames: string[]) {
     // Case-insensitive to match findByUsernameOrEmail below -- email/username are stored
     // verbatim (no lowercase transform), so a caller-typed case variant must still resolve.
+    // Caveat for callers: uniqueness on this schema is case-SENSITIVE (username_1, email_1),
+    // so two distinct real accounts differing only by case can both match one input string.
+    // A caller that grants access based on a result here (sharingService/create.ts is the one
+    // that does) must treat more than one match per input as ambiguous, not pick one silently.
     const result = await this.model
       .find({
         $or: [{ email: { $in: emails } }, { username: { $in: usernames } }],

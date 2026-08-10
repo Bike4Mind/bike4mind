@@ -66,6 +66,23 @@ const showBulkFeedback = (
   }
 };
 
+// The server now resolves recipients case-insensitively (UserModel.findAllByEmailsOrUsernames),
+// so a case-varied self-share (e.g. "Me@Test.com") must be caught here too, or it silently
+// creates a real self-invite instead of erroring. Shared by both the Autocomplete's onChange
+// filter and the submit-time backstop check below so they cannot drift out of sync again.
+const isSelfShareRecipient = (
+  recipient: string,
+  currentUser: { id: string; email?: string | null; username?: string | null } | null
+): boolean => {
+  if (!currentUser) return false;
+  const lower = recipient.toLowerCase();
+  return (
+    lower === currentUser.email?.toLowerCase() ||
+    lower === currentUser.username?.toLowerCase() ||
+    lower === currentUser.id.toLowerCase()
+  );
+};
+
 interface IProps {
   // Single item props
   id?: string;
@@ -161,15 +178,7 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
         setRecipients({ ...recipients, error: message });
         toast.error(message);
         isInvalid = true;
-      } else if (
-        tabIndex === 0 &&
-        currentUser &&
-        recipientValue.some(
-          recipient =>
-            // Check if user is trying to share to themselves via email, username, or ID
-            recipient === currentUser.email || recipient === currentUser.username || recipient === currentUser.id
-        )
-      ) {
+      } else if (tabIndex === 0 && recipientValue.some(recipient => isSelfShareRecipient(recipient, currentUser))) {
         // Prevent self-sharing and show error message (only for "By Users" tab)
         const message = 'You cannot share files to yourself';
         setRecipients({ ...recipients, error: message });
@@ -560,13 +569,13 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
                       sx={{ width: '100%', '--Input-minHeight': '100px' }}
                       value={recipients.value}
                       onChange={(_, value) => {
-                        // Filter out current user's email/username (only for "By Users" tab)
+                        // Filter out current user's email/username/id (only for "By Users" tab).
+                        // isSelfShareRecipient itself treats a not-yet-loaded currentUser as
+                        // "nothing to compare against" (returns false), so this never drops
+                        // every recipient just because currentUser hasn't loaded yet.
                         if (tabIndex === 0) {
-                          // A not-yet-loaded currentUser (e.g. mid rehydrate) must never drop
-                          // every recipient -- only filter once we can actually name the user.
                           const filteredValue = value.filter(
-                            recipient =>
-                              !currentUser || (recipient !== currentUser.email && recipient !== currentUser.username)
+                            recipient => !isSelfShareRecipient(recipient, currentUser)
                           );
                           if (filteredValue.length !== value.length) {
                             setRecipients({ value: filteredValue, error: 'You cannot share files to yourself' });
