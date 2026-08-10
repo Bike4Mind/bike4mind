@@ -43,8 +43,9 @@ describe('drop-legacy-fabfilechunk-indexes migration (real DB)', () => {
 
     const after = (await FabFileChunk.collection.indexes()).map(index => index.name).sort();
     expect(after).toEqual(['_id_', 'fabFileId_1__id_1']);
-  }, // shard's load; real-world-validation.test.ts uses the same 30s bump for similarly-heavy cases. // Four real index builds plus two drops exceeded the 15s default under the shared "misc" CI
-  30000);
+    // Four real index builds plus two drops exceeded the 15s default under the shared "misc" CI
+    // shard's load; real-world-validation.test.ts uses the same 30s bump for similarly-heavy cases.
+  }, 30000);
 
   it('refuses to drop when the keyset compound is missing', async () => {
     await FabFileChunk.collection.createIndex({ _id: 1, fabFileId: 1 });
