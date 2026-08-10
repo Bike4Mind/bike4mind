@@ -108,8 +108,9 @@ test.describe('Authentication', () => {
     // sessions for the SAME user, log one out, the other must survive.
     const user = await createLogoutUser(request, 'perdevice');
 
-    // Two independent sessions for the same user - each OTC login mints its own AuthSession.
-    const sessionA = await apiLoginViaOtc(request, user.email);
+    // Session A is the one minted at user creation; session B is a second independent login. Reusing
+    // the creation session as A keeps this to a single extra OTC round-trip (avoids OTC-send limits).
+    const sessionA = { accessToken: user.accessToken, refreshToken: user.refreshToken };
     const sessionB = await apiLoginViaOtc(request, user.email);
 
     // Log out session A only. GET /api/logout reads the sid from A's bearer access token and
@@ -137,7 +138,7 @@ test.describe('Authentication', () => {
   test('log out all devices revokes every session (#1194)', async ({ request }) => {
     // The panic lever: after POST /api/users/me/sessions/logout-all, BOTH sessions must be dead.
     const user = await createLogoutUser(request, 'logoutall');
-    const sessionA = await apiLoginViaOtc(request, user.email);
+    const sessionA = { accessToken: user.accessToken, refreshToken: user.refreshToken };
     const sessionB = await apiLoginViaOtc(request, user.email);
 
     const res = await request.post('/api/users/me/sessions/logout-all', {
