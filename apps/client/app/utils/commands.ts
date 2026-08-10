@@ -1,6 +1,7 @@
 import {
   B4MLLMTools,
   GenerateImageToolCall,
+  AudioGenerationToolCall,
   IChatHistoryItemDocument,
   IFabFileDocument,
   IMAGE_MODELS,
@@ -44,6 +45,7 @@ export type CommandArgExtra = {
     duration?: number;
   };
   imageConfig?: GenerateImageToolCall;
+  audioConfig?: AudioGenerationToolCall;
   modelConfigurations?: LLMModelConfig[];
   setChatCompletion?: (updater: (prev: any) => any) => void;
   userTags?: string[];

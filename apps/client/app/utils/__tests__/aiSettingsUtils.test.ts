@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { computeDefaultMaxTokens, refitMaxTokensForModel } from '../aiSettingsUtils';
+import {
+  computeDefaultMaxTokens,
+  getModelSpeedFromStats,
+  getTopUsedModelsFromStats,
+  refitMaxTokensForModel,
+} from '../aiSettingsUtils';
 
 describe('computeDefaultMaxTokens', () => {
   it('falls back to the catalog max_tokens when contextWindow is missing/0', () => {
@@ -90,5 +95,32 @@ describe('refitMaxTokensForModel', () => {
     it('still lowers a value the model cannot accept', () => {
       expect(refitMaxTokensForModel(128000, small, { allowRaise: false })).toBe(16384);
     });
+  });
+});
+
+describe('getTopUsedModelsFromStats', () => {
+  it('returns nothing when there are no stats', () => {
+    expect(getTopUsedModelsFromStats({})).toEqual([]);
+    expect(getTopUsedModelsFromStats(undefined as unknown as Record<string, number>)).toEqual([]);
+  });
+
+  it('returns the ids the stats payload is keyed by, most used first', () => {
+    const popularity = { 'gpt-5': 4, 'claude-opus-4-5': 9, 'gemini-3-pro': 7 };
+    expect(getTopUsedModelsFromStats(popularity, 2)).toEqual(['claude-opus-4-5', 'gemini-3-pro']);
+  });
+});
+
+describe('getModelSpeedFromStats', () => {
+  it('returns null when there are no stats, or none for this model', () => {
+    expect(getModelSpeedFromStats('gpt-5', {})).toBeNull();
+    expect(getModelSpeedFromStats('gpt-5', undefined as unknown as Record<string, number>)).toBeNull();
+    expect(getModelSpeedFromStats('gpt-5', { 'claude-opus-4-5': 1000 })).toBeNull();
+  });
+
+  it('buckets the model average against the tooltip thresholds', () => {
+    expect(getModelSpeedFromStats('m', { m: 6999 })).toBe('fast');
+    expect(getModelSpeedFromStats('m', { m: 7000 })).toBe('medium');
+    expect(getModelSpeedFromStats('m', { m: 14999 })).toBe('medium');
+    expect(getModelSpeedFromStats('m', { m: 15000 })).toBe('slow');
   });
 });

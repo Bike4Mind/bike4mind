@@ -45,6 +45,7 @@
     "@aws-sdk/credential-provider-node": "^3.972.63",
     "@aws-sdk/s3-request-presigner": "^3.1080.0",
     "@bike4mind/common": "workspace:*",
+    "@bike4mind/db-core": "workspace:*",
     "@bike4mind/observability": "workspace:*",
     "@opensearch-project/opensearch": "2.11.0",
     "@smithy/node-http-handler": "^4.9.3",
@@ -61,8 +62,12 @@
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.4.3"
   },
+  "peerDependencies": {
+    "mongoose": "^8.22.1"
+  },
   "devDependencies": {
     "@types/mime-types": "^3.0.1",
+    "mongoose": "^8.24.1",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
     "vitest": "^4.1.10"

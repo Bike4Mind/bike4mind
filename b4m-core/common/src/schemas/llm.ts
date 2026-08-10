@@ -9,6 +9,8 @@ export const b4mLLMTools = z.enum([
   'edit_image',
   // Background-music generation (ElevenLabs); mirrors image_generation
   'music_generation',
+  // Model-callable TTS + sound effects (OpenAI / ElevenLabs); mirrors image_generation
+  'audio_generation',
   'weather_info',
   'web_search',
   'web_fetch',
@@ -34,6 +36,8 @@ export const b4mLLMTools = z.enum([
   // Chess engine
   'chess_engine',
   'retrieve_knowledge_content',
+  // Cardinality - the one knowledge-base question ranked retrieval cannot answer
+  'count_knowledge_base',
   // Agent delegation
   'delegate_to_agent',
   // OptiHashi optimization tools

@@ -395,6 +395,7 @@ export function useBatchUpload() {
           vectorizedFiles: 0,
           failedFiles: 0,
           failedFileNames: [],
+          processingFailedFiles: 0,
           status: 'uploading',
           currentBatchId: batchId,
           // Clear any error from a prior attempt so a retry starts clean.
@@ -658,6 +659,9 @@ export function useBatchProgressListener() {
       }
       if (message.failedFiles !== undefined) {
         updates.failedFiles = message.failedFiles;
+      }
+      if (message.processingFailedFiles !== undefined) {
+        updates.processingFailedFiles = message.processingFailedFiles;
       }
       if (message.status === 'completed' || message.status === 'completed_with_errors') {
         updates.status = 'complete';

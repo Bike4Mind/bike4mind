@@ -2084,7 +2084,8 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                         Audio Generation
                       </Typography>
                       <Typography level="body-sm" sx={{ color: 'text.secondary', mb: 2 }}>
-                        Defaults for the in-app audio generator (Files Manager &rarr; Generate Audio).
+                        Defaults for both the direct audio generator (Files Manager &rarr; Generate Audio) and the
+                        model-callable audio_generation tool in chat.
                       </Typography>
                       <AudioGenerationSettings />
                     </Box>

@@ -2,6 +2,8 @@ import { useState, useMemo } from 'react';
 import dayjs from 'dayjs';
 import { ModelMetric, SortField, SortDirection } from '../types';
 
+export type ModelMetricsTabValue = 'overview' | 'analytics' | 'data' | 'spend';
+
 export const useModelMetricsState = (metrics: ModelMetric[]) => {
   // Filter states
   const [dateFrom, setDateFrom] = useState('');
@@ -12,7 +14,7 @@ export const useModelMetricsState = (metrics: ModelMetric[]) => {
 
   // UI states
   const [simplifiedNames, setSimplifiedNames] = useState(true);
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useState<ModelMetricsTabValue>('overview');
   const [showInfoModal, setShowInfoModal] = useState(false);
 
   // Sort states

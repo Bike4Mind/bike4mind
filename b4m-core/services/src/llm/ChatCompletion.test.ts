@@ -2105,6 +2105,9 @@ describe('ChatCompletionProcess', () => {
       // "tools are not folded into the system-prompt remainder" property is actually asserted.
       messagesTokenCount?: number;
       sourceTokenCounts?: [number, number, number, number, number, number];
+      // Full control over calculateTotalTokenLength, for the cases that need to differentiate the
+      // real count from the estimateOnly one (e.g. rejecting the former and resolving the latter).
+      tokenLengthImpl?: (messages: any, options: any) => Promise<number>;
       // countTokens serves BOTH the tool-schema count (string arg) and the output count (array
       // arg); the impl differentiates so a test can target one without disturbing the other.
       toolCountImpl: (text: any) => number;
@@ -2113,7 +2116,9 @@ describe('ChatCompletionProcess', () => {
       const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
 
       mockedCalculateTotalTokenLength.mockReset();
-      if (opts.sourceTokenCounts) {
+      if (opts.tokenLengthImpl) {
+        mockedCalculateTotalTokenLength.mockImplementation(opts.tokenLengthImpl as any);
+      } else if (opts.sourceTokenCounts) {
         for (const n of opts.sourceTokenCounts) mockedCalculateTotalTokenLength.mockResolvedValueOnce(n);
       } else {
         mockedCalculateTotalTokenLength.mockResolvedValue(opts.messagesTokenCount ?? 0);
@@ -2149,9 +2154,12 @@ describe('ChatCompletionProcess', () => {
       const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
       await service.process({ body, logger: mockLogger });
 
-      const call = mockDb.quests.update.mock.calls.find(
-        ([arg]: [any]) => arg?.promptMeta?.context?.tokensBySource !== undefined
-      );
+      // Second lookup for the runs where the breakdown itself fails: there is no tokensBySource to
+      // key on, but tokenUsage still carries the figure the turn was billed on.
+      const call =
+        mockDb.quests.update.mock.calls.find(
+          ([arg]: [any]) => arg?.promptMeta?.context?.tokensBySource !== undefined
+        ) ?? mockDb.quests.update.mock.calls.find(([arg]: [any]) => arg?.promptMeta?.tokenUsage !== undefined);
       buildToolsSpy.mockRestore();
       buildToolPromptSpy.mockRestore();
       return call?.[0]?.promptMeta;
@@ -2234,6 +2242,47 @@ describe('ChatCompletionProcess', () => {
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.stringContaining('Failed to count tool-schema tokens'),
         expect.anything()
+      );
+    });
+
+    it('falls back to the char-based estimate when the whole breakdown throws, never leaving 0', async () => {
+      // The tool-schema floor above only holds once the message counts have resolved. When the real
+      // count rejects outright - a special-token literal in a user message, a WASM failure - nothing
+      // has been assigned yet, so inputTokens used to stay 0: overflow guard and pre-reservation
+      // check disabled, and on backends reporting no usage that 0 is what settles the turn.
+      const promptMeta = await runWithTools({
+        tools: [],
+        tokenLengthImpl: async (_messages: any, options: any) => {
+          if (!options?.estimateOnly) throw new Error('The text contains a special token that is not allowed');
+          return 4242; // the estimate is char math, so it survives what the encoder could not
+        },
+        toolCountImpl: () => 7,
+      });
+      expect(promptMeta.tokenUsage.inputTokens).toBe(4242);
+      // The breakdown genuinely failed - this is the fallback path, not a healthy run.
+      expect(promptMeta.context?.tokensBySource).toBeUndefined();
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('Input tokens fell back to the char-based estimate')
+      );
+    });
+
+    it('does not reject a turn for overflow on an estimated input count', async () => {
+      // The estimator assumes 3.5 chars/token against prose that really runs ~6, so it over-counts
+      // prose by up to ~1.7x. Throwing the context-overflow error on that figure would fail valid
+      // turns - and the overflow-recovery loop never ran on this path either, so there was no
+      // attempt to shed history first. The provider is the judge when we only have an estimate.
+      const promptMeta = await runWithTools({
+        tools: [],
+        tokenLengthImpl: async (_messages: any, options: any) => {
+          if (!options?.estimateOnly) throw new Error('The text contains a special token that is not allowed');
+          return 250_000; // over the 200k window this harness's model declares
+        },
+        toolCountImpl: () => 7,
+      });
+      // Completed rather than throwing: promptMeta exists and carries the estimate.
+      expect(promptMeta.tokenUsage.inputTokens).toBe(250_000);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('Skipping the context-overflow guard: input tokens are an estimate')
       );
     });
   });

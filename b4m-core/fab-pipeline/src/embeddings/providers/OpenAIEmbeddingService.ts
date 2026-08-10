@@ -196,7 +196,9 @@ export class OpenAIEmbeddingService implements EmbeddingService {
       const encoding = encoding_for_model('text-embedding-ada-002');
 
       const counts = texts.map(text => {
-        const tokens = encoding.encode(text);
+        // encode_ordinary: these texts are file content, and encode rejects a special-token literal
+        // in it - which would drop the whole batch to the chars/3 estimate below over one string.
+        const tokens = encoding.encode_ordinary(text);
         return tokens.length;
       });
 

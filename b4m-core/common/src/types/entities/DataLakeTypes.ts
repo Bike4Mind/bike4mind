@@ -108,6 +108,23 @@ export interface IDataLake {
    * behavior) rather than restoring nothing.
    */
   filesDeletedAt?: Date | null;
+  /**
+   * Lake-memory producer (#1440) bookkeeping - server-managed, never client input.
+   *
+   * A concurrency LEASE, not a status: a run stamps it to claim the lake and clears it when done, so a
+   * second near-simultaneous batch finalize that finds a fresh stamp skips its (LLM-billed, redundant)
+   * extraction. A lease rather than a boolean so a crashed run frees itself once the stamp ages past the
+   * lease window, without needing a reconciler. Absent/null = no run holds the lease.
+   */
+  lakeMemoryExtractionAt?: Date | null;
+  /**
+   * Bounded-continuation watermark for the lake-memory producer (#1440): the id of the last document an
+   * interrupted run ATTEMPTED. The next run resumes from the document after it (keyset), so a lake too
+   * large for one Lambda invocation is covered across chained runs instead of silently truncated.
+   * Cleared once a scan reaches the end, so the following finalize does a fresh whole-lake re-scan (which
+   * re-asserts existing facts and keeps them hot). Absent/null = start from the beginning.
+   */
+  lakeMemoryCursor?: string | null;
 }
 
 export interface IDataLakeDocument extends IDataLake, IMongoDocument {}
@@ -183,6 +200,25 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * caller sweeps unmarked and must say so, since that lake then restores unbounded.
    */
   claimFilesDeletedAt(id: string, at: Date): Promise<Date | null>;
+  /**
+   * Per-lake concurrency claim for the memory producer (#1440): stamp `lakeMemoryExtractionAt = at` only
+   * if no run currently holds the lease - the field is unset, OR its stamp is older than `staleBefore`
+   * (a crashed run's expired lease). Returns whether THIS caller won the claim. Guarded in the query, so
+   * a concurrent claimer that already stamped a FRESH value makes this a no-op; exactly one run wins.
+   */
+  claimLakeMemoryExtraction(id: string, at: Date, staleBefore: Date): Promise<boolean>;
+  /**
+   * Release the extraction lease, but only if THIS run still holds it (the stamp still equals
+   * `claimedAt`). The guard matters when a stale takeover occurred mid-run: a late finish must not clear
+   * the lease a newer run has since claimed.
+   */
+  releaseLakeMemoryExtraction(id: string, claimedAt: Date): Promise<void>;
+  /**
+   * Persist (with a doc id) or clear (with null) the bounded-continuation cursor - the id of the last
+   * document the current scan attempted. Null marks the scan complete, so the next finalize re-scans the
+   * whole lake.
+   */
+  setLakeMemoryCursor(id: string, cursor: string | null): Promise<void>;
 }
 
 // ── Data Lake Batch ─────────────────────────────────────────────────────────
@@ -221,7 +257,8 @@ export interface IDataLakeBatchFile {
  * "completed" batch look reopened. `'none'` covers both "never opted in" and append-mode
  * batches (which never offer the opt-in at all).
  */
-export type TaxonomyStatus = 'none' | 'queued' | 'analyzing' | 'ready' | 'applying' | 'applied' | 'failed';
+export type TaxonomyStatus =
+  'none' | 'queued' | 'analyzing' | 'ready' | 'applying' | 'applied' | 'failed' | 'dismissed';
 
 /** Non-terminal taxonomy phases - the ones the stuck-job reconciler may force to 'failed'. */
 export const TAXONOMY_NON_TERMINAL_STATUSES: TaxonomyStatus[] = ['queued', 'analyzing', 'applying'];
@@ -229,10 +266,11 @@ export const TAXONOMY_NON_TERMINAL_STATUSES: TaxonomyStatus[] = ['queued', 'anal
 /**
  * Every phase the Data Lakes list needs to show a badge for: still running, OR finished and
  * awaiting the user (ready to review / failed and dismissible). Excludes 'none' (never opted
- * in) and 'applied' (already resolved, nothing left to surface). Includes 'applying' so a
- * batch stuck there (e.g. an apply request that errored or hit the Lambda timeout mid-write)
- * stays visible to the list and the fast read-time reconciler instead of only being reachable
- * by the daily cron sweep.
+ * in) and both resolved terminal outcomes, 'applied' and 'dismissed' (nothing left to surface
+ * for either - a dismissed batch's suggestions are never shown again, same as an applied one).
+ * Includes 'applying' so a batch stuck there (e.g. an apply request that errored or hit the
+ * Lambda timeout mid-write) stays visible to the list and the fast read-time reconciler instead
+ * of only being reachable by the daily cron sweep.
  */
 export const TAXONOMY_ATTENTION_STATUSES: TaxonomyStatus[] = ['queued', 'analyzing', 'ready', 'applying', 'failed'];
 
@@ -250,6 +288,9 @@ export interface IDataLakeBatch {
   vectorizedFiles: number;
   failedFiles: number;
   failedFileNames?: string[];
+  /** Subset of failedFiles caused by chunk/vectorize (vs a browser upload failure) - see the
+   * schema comment on this field for why it's tracked separately. */
+  processingFailedFiles: number;
   skippedFiles: number;
 
   // Size tracking
@@ -300,7 +341,8 @@ export type IDataLakeBatchSummary = Omit<IDataLakeBatchDocument, 'files' | 'taxo
   taxonomySuggestions?: Omit<TaxonomyTagSet, 'fileAssignments'>;
 };
 
-export type BatchCounterField = 'uploadedFiles' | 'chunkedFiles' | 'vectorizedFiles' | 'failedFiles' | 'skippedFiles';
+export type BatchCounterField =
+  'uploadedFiles' | 'chunkedFiles' | 'vectorizedFiles' | 'failedFiles' | 'processingFailedFiles' | 'skippedFiles';
 
 export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatchDocument> {
   findActiveByUserId(userId: string): Promise<IDataLakeBatchSummary[]>;
@@ -326,6 +368,13 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    */
   claimFileStatus(batchId: string, fabFileId: string, from: BatchFileStatus[], to: BatchFileStatus): Promise<boolean>;
   incrementCounter(batchId: string, field: BatchCounterField, amount?: number): Promise<IDataLakeBatchDocument | null>;
+  /** Atomic multi-field variant of incrementCounter - use when two+ counters must land together
+   * (e.g. failedFiles + processingFailedFiles), so a crash between them can't leave one applied
+   * and the other not. */
+  incrementCounters(
+    batchId: string,
+    fields: Partial<Record<BatchCounterField, number>>
+  ): Promise<IDataLakeBatchDocument | null>;
   /**
    * Guarded terminal transition: set the batch terminal only if it is still
    * non-terminal. Returns the post-update doc to the single winner, null to losers,
@@ -345,6 +394,15 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
     batchId: string,
     status: Extract<BatchStatus, 'preparing' | 'uploading' | 'processing'>
   ): Promise<IDataLakeBatchDocument | null>;
+  /**
+   * Bump `updatedAt` on a still-non-terminal batch, without touching status or counters. Used
+   * by the chunk/vectorize handlers on a non-final SQS delivery attempt, so a batch that is
+   * legitimately mid-retry doesn't go idle long enough for the stuck-batch reconciler (which
+   * keys off `updatedAt`) to force it terminal before the next attempt lands. Guarded the same
+   * way as `setStatusIfActive`/`markTerminalIfActive`, so it can never resurrect a batch the
+   * pipeline already finalized.
+   */
+  touchIfActive(batchId: string): Promise<void>;
   /**
    * Guarded taxonomy-phase transition: set `taxonomyStatus` only if it is still one of `from`,
    * so a redelivered queue message or a race between the reconciler and a live worker can only

@@ -15,8 +15,9 @@ export interface TaxonomyFolderEntry {
   contentSample?: string;
 }
 
-/** Taxonomy inference is OPTIONAL and non-blocking: on any failure this returns an empty
- * result rather than throwing, so a caller can always proceed with folder-only tags. */
+/** The fallback shape for a malformed/unparseable model response (never for a genuine API-call
+ * failure - see `runTaxonomyInference`'s doc comment for that distinction), so a caller can
+ * always proceed with folder-only tags when the model didn't cooperate with the schema. */
 export const emptyTaxonomyResponse = (existingPrefix?: string): InferTaxonomyResponse => ({
   suggestedPrefix: existingPrefix ?? '',
   suggestedName: '',
@@ -102,10 +103,16 @@ const formatSize = (bytes: number): string => {
 };
 
 /**
- * Call the LLM to infer a tag taxonomy from a sampled folder tree. Never throws - every
- * failure mode (blank/unparseable/malformed response) degrades to `emptyTaxonomyResponse`
- * so a caller can always proceed with folder-only tags. The caller resolves/owns the API
- * key (both the auto post-upload job and a manual re-analyze share this one call site).
+ * Call the LLM to infer a tag taxonomy from a sampled folder tree.
+ *
+ * THROWS on a genuine API-call failure (auth/rate-limit/server error, network failure) - that
+ * is a real, curable problem the caller should surface as a failure, not silently swallow.
+ * Never throws for a malformed/unparseable RESPONSE (blank content, invalid JSON, missing
+ * `categories`) - that degrades to `emptyTaxonomyResponse` so a caller can always proceed with
+ * folder-only tags, since a model that returned *something* just didn't cooperate with the
+ * schema, which isn't the same class of problem as the call itself failing. The caller
+ * resolves/owns the API key (both the auto post-upload job and a manual re-analyze share this
+ * one call site).
  */
 export async function runTaxonomyInference(
   openaiApiKey: string,
@@ -138,35 +145,50 @@ export async function runTaxonomyInference(
 
   userPrompt += `\n\nTotal files in folder tree sample: ${folderTree.length}`;
 
+  // Not wrapped in try/catch: a failure here (auth/rate-limit/server/network) is a genuine
+  // API-call problem, not a response-format one, and is left to propagate so the caller can
+  // treat it as a real failure instead of silently getting an empty "success."
+  const completion = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: userPrompt },
+    ],
+    response_format: { type: 'json_object' },
+    temperature: 0.3,
+    max_tokens: 4000,
+  });
+
+  // `?.` all the way through `choices`, not just its elements: a 200 response with a
+  // malformed body (no `choices` array) is a response-format problem, not an API-call
+  // failure, so it belongs in the same "degrade to empty" bucket as blank/unparseable content.
+  const rawContent = completion.choices?.[0]?.message?.content;
+  if (!rawContent) return emptyTaxonomyResponse(options?.existingPrefix);
+
   try {
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userPrompt },
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.3,
-      max_tokens: 4000,
-    });
-
-    const rawContent = completion.choices[0]?.message?.content;
-    if (!rawContent) return emptyTaxonomyResponse(options?.existingPrefix);
-
     const parsed = JSON.parse(rawContent) as InferTaxonomyResponse;
 
-    // Validate structure minimally - degrade to empty rather than failing the caller.
-    if (!parsed.suggestedPrefix || !parsed.categories || !Array.isArray(parsed.categories)) {
+    // Validate structure minimally - degrade to empty rather than failing the caller. Only
+    // `categories` gates the result: `suggestedPrefix` is never read downstream (the lake's
+    // already-fixed prefix is what's actually used, see the caller), so a model that omits it
+    // gets a sane default instead of losing an otherwise-valid taxonomy over an unused field.
+    if (!parsed.categories || !Array.isArray(parsed.categories)) {
       return emptyTaxonomyResponse(options?.existingPrefix);
     }
 
-    if (!parsed.suggestedPrefix.endsWith(':')) {
+    // `typeof` guard, not just truthiness: `parsed` is an unchecked cast from untrusted JSON,
+    // so an off-schema value (e.g. a number) must default rather than throw out of
+    // `.endsWith` - a crash here would wipe the already-validated `categories` above via the
+    // outer catch, exactly the "one bad field loses the whole result" bug this fix closes.
+    if (typeof parsed.suggestedPrefix !== 'string' || !parsed.suggestedPrefix) {
+      parsed.suggestedPrefix = options?.existingPrefix ?? '';
+    } else if (!parsed.suggestedPrefix.endsWith(':')) {
       parsed.suggestedPrefix += ':';
     }
 
     return parsed;
   } catch (error) {
-    console.warn('Taxonomy inference failed; returning empty taxonomy (non-blocking):', error);
+    console.warn('Taxonomy inference response was malformed; returning empty taxonomy (non-blocking):', error);
     return emptyTaxonomyResponse(options?.existingPrefix);
   }
 }

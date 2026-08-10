@@ -442,13 +442,18 @@ export const DataLakeBatchProgressAction = z.object({
   chunkedFiles: z.number().optional(),
   vectorizedFiles: z.number().optional(),
   failedFiles: z.number().optional(),
+  /** Subset of failedFiles caused by chunk/vectorize, so the client can say which stage a file
+   * failed at rather than a bare "failed" (#1412). Absent from a browser-upload-only failure. */
+  processingFailedFiles: z.number().optional(),
   skippedFiles: z.number().optional(),
   totalFiles: z.number().optional(),
   status: z
     .enum(['preparing', 'uploading', 'processing', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
     .optional(),
   /** Background AI-tagging phase - orthogonal to `status`, see `TaxonomyStatus`. */
-  taxonomyStatus: z.enum(['none', 'queued', 'analyzing', 'ready', 'applying', 'applied', 'failed']).optional(),
+  taxonomyStatus: z
+    .enum(['none', 'queued', 'analyzing', 'ready', 'applying', 'applied', 'failed', 'dismissed'])
+    .optional(),
 });
 
 /** Verdict for a freshly-uploaded FabFile after the S3-event moderation scan. */

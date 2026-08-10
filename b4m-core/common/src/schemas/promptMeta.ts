@@ -162,6 +162,15 @@ const PromptMetaContextSchema = z.object({
       minInlineTokensPerDoc: z.number(),
     })
     .optional(),
+  // Lake memory hot-card (#1440): the durable lake-profile beliefs injected on a Data-Lake-mode turn,
+  // and which lakes they came from. Present only when the card fired, so an eval row shows lake
+  // grounding independent of whether the model then also called the knowledge tools.
+  lakeMemory: z
+    .object({
+      beliefCount: z.number(),
+      dataLakeTags: z.array(z.string()),
+    })
+    .optional(),
   // Phase 2: Context window debug fields
   contextWindowUsage: z
     .object({

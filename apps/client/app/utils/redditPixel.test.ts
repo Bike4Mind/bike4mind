@@ -59,4 +59,20 @@ describe('redditPixel', () => {
     expect(existing).toHaveBeenCalledWith('track', 'SignUp');
     expect(existing).not.toHaveBeenCalledWith('init', 'a2_test123');
   });
+
+  it('passes event metadata through for valued conversions', () => {
+    trackRedditEvent('Purchase', { value: 30, currency: 'USD', transactionId: 'cs_1' });
+    expect(win.rdt!.callQueue).toEqual([
+      ['init', 'a2_test123'],
+      ['track', 'Purchase', { value: 30, currency: 'USD', transactionId: 'cs_1' }],
+    ]);
+  });
+
+  it('keeps the two-argument shape when no metadata is supplied', () => {
+    trackRedditEvent('SignUp', {});
+    expect(win.rdt!.callQueue).toEqual([
+      ['init', 'a2_test123'],
+      ['track', 'SignUp'],
+    ]);
+  });
 });

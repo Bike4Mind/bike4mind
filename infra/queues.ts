@@ -27,6 +27,21 @@ const dataLakeTaxonomyQueue = new sst.aws.Queue('dataLakeTaxonomyQueue', {
   },
 });
 
+// Lake Memory Extraction Queue (#1440 producer). Declared up here alongside taxonomy because the chunk
+// and vectorize Lambdas must link it too: finalizeBatchIfComplete (which they call) enqueues lake
+// memory extraction, so it needs Resource.lakeMemoryQueue.url. Full-lake LLM extraction, so retry: 2
+// like taxonomy (a dropped run is re-covered by the next finalize's whole-lake re-scan).
+const lakeMemoryQueueDLQ = new sst.aws.Queue('lakeMemoryQueueDLQ', {});
+const lakeMemoryQueue = new sst.aws.Queue('lakeMemoryQueue', {
+  // Must exceed the handler's 10-minute timeout (below), or SQS redelivers the message while the run
+  // is still in flight and a duplicate extraction runs concurrently.
+  visibilityTimeout: '12 minutes',
+  dlq: {
+    queue: lakeMemoryQueueDLQ.arn,
+    retry: 2,
+  },
+});
+
 // FabFile Vectorize Queue
 const fabFileVectorizeQueueDLQ = new sst.aws.Queue('fabFileVectorizeQueueDLQ', {});
 const fabFileVectorizeQueue = new sst.aws.Queue('fabFileVectorizeQueue', {
@@ -42,9 +57,17 @@ const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     vpc: lambdaVpc,
-    // dataLakeTaxonomyQueue: finalizeBatchIfComplete (called from this handler) enqueues
-    // taxonomy analysis as a backstop, which needs Resource.dataLakeTaxonomyQueue.url.
-    link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket, dataLakeTaxonomyQueue],
+    // dataLakeTaxonomyQueue + lakeMemoryQueue: finalizeBatchIfComplete (called from this handler)
+    // enqueues taxonomy analysis and lake memory extraction, which need their queue URLs.
+    link: [
+      ...allSecrets,
+      websocketApi,
+      fabFileBucket,
+      generatedImagesBucket,
+      appFilesBucket,
+      dataLakeTaxonomyQueue,
+      lakeMemoryQueue,
+    ],
     logging: {
       retention: '3 days',
     },
@@ -102,8 +125,8 @@ const fabFileChunkQueueSubscription = fabFileChunkQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '13 minutes',
     vpc: lambdaVpc,
-    // dataLakeTaxonomyQueue: finalizeBatchIfComplete (called from this handler) enqueues
-    // taxonomy analysis as a backstop, which needs Resource.dataLakeTaxonomyQueue.url.
+    // dataLakeTaxonomyQueue + lakeMemoryQueue: finalizeBatchIfComplete (called from this handler)
+    // enqueues taxonomy analysis and lake memory extraction, which need their queue URLs.
     link: [
       ...allSecrets,
       websocketApi,
@@ -112,6 +135,7 @@ const fabFileChunkQueueSubscription = fabFileChunkQueue.subscribe(
       generatedImagesBucket,
       appFilesBucket,
       dataLakeTaxonomyQueue,
+      lakeMemoryQueue,
     ],
     logging: {
       retention: '3 days',
@@ -683,6 +707,31 @@ const dataLakeTaxonomyQueueSubscription = dataLakeTaxonomyQueue.subscribe(
     timeout: '5 minutes',
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
+// Lake Memory Extraction subscription (#1440 producer). Reads a lake's chunk text and calls the LLM
+// per document (sequential, up to MAX_DOCS_PER_RUN=100), so it gets a 10-minute timeout - longer than
+// taxonomy because it does per-document LLM work across the whole lake, not a single inference (the
+// queue's visibilityTimeout is set to 12 min above to stay ahead of it). SINGLE_RECORD_BATCH so one
+// lake fails in isolation and DLQs on its own.
+const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/lakeMemoryExtraction.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    // lakeMemoryQueue: this handler self-re-enqueues for bounded continuation (a lake too large for one
+    // run sends the next slice's message to its own queue), so it needs Resource.lakeMemoryQueue.url and
+    // the sqs:SendMessage grant that linking the queue confers.
+    link: [...allSecrets, websocketApi, lakeMemoryQueue],
     logging: {
       retention: '3 days',
     },
@@ -1301,6 +1350,7 @@ export {
   questExportQueue,
   dataLakeCleanupQueue,
   dataLakeTaxonomyQueue,
+  lakeMemoryQueue,
   liveOpsTriageQueue,
   tavernHeartbeatQueue,
   deepAgentWakeQueue,
@@ -1328,6 +1378,7 @@ export {
   questExportQueueDLQ,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
+  lakeMemoryQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -1357,6 +1408,7 @@ export {
   questExportQueueSubscription,
   dataLakeCleanupQueueSubscription,
   dataLakeTaxonomyQueueSubscription,
+  lakeMemoryQueueSubscription,
   liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,
