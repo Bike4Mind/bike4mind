@@ -94,8 +94,9 @@ describe('processSlackFiles', () => {
     ] as never);
 
     expect(result.fabFileIds).toEqual([]);
-    expect(result.errors[0]).toContain('huge.pdf');
-    expect(result.errors[0]).toContain('50MB');
+    // Pin the WHOLE sentence, not just '50MB'. A loose toContain let an "exceeds" -> "exceeds the"
+    // drift through the validator extraction, which quietly falsified "behaviour preserved exactly".
+    expect(result.errors[0]).toBe('\u26a0\ufe0f File "huge.pdf" (51.0MB) exceeds 50MB limit. Skipping.');
     expect(downloadFile).not.toHaveBeenCalled();
   });
 
