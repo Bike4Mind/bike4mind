@@ -78,6 +78,10 @@ const isMetaTag = (name: string): boolean => name.toLowerCase().startsWith(DATAL
  * Everything above is keyed by `datalake:*` META-TAGS. A lake a file belongs to ONLY via a
  * `fileTagPrefix` content tag - no meta-tag ever involved - is a second, independent join/leave
  * source evaluated after the tagger runs; see the `findPrefixArmChanges` call below for that half.
+ *
+ * A THIRD, unrelated concern sits ahead of all of it: `ordinaryTags` is also checked against the
+ * static-registry namespace (e.g. `opti:`), which has no owning lake document at all and so is
+ * invisible to both mechanisms above.
  */
 export const reconcileLakeTags = async (
   actor: MembershipActor,
