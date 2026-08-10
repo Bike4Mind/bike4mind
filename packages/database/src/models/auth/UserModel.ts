@@ -288,9 +288,13 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   async findAllByEmailsOrUsernames(emails: string[], usernames: string[]) {
-    const result = await this.model.find({
-      $or: [{ email: { $in: emails } }, { username: { $in: usernames } }],
-    });
+    // Case-insensitive to match findByUsernameOrEmail below -- email/username are stored
+    // verbatim (no lowercase transform), so a caller-typed case variant must still resolve.
+    const result = await this.model
+      .find({
+        $or: [{ email: { $in: emails } }, { username: { $in: usernames } }],
+      })
+      .collation({ locale: 'en', strength: 2 });
     return result.map(d => d.toJSON());
   }
 

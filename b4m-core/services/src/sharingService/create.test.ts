@@ -167,3 +167,73 @@ describe('sharingService - createInvite (project arm authority)', () => {
     expect(db.invites.create).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * A recipient that findAllByEmailsOrUsernames does not resolve previously fell through
+ * silently: the invite was still created with an empty pending list and the route returned
+ * 200, so the recipient's inbox stayed empty with no visible failure anywhere (#1151). Scoped
+ * to FabFile/Session, since Organization/Project send raw user ids through this same
+ * recipients array via a different resolution path and must keep tolerating a 0-match result.
+ */
+describe('sharingService - createInvite (recipient resolution)', () => {
+  const FILE_ID = 'file-1';
+  const FILE_NAME = 'doc.pdf';
+  const PROJECT_ID = 'project-9';
+  const PROJECT_NAME = 'Some Project';
+
+  const asUser = (id: string) => ({ id, username: 'u', isAdmin: false }) as IUserDocument;
+
+  let db: any;
+
+  beforeEach(() => {
+    db = {
+      invites: { create: vi.fn(async (build: unknown) => ({ id: 'invite-3', ...(build as object) })) },
+      users: { findAllByEmailsOrUsernames: vi.fn(async () => []) },
+      fabFiles: { shareable: { findShareAccessById: vi.fn(async () => ({ id: FILE_ID, fileName: FILE_NAME })) } },
+      projects: { shareable: { findShareAccessById: vi.fn(async () => ({ id: PROJECT_ID, name: PROJECT_NAME })) } },
+    };
+  });
+
+  const createFabFile = (recipients: string[]) =>
+    createInvite(
+      asUser('owner-3'),
+      { id: FILE_ID, type: InviteType.FabFile, permissions: [Permission.read], recipients } as any,
+      { db }
+    );
+
+  const createProject = (recipients: string[]) =>
+    createInvite(
+      asUser('owner-4'),
+      { id: PROJECT_ID, type: InviteType.Project, permissions: [Permission.read], recipients } as any,
+      { db }
+    );
+
+  it('throws for an unresolved recipient on a FabFile (By Users) invite instead of silently creating a 0-recipient share', async () => {
+    db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: 'a@x.com', username: 'a' }]);
+
+    await expect(createFabFile(['a@x.com', 'nobody@x.com'])).rejects.toSatisfy(
+      (e: Error) => e instanceof BadRequestError && e.message.includes('nobody@x.com')
+    );
+    expect(db.invites.create).not.toHaveBeenCalled();
+  });
+
+  it('resolves a recipient against a matched user record with different casing', async () => {
+    db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: 'Friend@Example.com', username: 'friend' }]);
+
+    const invite = await createFabFile(['friend@example.com']);
+
+    expect(db.invites.create).toHaveBeenCalled();
+    expect((invite as any).recipients.pending).toEqual(['Friend@Example.com']);
+  });
+
+  it('does not throw on an Organization/Project invite with an unmatched, id-shaped recipient', async () => {
+    // No match, same as today, for an id-shaped recipient - the point is this must not become
+    // a hard failure just because milestone 2 added unresolved-recipient checking elsewhere.
+    db.users.findAllByEmailsOrUsernames = vi.fn(async () => []);
+
+    const invite = await createProject(['user-id-123']);
+
+    expect(db.invites.create).toHaveBeenCalled();
+    expect((invite as any).recipients.pending).toEqual([]);
+  });
+});

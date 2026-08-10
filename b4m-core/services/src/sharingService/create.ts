@@ -123,8 +123,25 @@ export const createInvite = async (
 
   const recipientsArray = recipients ?? [];
   const users = await db.users.findAllByEmailsOrUsernames(recipientsArray, recipientsArray);
-  // we push emails on pending regardless if username was sought for
-  const pending = users.map(user => user.email as string);
+
+  // By-Users sharing (FabFile/Session) sends real emails/usernames and must not silently
+  // create a share nobody can see. Organization/Project/Group invites send raw user ids
+  // through this same recipients array via a different resolution path (inviteToOrg above,
+  // and organizationService/groupMembership for Group), so this check does not apply to them.
+  if ((type === InviteType.FabFile || type === InviteType.Session) && recipientsArray.length > 0) {
+    const matched = new Set(
+      users.flatMap(u => [u.email, u.username].filter((v): v is string => Boolean(v)).map(v => v.toLowerCase()))
+    );
+    const unresolved = recipientsArray.filter(r => !matched.has(r.toLowerCase()));
+    if (unresolved.length > 0) {
+      throw new BadRequestError(`Could not find a user for: ${unresolved.join(', ')}`);
+    }
+  }
+
+  // we push emails on pending regardless if username was sought for; a username-matched user
+  // with no email has nothing to push here (accept.ts already blocks an emailless user from
+  // accepting any invite, so this only avoids polluting pending with a literal undefined).
+  const pending = users.map(user => user.email).filter((email): email is string => Boolean(email));
   const isLinkOnlyInvite = recipients?.length === 0;
 
   const build: Omit<IInvite, 'id'> = {
