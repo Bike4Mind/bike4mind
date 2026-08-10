@@ -273,6 +273,16 @@ export const pushShareable = (
   if (userIndex === -1) {
     entity.users.push({ userId: data.userId, permissions: data.permissions, projectId: data.projectId });
   } else {
-    entity.users[userIndex] = data;
+    // Merge, don't replace: every call site here is an additive invite-accept, so accepting a
+    // new invite must never silently drop the existing entry's projectId/extraData or narrow
+    // permissions it already carries (e.g. from a broader project-cascaded share) down to just
+    // what this invite grants.
+    const existing = entity.users[userIndex];
+    entity.users[userIndex] = {
+      ...existing,
+      userId: data.userId,
+      projectId: data.projectId ?? existing.projectId,
+      permissions: Array.from(new Set([...(existing.permissions ?? []), ...data.permissions])),
+    };
   }
 };
