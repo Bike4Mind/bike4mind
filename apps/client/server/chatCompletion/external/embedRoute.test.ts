@@ -53,6 +53,9 @@ vi.mock('@bike4mind/services', async () => {
       error instanceof MockInsufficientCreditsError ? error.code : getQuestErrorCode(error),
     buildSharedTools: mockBuildSharedTools,
     apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({ openai: 'k' }) },
+    // Availability filter that runs alongside buildSharedTools - tests here assert on
+    // enabledTools/kbScope, not on which tools are gated, so every tool reads as available.
+    resolveToolAvailability: vi.fn().mockResolvedValue({}),
   };
 });
 
