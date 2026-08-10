@@ -6,10 +6,11 @@ import { seedAuthOnPage } from './helpers/auth-seed';
 import { apiCreateTestUser, apiGetOtcCode, apiLoginViaOtc } from './helpers/api';
 
 /**
- * Mint a dedicated throwaway account for a test that logs out. Logout revokes every token
- * the user holds (tokenVersion bump), so a test that logs out MUST NOT use a shared spec user -
- * it would kill that user's session for every parallel spec. The email mirrors the setup
- * convention (`...-<id>-e2e@test.com`) so global-teardown's cleanup sweep matches and removes it.
+ * Mint a dedicated throwaway account for a test that logs out. Logout is now per-device (issue
+ * #1194): it revokes only the requesting session, not the user's other tokens. These specs still
+ * use a throwaway user for clean isolation (they seed one session and log it out), which keeps the
+ * teardown sweep simple - not because logout would otherwise nuke a shared user. The email mirrors
+ * the setup convention (`...-<id>-e2e@test.com`) so global-teardown's cleanup sweep matches it.
  *
  * The retry index is baked into the identity: attempt 0 already created (and logged out)
  * `auth-<label>0-...`, and createUser rejects a duplicate username OR email, so without this a
@@ -90,7 +91,7 @@ test.describe('Authentication', () => {
   });
 
   test('should logout successfully', async ({ basePage, navigationPage, page, request }) => {
-    // Dedicated user: logout revokes all of the user's tokens, so we must not log out a shared one.
+    // Dedicated user keeps this self-contained; logout only revokes this seeded session (per-device).
     const user = await createLogoutUser(request, 'logout');
     await basePage.clearAllStorage();
     await seedAuthOnPage(page, { accessToken: user.accessToken, refreshToken: user.refreshToken });
@@ -100,6 +101,59 @@ test.describe('Authentication', () => {
     await navigationPage.logout();
 
     await expect(page).toHaveURL(/.*login.*/);
+  });
+
+  test('logout on one device leaves other devices signed in (per-device, #1194)', async ({ request }) => {
+    // Pure API-level proof of the per-device contract, independent of the browser logout UI: two
+    // sessions for the SAME user, log one out, the other must survive.
+    const user = await createLogoutUser(request, 'perdevice');
+
+    // Two independent sessions for the same user - each OTC login mints its own AuthSession.
+    const sessionA = await apiLoginViaOtc(request, user.email);
+    const sessionB = await apiLoginViaOtc(request, user.email);
+
+    // Log out session A only. GET /api/logout reads the sid from A's bearer access token and
+    // revokes just that session - no tokenVersion bump.
+    const logoutRes = await request.get('/api/logout', {
+      headers: { Authorization: `Bearer ${sessionA.accessToken}` },
+    });
+    expect(logoutRes.status()).toBe(200);
+
+    // Session B's access token still authenticates - other devices stay signed in.
+    const identifyB = await request.get('/api/identify', {
+      headers: { Authorization: `Bearer ${sessionB.accessToken}` },
+    });
+    expect(identifyB.status()).toBe(200);
+
+    // Session B can still refresh (its session is alive)...
+    const refreshB = await request.post('/api/auth/refreshToken', { data: { token: sessionB.refreshToken } });
+    expect(refreshB.status()).toBe(200);
+
+    // ...while session A's refresh token is dead (its session was revoked).
+    const refreshA = await request.post('/api/auth/refreshToken', { data: { token: sessionA.refreshToken } });
+    expect(refreshA.status()).toBe(401);
+  });
+
+  test('log out all devices revokes every session (#1194)', async ({ request }) => {
+    // The panic lever: after POST /api/users/me/sessions/logout-all, BOTH sessions must be dead.
+    const user = await createLogoutUser(request, 'logoutall');
+    const sessionA = await apiLoginViaOtc(request, user.email);
+    const sessionB = await apiLoginViaOtc(request, user.email);
+
+    const res = await request.post('/api/users/me/sessions/logout-all', {
+      headers: { Authorization: `Bearer ${sessionA.accessToken}` },
+    });
+    expect(res.status()).toBe(200);
+
+    // tokenVersion was bumped, so even a still-unexpired access token is rejected immediately.
+    const identifyB = await request.get('/api/identify', {
+      headers: { Authorization: `Bearer ${sessionB.accessToken}` },
+    });
+    expect(identifyB.status()).toBe(401);
+
+    // And neither session's refresh token can mint a new one.
+    const refreshB = await request.post('/api/auth/refreshToken', { data: { token: sessionB.refreshToken } });
+    expect(refreshB.status()).toBe(401);
   });
 
   // Skipped: indexedDB is not cleared after logout. Covered by a manual test; re-enable once the fix lands.
@@ -277,8 +331,8 @@ test.describe('Authentication', () => {
       { timeout: TIMEOUTS.ACTION }
     );
 
-    // Logout revoked the seeded token (all tokens for the user are killed), so re-login for a
-    // fresh session before re-seeding - otherwise /api/identify rejects the dead token with 401.
+    // Logout revoked this seeded session, so re-login for a fresh one before re-seeding -
+    // otherwise /api/identify rejects the dead session's token with 401.
     const fresh = await apiLoginViaOtc(request, user.email);
     await seedAuthOnPage(page, { accessToken: fresh.accessToken, refreshToken: fresh.refreshToken });
     await basePage.dismissModals();

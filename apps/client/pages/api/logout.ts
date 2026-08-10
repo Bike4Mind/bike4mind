@@ -1,7 +1,6 @@
-import { AuthEvents, IUserDocument } from '@bike4mind/common';
+import { AuthEvents } from '@bike4mind/common';
 import { userRepository, authSessionRepository } from '@bike4mind/database';
-import { userService } from '@bike4mind/services';
-import { NotFoundError } from '@bike4mind/utils';
+import { userService, authSessionService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -9,8 +8,9 @@ import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { clearSessionCookies } from '@server/auth/refreshCookie';
 
 const handler = baseApi().get(async (req, res) => {
-  const user = req.user as IUserDocument & { impersonatedBy?: string };
+  const user = req.user;
   const userId = user?.id;
+  const sid = user?.sid;
 
   // Expire the refresh cookies unconditionally and first: the client can no longer clear them
   // itself (HttpOnly), and a logout that 500s partway must still leave the browser without a
@@ -19,27 +19,23 @@ const handler = baseApi().get(async (req, res) => {
   clearSessionCookies(res);
 
   await userService.updateLogoutTime(userId, { db: { users: userRepository }, logger: req.logger });
-  // Revoke the session server-side, not just client-side: bump tokenVersion so the logged-out
-  // token (and any other device's token for this user) is rejected on its next request. Without
-  // this, a token captured before logout stays valid until its natural TTL. All-device by design
-  // (tokens carry no session id); per-device revocation would need a session store (tracked separately).
+
+  // Per-device logout: revoke ONLY this browser's session, never bump tokenVersion. Logout used to
+  // bump tokenVersion, which rejected every token the user held and signed them out on ALL devices
+  // (issue #1194). Revoking just this `sid` leaves other devices signed in; the "Log out all
+  // devices" panic lever (POST /api/users/me/sessions/logout-all) keeps the tokenVersion bump for
+  // when the user actually wants every device gone. The revoked session's own access token keeps
+  // working until its short TTL, but its refresh cookie is dead, so it cannot outlive that window.
   //
-  // Two callers must NOT trigger a revoke:
-  //  - API-key requests: apiKeyAuth authenticates before JWT, so any key (any scope) hitting this
-  //    endpoint would otherwise become an account-wide session kill switch for the key's owner.
-  //  - Impersonating admins: revoking here bumps the *customer's* tokenVersion, force-logging the
-  //    real customer out on every device. Impersonation ends via "Return to safety", not logout.
-  if (userId && !isApiKeyAuth(req) && !user?.impersonatedBy) {
-    try {
-      await userService.revokeUserSessions(userId, {
-        db: { users: userRepository, authSessions: authSessionRepository },
-        logger: req.logger,
-      });
-    } catch (error) {
-      // Rare race: the account was deleted between JWT auth and this bump. Nothing is left to
-      // revoke, so let logout still succeed instead of surfacing a confusing 404 to the client.
-      if (!(error instanceof NotFoundError)) throw error;
-    }
+  // Skip for API-key callers: apiKeyAuth authenticates before JWT and carries no browser `sid`, so
+  // there is nothing to revoke (and the old all-device bump would have made any key an account-wide
+  // kill switch). An impersonating admin's `sid` IS this impersonation session, so revoking it is
+  // correct and - unlike the old tokenVersion bump - does not touch the real customer's other devices.
+  if (sid && !isApiKeyAuth(req)) {
+    await authSessionService.revokeSession(sid, {
+      db: { authSessions: authSessionRepository },
+      logger: req.logger,
+    });
   }
   await logEvent({ userId, type: AuthEvents.LOGOUT }, { ability: req.ability });
   if (userId) await logAuthAudit(req, { userId, event: 'logout' });

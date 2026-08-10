@@ -1,6 +1,7 @@
 import {
   Collection,
   CollectionType,
+  IActiveSessionDto,
   ICounterLogDocument,
   InviteType,
   ISessionDocument,
@@ -23,7 +24,14 @@ import {
   updateUserToServer,
   fetchUserTags,
 } from '@client/app/utils/userAPICalls';
-import { keepPreviousData, useMutation, useQuery, useQueryClient, UseQueryOptions } from '@tanstack/react-query';
+import {
+  keepPreviousData,
+  QueryClient,
+  useMutation,
+  useQuery,
+  useQueryClient,
+  UseQueryOptions,
+} from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import { clearClientCaches } from '@client/app/utils/clearClientCaches';
@@ -214,6 +222,38 @@ export function useUserRevokeSharing(
   });
 }
 
+/**
+ * Client-side teardown shared by every sign-out path (this-device logout, log-out-all-devices):
+ * drop the in-memory user + tokens, wipe client persistence, purge queries (keeping only the
+ * non-user-specific public server config), then hard-reload to /login so no in-memory state
+ * (components, query subscriptions, WebSocket) survives. The server-side revoke differs per path
+ * and is done by the caller BEFORE this runs.
+ */
+async function tearDownClientSession(opts: {
+  setCurrentUser: (user: IUserDocument | null) => void;
+  resetTokens: () => void;
+  queryClient: QueryClient;
+}): Promise<void> {
+  opts.setCurrentUser(null);
+  opts.resetTokens();
+  // Clear all client-side persistence (IndexedDB: React Query, Dexie, TagCache,
+  // and user-specific localStorage) before removing in-memory queries.
+  await clearClientCaches();
+  // Preserve server-config-public: it contains only apiUrl + defaultTheme and is not user-specific.
+  // The full server-config (auth'd) is intentionally purged on logout to prevent
+  // bucket names and the PDF Express key from persisting in memory across sessions.
+  opts.queryClient.removeQueries({
+    predicate: query => query.queryKey[0] !== 'server-config-public',
+  });
+
+  // Hard reload to /login to destroy all in-memory state (React components,
+  // query subscriptions, WebSocket connections). Matches the pattern used by
+  // loginAs/returnToAdmin flows which also use window.location.replace().
+  const redirectTo = new URLSearchParams(window.location.search).get('redirectTo');
+  const qs = redirectTo ? `?redirectTo=${encodeURIComponent(redirectTo)}` : '';
+  window.location.replace(`/login${qs}`);
+}
+
 export function useUserLogout() {
   const { setCurrentUser } = useUser();
   const resetTokens = useAccessToken(s => s.resetTokens);
@@ -222,6 +262,8 @@ export function useUserLogout() {
   return useMutation({
     mutationFn: async () => {
       try {
+        // Per-device: revokes ONLY this browser's session server-side (no tokenVersion bump),
+        // so other devices stay signed in (issue #1194).
         await api.get('/api/logout');
       } catch (error) {
         // Ignore 401 errors during logout
@@ -229,25 +271,63 @@ export function useUserLogout() {
           throw error;
         }
       }
+      await tearDownClientSession({ setCurrentUser, resetTokens, queryClient });
+    },
+  });
+}
 
-      setCurrentUser(null);
-      resetTokens();
-      // Clear all client-side persistence (IndexedDB: React Query, Dexie, TagCache,
-      // and user-specific localStorage) before removing in-memory queries.
-      await clearClientCaches();
-      // Preserve server-config-public: it contains only apiUrl + defaultTheme and is not user-specific.
-      // The full server-config (auth'd) is intentionally purged on logout to prevent
-      // bucket names and the PDF Express key from persisting in memory across sessions.
-      queryClient.removeQueries({
-        predicate: query => query.queryKey[0] !== 'server-config-public',
-      });
+const ACTIVE_SESSIONS_KEY = ['users', 'me', 'sessions'] as const;
 
-      // Hard reload to /login to destroy all in-memory state (React components,
-      // query subscriptions, WebSocket connections). Matches the pattern used by
-      // loginAs/returnToAdmin flows which also use window.location.replace().
-      const redirectTo = new URLSearchParams(window.location.search).get('redirectTo');
-      const qs = redirectTo ? `?redirectTo=${encodeURIComponent(redirectTo)}` : '';
-      window.location.replace(`/login${qs}`);
+/** The caller's own active auth sessions (devices), newest-active first. Powers the
+ *  Active Sessions list in Settings -> Security. */
+export function useGetActiveSessions() {
+  return useQuery({
+    queryKey: ACTIVE_SESSIONS_KEY,
+    queryFn: async () => {
+      const res = await api.get<{ items: IActiveSessionDto[] }>('/api/users/me/sessions');
+      return res.data.items;
+    },
+  });
+}
+
+/** Revoke a single session ("sign out this device") by sid, then refresh the list. */
+export function useRevokeSession() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (sid: string) => {
+      await api.delete('/api/users/me/sessions', { params: { sid } });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ACTIVE_SESSIONS_KEY });
+      toast.success('Device signed out');
+    },
+    onError: error => {
+      const data = isAxiosError(error) ? (error.response?.data as ErrorResponse | undefined) : undefined;
+      toast.error(data?.error ?? 'Failed to sign out device');
+    },
+  });
+}
+
+/**
+ * "Log out all devices" - hits the global panic endpoint (bumps tokenVersion + revokes every
+ * session, so all devices stop working immediately), then runs the same client teardown as a
+ * normal logout since this device is signed out too.
+ */
+export function useLogoutAllDevices() {
+  const { setCurrentUser } = useUser();
+  const resetTokens = useAccessToken(s => s.resetTokens);
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async () => {
+      try {
+        await api.post('/api/users/me/sessions/logout-all');
+      } catch (error) {
+        if (!isAxiosError(error) || error.response?.status !== 401) {
+          throw error;
+        }
+      }
+      await tearDownClientSession({ setCurrentUser, resetTokens, queryClient });
     },
   });
 }
