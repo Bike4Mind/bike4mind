@@ -632,8 +632,15 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     // updatedAt: an unrelated write to the batch (an ingest counter tick) keeps bumping that
     // while taxonomyStartedAt - when this taxonomy attempt actually began - stays fixed, so
     // filtering on updatedAt could let a genuinely stuck batch dodge every scan.
+    // $not/$gte (not $lt), matching forceFailStuckTaxonomy's write guard: a plain $lt never
+    // matches a document missing taxonomyStartedAt entirely, which would let such a batch dodge
+    // this scan forever - the write guard's missing-field handling is dead code otherwise, since
+    // the scan is what selects candidates for it in the first place.
     const results = await this.batchModel
-      .find({ taxonomyStatus: { $in: TAXONOMY_NON_TERMINAL_STATUSES }, taxonomyStartedAt: { $lt: cutoff } })
+      .find({
+        taxonomyStatus: { $in: TAXONOMY_NON_TERMINAL_STATUSES },
+        taxonomyStartedAt: { $not: { $gte: cutoff } },
+      })
       .sort({ taxonomyStartedAt: 1 })
       .limit(limit);
     return results.map(r => r.toJSON() as IDataLakeBatchDocument);

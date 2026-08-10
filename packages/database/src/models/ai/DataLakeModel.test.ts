@@ -698,13 +698,18 @@ describe('DataLakeBatchRepository.findStuckTaxonomy - global cross-user stale sc
   const seedBatch = async (taxonomyStatus: string, taxonomyStartedAt?: Date) =>
     dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', taxonomyStatus, taxonomyStartedAt } as never);
 
-  it('returns only stale non-terminal taxonomy phases (excludes fresh, ready, applied, and none)', async () => {
+  it('returns stale non-terminal phases and never-started ones, excluding fresh/ready/none', async () => {
+    const neverStarted = await seedBatch('analyzing'); // no taxonomyStartedAt -> treated as maximally stale, not excluded
     const stale = await seedBatch('analyzing', STALE);
-    await seedBatch('analyzing'); // fresh (no taxonomyStartedAt) -> excluded
+    await seedBatch('analyzing', new Date('2022-01-01T00:00:00Z')); // fresh -> excluded
     await seedBatch('ready', STALE); // stale but terminal-ish -> excluded
     await seedBatch('none', STALE); // never opted in -> excluded
     const stuck = await dataLakeBatchRepository.findStuckTaxonomy(CUTOFF);
-    expect(stuck.map(b => b.id)).toEqual([stale.id]);
+    // Missing sorts first in ascending order (Mongo treats it like null), so neverStarted leads.
+    // Inclusion here matters beyond this scan: it's what makes the never-started batch reachable
+    // at all for forceFailStuckTaxonomy's own missing-field handling - if the scan excluded it,
+    // that write-side guard would never actually be exercised for such a batch.
+    expect(stuck.map(b => b.id)).toEqual([neverStarted.id, stale.id]);
   });
 
   it('filters on taxonomyStartedAt, not updatedAt - an unrelated write must not hide a stuck batch', async () => {
