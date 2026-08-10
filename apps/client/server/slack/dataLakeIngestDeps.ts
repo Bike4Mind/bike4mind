@@ -30,7 +30,10 @@ export function buildSlackLakeIngestDeps(args: {
     // pre-download bound.
     resolveMaxFileSizeBytes: async () => {
       const mb = await adminSettingsRepository.getSettingsValue('MaxFileSize');
-      return typeof mb === 'number' && mb > 0 ? mb * 1024 * 1024 : undefined;
+      // `>= 0`, not `> 0`: an admin-set 0 must mean "refuse everything" here because that is what
+      // create.ts does with it (`fileSize >= 0` is always true). Collapsing it into undefined
+      // would read as "no limit" and hand the pre-check the opposite of the configured intent.
+      return typeof mb === 'number' && mb >= 0 ? mb * 1024 * 1024 : undefined;
     },
     resolveEntitlementKeys: actor =>
       getUserEntitlements({
