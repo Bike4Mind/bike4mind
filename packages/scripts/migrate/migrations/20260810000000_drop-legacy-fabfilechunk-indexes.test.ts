@@ -43,7 +43,9 @@ describe('drop-legacy-fabfilechunk-indexes migration (real DB)', () => {
 
     const after = (await FabFileChunk.collection.indexes()).map(index => index.name).sort();
     expect(after).toEqual(['_id_', 'fabFileId_1__id_1']);
-  });
+  }, // Four real index builds plus two drops exceeded the 15s default under the shared "misc" CI
+  // shard's load; real-world-validation.test.ts uses the same 30s bump for similarly-heavy cases.
+  30000);
 
   it('refuses to drop when the keyset compound is missing', async () => {
     await FabFileChunk.collection.createIndex({ _id: 1, fabFileId: 1 });
@@ -85,6 +87,17 @@ describe('drop-legacy-fabfilechunk-indexes migration (real DB)', () => {
       { fabFileId: 1, _id: 1 },
       { partialFilterExpression: { fabFileId: { $exists: true } } }
     );
+    await FabFileChunk.collection.createIndex({ _id: 1, fabFileId: 1 });
+    await FabFileChunk.collection.createIndex({ fabFileId: 1 });
+
+    await expect(migration.up()).rejects.toThrow(/keyset compound is missing/);
+
+    const after = (await FabFileChunk.collection.indexes()).map(index => index.name).sort();
+    expect(after).toEqual(['_id_', '_id_1_fabFileId_1', 'fabFileId_1', 'fabFileId_1__id_1']);
+  });
+
+  it('refuses to drop when the keyset compound has a non-default collation', async () => {
+    await FabFileChunk.collection.createIndex({ fabFileId: 1, _id: 1 }, { collation: { locale: 'en', strength: 2 } });
     await FabFileChunk.collection.createIndex({ _id: 1, fabFileId: 1 });
     await FabFileChunk.collection.createIndex({ fabFileId: 1 });
 

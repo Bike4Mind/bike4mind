@@ -14,8 +14,9 @@ import { type MigrationFile } from './index';
  * "not found" while this migration still gets recorded as applied - permanently un-retryable.
  *
  * Refuses to drop if the keyset compound is missing, or present but not actually usable to serve a
- * query (hidden, or narrowed by a partial filter): doing so would leave the collection unable to
- * serve a bare `fabFileId` read from an index, turning it into a full collection scan.
+ * bare `fabFileId` equality read (hidden, narrowed by a partial filter, or built with a non-default
+ * collation): doing so would leave the collection unable to serve that read from an index, turning
+ * it into a full collection scan.
  * `safeDropIndex` only swallows index-not-found, so a genuinely absent collection (a fresh
  * environment that never created it) is checked for up front and treated as nothing to do, rather
  * than reaching a NamespaceNotFound throw from the drop calls themselves.
@@ -42,7 +43,12 @@ const migration: MigrationFile = {
 
     const indexes = await FabFileChunk.collection.indexes();
     const keysetCompound = indexes.find(index => JSON.stringify(index.key) === JSON.stringify(KEYSET_COMPOUND_KEY));
-    if (!keysetCompound || keysetCompound.hidden || keysetCompound.partialFilterExpression) {
+    if (
+      !keysetCompound ||
+      keysetCompound.hidden ||
+      keysetCompound.partialFilterExpression ||
+      keysetCompound.collation
+    ) {
       throw new Error(
         'Refusing to drop the legacy fabfilechunks indexes: a usable { fabFileId: 1, _id: 1 } ' +
           'keyset compound is missing (absent, hidden, or partial). Run migration 20260728000000 ' +
