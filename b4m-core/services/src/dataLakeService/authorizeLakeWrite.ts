@@ -83,6 +83,16 @@ export const extractDataLakeMetaTags = (tagNames: readonly unknown[]): string[] 
 const STATIC_REGISTRY_DATALAKE_TAGS = new Set(DATA_LAKES.map(lake => lake.datalakeTag.toLowerCase()));
 
 /**
+ * Whether a `datalake:*` meta-tag names a STATIC REGISTRY lake rather than a DB-backed one.
+ * Exported so a caller that needs to PREDICT this gate's decision without a DB round-trip (e.g.
+ * a pre-filter dropping tags before a write it doesn't want to fail outright on) can ask the same
+ * question `assertCanWriteDataLakeTags` answers internally, instead of re-deriving its own,
+ * potentially drifted, notion of "unmanageable."
+ */
+export const isStaticRegistryDatalakeTag = (tag: string): boolean =>
+  STATIC_REGISTRY_DATALAKE_TAGS.has(tag.toLowerCase());
+
+/**
  * Gate the file-tag write paths (Send-to-Data-Lake, direct create/update, tag toggle): given the
  * `datalake:*` meta-tags a caller is applying to a file, assert they may write into EVERY
  * referenced lake. Non-meta tags are ignored. A meta-tag naming a STATIC REGISTRY lake is

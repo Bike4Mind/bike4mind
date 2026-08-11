@@ -294,6 +294,14 @@ export const handler = withEventContext(async (event, logger) => {
         );
         const unmanageableMetaTags: string[] = [];
         for (const tag of sessionMetaTagNames) {
+          // Mirror assertCanWriteDataLakeTags' own static-registry arm rather than re-deriving it:
+          // a static-registry lake (e.g. datalake:opti-knowledge) has no DB document at all, so
+          // findByDatalakeTag always returns null for it - treating that as "unmanageable" would
+          // drop the tag even for an admin the real gate would have let keep it.
+          if (dataLakeService.isStaticRegistryDatalakeTag(tag)) {
+            if (!user?.isAdmin) unmanageableMetaTags.push(tag);
+            continue;
+          }
           const lake = await dataLakeRepository.findByDatalakeTag(tag);
           if (!lake || !dataLakeService.canManageLake(lake, { userId: session.userId, isAdmin: !!user?.isAdmin })) {
             unmanageableMetaTags.push(tag);

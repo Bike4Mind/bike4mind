@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
   ),
   findByDatalakeTag: vi.fn(async () => null as { createdByUserId: string } | null),
   canManageLake: vi.fn(() => false),
+  userFindById: vi.fn(async (id: string) => ({ id, isAdmin: false })),
   session: {} as Record<string, unknown>,
 }));
 
@@ -39,7 +40,7 @@ vi.mock('@server/utils/eventBus', () => ({
 
 vi.mock('@bike4mind/database', () => ({
   Session: { findById: vi.fn(async () => h.session) },
-  User: { findById: vi.fn(async (id: string) => ({ id, isAdmin: false })) },
+  User: { findById: h.userFindById },
   Quest: {
     find: vi.fn(() => ({
       sort: () => ({ limit: async () => [{ _id: 'q1', prompt: 'hello', reply: 'world' }] }),
@@ -72,6 +73,9 @@ vi.mock('@bike4mind/services', () => ({
     // Real (not faked): a fixed test-only prefix, mirroring the shape of DATA_LAKES' opti: entry.
     extractStaticRegistryPrefixedTags: (names: unknown[]) =>
       names.filter((n): n is string => typeof n === 'string' && n.startsWith('opti:')),
+    // Real (not faked): a fixed test-only static-registry datalakeTag, mirroring
+    // DATA_LAKES' opti-knowledge entry (datalake:opti-knowledge, no owning DB document).
+    isStaticRegistryDatalakeTag: (tag: string) => tag.toLowerCase() === 'datalake:opti-knowledge',
   },
 }));
 
@@ -313,6 +317,39 @@ describe('sessionSummarization summary-file lookup', () => {
       const [, data] = h.createFabFile.mock.calls[0] as [string, { tags: { name: string }[] }];
       expect(data.tags.map(t => t.name)).toEqual(['plain']);
       expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('opti:legacy'));
+    });
+  });
+
+  // A static-registry lake's meta-tag (datalake:opti-knowledge) has no owning DB document, so
+  // findByDatalakeTag returns null for it - naively treating that as "unmanageable" would drop
+  // the tag even for an admin the real createFabFile gate would let keep it (bot review finding).
+  describe('a static-registry datalake: meta-tag on a brand-new summary', () => {
+    beforeEach(() => {
+      h.session = {
+        id: SESSION_ID,
+        _id: SESSION_ID,
+        userId: OWNER,
+        name: 'Notebook',
+        tags: [{ name: 'datalake:opti-knowledge' }, { name: 'plain' }],
+      };
+    });
+
+    it('drops it for a non-admin with no DB lookup', async () => {
+      await run();
+
+      const [, data] = h.createFabFile.mock.calls[0] as [string, { tags: { name: string }[] }];
+      expect(data.tags.map(t => t.name)).toEqual(['plain']);
+      expect(h.findByDatalakeTag).not.toHaveBeenCalled();
+    });
+
+    it('keeps it for an admin, matching what createFabFile would actually allow', async () => {
+      h.userFindById.mockResolvedValueOnce({ id: OWNER, isAdmin: true });
+
+      await run();
+
+      const [, data] = h.createFabFile.mock.calls[0] as [string, { tags: { name: string }[] }];
+      expect(data.tags.map(t => t.name)).toEqual(['datalake:opti-knowledge', 'plain']);
+      expect(logger.warn).not.toHaveBeenCalled();
     });
   });
 });
