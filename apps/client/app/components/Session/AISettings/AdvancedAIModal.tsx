@@ -1,9 +1,11 @@
 import React, { ChangeEvent, startTransition, useCallback, useEffect, useMemo, useState } from 'react';
+import dayjs from 'dayjs';
 import {
   Box,
   Modal,
   ModalDialog,
   Sheet,
+  Button,
   IconButton,
   Tabs,
   TabList,
@@ -18,7 +20,6 @@ import {
   Tooltip,
   Select,
   Option,
-  Switch,
   Divider,
 } from '@mui/joy';
 import {
@@ -39,6 +40,8 @@ import {
   NO_TEMPERATURE_MODELS,
   IMAGE_SIZE_CONSTRAINTS,
   isBflImageModel,
+  supportsPromptUpsampling,
+  ModelBackend,
   ModelInfo,
   ModelName,
   ChatModelName,
@@ -62,7 +65,19 @@ import ToolsSection from './ToolsSection';
 import { AudioGenerationSettings } from './AudioGenerationSettings';
 import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 
-import ModelSelection from '../ModelSelection';
+import ModelSelection, { getModelBackend } from '../ModelSelection';
+import {
+  BEDROCK_BADGE_BG,
+  CapabilityIndicators,
+  CornerBadge,
+  MetricIndicators,
+  ModelSpeed,
+  NEW_BADGE_BG,
+  SelectedCheckIcon,
+  SpecPill,
+  formatContextWindow,
+  formatNumber,
+} from './modelIndicators';
 import MetadataChip from './MetaDataChips';
 import {
   buildModelSelectionPatch,
@@ -73,9 +88,7 @@ import {
   getModelSpeedTooltip,
   getModelSpeedVariant,
   getPriceTierTooltip,
-  getTopUsedModelsFromStats,
   isNewModel,
-  isOpenAIModel,
 } from '@client/app/utils/aiSettingsUtils';
 import { useModelStats } from '@client/app/hooks/data/useModelStats';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
@@ -83,34 +96,57 @@ import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { api } from '@client/app/contexts/ApiContext';
 import { MobileTopBar } from '@client/app/components/MobileTopBar';
-import { brand, grayAlpha, green, orange } from '@client/app/utils/themes/colors';
+import { brand, grayAlpha, green, greenAlpha } from '@client/app/utils/themes/colors';
 
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import { ContextHelpButton, FieldTooltip, FIELD_TOOLTIPS } from '@client/app/components/help';
 import { useAdvancedAISettings } from './useAdvancedAISettingsStore';
 import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
+import { TabIntro } from './TabIntro';
 import { isImageModel } from '@client/app/utils/commands';
 import { updateSessionToServer } from '@client/app/utils/sessionsAPICalls';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { ImageTemplatePanel } from '../ImageTemplates/ImageTemplatePanel';
 
+/**
+ * Width shared by every settings control, so the column lines up on both edges. Narrower controls
+ * (the Prompt Upsampling toggle) are right-aligned inside a box of this width rather than resized.
+ */
+const SETTINGS_CONTROL_WIDTH = '120px';
+
 const commonInputStyles = (_mode: string) => ({
-  width: '120px',
+  width: SETTINGS_CONTROL_WIDTH,
   height: '36px',
+  // Out of flow deliberately: in flow the spinner reserves ~15px at the right, so `textAlign:
+  // center` centres the value across the remaining width and it lands left of the real centre.
+  // Matches the Select indicator, which is pulled out of flow for the same reason.
   '& input[type=number]::-webkit-inner-spin-button, & input[type=number]::-webkit-outer-spin-button': {
     opacity: 1,
-    marginRight: '-1px',
+    position: 'absolute',
+    right: '6px',
+    top: '50%',
+    transform: 'translateY(-50%)',
+    margin: 0,
   },
   '& input': {
     textAlign: 'center',
   },
   borderRadius: 8,
   border: `1px solid`,
-  borderColor: 'border.solid',
-  // `aiSettings.background` (not `.backgroundColor`, which doesn't exist on the palette) -
-  // surfaced by removing the `any` cast that was previously masking this.
-  backgroundColor: (theme: Theme) => theme.palette.aiSettings.background,
+  // Background and border deliberately match the sidenav search field (`Session/SearchBar.tsx`)
+  // so text entry looks the same wherever it appears. Both are palette tokens, so light and dark
+  // follow without a mode branch here.
+  borderColor: 'border.input',
+  backgroundColor: (theme: Theme) => theme.palette.searchbar.background,
   color: 'text.primary',
+  // Same hover as the Reset button in this section's header, so every control here responds
+  // identically. Kept in the shared helper rather than per control - the selects previously
+  // hovered to a neutral border while the inputs did not react at all. Excludes the disabled
+  // state, which Temperature uses on fixed-temperature models and which must not look clickable.
+  '&:not(.Mui-disabled):hover': {
+    backgroundColor: 'primary.softHoverBg',
+    borderColor: 'primary.main',
+  },
 });
 
 const commonSelectStyles = (mode: string) => ({
@@ -126,6 +162,114 @@ const commonTextTitleStyles = {
   color: 'text.primary',
   fontSize: '16px',
 };
+
+/**
+ * Shared by every Advanced Settings dropdown. Response History and Reasoning Effort each carried
+ * this inline while the image-model selects had none, so the same control rendered with a
+ * different indicator, hover and focus depending on which model was open.
+ */
+const settingsSelectSx = (mode: string) => ({
+  ...commonSelectStyles(mode),
+  '& .MuiSelect-indicator': {
+    color: 'var(--joy-palette-text-tertiary)',
+    transition: '0.2s',
+    // Joy sizes the glyph from --Icon-fontSize (fontSize.xl, 20px, for a md Select), so the box
+    // has to shrink with it or the icon overflows. Inset matches the number inputs' spinner.
+    '--Icon-fontSize': '16px',
+    width: '16px',
+    height: '16px',
+    // Joy renders this in flow after the button, and the button is `flex: 1` - so it shrinks by the
+    // chevron's ~25px footprint and a centred value sits ~12px left of the control's real centre,
+    // visibly out of line with the number inputs. Absolute takes it out of the button's width
+    // calculation; `pointerEvents: none` keeps clicks on the chevron opening the listbox.
+    position: 'absolute',
+    right: '6px',
+    top: '50%',
+    transform: 'translateY(-50%)',
+    margin: 0,
+    pointerEvents: 'none',
+  },
+  '&[aria-expanded="true"] .MuiSelect-indicator': {
+    transform: 'rotate(180deg)',
+  },
+  // Hover comes from commonInputStyles; a `&:hover` here would replace it wholesale rather than
+  // merge, which is how the selects ended up with a different hover to the inputs.
+  '&.Mui-focused': {
+    borderColor: 'var(--joy-palette-primary-500)',
+    boxShadow: '0 0 0 3px var(--joy-palette-primary-200)',
+  },
+});
+
+const SETTINGS_SELECT_SLOT_PROPS = {
+  button: {
+    sx: {
+      whiteSpace: 'nowrap',
+      justifyContent: 'center',
+    },
+  },
+  listbox: {
+    sx: {
+      '& .MuiOption-root': {
+        justifyContent: 'center',
+        fontSize: '0.875rem',
+      },
+    },
+  },
+} as const;
+
+/**
+ * Fits the longest label ("Prompt Upsampling") plus its tooltip icon. A fixed column is what makes
+ * labels and controls each line up down the whole list; the alternative, pushing the pair to
+ * opposite edges of the row, leaves ~600px of dead space in this 820px dialog and the eye loses
+ * which control belongs to which label.
+ */
+const SETTINGS_LABEL_WIDTH = '164px';
+
+/** Vertical rhythm between rows, and between the text and image-model groups. */
+const SETTINGS_ROW_GAP = '24px';
+
+/**
+ * Height of the model details screen's sticky header (16px padding, a 32px control, 16px padding).
+ * Fixed rather than content-driven for two reasons: it stops the bar changing height when "Use this
+ * model" is replaced by the shorter "Current model" label, and it gives the scrollbar track a margin
+ * to sit below - the header is inside the scroll container, so without it the bar runs up alongside
+ * the header instead of starting under it the way the model list's starts under the tabs.
+ */
+const MODEL_DETAILS_HEADER_HEIGHT = '64px';
+
+/**
+ * One Advanced Settings row: label (plus optional help icon) in the fixed column, control after it.
+ * Controls size themselves via `commonInputStyles` / `settingsSelectSx`, which share a width, so
+ * the control column lines up without this needing to constrain its children.
+ */
+const SettingsRow: React.FC<{
+  label: string;
+  tooltip?: string;
+  children: React.ReactNode;
+}> = ({ label, tooltip, children }) => (
+  <Box sx={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+    <Box
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+        // No room for a fixed column on mobile, so the pair splits the row evenly instead.
+        width: { xs: 'auto', sm: SETTINGS_LABEL_WIDTH },
+        flex: { xs: '1 1 0%', sm: '0 0 auto' },
+      }}
+    >
+      <Typography level="body-sm">{label}</Typography>
+      {tooltip && (
+        <FieldTooltip
+          ariaLabel={`Help: ${label}`}
+          content={tooltip}
+          data-testid={`field-tooltip-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
+        />
+      )}
+    </Box>
+    {children}
+  </Box>
+);
 
 interface ImageSettingOption {
   value: string;
@@ -165,6 +309,20 @@ const getModelConstraintKey = (model: string) => {
   return 'GPT_IMAGE_1';
 };
 
+/**
+ * Every value the BFL safety cap actually allows. Derived from the constant rather than hardcoded so
+ * the list cannot outlive a change to `MAX` - which is exactly how the old slider ended up offering
+ * marks at 4 and 6 after the cap dropped to 2.
+ */
+const SAFETY_TOLERANCE_LABELS = ['Strict', 'Moderate', 'Relaxed'];
+const SAFETY_TOLERANCE_OPTIONS = Array.from(
+  { length: BFL_SAFETY_TOLERANCE.MAX - BFL_SAFETY_TOLERANCE.MIN + 1 },
+  (_, i) => {
+    const value = BFL_SAFETY_TOLERANCE.MIN + i;
+    return { value, label: SAFETY_TOLERANCE_LABELS[i] ?? String(value) };
+  }
+);
+
 const BASE_REASONING_EFFORT_OPTIONS: { value: UserReasoningEffort; label: string }[] = [
   { value: 'auto', label: 'Auto' },
   { value: 'low', label: 'Low (Fast)' },
@@ -178,9 +336,8 @@ const GPT5_2_MODEL_IDS: ReadonlySet<string> = new Set([ChatModels.GPT5_2, ChatMo
 
 const ReasoningEffortSelector: React.FC<{
   model: ModelName;
-  commonInputStyles: typeof commonInputStyles;
   mode: 'dark' | 'light';
-}> = ({ model, commonInputStyles, mode }) => {
+}> = ({ model, mode }) => {
   const isGPT52 = GPT5_2_MODEL_IDS.has(model);
   const options = isGPT52
     ? [...BASE_REASONING_EFFORT_OPTIONS.map(o => (o.value === 'high' ? { ...o, label: 'High' } : o)), XHIGH_OPTION]
@@ -211,84 +368,32 @@ const ReasoningEffortSelector: React.FC<{
   };
 
   return (
-    <Grid xs={12} md={6}>
-      <Box
-        sx={{
-          display: 'flex',
-          justifyContent: { xs: 'flex-start', sm: 'flex-end' },
-          alignItems: 'center',
-          gap: '20px',
-        }}
+    <SettingsRow label="Reasoning Effort" tooltip={FIELD_TOOLTIPS.reasoningEffort}>
+      <Select
+        value={currentValue}
+        onChange={handleChange}
+        indicator={<KeyboardArrowDownIcon />}
+        sx={settingsSelectSx(mode || 'light')}
+        slotProps={SETTINGS_SELECT_SLOT_PROPS}
       >
-        <Tooltip title="Controls how much reasoning the model does. Lower = faster, Higher = more thorough">
-          <Typography level="body-sm" sx={{ flex: { xs: '1 1 0%', sm: '0 0 auto' } }}>
-            Reasoning Effort
-          </Typography>
-        </Tooltip>
-        <Select
-          value={currentValue}
-          onChange={handleChange}
-          indicator={<KeyboardArrowDownIcon />}
-          sx={{
-            ...commonInputStyles(mode || 'light'),
-            minWidth: { xs: 'auto', sm: '6rem' },
-            height: 32,
-            p: 1,
-            flex: { xs: '1 1 0%', sm: '0 0 auto' },
-            '& .MuiSelect-button': {
-              textAlign: 'center',
-              paddingBlock: '4px',
-              fontSize: '0.875rem',
-            },
-            '& .MuiSelect-indicator': {
-              color: 'var(--joy-palette-text-tertiary)',
-              transition: '0.2s',
-              width: '20px',
-              height: '20px',
-            },
-            '& .MuiSelect-endDecorator': {
-              marginRight: '4px',
-            },
-            '&[aria-expanded="true"] .MuiSelect-indicator': {
-              transform: 'rotate(180deg)',
-            },
-            '&:hover': {
-              borderColor: 'var(--joy-palette-neutral-400)',
-            },
-            '&.Mui-focused': {
-              borderColor: 'var(--joy-palette-primary-500)',
-              boxShadow: '0 0 0 3px var(--joy-palette-primary-200)',
-            },
-          }}
-          slotProps={{
-            button: {
-              sx: {
-                whiteSpace: 'nowrap',
-                justifyContent: 'center',
-              },
-            },
-            listbox: {
-              sx: {
-                '& .MuiOption-root': {
-                  justifyContent: 'center',
-                  fontSize: '0.875rem',
-                },
-              },
-            },
-          }}
-        >
-          {options.map(opt => (
-            <Option key={opt.value} value={opt.value}>
-              {opt.label}
-            </Option>
-          ))}
-        </Select>
-      </Box>
-    </Grid>
+        {options.map(opt => (
+          <Option key={opt.value} value={opt.value}>
+            {opt.label}
+          </Option>
+        ))}
+      </Select>
+    </SettingsRow>
   );
 };
 
 interface SelectedModelDetailsProps {
+  /**
+   * The screen is showing a model that is not the active one. Every field below is a shared
+   * setting, so editing one would reconfigure the running model rather than this one - the
+   * controls stay visible so you can see what the model offers, but they are inert until
+   * "Use this model" makes it yours.
+   */
+  readOnly?: boolean;
   modelInfo: ModelInfo | null;
   model: ModelName;
   setLLM: (updates: Partial<LLMContextProps>) => void;
@@ -301,11 +406,8 @@ interface SelectedModelDetailsProps {
   maxTokens: number;
   maxContextWindow: number;
   getPriceTierTooltip: (tier: string) => string;
-  isOpenAIModel: (modelName: string) => boolean;
-  isNewModel: (modelInfo: ModelInfo) => boolean;
-  isPopular: boolean;
   metricsLoading: boolean;
-  modelSpeed: string | null;
+  modelSpeed: ModelSpeed | null;
   getModelSpeedVariant: (speed: 'fast' | 'medium' | 'slow') => ChipVariant;
   getModelSpeedTooltip: (speed: 'fast' | 'medium' | 'slow') => string;
   INFINITE_VALUE: number;
@@ -330,7 +432,6 @@ interface SelectedModelDetailsProps {
   safety_tolerance: number;
   commonTextTitleStyles: typeof commonTextTitleStyles;
   commonInputStyles: typeof commonInputStyles;
-  commonSelectStyles: typeof commonSelectStyles;
   mode: 'dark' | 'light';
 }
 
@@ -355,7 +456,6 @@ const ResetButton: React.FC<{
   BFL_SAFETY_TOLERANCE: { DEFAULT: number; MIN: number; MAX: number };
   INFINITE_VALUE: number;
   ImageModels: typeof ImageModels;
-  tooltip?: string;
   width?: string;
   height?: string;
   top?: string;
@@ -370,7 +470,6 @@ const ResetButton: React.FC<{
   BFL_SAFETY_TOLERANCE,
   INFINITE_VALUE,
   ImageModels,
-  tooltip = 'Reset all settings to defaults',
   height = '32px',
 }) => {
   const handleReset = () => {
@@ -398,12 +497,27 @@ const ResetButton: React.FC<{
       height: undefined,
       aspect_ratio: undefined,
       output_format: isImageModel(model) ? 'jpeg' : undefined,
-      prompt_upsampling: isBflImageModel(model) ? false : undefined,
+      prompt_upsampling: supportsPromptUpsampling(model) ? false : undefined,
       safety_tolerance: isBflImageModel(model) ? BFL_SAFETY_TOLERANCE.DEFAULT : undefined,
     });
     setSpokenWords(200);
     setHistoryLines(INFINITE_VALUE);
   };
+
+  // Names what handleReset above actually clears. The previous copy listed only temperature, tokens,
+  // spoken words and response history, so it understated the scope badly on image models: the reset
+  // also wipes size, quality, style, width, height, aspect ratio, output format, prompt upsampling,
+  // safety tolerance and - the one value nobody can reconstruct from memory - the seed.
+  // Reasoning effort is called out because it is a user-level preference stored server-side, so this
+  // button genuinely cannot reset it despite being labelled "Reset advanced settings".
+  const resetScope = isImageModel(model)
+    ? 'temperature and every image setting, including the seed'
+    : 'temperature, output tokens, response history and spoken words';
+  const resetExclusions = REASONING_SUPPORTED_MODELS.has(model)
+    ? 'Tools and reasoning effort are not affected.'
+    : 'Tools are not affected.';
+  const tooltip = `Resets ${resetScope} to this model's defaults. ${resetExclusions}`;
+
   return (
     <Tooltip title={tooltip}>
       <IconButton
@@ -412,9 +526,6 @@ const ResetButton: React.FC<{
         onClick={handleReset}
         sx={{
           p: 1,
-          position: { xs: 'absolute', sm: 'relative' },
-          top: { xs: 12, sm: 'auto' },
-          right: { xs: 16, sm: 'auto' },
           borderRadius: '6px',
           width: 'auto',
           height: `${height} !important`,
@@ -450,9 +561,69 @@ const ResetButton: React.FC<{
   );
 };
 
+// Catalog cutoffs are ISO dates whose day is always 01, i.e. month precision - so rendering
+// the raw "2024-04-01" implies a day the data does not have.
+const formatTrainingCutoff = (cutoff: string): string => {
+  const parsed = dayjs(cutoff);
+  return parsed.isValid() ? parsed.format('MMM YYYY') : cutoff;
+};
+
+// Larger than the model list's 24px: this screen has the room, and they are the only
+// indicators on it rather than competing with a card's own controls.
+const INDICATOR_SIZE = 32;
+
+// Space thousands separators, matching the Context total these two numbers split.
+const formatTokenCount = (tokens: number): string => tokens.toLocaleString().replace(/,/g, ' ');
+
+/**
+ * Floor for the output-token slider. Replaces `max(1024, min(2048, ctx / 4))`, whose other two
+ * branches were dead for any window of 8192 or more - i.e. every current model - so the floor was
+ * 2048 by accident rather than by intent. Now the slider is the only control here, so it says so.
+ */
+const MIN_OUTPUT_TOKENS = 2048;
+
+/**
+ * Checked-state frame for the Advanced Settings checkboxes, matching the composer's Agent-mode
+ * button: green border at 75% over a 10% green fill instead of Joy's solid green.
+ *
+ * Requires the checkbox to be pinned to `variant="outlined"` - Joy otherwise swaps to `solid`
+ * on check, and these vars only feed the outlined variant. Set as CSS vars rather than
+ * backgroundColor/borderColor because Joy resolves the variant through them, so a plain value
+ * in sx is ignored. Keep in sync with AgentModeToggleButton.
+ */
+const AGENT_FRAME_CHECKBOX_SX = {
+  '--variant-outlinedColor': green[800],
+  '--variant-outlinedBorder': `${green[800]}BF`, // BF = 75%
+  '--variant-outlinedHoverBorder': `${green[800]}BF`,
+  '--variant-outlinedBg': greenAlpha[800][10],
+  '--variant-outlinedHoverBg': greenAlpha[800][10],
+  '--variant-outlinedActiveBg': greenAlpha[800][10],
+  // Joy sizes the tick at --Checkbox-size, i.e. the full 20px box, leaving it edge to edge with
+  // no breathing room inside the frame. The svg rule is not redundant: Joy's own icon reads the
+  // var, but Stream passes a Material CheckIcon that ignores it.
+  '--Icon-fontSize': '14px',
+  '& svg': { fontSize: 'var(--Icon-fontSize)' },
+} as const;
+
+/**
+ * Unchecked frame: the same border token the Reset button sitting beside these carries, so the
+ * whole row reads as one set of controls, and the model list/grid card hover fill.
+ *
+ * The hover border is pinned to the resting value - Joy would otherwise tint it toward the
+ * success palette on hover, which reads as a half-checked state. Active matches hover so a
+ * click does not flash a third colour on the way to checked.
+ */
+const PLAIN_FRAME_CHECKBOX_SX = {
+  '--variant-outlinedBorder': 'var(--joy-palette-border-light)',
+  '--variant-outlinedHoverBorder': 'var(--joy-palette-border-light)',
+  '--variant-outlinedHoverBg': 'var(--joy-palette-aiSettings-modelCard-hoverBackground)',
+  '--variant-outlinedActiveBg': 'var(--joy-palette-aiSettings-modelCard-hoverBackground)',
+} as const;
+
 const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   modelInfo,
   model,
+  readOnly = false,
   setLLM,
   setSpokenWords,
   setHistoryLines,
@@ -463,9 +634,6 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   maxTokens,
   maxContextWindow,
   getPriceTierTooltip,
-  isOpenAIModel,
-  isNewModel,
-  isPopular,
   metricsLoading,
   modelSpeed,
   getModelSpeedVariant,
@@ -492,10 +660,117 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   safety_tolerance,
   commonTextTitleStyles,
   commonInputStyles,
-  commonSelectStyles,
   mode,
 }) => {
   if (!modelInfo) return null;
+
+  // Provider and capability notices, rendered as one stacked block below the description.
+  const notices = [
+    // Same test the picker groups by, so the notice can never disagree with the provider
+    // section a model is filed under. A name-only check missed Sora.
+    ...(getModelBackend(modelInfo) === 'OpenAI'
+      ? ['This model shares session content with OpenAI for training purposes']
+      : []),
+    // The tools section is hidden outright for these models, so this line is the only
+    // thing that explains the absence.
+    ...(modelInfo.supportsTools ? [] : ['Selected AI model does not support tools']),
+    // Both of these used to render inside Advanced Settings with this exact styling, which put
+    // the same kind of message in two places. They are statements about the model, so they
+    // belong with the others.
+    ...(model === ImageModels.GPT_IMAGE_1
+      ? [
+          'This model has specific parameter constraints. Some settings like Style are not available, and invalid parameters will be automatically adjusted to compatible values.',
+        ]
+      : []),
+    ...(isKontextModel
+      ? [
+          'This model transforms existing images. Either upload an image to the workbench or use a recently generated image from this conversation, then describe how you want it changed.',
+        ]
+      : []),
+  ];
+
+  // Token allocation read-outs. max_tokens is the output budget, bounded by the model's own
+  // ceiling - never a share of the context window. The server reserves the whole budget out of
+  // the window when it computes maxSafeInputTokens (see aiSettingsUtils), so the remainder is
+  // what prompt + history actually get.
+  // While previewing, the stored budget belongs to the ACTIVE model and can sit outside this
+  // model's range entirely (128000 against gemini-2.5-pro's 8192 ceiling, which would also make
+  // the input remainder negative). Show the default that selecting it would apply instead - that
+  // is genuinely what you get, since buildModelSelectionPatch recomputes it on every switch.
+  const outputTokens = readOnly ? computeDefaultMaxTokens(modelInfo) : (max_tokens ?? 4096);
+  const outputCeiling = modelInfo.max_tokens ?? 16384;
+  const contextWindow = modelInfo.contextWindow ?? 0;
+  const inputTokens = Math.max(0, contextWindow - outputTokens);
+  // A slider needs a range to be worth drawing. Four Llama models in the catalog advertise exactly
+  // MIN_OUTPUT_TOKENS as their ceiling, so min and max coincide and the handle cannot move; below it
+  // the bounds would invert outright, which MUI leaves undefined. The read-out and the sentence below
+  // still state the budget, so nothing is lost by omitting the track.
+  const isOutputAdjustable = outputCeiling > MIN_OUTPUT_TOKENS;
+
+  // The session-wide switches, defined once and rendered two ways. Desktop keeps them inline beside
+  // the section title; mobile has no room for four controls on that row, so there the title keeps
+  // only Reset and these become rows at the top of the settings list, aligned with everything below.
+  const coreToggles = [
+    {
+      key: 'ai',
+      label: 'AI',
+      control: (
+        <Checkbox
+          checked={liveAI}
+          onChange={() => setLiveAI(!liveAI)}
+          disabled={voiceOver}
+          title="Use AI"
+          color="success"
+          variant="outlined"
+          sx={liveAI ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
+        />
+      ),
+    },
+    ...(!isImageModel(model)
+      ? [
+          {
+            key: 'stream',
+            label: 'Stream',
+            control: (
+              <Checkbox
+                checkedIcon={<CheckIcon sx={{ color: 'success.main' }} />}
+                checked={stream}
+                onChange={() => setStream(!stream)}
+                disabled={voiceOver}
+                title={stream ? 'Streaming responses' : 'Not streaming'}
+                color="success"
+                variant="outlined"
+                sx={stream ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
+              />
+            ),
+          },
+        ]
+      : []),
+    ...(isQuestMasterFeatureEnabled
+      ? [
+          {
+            key: 'quest-master',
+            label: 'Quest Master',
+            // Wraps the control alone. Around the whole pair it fired from the label too and centred
+            // itself across both, which read as belonging to neither. The native `title` came off the
+            // checkbox with it - it duplicated this one.
+            control: (
+              <Tooltip title="Enable Quest Master">
+                <Checkbox
+                  checked={isQuestMasterEnabled}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                    setLLM({ isQuestMasterEnabled: e.target.checked })
+                  }
+                  color="success"
+                  variant="outlined"
+                  sx={isQuestMasterEnabled ? AGENT_FRAME_CHECKBOX_SX : PLAIN_FRAME_CHECKBOX_SX}
+                />
+              </Tooltip>
+            ),
+          },
+        ]
+      : []),
+  ];
 
   return (
     <>
@@ -504,177 +779,77 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
         sx={{
           display: 'flex',
           alignItems: 'flex-start',
-          paddingBottom: 2,
           flexDirection: 'column',
         }}
       >
-        {/* Header with title and reset button */}
-        <Box
-          sx={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            width: '100%',
-            mb: { xs: 0, sm: 2 },
-          }}
-        >
-          <Typography level="h4" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
-            {modelInfo.name}
-          </Typography>
-
-          {/* Reset Button */}
-          <ResetButton
-            modelInfo={modelInfo}
-            model={model}
-            setLLM={setLLM}
-            setSpokenWords={setSpokenWords}
-            setHistoryLines={setHistoryLines}
-            isImageModel={isImageModel}
-            BFL_SAFETY_TOLERANCE={BFL_SAFETY_TOLERANCE}
-            INFINITE_VALUE={INFINITE_VALUE}
-            ImageModels={ImageModels}
-            tooltip="Reset all settings (temperature, tokens, spoken words, response history) to defaults"
-          />
-        </Box>
-
-        {/* Description and chips */}
+        {/* Chips and notices; the title, description and reset live in the dialog header */}
         <Box sx={{ width: '100%' }}>
-          {modelInfo.description && (
-            <Typography
-              level="body-xs"
-              sx={{
-                textAlign: 'left',
-                whiteSpace: 'normal',
-                color: 'text.primary50',
-                fontSize: '14px',
-                lineHeight: '1.4',
-                mb: 2,
-              }}
-            >
-              {modelInfo.description}
-            </Typography>
-          )}
-
-          {isOpenAIModel(modelInfo.name) && (
-            <Typography
-              level="body-xs"
-              sx={{
-                color: brand[800],
-                fontSize: '14px',
-                fontWeight: '500',
-                mt: 1,
-                mb: 2,
-              }}
-            >
-              This model shares session content with OpenAI for training purposes
-            </Typography>
-          )}
-
-          {/* Metadata Chips */}
-          <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mt: 1 }}>
-            {/* Latest Model Chip */}
-            {isNewModel(modelInfo) && (
-              <MetadataChip
-                label="New"
-                mode={mode}
-                variant="purple"
-                tooltip="This model is released in the last 3 months"
-              />
-            )}
-
-            {/* Popular Model Chip - based on usage data */}
-            {!metricsLoading && isPopular && (
-              <MetadataChip
-                label="Popular"
-                mode={mode}
-                variant="blue-filled"
-                tooltip="This is one of the most used models"
-              />
-            )}
-
-            {/* Price Tier */}
-            <MetadataChip
-              label={priceTierInfo.tier}
-              startDecorator={
-                <Box
+          {notices.length > 0 && (
+            <Stack direction="column" gap="4px" sx={{ mt: '16px' }}>
+              {notices.map(notice => (
+                <Typography
+                  key={notice}
+                  level="body-xs"
                   sx={{
-                    width: 12,
-                    height: 12,
-                    borderRadius: '50%',
-                    backgroundColor:
-                      priceTierInfo.variant === 'green'
-                        ? green[800]
-                        : priceTierInfo.variant === 'yellow'
-                          ? orange[450]
-                          : 'red',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '10px',
-                    fontWeight: 'bold',
-                    color: 'common.white',
-                    mr: '4px',
-                    p: 0.5,
+                    color: brand[800],
+                    fontSize: '14px',
+                    fontWeight: '500',
                   }}
                 >
-                  $
-                </Box>
-              }
-              tooltip={getPriceTierTooltip(priceTierInfo.tier)}
-              variant={priceTierInfo.variant}
-              isMaximum={false}
-              mode={mode}
-            />
+                  {notice}
+                </Typography>
+              ))}
+            </Stack>
+          )}
 
-            {/* Speed Chip - based on performance data */}
-            {!metricsLoading &&
-              modelSpeed &&
-              (modelSpeed === 'fast' || modelSpeed === 'medium' || modelSpeed === 'slow') && (
-                <MetadataChip
-                  label={modelSpeed.charAt(0).toUpperCase() + modelSpeed.slice(1)}
-                  mode={mode}
-                  variant={getModelSpeedVariant(modelSpeed)}
-                  tooltip={getModelSpeedTooltip(modelSpeed)}
-                />
-              )}
-
-            <MetadataChip
-              label={`${modelInfo.max_tokens} max`}
-              mode={mode}
-              tooltip="Maximum Output Tokens"
-              variant={modelInfo.max_tokens === maxTokens ? 'green' : 'default'}
-              isMaximum={modelInfo.max_tokens === maxTokens}
-            />
-
-            <MetadataChip
-              label={`${
-                modelInfo.contextWindow >= 1000000
-                  ? `${(modelInfo.contextWindow / 1000000).toFixed(1)}M`
-                  : modelInfo.contextWindow >= 1000
-                    ? `${Math.round(modelInfo.contextWindow / 1000)}K`
-                    : modelInfo.contextWindow
-              } ctx`}
-              mode={mode}
-              tooltip="Context Window Size"
-              variant={modelInfo.contextWindow === maxContextWindow ? 'green' : 'default'}
-              isMaximum={modelInfo.contextWindow === maxContextWindow}
-            />
-
+          {/* Specs then capabilities in one run. The editable Input/Output controls live in the
+              token allocation section below, so the numbers here state the model's own limits.
+              Indicators are the same components as the model list, so the glyphs carry over. */}
+          <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" alignItems="center" sx={{ mt: 2 }}>
             {modelInfo.trainingCutoff && (
-              <MetadataChip
-                label={modelInfo.trainingCutoff}
-                mode={mode}
-                tooltip="Model Knowledge Cut-off"
-                variant="default"
+              <SpecPill
+                label="Cutoff"
+                value={formatTrainingCutoff(modelInfo.trainingCutoff)}
+                tooltip="Model knowledge cutoff - the model has no awareness of events after this date"
+                size={INDICATOR_SIZE}
+                filled
               />
             )}
+            {/* Abbreviated to match the cards; the tooltips carry the exact figures, which the
+                abbreviation cannot always represent (most values are powers of two). */}
+            <SpecPill
+              label="ctx"
+              value={formatContextWindow(modelInfo.contextWindow)}
+              tooltip={`${formatNumber(modelInfo.contextWindow)} token context window`}
+              size={INDICATOR_SIZE}
+              filled
+            />
+            <SpecPill
+              label="max"
+              value={formatContextWindow(modelInfo.max_tokens)}
+              tooltip={`${formatNumber(modelInfo.max_tokens)} maximum output tokens`}
+              size={INDICATOR_SIZE}
+              filled
+            />
 
-            {modelInfo.supportsVision && (
-              <MetadataChip label="Vision" mode={mode} tooltip="Able to understand images" variant="blue" />
-            )}
-
-            {modelInfo.supportsTools && (
-              <MetadataChip label="Tools" mode={mode} tooltip="Able to use a growing list of tools" variant="blue" />
+            {modelInfo.disabled ? (
+              <MetadataChip
+                label="Unavailable"
+                mode={mode}
+                variant="red"
+                tooltip={modelInfo.disabledReason ?? 'This model is currently unavailable'}
+              />
+            ) : (
+              <>
+                <MetricIndicators
+                  priceTier={priceTierInfo}
+                  modelSpeed={modelSpeed}
+                  statsLoading={metricsLoading}
+                  size={INDICATOR_SIZE}
+                  filled
+                />
+                <CapabilityIndicators model={modelInfo} size={INDICATOR_SIZE} filled />
+              </>
             )}
           </Stack>
         </Box>
@@ -687,316 +862,269 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
           px: 4,
           height: '1px',
           mx: 'auto',
-          mb: 2,
+          my: '28px',
         }}
       />
 
-      {/* Tool Components */}
-      <ToolsSection
-        tools={tools}
-        setTools={newTools => setLLM({ tools: newTools })}
-        model={model}
-        onRollDice={onRollDice}
-        columns={isMobile ? 1 : 2}
-      />
-      <Divider
-        sx={{
-          backgroundColor: grayAlpha[150][20],
-          width: '100%',
-          height: '1px',
-          mx: 'auto',
-          my: 4,
-        }}
-      />
-
-      {/* Token Allocation Section with Context Window Info - Full Width */}
-      <Box sx={{ p: 0 }}>
-        <Box
-          sx={{ display: isMobile ? 'block' : 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '20px' }}
-        >
-          {/* Context */}
-          <Box sx={{ display: 'flex', mb: { xs: 2, sm: 0 }, alignItems: 'center', gap: '3px', flexShrink: 0 }}>
-            <Typography level="body-sm" sx={commonTextTitleStyles}>
-              Context -{' '}
-            </Typography>
-            <Typography
-              level="body-sm"
-              sx={{ fontWeight: 'bold', color: brand[800], fontSize: '16px', whiteSpace: 'nowrap' }}
-            >
-              {(modelInfo?.contextWindow ?? 0).toLocaleString().replace(/,/g, ' ')}
-            </Typography>
+      {/* Tool Components. Hidden for models that cannot run tools - the notice above the specs
+          carries that message here, so ToolsSection's own centered placeholder would duplicate
+          it. The placeholder stays in place for the composer's tools dropdown, which has no
+          other surface to say it on. */}
+      {modelInfo.supportsTools && (
+        <>
+          {/* inert rather than a `disabled` prop on each of the ~28 rows: it removes the whole
+              subtree from pointer AND keyboard interaction in one place, and ToolsSection is shared
+              with the composer dropdown, which must keep working normally. */}
+          <Box inert={readOnly || undefined}>
+            <ToolsSection
+              tools={tools}
+              setTools={newTools => setLLM({ tools: newTools })}
+              model={model}
+              onRollDice={onRollDice}
+              columns={isMobile ? 1 : 2}
+              readOnly={readOnly}
+            />
           </Box>
-
-          {/* Input */}
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '20px' }}>
-            <Box
-              sx={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 1,
-                justifyContent: { xs: 'flex-start', sm: 'flex-end' },
-              }}
-            >
-              <Typography level="body-sm">Input</Typography>
-              <FieldTooltip
-                ariaLabel="Help: Input tokens"
-                content={FIELD_TOOLTIPS.maxTokensInput}
-                data-testid="field-tooltip-input-tokens"
-              />
-              <Input
-                size="sm"
-                variant="outlined"
-                value={((modelInfo?.contextWindow ?? 0) - (max_tokens ?? 4096)).toLocaleString().replace(/,/g, ' ')}
-                sx={{
-                  ...commonInputStyles(mode || 'light'),
-                  fontSize: { xs: '12px', sm: '14px' },
-                  width: { xs: '80px', sm: 'auto' },
-                }}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                  const rawValue = e.target.value.replace(/\s/g, '');
-                  const inputTokens = parseInt(rawValue, 10);
-                  if (!isNaN(inputTokens) && inputTokens >= 0) {
-                    const contextWindow = modelInfo?.contextWindow ?? 0;
-                    const newMaxTokens = Math.max(
-                      4096,
-                      Math.min(contextWindow - inputTokens, modelInfo?.max_tokens ?? 16384)
-                    );
-                    setLLM({ max_tokens: newMaxTokens });
-                  }
-                }}
-              />
-            </Box>
-
-            {/* Output */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Typography level="body-sm">Output</Typography>
-              <FieldTooltip
-                ariaLabel="Help: Output tokens"
-                content={FIELD_TOOLTIPS.maxTokensOutput}
-                data-testid="field-tooltip-output-tokens"
-              />
-              <Input
-                size="sm"
-                variant="outlined"
-                value={(max_tokens ?? 4096).toLocaleString().replace(/,/g, ' ')}
-                sx={{
-                  ...commonInputStyles(mode || 'light'),
-                  fontSize: { xs: '12px', sm: '14px' },
-                  width: { xs: '80px', sm: 'auto' },
-                }}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                  const rawValue = e.target.value.replace(/\s/g, '');
-                  const outputTokens = parseInt(rawValue, 10);
-                  if (
-                    !isNaN(outputTokens) &&
-                    outputTokens >= 4096 &&
-                    outputTokens <= (modelInfo?.max_tokens ?? 16384)
-                  ) {
-                    setLLM({ max_tokens: outputTokens });
-                  }
-                }}
-              />
-            </Box>
-          </Box>
-        </Box>
-        <Box sx={{ position: 'relative', width: '100%', marginBottom: '-20px' }}>
-          <Slider
-            aria-label="Token Allocation"
-            value={max_tokens ?? Math.min(4096, Math.floor((modelInfo?.contextWindow ?? 8192) / 2))}
-            min={Math.max(1024, Math.min(2048, Math.floor((modelInfo?.contextWindow ?? 8192) / 4)))}
-            max={modelInfo?.max_tokens ?? 16384}
-            step={256}
-            onChange={(_, newValue) => {
-              if (typeof newValue === 'number') {
-                setLLM({ max_tokens: newValue });
-              }
-            }}
-            disableSwap
-            valueLabelDisplay="auto"
-            valueLabelFormat={value => `${value.toLocaleString().replace(/,/g, ' ')}`}
+          <Divider
             sx={{
-              '--Slider-trackSize': '8px',
-              '--Slider-thumbSize': '16px',
-              '--Slider-thumbWidth': '16px',
-              '--Slider-valueLabelArrowSize': '10px',
+              backgroundColor: grayAlpha[150][20],
               width: '100%',
-              '& .MuiSlider-mark': {
-                display: 'none',
-              },
-              '& .MuiSlider-markLabel': {
-                display: 'none',
-              },
-              '& .MuiSlider-track': {
-                backgroundColor: 'primary.main',
-              },
-              '& .MuiSlider-thumb': {
-                backgroundColor: 'primary.main',
-              },
+              height: '1px',
+              mx: 'auto',
+              my: '28px',
             }}
           />
-        </Box>
-      </Box>
+        </>
+      )}
 
-      <Divider
-        sx={{
-          backgroundColor: grayAlpha[150][20],
-          width: '100%',
-          height: '1px',
-          mx: 'auto',
-          my: 4,
-        }}
-      />
-
-      {/* Advanced Settings */}
-      <Box sx={{ p: 0 }}>
-        <Grid
-          container
-          spacing={1}
-          sx={{
-            flexGrow: 1,
-            display: 'flex',
-            flexDirection: 'row',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            mb: 2,
-          }}
-        >
-          <Typography level="body-sm" sx={commonTextTitleStyles}>
-            Advanced Settings
-          </Typography>
-          {/* Core Tools */}
+      {/* Same inert + dimmed treatment the tools block above gets, so the whole read-only state
+          reads as one thing. Replaces per-control `disabled`, which greyed these with Joy's own
+          disabled palette and so never matched the tools rows beside them. */}
+      <Box inert={readOnly || undefined}>
+        {/* Advanced Settings */}
+        <Box sx={{ p: 0 }}>
+          {/* Plain flex row, not a Grid container: `spacing` puts negative margins on the
+            container and compensating padding on Grid *items*, and these children are not items -
+            so the title and Reset hung outside the dialog's content box on both edges. */}
           <Box
             sx={{
               display: 'flex',
-              flexWrap: 'wrap',
-              gap: 1,
-              mb: 0,
+              flexDirection: 'row',
+              justifyContent: 'space-between',
               alignItems: 'center',
-              fontSize: '14px',
+              gap: 1,
+              mb: '32px',
+              opacity: readOnly ? 0.6 : 1,
             }}
           >
-            {/* AI Toggle */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
-              <Checkbox
-                checked={liveAI}
-                onChange={() => setLiveAI(!liveAI)}
-                disabled={voiceOver}
-                title="Use AI"
-                color="success"
-              />
-              <Typography level="body-sm" sx={{ flexGrow: 0 }}>
-                AI
-              </Typography>
-            </Box>
-
-            {/* Stream Toggle */}
-            {!isImageModel(model) && (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
-                <Checkbox
-                  checkedIcon={<CheckIcon sx={{ color: 'success.main' }} />}
-                  checked={stream}
-                  onChange={() => setStream(!stream)}
-                  disabled={voiceOver}
-                  title={stream ? 'Streaming responses' : 'Not streaming'}
-                  color="success"
-                />
-                <Typography level="body-sm" sx={{ flexGrow: 0 }}>
-                  Stream
-                </Typography>
-              </Box>
-            )}
-
-            {/* Quest Master Toggle */}
-            {isQuestMasterFeatureEnabled && (
-              <Tooltip title="Enable Quest Master">
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
-                  <Checkbox
-                    checked={isQuestMasterEnabled}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                      setLLM({ isQuestMasterEnabled: e.target.checked })
-                    }
-                    title="Enable Quest Master"
-                    color="success"
-                  />
-                  <Typography level="body-sm" sx={{ flexGrow: 0 }}>
-                    Quest Master
-                  </Typography>
-                </Box>
-              </Tooltip>
-            )}
-          </Box>
-        </Grid>
-
-        {/* GPT-Image-1 Model Info */}
-        {model === ImageModels.GPT_IMAGE_1 && (
-          <Typography
-            level="body-xs"
-            sx={{
-              color: brand[800],
-              fontSize: '14px',
-              fontWeight: '500',
-              mt: 2,
-              mb: 2,
-            }}
-          >
-            This model has specific parameter constraints. Some settings like Style are not available, and invalid
-            parameters will be automatically adjusted to compatible values.
-          </Typography>
-        )}
-
-        {/* Kontext Model Info */}
-        {isKontextModel && (
-          <Typography
-            level="body-xs"
-            sx={{
-              color: brand[800],
-              fontSize: '14px',
-              fontWeight: '500',
-              mt: 2,
-              mb: 2,
-            }}
-          >
-            This model transforms existing images. Either upload an image to the workbench or use a recently generated
-            image from this conversation, then describe how you want it changed.
-          </Typography>
-        )}
-
-        {/* Temperature and Randomness Settings */}
-        <Grid container spacing={2} sx={{ fontSize: '14px' }}>
-          {/* Temperature - hidden for models that reject the parameter */}
-          {!NO_TEMPERATURE_MODELS.has(model) && (
-            <Grid xs={12} md={6}>
+            <Typography level="body-sm" sx={commonTextTitleStyles}>
+              Advanced Settings
+            </Typography>
+            {/* Core Tools. Hidden entirely while previewing: these are session-wide switches and a
+                reset, none of which mean anything for a model you are not running. */}
+            {!readOnly && (
               <Box
                 sx={{
                   display: 'flex',
-                  justifyContent: { xs: 'flex-start', sm: 'flex-end' },
-                  alignItems: 'center',
-                  pb: { xs: 0, sm: 2 },
+                  flexWrap: 'wrap',
                   gap: '20px',
+                  mb: 0,
+                  alignItems: 'center',
+                  fontSize: '14px',
                 }}
               >
-                <Box
-                  sx={{
-                    flex: { xs: '1 1 0%', sm: '0 0 auto' },
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 0.5,
-                  }}
-                >
-                  <Typography level="body-sm">Temperature</Typography>
+                {/* Label before control, matching the Smart tools and Research Mode toggles. */}
+                {!isMobile &&
+                  coreToggles.map(toggle => (
+                    <Box key={toggle.key} sx={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
+                      <Typography level="body-sm" sx={{ flexGrow: 0 }}>
+                        {toggle.label}
+                      </Typography>
+                      {toggle.control}
+                    </Box>
+                  ))}
+
+                {/* Sits with the controls it resets. Everything handleReset touches - the token
+                allocation below, temperature, spoken words, response history - lives in this
+                section; tools are deliberately not among them, which is why this is not a
+                whole-dialog reset. */}
+                <ResetButton
+                  modelInfo={modelInfo}
+                  model={model}
+                  setLLM={setLLM}
+                  setSpokenWords={setSpokenWords}
+                  setHistoryLines={setHistoryLines}
+                  isImageModel={isImageModel}
+                  BFL_SAFETY_TOLERANCE={BFL_SAFETY_TOLERANCE}
+                  INFINITE_VALUE={INFINITE_VALUE}
+                  ImageModels={ImageModels}
+                />
+              </Box>
+            )}
+          </Box>
+
+          {readOnly && (
+            <Typography
+              level="body-sm"
+              data-testid="advanced-settings-readonly-note"
+              // Full strength on purpose: it is the instruction for getting out of this state, so it
+              // must not read as part of the dimmed content. Hence the dimming sits on the blocks
+              // around it rather than on the wrapper - a child cannot undo a parent's opacity.
+              sx={{
+                color: brand[800],
+                fontSize: '14px',
+                fontWeight: '500',
+                lineHeight: 1.4,
+                mt: '-16px',
+                mb: '24px',
+              }}
+            >
+              These are the settings this model supports. Use this model to adjust them.
+            </Typography>
+          )}
+
+          {/* Mobile only: the switches the title row cannot fit, as rows sharing SettingsRow's
+            label column so they line up with the settings below. Each control sits in a box of the
+            shared control width and hugs its right edge, matching the inputs. */}
+          {!readOnly && isMobile && (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: SETTINGS_ROW_GAP, mb: SETTINGS_ROW_GAP }}>
+              {coreToggles.map(toggle => (
+                <SettingsRow key={toggle.key} label={toggle.label}>
+                  <Box sx={{ width: SETTINGS_CONTROL_WIDTH, display: 'flex', justifyContent: 'flex-end' }}>
+                    {toggle.control}
+                  </Box>
+                </SettingsRow>
+              ))}
+            </Box>
+          )}
+
+          {/* An output-token budget only means something for chat models. Image, video and
+            transcription entries carry placeholder context values in the catalog (every Flux and
+            gpt-image row is a flat 10000/10000), so the slider would edit a number nothing reads.
+            Gated on the catalog's own type rather than isImageModel(), which name-matches a
+            hardcoded list. */}
+          {modelInfo.type === 'text' && (
+            <Box sx={{ p: 0, mb: '28px', opacity: readOnly ? 0.6 : 1 }}>
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '12px',
+                }}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  {/* A control label inside Advanced Settings, not a section heading, so it sits a
+                    step below the shared 16px title size. */}
+                  <Typography level="body-sm" sx={{ ...commonTextTitleStyles, fontSize: '14px' }}>
+                    Max output tokens
+                  </Typography>
                   <FieldTooltip
-                    ariaLabel="Help: Temperature"
-                    content={
-                      FIXED_TEMPERATURE_MODELS.has(model) ? FIELD_TOOLTIPS.fixedTemperature : FIELD_TOOLTIPS.temperature
-                    }
-                    data-testid="field-tooltip-temperature"
+                    ariaLabel="Help: Output tokens"
+                    content={FIELD_TOOLTIPS.maxTokensOutput}
+                    data-testid="field-tooltip-output-tokens"
                   />
                 </Box>
+                {/* A read-out, not a field - the slider owns this value. Shown against the model's
+                  own ceiling, because without it the slider's fill is unreadable: a full bar is 8K
+                  on gemini-2.5-pro and 128K on gpt-5.6-luna. Only the live value is emphasised; the
+                  ceiling is fixed per model, so it recedes. */}
+                <Typography
+                  level="body-sm"
+                  sx={{ fontSize: '14px', whiteSpace: 'nowrap' }}
+                  data-testid="token-allocation-output"
+                >
+                  <Box component="span" sx={{ color: readOnly ? 'text.tertiary' : brand[800], fontWeight: 'bold' }}>
+                    {formatTokenCount(outputTokens)}
+                  </Box>
+                  <Box component="span" sx={{ color: 'text.tertiary', fontWeight: 400 }}>
+                    {' / '}
+                    {formatTokenCount(outputCeiling)}
+                  </Box>
+                </Typography>
+              </Box>
+              {isOutputAdjustable && (
+                <Box sx={{ position: 'relative', width: '100%' }}>
+                  {/* No valueLabelDisplay: the bubble is centred on the thumb, so at max value half of
+                    it sat past the container's right edge. With overflowY auto the browser resolves
+                    overflowX to auto as well, so hovering there produced a horizontal scrollbar
+                    across the whole dialog. The read-out above tracks the drag anyway. */}
+                  <Slider
+                    aria-label="Max output tokens"
+                    value={outputTokens}
+                    min={MIN_OUTPUT_TOKENS}
+                    max={outputCeiling}
+                    step={256}
+                    onChange={(_, newValue) => {
+                      if (typeof newValue === 'number') {
+                        setLLM({ max_tokens: newValue });
+                      }
+                    }}
+                    disableSwap
+                    sx={{
+                      '--Slider-trackSize': '8px',
+                      '--Slider-thumbSize': '16px',
+                      '--Slider-thumbWidth': '16px',
+                      width: '100%',
+                      '& .MuiSlider-mark': {
+                        display: 'none',
+                      },
+                      '& .MuiSlider-markLabel': {
+                        display: 'none',
+                      },
+                      // The filled bar carries the value, so it goes inert with everything else -
+                      // primary blue on a dimmed row still read as the one live control.
+                      '& .MuiSlider-track': {
+                        backgroundColor: readOnly ? 'text.tertiary' : 'primary.main',
+                      },
+                      // No handle while previewing: there is nothing to drag, and a handle reads as
+                      // grabbable however it is coloured. The filled bar still shows the value.
+                      '& .MuiSlider-thumb': readOnly ? { display: 'none' } : { backgroundColor: 'primary.main' },
+                    }}
+                  />
+                </Box>
+              )}
+              {/* The effect of the setting, not a second control: the reserved budget is what the
+                remainder is left over from, which is also where the context total now lives. */}
+              <Typography
+                level="body-sm"
+                data-testid="token-allocation-input-note"
+                // Negative top margin closes the gap left by the Slider's own bottom padding.
+                sx={{
+                  color: 'text.primary50',
+                  fontSize: '12px',
+                  lineHeight: 1.4,
+                  mt: isOutputAdjustable ? '-12px' : 0,
+                }}
+              >
+                Reserved from the {formatTokenCount(contextWindow)} token context window, leaving{' '}
+                {formatTokenCount(inputTokens)} for input.
+              </Typography>
+            </Box>
+          )}
+
+          {/* One column on purpose: at 820px wide, two columns sat unrelated controls side by side
+            and neither column's labels lined up with the other's. */}
+          <Box
+            sx={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: SETTINGS_ROW_GAP,
+              fontSize: '14px',
+              opacity: readOnly ? 0.6 : 1,
+            }}
+          >
+            {/* Temperature - hidden for models that reject the parameter */}
+            {!NO_TEMPERATURE_MODELS.has(model) && (
+              <SettingsRow
+                label="Temperature"
+                tooltip={
+                  FIXED_TEMPERATURE_MODELS.has(model) ? FIELD_TOOLTIPS.fixedTemperature : FIELD_TOOLTIPS.temperature
+                }
+              >
                 <Input
-                  sx={{
-                    ...commonInputStyles(mode || 'light'),
-                    flex: { xs: '1 1 0%', sm: '0 0 auto' },
-                  }}
+                  sx={commonInputStyles(mode || 'light')}
                   size="sm"
                   variant="outlined"
                   color="primary"
@@ -1012,87 +1140,17 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                     },
                   }}
                 />
-              </Box>
-            </Grid>
-          )}
+              </SettingsRow>
+            )}
 
-          {!isImageModel(model) && (
-            <Grid xs={12} md={6}>
-              <Grid
-                xs={6}
-                sx={{
-                  display: 'flex',
-                  gap: '20px',
-                  alignItems: 'center',
-                  justifyContent: { xs: 'flex-start', sm: 'flex-end' },
-                }}
-              >
-                <Box
-                  sx={{
-                    flex: { xs: '1 1 0%', sm: '0 0 auto' },
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 0.5,
-                  }}
-                >
-                  <Typography level="body-sm">Response History</Typography>
-                  <FieldTooltip
-                    ariaLabel="Help: Response History"
-                    content={FIELD_TOOLTIPS.responseHistory}
-                    data-testid="field-tooltip-response-history"
-                  />
-                </Box>
+            {!isImageModel(model) && (
+              <SettingsRow label="Response History" tooltip={FIELD_TOOLTIPS.responseHistory}>
                 <Select
                   value={historyLines}
                   onChange={(_, newValue) => newValue && setHistoryLines(Number(newValue))}
                   indicator={<KeyboardArrowDownIcon />}
-                  sx={{
-                    ...commonInputStyles(mode || 'light'),
-                    minWidth: { xs: 'auto', sm: '6rem' },
-                    height: 32,
-                    p: 1,
-                    flex: { xs: '1 1 0%', sm: '0 0 auto' },
-                    '& .MuiSelect-button': {
-                      textAlign: 'center',
-                      paddingBlock: '4px',
-                      fontSize: '0.875rem',
-                    },
-                    '& .MuiSelect-indicator': {
-                      color: 'var(--joy-palette-text-tertiary)',
-                      transition: '0.2s',
-                      width: '20px',
-                      height: '20px',
-                    },
-                    '& .MuiSelect-endDecorator': {
-                      marginRight: '4px',
-                    },
-                    '&[aria-expanded="true"] .MuiSelect-indicator': {
-                      transform: 'rotate(180deg)',
-                    },
-                    '&:hover': {
-                      borderColor: 'var(--joy-palette-neutral-400)',
-                    },
-                    '&.Mui-focused': {
-                      borderColor: 'var(--joy-palette-primary-500)',
-                      boxShadow: '0 0 0 3px var(--joy-palette-primary-200)',
-                    },
-                  }}
-                  slotProps={{
-                    button: {
-                      sx: {
-                        whiteSpace: 'nowrap',
-                        justifyContent: 'center',
-                      },
-                    },
-                    listbox: {
-                      sx: {
-                        '& .MuiOption-root': {
-                          justifyContent: 'center',
-                          fontSize: '0.875rem',
-                        },
-                      },
-                    },
-                  }}
+                  sx={settingsSelectSx(mode || 'light')}
+                  slotProps={SETTINGS_SELECT_SLOT_PROPS}
                 >
                   <Option value={1}>1</Option>
                   <Option value={2}>2</Option>
@@ -1104,234 +1162,152 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                   <Option value={34}>34</Option>
                   <Option value={INFINITE_VALUE}>∞</Option>
                 </Select>
-              </Grid>
-            </Grid>
-          )}
+              </SettingsRow>
+            )}
 
-          {/* Spoken Words */}
-          <Grid xs={12} md={6}>
+            {/* Spoken Words - voice replies only exist for chat models. Gated on the catalog's own
+              type, like the token allocation above, so video and transcription models are covered
+              too; isImageModel() name-matches a hardcoded list and let video models through. */}
+            {modelInfo.type === 'text' && (
+              <SettingsRow label="Spoken Words" tooltip={FIELD_TOOLTIPS.spokenWords}>
+                <Input
+                  sx={commonInputStyles(mode || 'light')}
+                  size="sm"
+                  variant="outlined"
+                  color="primary"
+                  type="number"
+                  value={spokenWords}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                    const value = parseInt(e.target.value);
+                    if (!isNaN(value) && value >= 0) {
+                      setSpokenWords(value);
+                    }
+                  }}
+                  slotProps={{
+                    input: {
+                      min: 0,
+                      step: 10,
+                    },
+                  }}
+                />
+              </SettingsRow>
+            )}
+
+            {/* Reasoning Effort - only for reasoning-capable models */}
+            {REASONING_SUPPORTED_MODELS.has(model) && <ReasoningEffortSelector model={model} mode={mode} />}
+          </Box>
+        </Box>
+
+        {/* Image Model Settings, with the Templates panel below */}
+        {isImageModel(model) && (
+          <>
+            {/* Same single column as the text settings above, sharing SettingsRow so labels and
+              controls line up across both groups. The old Grid needed `px: 1` to undo its own
+              negative margins; a plain column does not. */}
             <Box
               sx={{
                 display: 'flex',
-                justifyContent: { xs: 'flex-start', sm: 'flex-end' },
-                alignItems: 'center',
-                gap: '20px',
+                flexDirection: 'column',
+                gap: SETTINGS_ROW_GAP,
+                mt: SETTINGS_ROW_GAP,
+                mb: 2,
+                opacity: readOnly ? 0.6 : 1,
               }}
             >
-              <Tooltip title="Maximum number of words to speak in voice responses">
-                <Typography level="body-sm" sx={{ textAlign: 'left', flex: { xs: '1 1 0%', sm: '0 0 auto' } }}>
-                  Spoken Words
-                </Typography>
-              </Tooltip>
-              <Input
-                sx={{
-                  ...commonInputStyles(mode || 'light'),
-                  flex: { xs: '1 1 0%', sm: '0 0 auto' },
-                }}
-                size="sm"
-                variant="outlined"
-                color="primary"
-                type="number"
-                value={spokenWords}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                  const value = parseInt(e.target.value);
-                  if (!isNaN(value) && value >= 0) {
-                    setSpokenWords(value);
-                  }
-                }}
-                slotProps={{
-                  input: {
-                    min: 0,
-                    step: 10,
-                  },
-                }}
-              />
-            </Box>
-          </Grid>
-
-          {/* Reasoning Effort - only for reasoning-capable models */}
-          {REASONING_SUPPORTED_MODELS.has(model) && (
-            <ReasoningEffortSelector model={model} commonInputStyles={commonInputStyles} mode={mode} />
-          )}
-        </Grid>
-      </Box>
-
-      {/* Image Model Settings, with the Templates panel below */}
-      {isImageModel(model) && (
-        <>
-          <Grid container spacing={2} sx={{ px: 1, mb: 2 }}>
-            {imageSettings.map(setting => (
-              <Grid key={setting.label} xs={12} md={6}>
-                <Box
-                  sx={{
-                    display: 'flex',
-                    justifyContent: 'flex-end',
-                    alignItems: 'center',
-                    gap: '20px',
-                  }}
-                >
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <Typography level="body-sm">{setting.label}</Typography>
-                    {setting.tooltip && <FieldTooltip ariaLabel={`Help: ${setting.label}`} content={setting.tooltip} />}
-                  </Box>
-                  <Box sx={{ minWidth: '120px' }}>
-                    {setting.type === 'select' && (
-                      <Select
-                        value={setting.value}
-                        onChange={(_, newValue) => setting.onChange(newValue)}
-                        indicator={<KeyboardArrowDownIcon />}
-                        sx={commonSelectStyles(mode || 'light')}
-                      >
-                        {setting.options?.map(option => (
-                          <Option key={option.value} value={option.value}>
-                            {option.label}
-                          </Option>
-                        ))}
-                      </Select>
-                    )}
-                    {setting.type === 'input' && (
-                      <Input
-                        sx={commonInputStyles(mode || 'light')}
-                        size="sm"
-                        variant="outlined"
-                        color="primary"
-                        value={setting.value}
-                        {...setting.inputProps}
-                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                          const value = e.target.value === '' ? undefined : parseInt(e.target.value);
-                          if (value !== undefined) {
-                            setting.onChange(value);
-                          }
-                        }}
-                      />
-                    )}
-                  </Box>
-                </Box>
-              </Grid>
-            ))}
-            {isBflImageModel(model) && (
-              <>
-                <Grid xs={12} md={6}>
-                  <Box
-                    sx={{
-                      display: 'flex',
-                      justifyContent: 'flex-end',
-                      alignItems: 'center',
-                      gap: '20px',
-                    }}
-                  >
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <Typography level="body-sm" sx={{ textAlign: 'right' }}>
-                        Prompt Upsampling
-                      </Typography>
-                      <FieldTooltip ariaLabel="Help: Prompt Upsampling" content={FIELD_TOOLTIPS.promptEnhancement} />
-                    </Box>
-                    <Box sx={{ minWidth: '120px' }}>
-                      <Switch
-                        checked={prompt_upsampling ?? false}
-                        onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                          setLLM({ prompt_upsampling: e.target.checked })
-                        }
-                        color={prompt_upsampling ? 'success' : 'neutral'}
-                      />
-                    </Box>
-                  </Box>
-                </Grid>
-                <Grid xs={12} md={6}>
-                  <Box
-                    sx={{
-                      display: 'flex',
-                      justifyContent: 'flex-end',
-                      alignItems: 'center',
-                      gap: '20px',
-                    }}
-                  >
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <Typography level="body-sm" sx={{ textAlign: 'right' }}>
-                        Safety Tolerance: {safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT}
-                      </Typography>
-                      <FieldTooltip ariaLabel="Help: Safety Tolerance" content={FIELD_TOOLTIPS.safetyTolerance} />
-                    </Box>
-                    <Box sx={{ minWidth: '120px' }}>
-                      <Input
-                        sx={commonInputStyles(mode || 'light')}
-                        size="sm"
-                        variant="outlined"
-                        color="primary"
-                        type="number"
-                        value={safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT}
-                        onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                          setLLM({ safety_tolerance: parseInt(e.target.value) })
-                        }
-                        slotProps={{
-                          input: {
-                            min: BFL_SAFETY_TOLERANCE.MIN,
-                            max: BFL_SAFETY_TOLERANCE.MAX,
-                            step: 1,
-                          },
-                        }}
-                      />
-                    </Box>
-                  </Box>
-                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, pt: 2 }}>
-                    <Box
-                      sx={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        px: 1,
-                      }}
+              {imageSettings.map(setting => (
+                <SettingsRow key={setting.label} label={setting.label} tooltip={setting.tooltip}>
+                  {setting.type === 'select' && (
+                    <Select
+                      value={setting.value}
+                      onChange={(_, newValue) => setting.onChange(newValue)}
+                      indicator={<KeyboardArrowDownIcon />}
+                      sx={settingsSelectSx(mode || 'light')}
+                      slotProps={SETTINGS_SELECT_SLOT_PROPS}
                     >
-                      <Typography level="body-xs" sx={{ color: 'text.secondary', fontWeight: 500 }}>
-                        🛡️ Family-friendly
-                      </Typography>
-                      <Typography level="body-xs" sx={{ color: 'text.secondary', fontWeight: 500 }}>
-                        🌶️ Creative & Spicy
-                      </Typography>
-                    </Box>
-                    <Slider
-                      aria-label="Safety Tolerance"
-                      value={safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT}
-                      min={BFL_SAFETY_TOLERANCE.MIN}
-                      max={BFL_SAFETY_TOLERANCE.MAX}
-                      step={1}
-                      onChange={(_, newValue) => {
-                        if (typeof newValue === 'number') {
-                          setLLM({ safety_tolerance: newValue });
+                      {setting.options?.map(option => (
+                        <Option key={option.value} value={option.value}>
+                          {option.label}
+                        </Option>
+                      ))}
+                    </Select>
+                  )}
+                  {setting.type === 'input' && (
+                    <Input
+                      sx={commonInputStyles(mode || 'light')}
+                      size="sm"
+                      variant="outlined"
+                      color="primary"
+                      value={setting.value}
+                      {...setting.inputProps}
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                        const value = e.target.value === '' ? undefined : parseInt(e.target.value);
+                        if (value !== undefined) {
+                          setting.onChange(value);
                         }
-                      }}
-                      valueLabelDisplay="auto"
-                      marks={[
-                        { value: 0, label: '🛡️ Safe' },
-                        { value: 2, label: '📝 Mild' },
-                        { value: 4, label: '🎨 Balanced' },
-                        { value: 6, label: '🌶️ Spicy' },
-                      ]}
-                      sx={{
-                        '--Slider-trackSize': '6px',
-                        '--Slider-thumbSize': '14px',
-                        '--Slider-thumbWidth': '14px',
-                        '& .MuiSlider-mark': {
-                          display: 'block',
-                          height: '8px',
-                          width: '2px',
-                          backgroundColor: 'var(--joy-palette-neutral-400)',
-                        },
-                        '& .MuiSlider-markLabel': {
-                          fontSize: '0.75rem',
-                          fontWeight: 500,
-                          marginTop: '8px',
-                        },
                       }}
                     />
+                  )}
+                </SettingsRow>
+              ))}
+              {isBflImageModel(model) && (
+                <>
+                  {/* A dropdown, not a slider: `MAX` is a hard cap of 2, so there are only three
+                    reachable values. The slider that used to be here was min 0 / max 2 with marks at
+                    0/2/4/6, so two of its four labels sat outside the track and could never be
+                    selected, and a pair of captions above it advertised a "Creative & Spicy" end that
+                    the cap forbids. It also duplicated a number input on the same value. */}
+                  <SettingsRow label="Safety Tolerance" tooltip={FIELD_TOOLTIPS.safetyTolerance}>
+                    <Select
+                      // Clamped both ways, because any value without a matching Option renders the
+                      // Select blank. Above MAX is the real case - sessions saved before the cap can
+                      // hold up to LEGACY_INPUT_MAX, and the schema clamps them on parse. Below MIN
+                      // should be impossible, but a stored value is not something this component
+                      // controls, so it is not worth trusting for a one-expression guard.
+                      value={Math.min(
+                        Math.max(safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT, BFL_SAFETY_TOLERANCE.MIN),
+                        BFL_SAFETY_TOLERANCE.MAX
+                      )}
+                      onChange={(_, newValue) => newValue !== null && setLLM({ safety_tolerance: newValue })}
+                      indicator={<KeyboardArrowDownIcon />}
+                      sx={settingsSelectSx(mode || 'light')}
+                      slotProps={SETTINGS_SELECT_SLOT_PROPS}
+                      data-testid="setting-select-safety-tolerance"
+                    >
+                      {SAFETY_TOLERANCE_OPTIONS.map(option => (
+                        <Option key={option.value} value={option.value}>
+                          {option.label}
+                        </Option>
+                      ))}
+                    </Select>
+                  </SettingsRow>
+                </>
+              )}
+
+              {/* Not BFL-only: GeminiImageService maps prompt_upsampling to Google's `enhancePrompt`,
+                so the Nano Banana models support it too. Safety Tolerance above stays BFL-gated - it
+                is a BFL API parameter with no Gemini equivalent. Last row on purpose: the only toggle
+                among the dropdowns and inputs, so it reads as an addendum rather than interrupting
+                the column of matching controls. */}
+              {supportsPromptUpsampling(model) && (
+                <SettingsRow label="Prompt Upsampling" tooltip={FIELD_TOOLTIPS.promptEnhancement}>
+                  {/* The toggle is narrower than the inputs and selects, so it sits in a box of the
+                    shared control width and hugs the right edge - lining up with their right edge
+                    rather than floating in the middle of the column. */}
+                  <Box sx={{ width: SETTINGS_CONTROL_WIDTH, display: 'flex', justifyContent: 'flex-end' }}>
+                    {/* The same toggle the tools list uses, so on/off reads identically everywhere. */}
+                    <SquareSlideToggle
+                      checked={prompt_upsampling ?? false}
+                      onChange={e => setLLM({ prompt_upsampling: e.target.checked })}
+                      data-testid="setting-toggle-prompt-upsampling"
+                    />
                   </Box>
-                </Grid>
-              </>
-            )}
-          </Grid>
-          <ImageTemplatePanel />
-        </>
-      )}
+                </SettingsRow>
+              )}
+            </Box>
+            <ImageTemplatePanel />
+          </>
+        )}
+      </Box>
 
       {/* Bottom padding to match left panel spacing */}
       <Box sx={{ pb: 4 }} />
@@ -1349,7 +1325,6 @@ const AISettingsTab: React.FC<{
   handleModelChange: (filter: 'all' | 'text' | 'image' | 'video') => void;
   isMobile: boolean;
   onViewDetails: (model: ModelInfo) => void;
-  isResearchModeFeatureEnabled: boolean;
 }> = ({
   model,
   handleModelSelection,
@@ -1358,7 +1333,6 @@ const AISettingsTab: React.FC<{
   handleModelChange,
   isMobile,
   onViewDetails,
-  isResearchModeFeatureEnabled,
 }) => {
   return (
     <Box
@@ -1372,12 +1346,8 @@ const AISettingsTab: React.FC<{
         width: { xs: '100%', sm: 'calc(100% + 20px)' },
         height: '100%',
         ...scrollbarStyles,
-        // Start the bar 16px below the header icons (they end 36px from the modal top). A
-        // track margin is the only way to shorten a native scrollbar without moving content.
-        // With tabs, this container already begins below them, so no offset is needed.
         '&::-webkit-scrollbar-track': {
           background: 'transparent',
-          marginTop: isResearchModeFeatureEnabled ? 0 : '28px',
         },
       }}
     >
@@ -1390,24 +1360,12 @@ const AISettingsTab: React.FC<{
         modelFilter={modelFilter}
         onModelFilterChange={handleModelChange}
         onSettingsClick={onViewDetails}
-        isResearchModeFeatureEnabled={isResearchModeFeatureEnabled}
         stickyHeader={
           !isMobile && (
-            <Stack
-              direction="column"
-              alignItems="flex-start"
-              gap="4px"
-              sx={{
-                width: 'auto',
-                // Only clears the tab bar; without tabs the modal padding is already enough.
-                mt: isResearchModeFeatureEnabled ? '20px' : 0,
-              }}
-            >
-              <Typography sx={{ color: 'text.primary', fontSize: '16px', fontWeight: '500' }}>AI Settings</Typography>
-              <Typography sx={{ color: 'text.primary50', fontSize: '14px', pr: { sm: 4 }, lineHeight: '1.4' }}>
-                Choose an AI model, then open its settings to tune it to your needs.
-              </Typography>
-            </Stack>
+            <TabIntro
+              title="AI Settings"
+              description="Choose an AI model, then open its settings to tune it to your needs."
+            />
           )
         }
       />
@@ -1450,51 +1408,42 @@ const ResearchModeTab: React.FC<{
       <Box sx={{ mb: 3 }}>
         <Box
           sx={{
+            mt: '20px',
             mb: 2,
             display: 'flex',
             justifyContent: 'space-between',
-            alignItems: 'center',
+            alignItems: 'flex-start',
             flexDirection: { xs: 'column', md: 'row' },
+            gap: { xs: 2, md: 4 },
           }}
         >
-          <Box>
-            <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.5 }}>
-              <Typography
-                sx={{
-                  color: 'text.primary',
-                  fontSize: '18px',
-                  fontWeight: '500',
-                }}
-              >
-                Research Mode
-              </Typography>
-              <ContextHelpButton helpId="features/research-mode" tooltipText="Learn about Research Mode" size="sm" />
-            </Stack>
-            <Typography sx={{ color: 'text.primary50', fontSize: '14px', lineHeight: '1.4' }}>
-              Configure up to 4 different model/parameter combinations to compare responses
-            </Typography>
-          </Box>
+          <TabIntro
+            title="Research Mode"
+            description="Run the same prompt against up to four model/parameter configurations side-by-side. Token usage scales with the number of configurations."
+            titleAdornment={
+              <ContextHelpButton
+                helpId="features/research-mode"
+                tooltipText="Learn about Research Mode"
+                size="sm"
+                sx={HEADER_ICON_BUTTON_SX}
+              />
+            }
+            mt={0}
+          />
 
           <Stack
             direction="row"
             alignItems="center"
-            spacing={2}
+            spacing="12px"
             justifyContent={{ xs: 'flex-start', md: 'center' }}
             sx={{
               width: { xs: '100%', md: 'auto' },
-              mt: { xs: 2, md: 0 },
+              flexShrink: 0,
             }}
           >
-            <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
-              <Typography level="title-sm" sx={{ fontWeight: 'normal', fontSize: '14px', textAlign: 'right' }}>
-                Enable Research Mode
-              </Typography>
-              <FieldTooltip
-                ariaLabel="Help: Enable Research Mode"
-                content={FIELD_TOOLTIPS.researchModeToggle}
-                data-testid="field-tooltip-research-mode"
-              />
-            </Box>
+            <Typography level="title-sm" sx={{ fontWeight: 'normal', fontSize: '14px', textAlign: 'right' }}>
+              Enable
+            </Typography>
             <SquareSlideToggle
               checked={researchMode.enabled}
               onChange={e => setLLM({ researchMode: { ...researchMode, enabled: e.target.checked } })}
@@ -1526,7 +1475,7 @@ const ResearchModeTab: React.FC<{
           {[0, 1, 2, 3].map(index => {
             const config = researchMode.configurations[index];
             return (
-              <Grid key={index} xs={12} md={3}>
+              <Grid key={index} xs={12} md={6}>
                 <ResearchConfigPanel
                   index={index}
                   config={config}
@@ -1674,11 +1623,31 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
 
   const { settings: userSettings } = useUserSettings();
 
-  const modelSpeed = getModelSpeedFromStats(modelInfo?.id ?? '', stats?.avgResponseTime ?? {});
-  const isPopular = getTopUsedModelsFromStats(stats?.popularity ?? {}, 3).includes(modelInfo?.id ?? '');
   const isResearchModeFeatureEnabled = userSettings.experimentalFeatures?.enableResearchMode === true;
 
-  const isKontextModel = isKontextImageModel(model);
+  // Model detail dialog. `modelDetailsOpen` is lifted to the shared store so the
+  // composer Templates button can open it directly; `detailsModel` (which model's
+  // header/metadata to show) stays local. Declared here because everything below keys off it.
+  const [detailsModel, setDetailsModel] = useState<ModelInfo | null>(null);
+
+  // The model the details screen is about, versus `model`, which is the session's ACTIVE one.
+  // They differ whenever you open a model you have not selected, and every control that
+  // describes or configures a model has to follow this one - otherwise the screen shows one
+  // model's name over another model's settings.
+  const shownModel = (detailsModel?.id ?? model) as ModelName;
+  // Previewing: the settings on screen belong to a model that is not running, and they are all
+  // shared fields, so editing them would silently reconfigure the active model instead.
+  const isPreviewingModel = shownModel !== model;
+
+  // The catalog row for the model on screen. Everything the dialog *describes* - name, description,
+  // capability pills, speed, price tier - must read from this rather than from `modelInfo`, which is
+  // the active model. Deriving it once is deliberate: speed and price tier were each computed from
+  // `modelInfo` and so kept showing the active model's numbers under a previewed model's name.
+  const shownModelInfo = detailsModel ?? modelInfo;
+
+  const modelSpeed = getModelSpeedFromStats(shownModelInfo?.id ?? '', stats?.avgResponseTime ?? {});
+
+  const isKontextModel = isKontextImageModel(shownModel);
 
   const { maxContextWindow, maxTokens } = useMemo(() => {
     if (!modelInfoRepo) return { maxContextWindow: 0, maxTokens: 0 };
@@ -1691,8 +1660,8 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
     return { maxContextWindow: maxCtx, maxTokens: maxTok };
   }, [modelInfoRepo]);
 
-  const priceTierInfo: { tier: string; variant: ChipVariant } = modelInfo
-    ? getModelPriceTier(modelInfo)
+  const priceTierInfo: { tier: string; variant: ChipVariant } = shownModelInfo
+    ? getModelPriceTier(shownModelInfo)
     : { tier: 'Low', variant: 'green' };
 
   const handleModelSelection = useCallback(
@@ -1741,9 +1710,9 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
             {
               label: 'Image Size',
               type: 'select' as const,
-              value: size || IMAGE_SIZE_CONSTRAINTS[getModelConstraintKey(model)].defaultSize,
+              value: size || IMAGE_SIZE_CONSTRAINTS[getModelConstraintKey(shownModel)].defaultSize,
               onChange: (value: OpenAIImageSize | null) => value && setLLM({ size: value }),
-              options: getAvailableSizes(model).map(s => ({ value: s, label: s })),
+              options: getAvailableSizes(shownModel).map(s => ({ value: s, label: s })),
               tooltip: FIELD_TOOLTIPS.imageSize,
             },
           ]),
@@ -1754,7 +1723,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         value: quality,
         onChange: (value: OpenAIImageQuality | null) => value && setLLM({ quality: value }),
         options:
-          model === ImageModels.GPT_IMAGE_1
+          shownModel === ImageModels.GPT_IMAGE_1
             ? [
                 { value: 'low', label: 'Low' },
                 { value: 'medium', label: 'Medium' },
@@ -1765,7 +1734,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 { value: 'hd', label: 'HD' },
               ],
       },
-      ...(model !== ImageModels.GPT_IMAGE_1 && !isBflImageModel(model)
+      ...(shownModel !== ImageModels.GPT_IMAGE_1 && !isBflImageModel(shownModel)
         ? [
             {
               label: 'Style',
@@ -1788,7 +1757,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         inputProps: { type: 'number', placeholder: 'Random' },
       },
       // Width/Height are BFL-specific parameters; GPT Image models use the Image Size dropdown instead
-      ...(!isKontextModel && isBflImageModel(model)
+      ...(!isKontextModel && isBflImageModel(shownModel)
         ? [
             {
               label: 'Width',
@@ -1842,13 +1811,8 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         ],
       },
     ],
-    [model, isKontextModel, size, quality, style, seed, width, height, aspect_ratio, output_format, setLLM]
+    [shownModel, isKontextModel, size, quality, style, seed, width, height, aspect_ratio, output_format, setLLM]
   );
-
-  // Model detail dialog. `modelDetailsOpen` is lifted to the shared store so the
-  // composer Templates button can open it directly; `detailsModel` (which model's
-  // header/metadata to show) stays local.
-  const [detailsModel, setDetailsModel] = useState<ModelInfo | null>(null);
 
   const handleViewDetails = (model: ModelInfo) => {
     setDetailsModel(model);
@@ -1964,9 +1928,9 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 }}
               >
                 <TabList
-                  sx={{
+                  sx={theme => ({
                     backgroundColor: 'transparent',
-                    borderBottom: theme => `1px solid ${theme.palette.divider}`,
+                    borderBottom: `1px solid ${theme.palette.divider}`,
                     // Desktop spacing lives on the title instead, so it scrolls away and the
                     // sticky search row pins right under the tabs. Mobile has no title.
                     mb: { xs: 2, sm: 0 },
@@ -1979,52 +1943,45 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                     // Tabs inherit `min-block-size: var(--ListItem-minHeight)` (36px at sizeMd),
                     // which would outgrow the 32px bar.
                     '--ListItem-minHeight': '32px',
+                    // Mobile scrolls the bar sideways rather than squeezing the labels. Explicit
+                    // nowrap because the scroll depends on it, and the scrollbar is hidden: touch
+                    // scrolling has no persistent bar, and a visible one inside a 32px strip would
+                    // crowd the labels.
+                    flexWrap: 'nowrap',
+                    overflowX: { xs: 'auto', sm: 'visible' },
+                    scrollbarWidth: 'none',
+                    '&::-webkit-scrollbar': { display: 'none' },
                     '& .MuiTab-root': {
                       fontSize: '14px',
                       fontWeight: 400,
-                      p: 0,
+                      paddingBlock: 0,
+                      paddingInline: '12px',
                       color: 'text.primary50',
-                      flex: { xs: '1 1 0%', sm: '0 0 auto' },
-                      // Bounds must live here: this descendant selector outranks a Tab's own sx.
-                      maxWidth: { xs: 'none', sm: '200px' },
-                      minWidth: { xs: 0, sm: '140px' },
+                      // Never shrink: each tab keeps its label's width and the bar scrolls instead.
+                      flex: '0 0 auto',
+                      minWidth: 0,
+                      whiteSpace: 'nowrap',
                       textAlign: 'center',
+                      transition: 'background 0.2s, color 0.2s',
+                      // Joy's own :hover rule for the plain variant outranks a bare `&:hover`
+                      // here, so the tint has to go through its variant var.
+                      '&:not(.Mui-selected)': {
+                        '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
+                        '&:hover': {
+                          color: 'text.primary',
+                        },
+                      },
                       '&.Mui-selected': {
                         color: 'text.primary',
                       },
                     },
-                  }}
+                  })}
                 >
-                  <Tab
-                    value="ai-settings"
-                    sx={{
-                      width: 'auto',
-                      flex: { xs: '1 1 0%', sm: '0 0 auto' },
-                    }}
-                  >
-                    AI Settings
-                  </Tab>
+                  <Tab value="ai-settings">AI Settings</Tab>
 
-                  {isResearchModeFeatureEnabled && (
-                    <Tab
-                      value="research-mode"
-                      sx={{
-                        width: 'auto',
-                        flex: { xs: '1 1 0%', sm: '0 0 auto' },
-                      }}
-                    >
-                      Research Mode
-                    </Tab>
-                  )}
+                  {isResearchModeFeatureEnabled && <Tab value="research-mode">Research Mode</Tab>}
 
-                  <Tab
-                    value="audio"
-                    data-testid="ai-settings-audio-tab"
-                    sx={{
-                      width: 'auto',
-                      flex: { xs: '1 1 0%', sm: '0 0 auto' },
-                    }}
-                  >
+                  <Tab value="audio" data-testid="ai-settings-audio-tab">
                     Audio
                   </Tab>
                 </TabList>
@@ -2040,7 +1997,6 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                       handleModelChange={handleModelChange}
                       isMobile={isMobile}
                       onViewDetails={handleViewDetails}
-                      isResearchModeFeatureEnabled={isResearchModeFeatureEnabled}
                     />
                   )}
                 </TabPanel>
@@ -2079,15 +2035,19 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                   sx={{ p: 0, overflowY: 'auto', overflowX: 'hidden', height: 'calc(100% - 37px)' }}
                 >
                   {activeTab === 'audio' && (
-                    <Box sx={{ px: 1, py: 1 }}>
-                      <Typography level="title-md" sx={{ mb: 0.5 }}>
-                        Audio Generation
-                      </Typography>
-                      <Typography level="body-sm" sx={{ color: 'text.secondary', mb: 2 }}>
-                        Defaults for both the direct audio generator (Files Manager &rarr; Generate Audio) and the
-                        model-callable audio_generation tool in chat.
-                      </Typography>
-                      <AudioGenerationSettings />
+                    <Box>
+                      <TabIntro
+                        title="Audio Generation"
+                        description={
+                          <>
+                            Defaults for both the direct audio generator (Files Manager &rarr; Generate Audio) and the
+                            model-callable audio_generation tool in chat.
+                          </>
+                        }
+                      />
+                      <Box sx={{ mt: 2 }}>
+                        <AudioGenerationSettings />
+                      </Box>
                     </Box>
                   )}
                 </TabPanel>
@@ -2111,11 +2071,11 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         <ModalDialog
           data-testid="model-details-dialog"
           sx={{
-            // Image models render a 2-column settings grid with per-field info
-            // icons; give them a bit more room so labels don't squish.
-            width: isMobile ? '100vw' : isImageModel(model) ? 'min(720px, 94vw)' : 'min(640px, 92vw)',
-            height: isMobile ? '100dvh' : 'auto',
-            maxWidth: isMobile ? '100vw' : isImageModel(model) ? '94vw' : '92vw',
+            // Matches the model-list modal exactly so the window does not resize when you
+            // open a model's settings.
+            width: isMobile ? '100vw' : 'min(820px, 92vw)',
+            height: isMobile ? '100dvh' : '85vh',
+            maxWidth: isMobile ? '100vw' : '92vw',
             maxHeight: isMobile ? '100dvh' : '85vh',
             margin: 0,
             borderRadius: isMobile ? 0 : 'lg',
@@ -2130,93 +2090,152 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
               height: '100%',
               display: 'flex',
               flexDirection: 'column',
-              backgroundColor: 'background.body',
               overflow: 'hidden',
               borderRadius: isMobile ? 0 : 'lg',
             }}
           >
-            {/* Header - back arrow on phone, close (X) on desktop */}
-            <Box
-              sx={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                gap: 1,
-                py: { xs: 2, sm: 1.5 },
-                px: 2,
-                width: '100%',
-                borderBottom: { sm: theme => `1px solid ${theme.palette.divider}` },
-              }}
-            >
-              <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
-                {isMobile && (
-                  <IconButton
-                    variant="plain"
-                    data-testid="model-details-back-btn"
-                    onClick={handleDetailsClose}
-                    sx={{
-                      width: '24px',
-                      height: '24px',
-                      minHeight: '24px',
-                      minWidth: 'auto',
-                      mr: 1,
-                      p: 0,
-                      '& .MuiSvgIcon-root': {
-                        fontSize: '16px',
-                      },
-                      '&:hover': {
-                        backgroundColor: 'transparent',
-                      },
-                    }}
-                  >
-                    <ArrowBackIcon />
-                  </IconButton>
-                )}
-                <Typography
-                  noWrap
-                  sx={{ color: 'text.primary', fontSize: { xs: '14px', sm: '16px' }, fontWeight: '500' }}
-                >
-                  {(detailsModel ?? modelInfo)?.name} Settings
-                </Typography>
-              </Box>
-              {!isMobile && (
-                <IconButton
-                  variant="plain"
-                  data-testid="model-details-close-btn"
-                  onClick={handleDetailsClose}
-                  sx={{
-                    width: '24px',
-                    height: '24px',
-                    minHeight: '24px',
-                    minWidth: 'auto',
-                    p: 0,
-                    '& .MuiSvgIcon-root': {
-                      fontSize: '1rem',
-                    },
-                    '&:hover': {
-                      backgroundColor: 'transparent',
-                    },
-                  }}
-                >
-                  <CloseIcon />
-                </IconButton>
-              )}
-            </Box>
-
             {/* Detail content */}
             <Box
               sx={{
                 flex: 1,
                 overflowY: 'auto',
-                p: { xs: 2, sm: 3 },
-                backgroundColor: 'background.panel2',
+                pt: 0,
+                px: { xs: 2, sm: 3 },
+                pb: { xs: 2, sm: 3 },
                 ...scrollbarStyles,
+                // Starts the bar below the sticky header, matching the model list where the bar
+                // begins under the tabs. Re-states the background because this replaces the track
+                // rule scrollbarStyles just spread in rather than merging with it.
+                '&::-webkit-scrollbar-track': {
+                  background: 'transparent',
+                  marginTop: MODEL_DETAILS_HEADER_HEIGHT,
+                },
               }}
             >
+              <Box
+                sx={{
+                  position: 'sticky',
+                  top: 0,
+                  zIndex: 2,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 1,
+                  // Breaks out of the container's side padding so the background covers edge to
+                  // edge as content scrolls under. Nothing to compensate vertically - the
+                  // container has no top padding.
+                  mx: { xs: '-16px', sm: '-24px' },
+                  px: { xs: '16px', sm: '24px' },
+                  // Fixed so the scrollbar track's matching offset stays correct, and so the header
+                  // does not shrink when "Use this model" becomes the shorter "Current model".
+                  height: MODEL_DETAILS_HEADER_HEIGHT,
+                  flexShrink: 0,
+                  backgroundColor: 'background.surface',
+                  // Same token as the dialog's own outline: ModalDialog carries no explicit
+                  // border, so its window edge is Joy's outlined-variant border.
+                  borderBottom: '1px solid',
+                  borderColor: 'neutral.outlinedBorder',
+                }}
+              >
+                <Button
+                  variant="plain"
+                  size="sm"
+                  data-testid="model-details-back-btn"
+                  onClick={handleDetailsClose}
+                  startDecorator={<ArrowBackIcon sx={{ fontSize: '16px' }} />}
+                  sx={{
+                    ...HEADER_ICON_BUTTON_SX,
+                    '--Button-gap': '4px',
+                    // Joy's own plain-variant :hover rule outranks the backgroundColor in
+                    // HEADER_ICON_BUTTON_SX, so the fill has to be cleared through its var.
+                    '--variant-plainHoverBg': 'transparent',
+                    '--variant-plainActiveBg': 'transparent',
+                    minHeight: 'auto',
+                    px: 0,
+                    fontSize: '14px',
+                    fontWeight: 400,
+                  }}
+                >
+                  Back to models
+                </Button>
+
+                {/* Commit control. Opening this screen no longer selects the model (see
+                    ModelSelection's onSettingsClick), so it is a preview until this is pressed -
+                    and pressing it deliberately leaves the dialog open so the settings below can
+                    be adjusted straight after. */}
+                {(() => {
+                  const shown = shownModelInfo;
+                  if (!shown) return null;
+                  if (shown.id === typedModel) {
+                    // Tick trails the label here, unlike the cards: this sits at the row's right
+                    // edge, so leading with the glyph would leave it floating mid-row.
+                    return (
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <Typography
+                          data-testid="model-current-label"
+                          sx={{ color: 'text.primary', fontSize: '14px', fontWeight: 400 }}
+                        >
+                          Current model
+                        </Typography>
+                        <SelectedCheckIcon />
+                      </Box>
+                    );
+                  }
+                  return (
+                    <Button
+                      variant="solid"
+                      color="primary"
+                      size="sm"
+                      data-testid="model-use-btn"
+                      disabled={shown.disabled}
+                      onClick={() => handleModelSelection(shown.id)}
+                      sx={{ fontSize: '14px', fontWeight: 400, flexShrink: 0 }}
+                    >
+                      Use this model
+                    </Button>
+                  );
+                })()}
+              </Box>
+
+              <Box sx={{ mt: '24px' }}>
+                {(() => {
+                  const shown = shownModelInfo;
+                  if (!shown) return null;
+                  const showNew = isNewModel(shown);
+                  const showBedrock = shown.backend === ModelBackend.Bedrock;
+                  if (!showNew && !showBedrock) return null;
+                  return (
+                    <Box sx={{ display: 'flex', gap: '4px', mb: '8px' }}>
+                      {showNew && (
+                        <CornerBadge
+                          testId={`model-new-badge-${shown.id}`}
+                          label="New"
+                          tooltip="Released in the last 3 months"
+                          background={NEW_BADGE_BG}
+                        />
+                      )}
+                      {showBedrock && (
+                        <CornerBadge
+                          testId={`bedrock-badge-${shown.id}`}
+                          label="AWS Bedrock"
+                          tooltip="Hosted on AWS Bedrock, not the provider's own API"
+                          background={BEDROCK_BADGE_BG}
+                        />
+                      )}
+                    </Box>
+                  );
+                })()}
+
+                <TabIntro title={shownModelInfo?.name ?? ''} description={shownModelInfo?.description} mt={0} />
+              </Box>
+
               {/* Selected Model Details */}
               <SelectedModelDetails
-                modelInfo={detailsModel ?? modelInfo}
-                model={typedModel}
+                modelInfo={shownModelInfo}
+                // The previewed model, not the session's active one: every gate inside keys off
+                // this, so the screen shows the control set belonging to the model it names.
+                model={shownModel}
+                readOnly={isPreviewingModel}
                 setLLM={setLLM}
                 setSpokenWords={setSpokenWords}
                 historyLines={historyLines}
@@ -2227,9 +2246,6 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 maxTokens={maxTokens}
                 maxContextWindow={maxContextWindow}
                 getPriceTierTooltip={getPriceTierTooltip}
-                isOpenAIModel={isOpenAIModel}
-                isNewModel={isNewModel}
-                isPopular={isPopular}
                 metricsLoading={metricsLoading}
                 modelSpeed={modelSpeed}
                 getModelSpeedVariant={getModelSpeedVariant}
@@ -2256,7 +2272,6 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 safety_tolerance={safeSafetyTolerance}
                 commonTextTitleStyles={commonTextTitleStyles}
                 commonInputStyles={commonInputStyles}
-                commonSelectStyles={commonSelectStyles}
                 mode={mode}
               />
             </Box>
