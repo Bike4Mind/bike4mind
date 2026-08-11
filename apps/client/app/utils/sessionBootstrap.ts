@@ -75,6 +75,25 @@ export function bootstrapSession(): Promise<void> {
   return bootstrapPromise;
 }
 
+/** How close to its `exp` claim a token has to be before a refocus is worth a round trip.
+ *  Generous enough to absorb clock skew between this tab and the server. */
+const REVALIDATE_EXPIRY_BUFFER_MS = 30_000;
+
+/** Decode the `exp` claim (seconds since epoch) from a JWT without verifying the signature
+ *  (client-side only) - same pattern as UserContext's decodeTokenVersion/decodeMfaPending.
+ *  Returns null when absent, malformed, or on a legacy token with no exp claim. */
+function decodeTokenExpiryMs(token: string): number | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const payload = JSON.parse(atob(base64)) as { exp?: unknown };
+    return typeof payload.exp === 'number' ? payload.exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Refocus liveness check - pure predicate, unit-testable in isolation.
  * Mirrors shouldProbeOnFailedWsConnect (WebsocketContext.tsx): decides whether a tab
@@ -86,12 +105,20 @@ export function shouldRevalidateOnFocus(params: {
   mfaPending: boolean;
   expired: boolean;
   pathname: string;
+  /** Injectable for tests; real callers take the default (now). */
+  nowMs?: number;
 }): boolean {
   if (params.visibilityState !== 'visible') return false;
   if (!params.accessToken) return false;
   if (params.mfaPending) return false;
   if (params.expired) return false;
   if (isPublicPath(params.pathname)) return false;
+  const expMs = decodeTokenExpiryMs(params.accessToken);
+  // No readable exp claim (malformed/legacy token) is treated as "could be stale" - probe
+  // rather than silently skip, matching the fail-safe direction of every guard above.
+  if (expMs !== null && expMs - (params.nowMs ?? Date.now()) > REVALIDATE_EXPIRY_BUFFER_MS) {
+    return false;
+  }
   return true;
 }
 
@@ -105,21 +132,34 @@ export function resetProbeGuardForTests(): void {
   probeInFlight = false;
 }
 
+interface IdentifyResponse {
+  user: IUserDocument;
+  accessToken: string;
+}
+
 /**
  * Liveness probe shared by revalidateSessionOnFocus (below) and WebsocketContext's
- * close-probe. Refetches the `['identify']` query directly - rather than a bare
- * `api.get('/api/identify')` - so that when the 401 interceptor refreshes the token, the
- * fresh { user, accessToken } response lands back in the SAME query cache UserProvider's
- * identify effect reads. A bare fetch would leave that cache holding the pre-refresh
- * response; the effect re-runs on the accessToken change and feeds the STALE cached token
- * right back into the store, undoing the refresh (see useGetIdentify's own doc comment on
- * this exact stale-cache-feedback failure mode).
+ * close-probe. Goes through the same `api` instance (the 401 interceptor still refreshes and
+ * retries on a genuine expiry), but on SUCCESS writes the fresh response directly into the
+ * `['identify']` query cache via setQueryData - the same cache UserProvider's identify effect
+ * reads - so a refreshed token doesn't get fed back to stale by that effect (see
+ * useGetIdentify's own doc comment on this exact stale-cache-feedback failure mode).
+ *
+ * Deliberately NOT queryClient.refetchQueries: that would also propagate a FAILED probe (a
+ * transient network error, not a real 401) into the query's error state, and
+ * resolveIdentifyEffect checks isError before isSuccess - so a laptop waking with wifi still
+ * coming up would clear currentUser and bounce the user to /login. A failed probe here just
+ * throws it away; the interceptor's own forceSessionExpiredRedirect (unaffected by this
+ * function) is still what handles a genuinely revoked session.
  */
 export function probeIdentity(queryClient: QueryClient): Promise<void> {
   if (probeInFlight) return Promise.resolve();
   probeInFlight = true;
-  return queryClient
-    .refetchQueries({ queryKey: ['identify'] })
+  return api
+    .get<IdentifyResponse>('/api/identify')
+    .then(response => {
+      queryClient.setQueryData(['identify'], response.data);
+    })
     .catch(() => {})
     .finally(() => {
       probeInFlight = false;
@@ -133,6 +173,8 @@ export function probeIdentity(queryClient: QueryClient): Promise<void> {
  * surfaces, so an idle tab's expired token could sit unrefreshed indefinitely. This fires that
  * recovery explicitly, through probeIdentity above (the SAME interceptor, no separate refresh
  * path), instead of leaving it to whichever query happens to opt in and race there first.
+ * shouldRevalidateOnFocus's exp check means a refocus well before the token's TTL elapses
+ * skips the round trip entirely, so this stays free on the common case.
  */
 export function revalidateSessionOnFocus(queryClient: QueryClient): void {
   const { accessToken, mfaPending, expired } = useAccessToken.getState();

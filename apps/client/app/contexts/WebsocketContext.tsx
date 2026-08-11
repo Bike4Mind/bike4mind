@@ -91,6 +91,10 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   // True once `onOpen` has fired for the CURRENT connect attempt; reset on each close.
   // Mirrors the same flag in the CLI's WebSocketConnectionManager.
   const openedThisAttemptRef = useRef(false);
+  // True once `onReconnectStop` has fired (the reconnect budget below is exhausted, no pending
+  // backoff timer left); reset on the next successful open. Gates the refocus pulse so it only
+  // fires once there is genuinely nothing left running - see the pulse effect below for why.
+  const reconnectExhaustedRef = useRef(false);
 
   // Map the action being listened for to the callbacks that want to hear about it
   const listeners = useRef(new Map<string, ((message: IMessageDataToClient) => Promise<void>)[]>());
@@ -130,6 +134,7 @@ export const WebsocketProvider = ({ children, url }: Props) => {
     onOpen: () => {
       console.log('ws connected');
       openedThisAttemptRef.current = true;
+      reconnectExhaustedRef.current = false;
     },
     onClose(event: CloseEvent) {
       console.log('ws disconnected', event.code, event.reason);
@@ -156,6 +161,7 @@ export const WebsocketProvider = ({ children, url }: Props) => {
     },
     onReconnectStop(numAttempts) {
       console.log('ws reconnect stopped after', numAttempts, 'attempts');
+      reconnectExhaustedRef.current = true;
     },
 
     onMessage: event => {
@@ -227,14 +233,19 @@ export const WebsocketProvider = ({ children, url }: Props) => {
     };
   }, []);
 
-  // On refocus, if the socket isn't open, pulse forceDisconnected to force a fresh
-  // reconnect attempt with a reset backoff budget - a tab idle long enough to exhaust
-  // DEFAULT_RECONNECT_LIMIT would otherwise stay dead until reload even after any token
-  // refresh (see the forceDisconnected declaration above for why this is the only lever).
+  // On refocus, pulse forceDisconnected to force a fresh reconnect attempt with a reset
+  // backoff budget - but ONLY once reconnectExhaustedRef is set (onReconnectStop already
+  // fired, so there is no pending backoff timer left to cancel). Gating on readyState alone
+  // (e.g. "not OPEN") would also pulse mid-backoff: react-use-websocket's own
+  // reconnectInterval below deliberately staggers reconnects with jitter to avoid a
+  // thundering herd after an outage, and cancelling that on every refocus would defeat it -
+  // plus the library never clears its own pending reconnect timer on a url change, so a
+  // mid-backoff pulse leaves a second, stale reconnect attempt to fire later. Once genuinely
+  // exhausted there is no such timer left, so this has neither problem.
   useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState !== 'visible') return;
-      if (readyState === ReadyState.OPEN || readyState === ReadyState.CONNECTING) return;
+      if (!reconnectExhaustedRef.current) return;
       setForceDisconnected(true);
     };
     document.addEventListener('visibilitychange', handleVisibility);
@@ -243,7 +254,7 @@ export const WebsocketProvider = ({ children, url }: Props) => {
       document.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('focus', handleVisibility);
     };
-  }, [readyState]);
+  }, []);
 
   // The other half of the pulse: flip back on the next commit so shouldConnect's dip to
   // false was only momentary - enough for react-use-websocket to see url turn null (see

@@ -29,7 +29,8 @@ vi.mock('react-use-websocket', () => ({
   },
 }));
 
-vi.mock('@tanstack/react-query', () => ({
+vi.mock('@tanstack/react-query', async importOriginal => ({
+  ...(await importOriginal<typeof import('@tanstack/react-query')>()),
   useQueryClient: () => h.queryClient,
 }));
 
@@ -144,9 +145,16 @@ describe('WebsocketProvider - refocus reconnect pulse', () => {
     stubVisibility('visible');
   });
 
-  it('pulses the url to null and back on refocus when the socket is not open (forces a fresh reconnect budget)', async () => {
-    h.readyState = 3; // ReadyState.CLOSED - e.g. reconnect budget already exhausted while idle
+  const mount = () => {
     render(React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div')));
+    return h.capturedOptions.current;
+  };
+
+  it('pulses the url to null and back on refocus once the reconnect budget is exhausted', async () => {
+    const opts = mount();
+    await act(async () => {
+      opts.onReconnectStop(20); // the budget genuinely ran out - no pending backoff timer left
+    });
     h.capturedUrls = [];
 
     await act(async () => {
@@ -159,9 +167,37 @@ describe('WebsocketProvider - refocus reconnect pulse', () => {
     expect(h.capturedUrls[h.capturedUrls.length - 1]).toBe('wss://example/ws');
   });
 
-  it('does not pulse on refocus when the socket is already open', async () => {
-    h.readyState = 1; // ReadyState.OPEN
-    render(React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div')));
+  it('does not pulse on refocus while still mid-backoff (budget not yet exhausted)', async () => {
+    mount(); // no onReconnectStop - a reconnect attempt may still be pending its own backoff
+    h.capturedUrls = [];
+
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    expect(h.capturedUrls).not.toContain(null);
+  });
+
+  it('does not pulse on refocus when the socket is open', async () => {
+    const opts = mount();
+    await act(async () => {
+      opts.onOpen({});
+    });
+    h.capturedUrls = [];
+
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    expect(h.capturedUrls).not.toContain(null);
+  });
+
+  it('a successful reconnect clears the exhausted flag, so a later refocus does not pulse again', async () => {
+    const opts = mount();
+    await act(async () => {
+      opts.onReconnectStop(20);
+      opts.onOpen({});
+    });
     h.capturedUrls = [];
 
     await act(async () => {
@@ -172,8 +208,10 @@ describe('WebsocketProvider - refocus reconnect pulse', () => {
   });
 
   it('does not pulse when the tab is backgrounded (only a return to visible should)', async () => {
-    h.readyState = 3;
-    render(React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div')));
+    const opts = mount();
+    await act(async () => {
+      opts.onReconnectStop(20);
+    });
     h.capturedUrls = [];
     stubVisibility('hidden');
 
