@@ -40,7 +40,9 @@ import {
   createSkillTool,
   createFindDefinitionTool,
   createGetFileStructureTool,
+  createWorkItemTools,
 } from '../tools';
+import { WorkItemsClient } from '../api/WorkItemsClient.js';
 import { CheckpointStore } from '../storage/CheckpointStore.js';
 import { createSandboxRuntime } from '../sandbox/runtime/SandboxRuntimeAdapter.js';
 import { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
@@ -380,6 +382,10 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     const writeTodosTool = createWriteTodosTool(todoStore);
     const findDefinitionTool = createFindDefinitionTool();
     const getFileStructureTool = createGetFileStructureTool();
+    // Off by default - see the matching note in index.tsx.
+    const workItemTools = config.preferences.enableWorkItemTools
+      ? createWorkItemTools(new WorkItemsClient(apiClient))
+      : [];
 
     const enableSkillTool = config.preferences.enableSkillTool !== false;
     const skillTool = enableSkillTool
@@ -393,6 +399,7 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       writeTodosTool,
       findDefinitionTool,
       getFileStructureTool,
+      ...workItemTools,
     ];
     if (skillTool) cliTools.push(skillTool);
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
-import { KnowledgeType } from '@bike4mind/common';
+import { FabFileSourceType, KnowledgeType } from '@bike4mind/common';
 import { createFabFile, type CreateFabFileAdapters } from './create';
 
 // Unsupported file-type gating on ingest. The rejection throws right
@@ -163,6 +163,76 @@ describe('createFabFile (upload moderation gate root cause)', () => {
     expect(persistedData.mimeType).toBe('audio/mpeg');
     // Stored under the generated-audio prefix with an .mp3 extension.
     expect(persistedData.filePath).toMatch(/^generated-audio\/.+\.mp3$/);
+  });
+});
+
+describe('createFabFile provenance', () => {
+  const mockUserId = 'user-123';
+  let fabFilesCreate: Mock;
+  let mockAdapters: CreateFabFileAdapters;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fabFilesCreate = vi.fn().mockImplementation(async data => ({ id: 'fab-1', ...data }));
+    mockAdapters = {
+      db: {
+        fabFiles: { create: fabFilesCreate },
+        adminSettings: {
+          findAll: vi.fn().mockResolvedValue([]),
+          findBySettingNames: vi.fn().mockResolvedValue([]),
+        },
+        users: {
+          findById: vi.fn().mockResolvedValue({ id: mockUserId, storageLimit: 1000, currentStorageSize: 0 }),
+        },
+      },
+      storage: {
+        generateSignedUrl: vi.fn().mockResolvedValue('https://s3.example.com/signed-url'),
+        upload: vi.fn().mockResolvedValue(undefined),
+      },
+    } as unknown as CreateFabFileAdapters;
+  });
+
+  const params = {
+    fileName: 'notes.txt',
+    mimeType: 'text/plain',
+    fileSize: 10,
+    type: KnowledgeType.FILE as const,
+  };
+
+  it('stamps a server-supplied origin onto the persisted document', async () => {
+    await createFabFile(mockUserId, params, {
+      ...mockAdapters,
+      provenance: {
+        sourceType: FabFileSourceType.SLACK,
+        sourceMetadata: { channel: 'C1', messageTs: '1700000000.0001' },
+      },
+    });
+
+    const persisted = fabFilesCreate.mock.calls[0][0];
+    expect(persisted.sourceType).toBe(FabFileSourceType.SLACK);
+    expect(persisted.sourceMetadata).toEqual({ channel: 'C1', messageTs: '1700000000.0001' });
+  });
+
+  it('leaves both fields off when no provenance is supplied', async () => {
+    await createFabFile(mockUserId, params, mockAdapters);
+
+    const persisted = fabFilesCreate.mock.calls[0][0];
+    expect(persisted).not.toHaveProperty('sourceType');
+    expect(persisted).not.toHaveProperty('sourceMetadata');
+  });
+
+  // The whole reason provenance is an adapter and not a schema field: a request body must never
+  // be able to claim an origin. This asserts the schema still strips it.
+  it('ignores sourceType smuggled in through the request parameters', async () => {
+    await createFabFile(
+      mockUserId,
+      { ...params, sourceType: FabFileSourceType.SLACK, sourceMetadata: { channel: 'spoofed' } } as never,
+      mockAdapters
+    );
+
+    const persisted = fabFilesCreate.mock.calls[0][0];
+    expect(persisted).not.toHaveProperty('sourceType');
+    expect(persisted).not.toHaveProperty('sourceMetadata');
   });
 });
 
