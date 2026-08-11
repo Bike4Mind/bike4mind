@@ -44,10 +44,12 @@ const OrgGoogleDriveConnectionSchema = new Schema<IOrgGoogleDriveConnectionDocum
     folderName: { type: String },
     targetDataLakeId: { type: String, required: true },
 
-    // OAuth refresh token. select:false so it never leaks into default reads or toJSON. NO writer
-    // exists yet - the org-owned connect flow that persists this (and MUST encryptToken it first)
-    // lands with issue D. Encryption is call-site convention here, as with the sibling Org*
-    // connections and User.googleDrive; a pre-save encrypt guard should land with that first writer.
+    // OAuth refresh token. select:false so it never leaks into default reads or toJSON. Written by
+    // the connect flow (POST /api/data-lakes/drive-sync), which copies the connecting user's
+    // already-encrypted refresh token. Encryption is CALL-SITE convention (as with the sibling Org*
+    // connections and User.googleDrive) because the crypto helpers live in apps/client and are not
+    // reachable from packages/database - so the encrypt/isEncrypted guard lives at that writer, not a
+    // pre-save hook here. A pre-save hook cannot encrypt without the key it has no access to.
     oauthRefreshToken: { type: String, select: false },
 
     // Metadata
@@ -144,6 +146,23 @@ class OrgGoogleDriveConnectionRepository
   ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
     const result = await this.model.findOne({ _id: id, organizationId }).select('+oauthRefreshToken');
     return result?.toJSON() || null;
+  }
+
+  /**
+   * (Re)write the org-owned encrypted refresh token, org-scoped so one org can't overwrite another's.
+   * Marks the connection healthy since a fresh credential resolves a prior credential_error.
+   * The value must already be encrypted by the caller (crypto is not reachable from packages/database).
+   */
+  async updateCredential(
+    id: string,
+    organizationId: string,
+    encryptedRefreshToken: string
+  ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
+    return this.model.findOneAndUpdate(
+      { _id: id, organizationId },
+      { $set: { oauthRefreshToken: encryptedRefreshToken, status: 'connected', lastError: null } },
+      { new: true }
+    );
   }
 
   /** Update health state; clears `lastError` on a healthy update (mirrors OrgGitHubConnection.updateHealthInfo). */

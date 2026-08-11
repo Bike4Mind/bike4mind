@@ -49,6 +49,26 @@ describe('OrgGoogleDriveConnectionModel - credential handling', () => {
     // org-scoped: another org cannot load this connection's credential by id alone.
     expect(await orgGoogleDriveConnectionRepository.findByIdWithCredentials(created.id, 'org-2')).toBeFalsy();
   });
+
+  it('updateCredential rewrites the token, heals status, and is org-scoped', async () => {
+    const created = await OrgGoogleDriveConnection.create({ ...base, oauthRefreshToken: 'enc-old' });
+    await orgGoogleDriveConnectionRepository.updateHealth(created.id, {
+      status: 'credential_error',
+      lastError: 'invalid_grant',
+    });
+
+    // Wrong org cannot overwrite this connection's credential.
+    expect(await orgGoogleDriveConnectionRepository.updateCredential(created.id, 'org-2', 'enc-new')).toBeFalsy();
+    const stillOld = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(created.id, 'org-1');
+    expect(stillOld?.oauthRefreshToken).toBe('enc-old');
+
+    // Correct org: token rewritten, status healed, error cleared.
+    const updated = await orgGoogleDriveConnectionRepository.updateCredential(created.id, 'org-1', 'enc-new');
+    expect(updated?.status).toBe('connected');
+    expect(updated?.lastError ?? null).toBeNull();
+    const withCreds = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(created.id, 'org-1');
+    expect(withCreds?.oauthRefreshToken).toBe('enc-new');
+  });
 });
 
 describe('OrgGoogleDriveConnectionModel - uniqueness invariants', () => {

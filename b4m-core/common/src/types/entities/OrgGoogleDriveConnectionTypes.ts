@@ -177,6 +177,19 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    */
   findByIdWithCredentials(id: string, organizationId: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
+  /**
+   * (Re)write the org-owned encrypted refresh token for a connection, scoped to an org.
+   * organizationId is REQUIRED so one org can never overwrite another org's credential. Marks the
+   * connection healthy (`connected`, clears `lastError`) since a fresh credential resolves a prior
+   * `credential_error`. SECURITY: `encryptedRefreshToken` must already be encrypted by the caller
+   * (packages/database cannot reach the crypto helpers - see the model note).
+   */
+  updateCredential(
+    id: string,
+    organizationId: string,
+    encryptedRefreshToken: string
+  ): Promise<IOrgGoogleDriveConnectionDocument | null>;
+
   /** Update health state; clears `lastError` on a healthy update. */
   updateHealth(
     id: string,

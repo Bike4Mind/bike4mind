@@ -14,6 +14,12 @@ const oauth2Client = new google.auth.OAuth2(Config.GOOGLE_CLIENT_ID, Config.GOOG
 export function getAuthUrl(): string {
   return oauth2Client.generateAuthUrl({
     access_type: 'offline',
+    // Force the consent screen so Google ALWAYS returns a refresh_token. With `access_type: offline`
+    // alone, a REPEAT authorization omits refresh_token and the callback persists
+    // `refreshToken: undefined` - survivable for a short-lived personal session, but fatal for an
+    // org-owned connection, which copies this token as its durable credential (see drive-sync.ts) and
+    // must keep syncing after the connecting user's access token expires or they leave the org.
+    prompt: 'consent',
     scope: SCOPES,
   });
 }
