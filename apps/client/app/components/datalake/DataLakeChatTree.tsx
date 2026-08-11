@@ -126,12 +126,12 @@ const RowMenuItem = ({
  * square inside an already-highlighted row reads as a second, competing surface.
  */
 const ROW_ACTION_SX = {
-  '--IconButton-size': '22px',
+  '--IconButton-size': '20px',
   '--Icon-color': 'currentColor',
   '--variant-plainHoverBg': 'transparent',
   '--variant-plainActiveBg': 'transparent',
-  minWidth: '22px',
-  minHeight: '22px',
+  minWidth: '20px',
+  minHeight: '20px',
   color: 'text.tertiary',
   transition: 'color 0.3s',
   '&:hover': { backgroundColor: 'transparent', color: 'text.primary' },
@@ -337,11 +337,12 @@ export default function DataLakeChatTree({
       );
     },
     renderFileRow: (file, selected) => (
-      // The row Box owns all of the padding. Joy's ListItem always pads itself and relies on a
+      // The row Box owns the padding. Joy's ListItem always pads itself and relies on a
       // ListItemButton child cancelling it with negative margins (--ListItemButton-marginInline);
       // a plain Box has no such margin, so leaving this padding in place indents file rows twice
-      // as far as the folder rows above.
-      <ListItem key={file.id} sx={{ p: 0 }}>
+      // as far as the folder rows above. The 4px right inset keeps the actions trigger off the
+      // rail's edge.
+      <ListItem key={file.id} sx={{ p: 0, pr: '4px' }}>
         {/* Plain row, not a ListItemButton: row clicks are dead by design (auto-attach removal);
             every action lives in the row's three-dots menu. The trigger reveals on hover/focus,
             stays visible on touch (no-hover) devices, and pins while its menu is open (:has on
