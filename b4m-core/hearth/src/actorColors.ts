@@ -29,6 +29,25 @@ import { actorColorIndex } from './identity';
  * must keep the actor name in normal text ink and let a mark carry the hue -
  * never color the name itself.
  *
+ * HOW TO RE-VALIDATE. The numbers above are not hand-computed: they come from the
+ * dataviz categorical-palette validator, run over the whole set with all-pairs
+ * scope (adjacent-pair scope is too weak for a log, per the all-pairs note above):
+ *
+ *   node scripts/validate_palette.js "#2a78d6,#eda100,#e87ba4,#008300" \
+ *     --mode light --pairs all
+ *   node scripts/validate_palette.js "#3987e5,#c98500,#d55181,#008300" \
+ *     --mode dark  --pairs all
+ *
+ * That script is not vendored here - copying 300 lines of color science into this
+ * package would just let it drift from the canonical one. If you change a hex,
+ * re-run both commands and update the four numbers above; a green light on only
+ * one mode means nothing.
+ *
+ * Green is the one slot with a single step for both modes because that step
+ * already clears 3:1 on each surface (4.82:1 on light, 3.52:1 on dark); the other
+ * three need a per-mode step to get there. It is not an oversight, and it is not
+ * the reason dark CVD sits in the warn band - that pair is green vs yellow.
+ *
  * The slot MAPPING is not here: actorColorIndex lives in identity.ts alongside
  * ACTOR_COLOR_SLOT_COUNT, because a terminal cannot express these hex pairs and
  * needs its own palette of the same length off the same mapping.
