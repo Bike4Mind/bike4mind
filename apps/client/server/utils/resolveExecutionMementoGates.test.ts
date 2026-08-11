@@ -147,4 +147,47 @@ describe('resolveExecutionMementoGates (agent-surface authority, #1337)', () => 
     expect(getSettingsValueMock).not.toHaveBeenCalled();
     expect(isMementosV2EnabledMock).not.toHaveBeenCalled();
   });
+
+  describe('resolve-once memoization (#1525)', () => {
+    it('returns the persisted gates verbatim and reads NO mutable state', async () => {
+      // This is the whole fix: once the execution start has resolved and persisted a verdict, every
+      // downstream site (read preamble, write completion, stop-at-gate) gets that same verdict back
+      // instead of re-deriving it from the admin setting + V2 opt-in a whole agent run later.
+      const persisted = { v1: true, v2: false, v2OptInLookupFailed: false };
+      const gates = await resolveExecutionMementoGates(
+        makeExecution({ enableMementos: true, resolvedMementoGates: persisted }),
+        makeAdapters(),
+        makeLogger()
+      );
+      expect(gates).toEqual(persisted);
+      expect(getSettingsValueMock).not.toHaveBeenCalled();
+      expect(isMementosV2EnabledMock).not.toHaveBeenCalled();
+    });
+
+    it('reuses the persisted verdict even when the live flags now disagree with it', async () => {
+      // A mid-run flip is exactly the disagreement window this closes: the admin setting is now ON and
+      // the user is now V2-opted-in, but the run resolved OFF at its start, so it must stay OFF.
+      getSettingsValueMock.mockResolvedValue(true);
+      isMementosV2EnabledMock.mockResolvedValue(true);
+      const persisted = { v1: false, v2: false, v2OptInLookupFailed: false };
+      const gates = await resolveExecutionMementoGates(
+        makeExecution({ enableMementos: undefined, resolvedMementoGates: persisted }),
+        makeAdapters(),
+        makeLogger()
+      );
+      expect(gates).toEqual(persisted);
+      expect(getSettingsValueMock).not.toHaveBeenCalled();
+      expect(isMementosV2EnabledMock).not.toHaveBeenCalled();
+    });
+
+    it('preserves the persisted opt-in-lookup-failure signal for the write side', async () => {
+      const persisted = { v1: true, v2: false, v2OptInLookupFailed: true };
+      const gates = await resolveExecutionMementoGates(
+        makeExecution({ enableMementos: undefined, resolvedMementoGates: persisted }),
+        makeAdapters(),
+        makeLogger()
+      );
+      expect(gates.v2OptInLookupFailed).toBe(true);
+    });
+  });
 });
