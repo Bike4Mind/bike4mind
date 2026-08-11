@@ -79,22 +79,18 @@ export async function getValidUserDriveAccessToken(userId: string): Promise<stri
   const credentials = await refreshAccessToken(refreshToken);
   if (!credentials.access_token) throw new BadRequestError('Google Drive token refresh returned no access token');
 
-  const update: { $set: Record<string, unknown>; $unset?: Record<string, 1> } = {
-    $set: {
+  await User.updateOne(
+    { _id: userId },
+    {
       'googleDrive.accessToken': encryptToken(credentials.access_token)!,
       'googleDrive.refreshToken': credentials.refresh_token ? encryptToken(credentials.refresh_token)! : rawRefresh,
-    },
-  };
-  // expiresAt is `required` in the schema, so persisting null makes the whole googleDrive subdoc
-  // invalid and fails the NEXT user.save() anywhere (e.g. the websocket connect handler) - not here.
-  // $unset instead: an absent value reads as expired via the `!expiresAt` check above, preserving
-  // the "unknown -> refresh" intent without writing an invalid value.
-  if (credentials.expiry_date) {
-    update.$set['googleDrive.expiresAt'] = new Date(credentials.expiry_date);
-  } else {
-    update.$unset = { 'googleDrive.expiresAt': 1 };
-  }
-  await User.updateOne({ _id: userId }, update);
+      // expiresAt is `required`, so it must be a real Date - both `null` AND an absent ($unset) path
+      // fail the validator on the next user.save() (e.g. the websocket connect handler). When Google
+      // omits expiry_date, write epoch: it satisfies `required` and `dayjs().isAfter(epoch)` reads as
+      // already-expired, so the next call refreshes.
+      'googleDrive.expiresAt': credentials.expiry_date ? new Date(credentials.expiry_date) : new Date(0),
+    }
+  );
 
   return credentials.access_token;
 }
