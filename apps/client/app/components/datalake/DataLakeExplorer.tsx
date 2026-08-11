@@ -325,24 +325,16 @@ export default function DataLakeExplorer({
     }
   }, [chatMode, deepLinkTarget, handleViewFile]);
 
+  // Chat mode deliberately leaves the open file alone: the tree and the viewer are separate panels,
+  // so browsing categories - including back out of one - must not dismiss what you are reading. The
+  // viewer closes on its own Close button (see the layout subscription above). The highlight also
+  // stays, so returning to the file's category still shows which one is open.
   const handleNavigate = useCallback(
     (newBreadcrumb: string[]) => {
       setBreadcrumb(newBreadcrumb);
-      if (chatMode) {
-        // Browsing away closes whatever View opened. Navigation can arrive from the host's idle
-        // pane (DataLakeNavProvider) while the reader has the rail. Only reset a layout WE
-        // opened ('vertical') - an unconditional 'hide' would collapse a docked/floating chat
-        // on external-chat hosts.
-        if (chatEmbedded) {
-          setSessionLayout(prev => (prev.layout === 'vertical' ? { layout: 'hide' } : {}));
-        }
-        setRailViewerOpen(false);
-        setViewerFileId(null);
-      } else {
-        setUserSelectedFile(null);
-      }
+      if (!chatMode) setUserSelectedFile(null);
     },
-    [chatMode, chatEmbedded, setBreadcrumb, setRailViewerOpen, setViewerFileId, setUserSelectedFile]
+    [chatMode, setBreadcrumb, setUserSelectedFile]
   );
 
   // Page mode only: the chat tree's rows carry explicit actions instead of a click handler.

@@ -102,6 +102,7 @@ vi.mock('./DataLakeChatTree', () => ({
     onViewFile: (f: { id: string; fileName: string }) => void;
     canDeleteFile: (f: { id: string; fileName: string }) => boolean;
     onDeleteFile: (f: { id: string; fileName: string }) => void;
+    onNavigate: (breadcrumb: string[]) => void;
     selectedFileId: string | null;
     onClose?: () => void;
   }) => {
@@ -120,6 +121,9 @@ vi.mock('./DataLakeChatTree', () => ({
         </button>
         <button data-testid="mock-delete" onClick={() => props.onDeleteFile(file)}>
           delete
+        </button>
+        <button data-testid="mock-navigate-back" onClick={() => props.onNavigate([])}>
+          back
         </button>
         {props.onClose && (
           <button data-testid="mock-close" onClick={props.onClose}>
@@ -280,6 +284,25 @@ describe('DataLakeExplorer chat-first surface', () => {
     expect(screen.getByTestId('my-chat')).toBeInTheDocument();
     // Nothing is on screen any more, so the tree must not keep claiming a file is open.
     expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', '');
+  });
+
+  it('browsing back out of a category leaves the open viewer up (overlay host)', async () => {
+    // The tree and the viewer are separate panels; navigating one must not dismiss the other.
+    renderExplorer({ chatEmbedded: false });
+    fireEvent.click(screen.getByTestId('mock-view'));
+    await vi.waitFor(() => expect(screen.getByTestId('datalake-rail-viewer')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('mock-navigate-back'));
+
+    expect(screen.getByTestId('datalake-rail-viewer')).toBeInTheDocument();
+    // The highlight survives too, so returning to the category still shows which file is open.
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
+  });
+
+  it('browsing the tree never touches the layout on the embedded host', () => {
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-navigate-back'));
+    expect(setSessionLayout).not.toHaveBeenCalled();
   });
 
   it('closing the viewer clears the row highlight on the embedded host too', async () => {
