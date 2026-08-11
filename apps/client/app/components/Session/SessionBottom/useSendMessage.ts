@@ -308,7 +308,9 @@ export function useSendMessage({
 
     try {
       await stopChatMessage(currentSessionId);
-      toast.success('Generation cancelled successfully');
+      // No success toast here: the inline statusMessage below already surfaces the
+      // cancellation, and a bottom-right toast covers the whole prompt area on
+      // narrow layouts (e.g. chat docked to the right).
       setChatCompletion(prev => ({
         ...prev,
         completed: true,
