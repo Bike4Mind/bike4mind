@@ -284,6 +284,13 @@ export interface FabFileChunkVector {
 
 export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDocument> {
   deleteManyByFabFileId(fabFileId: string): Promise<void>;
+  /**
+   * Every DISTINCT embeddingModel actually used by chunks of the given files - not
+   * FabFile.embeddingModel, which is only the file's current/latest model (see
+   * IFabFileChunk.embeddingModel: chunks can outlive a re-embed). A retrieval index keyed
+   * per-model (e.g. self-host OpenSearch) needs this to know every index a removal must reach.
+   */
+  distinctEmbeddingModelsByFabFileIds(fabFileIds: string[]): Promise<string[]>;
   bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]): Promise<IFabFileChunkDocument[]>;
   findByFabFileId(fabFileId: string): Promise<IFabFileChunkDocument[]>;
   /** Count chunks that are terminal (have a vector OR are oversized) - for idempotent vectorizedChunkCount recompute. */

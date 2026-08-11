@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Keyword-fallback path calls getDynamicDataLakeAccess; stub it. Semantic path is forced to
 // bail (no fabfilechunks/adminSettings/apiKeys on db), so these tests exercise the keyword arm.
@@ -366,6 +366,59 @@ describe('search_knowledge_base partial-corpus disclosure', () => {
     await run(semanticContext());
 
     expect(semanticDataLakeSearchMock.mock.calls[0][0]).toHaveProperty('budgets');
+  });
+
+  describe('self-host OpenSearch adapter wiring', () => {
+    const originalEnv = { ...process.env };
+
+    afterEach(() => {
+      process.env = { ...originalEnv };
+    });
+
+    it('wires a vectorIndex adapter into the unscoped arm when self-host OpenSearch is enabled', async () => {
+      process.env.B4M_SELF_HOST = 'true';
+      process.env.B4M_SELF_HOST_OPENSEARCH = 'true';
+      process.env.OPENSEARCH_ENDPOINT = 'localhost:9200';
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: [hit],
+        totalChunksSearched: 9,
+        filesInScope: 3,
+        scan: scanOf({}),
+      });
+
+      await run(semanticContext());
+
+      expect(semanticDataLakeSearchMock.mock.calls[0][1].vectorIndex).toBeDefined();
+    });
+
+    it('never wires a vectorIndex adapter on the default (Atlas) backend', async () => {
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: [hit],
+        totalChunksSearched: 9,
+        filesInScope: 3,
+        scan: scanOf({}),
+      });
+
+      await run(semanticContext());
+
+      expect(semanticDataLakeSearchMock.mock.calls[0][1].vectorIndex).toBeUndefined();
+    });
+
+    it('wires a vectorIndex adapter into the scoped (agent kbScope) arm when self-host OpenSearch is enabled', async () => {
+      process.env.B4M_SELF_HOST = 'true';
+      process.env.B4M_SELF_HOST_OPENSEARCH = 'true';
+      process.env.OPENSEARCH_ENDPOINT = 'localhost:9200';
+      fileScopedSemanticSearchMock.mockResolvedValue({
+        results: [hit],
+        totalChunksSearched: 9,
+        filesInScope: 3,
+        scan: scanOf({}),
+      });
+
+      await run(semanticContext({ kbScope: { fileIds: ['f1'] } as never }));
+
+      expect(fileScopedSemanticSearchMock.mock.calls[0][1].vectorIndex).toBeDefined();
+    });
   });
 });
 

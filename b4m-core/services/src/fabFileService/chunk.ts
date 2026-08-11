@@ -20,6 +20,7 @@ interface ChunkFileAdapters {
       deleteManyByFabFileId: (fabFileId: string) => Promise<void>;
       bulkInsert: (chunks: Omit<IFabFileChunkDocument, 'id'>[]) => Promise<IFabFileChunkDocument[]>;
       update: (chunk: IFabFileChunkDocument) => Promise<unknown>;
+      distinctEmbeddingModelsByFabFileIds: (fabFileIds: string[]) => Promise<string[]>;
     };
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
@@ -29,12 +30,18 @@ interface ChunkFileAdapters {
     getContentAsBuffer: (filePath: string) => Promise<Buffer>;
   };
   logger: Logger;
+  /**
+   * Self-host OpenSearch only (undefined elsewhere). Re-chunking deletes the old
+   * FabFileChunk rows and their embeddingModel with them - without this, the old chunks'
+   * OpenSearch vectors would survive as permanent orphans in the OLD model's index.
+   */
+  searchIndex?: { deleteByFabFileId: (fabFileId: string, embeddingModel: string) => Promise<void> };
 }
 
 export const chunkFabfile = async (
   user: IUserDocument,
   parameters: ChunkFileParameters,
-  { db, storage, logger }: ChunkFileAdapters
+  { db, storage, logger, searchIndex }: ChunkFileAdapters
 ) => {
   const { fabFileId, embeddingModel, passageTokenTarget } = secureParameters(parameters, chunkFileSchema);
 
@@ -47,6 +54,15 @@ export const chunkFabfile = async (
   const chunks = await chunker.chunkFile(fabFile);
   chunker.freeEncoder();
   Logger.globalInstance.log(`Completed chunking file into ${chunks.length} chunks`);
+
+  // Resolved before the old chunks are deleted below - their per-chunk embeddingModel is the
+  // only place this survives once they're gone. Chunks can span more than one model if this
+  // file was already re-embedded once before (see IFabFileChunk.embeddingModel), so
+  // fabFile.embeddingModel alone - the CURRENT model only - would miss an earlier OpenSearch
+  // index left behind by that prior re-embed.
+  const previousChunkEmbeddingModels = searchIndex
+    ? await db.fabFileChunks.distinctEmbeddingModelsByFabFileIds([fabFileId])
+    : [];
 
   fabFile.isChunking = false;
   fabFile.chunked = chunks.length > 0;
@@ -66,6 +82,9 @@ export const chunkFabfile = async (
   await db.fabFiles.update(fabFile);
 
   await db.fabFileChunks.deleteManyByFabFileId(fabFileId);
+  if (searchIndex) {
+    await Promise.all(previousChunkEmbeddingModels.map(model => searchIndex.deleteByFabFileId(fabFileId, model)));
+  }
 
   const fabFileChunks = await Promise.all(
     chunks.map(async chunk => {

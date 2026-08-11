@@ -56,6 +56,15 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
     await this.fabFileChunkModel.deleteMany({ fabFileId });
   }
 
+  async distinctEmbeddingModelsByFabFileIds(fabFileIds: string[]): Promise<string[]> {
+    if (fabFileIds.length === 0) return [];
+    // Uses the { fabFileId: 1, _id: 1 } compound index below for the filter half of the scan.
+    return this.fabFileChunkModel.distinct('embeddingModel', {
+      fabFileId: { $in: fabFileIds },
+      embeddingModel: { $ne: null },
+    });
+  }
+
   async bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]) {
     const result = await this.fabFileChunkModel.insertMany(chunks);
 

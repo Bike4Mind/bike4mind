@@ -13,6 +13,8 @@ import {
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { NotFoundError } from '@bike4mind/utils';
+import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
+import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { findLakeAccessibleFabFile } from '@server/dataLakes';
@@ -184,6 +186,7 @@ const handler = baseApi()
           onDeleteComplete: async (_fabFile, size) => {
             sizeToDeduct = size;
           },
+          searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
         }
       );
 
