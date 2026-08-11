@@ -359,6 +359,12 @@ export const QuestStartBodySchema = z.object({
   allowedAgents: z.array(z.string()).optional(),
   /** When true, Quest Processor injects Slack-specific tool configs (help, notebooks, curated files) */
   enableSlackTools: z.boolean().optional(),
+  /**
+   * Disclose the system prompt text this completion was assembled from. Exposed on the process
+   * instance for the direct response of the request that asked for it, and never persisted -
+   * the derived breakdown (`promptMeta.context.systemPromptDetails`) is the persisted half.
+   */
+  includeSystemPrompt: z.boolean().optional(),
 });
 
 // Type for what features need from the chat completion service

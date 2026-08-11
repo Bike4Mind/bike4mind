@@ -207,6 +207,9 @@
           },
           "includePromptDetails": {
             "type": "boolean"
+          },
+          "includeSystemPrompt": {
+            "type": "boolean"
           }
         },
         "required": [

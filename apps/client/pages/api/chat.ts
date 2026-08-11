@@ -1,11 +1,5 @@
 import { ChatCompletionFeature, ChatCompletionInvoke, ChatCompletionProcess, featureNames } from '@bike4mind/services';
-import {
-  BadRequestError,
-  getSettingsMap,
-  getSettingsValue,
-  NotFoundError,
-  SQSService,
-} from '@bike4mind/utils';
+import { BadRequestError, getSettingsMap, getSettingsValue, NotFoundError, SQSService } from '@bike4mind/utils';
 import { PipelineTimer } from '@bike4mind/llm-adapters';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
@@ -193,6 +187,9 @@ const handler = nextRouteForContract(chatContract, {
       ...(simplifiedRequest.includePromptDetails && completedQuest.promptMeta?.context?.systemPromptDetails
         ? { promptDetails: completedQuest.promptMeta.context.systemPromptDetails }
         : {}),
+      // Read off the process instance, not the quest: the disclosed text is deliberately never
+      // persisted, so this response is the only place it exists.
+      ...(processService.systemPromptText && { promptText: processService.systemPromptText }),
       ...(toolMeta && { tools: toolMeta }),
       performance,
       tracking_info: {
@@ -298,6 +295,7 @@ function transformToInternalFormat(
     },
     enableArtifacts: false,
     ...(request.promptMode ? { promptMode: request.promptMode } : {}),
+    includeSystemPrompt: request.includeSystemPrompt,
     ...(isToolsEnabled
       ? {
           // Legacy enableTools=true callers expect full capabilities by default.
