@@ -68,14 +68,6 @@ const event = {
 
 const run = () => (dispatch as unknown as (e: unknown, c: unknown, l: unknown) => Promise<void>)(event, {}, logger);
 
-/** Mirrors the trace used to verify the deployed worker: one line per case, same fields. */
-function trace(scenario: string, skipped: boolean) {
-  const notified = h.createInboxMessage.mock.calls.length > 0;
-  const lookedUpJob = h.findByS3Key.mock.calls.length > 0;
-
-  console.log(`[[test]] ${scenario} {"skipped":${skipped},"jobLookup":${lookedUpJob},"userNotified":${notified}}`);
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
   h.findByS3Key.mockResolvedValue(null);
@@ -92,7 +84,6 @@ describe('notebook import duplicate-event guard', () => {
     // Skipped means it never reached the job lookup, so nothing downstream ran.
     expect(h.findByS3Key).not.toHaveBeenCalled();
     expect(h.createInboxMessage).not.toHaveBeenCalled();
-    trace('NoSuchKey (Error)', true);
   });
 
   it('skips a redelivered event for NotFound, which is what HeadObject rejects with', async () => {
@@ -102,7 +93,6 @@ describe('notebook import duplicate-event guard', () => {
 
     expect(h.findByS3Key).not.toHaveBeenCalled();
     expect(h.createInboxMessage).not.toHaveBeenCalled();
-    trace('NotFound (Error)', true);
   });
 
   it('skips a plain-object rejection carrying the name, with no Error prototype', async () => {
@@ -114,7 +104,6 @@ describe('notebook import duplicate-event guard', () => {
 
     expect(h.findByS3Key).not.toHaveBeenCalled();
     expect(h.createInboxMessage).not.toHaveBeenCalled();
-    trace('NoSuchKey (plain object)', true);
   });
 
   it('does not swallow an unrelated failure', async () => {
@@ -125,6 +114,5 @@ describe('notebook import duplicate-event guard', () => {
     // Not skipped: the guard must stay narrow, so this reaches the failure path and the user
     // is told. Pins that the not-found branch did not widen into catching everything.
     expect(h.createInboxMessage).toHaveBeenCalled();
-    trace('unrelated error', false);
   });
 });

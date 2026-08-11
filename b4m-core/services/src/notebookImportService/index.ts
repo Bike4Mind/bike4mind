@@ -11,7 +11,6 @@ import {
   ImportResult,
   NotebookImportError,
   SUPPORTED_IMPORT_VERSIONS,
-  Expect,
 } from '../notebookExportService/types';
 import { isValidEnumValue, KnowledgeType } from '@bike4mind/common';
 import type { IChatHistoryItem } from '@bike4mind/common';
@@ -36,6 +35,15 @@ export interface NotebookImportAdapters {
   // Property syntax throughout, not method shorthand: methods are compared bivariantly, so an
   // implementation demanding a narrower argument than the service passes would still compile.
   sessionRepository: {
+    /**
+     * `Record<string, unknown>` rather than the notebook shape, and that hides a real mismatch:
+     * `BaseRepository.create` declares `Omit<T, 'id' | ...>` while this service always passes `id`.
+     * `id` is not a SessionSchema path - it is Mongoose's getter-only `_id` virtual - so the field
+     * is dropped and `preserveIds` does not preserve a notebook's id. Confirmed on a deployed
+     * worker: importing with preserveIds on created a notebook under a freshly minted id, not the
+     * exported one. Typing the payload would make that a compile error, which is a behaviour fix
+     * and not this change.
+     */
     create: (data: Record<string, unknown>) => Promise<NotebookRef>;
     find: (query: { userId: string; name: string }) => Promise<NotebookRef[]>;
     updateById: (id: string, data: Record<string, unknown>) => Promise<unknown>;
@@ -65,6 +73,10 @@ export interface NotebookImportAdapters {
 function toKnowledgeType(raw: string | undefined): KnowledgeType {
   return raw && isValidEnumValue(raw, KnowledgeType) ? raw : KnowledgeType.FILE;
 }
+
+// Declared here rather than imported: `types.ts` is re-exported wholesale from the package entry
+// point, so exporting it there would put a one-word generic name in this package's public API.
+type Expect<T extends true> = T;
 
 /**
  * Fails typecheck if a whole slot is re-loosened to `any` - every one of them used to be. Lives in
