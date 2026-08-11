@@ -204,7 +204,7 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
     } catch (error) {
       // A concurrent removal landing between the read above and this write leaves nothing to
       // remove, which is the state the caller asked for anyway - still worth a recompute, unlike
-      // an actual gate rejection, which throws below without ever reaching this line.
+      // an actual gate rejection, which rethrows below and never touches the lake at all.
       if (error instanceof NotFoundError) {
         touchedLakes.set(lake.id, lake);
         return;
