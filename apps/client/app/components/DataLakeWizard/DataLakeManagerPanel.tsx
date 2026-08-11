@@ -906,7 +906,7 @@ function NavSectionHeader({
     >
       {/* Label and help sit as one group, so the icon stays beside the text instead of being
           pushed across to the chevron by a stretching label. Same pairing as the tree header. */}
-      <Box sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '2px' }}>
+      <Box sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
         <Typography noWrap sx={{ minWidth: 0, fontSize: '14px', fontWeight: 400, color: 'text.primary' }}>
           {label}
         </Typography>
