@@ -25,7 +25,7 @@ env:
 
 jobs:
   zap-website-scan:
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 45
     env:
       # Optional overrides passed from workflow_dispatch
