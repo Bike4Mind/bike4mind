@@ -620,23 +620,25 @@ function ManagerNav({
               emptyLabel="No files"
               lakes={archivedLakes ? filterByName(archivedLakes) : undefined}
               hoverBg={hoverBg}
-              renderActions={lake => (
-                <>
-                  <RowMenuItem
-                    testId={`datalake-restore-btn-${lake.id}`}
-                    icon={<UnarchiveOutlinedIcon sx={{ fontSize: 16 }} />}
-                    label="Restore"
-                    onClick={() => unarchiveLake.mutate(lake.id)}
-                  />
-                  <RowMenuItem
-                    testId={`datalake-delete-btn-${lake.id}`}
-                    icon={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
-                    label="Delete"
-                    onClick={() => deleteLake.mutate(lake.id)}
-                    danger
-                  />
-                </>
-              )}
+              // An array, not a fragment: Joy's Menu clones its first child with data-first-child,
+              // which a Fragment rejects with a console error.
+              renderActions={lake => [
+                <RowMenuItem
+                  key="restore"
+                  testId={`datalake-restore-btn-${lake.id}`}
+                  icon={<UnarchiveOutlinedIcon sx={{ fontSize: 16 }} />}
+                  label="Restore"
+                  onClick={() => unarchiveLake.mutate(lake.id)}
+                />,
+                <RowMenuItem
+                  key="delete"
+                  testId={`datalake-delete-btn-${lake.id}`}
+                  icon={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
+                  label="Delete"
+                  onClick={() => deleteLake.mutate(lake.id)}
+                  danger
+                />,
+              ]}
             />
 
             {/* Deleted (recoverable until purged) */}
@@ -648,23 +650,24 @@ function ManagerNav({
               emptyLabel="No files"
               lakes={deletedLakes ? filterByName(deletedLakes) : undefined}
               hoverBg={hoverBg}
-              renderActions={lake => (
-                <>
-                  <RowMenuItem
-                    testId={`datalake-restore-deleted-btn-${lake.id}`}
-                    icon={<RestoreIcon sx={{ fontSize: 16 }} />}
-                    label="Restore"
-                    onClick={() => restoreDeletedLake.mutate(lake.id)}
-                  />
-                  <RowMenuItem
-                    testId={`datalake-purge-btn-${lake.id}`}
-                    icon={<DeleteForeverIcon sx={{ fontSize: 16 }} />}
-                    label="Purge permanently"
-                    onClick={() => setPurgeTarget({ id: lake.id, name: lake.name })}
-                    danger
-                  />
-                </>
-              )}
+              // Array for the same data-first-child reason as the archived section above.
+              renderActions={lake => [
+                <RowMenuItem
+                  key="restore"
+                  testId={`datalake-restore-deleted-btn-${lake.id}`}
+                  icon={<RestoreIcon sx={{ fontSize: 16 }} />}
+                  label="Restore"
+                  onClick={() => restoreDeletedLake.mutate(lake.id)}
+                />,
+                <RowMenuItem
+                  key="purge"
+                  testId={`datalake-purge-btn-${lake.id}`}
+                  icon={<DeleteForeverIcon sx={{ fontSize: 16 }} />}
+                  label="Purge permanently"
+                  onClick={() => setPurgeTarget({ id: lake.id, name: lake.name })}
+                  danger
+                />,
+              ]}
             />
 
             {/* Irreversible purge confirmation */}
