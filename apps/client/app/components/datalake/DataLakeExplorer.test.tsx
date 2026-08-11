@@ -53,6 +53,19 @@ vi.mock('@client/app/hooks/data/fabFiles', () => ({
 
 vi.mock('@client/app/components/DataLakeWizard/DataLakeIngestPickerModal', () => ({ default: () => null }));
 
+// The rail viewer mounts KnowledgeViewer, which pulls in the websocket/session/artifact chain.
+// What this suite owns is the explorer's wiring - whether the rail swaps and Back returns - so
+// the wrapper is stubbed with the same test ids it renders.
+vi.mock('./DataLakeRailViewer', () => ({
+  default: ({ onBack }: { onBack: () => void }) => (
+    <div data-testid="datalake-rail-viewer">
+      <button data-testid="datalake-viewer-back-btn" onClick={onBack}>
+        back
+      </button>
+    </div>
+  ),
+}));
+
 // The page-mode header's ManageKnowledgeButton folds in the EnableDataLakes gate, which
 // reaches the admin settings cache; mirror manageKnowledge.test's stubs for that chain.
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
@@ -220,8 +233,8 @@ describe('DataLakeExplorer chat-first surface', () => {
       expect(setSessionLayout).toHaveBeenCalledWith({ layout: 'vertical', selectedArtifactId: 'file-123' });
     });
     expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
-    // The rail keeps the tree; the file opens beside the chat, not in place of the tree.
-    expect(screen.queryByTestId('datalake-rail-reader')).toBeNull();
+    // The rail keeps the tree; the chat's own SessionContainer renders the viewer here.
+    expect(screen.queryByTestId('datalake-rail-viewer')).toBeNull();
   });
 
   it('view on /new mints the session first, then opens the split', async () => {
@@ -236,26 +249,29 @@ describe('DataLakeExplorer chat-first surface', () => {
     expect(createSessionForFile).toHaveBeenCalledTimes(1);
   });
 
-  it('view on an overlay host uses the rail reader, never the global layout', () => {
+  it('view on an overlay host mounts the viewer in the rail and never sets a layout', async () => {
     // Regression guard: switching to 'vertical' here collapsed the overlay's docked chat into
     // the 0x0 non-docked branch with no on-surface way back. Keyed on the HOST prop, not the
-    // live layout store - that store is global and leaks across surfaces.
-    sessionState.currentSessionId = null;
+    // live layout store - that store is global and leaks across surfaces. Selecting the artifact
+    // is fine; it is `layout` that must never be written.
     renderExplorer({ chatEmbedded: false });
     fireEvent.click(screen.getByTestId('mock-view'));
-    expect(screen.getByTestId('datalake-rail-reader')).toBeInTheDocument();
+    await vi.waitFor(() => expect(screen.getByTestId('datalake-rail-viewer')).toBeInTheDocument());
     expect(screen.queryByTestId('mock-tree')).toBeNull();
-    // No session needed and nothing attached to read a lake file there.
-    expect(setWorkBenchFiles).not.toHaveBeenCalled();
-    expect(setSessionLayout).not.toHaveBeenCalled();
+    expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function));
+    expect(setSessionLayout).toHaveBeenCalledWith({ selectedArtifactId: 'file-123' });
+    expect(setSessionLayout).not.toHaveBeenCalledWith(
+      expect.objectContaining({ layout: expect.anything() as unknown as string })
+    );
   });
 
-  it('reader back returns to the tree with the viewed file highlighted (overlay host)', () => {
+  it('viewer back returns to the tree with the viewed file highlighted (overlay host)', async () => {
     renderExplorer({ chatEmbedded: false });
     fireEvent.click(screen.getByTestId('mock-view'));
-    fireEvent.click(screen.getByTestId('datalake-reader-back-btn'));
+    await vi.waitFor(() => expect(screen.getByTestId('datalake-viewer-back-btn')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('datalake-viewer-back-btn'));
     expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
-    expect(screen.queryByTestId('datalake-rail-reader')).toBeNull();
+    expect(screen.queryByTestId('datalake-rail-viewer')).toBeNull();
   });
 
   it('deep-linked articleId opens it the same way View does', async () => {

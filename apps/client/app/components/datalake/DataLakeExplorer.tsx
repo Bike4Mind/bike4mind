@@ -18,7 +18,7 @@ import { SurfaceBreadcrumb } from '@client/app/components/datalake/SurfaceBreadc
 import DataLakeTree from './DataLakeTree';
 import DataLakeChatTree from './DataLakeChatTree';
 import DataLakeArticle from './DataLakeArticle';
-import DataLakeRailReader from './DataLakeRailReader';
+import DataLakeRailViewer from './DataLakeRailViewer';
 import { resolveManageableLake } from './resolveManageableLake';
 import { DataLakeNavProvider } from './dataLakeNavContext';
 import { StatTicker, inkFor, surfaceBackground } from '@client/app/components/datalake/surfaceChrome';
@@ -136,8 +136,8 @@ export default function DataLakeExplorer({
   const [userSelectedFile, setUserSelectedFile] = useState<IFabFileDocument | null>(null);
   // Chat mode: id of the file most recently viewed, kept to highlight it in the tree.
   const [viewerFileId, setViewerFileId] = useState<string | null>(articleId ?? null);
-  // Chat mode: file open in the rail reader (View action); it replaces the tree until Back.
-  const [readerFile, setReaderFile] = useState<IFabFileDocument | null>(null);
+  // External-chat hosts only: the KnowledgeViewer takes the rail (View action) until Back.
+  const [railViewerOpen, setRailViewerOpen] = useState(false);
   // Chat mode: pending remove-from-lake confirmation.
   const [deleteTarget, setDeleteTarget] = useState<{ file: IFabFileDocument; lake: ManageableDataLakeConfig } | null>(
     null
@@ -195,24 +195,29 @@ export default function DataLakeExplorer({
     [ensureSessionId, addToWorkBench]
   );
 
-  // View. The embedded host opens the KnowledgeViewer split, which builds its tabs FROM the
-  // session workbench - so the file has to be attached for it to have a tab at all. Overlay
-  // hosts get the in-rail reader instead: their chat is docked outside this component, so
-  // switching the global layout would collapse it, and the reader needs no session.
+  // View opens the file in the KnowledgeViewer on both hosts. The viewer builds its tabs FROM
+  // the session workbench, so the file has to be attached for it to have a tab at all.
+  //
+  // How the viewer gets on screen differs, and only by necessity: with the chat embedded, the
+  // chat's own SessionContainer renders it once the layout is `vertical`. External-chat hosts
+  // dock the chat (`dockRight`), a mode in which SessionContainer renders NO viewer and whose
+  // layout must not be touched - `vertical` would collapse the dock into a 0x0 branch, and the
+  // host force-redocks anything else. So we set the selected artifact WITHOUT touching `layout`
+  // and mount the viewer in our own rail.
   const handleViewFile = useCallback(
     async (file: IFabFileDocument) => {
-      if (!chatEmbedded) {
-        setReaderFile(file);
-        setViewerFileId(file.id);
-        return;
-      }
       const sessionId = await ensureSessionId();
       if (!sessionId) return;
       addToWorkBench(sessionId, file);
-      setSessionLayout({ layout: 'vertical', selectedArtifactId: file.id });
+      if (chatEmbedded) {
+        setSessionLayout({ layout: 'vertical', selectedArtifactId: file.id });
+      } else {
+        setSessionLayout({ selectedArtifactId: file.id });
+        setRailViewerOpen(true);
+      }
       setViewerFileId(file.id);
     },
-    [chatEmbedded, ensureSessionId, addToWorkBench, setReaderFile, setViewerFileId]
+    [chatEmbedded, ensureSessionId, addToWorkBench, setRailViewerOpen, setViewerFileId]
   );
 
   // Delete gating: the lake list is only needed in chat mode (page mode has no row actions).
@@ -318,13 +323,13 @@ export default function DataLakeExplorer({
         if (chatEmbedded) {
           setSessionLayout(prev => (prev.layout === 'vertical' ? { layout: 'hide' } : {}));
         }
-        setReaderFile(null);
+        setRailViewerOpen(false);
         setViewerFileId(null);
       } else {
         setUserSelectedFile(null);
       }
     },
-    [chatMode, chatEmbedded, setBreadcrumb, setReaderFile, setViewerFileId, setUserSelectedFile]
+    [chatMode, chatEmbedded, setBreadcrumb, setRailViewerOpen, setViewerFileId, setUserSelectedFile]
   );
 
   // Page mode only: the chat tree's rows carry explicit actions instead of a click handler.
@@ -537,8 +542,8 @@ export default function DataLakeExplorer({
             transition: 'padding-left 0.2s ease',
           }}
         >
-          {readerFile ? (
-            <DataLakeRailReader file={readerFile} onBack={() => setReaderFile(null)} />
+          {railViewerOpen ? (
+            <DataLakeRailViewer onBack={() => setRailViewerOpen(false)} />
           ) : (
             <DataLakeChatTree
               tree={tree}

@@ -33,19 +33,24 @@ touch) holding the actions below, and clicking the row itself runs View.
   (external-chat hosts), keep the existing guidance toast.
 - Remove: confirm dialog, then `useRemoveFileFromDataLake`, with the Discover
   viewer's copy (the file leaves the lake but stays in Files and existing chats).
-- View: reopens the file where it always opened. On the chat-embedded host that is
-  the KnowledgeViewer split (`setSessionLayout({ layout: 'vertical' })`), which
-  builds its tabs from the session workbench - so View attaches the file too,
-  minting the session first on `/new`. External-chat hosts (the overlay, whose
-  chat is docked outside this component and would collapse if the global layout
-  changed) fall back to an in-rail read-only reader with a Back control that
-  restores the tree, breadcrumb intact; that path needs no session and attaches
-  nothing.
+- View: opens the file in the KnowledgeViewer on every chat surface, attaching it
+  on the way (the viewer builds its tabs from the session workbench, so a file
+  with no workbench entry has no tab) and minting the session first on `/new`.
+  Only the route onto the screen differs, and only where it must:
+  - Chat embedded: `setSessionLayout({ layout: 'vertical', selectedArtifactId })`
+    and the chat's own SessionContainer renders the viewer.
+  - External-chat host (the overlay): the chat is docked (`dockRight`), a mode in
+    which SessionContainer renders no viewer, and the layout cannot be used to get
+    one - `vertical` collapses the dock and the host force-redocks anything else.
+    So only `selectedArtifactId` is set and the explorer mounts its own viewer in
+    the rail (`autoHideOnEmpty={false}`, or the viewer would push the layout to
+    `hide` and take the dock with it), with a Back control that restores the tree.
 
-Revised after review of the first build, where View opened the in-rail reader on
-every surface: reading a lake file beside the chat is the behavior people already
-had, and losing it to gain attach-free viewing was the wrong trade. The bug being
-fixed is browsing mutating the chat, not viewing doing so.
+Revised twice after seeing the first build: View opened an in-rail markdown reader
+on every surface, which took away reading a file beside the chat, and then opened
+the split on the embedded host only, which left the overlay behaving differently.
+Reading a lake file where it has always appeared is the behavior people already
+had; the bug being fixed is browsing mutating the chat, not viewing doing so.
 
 ## Known tension
 
@@ -77,26 +82,28 @@ AND it has `canManage`. Consequences, both intended:
 
 ## Removals
 
-- The auto-attach write (`setWorkBenchFiles`) leaves the click path. What
-  `openFileInViewer` did splits in two: `attachFileToChat` behind `[+]` (attach
-  plus a success toast, no layout write) and `handleViewFile` behind View (the
-  old attach-plus-split, or the rail reader off-host). Both share
-  `ensureSessionId`, which owns the `/new` minting and its double-click guard.
+- The silent auto-attach leaves the click path. What `openFileInViewer` did splits
+  in two: `attachFileToChat` behind Attach to chat (attach plus a success toast,
+  no layout write) and `handleViewFile` behind View. Both share `ensureSessionId`,
+  which owns the `/new` minting and its double-click guard.
 - `chatEmbedded` stays: it is what keeps View from switching a global layout that
-  an external-chat host has its docked chat inside. The premium guard test
-  asserts the overlay never passes it, so the overlay keeps the reader path.
+  an external-chat host has its docked chat inside. The premium guard test asserts
+  the overlay never passes it, so the overlay keeps the rail-mounted viewer.
 - Deep-linked `?article=` ids go through the same `handleViewFile`, so a link
   opens what View opens.
 
 ## Testing
 
-- `DataLakeExplorer.test.tsx`: invert the click assertions - a file click must
-  not call `setWorkBenchFiles`, `setSessionLayout`, or toast.
-- New: `[+]` attaches (existing session / `/new` minting / no-session toast);
-  View swaps rail to reader and back without attaching or minting; deep-link
-  opens the reader without attaching; `[x]` gating (meta-tag resolution,
-  `canManage` true/false, fallback lake); confirm dialog wired to the mutation.
-- Tree chrome tests: hover controls render, clicks do not bubble to the row.
+- `DataLakeExplorer.test.tsx`: the explorer writes nothing until an action runs;
+  which gesture triggers which action is the tree's contract.
+- Attach (existing session / `/new` minting / no-session toast / create
+  rejection); View on the embedded host sets `layout: 'vertical'`, on an
+  external-chat host mounts the rail viewer and sets ONLY `selectedArtifactId`;
+  Back restores the tree; deep-link behaves as View; delete gating (meta-tag
+  resolution, `canManage` true/false, fallback lake); confirm dialog wired to the
+  mutation.
+- Tree chrome tests: a row click runs View, an actions-menu click does not, the
+  trigger is frameless, and the menu's items gate on `canDeleteFile`.
 
 ## Known follow-up (not this change)
 
