@@ -86,6 +86,21 @@ describe('MetadataFilterPanel - field allowlist', () => {
   });
 });
 
+describe('MetadataFilterPanel - custom field entry', () => {
+  it('keeps accepting input when the typed text matches a suggested key', () => {
+    renderPanel({ metadataFields: ['credits'], initialFilters: [{ field: '', operator: 'equals', value: '' }] });
+
+    const typeField = (value: string) =>
+      fireEvent.change(screen.getByPlaceholderText('Enter field name'), { target: { value } });
+
+    typeField('credits');
+    expect(screen.getByPlaceholderText('Enter field name')).toHaveValue('credits');
+
+    typeField('creditsUsed');
+    expect(screen.getByPlaceholderText('Enter field name')).toHaveValue('creditsUsed');
+  });
+});
+
 describe('MetadataFilterPanel - row identity', () => {
   it('keeps the surviving row showing its own field name after an earlier row is deleted', () => {
     renderPanel({

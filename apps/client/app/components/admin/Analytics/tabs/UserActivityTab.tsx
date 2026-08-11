@@ -349,7 +349,10 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, i
           testId="user-activity-error"
         />
       ) : (
-        <Box sx={{ opacity: isFetching ? 0.55 : 1, transition: 'opacity 0.15s ease-in-out' }}>
+        <Box
+          data-testid="user-activity-results"
+          sx={{ opacity: isFetching ? 0.55 : 1, transition: 'opacity 0.15s ease-in-out' }}
+        >
           {/* Keyed on `total`, not on this page's rows: a page past the end of a shrunken result
               set has no rows, and hiding the controls there would leave no way back to page 1. */}
           {total > 0 && (

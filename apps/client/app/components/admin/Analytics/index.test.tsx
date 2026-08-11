@@ -63,4 +63,23 @@ describe('AnalyticsTab', () => {
     expect(screen.queryByTestId('user-activity-row')).toBeNull();
     expect(screen.getByRole('progressbar')).toBeTruthy();
   });
+
+  it('reserves height for the progress bar even when it is not rendered', () => {
+    useAnalyticsData.mockReturnValue({
+      data: { logs: ROWS, total: 1 },
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(
+      <TestWrapper>
+        <AnalyticsTab />
+      </TestWrapper>
+    );
+
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    expect(screen.getByTestId('analytics-progress-slot')).toHaveStyle({ height: '4px' });
+  });
 });

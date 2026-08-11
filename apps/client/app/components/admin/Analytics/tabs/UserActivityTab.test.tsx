@@ -73,11 +73,26 @@ describe('UserActivityTab', () => {
   });
 
   it('disables Refresh and pagination while a refetch is in flight, without hiding the retained rows', () => {
+    // page: 2, not the beforeEach default of 1 - Previous is already disabled at page 1
+    // regardless of isFetching, so that assertion alone can't catch a missing `disabled` wire-up.
+    useAnalyticsStore.setState({ page: 2, limit: 25 });
     renderTab({ total: 4210, isFetching: true });
 
     expect(screen.getByTestId('user-activity-refresh-btn').closest('button')).toBeDisabled();
     expect(screen.getByLabelText('Next page').closest('button')).toBeDisabled();
     expect(screen.getByLabelText('Previous page').closest('button')).toBeDisabled();
     expect(screen.getAllByTestId('user-activity-row').length).toBeGreaterThan(0);
+  });
+
+  it('dims the retained results while a refetch is in flight', () => {
+    renderTab({ total: 4210, isFetching: true });
+
+    expect(screen.getByTestId('user-activity-results')).toHaveStyle({ opacity: '0.55' });
+  });
+
+  it('shows the results at full opacity outside a refetch', () => {
+    renderTab({ total: 4210, isFetching: false });
+
+    expect(screen.getByTestId('user-activity-results')).toHaveStyle({ opacity: '1' });
   });
 });

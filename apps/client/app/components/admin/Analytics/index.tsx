@@ -66,7 +66,7 @@ const AnalyticsTab: React.FC = () => {
         </Grid>
 
         {/* Reserved height keeps the bar from shifting the content below it on every page turn. */}
-        <Box sx={{ width: '100%', height: 4, mx: '5px' }}>
+        <Box data-testid="analytics-progress-slot" sx={{ width: '100%', height: 4, mx: '5px' }}>
           {isFetching && <LinearProgress size={'sm'} sx={{ width: '100%' }} />}
         </Box>
 

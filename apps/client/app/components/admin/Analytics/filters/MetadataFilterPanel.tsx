@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Card,
   Stack,
@@ -40,13 +40,20 @@ interface MetadataFilterState {
 }
 
 const FilterRow: React.FC<FilterRowProps> = ({ filter, onChange, onDelete, metadataFields }) => {
-  // Derived from filter.field alone (no local state): the row is keyed by array index, so any
-  // state seeded at mount would go stale when a row above it is deleted and React reuses the
-  // instance for the next filter.
-  const isCustomField = !metadataFields.includes(filter.field);
+  // Seeded once per row and changed only by an explicit Select choice, not derived from
+  // filter.field on every render - otherwise typing a custom name that happens to match a
+  // suggestion (or a page turn that changes `metadataFields`) would swap the Input out from
+  // under the cursor mid-entry. Safe now that rows key on a stable id rather than array index.
+  const [isCustomField, setIsCustomField] = useState(() => !metadataFields.includes(filter.field));
 
   const handleFieldChange = (value: string) => {
-    onChange({ ...filter, field: value === 'custom' ? '' : value });
+    if (value === 'custom') {
+      setIsCustomField(true);
+      onChange({ ...filter, field: '' });
+    } else {
+      setIsCustomField(false);
+      onChange({ ...filter, field: value });
+    }
   };
 
   const handleCustomFieldChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -138,9 +145,17 @@ export const MetadataFilterPanel: React.FC<MetadataFilterPanelProps> = ({
   });
   const [tempFilters, setTempFilters] = useState<MetadataFilter[]>(initialFilters);
 
+  // Rows key on these instead of array index, so deleting a row does not shift a surviving
+  // row into another instance's slot and inherit its local isCustomField state. The counter
+  // is only ever read/written from effects and event handlers, never during render.
+  const nextRowId = useRef(initialFilters.length);
+  const [rowIds, setRowIds] = useState<number[]>(() => initialFilters.map((_, i) => i));
+
   useEffect(() => {
     setTempFilters(initialFilters);
     setFilterState(prev => ({ ...prev, filters: initialFilters }));
+    setRowIds(initialFilters.map((_, i) => i));
+    nextRowId.current = initialFilters.length;
   }, [initialFilters]);
 
   const addNewFilter = () => {
@@ -152,12 +167,13 @@ export const MetadataFilterPanel: React.FC<MetadataFilterPanelProps> = ({
         value: '',
       },
     ]);
+    setRowIds([...rowIds, nextRowId.current++]);
     setFilterState(prev => ({ ...prev, isDirty: true }));
   };
 
   const removeFilter = (index: number) => {
-    const newFilters = tempFilters.filter((_, i) => i !== index);
-    setTempFilters(newFilters);
+    setTempFilters(tempFilters.filter((_, i) => i !== index));
+    setRowIds(rowIds.filter((_, i) => i !== index));
     setFilterState(prev => ({ ...prev, isDirty: true }));
   };
 
@@ -168,6 +184,10 @@ export const MetadataFilterPanel: React.FC<MetadataFilterPanelProps> = ({
 
   const handleReset = () => {
     setTempFilters(filterState.filters);
+    // tempFilters and rowIds are kept in lockstep by add/remove, but a wholesale replacement
+    // here would otherwise leave rowIds at whatever length editing had grown it to.
+    setRowIds(filterState.filters.map((_, i) => i));
+    nextRowId.current = filterState.filters.length;
     setFilterState(prev => ({ ...prev, isDirty: false }));
   };
 
@@ -197,7 +217,7 @@ export const MetadataFilterPanel: React.FC<MetadataFilterPanelProps> = ({
 
         {tempFilters.map((filter, index) => (
           <FilterRow
-            key={index}
+            key={rowIds[index]}
             filter={filter}
             onDelete={() => removeFilter(index)}
             onChange={updatedFilter => updateFilter(index, updatedFilter)}
