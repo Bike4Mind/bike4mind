@@ -1,8 +1,9 @@
 import { z } from 'zod';
-import { reasonForHookEvent, type HearthEvent } from '@bike4mind/hearth';
+import { reasonForHookEvent, type ActorKind, type HearthEvent } from '@bike4mind/hearth';
 import {
   hearthRepository,
   MAX_PRESENCE_FIELD_LENGTH,
+  type HearthActorIdentity,
   type HearthPresenceState,
   type IHearthPresenceDoc,
   type UpsertPresenceInput,
@@ -13,16 +14,17 @@ type WireHearthEvent = IHearthEventAction['event'];
 
 /**
  * Domain HearthEvent -> wire shape shared by the /api/hearth responses and
- * the hearth_event WS action (Dates become ISO strings; actorName is resolved
- * server-side so surfaces need no actor lookup).
+ * the hearth_event WS action (Dates become ISO strings; the actor's name and
+ * kind are resolved server-side so surfaces need no actor lookup).
  */
-export function toWireHearthEvent(event: HearthEvent, actorName?: string): WireHearthEvent {
+export function toWireHearthEvent(event: HearthEvent, actor?: HearthActorIdentity): WireHearthEvent {
   return {
     id: event.id,
     channelId: event.channelId,
     seq: event.seq,
     actorId: event.actorId,
-    actorName,
+    actorName: actor?.displayName,
+    actorKind: actor?.kind,
     kind: event.kind,
     human: event.human,
     machine: event.machine,
@@ -145,6 +147,7 @@ export function toPresenceProjection(args: {
 export interface WireHearthPresence {
   actorId: string;
   actorName?: string;
+  actorKind?: ActorKind;
   state: HearthPresenceState;
   reason?: string;
   lastSeen: string;
@@ -158,10 +161,11 @@ export interface WireHearthPresence {
 }
 
 /** Roster row -> wire shape for GET /api/hearth/presence. */
-export function toWireHearthPresence(row: IHearthPresenceDoc, actorName?: string): WireHearthPresence {
+export function toWireHearthPresence(row: IHearthPresenceDoc, actor?: HearthActorIdentity): WireHearthPresence {
   return {
     actorId: row.actorId.toString(),
-    actorName,
+    actorName: actor?.displayName,
+    actorKind: actor?.kind,
     state: row.state,
     reason: row.reason,
     lastSeen: row.lastSeen.toISOString(),

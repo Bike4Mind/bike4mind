@@ -49,9 +49,9 @@ const handler = baseApi({
 
     if (body.tail !== undefined) {
       const tailEvents = await hearthRepository.tailEvents(body.channelId, body.tail);
-      const tailNames = await hearthRepository.actorNamesById(tailEvents.map(e => e.actorId));
+      const tailActors = await hearthRepository.actorIdentitiesById(tailEvents.map(e => e.actorId));
       res.json({
-        events: tailEvents.map(e => toWireHearthEvent(e, tailNames.get(e.actorId))),
+        events: tailEvents.map(e => toWireHearthEvent(e, tailActors.get(e.actorId))),
         cursor: channel.nextSeq,
       });
       return;
@@ -67,11 +67,11 @@ const handler = baseApi({
       limit: body.limit,
     });
 
-    const names = await hearthRepository.actorNamesById(events.map(e => e.actorId));
+    const actors = await hearthRepository.actorIdentitiesById(events.map(e => e.actorId));
     const cursor = await hearthRepository.store.getCursor(actorId, body.channelId);
 
     res.json({
-      events: events.map(e => toWireHearthEvent(e, names.get(e.actorId))),
+      events: events.map(e => toWireHearthEvent(e, actors.get(e.actorId))),
       cursor,
     });
   });

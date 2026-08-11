@@ -6,9 +6,10 @@ import { api } from '@client/app/contexts/ApiContext';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
 import { useActorColor } from './actorColors';
+import ActorKindBadge from './ActorKindBadge';
 import HearthPresencePanel from './HearthPresencePanel';
 
-export { actorColorIndex } from './actorColors';
+export { actorColorSlot } from './actorColors';
 
 type WireHearthEvent = IHearthEventAction['event'];
 
@@ -181,8 +182,14 @@ export default function HearthChannelsView() {
             <HearthPresencePanel channelId={selectedId} />
             <Box sx={{ flex: 1, overflowY: 'auto', p: 2 }} data-testid="hearth-event-list">
               {events.map(event => (
-                <Box key={event.id} sx={{ mb: 1 }}>
-                  <Stack direction="row" spacing={1} alignItems="center">
+                // The rule down the left edge is the actual at-a-glance signal -
+                // it gives each actor a scan lane through a mixed stream, which a
+                // swatch buried in the header row cannot.
+                <Box
+                  key={event.id}
+                  sx={{ mb: 1, pl: 1, borderLeft: '3px solid', borderColor: actorColor(event.actorId) }}
+                >
+                  <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
                     <Box
                       data-testid="hearth-event-actor-swatch"
                       sx={{
@@ -193,13 +200,12 @@ export default function HearthChannelsView() {
                         backgroundColor: actorColor(event.actorId),
                       }}
                     />
-                    <Typography
-                      level="title-sm"
-                      data-testid="hearth-event-actor-name"
-                      sx={{ color: actorColor(event.actorId) }}
-                    >
+                    {/* Normal ink, never the actor color: two of the light-mode
+                        palette slots fall below 3:1 on this surface. */}
+                    <Typography level="title-sm" data-testid="hearth-event-actor-name">
                       {event.actorName ?? event.actorId}
                     </Typography>
+                    <ActorKindBadge kind={event.actorKind} testId="hearth-event-actor-kind-chip" />
                     <Typography level="body-xs" sx={{ opacity: 0.6 }}>
                       #{event.seq} {'\u00B7'} {new Date(event.createdAt).toLocaleTimeString()}
                     </Typography>

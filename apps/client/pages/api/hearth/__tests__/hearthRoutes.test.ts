@@ -8,7 +8,7 @@ const {
   createChannelMock,
   listChannelsForUserMock,
   tailEventsMock,
-  actorNamesByIdMock,
+  actorIdentitiesByIdMock,
   upsertPresenceMock,
   presenceForChannelMock,
   storeMock,
@@ -34,7 +34,7 @@ const {
     createChannelMock: vi.fn(),
     listChannelsForUserMock: vi.fn(),
     tailEventsMock: vi.fn(),
-    actorNamesByIdMock: vi.fn(),
+    actorIdentitiesByIdMock: vi.fn(),
     upsertPresenceMock: vi.fn(),
     presenceForChannelMock: vi.fn(),
     storeMock,
@@ -103,7 +103,7 @@ vi.mock('@bike4mind/database', () => ({
     createChannel: createChannelMock,
     listChannelsForUser: listChannelsForUserMock,
     tailEvents: tailEventsMock,
-    actorNamesById: actorNamesByIdMock,
+    actorIdentitiesById: actorIdentitiesByIdMock,
     upsertPresence: upsertPresenceMock,
     presenceForChannel: presenceForChannelMock,
   },
@@ -182,10 +182,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   getOwnedChannelMock.mockResolvedValue({ _id: 'ch-1', nextSeq: 5, userId: 'u1' });
   ensureChannelByNameMock.mockResolvedValue({ _id: 'ch-default', nextSeq: 0, userId: 'u1' });
-  ensureActorMock.mockResolvedValue({ _id: { toString: () => 'actor-1' }, displayName: 'erik' });
+  ensureActorMock.mockResolvedValue({ _id: { toString: () => 'actor-1' }, displayName: 'erik', kind: 'human' });
   hearthLogAppendMock.mockResolvedValue(DOMAIN_EVENT);
   hearthLogCatchupMock.mockResolvedValue([DOMAIN_EVENT]);
-  actorNamesByIdMock.mockResolvedValue(new Map([['actor-1', 'erik']]));
+  actorIdentitiesByIdMock.mockResolvedValue(new Map([['actor-1', { displayName: 'erik', kind: 'human' }]]));
   storeMock.getCursor.mockResolvedValue(1);
   tailEventsMock.mockResolvedValue([DOMAIN_EVENT]);
   sendToClientMock.mockResolvedValue(undefined);
@@ -391,7 +391,7 @@ describe('GET /api/hearth/presence', () => {
   it('publishes the row cap so a full page does not read as the whole roster', async () => {
     getOwnedChannelMock.mockResolvedValue({ _id: 'ch-1' });
     presenceForChannelMock.mockResolvedValue([]);
-    actorNamesByIdMock.mockResolvedValue(new Map());
+    actorIdentitiesByIdMock.mockResolvedValue(new Map());
 
     const res = makeRes();
     await get()(makeReq({}, { channelId: 'ch-1' }), res);
@@ -426,7 +426,7 @@ describe('GET /api/hearth/presence', () => {
       presenceRow('a-working', 'running', '2026-07-27T10:00:20Z', { tool: 'Bash' }),
       presenceRow('a-idle', 'idle', '2026-07-27T10:00:30Z'),
     ]);
-    actorNamesByIdMock.mockResolvedValue(new Map([['a-blocked', 'agent one']]));
+    actorIdentitiesByIdMock.mockResolvedValue(new Map([['a-blocked', { displayName: 'agent one', kind: 'agent' }]]));
 
     const res = makeRes();
     await get()(makeReq({}, { channelId: 'ch-1' }), res);

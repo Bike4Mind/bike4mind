@@ -1,6 +1,11 @@
 import { z } from 'zod';
 
-import { hearthEventKindSchema, hearthMachineBodySchema, hearthEventRefsSchema } from '@bike4mind/hearth';
+import {
+  actorKindSchema,
+  hearthEventKindSchema,
+  hearthMachineBodySchema,
+  hearthEventRefsSchema,
+} from '@bike4mind/hearth';
 import { FallbackInfoSchema } from './llm';
 import { supportedChatModels } from '../models';
 import { shareableDocumentSchema, QUEST_ERROR_CODES } from '../types';
@@ -824,6 +829,9 @@ export const HearthEventAction = z.object({
     seq: z.number(),
     actorId: z.string(),
     actorName: z.string().optional(),
+    // Resolved server-side from the actor record. Surfaces badge it so a
+    // self-chosen displayName can never pass for a session-derived human.
+    actorKind: actorKindSchema.optional(),
     kind: hearthEventKindSchema,
     human: z.object({
       text: z.string(),

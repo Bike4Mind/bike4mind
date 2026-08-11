@@ -2,10 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Chip, Link, Sheet, Stack, Typography } from '@mui/joy';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { IHearthEventAction, ICcAgentStatus } from '@bike4mind/common';
+import type { ActorKind } from '@bike4mind/hearth';
 import { api } from '@client/app/contexts/ApiContext';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { useActorColor } from './actorColors';
+import ActorKindBadge from './ActorKindBadge';
 
 // Reuses the shared code-agent status vocabulary rather than a parallel one,
 // so this panel and any other surface rendering agent presence agree on terms.
@@ -15,6 +17,7 @@ type PresenceState = ICcAgentStatus;
 interface PresenceRow {
   actorId: string;
   actorName?: string;
+  actorKind?: ActorKind;
   state: PresenceState;
   reason?: string;
   lastSeen: string;
@@ -264,6 +267,7 @@ export default function HearthPresencePanel({ channelId }: { channelId: string }
                 <Typography level="title-sm" data-testid="hearth-presence-actor-name">
                   {row.actorName ?? row.actorId}
                 </Typography>
+                <ActorKindBadge kind={row.actorKind} testId="hearth-presence-actor-kind-chip" />
                 <Chip size="sm" variant="soft" color={chip.color} data-testid="hearth-presence-state-chip">
                   {chip.label}
                 </Chip>

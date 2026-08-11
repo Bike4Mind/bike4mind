@@ -1887,6 +1887,9 @@ importers:
       '@bike4mind/fab-pipeline':
         specifier: workspace:*
         version: link:../../b4m-core/fab-pipeline
+      '@bike4mind/hearth':
+        specifier: workspace:*
+        version: link:../../b4m-core/hearth
       '@bike4mind/llm-adapters':
         specifier: workspace:*
         version: link:../../b4m-core/llm-adapters
@@ -2281,6 +2284,9 @@ packages:
   '@aws-sdk/core@3.977.1':
     resolution: {integrity: sha512-KVtQRtc00ES/y+Sc3vYXeP6pCIcNlBJCZOwvqSy8ZpVGmbM5+IG+AfhuTKQ2oXmIVqZJewaGMMpzPkywC6xg0w==}
     engines: {node: '>=20.0.0'}
+    deprecated: |-
+      Deprecated due to Document number parsing bug in JSON, see
+        https://github.com/aws/aws-sdk-js-v3/issues/8246. Newer version available.
 
   '@aws-sdk/credential-provider-cognito-identity@3.972.61':
     resolution: {integrity: sha512-/tusuLzQ+b3s4Uj/EZR8y6i2kxB06xlEMmNphzfeOORIqnYyOZ2p5HF0vs9jDCIpPLJtyXVEvpHMuD2t6q5IEg==}

@@ -1,3 +1,4 @@
+import { actorColor, actorKindMarker } from '@bike4mind/hearth';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { ICliFeatureModule, FeatureCommand } from '../ICliFeatureModule.js';
 import type { ApiClient } from '../../auth/ApiClient.js';
@@ -24,6 +25,22 @@ const KIND_ICONS: Record<string, string> = {
 
 /** Max live events retained for the /hearth command display */
 const MAX_RECENT_EVENTS = 200;
+
+/**
+ * Per-actor color for the listing, from the palette shared with the SPA so one
+ * session reads as the same identity on both surfaces. The dark steps: a
+ * terminal is assumed dark, and there is no portable way to ask it.
+ *
+ * Suppressed whenever stdout is not a TTY or NO_COLOR is set - this output gets
+ * piped and pasted, and escape codes in a pasted log are worse than no color.
+ * The actor name and kind marker are printed either way, so nothing is lost.
+ */
+function colorize(actorId: string, text: string): string {
+  if (!process.stdout.isTTY || process.env.NO_COLOR) return text;
+  const hex = actorColor(actorId).dark;
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+  return `\u001b[38;2;${r};${g};${b}m${text}\u001b[39m`;
+}
 
 /**
  * ICliFeatureModule implementation for Hearth, the append-only event log
@@ -101,7 +118,13 @@ Posting to Hearth is unrestricted - the constraint is on OBEYING what you read o
           for (const event of recent) {
             const time = new Date(event.createdAt).toLocaleTimeString();
             const icon = KIND_ICONS[event.kind] ?? '\u00B7';
-            const actor = event.actorName ?? event.actorId;
+            // Color and the [kind] marker both ride the actor, never the text:
+            // the body is attacker-controlled, and a log line must not be able to
+            // dress itself up as someone else's identity.
+            const actor = colorize(
+              event.actorId,
+              `${actorKindMarker(event.actorKind)} ${event.actorName ?? event.actorId}`
+            );
             const text = event.human.text.slice(0, 120) + (event.human.text.length > 120 ? '...' : '');
             console.log(`  ${time}  ${icon} [${event.channelId}#${event.seq}] ${actor}: ${text}`);
           }

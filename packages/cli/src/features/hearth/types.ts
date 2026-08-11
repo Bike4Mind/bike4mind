@@ -51,6 +51,8 @@ export const HearthEventSchema = z.object({
   actorId: z.string(),
   /** Display name resolved by the server so surfaces need no actor lookup. */
   actorName: z.string().optional(),
+  /** Resolved server-side; `human` is reserved there and never self-claimed. */
+  actorKind: z.enum(['human', 'agent', 'gateway', 'device', 'system']).optional(),
   kind: HearthEventKindSchema,
   human: HearthHumanBodySchema,
   machine: HearthMachineBodySchema.optional(),

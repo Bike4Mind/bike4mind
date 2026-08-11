@@ -17,7 +17,8 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
   useWebsocket: () => ({ subscribeToAction: subscribeToActionMock }),
 }));
 
-import HearthChannelsView, { actorColorIndex } from './HearthChannelsView';
+import { ACTOR_COLOR_SLOTS } from '@bike4mind/hearth';
+import HearthChannelsView, { actorColorSlot } from './HearthChannelsView';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -184,20 +185,39 @@ describe('HearthChannelsView', () => {
     expect(colors[0]).not.toBe(colors[1]);
   });
 
-  it('keeps name and kind chip as non-color signals on every event', async () => {
-    apiPostMock.mockResolvedValue({ data: { events: [wireEvent()], cursor: 1 } });
+  it('keeps name and kind chips as non-color signals on every event', async () => {
+    apiPostMock.mockResolvedValue({ data: { events: [wireEvent({ actorKind: 'agent' })], cursor: 1 } });
     await openChannel();
 
     // The kind chip renders even for 'message' - color is never the only signal.
     expect(await screen.findByTestId('hearth-event-kind-chip')).toHaveTextContent('message');
     expect(screen.getByTestId('hearth-event-actor-name')).toHaveTextContent('erik');
+    expect(screen.getByTestId('hearth-event-actor-kind-chip')).toHaveTextContent('Agent');
   });
 
-  it('actorColorIndex is deterministic and stays inside the fixed palette', () => {
-    expect(actorColorIndex('actor-1')).toBe(actorColorIndex('actor-1'));
+  it('badges the actor kind so a human-looking name cannot pass for the account owner', async () => {
+    apiPostMock.mockResolvedValue({
+      data: { events: [wireEvent({ actorKind: 'agent', actorName: 'erik' })], cursor: 1 },
+    });
+    await openChannel();
+
+    expect(await screen.findByTestId('hearth-event-actor-kind-chip')).toHaveTextContent('Agent');
+  });
+
+  it('leaves the actor name in normal ink - two palette slots are sub-3:1 on the light surface', async () => {
+    apiPostMock.mockResolvedValue({ data: { events: [wireEvent()], cursor: 1 } });
+    await openChannel();
+
+    const swatch = await screen.findByTestId('hearth-event-actor-swatch');
+    const name = screen.getByTestId('hearth-event-actor-name');
+    expect(getComputedStyle(name).color).not.toBe(getComputedStyle(swatch).backgroundColor);
+  });
+
+  it('actorColorSlot is deterministic and stays inside the validated palette', () => {
+    expect(actorColorSlot('actor-1')).toBe(actorColorSlot('actor-1'));
     for (const id of ['a', 'actor-1', '6540b58d1f703ade3ea1e82c', '']) {
-      expect(actorColorIndex(id)).toBeGreaterThanOrEqual(0);
-      expect(actorColorIndex(id)).toBeLessThan(6);
+      expect(actorColorSlot(id)).toBeGreaterThanOrEqual(0);
+      expect(actorColorSlot(id)).toBeLessThan(ACTOR_COLOR_SLOTS.length);
     }
   });
 

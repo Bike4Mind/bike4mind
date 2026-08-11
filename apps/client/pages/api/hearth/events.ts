@@ -101,7 +101,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.HEARTH_WRITE, ApiKeyScope
       refs: body.refs,
     });
 
-    const wireEvent = toWireHearthEvent(event, actor.displayName);
+    const wireEvent = toWireHearthEvent(event, { displayName: actor.displayName, kind: actor.kind });
 
     // Roster projection. Best-effort for the same reason as the fanout below:
     // the event is already durable, the roster is derived state that a later
