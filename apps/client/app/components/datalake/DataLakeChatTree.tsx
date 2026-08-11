@@ -25,6 +25,11 @@ import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import { HEADER_ICON_BUTTON_SX } from '@client/app/components/Session/AISettings/headerIconButtonSx';
+import {
+  MENU_ROW_ICON_SX,
+  menuRowSx,
+  menuSurfaceSx,
+} from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 import type { TagNode } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import DataLakeTreeView, { type DataLakeTreeChrome } from './DataLakeTreeView';
 import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
@@ -70,6 +75,39 @@ interface DataLakeChatTreeProps {
   /** Header close (X) button - turns Data Lake mode off for this chat. */
   onClose?: () => void;
 }
+
+/**
+ * One item in a file row's action menu, styled like the profile menu's rows. Joy MenuItem
+ * needs --variant-plainHoverBg pointed at the hover colour too, or its own variant rule wins
+ * over the shared recipe's `&:hover`.
+ */
+const RowMenuItem = ({
+  testId,
+  icon,
+  label,
+  onClick,
+  danger,
+}: {
+  testId: string;
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+}) => (
+  <MenuItem
+    data-testid={testId}
+    onClick={onClick}
+    sx={itemTheme => ({
+      ...menuRowSx(itemTheme, danger),
+      '--variant-plainHoverBg': itemTheme.palette.notebooklist.hoverBg,
+    })}
+  >
+    <Box sx={MENU_ROW_ICON_SX}>{icon}</Box>
+    <Typography level="body-sm" noWrap sx={{ flex: 1, color: 'inherit', fontSize: '14px', fontWeight: 400 }}>
+      {label}
+    </Typography>
+  </MenuItem>
+);
 
 /** Compact 22px hover-action buttons so three of them fit a 260px rail row. */
 const ROW_ACTION_SX = {
@@ -331,25 +369,33 @@ export default function DataLakeChatTree({
               >
                 <MoreVertIcon sx={{ fontSize: 16 }} />
               </MenuButton>
-              <Menu size="sm" placement="bottom-end">
-                <MenuItem data-testid={`datalake-attach-item-${file.id}`} onClick={() => onAttachFile(file)}>
-                  <AddIcon sx={{ fontSize: 16 }} />
-                  Add to chat
-                </MenuItem>
-                <MenuItem data-testid={`datalake-view-item-${file.id}`} onClick={() => onViewFile(file)}>
-                  <VisibilityOutlinedIcon sx={{ fontSize: 16 }} />
-                  View
-                </MenuItem>
-                {canDeleteFile(file) && <ListDivider />}
+              {/* Same floating-surface + row recipe as the profile menu (menuSurfaceSx). */}
+              <Menu
+                size="sm"
+                placement="bottom-end"
+                sx={menuTheme => ({ ...menuSurfaceSx(menuTheme), borderRadius: '8px', minWidth: 200, gap: '2px' })}
+              >
+                <RowMenuItem
+                  testId={`datalake-attach-item-${file.id}`}
+                  icon={<AddIcon sx={{ fontSize: 18 }} />}
+                  label="Add to chat"
+                  onClick={() => onAttachFile(file)}
+                />
+                <RowMenuItem
+                  testId={`datalake-view-item-${file.id}`}
+                  icon={<VisibilityOutlinedIcon sx={{ fontSize: 18 }} />}
+                  label="View"
+                  onClick={() => onViewFile(file)}
+                />
+                {canDeleteFile(file) && <ListDivider sx={{ my: 1 }} />}
                 {canDeleteFile(file) && (
-                  <MenuItem
-                    color="danger"
-                    data-testid={`datalake-delete-item-${file.id}`}
+                  <RowMenuItem
+                    testId={`datalake-delete-item-${file.id}`}
+                    icon={<DeleteOutlineIcon sx={{ fontSize: 18 }} />}
+                    label="Remove from lake"
                     onClick={() => onDeleteFile(file)}
-                  >
-                    <DeleteOutlineIcon sx={{ fontSize: 16 }} />
-                    Remove from lake
-                  </MenuItem>
+                    danger
+                  />
                 )}
               </Menu>
             </Dropdown>
