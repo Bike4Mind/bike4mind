@@ -225,6 +225,15 @@ class OrgGoogleDriveConnectionRepository
       { new: true }
     );
   }
+
+  /**
+   * Delete a connection (org-scoped), releasing its global Drive-folder claim. HARD delete on purpose:
+   * a soft-deleted/disabled row would keep the unique driveFolderId index populated and block re-claim.
+   */
+  async release(id: string, organizationId: string): Promise<boolean> {
+    const res = await this.model.deleteMany({ _id: id, organizationId }, { hardDelete: true });
+    return (res?.deletedCount ?? 0) > 0;
+  }
 }
 
 export const orgGoogleDriveConnectionRepository = new OrgGoogleDriveConnectionRepository(OrgGoogleDriveConnection);

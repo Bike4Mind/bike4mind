@@ -214,4 +214,11 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    * path releases via `updateHealth({ status: 'connected' })` instead.
    */
   releaseSyncClaim(id: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
+
+  /**
+   * Delete a connection (org-scoped), releasing its GLOBAL Drive-folder claim so the folder can be
+   * connected elsewhere. Must HARD delete: a merely-disabled row still holds the unique driveFolderId
+   * index and would keep blocking re-claim. Returns true if a row was removed.
+   */
+  release(id: string, organizationId: string): Promise<boolean>;
 }

@@ -94,6 +94,25 @@ describe('OrgGoogleDriveConnectionModel - uniqueness invariants', () => {
     ).rejects.toThrow();
   });
 
+  it('release hard-deletes so the freed folder can be re-claimed (even by another org)', async () => {
+    const created = await OrgGoogleDriveConnection.create(base);
+
+    // Wrong org cannot release it.
+    expect(await orgGoogleDriveConnectionRepository.release(created.id, 'org-2')).toBe(false);
+    await expect(
+      OrgGoogleDriveConnection.create({ ...base, organizationId: 'org-2', targetDataLakeId: 'lake-2' })
+    ).rejects.toThrow();
+
+    // Owning org releases it; the global folder claim is freed for a fresh claim.
+    expect(await orgGoogleDriveConnectionRepository.release(created.id, 'org-1')).toBe(true);
+    const reclaimed = await OrgGoogleDriveConnection.create({
+      ...base,
+      organizationId: 'org-2',
+      targetDataLakeId: 'lake-2',
+    });
+    expect(reclaimed.id).toBeTruthy();
+  });
+
   it('allows one org to hold multiple connections (distinct folders + lakes)', async () => {
     await OrgGoogleDriveConnection.create(base);
     const second = await OrgGoogleDriveConnection.create({
