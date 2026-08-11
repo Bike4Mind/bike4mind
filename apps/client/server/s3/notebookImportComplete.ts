@@ -1,3 +1,4 @@
+/* eslint @typescript-eslint/no-explicit-any: "error" */
 import { InboxType, isImageServeable } from '@bike4mind/common';
 import { notebookImportService } from '@bike4mind/services';
 import { Logger } from '@bike4mind/observability';

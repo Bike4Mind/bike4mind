@@ -1,3 +1,4 @@
+/* eslint @typescript-eslint/no-explicit-any: "error" */
 import {
   NotebookExportFormat,
   ExportedNotebook,
@@ -66,9 +67,13 @@ function toKnowledgeType(raw: string | undefined): KnowledgeType {
 }
 
 /**
- * Fails typecheck if any slot is re-loosened to `any` - every one of them used to be. Lives in
+ * Fails typecheck if a whole slot is re-loosened to `any` - every one of them used to be. Lives in
  * src, not a test: tsconfig excludes *.test.ts, so only `turbo:typecheck` enforces it. Sibling
  * guard: notebookExportService's NotebookExportTypesStayNarrowed.
+ *
+ * It only sees the slot type, so a nested `any` (say a method parameter) slips past it. The
+ * file-level `no-explicit-any: error` at the top covers that case; the rule is repo-wide `warn`,
+ * and `lint:check` runs `--quiet`, so warnings alone would print nothing.
  */
 export type NotebookImportAdaptersStayNarrowed = Expect<
   0 extends 1 & NotebookImportAdapters[keyof NotebookImportAdapters] ? false : true
