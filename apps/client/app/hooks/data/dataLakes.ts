@@ -544,9 +544,18 @@ export function useGetDataLakeArticles(params?: DataLakeArticlesParams | null, s
     // `null` means disabled-below, but the key type takes the params shape or undefined only.
     queryKey: dataLakeKeys.articles(source, params ?? undefined),
     queryFn: async () => {
+      // Serialized by hand because of an axios/Next disagreement on arrays: axios writes
+      // `tags[]=x`, Next's query parser keeps the literal key `tags[]`, and the handler reads
+      // `query.tags` - so the tag filter silently vanished and a leaf category showed whatever
+      // happened to be in the first alphabetical page. Repeated bare keys (`tags=x&tags=y`)
+      // parse into exactly the string | string[] shape DataLakeArticlesQuery declares.
+      const search = new URLSearchParams();
+      for (const [key, value] of Object.entries(params ?? {})) {
+        if (value == null) continue;
+        for (const v of Array.isArray(value) ? value : [value]) search.append(key, String(v));
+      }
       const response = await api.get<{ data: IFabFileDocument[]; total: number; hasMore: boolean }>(
-        `${browseBase(source)}/articles`,
-        { params: params ?? undefined }
+        `${browseBase(source)}/articles?${search.toString()}`
       );
       return response.data;
     },
