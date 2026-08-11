@@ -52,7 +52,7 @@ const runHandler = async (key: string, value: unknown, extra: Record<string, unk
     user: { isAdmin: true },
     ability: { can: () => true },
     body: { key, value, ...extra },
-    logger: { info: vi.fn(), error: vi.fn() },
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   await (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, { json });
   return json.mock.calls[0][0] as { settingName: string; settingValue: unknown };
@@ -160,6 +160,32 @@ describe('settings/update sensitive value handling', () => {
       expect(findOneAndUpdate).not.toHaveBeenCalled();
     } finally {
       Config.SECRET_ENCRYPTION_KEY = original;
+    }
+  });
+
+  it('degrades to plaintext (does not fail closed) on self-host without a key, matching ApiKeyModel', async () => {
+    // A self-host that has not run the openssl step must still be able to save a sensitive,
+    // local-only setting like ollamaBackend, exactly as the per-user provider-key path allows.
+    const { Config } = (await import('@server/utils/config')) as unknown as {
+      Config: { SECRET_ENCRYPTION_KEY: string };
+    };
+    const originalKey = Config.SECRET_ENCRYPTION_KEY;
+    const originalSelfHost = process.env.B4M_SELF_HOST;
+    Config.SECRET_ENCRYPTION_KEY = 'too-short';
+    process.env.B4M_SELF_HOST = 'true';
+    stageWriteResult('ollamaBackend', 'http://localhost:11434');
+    try {
+      await runHandler('ollamaBackend', 'http://localhost:11434');
+      // Stored verbatim (plaintext), and crucially the write was NOT rejected.
+      expect(findOneAndUpdate).toHaveBeenCalledWith(
+        { settingName: 'ollamaBackend' },
+        { $set: { settingValue: 'http://localhost:11434' } },
+        expect.anything()
+      );
+    } finally {
+      Config.SECRET_ENCRYPTION_KEY = originalKey;
+      if (originalSelfHost === undefined) delete process.env.B4M_SELF_HOST;
+      else process.env.B4M_SELF_HOST = originalSelfHost;
     }
   });
 });

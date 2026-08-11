@@ -17,6 +17,10 @@ import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/er
 import { encryptSecret, isEncrypted, isValidEncryptionKey } from '@server/security/secretEncryption';
 import { materializePublicSettingsArtifactSafe } from '@server/utils/publicSettingsArtifact';
 
+// One-time guard so a self-host install running without a configured key logs the
+// plaintext-at-rest degradation once, rather than silently or on every write.
+let warnedSelfHostPlaintext = false;
+
 // Update Admin Setting
 const handler = baseApi().put(
   asyncHandler<unknown, unknown, { key: string; value: unknown; confirmClear?: boolean }>(async (req, res) => {
@@ -99,16 +103,36 @@ const handler = baseApi().put(
     // not isSensitive and never reaches this branch. A confirmed clear ('') is stored as-is,
     // and an already-encrypted value is left untouched (idempotent). The submitted plaintext
     // stays in `value` for the response mask below so the admin sees the real last-4.
+    //
+    // This handler is the ONLY sanctioned writer of a sensitive admin setting, so the
+    // encrypt-on-write decision lives here rather than at the repository choke point the read
+    // path uses (a future writer - e.g. an OAuth flow persisting a refreshed secret - must
+    // encrypt here too, or route through AdminSettings with the same guard). The fail-closed
+    // contract is kept identical to the per-user provider-key path (ApiKeyModel.create): a
+    // cloud stage without a valid key throws; only a deliberate self-host install
+    // (B4M_SELF_HOST) degrades to plaintext at rest, so an admin can still save a local-only
+    // sensitive setting such as ollamaBackend before running the openssl key step.
     let settingValueToStore: unknown = value;
     if (isSensitiveSetting && typeof value === 'string' && value !== '' && !isEncrypted(value)) {
       const encryptionKey = Config.SECRET_ENCRYPTION_KEY;
-      if (!encryptionKey || !isValidEncryptionKey(encryptionKey)) {
+      if (encryptionKey && isValidEncryptionKey(encryptionKey)) {
+        settingValueToStore = encryptSecret(value, encryptionKey);
+      } else if (process.env.B4M_SELF_HOST === 'true') {
+        if (!warnedSelfHostPlaintext) {
+          warnedSelfHostPlaintext = true;
+          req.logger?.warn(
+            'SECRET_ENCRYPTION_KEY is not configured; storing sensitive admin settings in plaintext at rest ' +
+              '(self-host). Set a 64-hex SECRET_ENCRYPTION_KEY to encrypt them.'
+          );
+        }
+        // settingValueToStore stays the plaintext `value`.
+      } else {
         throw new Error(
           'SECRET_ENCRYPTION_KEY is not configured (needs a 64-hex value), refusing to store a sensitive ' +
-            'setting in plaintext. Set it on this stage: sst secret set SECRET_ENCRYPTION_KEY <value>.'
+            'setting in plaintext. Set a 64-hex key on this stage (sst secret set SECRET_ENCRYPTION_KEY <value>), ' +
+            'or set B4M_SELF_HOST=true to opt into plaintext.'
         );
       }
-      settingValueToStore = encryptSecret(value, encryptionKey);
     }
 
     const updatedSetting = await AdminSettings.findOneAndUpdate(

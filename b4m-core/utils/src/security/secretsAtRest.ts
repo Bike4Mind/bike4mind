@@ -23,6 +23,7 @@ let currentKey: string | undefined;
 let previousKey: string | undefined;
 let warnedMissingKey = false;
 let warnedDecryptFailure = false;
+let warnedPlaintextWrite = false;
 
 /**
  * Register the at-rest encryption key(s). Called once from app boot with
@@ -37,6 +38,7 @@ export function configureSecretsAtRest(key: string | undefined, previous?: strin
   // (re)configuration - e.g. a key rotation - is still surfaced once.
   warnedMissingKey = false;
   warnedDecryptFailure = false;
+  warnedPlaintextWrite = false;
 }
 
 /** True when a usable encryption key is registered. */
@@ -53,7 +55,17 @@ export function isSecretsAtRestConfigured(): boolean {
  */
 export function encryptAtRest(plaintext: string): string {
   if (!plaintext || isEncrypted(plaintext)) return plaintext;
-  if (!currentKey) return plaintext;
+  if (!currentKey) {
+    // Degrading to plaintext storage (self-host without a key, or a stage that fails closed
+    // upstream before reaching here). Never silent: log once so an operator can see it.
+    if (!warnedPlaintextWrite) {
+      warnedPlaintextWrite = true;
+      Logger.globalInstance.warn(
+        '[secrets-at-rest] no SECRET_ENCRYPTION_KEY configured; storing a secret in plaintext at rest'
+      );
+    }
+    return plaintext;
+  }
   return encryptSecret(plaintext, currentKey);
 }
 

@@ -3,6 +3,7 @@ import {
   settingsMap,
   publicSafeSettingKeys,
   redactSettingSecrets,
+  redactSettingSecretsForBroadcast,
   buildPublicSettingsProjection,
   experimentalFeatureSettingKeys,
   experimentalNonGroupSettingKeys,
@@ -284,6 +285,40 @@ describe('public settings projection (M2.5 security boundary)', () => {
         .map(s => s.key);
 
       expect(offenders, `isSensitive settings that are not plain string inputs: ${offenders.join(', ')}`).toEqual([]);
+    });
+  });
+
+  describe('redactSettingSecretsForBroadcast', () => {
+    it('emits a bare mask with NO tail for a sensitive setting (browser cannot decrypt ciphertext)', () => {
+      // The WS fanout carries the raw stored document - ciphertext post-migration. Masking its
+      // tail would surface a wrong "last 4"; a bare mask cannot be mis-verified.
+      const ciphertext = 'a'.repeat(32) + ':' + 'b'.repeat(32) + ':deadbeef';
+      const redacted = redactSettingSecretsForBroadcast({ settingName: 'anthropicDemoKey', settingValue: ciphertext });
+      expect(redacted.settingValue).toBe(SENSITIVE_SETTING_MASK);
+      // Never the ciphertext tail (the whole point of the fix).
+      expect(redacted.settingValue).not.toBe(`${SENSITIVE_SETTING_MASK}beef`);
+    });
+
+    it('leaves an unset sensitive setting empty', () => {
+      expect(redactSettingSecretsForBroadcast({ settingName: 'anthropicDemoKey', settingValue: '' }).settingValue).toBe(
+        ''
+      );
+    });
+
+    it('still masks sreAgentConfig per-repo secrets (delegates to redactSettingSecrets)', () => {
+      const redacted = redactSettingSecretsForBroadcast({
+        settingName: 'sreAgentConfig',
+        settingValue: { repos: [{ owner: 'a', repo: 'b', webhookSecret: 'hunter2', callbackToken: 'tok' }] },
+      });
+      const repo = (redacted.settingValue as { repos: Array<{ webhookSecret: string; callbackToken: string }> })
+        .repos[0];
+      expect(repo.webhookSecret).toBe(SRE_SECRET_PLACEHOLDER);
+      expect(repo.callbackToken).toBe(SRE_SECRET_PLACEHOLDER);
+    });
+
+    it('passes a non-sensitive setting through untouched', () => {
+      const setting: AdminSettingDoc = { settingName: 'enforceMFA', settingValue: 'true' };
+      expect(redactSettingSecretsForBroadcast(setting)).toEqual(setting);
     });
   });
 });
