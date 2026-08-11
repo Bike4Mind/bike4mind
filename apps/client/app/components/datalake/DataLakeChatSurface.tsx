@@ -4,6 +4,7 @@ import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStor
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 import useCreateDataLakeSession from '@client/app/hooks/useCreateDataLakeSession';
 import DataLakeExplorer from './DataLakeExplorer';
+import type { IFabFileDocument } from '@bike4mind/common';
 import { useManageKnowledge } from './manageKnowledge';
 
 /**
@@ -29,9 +30,13 @@ export default function DataLakeChatSurface({ chat }: { chat: React.ReactNode })
     seedFromSession(currentSession);
   }, [currentSession, seedFromSession]);
 
-  // Attach on /new: mint the grounded session right away (same creation the first-send
-  // seam uses) so the [+] action lands in a real workbench instead of dead-ending.
-  const createSessionForFile = useCallback(async () => (await createDataLakeSession()).id, [createDataLakeSession]);
+  // Open/attach on /new: mint the grounded session right away (same creation the first-send
+  // seam uses), born holding the file - adoption rehydrates the workbench from the session's
+  // knowledgeIds, so a file written into the store after creation would be wiped by that reset.
+  const createSessionForFile = useCallback(
+    async (file: IFabFileDocument) => (await createDataLakeSession({ knowledgeIds: [file.id] })).id,
+    [createDataLakeSession]
+  );
 
   if (!enabled) return <>{chat}</>;
 

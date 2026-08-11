@@ -207,6 +207,9 @@ describe('DataLakeExplorer chat-first surface', () => {
       expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-new', expect.any(Function));
     });
     expect(createSessionForFile).toHaveBeenCalledTimes(1);
+    // The minting host needs the file: the session must be created already holding it
+    // (knowledgeIds), or the adoption-time workbench rehydration wipes the store write.
+    expect(createSessionForFile).toHaveBeenCalledWith(expect.objectContaining({ id: 'file-123' }));
   });
 
   it('attach with no session and no create path guides via toast, writes nothing', () => {

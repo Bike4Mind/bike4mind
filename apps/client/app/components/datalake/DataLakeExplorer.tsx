@@ -96,8 +96,12 @@ interface DataLakeExplorerProps {
    * Called when a file is ATTACHED or VIEWED with no active session (/new, where creation is
    * deferred to the first message): must create + adopt the session and resolve its id so the
    * file can land in a real workbench. Omitted (overlay) -> a guidance toast instead.
+   *
+   * Receives the file so the session can be created ALREADY HOLDING it (knowledgeIds): adoption
+   * rehydrates the workbench from the session's knowledgeIds, so a file merely written into the
+   * store after creation is wiped by that reset on hosts with a longer adoption path.
    */
-  createSessionForFile?: () => Promise<string>;
+  createSessionForFile?: (file: IFabFileDocument) => Promise<string>;
   /**
    * Whether the chat tree header shows the close (X) that turns Data Lake mode off. Default true.
    * Hosts entered/left by navigation rather than a per-session toggle pass false.
@@ -157,25 +161,28 @@ export default function DataLakeExplorer({
   // The session both chat actions need. On /new creation is deferred to the first message, so
   // hosts that can mint the grounded session do it here; the rest get guidance. Returns null
   // when there is no session to be had (already explained to the user), so callers just bail.
-  const ensureSessionId = useCallback(async (): Promise<string | null> => {
-    if (currentSessionId) return currentSessionId;
-    if (!createSessionForFile || creatingSessionRef.current) {
-      if (!createSessionForFile) {
-        toast.info('Start the chat with a first message - then lake files can be added to it.');
+  const ensureSessionId = useCallback(
+    async (file: IFabFileDocument): Promise<string | null> => {
+      if (currentSessionId) return currentSessionId;
+      if (!createSessionForFile || creatingSessionRef.current) {
+        if (!createSessionForFile) {
+          toast.info('Start the chat with a first message - then lake files can be added to it.');
+        }
+        return null;
       }
-      return null;
-    }
-    creatingSessionRef.current = true;
-    try {
-      return await createSessionForFile();
-    } catch (error) {
-      console.error('Data Lake session create failed:', error);
-      toast.error("Couldn't start the chat - please try again.");
-      return null;
-    } finally {
-      creatingSessionRef.current = false;
-    }
-  }, [currentSessionId, createSessionForFile]);
+      creatingSessionRef.current = true;
+      try {
+        return await createSessionForFile(file);
+      } catch (error) {
+        console.error('Data Lake session create failed:', error);
+        toast.error("Couldn't start the chat - please try again.");
+        return null;
+      } finally {
+        creatingSessionRef.current = false;
+      }
+    },
+    [currentSessionId, createSessionForFile]
+  );
 
   const addToWorkBench = useCallback(
     (sessionId: string, file: IFabFileDocument) =>
@@ -187,7 +194,7 @@ export default function DataLakeExplorer({
   // page mode never calls this.
   const attachFileToChat = useCallback(
     async (file: IFabFileDocument) => {
-      const sessionId = await ensureSessionId();
+      const sessionId = await ensureSessionId(file);
       if (!sessionId) return;
       addToWorkBench(sessionId, file);
       toast.success(`Added "${file.fileName.replace(/\.[^/.]+$/, '')}" to the chat's files`);
@@ -206,7 +213,7 @@ export default function DataLakeExplorer({
   // and mount the viewer in our own rail.
   const handleViewFile = useCallback(
     async (file: IFabFileDocument) => {
-      const sessionId = await ensureSessionId();
+      const sessionId = await ensureSessionId(file);
       if (!sessionId) return;
       addToWorkBench(sessionId, file);
       if (chatEmbedded) {
