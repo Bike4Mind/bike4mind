@@ -30,7 +30,7 @@ describe('CreateDataLakeRequestInput.fileTagPrefix', () => {
   // segment; the tag-tree UIs can only guard around it downstream, so the schema is the
   // durable gate. Whitespace-only and zero-width segments (U+200B/U+2060 survive trim())
   // are the same failure mode as bare "::".
-  it.each(['::', 'a::', ':a:', 'a::b:', 'a: :', 'acme: :', ' :', 'a:\u200b:', 'a:\u2060:'])(
+  it.each(['::', 'a::', ':a:', 'a::b:', 'a: :', 'acme: :', 'a:\u200b:', 'a:\u2060:', 'a:\u3164:', 'a:\u2800:'])(
     'rejects a prefix with a blank segment (%s)',
     prefix => {
       const result = CreateDataLakeRequestInput.safeParse(input(prefix));
@@ -43,6 +43,21 @@ describe('CreateDataLakeRequestInput.fileTagPrefix', () => {
 
   it('accepts a multi-segment prefix with non-empty segments', () => {
     expect(CreateDataLakeRequestInput.safeParse(input('acme:legal:')).success).toBe(true);
+  });
+
+  it('accepts non-Latin prefixes', () => {
+    expect(CreateDataLakeRequestInput.safeParse(input('\u0444\u0430\u0439\u043b\u044b:')).success).toBe(true);
+    expect(CreateDataLakeRequestInput.safeParse(input('\u6587\u4ef6:')).success).toBe(true);
+  });
+
+  // Consumers split between raw reads (tree roots) and normalizeTagPrefix reads (tag
+  // stamping); an untrimmed " acme:" stored raw would desynchronize them.
+  it('trims edge whitespace so the stored prefix equals its normalized form', () => {
+    const result = CreateDataLakeRequestInput.safeParse(input('  acme:  '));
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.fileTagPrefix).toBe('acme:');
+    }
   });
 
   // Without the endsWith guard inside the segment check, slice(0, -1) on a colon-less

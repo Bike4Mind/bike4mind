@@ -153,6 +153,24 @@ describe('DataLakeWizardModal — handleStartUpload offline pre-check', () => {
     expect(batchUploadMutate).not.toHaveBeenCalled();
   });
 
+  // The inverse gate: append mode inherits a stored prefix the user cannot edit on the
+  // Config step, so a legacy lake predating the blank-segment rule must keep accepting
+  // uploads rather than being locked out with no way to clear the error.
+  it('leaves Start Upload enabled in append mode even when the inherited prefix has a blank segment', () => {
+    useDataLakeWizardStore.setState(state => ({
+      targetLake: { id: 'lake-1', name: 'Legacy Lake', fileTagPrefix: 'legal::' } as never,
+      config: { ...state.config, tagPrefix: 'legal::' },
+    }));
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    const btn = screen.getByTestId('wizard-start-upload-btn') as HTMLButtonElement;
+    expect(btn).not.toBeDisabled();
+  });
+
   it('leaves Start Upload enabled when the prefix is free', () => {
     render(
       <TestWrapper>

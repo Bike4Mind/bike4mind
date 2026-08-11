@@ -18,6 +18,10 @@ export const CreateDataLakeRequestInput = z.object({
   description: z.string().max(2000).optional(),
   fileTagPrefix: z
     .string()
+    // Edge whitespace is stripped so the stored prefix equals its normalizeTagPrefix form -
+    // consumers split between raw reads (tree roots) and normalized reads (tag stamping),
+    // and " acme:" stored raw would desynchronize them.
+    .trim()
     .min(2)
     .max(30)
     .refine(s => s.endsWith(':'), 'Tag prefix must end with ":" (e.g. "acme:")')

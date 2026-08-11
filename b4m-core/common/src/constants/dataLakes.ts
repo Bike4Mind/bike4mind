@@ -93,16 +93,23 @@ export const tagPrefixesOverlap = (a: string | undefined | null, b: string | und
   return left === right || left.startsWith(right) || right.startsWith(left);
 };
 
+// Codepoints that render blank despite carrying an "ink" Unicode category (Hangul and
+// halfwidth fillers are Lo, braille blank is So, Khmer inherent vowels are Mn) - stripped
+// before the ink test in hasBlankTagPrefixSegment.
+const INVISIBLE_INK = /\u115F|\u1160|\u17B4|\u17B5|\u2800|\u3164|\uFFA0/g;
+
 /**
  * True when any ":"-separated segment of the prefix (ignoring the trailing colon) has no
- * visible character. `trim()` alone is not enough: zero-width/format characters (U+200B,
- * U+2060 - Unicode category Cf, not whitespace) survive it and render as the same blank
- * tree node. Shared by CreateDataLakeRequestInput's schema refine and the wizard mirror
- * below so the server and client rules cannot drift.
+ * character that renders ink. A negated-whitespace test is not enough: format characters
+ * (U+200B/U+2060, category Cf) survive `trim()`, and a handful of letter/symbol codepoints
+ * (INVISIBLE_INK above) render blank too - all producing the same blank tree node. So
+ * require a letter, number, punctuation, symbol, or mark after stripping the known blanks.
+ * Shared by CreateDataLakeRequestInput's schema refine and the wizard mirror below so the
+ * server and client rules cannot drift.
  */
 export const hasBlankTagPrefixSegment = (prefix: string): boolean => {
   const body = prefix.endsWith(':') ? prefix.slice(0, -1) : prefix;
-  return body.split(':').some(part => !/[^\s\p{Cf}\p{Cc}]/u.test(part));
+  return body.split(':').some(part => !/[\p{L}\p{N}\p{P}\p{S}\p{M}]/u.test(part.replace(INVISIBLE_INK, '')));
 };
 
 /**
@@ -114,11 +121,13 @@ export const tagPrefixIssue = (
   prefix: string | undefined | null,
   overlapping?: { name: string; fileTagPrefix: string } | null
 ): string | null => {
-  if (isReservedTagPrefix(prefix)) {
-    return `"${DATALAKE_TAG_PREFIX}" is reserved for lake membership. Pick another prefix, such as legal:`;
-  }
+  // Blank-segment before reserved, matching the schema's refine order, so both surfaces
+  // name the same culprit for an input like "datalake::".
   if (prefix && hasBlankTagPrefixSegment(prefix)) {
     return 'Every ":" segment of the prefix needs a visible character (e.g. legal: or legal:contracts:).';
+  }
+  if (isReservedTagPrefix(prefix)) {
+    return `"${DATALAKE_TAG_PREFIX}" is reserved for lake membership. Pick another prefix, such as legal:`;
   }
   if (overlapping) {
     return `This prefix overlaps the data lake "${overlapping.name}" (${overlapping.fileTagPrefix}). They would share files, so deleting either one would take the other's.`;
