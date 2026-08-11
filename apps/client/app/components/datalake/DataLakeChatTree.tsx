@@ -32,6 +32,7 @@ import {
 } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 import type { TagNode } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import DataLakeTreeView, { type DataLakeTreeChrome } from './DataLakeTreeView';
+import TreeRowLabel from './TreeRowLabel';
 import { inkFor } from '@client/app/components/datalake/deckChrome';
 import {
   COUNT_CHIP_SX,
@@ -331,9 +332,7 @@ export default function DataLakeChatTree({
           >
             <FolderOutlinedIcon sx={{ fontSize: 16, color: branchInk, flexShrink: 0 }} />
             <ListItemContent>
-              <Typography noWrap sx={{ fontSize: '14px', fontWeight: 400, color: 'text.primary' }}>
-                {humanizeSegment(node.segment, depth)}
-              </Typography>
+              <TreeRowLabel label={humanizeSegment(node.segment, depth)} />
             </ListItemContent>
             <Chip size="sm" variant="soft" color="neutral" sx={COUNT_CHIP_SX}>
               {node.fileCount}
@@ -349,7 +348,9 @@ export default function DataLakeChatTree({
             reveals on hover/focus, stays visible on touch (no-hover) devices, and pins while its
             menu is open (:has on aria-expanded) so the anchor cannot fade under an open menu. */}
         <ListItemButton
-          selected={selected}
+          // Deliberately NOT Joy's `selected`: that paints its own active-variant ground, which
+          // overrides the sidebar-matching background below. aria-current carries the state.
+          aria-current={selected ? 'true' : undefined}
           onClick={() => onViewFile(file)}
           data-testid={`datalake-file-${file.id}`}
           sx={{
@@ -384,9 +385,7 @@ export default function DataLakeChatTree({
               the left bar carry the state on their own. */}
           <ArticleOutlinedIcon sx={{ fontSize: 16, color: 'text.tertiary', flexShrink: 0 }} />
           <ListItemContent>
-            <Typography noWrap sx={{ fontSize: '14px', fontWeight: 400, color: 'text.primary' }}>
-              {file.fileName.replace(/\.[^/.]+$/, '')}
-            </Typography>
+            <TreeRowLabel label={file.fileName.replace(/\.[^/.]+$/, '')} />
           </ListItemContent>
           {/* The row itself is the View action, so an actions click must not also fire it.
               Caught here rather than on the trigger: MenuButton owns its own onClick. */}
