@@ -26,7 +26,7 @@ import { useDataLakeSurface } from '@client/app/components/datalake/surfaceToken
 import { ManageKnowledgeButton } from '@client/app/components/datalake/manageKnowledge';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import useSetDataLakeMode from '@client/app/hooks/useSetDataLakeMode';
-import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { useNotebookLayout } from '@client/app/components/layouts/Notebook';
 import {
   useGetDataLakeArticles,
@@ -304,6 +304,17 @@ export default function DataLakeExplorer({
   const selectedFile = userSelectedFile ?? (articleId ? deepLinkTarget : null);
 
   // Chat mode: show the URL's article in the rail reader once it resolves, once per id.
+  // The viewer's own Close button asks for `layout: 'hide'`. An external-chat host never honours
+  // that - its chat is docked, so it re-docks anything else, often within the same tick - which
+  // would leave our pane open with its close button doing nothing. A store subscription catches
+  // the write regardless of whether the value survives to a render.
+  useEffect(() => {
+    if (!railViewerOpen) return;
+    return useSessionLayout.subscribe((state, prev) => {
+      if (state.layout === 'hide' && prev.layout !== 'hide') setRailViewerOpen(false);
+    });
+  }, [railViewerOpen]);
+
   const openedDeepLinkRef = useRef<string | null>(null);
   useEffect(() => {
     if (chatMode && deepLinkTarget && openedDeepLinkRef.current !== deepLinkTarget.id) {
@@ -559,12 +570,16 @@ export default function DataLakeExplorer({
             onCreateLake={onCreateLake}
             onClose={showModeClose ? () => setDataLakeMode(false) : undefined}
           />
-          {/* Opens BESIDE the tree, never in place of it - the embedded host keeps its tree too
-              when the split opens, and browsing on to the next file is the common next move. */}
-          {railViewerOpen && <DataLakeRailViewer onBack={() => setRailViewerOpen(false)} />}
-          <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
-            <DataLakeNavProvider value={nav}>{chatSlot}</DataLakeNavProvider>
-          </Box>
+          {/* The tree stays put; the viewer takes the centre pane, which on an external-chat host
+              is the page's own content rather than the chat (that is docked outside). Closing it
+              brings the page content straight back. */}
+          {railViewerOpen ? (
+            <DataLakeRailViewer />
+          ) : (
+            <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
+              <DataLakeNavProvider value={nav}>{chatSlot}</DataLakeNavProvider>
+            </Box>
+          )}
         </Box>
       ) : (
         <Box sx={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>

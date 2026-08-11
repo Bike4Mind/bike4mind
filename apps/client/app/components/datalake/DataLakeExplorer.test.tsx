@@ -1,13 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { toast } from 'sonner';
 import { getThemeConfig } from '@client/app/utils/themes';
+// The store itself stays real (only its setter is spied), so a test can drive a layout write the
+// way the KnowledgeViewer's close button does.
+import useSessionLayoutStore from '@client/app/hooks/useSessionLayout';
 import DataLakeExplorer from './DataLakeExplorer';
 
-// Browsing the tree must never mutate the chat: attach happens only via the explicit [+]
-// action, and nothing may touch the session layout. setSessionLayout is spied purely as a
-// regression guard - the suite asserts it is never called.
+// Browsing the tree must not mutate the chat on its own: writes come only from the row actions,
+// and an external-chat host must never have its `layout` touched. setSessionLayout is spied to
+// assert both.
 const { setWorkBenchFiles, setSessionLayout, sessionState, removeFileMutate, lakesState } = vi.hoisted(() => ({
   setWorkBenchFiles: vi.fn(),
   setSessionLayout: vi.fn(),
@@ -57,13 +60,7 @@ vi.mock('@client/app/components/DataLakeWizard/DataLakeIngestPickerModal', () =>
 // What this suite owns is the explorer's wiring - whether the rail swaps and Back returns - so
 // the wrapper is stubbed with the same test ids it renders.
 vi.mock('./DataLakeRailViewer', () => ({
-  default: ({ onBack }: { onBack: () => void }) => (
-    <div data-testid="datalake-rail-viewer">
-      <button data-testid="datalake-viewer-back-btn" onClick={onBack}>
-        back
-      </button>
-    </div>
-  ),
+  default: () => <div data-testid="datalake-rail-viewer" />,
 }));
 
 // The page-mode header's ManageKnowledgeButton folds in the EnableDataLakes gate, which
@@ -160,6 +157,9 @@ describe('DataLakeExplorer chat-first surface', () => {
     vi.clearAllMocks();
     sessionState.currentSessionId = 'sess-1';
     lakesState.value = [{ id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', canManage: true }];
+    // The store defaults to 'hide'; start from the docked layout an external-chat host runs, so
+    // a close request is an actual transition rather than a no-op write.
+    useSessionLayoutStore.setState({ layout: 'dockRight' });
   });
 
   it('renders chatSlot in the right pane', () => {
@@ -257,8 +257,9 @@ describe('DataLakeExplorer chat-first surface', () => {
     renderExplorer({ chatEmbedded: false });
     fireEvent.click(screen.getByTestId('mock-view'));
     await vi.waitFor(() => expect(screen.getByTestId('datalake-rail-viewer')).toBeInTheDocument());
-    // Beside the tree, not instead of it - browsing on to the next file must stay possible.
+    // The tree stays; it is the centre pane (the host's own content) the viewer replaces.
     expect(screen.getByTestId('mock-tree')).toBeInTheDocument();
+    expect(screen.queryByTestId('my-chat')).toBeNull();
     expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function));
     expect(setSessionLayout).toHaveBeenCalledWith({ selectedArtifactId: 'file-123' });
     expect(setSessionLayout).not.toHaveBeenCalledWith(
@@ -266,12 +267,17 @@ describe('DataLakeExplorer chat-first surface', () => {
     );
   });
 
-  it('viewer back closes it and leaves the viewed file highlighted (overlay host)', async () => {
+  it("the viewer's own close request restores the host's content (overlay host)", async () => {
+    // The viewer closes itself by asking for layout 'hide', which this host reverts; the panel
+    // has to honour the request anyway or its close button would appear dead.
     renderExplorer({ chatEmbedded: false });
     fireEvent.click(screen.getByTestId('mock-view'));
-    await vi.waitFor(() => expect(screen.getByTestId('datalake-viewer-back-btn')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('datalake-viewer-back-btn'));
+    await vi.waitFor(() => expect(screen.getByTestId('datalake-rail-viewer')).toBeInTheDocument());
+
+    act(() => useSessionLayoutStore.setState({ layout: 'hide' }));
+
     expect(screen.queryByTestId('datalake-rail-viewer')).toBeNull();
+    expect(screen.getByTestId('my-chat')).toBeInTheDocument();
     expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
   });
 
