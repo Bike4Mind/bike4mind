@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => ({
   userState: { currentUser: null as unknown },
   accessTokenState: {
     accessToken: null as string | null,
-    setVerifiedTokens: vi.fn(),
+    setVerifiedSession: vi.fn(),
     resetTokens: vi.fn(),
     setMfaPendingTokens: vi.fn(),
     forceLogoutTokens: vi.fn(),
@@ -136,16 +136,15 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     await waitFor(() => expect(mocks.setCurrentUser).toHaveBeenCalled());
 
     const arg = mocks.setCurrentUser.mock.calls[0][0];
-    // Regression guard: the user must be flattened, NOT the { user, accessToken, refreshToken } wrapper.
+    // Regression guard: the user must be flattened, NOT the { user, accessToken } wrapper.
     expect(arg).toMatchObject({
       id: 'new-1',
       email: 'new@test.com',
       username: 'newbie',
       accessToken: 'atk',
-      refreshToken: 'rtk',
     });
     expect(arg).not.toHaveProperty('user');
-    expect(mocks.accessTokenState.setVerifiedTokens).toHaveBeenCalledWith('atk', 'rtk');
+    expect(mocks.accessTokenState.setVerifiedSession).toHaveBeenCalledWith('atk');
     // The inline step must thread the abuse-gate fields into the verify call;
     // without them the server rejects every inline registration.
     expect(mocks.verifyOTC).toHaveBeenLastCalledWith(

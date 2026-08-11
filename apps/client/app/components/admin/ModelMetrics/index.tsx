@@ -4,7 +4,7 @@ import dayjs from 'dayjs';
 
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useModelMetrics } from './hooks/useModelMetrics';
-import { useModelMetricsState } from './hooks/useModelMetricsState';
+import { useModelMetricsState, ModelMetricsTabValue } from './hooks/useModelMetricsState';
 import { exportToCSV } from './utils/csvExport';
 import { processChartData } from './utils/chartDataProcessor';
 import { MetricsInfoModal } from './components/MetricsInfoModal';
@@ -13,6 +13,7 @@ import { ControlPanel } from './components/ControlPanel';
 import { OverviewTab } from './components/OverviewTab';
 import { AnalyticsTab } from './components/AnalyticsTab';
 import { RawDataTab } from './components/RawDataTab';
+import { SpendTab } from './components/SpendTab';
 
 const ModelMetricsTab: React.FC = () => {
   // Applied filters state (used for API calls)
@@ -120,7 +121,7 @@ const ModelMetricsTab: React.FC = () => {
       />
 
       {/* Tabs Section */}
-      <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as string)}>
+      <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as ModelMetricsTabValue)}>
         <Box
           sx={{
             display: 'flex',
@@ -153,6 +154,13 @@ const ModelMetricsTab: React.FC = () => {
                 Raw Data
               </Box>
             </Tab>
+            <Tab value="spend">
+              💰{' '}
+              <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
+                {' '}
+                Spend
+              </Box>
+            </Tab>
           </TabList>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: { xs: 1, sm: 0 } }}>
             <Typography level="body-sm" sx={{ color: 'text.secondary', whiteSpace: 'nowrap' }}>
@@ -183,6 +191,11 @@ const ModelMetricsTab: React.FC = () => {
             onSort={handleSort}
             onShowInfoModal={() => setShowInfoModal(true)}
           />
+        </TabPanel>
+
+        {/* Spend Tab (mock data, issue No. 1507) */}
+        <TabPanel value="spend" sx={{ p: 1 }}>
+          <SpendTab />
         </TabPanel>
       </Tabs>
 

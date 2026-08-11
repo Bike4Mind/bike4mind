@@ -189,6 +189,31 @@ describe('UserApiKeyRepository.findByOrganizationIdsAndId', () => {
     await expect(userApiKeyRepository.findByOrganizationIdsAndId(['org-1'], divergent.id)).resolves.toBeNull();
   });
 
+  // The org LIST finder feeds the surface whose write paths use the finder above,
+  // so it has to exclude the same row - otherwise an org admin is shown a key
+  // every write path then refuses to resolve.
+  it('excludes an in-org key whose billingOwnerType is User from the org list', async () => {
+    const { userApiKeyRepository } = await import('../UserApiKeyModel');
+    await UserApiKey.create({
+      ...base,
+      keyPrefix: 'b4m_live_listuser',
+      agentId: 'agent-1',
+      organizationId: 'org-list',
+      billingOwnerType: CreditHolderType.User,
+    });
+    const orgBilled = await UserApiKey.create({
+      ...base,
+      keyPrefix: 'b4m_live_listorg',
+      agentId: 'agent-1',
+      organizationId: 'org-list',
+      billingOwnerType: CreditHolderType.Organization,
+    });
+
+    const listed = await userApiKeyRepository.findByOrganizationId('org-list');
+
+    expect(listed.map(k => k.id)).toEqual([orgBilled.id]);
+  });
+
   it('returns null for a key billed to an org not in the set', async () => {
     const { userApiKeyRepository, org2 } = await seed('c');
     await expect(userApiKeyRepository.findByOrganizationIdsAndId(['org-1'], org2.id)).resolves.toBeNull();

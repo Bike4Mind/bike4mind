@@ -19,6 +19,7 @@ const createSessionParametersSchema = z.object({
   artifactIds: z.array(z.string()).optional(),
   agentIds: z.array(z.string()).optional(),
   systemPromptText: z.string().optional(),
+  systemPromptId: z.string().optional(),
   surface: z.string().optional(),
   enabledTools: z.array(z.string()).optional(),
   disabledTools: z.array(z.string()).optional(),

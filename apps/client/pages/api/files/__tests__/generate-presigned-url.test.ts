@@ -3,6 +3,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const h = vi.hoisted(() => ({
   createFabFile: vi.fn(),
   findByDatalakeTag: vi.fn(),
+  batchFindById: vi.fn(),
+  getSettingsValue: vi.fn(),
+  s3ClientConfigs: [] as unknown[],
 }));
 
 // The route calls `baseApi().post(...)` directly, with no `.use(...)` in the chain.
@@ -12,7 +15,11 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-bucket' } } }));
 vi.mock('@aws-sdk/client-s3', () => ({
-  S3Client: class {},
+  S3Client: class {
+    constructor(config: unknown) {
+      h.s3ClientConfigs.push(config);
+    }
+  },
   PutObjectCommand: class {
     constructor(public input: unknown) {}
   },
@@ -24,8 +31,9 @@ vi.mock('@server/managers/fabFileManager', () => ({ createFabFile: h.createFabFi
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 
 vi.mock('@bike4mind/database', () => ({
-  adminSettingsRepository: {},
+  adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag },
+  dataLakeBatchRepository: { findById: h.batchFindById },
 }));
 
 // Only the settings read is stubbed; checkStorageLimit and resolveSupportedMimeType are real
@@ -76,6 +84,14 @@ const tagNamesOf = (callIndex = 0) => {
   return persisted.tags?.map(t => t.name).sort();
 };
 
+describe('POST /api/files/generate-presigned-url - S3 client config', () => {
+  it('sets requestChecksumCalculation to WHEN_REQUIRED (#1535)', () => {
+    // Without this, getSignedUrl signs in a checksum of the empty sign-time body, which then
+    // mismatches whatever the browser actually PUTs.
+    expect(h.s3ClientConfigs[0]).toMatchObject({ requestChecksumCalculation: 'WHEN_REQUIRED' });
+  });
+});
+
 describe('POST /api/files/generate-presigned-url - data-lake tags', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -111,5 +127,56 @@ describe('POST /api/files/generate-presigned-url - data-lake tags', () => {
 
     expect(h.createFabFile.mock.calls[0][0]).not.toHaveProperty('tags');
     expect(h.findByDatalakeTag).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/files/generate-presigned-url - batch ownership (IDOR guard)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.createFabFile.mockImplementation(async () => ({ id: 'f1' }));
+    h.getSettingsValue.mockResolvedValue(true);
+  });
+
+  it('never looks up a batch or checks the feature flag when none was sent', async () => {
+    const { res } = makeRes();
+    await run(body(), res);
+
+    expect(h.getSettingsValue).not.toHaveBeenCalled();
+    expect(h.batchFindById).not.toHaveBeenCalled();
+    expect(h.createFabFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a batchId when Data Lakes is disabled, before ever looking the batch up', async () => {
+    h.getSettingsValue.mockResolvedValue(false);
+    const { res } = makeRes();
+
+    await expect(run(body({ batchId: 'b1' }), res)).rejects.toThrow(/feature/i);
+    expect(h.batchFindById).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  it('stamps batchId onto the created file when the caller owns the batch', async () => {
+    h.batchFindById.mockResolvedValue({ id: 'b1', userId: 'u1' });
+    const { res } = makeRes();
+    await run(body({ batchId: 'b1' }), res);
+
+    expect(h.batchFindById).toHaveBeenCalledWith('b1');
+    expect(h.createFabFile.mock.calls[0][0]).toMatchObject({ batchId: 'b1' });
+  });
+
+  it('rejects a batchId belonging to another user, without creating a file', async () => {
+    h.batchFindById.mockResolvedValue({ id: 'b1', userId: 'someone-else' });
+    const { res } = makeRes();
+
+    await expect(run(body({ batchId: 'b1' }), res)).rejects.toThrow(/batch not found/i);
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  it('rejects a batchId that does not exist, without creating a file', async () => {
+    h.batchFindById.mockResolvedValue(null);
+    const { res } = makeRes();
+
+    await expect(run(body({ batchId: 'b1' }), res)).rejects.toThrow(/batch not found/i);
+    expect(h.createFabFile).not.toHaveBeenCalled();
   });
 });

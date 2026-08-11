@@ -1,17 +1,20 @@
 /**
  * Auth Parameters Parser Utility
  *
- * Parses OAuth tokens from URL - supports both query params (legacy) and hash fragments (secure)
+ * Parses the OAuth access token from the URL - supports both query params (legacy) and hash
+ * fragments (secure).
  *
  * Hash fragments are preferred because they:
  * - Are not sent to servers in Referer headers
  * - Are not logged in server access logs
  * - Provide better security for OAuth token transport
+ *
+ * The refresh token is NOT carried here any more: SSO callbacks set it as an HttpOnly cookie
+ * (server/auth/refreshCookie.ts), so the long-lived credential never touches a URL at all.
  */
 
 export interface AuthParams {
   token?: string;
-  refreshToken?: string;
   userId?: string;
   error?: string;
   /** True only when the OAuth callback just created a brand-new account. */
@@ -40,15 +43,13 @@ export function parseHashParams(hash: string): AuthParams | null {
 
   const hashParams = new URLSearchParams(hashContent);
   const token = hashParams.get('token');
-  const refreshToken = hashParams.get('refreshToken');
   const userId = hashParams.get('userId');
   const error = hashParams.get('error');
 
   // Only return hash params if we have complete token data
-  if (token && refreshToken && userId) {
+  if (token && userId) {
     return {
       token,
-      refreshToken,
       userId,
       error: error || undefined,
       isNewUser: hashParams.get('isNewUser') === '1' || undefined,
@@ -73,7 +74,6 @@ export function parseHashParams(hash: string): AuthParams | null {
 export function parseQueryParams(search: Record<string, unknown>): AuthParams {
   return {
     token: typeof search.token === 'string' ? search.token : undefined,
-    refreshToken: typeof search.refreshToken === 'string' ? search.refreshToken : undefined,
     userId: typeof search.userId === 'string' ? search.userId : undefined,
     error: typeof search.error === 'string' ? search.error : undefined,
   };

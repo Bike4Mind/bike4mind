@@ -1,8 +1,10 @@
-import { ModelInfo, IOrganizationDocument } from '@bike4mind/common';
+import { ModelInfo, IOrganizationDocument, MusicGenerationVendor } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { insufficientCreditsError } from '@bike4mind/common';
 import { CostInput } from '../../imageCostCalculator/types';
 import { estimateImageCredits, UnsupportedImageModelError } from '../../../imageCost';
+import { estimateMusicCredits } from '../../../musicCost';
+import { AudioCostInput, estimateAudioCredits } from '../../../audioCost';
 
 export async function validateUserCredits(
   user: any,
@@ -45,4 +47,67 @@ export async function validateUserCredits(
 
   // usdCost is the n-scaled total so it describes the same quantity as requiredCredits.
   return { requiredCredits, usdCost };
+}
+
+/**
+ * Music-generation parallel to validateUserCredits: the cost is deterministic from
+ * `lengthMs` (the provider generates exactly the billed length), so the estimate here
+ * drives the up-front balance check AND the toolCreditsMap reservation the host settles
+ * at quest end. `billedSeconds`/`usdCost` are carried through for usage-event analytics.
+ */
+export function validateMusicCredits(
+  user: { currentCredits?: number; id: string },
+  provider: MusicGenerationVendor,
+  lengthMs: number,
+  logger: Logger,
+  organization?: IOrganizationDocument | null
+): { requiredCredits: number; usdCost: number; billedSeconds: number } {
+  const availableCredits = organization ? organization.currentCredits : (user.currentCredits ?? 0);
+  logger.updateMetadata(
+    organization
+      ? { creditsSource: 'organization', creditsSourceId: organization.id }
+      : { creditsSource: 'user', creditsSourceId: user.id }
+  );
+
+  const { requiredCredits, usdCost, billedSeconds } = estimateMusicCredits(provider, { lengthMs });
+
+  if (availableCredits < requiredCredits) {
+    const creditsType = organization ? 'organization' : 'personal';
+    throw insufficientCreditsError(
+      `You do not have enough ${creditsType} credits to generate music. You currently have ${availableCredits} credits, and this request requires approximately ${requiredCredits} credits. Try a shorter track to lower the credit cost.`
+    );
+  }
+
+  return { requiredCredits, usdCost, billedSeconds };
+}
+
+/**
+ * Audio-generation (TTS + sound-effects) parallel to validateMusicCredits: an up-front
+ * affordability gate. Speech bills per character (conservative gate estimate; settlement
+ * uses the resolved model + actual characters in ToolBuilder.settleAudioCredits), sound
+ * effects per duration second. Throws insufficient_credits before the paid provider call.
+ */
+export function validateAudioCredits(
+  user: { currentCredits?: number; id: string },
+  input: AudioCostInput,
+  logger: Logger,
+  organization?: IOrganizationDocument | null
+): { requiredCredits: number; usdCost: number; units: number } {
+  const availableCredits = organization ? organization.currentCredits : (user.currentCredits ?? 0);
+  logger.updateMetadata(
+    organization
+      ? { creditsSource: 'organization', creditsSourceId: organization.id }
+      : { creditsSource: 'user', creditsSourceId: user.id }
+  );
+
+  const { requiredCredits, usdCost, units } = estimateAudioCredits(input);
+
+  if (availableCredits < requiredCredits) {
+    const creditsType = organization ? 'organization' : 'personal';
+    throw insufficientCreditsError(
+      `You do not have enough ${creditsType} credits to generate audio. You currently have ${availableCredits} credits, and this request requires approximately ${requiredCredits} credits.`
+    );
+  }
+
+  return { requiredCredits, usdCost, units };
 }

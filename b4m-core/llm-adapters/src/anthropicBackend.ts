@@ -30,10 +30,10 @@ import {
 } from './backend';
 import { Logger } from '@bike4mind/observability';
 import { handleToolResultStreaming } from './toolStreamingHelper';
-import { ensureToolPairingIntegrity, stripAllToolBlocks } from './toolPairingUtils';
+import { ensureToolPairingIntegrity, stripAllToolBlocks, stripToolDependentMessages } from './toolPairingUtils';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { withRetry, isUserInitiatedAbort, isRetryableError } from '@bike4mind/common';
-import { buildThinkingParams, type ThinkingConfig } from './thinkingParams';
+import { buildThinkingParams, THINKING_ANSWER_HEADROOM_TOKENS, type ThinkingConfig } from './thinkingParams';
 import { DispatchModel } from './dispatchModel';
 import { acquireSlot, releaseSlot } from './_anthropicSemaphore';
 
@@ -64,6 +64,14 @@ const DEFAULT_IDLE_TIMEOUT_MS = 90000; // 90s between events for standard models
 const THINKING_IDLE_TIMEOUT_MS = 180000; // 180s for thinking models (can pause during extended thinking)
 const REQUEST_TIMEOUT_MS = 60000; // 60s timeout for the initial API request before any streaming starts
 const SLOW_MODEL_REQUEST_TIMEOUT_MS = 120000; // 120s for slow/opus-class models that need longer to begin streaming
+
+/**
+ * Largest max_tokens the SDK will accept without streaming. It derives a projected
+ * duration of 60min * max_tokens / 128000 and throws outright once that exceeds its
+ * 10-minute non-streaming ceiling, so the real limit is 128000 * 10 / 60 = 21333.
+ * Floored to a round number for headroom against that formula being retuned.
+ */
+const ANTHROPIC_NONSTREAMING_MAX_TOKENS = 21_000;
 
 /**
  * Accumulated multi-turn cache token total. Undefined when zero so turns
@@ -719,7 +727,8 @@ export class AnthropicBackend implements ICompletionBackend {
       // Don't increment toolCallCount so subsequent no-tool calls skip this check
       await this.complete(
         model,
-        messages,
+        // Tools are going away, so the prompts that order the model to use one have to go with them.
+        stripToolDependentMessages(messages),
         {
           ...options,
           tools: undefined,
@@ -791,8 +800,12 @@ export class AnthropicBackend implements ICompletionBackend {
     // append the model-identity reminder as a separate uncached block to keep
     // the cached prefix stable across requests (otherwise the suffix would
     // bust the cache key on every model identifier change).
-    const identityReminder = `IMPORTANT! Only when someone asks, remember that you are specifically the ${model} model.`;
-    let system: string | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }>;
+    // Omitted for callers whose contract is a bare completion (API promptMode raw) -
+    // with no system messages left either, the request then carries no system at all.
+    const identityReminder = options.omitIdentityReminder
+      ? null
+      : `IMPORTANT! Only when someone asks, remember that you are specifically the ${model} model.`;
+    let system: string | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> | undefined;
     if (anySystemCacheControlled) {
       const systemMessages = messages.filter(m => m.role === 'system');
       const blocks: Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> = [];
@@ -804,11 +817,14 @@ export class AnthropicBackend implements ICompletionBackend {
           blocks.push({ type: 'text', text });
         }
       }
-      blocks.push({ type: 'text', text: identityReminder });
-      system = blocks.length > 0 ? blocks : identityReminder;
+      if (identityReminder) {
+        blocks.push({ type: 'text', text: identityReminder });
+      }
+      system = blocks.length > 0 ? blocks : undefined;
     } else {
       const joined = this.consolidateSystemMessages(messages);
-      system = joined ? `${joined}\n${identityReminder}` : identityReminder;
+      const parts = [joined, identityReminder].filter(Boolean);
+      system = parts.length > 0 ? parts.join('\n') : undefined;
     }
 
     // Ensure tool_use/tool_result pairing integrity after filterRelevantMessages.
@@ -999,6 +1015,33 @@ export class AnthropicBackend implements ICompletionBackend {
         cacheHistory: cacheStrategy.cacheConversationHistory,
         cacheTTL: cacheStrategy.cacheTTL,
       });
+    }
+
+    // The SDK refuses a non-streaming request whose max_tokens implies it could run
+    // past its 10-minute ceiling, throwing before any HTTP call is made (see
+    // Anthropic.calculateNonstreamingTimeout: 60min * max_tokens / 128000 > 10min).
+    // Clamping is strictly better than the alternative, which is not a shorter answer
+    // but no answer at all. Reachable from any caller that pairs a large budget with
+    // stream:false - notably an adaptive model, where both the no-budget default and
+    // buildThinkingParams size max_tokens at ADAPTIVE_THINKING_MAX_TOKENS_FLOOR (64K).
+    if (!options.stream && apiParams.max_tokens > ANTHROPIC_NONSTREAMING_MAX_TOKENS) {
+      this.logger.warn(
+        `[AnthropicBackend] max_tokens ${apiParams.max_tokens} exceeds the non-streaming ceiling; clamping to ${ANTHROPIC_NONSTREAMING_MAX_TOKENS}. Stream this request to use the full budget.`,
+        { model }
+      );
+      apiParams.max_tokens = ANTHROPIC_NONSTREAMING_MAX_TOKENS;
+
+      // A legacy thinking budget is spent inside max_tokens, so lowering the ceiling has
+      // to bring the budget down with it. Keyed on the headroom rather than on max_tokens
+      // itself: a budget merely below the ceiling (20_999 against 21_000) satisfies the
+      // API yet leaves a single token for the visible answer, which is the same empty
+      // reply this whole clamp exists to avoid. The ceiling keeps the result well above
+      // Anthropic's 1024 minimum budget.
+      const maxThinkingBudget = apiParams.max_tokens - THINKING_ANSWER_HEADROOM_TOKENS;
+      const thinking = apiParams.thinking;
+      if (thinking?.type === 'enabled' && thinking.budget_tokens > maxThinkingBudget) {
+        thinking.budget_tokens = maxThinkingBudget;
+      }
     }
 
     // Setup the actual API call with API-specific options

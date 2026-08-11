@@ -9,6 +9,7 @@ import {
   FormLabel,
   IconButton,
   Input,
+  Link,
   Modal,
   ModalDialog,
   Sheet,
@@ -19,8 +20,14 @@ import {
 } from '@mui/joy';
 import type { ColorPaletteProp } from '@mui/joy/styles';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import type { PerMTokRate } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { DiscoveryStatusCard } from './DiscoveryStatusCard';
+import { SuccessorCostChip, SuccessorCostPanel } from './SuccessorCostDelta';
+import { AdminTab } from './adminSidebarConfig';
+import { useAdminModal } from './useAdminModal';
+import { useCreditAnalysisStore } from './CreditAnalysis/store';
 
 /** Wire shapes of /api/admin/model-deprecation-status (dates arrive as strings). */
 interface QueueItem {
@@ -66,6 +73,8 @@ interface LifecycleStatus {
   expired: ExpiringRow[];
   queue: QueueItem[];
   staleReferences: StaleReference[];
+  /** Per-MTok rates in force, by model id, for pricing a proposed successor. */
+  perMTokRates?: Record<string, PerMTokRate>;
 }
 
 const PROBLEM_COLOR: Record<StaleReference['problem'], ColorPaletteProp> = {
@@ -143,6 +152,9 @@ export const ModelLifecycleTab: React.FC = () => {
   const [blockers, setBlockers] = useState<string[] | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [pendingDismissId, setPendingDismissId] = useState<string | null>(null);
+
+  const setAdminTab = useAdminModal(state => state.setActiveTab);
+  const setCreditAnalysisTab = useCreditAnalysisStore(state => state.setActiveTab);
 
   const fetchStatus = useCallback(async () => {
     setIsLoading(true);
@@ -228,6 +240,7 @@ export const ModelLifecycleTab: React.FC = () => {
   };
 
   const horizon = status ? horizonRows(status) : [];
+  const rates = status?.perMTokRates ?? {};
 
   return (
     <Box data-testid="model-lifecycle-panel">
@@ -238,6 +251,23 @@ export const ModelLifecycleTab: React.FC = () => {
             Detected deprecations awaiting a verdict. Accepting appends an operator catalog row; the stale-reference
             list is a report - those chains live in code.
           </Typography>
+          {/* Prices live in a different sidebar section, so settling a flagged
+              price meant hunting for it. Already inside /admin: setting the tab
+              is the whole navigation. component="button" because a Joy Link with
+              an onClick and no href renders an <a> with no href, which is not
+              focusable and unreachable by keyboard. */}
+          <Link
+            level="body-sm"
+            component="button"
+            startDecorator={<OpenInNewIcon sx={{ fontSize: 14 }} />}
+            onClick={() => {
+              setCreditAnalysisTab('pricing');
+              setAdminTab(AdminTab.CreditAnalytics);
+            }}
+            data-testid="model-lifecycle-model-pricing-link"
+          >
+            Model pricing catalog
+          </Link>
         </Box>
         <IconButton
           size="sm"
@@ -293,7 +323,18 @@ export const ModelLifecycleTab: React.FC = () => {
                         {item.suggestion?.deprecationDate ?? '-'}
                         {item.suggestion?.retirementDate ? ` / ${item.suggestion.retirementDate}` : ''}
                       </td>
-                      <td>{item.suggestion?.replacedBy ?? '-'}</td>
+                      <td>
+                        {item.suggestion?.replacedBy ?? '-'}
+                        {item.suggestion?.replacedBy && (
+                          <Box sx={{ mt: 0.25 }}>
+                            <SuccessorCostChip
+                              modelId={item.modelId}
+                              successorId={item.suggestion.replacedBy}
+                              rates={rates}
+                            />
+                          </Box>
+                        )}
+                      </td>
                       <td>
                         <Chip size="sm" variant="soft">
                           {item.suggestion?.source ?? 'unknown'}
@@ -447,6 +488,11 @@ export const ModelLifecycleTab: React.FC = () => {
                 slotProps={{ input: { 'data-testid': 'model-lifecycle-replacedby-input' } }}
               />
             </FormControl>
+            {/* Priced against what is typed, not what was suggested: the override is the
+                decision that needs the number, and it is the one the queue cannot precompute. */}
+            {acceptTarget && (
+              <SuccessorCostPanel modelId={acceptTarget.modelId} successorId={replacedBy.trim()} rates={rates} />
+            )}
             <FormControl required>
               <FormLabel>Note (audit trail: what confirms this deprecation?)</FormLabel>
               <Textarea

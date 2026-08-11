@@ -67,7 +67,10 @@ vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedVal
 // The real apiKeyRateLimit middleware runs; only its Mongo-backed counter check
 // is stubbed (otherwise the query buffers forever against the stubbed connectDB).
 // Overridable per-test (see the 429 case) via mockRateLimit.
-vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
+vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+  // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it now; only
+  // checkApiKeyRateLimit is stubbed.
+  ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));
 

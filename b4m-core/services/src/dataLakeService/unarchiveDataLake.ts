@@ -10,7 +10,7 @@ export interface UnarchiveResult {
 
 interface UnarchiveDataLakeAdapters {
   db: {
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'setStats'>;
+    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'setStats' | 'activateIfDraft'>;
     fabFiles: Pick<
       IFabFileRepository,
       | 'findArchivedByDataLakeTag'

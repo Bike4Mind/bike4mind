@@ -12,7 +12,12 @@ import {
   testCredentials,
   testRecord,
 } from './__fixtures__/fakes';
-import { DISCOVERY_LEASE_KEY, MAX_DISCOVERY_PASSES, runModelDiscovery } from './runModelDiscovery';
+import {
+  DISCOVERY_LEASE_KEY,
+  MAX_DISCOVERY_PASSES,
+  MAX_PERSISTED_RUN_DETAIL,
+  runModelDiscovery,
+} from './runModelDiscovery';
 import type {
   DiscoveredModel,
   DiscoveryLogger,
@@ -153,6 +158,19 @@ describe('runModelDiscovery', () => {
     expect(result.diff[0]).toMatchObject({ modelId: 'gpt-6', kind: 'added', promoted: true });
     // The run report itself is always written: it is how the diff is read.
     expect(reporting.runs.docs).toHaveLength(1);
+    // On the document, not inferred from the setting at read time: the plan below
+    // it counts rows this run deliberately did not write, and a reader with no
+    // mode cannot tell that from a write run whose appends all threw.
+    expect(reporting.runs.docs[0]).toMatchObject({ mode: 'report', changes: { plannedPriceRows: 1 } });
+    expect(reporting.runs.docs[0].changes?.appendedPriceRows).toBe(0);
+  });
+
+  it('records the mode it ran in from the moment the run document exists', async () => {
+    // Written at creation rather than at the final update, so a run killed
+    // mid-flight still says what it was allowed to do.
+    await runModelDiscovery(bench.adapters, bench.options);
+
+    expect(bench.runs.docs[0].mode).toBe('write');
   });
 
   it('defaults to report mode when the setting is unset', async () => {
@@ -432,6 +450,18 @@ describe('runModelDiscovery', () => {
         expect(result.lifecycle.wouldDeprecate).toEqual(['gpt-6']);
         expect(result.metrics.ModelsDeprecated).toBe(1);
         expect(bench.runs.docs[3].changes?.deprecated).toEqual(['gpt-6']);
+        // The count says one model moved; only the transition says from what, on
+        // what signal, and with which dates.
+        expect(bench.runs.docs[3].lifecycleTransitions).toEqual([
+          {
+            modelId: 'gpt-6',
+            from: 'active',
+            to: 'deprecated',
+            signal: 'absence',
+            deprecationDate: '2026-07-29',
+            autoApplied: false,
+          },
+        ]);
         expect(bench.catalog.rows).toHaveLength(2);
         expect(bench.catalog.rows[1].patch).toMatchObject({
           id: 'gpt-6',
@@ -711,8 +741,8 @@ describe('runModelDiscovery', () => {
     });
 
     it('flags a move beyond the band under its own log prefix and applies nothing', async () => {
-      // $8/MTok in force against the $2 the source reports: a 75% cut, past
-      // the 50% default band.
+      // $8/MTok in force against the $2 the source reports: a 4x cut, which the
+      // band scores as 300%, past the 50% default.
       await seedPrice(bench, { input: 8e-6, output: 8e-6 });
 
       const result = await runModelDiscovery(bench.adapters, bench.options);
@@ -725,7 +755,8 @@ describe('runModelDiscovery', () => {
     });
 
     it('honors a widened band from the admin setting', async () => {
-      const wide = harness([openaiSource()], { modelDiscoveryPriceBandPct: 90 });
+      // The same 4x cut, applied unattended only by a band that admits 4x.
+      const wide = harness([openaiSource()], { modelDiscoveryPriceBandPct: 400 });
       await seedPrice(wide, { input: 8e-6, output: 8e-6 });
 
       const result = await runModelDiscovery(wide.adapters, wide.options);
@@ -1065,6 +1096,154 @@ describe('runModelDiscovery', () => {
       expect(hung.catalog.rows).toHaveLength(1);
       expect(result.passes).toBe(1);
       expect(result.outcome).toBe('partial');
+    });
+  });
+
+  describe('the persisted run report', () => {
+    const gpt6mini: DiscoveredModel = {
+      ...gpt6,
+      modelId: 'gpt-6-mini',
+      patch: { ...gpt6.patch, id: 'gpt-6-mini', name: 'GPT-6 mini' },
+    };
+
+    /** An operator row for the model, which is what makes the run report a conflict. */
+    const pinByOperator = (harnessed: Harness, modelId: string) =>
+      harnessed.catalog.append({
+        modelId,
+        source: 'operator',
+        patch: { rank: 5 },
+        ownedGroups: ['presentation'],
+        note: 'pinned by an operator',
+        effectiveFrom: new Date(START.getTime() - 60_000),
+      });
+
+    it('carries the sentence behind each price flag, and the operator overlaps apart from them', async () => {
+      const reported = harness([openaiSource([gpt6, gpt6mini])]);
+      await pinByOperator(reported, 'gpt-6-mini');
+      // $8/MTok in force against the $2 the source reports: past the 50% band.
+      await reported.prices.append({
+        modelId: 'gpt-6',
+        unit: 'per_token',
+        pricing: { '0': { input: 8e-6, output: 8e-6 } },
+        effectiveFrom: new Date(START.getTime() - 60_000),
+        note: 'adapter-seed',
+      });
+
+      const result = await runModelDiscovery(reported.adapters, reported.options);
+      const persisted = reported.runs.docs[0];
+
+      expect(persisted.priceFlags).toHaveLength(1);
+      expect(persisted.priceFlags?.[0]).toMatchObject({
+        modelId: 'gpt-6',
+        kind: 'band-exceeded',
+        proposed: { inputPerMTok: 2, outputPerMTok: 8 },
+        current: { inputPerMTok: 8, outputPerMTok: 8 },
+        sources: ['openai'],
+      });
+      // The explanation is what the flags are persisted for: it used to reach
+      // logger.warn and nowhere else, leaving "1 flagged" unanswerable.
+      expect(persisted.priceFlags?.[0].detail).toBe(result.prices.flags[0].detail);
+      expect(persisted.priceFlags?.[0].detail).toContain('band 50%');
+      // One queue for the operator, but the merged array cannot say which half of
+      // it a model came from.
+      expect(persisted.changes?.flagged).toEqual(['gpt-6-mini', 'gpt-6']);
+      expect(persisted.changes?.operatorConflicts).toEqual(['gpt-6-mini']);
+      expect(persisted.catalogDiff?.find(entry => entry.modelId === 'gpt-6-mini')).toMatchObject({
+        kind: 'added',
+        operatorOwned: true,
+      });
+      // A planned row keeps its Date across the boundary; the schema stores a date.
+      expect(persisted.priceRows).toHaveLength(1);
+      expect(persisted.priceRows?.[0]).toMatchObject({
+        modelId: 'gpt-6-mini',
+        unit: 'per_token',
+        inputPerMTok: 2,
+        outputPerMTok: 8,
+        sources: ['openai'],
+      });
+      expect(persisted.priceRows?.[0].effectiveFrom).toEqual(START);
+    });
+
+    it('records the mirror a provider price was written over', async () => {
+      const stale = harness([
+        openaiSource(),
+        stubSource({
+          name: 'models.dev',
+          kind: 'aggregator',
+          records: [{ modelId: 'gpt-6', patch: {}, pricing: { inputPerMTok: 2, outputPerMTok: 8 } }],
+        }),
+        stubSource({
+          name: 'litellm',
+          kind: 'aggregator',
+          records: [{ modelId: 'gpt-6', patch: {}, pricing: { inputPerMTok: 8, outputPerMTok: 32 } }],
+        }),
+      ]);
+
+      const result = await runModelDiscovery(stale.adapters, stale.options);
+      const persisted = stale.runs.docs[0];
+
+      expect(persisted.priceRows).toHaveLength(1);
+      expect(persisted.priceFlags).toEqual([]);
+      // "litellm is 4x off for gpt-6" is the operational fact here, and it would
+      // be invisible if the write simply succeeded quietly.
+      expect(persisted.priceOverrides).toHaveLength(1);
+      expect(persisted.priceOverrides?.[0]).toMatchObject({
+        modelId: 'gpt-6',
+        source: 'openai',
+        dissenting: ['litellm'],
+        applied: { inputPerMTok: 2, outputPerMTok: 8 },
+      });
+      expect(persisted.priceOverrides?.[0].detail).toBe(result.prices.overrides[0].detail);
+    });
+
+    it('records the skips a rerun produces in place of a row', async () => {
+      await runModelDiscovery(bench.adapters, bench.options);
+      bench.advance(60_000);
+
+      await runModelDiscovery(bench.adapters, bench.options);
+
+      // A run that planned no price row reads exactly like a run that saw no
+      // price at all until the skip says which model and why.
+      expect(bench.runs.docs[1].priceRows).toEqual([]);
+      expect(bench.runs.docs[1].priceSkips).toEqual([{ modelId: 'gpt-6', reason: 'unchanged' }]);
+    });
+
+    it('bounds every detail array, so one wide run cannot grow the document without limit', async () => {
+      const overflow = MAX_PERSISTED_RUN_DETAIL + 50;
+      const many: DiscoveredModel[] = Array.from({ length: overflow }, (_unused, index) => ({
+        ...gpt6,
+        modelId: `gpt-6-${index}`,
+        patch: { ...gpt6.patch, id: `gpt-6-${index}`, name: `GPT-6 ${index}` },
+      }));
+      const wide = harness([openaiSource(many)]);
+
+      const result = await runModelDiscovery(wide.adapters, wide.options);
+      const persisted = wide.runs.docs[0];
+
+      // The result is the caller's, unbounded; the document the admin reads whole
+      // is not.
+      expect(result.diff).toHaveLength(overflow);
+      expect(result.prices.rows).toHaveLength(overflow);
+      expect(persisted.catalogDiff).toHaveLength(MAX_PERSISTED_RUN_DETAIL);
+      expect(persisted.priceRows).toHaveLength(MAX_PERSISTED_RUN_DETAIL);
+      // The convergence pass re-read the prices it wrote and skipped every one.
+      expect(persisted.priceSkips).toHaveLength(MAX_PERSISTED_RUN_DETAIL);
+      // What each slice was cut from. The `changes` ids are uncapped, so without
+      // these the report shows 250 flagged in the header and 200 in the section.
+      expect(persisted.detailTotals).toEqual({
+        catalogDiff: overflow,
+        priceRows: overflow,
+        priceSkips: overflow,
+      });
+      // Only the truncated arrays: an untouched one would report a total equal to
+      // what is stored, which says nothing.
+      expect(persisted.detailTotals?.priceFlags).toBeUndefined();
+    });
+
+    it('leaves the totals off entirely when every detail array fit', async () => {
+      await runModelDiscovery(bench.adapters, bench.options);
+
+      expect(bench.runs.docs[0].detailTotals).toBeUndefined();
     });
   });
 

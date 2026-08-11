@@ -4,6 +4,7 @@ import { randomBytes } from 'crypto';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { KEY_PREFIX_LENGTH } from './constants';
+import { resolveOwnedApiKey } from './resolveOwnedApiKey';
 
 const rotateUserApiKeySchema = z.object({
   keyId: z.string(),
@@ -38,10 +39,8 @@ function generateNewApiKey(): { key: string; keyPrefix: string; keyHash: string 
 }
 
 /**
- * Rotate a key's secret. Resolvable by the key's minter OR by an admin of the
- * org the key is billed to (owner or manager), mirroring the org-admin-aware
- * LIST route and updateEmbedKey. The org-admin lookup is lazy: the minter path
- * pays no extra query.
+ * Rotate a key's secret, scoped by resolveOwnedApiKey (the key's minter, or an
+ * admin of the org it is billed to).
  */
 export const rotateUserApiKey = async (
   userId: string,
@@ -51,11 +50,7 @@ export const rotateUserApiKey = async (
   const { db } = adapters;
   const params = secureParameters(parameters, rotateUserApiKeySchema);
 
-  let apiKey = await db.userApiKeys.findByUserIdAndId(userId, params.keyId);
-  if (!apiKey) {
-    const administeredOrgIds = await db.organizations.findIdsAdministeredBy(userId);
-    apiKey = await db.userApiKeys.findByOrganizationIdsAndId(administeredOrgIds, params.keyId);
-  }
+  const apiKey = await resolveOwnedApiKey(userId, params.keyId, { db });
   if (!apiKey) {
     throw new NotFoundError('API key not found');
   }

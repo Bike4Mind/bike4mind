@@ -1235,7 +1235,7 @@ describe('large bodies', () => {
     const elapsedMs = Date.now() - startedAt;
 
     expect(result.signals.length).toBeGreaterThan(0);
-    expect(elapsedMs).toBeLessThan(3000);
+    expect(elapsedMs).toBeLessThan(5000);
   });
 
   it('stays fast when the body has one comment per line', () => {

@@ -39,6 +39,27 @@ export interface KbScope {
   fileIds: string[];
 }
 
+/**
+ * Token + cost report for a single tool-internal `llm.complete()` call. Tools that
+ * generate via their own LLM (deep_research, blog_draft, edit_file, ...) emit one of
+ * these through `ToolContext.onToolLlmUsage` so a billing host can fold nested spend
+ * into its ledger. `costUsd` is priced with the tool's OWN model (see
+ * recordToolOperationalUsage), so consumers must accumulate the USD directly rather
+ * than re-pricing the tokens at some other model's rate.
+ *
+ * The agent executor accumulates these into `ToolUsageTotals`
+ * (apps/client agentExecutor.iterationBilling.ts) - same five fields, kept in sync by
+ * hand. Keep both in step on a rename.
+ */
+export type ToolLlmUsage = {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number;
+};
+
 export interface ToolContext {
   userId: string;
   user: IUserDocument; // Full user document for tools that need user data (e.g., blog integration)
@@ -57,7 +78,10 @@ export interface ToolContext {
     };
     // Extended db adapters for tools that need them
     fabfiles?: IFabFileRepository;
-    fabfilechunks?: Pick<IFabFileChunkRepository, 'findByFabFileId' | 'findVectorsByFabFileIds'>;
+    fabfilechunks?: Pick<
+      IFabFileChunkRepository,
+      'findByFabFileId' | 'findVectorsByFabFileIds' | 'findTextsByFabFileId' | 'countByFabFileId'
+    >;
     users?: Pick<IUserRepository, 'findById'>;
     projects?: IProjectRepository;
     dataLakes?: Pick<IDataLakeRepository, 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements'>;
@@ -101,9 +125,9 @@ export interface ToolContext {
    * consult owner-wide access (getDynamicDataLakeAccess). Absent on all non-agent paths.
    *
    * INVARIANT: any NEW tool that reads db.fabfiles / db.fabfilechunks must honor kbScope
-   * (reject / restrict to scope.fileIds) - today only search_knowledge_base and
-   * retrieve_knowledge_content do, and the embed surface stays safe only because its tool
-   * resolver excludes every other fabfiles-reading tool. Enforcement is per-tool, not
+   * (reject / restrict to scope.fileIds) - today only search_knowledge_base,
+   * retrieve_knowledge_content and count_knowledge_base do, and the embed surface stays safe only
+   * because its tool resolver excludes every other fabfiles-reading tool. Enforcement is per-tool, not
    * per-repository, so a new fabfiles tool added to a scoped surface without this handling
    * would silently read unscoped.
    */
@@ -122,6 +146,20 @@ export interface ToolContext {
    * where cost degrades to 0 but the usage event is still written.
    */
   availableModels?: ModelInfo[];
+  /**
+   * Optional sink for tool-internal LLM spend. Invoked by recordToolOperationalUsage
+   * after a tool's own `llm.complete()` call so a billing host (the agent executor)
+   * can fold nested generation into iteration billing instead of charging it at zero
+   * (#630). Absent on hosts that don't fold nested tool spend into a customer charge -
+   * e.g. the chat path, which records tool COGS as analytics-only operational usage and
+   * leaves this unset (its up-front credit enforcement covers only image_generation /
+   * edit_image, not the text-gen tools this callback measures).
+   *
+   * Must not throw: recordToolOperationalUsage invokes it inside its best-effort
+   * try/catch, so a throwing callback is swallowed AND drops the subsequent analytics
+   * write. Keep implementations pure arithmetic (see agentExecutor's addToolUsage).
+   */
+  onToolLlmUsage?: (usage: ToolLlmUsage) => void;
   imageProcessorLambdaName?: string; // Lambda function name for image processing (edit_image, image_generation)
   /**
    * List of allowed directories for file operations.

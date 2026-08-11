@@ -1,4 +1,5 @@
 import { useTheme } from '@mui/joy/styles';
+import { actorColorIndex } from '@bike4mind/hearth';
 
 /**
  * Per-actor colors: a FIXED palette, indexed by a hash of actorId. The hash is
@@ -28,17 +29,12 @@ const ACTOR_COLORS: ReadonlyArray<{ light: string; dark: string }> = [
 /** Used when a row carries no usable actorId - never a generated hue. */
 const NEUTRAL_ACTOR_COLOR = { light: '#475569', dark: '#cbd5e1' };
 
-/**
- * djb2 over the actorId, folded into the palette. Exported for the test that
- * pins determinism: the same actorId must always map to the same slot.
- */
-export function actorColorIndex(actorId: string): number {
-  let hash = 5381;
-  for (let i = 0; i < actorId.length; i++) {
-    hash = ((hash << 5) + hash + actorId.charCodeAt(i)) | 0;
-  }
-  return Math.abs(hash) % ACTOR_COLORS.length;
-}
+// The slot mapping is NOT local: it lives in @bike4mind/hearth so this view,
+// the presence roster, and the CLI `/hearth` output all land an actor on the
+// same slot. A session that reads as teal here and amber in the CLI is two
+// identities to a human, not one. Only the palette stays local, because a
+// terminal cannot express these light/dark hex pairs.
+export { actorColorIndex };
 
 /** Resolves an actorId to its palette color for the active theme mode. */
 export function useActorColor(): (actorId: string) => string {

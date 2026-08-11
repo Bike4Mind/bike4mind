@@ -19,12 +19,20 @@ describe('MoonshotBedrockBackend payload', () => {
   });
 
   it('clamps max_tokens to the 16K Bedrock ceiling rather than passing the direct-API limit', () => {
-    // Direct Moonshot allows 262144; asking Bedrock for it is a validation error.
+    // 262144 is the direct-served K2.5 context window, not an output budget anywhere:
+    // asking Bedrock for that many output tokens is a validation error.
     expect(bodyOf(ChatModels.KIMI_K2_5_BEDROCK, { maxTokens: 262_144 }).max_tokens).toBe(16_384);
   });
 
   it('always sends max_tokens, which the Invoke body requires', () => {
     expect(bodyOf(ChatModels.KIMI_K2_5_BEDROCK)).toHaveProperty('max_tokens');
+  });
+
+  it('defaults max_tokens to the full ceiling, since reasoning is spent inside it', () => {
+    // A smaller default is not "a shorter answer" on these ids: the monologue eats
+    // the whole budget and the turn ends mid-thought with no answer after it.
+    expect(bodyOf(ChatModels.KIMI_K2_THINKING_BEDROCK).max_tokens).toBe(16_384);
+    expect(bodyOf(ChatModels.KIMI_K2_5_BEDROCK).max_tokens).toBe(16_384);
   });
 
   it('passes temperature and top_p through, unlike the direct-served family', () => {
@@ -78,6 +86,42 @@ describe('MoonshotBedrockBackend response translation', () => {
 
   it('tolerates a response with no choices at all', () => {
     expect(backend.translateChunk(ChatModels.KIMI_K2_5_BEDROCK, {}).chunk.choices).toEqual([]);
+  });
+});
+
+// statusEndReason collapses 'stop' and 'length' onto ChoiceEndReason.STOP, so it
+// cannot tell a caller the output was cut off. Without the separate stopReason a
+// k2-thinking turn that spent its whole budget on the monologue reached the user as
+// a reasoning trace ending at </think>, with nothing marking it truncated.
+describe('MoonshotBedrockBackend stopReason', () => {
+  it("maps a 'length' finish to max_tokens so the reply is flagged truncated", () => {
+    const { chunk } = backend.translateChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, {
+      choices: [{ message: { content: '<reasoning>thinking hard' }, finish_reason: 'length' }],
+    });
+    expect(chunk.stopReason).toBe('max_tokens');
+  });
+
+  it("maps a clean 'stop' finish through unchanged", () => {
+    const { chunk } = backend.translateChunk(ChatModels.KIMI_K2_5_BEDROCK, {
+      choices: [{ message: { content: 'hi' }, finish_reason: 'stop' }],
+    });
+    expect(chunk.stopReason).toBe('stop');
+  });
+
+  it('reports truncation on the streaming path too', () => {
+    const fresh = new MoonshotBedrockBackend();
+    const { chunk } = fresh.translateStreamChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, {
+      choices: [{ delta: { content: '<reasoning>cut off' }, finish_reason: 'length' }],
+    });
+    expect(chunk.stopReason).toBe('max_tokens');
+  });
+
+  it('omits stopReason on a mid-stream frame that carries no finish_reason', () => {
+    const fresh = new MoonshotBedrockBackend();
+    const { chunk } = fresh.translateStreamChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, {
+      choices: [{ delta: { content: 'more text' } }],
+    });
+    expect(chunk.stopReason).toBeUndefined();
   });
 });
 

@@ -1,11 +1,11 @@
-import { IUserDocument, WithOrgRef } from '@bike4mind/common';
+import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { useMigrateUsers } from '@client/app/utils/userAPICalls';
 import ForwardToInboxIcon from '@mui/icons-material/ForwardToInbox';
 import { Button, Tooltip } from '@mui/joy';
 import React from 'react';
 
 interface MigrateAgainProps {
-  user: WithOrgRef<IUserDocument>;
+  user: AdminUserListItem;
   size?: 'sm' | 'md' | 'lg';
 }
 

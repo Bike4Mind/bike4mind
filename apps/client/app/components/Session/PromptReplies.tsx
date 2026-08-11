@@ -44,7 +44,7 @@ import type { ChessArtifact, MermaidArtifact } from '@bike4mind/common';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import EditModeContent from './EditModeContent';
 import { ExpandCollapseButton } from './ExpandCollapseButton';
-import { IAgent } from '@bike4mind/common';
+import { IAgent, GENERATED_AUDIO_EXTENSION_RE, GENERATED_IMAGE_EXTENSION_RE } from '@bike4mind/common';
 import { ArtifactElisionBanner } from './ArtifactElisionBanner';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
@@ -456,6 +456,29 @@ function omitBetweenTags(input: string, openTag: string, closeTag: string): stri
   return result;
 }
 
+/**
+ * Partition the files a tool dropped into `quest.images` this turn into three disjoint
+ * buckets by extension: the inline <img> grid, inline <audio> players, and download
+ * chips (everything else - also surfaced in the Knowledge Base). Every entry lands in
+ * exactly one bucket, and `others` is the catch-all so a newly added media type degrades
+ * to a download chip rather than silently vanishing or rendering as a broken <img>.
+ */
+export function classifyGeneratedFiles(files: string[]): {
+  images: string[];
+  audio: string[];
+  others: string[];
+} {
+  const images: string[] = [];
+  const audio: string[] = [];
+  const others: string[] = [];
+  for (const file of files) {
+    if (GENERATED_IMAGE_EXTENSION_RE.test(file)) images.push(file);
+    else if (GENERATED_AUDIO_EXTENSION_RE.test(file)) audio.push(file);
+    else others.push(file);
+  }
+  return { images, audio, others };
+}
+
 // PromptReplies: top-level component (public API unchanged)
 
 const PromptReplies: FC<PromptReplyProps> = ({
@@ -477,28 +500,19 @@ const PromptReplies: FC<PromptReplyProps> = ({
 
   const generatedImagesUrl = `${cdnUrl}/generated`;
   // quest.images carries every file a tool generated this turn, but not all of them are
-  // images - e.g. excel_generation drops an .xlsx in here. Only actual images belong in the
-  // inline image grid; anything else would render as a broken <img>. Split by extension and
-  // surface non-image files as download chips instead (they also appear in the Knowledge Base).
-  const images = useMemo(
-    () =>
-      generatedImagesUrl
-        ? (messageData.images ?? [])
-            .filter(image => /\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i.test(image))
-            .map(image => `${generatedImagesUrl}/${image}`)
-            .filter(Boolean)
-        : [],
-    [messageData.images, generatedImagesUrl]
-  );
-  const generatedFiles = useMemo(
-    () =>
-      generatedImagesUrl
-        ? (messageData.images ?? [])
-            .filter(image => !/\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i.test(image))
-            .map(image => ({ name: image, url: `${generatedImagesUrl}/${image}` }))
-        : [],
-    [messageData.images, generatedImagesUrl]
-  );
+  // images - e.g. excel_generation drops an .xlsx and music_generation an audio track in
+  // here. Classify once into the inline grid, inline audio players, and download chips
+  // (non-image/-audio files, also surfaced in the Knowledge Base) so each lands in exactly
+  // one place instead of rendering as a broken <img>. See classifyGeneratedFiles.
+  const { images, audio, generatedFiles } = useMemo(() => {
+    if (!generatedImagesUrl) return { images: [], audio: [], generatedFiles: [] };
+    const buckets = classifyGeneratedFiles(messageData.images ?? []);
+    return {
+      images: buckets.images.map(image => `${generatedImagesUrl}/${image}`),
+      audio: buckets.audio.map(file => `${generatedImagesUrl}/${file}`),
+      generatedFiles: buckets.others.map(name => ({ name, url: `${generatedImagesUrl}/${name}` })),
+    };
+  }, [messageData.images, generatedImagesUrl]);
   const videos = useMemo(
     () =>
       generatedImagesUrl ? messageData.videos?.map(video => `${generatedImagesUrl}/${video}`).filter(Boolean) : [],
@@ -544,6 +558,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
         images={images}
         generatedFiles={generatedFiles}
         videos={videos}
+        audio={audio}
         search={search}
         isExpandable={isExpandable}
         promptMeta={messageData.promptMeta}
@@ -1089,6 +1104,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   images = [],
   generatedFiles = [],
   videos = [],
+  audio = [],
   search,
   isExpandable = false,
   completed = false,
@@ -1595,7 +1611,11 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
             />
           ) : (
             <>
-              {(cleanReply || images.length > 0 || generatedFiles.length > 0 || videos.length > 0) && (
+              {(cleanReply ||
+                images.length > 0 ||
+                generatedFiles.length > 0 ||
+                videos.length > 0 ||
+                audio.length > 0) && (
                 <Box
                   sx={{
                     position: 'relative',
@@ -1683,6 +1703,22 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                               >
                                 {file.name}
                               </Button>
+                            ))}
+                          </Box>
+                        )}
+
+                        {audio.length > 0 && (
+                          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, width: '100%', mt: 1 }}>
+                            {audio.map((src, index) => (
+                              <Box
+                                key={index}
+                                component="audio"
+                                controls
+                                preload="metadata"
+                                src={src}
+                                data-testid="generated-audio-player"
+                                sx={{ width: '100%', maxWidth: 480 }}
+                              />
                             ))}
                           </Box>
                         )}

@@ -75,7 +75,8 @@ const handler = baseApi().post(
           stripeCustomerId: null,
         },
         {
-          db: { organizations: organizationRepository },
+          db: { organizations: organizationRepository, users: userRepository },
+          logger: req.logger,
         }
       );
 

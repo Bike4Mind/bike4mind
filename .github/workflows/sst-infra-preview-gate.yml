@@ -36,14 +36,38 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.head_ref }}
+          IS_SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           set -euo pipefail
 
           # Single fetch of changed files (with patches). No `|| true`: a fetch
           # failure must redden this gate (fail closed), never silently pass.
-          gh api "repos/$REPO/pulls/$PR/files" --paginate > /tmp/pr_files.json
-          jq -r '.[].filename' /tmp/pr_files.json > /tmp/files.txt
-          echo "Changed files:"; sed 's/^/  /' /tmp/files.txt || true
+          gh api "repos/$REPO/pulls/$PR/files" --paginate > /tmp/pr_files_raw.json
+
+          # The changesets "version packages" PR bumps versions + CHANGELOGs; its
+          # b4m-core/infra/package.json bump trips the infra glob below with no real
+          # infra change. Exempt those ARTIFACTS on a same-repo release PR rather
+          # than trusting the branch name: `github.head_ref` is attacker-chosen on a
+          # fork (this public repo takes external PRs), and the release branch is
+          # long-lived and human-pushed -- so a real infra change riding it must
+          # still redden. Filtering the diff instead of short-circuiting the whole
+          # PR preserves that. Same-repo predicate mirrors auto-changeset.yml.
+          if [ "$IS_SAME_REPO" = "true" ] && [ "$HEAD_REF" = "changeset-release/main" ]; then
+            # Drop CHANGELOGs entirely (pure release artifacts, no deploy surface).
+            # Keep b4m-core/infra/package.json in pr_files.json so the sst-pin patch
+            # check below still inspects it; exclude it only from the path-glob input
+            # (files.txt), so its version bump does not trip the glob while a
+            # hand-pushed sst pin on that same file still reddens the gate.
+            jq '[.[] | select((.filename == "CHANGELOG.md" or (.filename | endswith("/CHANGELOG.md"))) | not)]' /tmp/pr_files_raw.json > /tmp/pr_files.json
+            jq -r '.[].filename' /tmp/pr_files.json > /tmp/files_all.txt
+            grep -v '^b4m-core/infra/package\.json$' /tmp/files_all.txt > /tmp/files.txt || true
+            echo "Release PR: excluded CHANGELOGs from detection; b4m-core/infra/package.json excluded from the path glob but still patch-inspected for sst pins."
+          else
+            cp /tmp/pr_files_raw.json /tmp/pr_files.json
+            jq -r '.[].filename' /tmp/pr_files.json > /tmp/files.txt
+          fi
+          echo "Changed files considered:"; sed 's/^/  /' /tmp/files.txt || true
 
           applicable=0
           reason=""

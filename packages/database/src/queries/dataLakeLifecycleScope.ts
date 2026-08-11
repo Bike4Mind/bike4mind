@@ -1,4 +1,9 @@
-import { isReservedTagPrefix, normalizeTagPrefix, type DataLakeMembershipScope } from '@bike4mind/common';
+import {
+  DATALAKE_TAG_PREFIX,
+  isReservedTagPrefix,
+  normalizeTagPrefix,
+  type DataLakeMembershipScope,
+} from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 
 /**
@@ -12,9 +17,10 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
  * viewer-independent `fileCount`; an actor-anchored predicate would make the stored count vary
  * by who triggered the recompute.
  *
- * The prefix arm needs an ownership conjunct at all because `fileTagPrefix` is user-chosen with no
- * uniqueness constraint (see DataLakeModel). Without it, minting a lake with prefix `acme:`
- * would permanently delete every file in the database tagged `acme:*`.
+ * The prefix arm needs an ownership conjunct at all because `fileTagPrefix` is user-chosen and only
+ * unique per creator (see DataLakeModel) - a lake in a different org or by a different creator can
+ * still register the same prefix. Without the conjunct, minting a lake with prefix `acme:` would
+ * permanently delete every file in the database tagged `acme:*`.
  *
  * That conjunct is POSITIVE ownership - `userId` equals the creator - and deliberately NOT
  * "anything the creator can access". A read share must not make someone else's file a member:
@@ -44,5 +50,39 @@ export function buildDataLakeMembershipFilter(scope: DataLakeMembershipScope): R
         ],
       },
     ],
+  };
+}
+
+/**
+ * Datastore mirror of `satisfiesTagPrefix`, NEGATED: matches files carrying no tag that places
+ * them under `prefix`. What the backfill migration selects, so it stamps exactly the files the
+ * write-door reconciler would have. A parity test asserts the two agree; change them together.
+ *
+ * The trailing `[\s\S]` in the pattern is the length check - a bare `acme:` is not a category
+ * anyone can navigate to, so it does not satisfy `acme:`. It is spelled that way rather than `.`
+ * because `.` excludes newlines, which would make `acme:\nfoo` satisfy the predicate but not this
+ * filter. Case-sensitive (no `i` flag), matching both the predicate and the read arms the stamp
+ * has to become visible to.
+ *
+ * The second conjunct mirrors the predicate's "a meta-tag is membership, never content" rule. It is
+ * unreachable for the prefixes the stamp gate actually clears, since those are outside the
+ * `datalake:` namespace - but carrying it means parity holds for ANY prefix rather than only under
+ * that precondition, which is one fewer thing for a future caller to get wrong. Case-insensitive,
+ * matching the predicate.
+ *
+ * Returns a top-level filter fragment; spread it alongside the meta-tag arm.
+ */
+export function buildLacksContentPrefixTagFilter(prefix: string): Record<string, unknown> {
+  return {
+    tags: {
+      $not: {
+        $elemMatch: {
+          $and: [
+            { name: { $regex: new RegExp(`^${escapeRegex(prefix)}[\\s\\S]`) } },
+            { name: { $not: new RegExp(`^${DATALAKE_TAG_PREFIX}`, 'i') } },
+          ],
+        },
+      },
+    },
   };
 }

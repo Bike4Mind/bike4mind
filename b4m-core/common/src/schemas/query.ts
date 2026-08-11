@@ -26,3 +26,19 @@ export const TableQuery = QueryPaginate.extend({
 
 export const QueryComplexity = z.enum(['simple', 'contextual', 'complex']);
 export type QueryComplexityType = z.infer<typeof QueryComplexity>;
+
+/**
+ * Boolean query parameter. Not `z.coerce.boolean()`: that is `Boolean(input)`, and query params
+ * arrive as strings, so `'false'` would parse as TRUE. Accepts `true`/`'true'`/`'1'`
+ * case-insensitively.
+ *
+ * A repeated param (`?flag=true&flag=true`) arrives from `qs` as an array; the last value wins,
+ * matching how servers usually treat duplicates. Collapsing it to the default instead would be
+ * wrong in the other direction - a caller who asked twice for `all=true` would silently get one
+ * truncated page. `.catch` is the final guard so a malformed value cannot 422 the whole request.
+ */
+export const queryBool = z
+  .preprocess(v => (Array.isArray(v) ? v.at(-1) : v), z.union([z.boolean(), z.string()]))
+  .prefault(false)
+  .transform(v => ['true', '1'].includes(String(v).toLowerCase()))
+  .catch(false);

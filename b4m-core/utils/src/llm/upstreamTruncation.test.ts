@@ -14,7 +14,14 @@ vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
   fetchAndParseURL: vi.fn(async () => ({ textContent: 'PAGE-START ' + 'y'.repeat(40000) + ' PAGE-END' })),
 }));
 
-import { processFabFilesServer, processUrlsFromPrompt, buildAndSortMessages, getLastBuildDebugInfo } from './utils';
+import {
+  processFabFilesServer,
+  processUrlsFromPrompt,
+  buildAndSortMessages,
+  getLastBuildDebugInfo,
+  calculateTotalTokenLength,
+  ATTACHMENT_DELIVERED_NOTICE,
+} from './utils';
 
 const mockLogger = {
   log: vi.fn(),
@@ -50,7 +57,7 @@ const embeddingFactory = {
 
 const chunks = (count: number, charsEach: number) =>
   Array.from({ length: count }, (_, i) => ({
-    id: `chunk-${i}`,
+    id: `chunk-${String(i).padStart(4, '0')}`,
     text: `chunk-${i}-` + 'c'.repeat(Math.max(0, charsEach - `chunk-${i}-`.length)),
     vector: [1, i / count],
   }));
@@ -58,10 +65,29 @@ const chunks = (count: number, charsEach: number) =>
 /** Similarity order is the REVERSE of document order, so presentation order is observable. */
 const reverseRankedChunks = (count: number, charsEach: number) =>
   Array.from({ length: count }, (_, i) => ({
-    id: `chunk-${i}`,
+    id: `chunk-${String(i).padStart(4, '0')}`,
     text: `chunk-${i}-` + 'c'.repeat(Math.max(0, charsEach - `chunk-${i}-`.length)),
     vector: [1, (count - i) / count],
   }));
+
+/**
+ * Keyset-paging stand-in for the chunk repository, implementing the REAL cursor arithmetic rather
+ * than returning a canned page per call: a page-keyed mock structurally cannot observe a wrong
+ * cursor, which is the defect paging introduces. Ids are zero-padded so lexicographic order matches
+ * insertion order, the same property a real 24-char ObjectId string has.
+ */
+const pagedChunkRepo = (rows: Array<{ id: string; text: string; vector: number[] }>) => ({
+  findVectorsByFabFileIds: vi.fn(async (_ids: string[], opts?: { limit?: number; afterChunkId?: string }) =>
+    rows
+      .filter(r => r.vector && r.vector.length > 0)
+      .filter(r => (opts?.afterChunkId ? r.id > opts.afterChunkId : true))
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .slice(0, opts?.limit ?? rows.length)
+      .map(r => ({ id: r.id, fabFileId: 'file-1', text: r.text, vector: r.vector }))
+  ),
+  // The FILE's chunk count, vectorless included - what the caller compares "delivered" against.
+  countByFabFileId: vi.fn(async () => rows.length),
+});
 
 const runFabFiles = async (
   file: Record<string, unknown>,
@@ -79,7 +105,7 @@ const runFabFiles = async (
       logger: mockLogger as any,
       storage: {} as any,
       db: {
-        fabfilechunks: { findByFabFileId: vi.fn(async () => fileChunks) },
+        fabfilechunks: pagedChunkRepo(fileChunks),
         fabfiles: { update: vi.fn() },
         caches: {} as any,
       } as any,
@@ -207,7 +233,7 @@ describe('content cut before assembly is declared to the model', () => {
       // file's own text - and a quoted CSV field is ordinary. The squeeze warning then carried
       // user data into logs while the docstring claimed it could not.
       const quoted = Array.from({ length: 8 }, (_, i) => ({
-        id: `chunk-${i}`,
+        id: `chunk-${String(i).padStart(4, '0')}`,
         text: `"SECRET-FIELD-${i}",more,"ANOTHER-QUOTED-${i}"`,
         vector: [1, i / 8],
       }));
@@ -362,9 +388,14 @@ describe('content cut before assembly is declared to the model', () => {
       // appended and the model reads a fragment as the whole file. Reachable only since the
       // reservation cap let this pass shrink at all - before it the selection was never empty and an
       // overflow went to the caller's hard throw instead.
+      //
+      // History is deliberately small: what survives of the file is whatever the budget has left once
+      // system and history are paid for, so a large history pushes the remainder under the
+      // usable-minimum floor and the file is declared rather than cut. That is the sibling case, and
+      // the restored safety-pass suite covers it - this one has to stay a cut to test the notice.
       const result = await buildAndSortMessages(
-        bigHistory(2, 1500),
-        [{ role: 'user', content: 'Data for roster.csv:\n' + 'row-data,'.repeat(500) }],
+        bigHistory(2, 200),
+        [{ role: 'user', content: 'Data for roster.csv:\n' + 'row-data,'.repeat(2000) }],
         [{ role: 'user', content: 'what is in the file' }],
         2500,
         {},
@@ -375,6 +406,48 @@ describe('content cut before assembly is declared to the model', () => {
 
       const text = result.map(m => (typeof m.content === 'string' ? m.content : '')).join('\n');
       expect(text).toContain(TRUNCATION_NOTICE_MARKER);
+      // The point of the pass, not just of the notice: it has to actually fit now.
+      expect(
+        await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer: denseTokenizer(1.5) as any })
+      ).toBeLessThanOrEqual(2500);
+    });
+
+    it('keeps fetched page content when the safety pass is the first stage to drop a file', async () => {
+      // The undelivered note is only about attachments, but it replaced the whole content list with the
+      // attachments it had judged - so fetched page content, which is deliberately not one, went with it.
+      // Masked while the allocation was the only caller: a turn it dropped nothing on returned early,
+      // before that filter. The safety pass can now be the first stage to drop something.
+      //
+      // Has to go through processUrlsFromPrompt rather than a hand-made message, because what marks
+      // content as URL-derived is a WeakSet that only this function populates.
+      const { userMessages: pageMessages } = await processUrlsFromPrompt(
+        'summarise https://example.com/report',
+        400,
+        'user-1',
+        async () => {},
+        mockLogger as any
+      );
+
+      const result = await buildAndSortMessages(
+        bigHistory(2, 200),
+        [
+          ...pageMessages,
+          {
+            role: 'user',
+            content: 'Here is the content from the attached file "roster.csv" for context:\n\n' + 'C'.repeat(20000),
+          },
+        ],
+        [{ role: 'user', content: 'Summarize the attached file' }],
+        2000,
+        {},
+        20,
+        mockLogger as any,
+        denseTokenizer(1.5) as any
+      );
+
+      const text = result.map(m => (typeof m.content === 'string' ? m.content : '')).join('\n');
+      expect(text).toContain('could not be included in this request');
+      expect(text).toContain('PAGE-START');
     });
 
     it('reports content the final safety pass drops, instead of wasTruncated: false', async () => {
@@ -420,6 +493,34 @@ describe('content cut before assembly is declared to the model', () => {
 
       const text = result.map(m => (typeof m.content === 'string' ? m.content : '')).join('\n');
       expect(text).not.toContain('could not be included');
+    });
+
+    it('does not tell the model it can read attachments when the content is a fetched page, not one', async () => {
+      // The delivered-content assurance is gated on isAttachment, which this WeakSet-based check
+      // already excludes URL-derived content from - a fetched page is not an attachment the user
+      // added, so wording that says "the content below" was attached would misdescribe it.
+      const { userMessages } = await processUrlsFromPrompt(
+        'summarise https://example.com/report',
+        100000,
+        'user-1',
+        async () => {},
+        mockLogger as any
+      );
+
+      const result = await buildAndSortMessages(
+        [],
+        userMessages,
+        [{ role: 'user', content: 'summarise it' }],
+        20000,
+        {},
+        5,
+        mockLogger as any,
+        tokenizer as any
+      );
+
+      const text = result.map(m => (typeof m.content === 'string' ? m.content : '')).join('\n');
+      expect(text).toContain('PAGE-START');
+      expect(text).not.toContain(ATTACHMENT_DELIVERED_NOTICE.trim());
     });
 
     it('cuts content that merely contains the excerpt prefix and ends with a bracket', async () => {

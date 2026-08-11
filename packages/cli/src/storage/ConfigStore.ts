@@ -246,6 +246,9 @@ const CliConfigSchema = z.object({
     exportFormat: z.enum(['markdown', 'json']),
     maxIterations: z.number().nullable().prefault(10),
     enableSkillTool: z.boolean().optional().prefault(true),
+    // Six always-on tools would sit in every completion's schema list; off by
+    // default so only users who want persistent tracking pay for them.
+    enableWorkItemTools: z.boolean().optional().prefault(false),
     /**
      * When false (or set via the `--no-remote-skills` CLI flag / the
      * `B4M_NO_REMOTE_SKILLS=1` env var), the CLI skips fetching skills from
@@ -325,6 +328,7 @@ const ProjectConfigSchema = z.object({
       theme: z.enum(['light', 'dark']).optional(),
       exportFormat: z.enum(['markdown', 'json']).optional(),
       enableSkillTool: z.boolean().optional(),
+      enableWorkItemTools: z.boolean().optional(),
       enableDynamicAgentCreation: z.boolean().optional(),
       enableCoordinatorMode: z.boolean().optional(),
       promptVariant: z.enum(['current', 'minimal']).optional(),
@@ -356,6 +360,7 @@ const ProjectLocalConfigSchema = z.object({
       theme: z.enum(['light', 'dark']).optional(),
       exportFormat: z.enum(['markdown', 'json']).optional(),
       enableSkillTool: z.boolean().optional(),
+      enableWorkItemTools: z.boolean().optional(),
       enableDynamicAgentCreation: z.boolean().optional(),
       enableCoordinatorMode: z.boolean().optional(),
     })
@@ -386,6 +391,7 @@ const DEFAULT_CONFIG: CliConfig = {
     exportFormat: 'markdown',
     maxIterations: 10,
     enableSkillTool: true,
+    enableWorkItemTools: false,
     enableRemoteSkills: true,
     enableDynamicAgentCreation: false,
     enableCoordinatorMode: false,

@@ -1,17 +1,20 @@
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { createS3Client } from '@bike4mind/fab-pipeline';
 import {
   BatchPresignedUrlRequestInput,
   DATALAKE_TAG_PREFIX,
+  DATALAKE_TAG_STRENGTH,
   KnowledgeType,
   type IDataLakeBatchFile,
+  type IDataLakeDocument,
 } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { createFabFile } from '@server/managers/fabFileManager';
 import { adminSettingsRepository, dataLakeBatchRepository, dataLakeRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { checkStorageLimit, getSettingsMap, resolveSupportedMimeType } from '@bike4mind/utils';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError } from '@server/utils/errors';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { Request } from 'express';
@@ -19,7 +22,7 @@ import { Resource } from 'sst';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
 
-const s3Client = new S3Client();
+const s3Client = createS3Client();
 const EXPIRES = 600; // 10 minutes
 
 const handler = baseApi().post(async (req: Request, res) => {
@@ -38,13 +41,18 @@ const handler = baseApi().post(async (req: Request, res) => {
   // Look up data lake for meta-tag injection. Uploading into a lake is a WRITE, so enforce the
   // creator/admin gate (not just read access) - otherwise a read-only member could inject files.
   // Not-found-style denial when unreadable; manage-denied when readable but not owned.
-  let datalakeTag: string | undefined;
+  let dataLake: IDataLakeDocument | undefined;
   if (data.dataLakeSlug) {
-    const dataLake = await dataLakeService.assertLakeWriteAccess(data.dataLakeSlug, await toAccessContext(req), {
+    dataLake = await dataLakeService.assertLakeWriteAccess(data.dataLakeSlug, await toAccessContext(req), {
       db: { dataLakes: dataLakeRepository },
     });
-    datalakeTag = dataLake.datalakeTag;
+    // Same rule as the batch-create door: only a draft (first batch) or active lake takes new
+    // files, so an archived/deleting one cannot be topped up through this entrance either.
+    if (dataLake.status !== 'draft' && dataLake.status !== 'active') {
+      return res.status(400).json({ error: `Cannot upload into a data lake in '${dataLake.status}' status` });
+    }
   }
+  const datalakeTag = dataLake?.datalakeTag;
 
   // Defense-in-depth: a caller could also smuggle a `datalake:*` meta-tag for a DIFFERENT lake
   // through per-file tags. Gate every such tag with the same write check.
@@ -53,12 +61,47 @@ const handler = baseApi().post(async (req: Request, res) => {
     db: { dataLakes: dataLakeRepository },
   });
 
-  // Verify batch ownership before stamping/appending - batchId comes from the body,
-  // so without this a user could inject files into another user's batch (IDOR).
+  // A meta-tag the client sent must name the lake this upload is joining, not merely some lake
+  // the caller may write to - which, for an admin, is all of them.
+  if (dataLake) {
+    try {
+      dataLakeService.assertMetaTagsMatchLake(dataLake, clientMetaTags);
+    } catch (err) {
+      // Worth a log line: a spike here separates a stale client from a real regression, and the
+      // refusal message alone cannot tell an operator which lake was asked for. The tags are
+      // unconstrained user input, so JSON-encode them - a newline in a tag name would otherwise
+      // forge a log line of its own.
+      req.logger?.warn(
+        `[dataLakes] refused an upload tagged for another lake: resolved=${dataLake.id} tags=${JSON.stringify(clientMetaTags)}`
+      );
+      throw err;
+    }
+  }
+
+  // Verify batch ownership before stamping/appending - batchId comes from the body, so without
+  // this a caller could inject files into another user's batch (IDOR). Shared with the
+  // single-file presign and createFabFile routes so a future caller can't forget this check.
+  // It hands back the batch it already read, which the lake-identity check below needs.
   if (data.batchId) {
-    const batch = await dataLakeBatchRepository.findById(data.batchId);
-    if (!batch || batch.userId !== userId) {
-      throw new NotFoundError('Batch not found');
+    const batch = await dataLakeService.assertBatchOwnership(userId, data.batchId, {
+      db: { batches: dataLakeBatchRepository },
+    });
+    try {
+      dataLakeService.assertBatchBelongsToLake(batch, dataLake);
+    } catch (err) {
+      // Logged for the same reason as the meta-tag refusal above: post-deploy, a stale client
+      // still sending a name-derived slug and a real regression are indistinguishable from the
+      // message alone.
+      // Same encoding as the meta-tag line above, for the same reason - these ids are generated
+      // rather than user-supplied, but a log line should not depend on that staying true.
+      req.logger?.warn(
+        `[dataLakes] refused an upload whose batch names another lake: ${JSON.stringify({
+          batch: batch.id,
+          batchLake: batch.dataLakeId,
+          resolved: dataLake?.id ?? null,
+        })}`
+      );
+      throw err;
     }
   }
 
@@ -113,7 +156,7 @@ const handler = baseApi().post(async (req: Request, res) => {
   // lake-dependent read up front means a lookup failure aborts with nothing persisted; the
   // memo makes this free for the files that follow.
   if (datalakeTag) {
-    await applyFallbackTags([{ name: datalakeTag, strength: 1.0 }]);
+    await applyFallbackTags([{ name: datalakeTag, strength: DATALAKE_TAG_STRENGTH }]);
   }
 
   const results = await Promise.all(
@@ -140,9 +183,10 @@ const handler = baseApi().post(async (req: Request, res) => {
       // read arms and counters build unflagged regexes, so `Acme:x` and `acme:x` really are two.
       const dedupeKey = (name: string) =>
         name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX) ? name.toLowerCase() : name;
-      const merged = [...(datalakeTag ? [{ name: datalakeTag, strength: 1.0 }] : []), ...(fileItem.tags || [])].filter(
-        (tag, i, all) => all.findIndex(other => dedupeKey(other.name) === dedupeKey(tag.name)) === i
-      );
+      const merged = [
+        ...(datalakeTag ? [{ name: datalakeTag, strength: DATALAKE_TAG_STRENGTH }] : []),
+        ...(fileItem.tags || []),
+      ].filter((tag, i, all) => all.findIndex(other => dedupeKey(other.name) === dedupeKey(tag.name)) === i);
       const tags = await applyFallbackTags(merged);
 
       // Stamp batchId so the existing pipeline (objectCreated -> chunk -> vectorize)

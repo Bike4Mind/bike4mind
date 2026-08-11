@@ -4,9 +4,13 @@ const h = vi.hoisted(() => ({
   createFabFile: vi.fn(),
   assertLakeWriteAccess: vi.fn(),
   findByDatalakeTag: vi.fn(),
+  // The real fallback tagger checks the lake's prefix against other lakes in scope before
+  // stamping a content tag; without this it takes its overlap-check-failed path on every test.
+  lakeFind: vi.fn(),
   getSettingsValue: vi.fn(),
   batchFindById: vi.fn(),
   appendFiles: vi.fn(),
+  s3ClientConfigs: [] as unknown[],
 }));
 
 // Callable chain routed by req.method, same shape as the batches lifecycle test.
@@ -24,7 +28,11 @@ vi.mock('@server/middlewares/baseApi', () => ({
 // The global setup mocks `sst` without a fabFileBucket, and the route reads its name.
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-bucket' } } }));
 vi.mock('@aws-sdk/client-s3', () => ({
-  S3Client: class {},
+  S3Client: class {
+    constructor(config: unknown) {
+      h.s3ClientConfigs.push(config);
+    }
+  },
   PutObjectCommand: class {
     constructor(public input: unknown) {}
   },
@@ -41,7 +49,7 @@ vi.mock('@server/dataLakes/toAccessContext', () => ({
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   dataLakeBatchRepository: { findById: h.batchFindById, appendFiles: h.appendFiles },
-  dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag },
+  dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag, find: h.lakeFind },
 }));
 
 // Partial: only the lake-authorization collaborators are stubbed. The fallback tagger is the
@@ -76,6 +84,9 @@ const LAKE = {
   createdByUserId: 'u1',
   datalakeTag: 'datalake:orga:acme-2026',
   fileTagPrefix: 'acme:',
+  // A real lake always carries one (schema default 'draft'), and this door now refuses a lake
+  // that is no longer taking files.
+  status: 'active',
 };
 
 const makeRes = () => {
@@ -107,14 +118,23 @@ const file = (overrides: Record<string, unknown> = {}) => ({
 const tagNamesOf = (callIndex = 0) =>
   ((h.createFabFile.mock.calls[callIndex][0] as { tags?: { name: string }[] }).tags ?? []).map(t => t.name).sort();
 
+describe('POST /api/files/generate-presigned-urls-batch - S3 client config', () => {
+  it('sets requestChecksumCalculation to WHEN_REQUIRED (#1535)', () => {
+    // Without this, getSignedUrl signs in a checksum of the empty sign-time body, which then
+    // mismatches whatever the browser actually PUTs.
+    expect(h.s3ClientConfigs[0]).toMatchObject({ requestChecksumCalculation: 'WHEN_REQUIRED' });
+  });
+});
+
 describe('POST /api/files/generate-presigned-urls-batch - data-lake tags', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.getSettingsValue.mockResolvedValue(true);
     h.assertLakeWriteAccess.mockResolvedValue(LAKE);
     h.findByDatalakeTag.mockResolvedValue(LAKE);
+    h.lakeFind.mockResolvedValue([]);
     h.createFabFile.mockImplementation(async () => ({ id: `f${h.createFabFile.mock.calls.length}` }));
-    h.batchFindById.mockResolvedValue({ id: 'b1', userId: 'u1' });
+    h.batchFindById.mockResolvedValue({ id: 'b1', userId: 'u1', dataLakeId: LAKE.id });
     h.appendFiles.mockResolvedValue(null);
   });
 
@@ -209,5 +229,139 @@ describe('POST /api/files/generate-presigned-urls-batch - data-lake tags', () =>
 
     const persisted = (h.createFabFile.mock.calls[0][0] as { tags: { name: string; strength: number }[] }).tags;
     expect(persisted.find(t => t.name === 'datalake:orga:acme-2026')?.strength).toBe(1.0);
+  });
+});
+
+describe('POST /api/files/generate-presigned-urls-batch - lake targeting', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getSettingsValue.mockResolvedValue(true);
+    h.assertLakeWriteAccess.mockResolvedValue(LAKE);
+    h.findByDatalakeTag.mockResolvedValue(LAKE);
+    h.lakeFind.mockResolvedValue([]);
+    h.createFabFile.mockImplementation(async () => ({ id: `f${h.createFabFile.mock.calls.length}` }));
+    h.batchFindById.mockResolvedValue({ id: 'b1', userId: 'u1', dataLakeId: LAKE.id });
+    h.appendFiles.mockResolvedValue(null);
+  });
+
+  it('refuses files whose batch belongs to a lake other than the one the reference resolves to', async () => {
+    // The wizard used to send a slug derived from the lake's NAME, which on a collision resolves
+    // to the lake that already held it - so the batch pointed at the new lake while the files
+    // were tagged into someone else's. The batch's binding is the authority.
+    h.batchFindById.mockResolvedValue({ id: 'b1', userId: 'u1', dataLakeId: 'lake-2' });
+    const { res } = makeRes();
+
+    await expect(run({ files: [file()], dataLakeSlug: 'acme-2026', batchId: 'b1' }, res)).rejects.toThrow(
+      /must name the data lake its batch belongs to/
+    );
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  it('refuses a batch that carries no lake binding at all', async () => {
+    h.batchFindById.mockResolvedValue({ id: 'b1', userId: 'u1' });
+    const { res } = makeRes();
+
+    await expect(run({ files: [file()], dataLakeSlug: 'acme-2026', batchId: 'b1' }, res)).rejects.toThrow(
+      /batch is not attached to a data lake/
+    );
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  it('refuses a batch upload that names no lake, rather than filing untagged files into it', async () => {
+    // The batch is the authority, so honoring this would put files in a lake's batch while
+    // joining them to no lake at all.
+    const { res } = makeRes();
+
+    await expect(run({ files: [file()], batchId: 'b1' }, res)).rejects.toThrow(
+      /must name the data lake its batch belongs to/
+    );
+    expect(h.createFabFile).not.toHaveBeenCalled();
+    expect(h.appendFiles).not.toHaveBeenCalled();
+  });
+
+  it('presigns when the batch and the lake reference agree', async () => {
+    const { res } = makeRes();
+    await run({ files: [file()], dataLakeSlug: 'acme-2026', batchId: 'b1' }, res);
+
+    expect(h.createFabFile).toHaveBeenCalledTimes(1);
+    expect(h.appendFiles).toHaveBeenCalled();
+  });
+
+  it('leaves an upload with neither a lake nor a batch alone', async () => {
+    const { res } = makeRes();
+    await run({ files: [file()] }, res);
+
+    expect(h.createFabFile).toHaveBeenCalledTimes(1);
+    expect(h.assertLakeWriteAccess).not.toHaveBeenCalled();
+  });
+
+  it('rejects a client meta-tag that names a lake other than the one being joined', async () => {
+    const { res } = makeRes();
+
+    await expect(
+      run(
+        {
+          files: [file({ tags: [{ name: 'datalake:orgb:other-lake', strength: 1 }] })],
+          dataLakeSlug: 'acme-2026',
+        },
+        res
+      )
+    ).rejects.toThrow(/names a different data lake/);
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  it('hands the lake reference to the write gate exactly as received', async () => {
+    // The whole fix rests on the reference being resolved id-then-slug by the gate, so the route
+    // must not transform it - a slug-only assumption here is what shipped the bug.
+    const { res } = makeRes();
+    await run({ files: [file()], dataLakeSlug: 'lake-1' }, res);
+
+    expect(h.assertLakeWriteAccess).toHaveBeenCalledWith('lake-1', expect.anything(), expect.anything());
+  });
+
+  it('refuses an upload into a lake that is no longer taking files', async () => {
+    h.assertLakeWriteAccess.mockResolvedValue({ ...LAKE, status: 'archived' });
+    const { res } = makeRes();
+    await run({ files: [file()], dataLakeSlug: 'acme-2026' }, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  it('logs nothing on a healthy upload', async () => {
+    // The two refusal logs are the ops signal for a stale client; they are worthless if the happy
+    // path is noisy too.
+    const { res } = makeRes();
+    const r = req({ files: [file()], dataLakeSlug: 'acme-2026', batchId: 'b1' });
+    await (handler as (rq: unknown, rs: unknown) => Promise<void>)(r, res);
+
+    expect((r as unknown as { logger: { warn: ReturnType<typeof vi.fn> } }).logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('reports the tag disagreement first when the batch is wrong too', async () => {
+    // Both guards would fire; pinning which one answers keeps the message stable for callers.
+    h.batchFindById.mockResolvedValue({ id: 'b1', userId: 'u1', dataLakeId: 'lake-2' });
+    const { res } = makeRes();
+
+    await expect(
+      run(
+        {
+          files: [file({ tags: [{ name: 'datalake:orgb:other-lake', strength: 1 }] })],
+          dataLakeSlug: 'acme-2026',
+          batchId: 'b1',
+        },
+        res
+      )
+    ).rejects.toThrow(/names a different data lake/);
+  });
+
+  it('accepts the joined lake own tag from the client, mixed case included', async () => {
+    const { res } = makeRes();
+    await run(
+      { files: [file({ tags: [{ name: 'DataLake:OrgA:Acme-2026', strength: 1 }] })], dataLakeSlug: 'acme-2026' },
+      res
+    );
+
+    expect(h.createFabFile).toHaveBeenCalledTimes(1);
   });
 });

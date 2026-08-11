@@ -6,8 +6,11 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useLocation, useSearch } from '@tanstack/react-router';
 import { createOptimisticPromptBubble, createOptimisticSessionId } from '@client/app/utils/llm';
 import { useSessionRouter } from '@client/app/hooks/useSessionRouter';
+import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
+import useCreateDataLakeSession from '@client/app/hooks/useCreateDataLakeSession';
 
 import {
+  AudioGenerationToolCall,
   B4MLLMTools,
   GenerateImageToolCall,
   IChatHistoryItemDocument,
@@ -15,6 +18,7 @@ import {
   ModelName,
   requiresImageInput,
 } from '@bike4mind/common';
+import { useAudioGenSettings } from '@client/app/stores/useAudioGenSettings';
 import type { IAgent } from '@bike4mind/common';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -145,6 +149,7 @@ export function useSendMessage({
   const recordImageTemplateUse = useRecordImageTemplateUse();
   const navigate = useNavigate();
   const location = useLocation();
+  const createDataLakeSession = useCreateDataLakeSession();
   const { projectId: routerProjectId } = useSearch({ strict: false }) as { projectId?: string };
   const { data: modelInfo } = useModelInfo();
   const { accessibleModels, userTags } = useAccessibleModels();
@@ -376,9 +381,28 @@ export function useSendMessage({
         return;
       }
     }
+
+    // Data Lake mode with no session yet: create the grounded session up front so the FIRST
+    // message is retrieval-grounded. Creation (cache seeding, adoption, /new -> notebook URL
+    // swap) lives in useCreateDataLakeSession, shared with the explorer's file-click path.
+    // (The submit lock at the top of this function keeps a rapid second Enter from racing
+    // the awaited create into a second creation.)
+    let dataLakeCreated: ISessionDocument | null = null;
+    if (!currentSession && useDataLakeMode.getState().enabled) {
+      try {
+        dataLakeCreated = await createDataLakeSession();
+      } catch (error) {
+        console.error('Data Lake session create failed:', error);
+        setSubmitting(false);
+        toast.error("Couldn't start the chat - please try again.");
+        return;
+      }
+    }
+
     setSessionLayout({ selectedArtifactId: undefined, artifactData: undefined });
     const session = currentSession;
     let sessionToSend = session;
+    if (dataLakeCreated) sessionToSend = dataLakeCreated;
     let isNewSession = false;
     // Tracks the client-generated tmpId during optimistic pre-navigation so we
     // can clean up the fake cache entry if the API call fails.
@@ -607,6 +631,21 @@ export function useSendMessage({
       output_format,
     };
 
+    // Snapshot the current audio-generation selections so the audio_generation tool has
+    // provider/voice/format/duration defaults without the model having to pick them. Read
+    // synchronously from the store (single source of truth, #1055/PR #1183) at send time,
+    // exactly as the direct Generate Audio action does. An empty `voice` stays empty so the
+    // server falls back to the user's preferredVoice / provider default.
+    const audioState = useAudioGenSettings.getState();
+    const audioSettings: AudioGenerationToolCall = {
+      ttsProvider: audioState.ttsProvider,
+      voice: audioState.voice || undefined,
+      format: audioState.format,
+      languageCode: audioState.languageCode || undefined,
+      durationSeconds: audioState.durationSeconds,
+      promptInfluence: audioState.promptInfluence,
+    };
+
     const currentModelInfo = modelInfo?.find(m => m.id === model);
     // Tool-resolution ladder (model-capability gate -> Smart recommendations -> Fast ->
     // briefcase per-message override) extracted to useLLMSettingsAssembly.
@@ -689,6 +728,7 @@ export function useSendMessage({
           researchMode,
           deepResearchConfig,
           imageConfig: imageSettings,
+          audioConfig: audioSettings,
           modelConfigurations: accessibleModels,
           userTags,
           setChatCompletion,
@@ -731,6 +771,7 @@ export function useSendMessage({
           researchMode,
           deepResearchConfig,
           imageConfig: imageSettings,
+          audioConfig: audioSettings,
           setChatCompletion,
           ...llmSettings,
           mcpServers: enabledMcpServers ?? undefined,
@@ -748,7 +789,7 @@ export function useSendMessage({
     // Optimistic pre-navigation: on /new, always create a fresh session immediately,
     // even if currentSession is stale from the previous route (useEffect cleanup runs
     // after render, so context may not be cleared yet when the user sends quickly).
-    if (location.pathname === '/new') {
+    if (location.pathname === '/new' && !dataLakeCreated) {
       isNewSession = true;
       const tmpId = createOptimisticSessionId();
       optimisticTmpId = tmpId;
@@ -807,7 +848,10 @@ export function useSendMessage({
         // `preferredImageModel` resolution above (#agent-mode-persona). Falls
         // back to the caller's `model` when neither agent pins one.
         const dispatchModel = (orchestrationAgent ?? mentionedAgent)?.preferredModel ?? (model as string);
-        let dispatchSessionId = currentSessionId;
+        // `currentSessionId` is a stale render-closure value on `/new` (still null even
+        // after the Data Lake seam above just created + set the session), so fall back to
+        // the locally-created id to avoid minting a second, ungrounded session here.
+        let dispatchSessionId = currentSessionId ?? dataLakeCreated?.id;
         if (!dispatchSessionId) {
           const realSession = await generateNewSession(
             prompt.slice(0, 60),
@@ -926,6 +970,13 @@ export function useSendMessage({
           // (consumed only by buildSubagentToolConfig), so it can't reintroduce
           // the prior `structuredClone` failure.
           imageConfig: imageSettings.model ? imageSettings : undefined,
+          // Audio config parity with imageConfig: forward the user's saved audio
+          // settings so the executor's audio_generation tool resolves the same
+          // provider/voice/format the classic-chat path uses (`audioSettings` is
+          // the useAudioGenSettings snapshot taken above). Without it the tool
+          // falls back to OpenAI + provider-default voice, ignoring the Audio tab
+          // and hard-failing for an ElevenLabs-only user.
+          audioConfig: audioSettings,
           // Memento parity with chat_completion. Mirrors the
           // `enableMementos: isMementosEnabled` payload field used by the
           // chat-completion dispatchers above so agent-mode runs evaluate
