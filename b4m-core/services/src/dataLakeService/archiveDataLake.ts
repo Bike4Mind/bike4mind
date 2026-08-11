@@ -73,8 +73,10 @@ export const archiveDataLake = async (
   //
   // Also wider than the legacy case: the scope-matched query can't tell "pre-field legacy" apart
   // from "a prefix-sharing sibling's own stamp", so either one skips the claim here - and with it,
-  // any freshly-archived rows this same sweep is about to write. Such a lake stays unbounded until
-  // someone unarchives it once; a known limitation, not a full fix for either case.
+  // any freshly-archived rows this same sweep is about to write. Such a lake stays broken on
+  // restore until someone archives it again (once nothing is left unstamped) and then unarchives
+  // it - not "unarchive once" as a lake fresh out of restore is 'active', and unarchive only
+  // accepts 'archived'/'restoring'. A known limitation, not a full fix for either case.
   const hasUnstampedArchive = !existing.filesArchivedAt && (await db.fabFiles.hasArchivedByDataLakeTag(scope));
   let stamp: Date | undefined;
   if (!hasUnstampedArchive) {
@@ -95,7 +97,15 @@ export const archiveDataLake = async (
   // browse (they filter archivedAt: null) - and unarchiving either lake brings back BOTH lakes'
   // archived files, since the flip matches on archivedAt alone.
   await warnOnPrefixCollision(db, existing, logger);
-  await db.fabFiles.archiveByDataLakeTag(scope, stamp);
+  const swept = await db.fabFiles.archiveByDataLakeTag(scope, stamp);
+  // The probe-then-claim window above has no lock, so a concurrent archive on a prefix-colliding
+  // sibling can stamp our row between the two and leave this sweep matching nothing: `stamp` gets
+  // claimed, but zero rows actually carry it. Detecting that after the fact and clearing the mark
+  // closes the invariant regardless of how the race arose - an empty lake also sweeps zero and
+  // clearing its (already meaningless) mark is harmless.
+  if (stamp && swept === 0) {
+    await db.dataLakes.update({ id: dataLakeId, filesArchivedAt: null });
+  }
   // Same scope the sweep ran on. findIdsByDataLakeTag is the id source rather than the flip's
   // count because it reports every member whatever its archived/deleted state, so a re-run after
   // a crashed attempt still hands the index the full set.

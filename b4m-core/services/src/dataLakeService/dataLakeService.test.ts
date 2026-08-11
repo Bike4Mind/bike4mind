@@ -1201,6 +1201,43 @@ describe('archiveDataLake - retrieval-index removal', () => {
     expect(adapters.db.dataLakes.claimFilesArchivedAt).toHaveBeenCalledWith('lake1', expect.any(Date));
     expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, stamp);
   });
+
+  it('warns and archives unstamped when the claim comes back empty (the lake vanished under a concurrent delete)', async () => {
+    const adapters = makeAdapters();
+    adapters.db.dataLakes.claimFilesArchivedAt = vi.fn().mockResolvedValue(null);
+
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+
+    expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('archive recorded no stamp'), {
+      dataLakeId: 'lake1',
+    });
+    expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
+    // No stamp means the zero-swept clear-back below can never fire for this lake - nothing to
+    // clear, and clearing would wipe a mark a concurrent claimant may since have written.
+    expect(adapters.db.dataLakes.update).not.toHaveBeenCalledWith(expect.objectContaining({ filesArchivedAt: null }));
+  });
+
+  it('clears the just-claimed stamp back to null when the sweep matches nothing (a concurrent sibling won the probe-to-claim race)', async () => {
+    const adapters = makeAdapters();
+    const stamp = new Date('2026-05-01');
+    adapters.db.dataLakes.claimFilesArchivedAt = vi.fn().mockResolvedValue(stamp);
+    adapters.db.fabFiles.archiveByDataLakeTag = vi.fn().mockResolvedValue(0);
+
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+
+    expect(adapters.db.dataLakes.update).toHaveBeenCalledWith({ id: 'lake1', filesArchivedAt: null });
+  });
+
+  it('leaves the stamp alone when the sweep matches at least one row', async () => {
+    const adapters = makeAdapters();
+    const stamp = new Date('2026-05-01');
+    adapters.db.dataLakes.claimFilesArchivedAt = vi.fn().mockResolvedValue(stamp);
+    adapters.db.fabFiles.archiveByDataLakeTag = vi.fn().mockResolvedValue(1);
+
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+
+    expect(adapters.db.dataLakes.update).not.toHaveBeenCalledWith(expect.objectContaining({ filesArchivedAt: null }));
+  });
 });
 
 describe('deleteDataLake - phase 1 retrieval-index removal', () => {

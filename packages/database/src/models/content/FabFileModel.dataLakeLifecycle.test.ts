@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { KnowledgeType, type DataLakeMembershipScope } from '@bike4mind/common';
 import { createMongoServer } from '../../__test__/createMongoServer';
@@ -387,6 +387,29 @@ describe('FabFile data lake lifecycle membership', () => {
         const diverged = await readRaw(rows.prefixOwned._id.toString());
         expect(diverged?.deletedAt ?? null).toBeNull();
         expect(diverged?.archivedAt?.getTime()).toBe(OTHER_STAMP.getTime());
+      });
+
+      it('sends the $ne bound to Mongo on the non-matching partition, not just an end-state that could pass by resolution-order luck', async () => {
+        // An end-state assertion alone does not reliably catch this: removing partition B's `$ne`
+        // bound (replacing it with the bare base filter) makes the two updateMany calls race on
+        // shared rows against a real DB, so this file's row-level tests fail only intermittently
+        // under that mutation, not every run - easy to write off as flakiness rather than catch.
+        // Spying on the actual filter sent to Mongo asserts the predicate itself, not what it
+        // happens to produce this run, so it fails deterministically.
+        await seedLakeRows();
+        await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+        const spy = vi.spyOn(FabFile, 'updateMany');
+
+        await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
+
+        expect(spy).toHaveBeenCalledTimes(2);
+        const filters = spy.mock.calls.map(call => call[0] as Record<string, unknown>);
+        // Partition A: bare equality. Partition B: $ne - both must be present as sent to Mongo,
+        // not merely implied by the rows this run happened to produce.
+        expect(filters.some(f => f.archivedAt === ARCHIVE_STAMP)).toBe(true);
+        expect(filters.some(f => JSON.stringify(f.archivedAt) === JSON.stringify({ $ne: ARCHIVE_STAMP }))).toBe(true);
+        spy.mockRestore();
       });
 
       it('leaves a member archived under a DIFFERENT stamp untouched (a prefix-sharing sibling lake)', async () => {

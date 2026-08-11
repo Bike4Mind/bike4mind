@@ -118,6 +118,10 @@ export interface IDataLake {
    * Claimed set-if-unset; cleared by unarchive (so a later re-archive gets a fresh stamp, not a
    * stale reused one) and by a restore that clears it.
    *
+   * The key is a wall-clock `Date`, not a unique token - equality is a best-effort ownership test,
+   * not a guarantee, and two lakes claiming in the same millisecond would collide (same design as
+   * `filesDeletedAt`, not new to this field).
+   *
    * Absent on a lake archived before this field existed (or one whose members already carry an
    * unstamped `archivedAt` for any other reason): restore leaves that archive marker exactly as
    * it is instead of guessing at a batch it cannot prove, and archive itself skips claiming a
