@@ -219,6 +219,28 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    */
   systemPrompt?: string;
   /**
+   * Whether the requesting caller CREATED this lake (createdByUserId === caller). Server-computed
+   * per request. The manager list is "lakes I can reach", not "lakes I own": it also surfaces org
+   * lakes, strangers' public lakes, and - for a global admin - every tenant's lakes. So the UI
+   * marks a not-own lake to keep an admin from mistaking someone else's (even private) lake for
+   * their own and managing it by accident. Built-in fallback lakes have no owner, so `false`.
+   *
+   * REQUIRED, not optional: both producers (toManageableConfig, toFallbackConfig) set it
+   * unconditionally, and the UI safety-gates on `isOwn === false` - an absent field would render
+   * no warning, so a future projection that forgot it would silently reintroduce the bug with a
+   * green typecheck. Required makes that a compile error instead.
+   */
+  isOwn: boolean;
+  /**
+   * Display name (name || username, never email) of the lake's creator. Populated ONLY for lakes
+   * the caller does NOT own, and ONLY when the list projection was given a user lookup (the
+   * manager list route) - the content-scope resolver and Slack omit it and pay for no extra
+   * query. Mirrors the discover catalog's owner rule: never the owner's email, so a cross-org or
+   * admin view can't leak an address. Undefined when the owner can't be resolved (deleted
+   * account), or for own/fallback lakes.
+   */
+  ownerDisplayName?: string;
+  /**
    * Preferred registry system-prompt id (see IDataLake.preferredSystemPromptId). EDITOR-ONLY,
    * like `systemPrompt`: surfaced only when the caller can manage the lake, so the settings
    * picker can seed its current selection. Absent (never an empty-string stand-in) otherwise,

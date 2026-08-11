@@ -35,6 +35,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
@@ -560,6 +561,26 @@ function ManagerNav({
                                   {lake.name}
                                 </Typography>
                               </ListItemContent>
+                              {/* Owner marker in the LIST itself, not just the detail pane: the
+                                  row otherwise shows only a name, so an admin (who sees every
+                                  tenant's lakes, even private) can't tell whose is whose without
+                                  opening each one. The owner name is already on the row, so this
+                                  costs no extra request. */}
+                              {lake.isOwn === false && (
+                                <Tooltip
+                                  title={
+                                    lake.ownerDisplayName
+                                      ? `Owned by ${lake.ownerDisplayName}`
+                                      : 'Owned by another user'
+                                  }
+                                  size="sm"
+                                >
+                                  <PersonOutlineIcon
+                                    data-testid={`datalake-manager-owner-icon-${lake.id}`}
+                                    sx={{ fontSize: 14, color: 'warning.400', flexShrink: 0 }}
+                                  />
+                                </Tooltip>
+                              )}
                               {/* Background AI-tag suggestion indicator - an independent clock
                                   from ingest, so this can appear well after the lake's files
                                   are already fully uploaded/searchable. */}
@@ -1112,6 +1133,22 @@ function LakeInfoPanel({
           )}
         </Box>
         <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+          {/* Not-your-lake marker: the sidebar lists lakes the caller can REACH, not only ones
+              they own (org lakes, others' public lakes, and - for an admin - every tenant's, even
+              private). Flagged here, next to Add files / Settings / Archive, so someone else's
+              lake can't be mistaken for your own and managed by accident. */}
+          {lake.isOwn === false && (
+            <Chip
+              size="sm"
+              variant="soft"
+              color="warning"
+              startDecorator={<PersonOutlineIcon sx={{ fontSize: 12 }} />}
+              sx={{ fontSize: '11px' }}
+              data-testid={`datalake-manager-owner-chip-${lake.id}`}
+            >
+              {lake.ownerDisplayName ? `Owner: ${lake.ownerDisplayName}` : 'Owned by another user'}
+            </Chip>
+          )}
           <Chip size="sm" variant="soft" color="neutral" sx={{ fontSize: '11px' }}>
             {lake.fileTagPrefix}
           </Chip>
