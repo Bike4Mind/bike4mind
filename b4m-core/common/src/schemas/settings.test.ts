@@ -435,8 +435,9 @@ describe('DefaultChunkSize agrees with the chunker', () => {
 });
 
 describe('AbstentionPrompt default carries the anti-invention licence', () => {
-  // The always-on backstop is the ONLY anti-invention text on a turn that answers WITHOUT searching
-  // the knowledge base (and the only one a promptMode session cannot route around), so guard that
+  // The always-on backstop is the ONLY anti-invention text on a normal turn that answers WITHOUT
+  // searching the knowledge base. (A promptMode session strips it like any authored prompt, so that
+  // surface is an uncovered gap by design - not something this backstop routes around.) Guard that
   // its default still both licenses abstention AND bars volunteering a specific unsourced fact. The
   // grounded-surface half ships two tests; without this, blanking this clause would pass unnoticed.
   it('licenses saying "not enough to answer" instead of inventing', () => {

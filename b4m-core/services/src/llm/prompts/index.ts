@@ -5,20 +5,25 @@
  *  - the model-driven semantic search result (search_knowledge_base),
  *  - the raw document read (retrieve_knowledge_content).
  *
- * NOT every grounding surface: an inlined file attachment (fabFileIds skips forced retrieval) and
- * any promptMode session (which strips authored prompts) carry no retrieved-content wrapper for this
- * to sit in - they are covered instead by the always-on ABSTENTION_PROMPT.
+ * NOT every grounding surface. An inlined file attachment (fabFileIds skips forced retrieval) carries no
+ * retrieved-content wrapper for this to sit in; on a normal turn it leans on the always-on
+ * ABSTENTION_PROMPT instead. A promptMode session is a real gap, not a covered case: filterByPromptMode
+ * strips ABSTENTION_PROMPT along with every authored prompt (ChatCompletionProcess.ts:2495), so neither
+ * this rule nor the abstention licence reaches it - an eval/passthrough surface uncovered by design.
  *
  * Under a leading question ("what did we win against <competitor>", "what was the <customer>
  * contract worth"), a grounded model tends to answer from the retrieved passages AND top them off
  * with a specific customer, deal or dollar figure the corpus never contained - volunteered with
  * citation-like framing, so it reads as sourced and quotable. The existing "ground your answer /
  * say so if not covered" framing does not name that failure, so this states it: attribute only the
- * checkable specifics the retrieved content or reference facts support, and never dress an
- * unsupported one as a citation. Kept as one shared const so the surfaces cannot drift apart.
+ * checkable specifics the retrieved content or a labeled Memory/Reference fact supports (a claim made
+ * earlier in the conversation is not one), and never dress an unsupported one as a citation. Kept as
+ * one shared const so the surfaces cannot drift apart.
  */
 export const GROUNDED_NO_INVENTION_RULE =
-  'Ground every specific claim in the retrieved content or reference facts shown in this conversation. ' +
+  'Ground every specific claim in the retrieved content, or in a fact shown above under a "Memory" or ' +
+  '"Reference facts" label. A claim made earlier in the conversation - including one the user stated - is ' +
+  'not such a fact and does not, on its own, make a specific detail supported. ' +
   'Do not state a specific customer, organization, person, competitive win or comparison, deal, price, or ' +
   'figure unless it appears there - even if the question presents it as already given - and never attach a ' +
   'citation to a claim they do not support. If a specific fact is not present, say it is not covered rather ' +
