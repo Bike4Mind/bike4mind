@@ -3,6 +3,7 @@ import { google } from 'googleapis';
 import dayjs from 'dayjs';
 import { User } from '@bike4mind/database';
 import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
+import { BadRequestError } from '@server/utils/errors';
 
 const SCOPES = ['https://www.googleapis.com/auth/drive.readonly'];
 
@@ -23,8 +24,13 @@ export async function getTokens(code: string) {
 }
 
 export async function refreshAccessToken(refreshToken: string) {
-  oauth2Client.setCredentials({ refresh_token: refreshToken });
-  const { credentials } = await oauth2Client.refreshAccessToken();
+  // Fresh client per call - NEVER the shared module-level `oauth2Client`. google-auth-library
+  // re-reads `refresh_token` off the client's mutable `credentials` AFTER the network await, so a
+  // concurrent refresh for another user racing on the shared singleton can cross-write one user's
+  // refresh token into another user's persisted record (same hazard createDriveClient avoids).
+  const client = new google.auth.OAuth2(Config.GOOGLE_CLIENT_ID, Config.GOOGLE_CLIENT_SECRET, REDIRECT_URI);
+  client.setCredentials({ refresh_token: refreshToken });
+  const { credentials } = await client.refreshAccessToken();
   return credentials;
 }
 
@@ -43,25 +49,38 @@ export async function revokeToken(accessToken: string) {
  */
 export async function getValidUserDriveAccessToken(userId: string): Promise<string> {
   const user = await User.findById(userId, 'googleDrive');
-  if (!user?.googleDrive) throw new Error('Google Drive not connected');
+  // Expected user states (not connected / needs reconnect) are BadRequestError, not bare Error:
+  // errorHandler only maps status-bearing errors, so a bare Error here becomes a 500 logged at
+  // `error` level, which trips the LiveOps CloudWatch filter for the most common non-error state.
+  if (!user?.googleDrive) throw new BadRequestError('Google Drive not connected');
 
   const { accessToken: rawAccess, refreshToken: rawRefresh, expiresAt } = user.googleDrive;
-  const accessToken = decryptToken(rawAccess);
+  // A corrupt/undecryptable CACHED access token must not hard-fail - fall through to the refresh
+  // path, which can still succeed from the refresh token.
+  let accessToken: string | null = null;
+  try {
+    accessToken = decryptToken(rawAccess);
+  } catch {
+    accessToken = null;
+  }
   const isExpired = !expiresAt || dayjs().isAfter(dayjs(expiresAt));
   if (!isExpired && accessToken) return accessToken;
 
   const refreshToken = decryptToken(rawRefresh);
-  if (!refreshToken) throw new Error('Google Drive refresh token missing - reconnect required');
+  if (!refreshToken) throw new BadRequestError('Google Drive refresh token missing - reconnect required');
 
   const credentials = await refreshAccessToken(refreshToken);
-  if (!credentials.access_token) throw new Error('Google Drive token refresh returned no access token');
+  if (!credentials.access_token) throw new BadRequestError('Google Drive token refresh returned no access token');
 
   await User.updateOne(
     { _id: userId },
     {
       'googleDrive.accessToken': encryptToken(credentials.access_token)!,
       'googleDrive.refreshToken': credentials.refresh_token ? encryptToken(credentials.refresh_token)! : rawRefresh,
-      'googleDrive.expiresAt': credentials.expiry_date ? new Date(credentials.expiry_date) : undefined,
+      // null, not undefined: Mongoose strips undefined from $set, which would leave a stale
+      // (already-expired) expiresAt and force a re-refresh every call. null reads as "unknown" ->
+      // expired -> one refresh next time.
+      'googleDrive.expiresAt': credentials.expiry_date ? new Date(credentials.expiry_date) : null,
     }
   );
 

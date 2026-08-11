@@ -19,12 +19,17 @@ const OrgGoogleDriveConnectionSchema = new Schema<IOrgGoogleDriveConnectionDocum
   {
     organizationId: { type: String, required: true },
     authMode: { type: String, enum: ['oauth', 'service_account'], required: true },
-    driveFolderId: { type: String, required: true },
+    // trim + match at the DB layer too: isValidDriveFolderId lives in apps/client and isn't
+    // reachable from packages/database, so without this 'F' / 'F ' / ' F' would be distinct unique
+    // keys for one folder. Keep the pattern in sync with driveClient.isValidDriveFolderId.
+    driveFolderId: { type: String, required: true, trim: true, match: /^[A-Za-z0-9_-]{1,256}$/ },
     folderName: { type: String },
     targetDataLakeId: { type: String, required: true },
 
-    // OAuth refresh token - encrypted at rest by the service layer (encryptToken on write /
-    // decryptToken on read); select:false so it never leaks into default reads or toJSON.
+    // OAuth refresh token. select:false so it never leaks into default reads or toJSON. NO writer
+    // exists yet - the org-owned connect flow that persists this (and MUST encryptToken it first)
+    // lands with issue D. Encryption is call-site convention here, as with the sibling Org*
+    // connections and User.googleDrive; a pre-save encrypt guard should land with that first writer.
     oauthRefreshToken: { type: String, select: false },
 
     // Metadata
@@ -52,9 +57,12 @@ const OrgGoogleDriveConnectionSchema = new Schema<IOrgGoogleDriveConnectionDocum
   }
 );
 
-// A Drive folder is claimable by at most one org, ever - prevents cross-org folder-claim
-// (a member of org A binding a folder that belongs to org B). driveFolderId is required, so a
-// plain unique index is correct here.
+// FIRST-CLAIM-WINS on the Drive folder id: the unique index rejects a SECOND row for a folder
+// already claimed. It does NOT verify the first claimant actually owns the folder - that ownership
+// check (a files.get capabilities lookup with the connecting user's credential) lands with the
+// connect flow (issue D). This is a NEW pattern, not sibling precedent: the sibling Org* connections
+// scope uniqueness to the org and never make a third-party resource id globally unique; making
+// driveFolderId global is a deliberate anti-double-claim choice.
 OrgGoogleDriveConnectionSchema.index({ driveFolderId: 1 }, { unique: true, name: 'org_gdrive_conn_folder_id' });
 
 // A lake is fed by at most one Drive folder (v1: one-folder-per-lake).

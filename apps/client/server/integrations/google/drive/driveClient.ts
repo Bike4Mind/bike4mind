@@ -8,13 +8,18 @@ export function isFolder(file: DriveFile): boolean {
   return file.mimeType === FOLDER_MIME_TYPE;
 }
 
-// Drive file/folder ids are URL-safe tokens ([A-Za-z0-9_-]); the alias 'root' also matches.
-// Validate before interpolating into the `q` string so a crafted id can't break out of the query.
-const DRIVE_FOLDER_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+// Drive file/folder ids are URL-safe tokens ([A-Za-z0-9_-]); the alias 'root' also matches. The
+// length bound (real ids are ~33-44 chars) stops ~1MB of legal characters being interpolated into
+// the `q` string and sent outbound. Validate before interpolating so a crafted id can't break out.
+const DRIVE_FOLDER_ID_PATTERN = /^[A-Za-z0-9_-]{1,256}$/;
 
 export function isValidDriveFolderId(id: unknown): id is string {
   return typeof id === 'string' && DRIVE_FOLDER_ID_PATTERN.test(id);
 }
+
+// Defensive cap: a folder shouldn't exceed this many pages of children, and an unbounded loop on a
+// pathological/looping pageToken would issue unlimited outbound Drive calls. 100 x pageSize(1000).
+const MAX_LIST_PAGES = 100;
 
 /**
  * Build a per-call Drive v3 client from an OAuth access token.
@@ -46,6 +51,7 @@ export async function listFolderChildren(drive: drive_v3.Drive, folderId: string
 
   const files: DriveFile[] = [];
   let pageToken: string | undefined;
+  let pages = 0;
 
   do {
     const res = await drive.files.list({
@@ -65,7 +71,8 @@ export async function listFolderChildren(drive: drive_v3.Drive, folderId: string
     }
 
     pageToken = res.data.nextPageToken ?? undefined;
-  } while (pageToken);
+    pages++;
+  } while (pageToken && pages < MAX_LIST_PAGES);
 
   return files;
 }
