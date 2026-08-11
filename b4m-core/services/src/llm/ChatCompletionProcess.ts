@@ -139,9 +139,14 @@ import {
   type PromptSourceId,
 } from './systemPromptSources';
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
-import { buildInsufficientCreditsMessage } from './insufficientCreditsMessage';
+import { buildInsufficientCreditsMessage, buildMemberCreditCapMessage } from './insufficientCreditsMessage';
 import { ResearchModeService } from './ResearchModeService';
-import { deductCreditsWithOrgSupport, subtractCredits } from '../creditService';
+import {
+  deductCreditsWithOrgSupport,
+  subtractCredits,
+  getMemberUsedCredits,
+  isMemberCreditCapExceeded,
+} from '../creditService';
 import {
   TelemetryBuilder,
   mapBackendToProvider,
@@ -3083,6 +3088,20 @@ export class ChatCompletionProcess {
           reservationOwnerId = organization.id;
           reservationOwnerType = CreditHolderType.Organization;
           reservationMethods = this.db.organizations;
+
+          // Enforce the per-member cap here, at pre-flight, before debiting the org pool.
+          // Blocking must happen now: by settlement the reply has streamed and the balance
+          // has moved, so a cap throw there can only sabotage usage tracking (#1536).
+          if (isMemberCreditCapExceeded(organization, this.user.id, requiredCredits)) {
+            throw new InsufficientCreditsError(
+              buildMemberCreditCapMessage({
+                used: getMemberUsedCredits(organization, this.user.id),
+                cap: organization.maxCreditsPerMember!,
+                organizationName: organization.name,
+              }),
+              'insufficient_credits'
+            );
+          }
         }
 
         // Preserve low-credits notification (checks current balance before reservation)

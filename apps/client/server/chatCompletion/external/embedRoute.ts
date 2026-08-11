@@ -188,10 +188,11 @@ async function buildEmbedServerTools(args: {
    * Owner org, or null. Set only when the bound agent passed the ORG-ownership clause -
    * it authorizes a project owned by any org member (org projects are routinely created
    * by a teammate). Null for a personal agent, which restricts to the key owner's own
-   * projects. Membership is read from the org's own member list (a User doc carries no
-   * org field), so no extra lookup is needed.
+   * projects. Membership is read from the org's authoritative `users[]` ACL (a User doc
+   * carries no org field), so no extra lookup is needed. NOT `userDetails[]`, which is a
+   * per-member credit side-table and can lag membership (a member may have no row yet).
    */
-  ownerOrg: { userId?: string; userDetails?: Array<{ id: string }> | null } | null;
+  ownerOrg: { userId?: string; users?: Array<{ userId?: string }> | null } | null;
   logger: Logger;
   getAbortSignal: () => AbortSignal | undefined;
 }): Promise<ICompletionOptionTools[] | undefined> {
@@ -222,7 +223,7 @@ async function buildEmbedServerTools(args: {
   let kbFileIds: string[] = [];
   if (project && !project.deletedAt) {
     const isOrgMember = (userId: string): boolean =>
-      !!ownerOrg && (ownerOrg.userId === userId || (ownerOrg.userDetails ?? []).some(d => d.id === userId));
+      !!ownerOrg && (ownerOrg.userId === userId || (ownerOrg.users ?? []).some(u => u.userId === userId));
     // Authorized when the key owner owns the project, or - for an org agent - any org
     // member does. Anything else fails closed to an empty scope (never owner-wide).
     if (project.userId === ctx.userId || isOrgMember(project.userId)) {
