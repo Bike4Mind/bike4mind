@@ -10,8 +10,9 @@ let mongod: MongoMemoryServer;
 beforeAll(async () => {
   mongod = await createMongoServer();
   await mongoose.connect(mongod.getUri());
-  // Only the history indexes matter here; SystemPrompt's promptId partial index
-  // ({ deletedAt: { $exists: false} }) is rejected by the server as a partial filter.
+  // Both models' indexes are built: the live-unique promptId index is what makes the
+  // recreate-after-delete case below meaningful.
+  await SystemPrompt.syncIndexes();
   await SystemPromptHistory.syncIndexes();
 });
 
