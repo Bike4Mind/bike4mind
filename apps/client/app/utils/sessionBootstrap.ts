@@ -1,5 +1,5 @@
 import { IUserDocument } from '@bike4mind/common';
-import { api } from '@client/app/contexts/ApiContext';
+import { api, isPublicPath } from '@client/app/contexts/ApiContext';
 import { takeLegacyRefreshToken, useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useUser } from '@client/app/contexts/UserContext';
 
@@ -72,4 +72,58 @@ export function bootstrapSession(): Promise<void> {
   }
   bootstrapPromise ??= exchangeRefreshCookie();
   return bootstrapPromise;
+}
+
+/**
+ * Refocus liveness check - pure predicate, unit-testable in isolation.
+ * Mirrors shouldProbeOnFailedWsConnect (WebsocketContext.tsx): decides whether a tab
+ * returning to the foreground is worth pinging the server for, without doing the ping itself.
+ */
+export function shouldRevalidateOnFocus(params: {
+  visibilityState: DocumentVisibilityState;
+  accessToken: string | null;
+  mfaPending: boolean;
+  expired: boolean;
+  pathname: string;
+}): boolean {
+  if (params.visibilityState !== 'visible') return false;
+  if (!params.accessToken) return false;
+  if (params.mfaPending) return false;
+  if (params.expired) return false;
+  if (isPublicPath(params.pathname)) return false;
+  return true;
+}
+
+/** Single-flight guard so visibilitychange and focus firing together only probes once. */
+let revalidateInFlight = false;
+
+/**
+ * On a tab returning from idle, `bootstrapSession` only runs at page load (see router.tsx's
+ * beforeLoad), so nothing proactively checks whether the access token expired while the tab was
+ * hidden. The first refetchOnWindowFocus query to 401 is what currently starts recovery via the
+ * ApiContext interceptor - this fires that recovery explicitly, through the SAME interceptor
+ * (no separate refresh path), instead of leaving it to whichever query happens to race there
+ * first. `/api/identify` is the same cheap authed endpoint WebsocketContext's close-probe uses.
+ */
+export function revalidateSessionOnFocus(): void {
+  if (revalidateInFlight) return;
+  const { accessToken, mfaPending, expired } = useAccessToken.getState();
+  if (
+    !shouldRevalidateOnFocus({
+      visibilityState: document.visibilityState,
+      accessToken,
+      mfaPending,
+      expired,
+      pathname: window.location.pathname,
+    })
+  ) {
+    return;
+  }
+  revalidateInFlight = true;
+  api
+    .get('/api/identify')
+    .catch(() => {})
+    .finally(() => {
+      revalidateInFlight = false;
+    });
 }

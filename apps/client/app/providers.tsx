@@ -23,6 +23,7 @@ import { CookieConsentBanner } from '@client/app/components/CookieConsentBanner'
 import { TranslationProvider } from '@client/app/contexts/TranslationProvider';
 import { QuestPreparationOverlay } from '@client/app/components/QuestPreparationOverlay';
 import { runLocalStorageCleanup } from '@client/app/utils/localStorageCleanup';
+import { revalidateSessionOnFocus } from '@client/app/utils/sessionBootstrap';
 
 // Lazy load DevTools only when needed (development only)
 const ReactQueryDevtools = lazy(() =>
@@ -149,6 +150,21 @@ export function ClientProviders({ children }: { children: ReactNode }) {
     };
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
+
+  // A reload runs the bootstrap refresh on load, but nothing ran its equivalent on
+  // tab refocus - so a token that expired while the tab was hidden wasn't caught until
+  // whichever refetchOnWindowFocus query happened to fire (and 401) first. Both events
+  // are listened for since a tab-switch fires visibilitychange while an OS-level app-switch
+  // back to the same foreground tab only fires focus; revalidateSessionOnFocus's own
+  // in-flight guard collapses a double-fire into one probe.
+  useEffect(() => {
+    document.addEventListener('visibilitychange', revalidateSessionOnFocus);
+    window.addEventListener('focus', revalidateSessionOnFocus);
+    return () => {
+      document.removeEventListener('visibilitychange', revalidateSessionOnFocus);
+      window.removeEventListener('focus', revalidateSessionOnFocus);
+    };
   }, []);
 
   return (
