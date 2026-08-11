@@ -180,6 +180,25 @@ async function recordQueryEmbeddingUsage(
 }
 
 /**
+ * Bill every alternate model the mixed-model ANN cutover actually embedded under, on top of the
+ * primary model's own recordQueryEmbeddingUsage call above - that embed ran (and was billable)
+ * regardless of whether the model's ANN query then found anything. Each call is independently
+ * try/caught inside recordQueryEmbeddingUsage, so one failing recording never skips the rest.
+ */
+async function recordAlternateModelUsage(
+  context: ToolContext,
+  query: string,
+  alternateModelsEmbedded: string[]
+): Promise<void> {
+  for (const model of alternateModelsEmbedded) {
+    // Defensive: the planner (alternateModelAnn.ts) already only ever selects a registry-known
+    // model, so this should never actually skip anything.
+    if (!isSupportedEmbeddingModel(model)) continue;
+    await recordQueryEmbeddingUsage(context, query, model, getProviderFromModel(model));
+  }
+}
+
+/**
  * Emit citable chips + a found-status line for semantic hits. corpusLabel keeps the scoped
  * wording free of owner-corpus framing ("the data lake" would misdescribe - and leak the
  * existence of - a corpus an agent-scoped caller cannot see).
@@ -296,6 +315,9 @@ async function trySemanticKbSearch(
     );
 
     await recordQueryEmbeddingUsage(context, query, embeddingModel, provider);
+    // Real callers always set this; the fallback only guards a test double built from a
+    // partial result object.
+    await recordAlternateModelUsage(context, query, search.alternateModelsEmbedded ?? []);
 
     const skipNotice = describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
     // No hits: the keyword arm answers, but it has to carry the notice with it.
@@ -365,6 +387,9 @@ async function tryScopedSemanticKbSearch(
     );
 
     await recordQueryEmbeddingUsage(context, query, embeddingModel, provider);
+    // Real callers always set this; the fallback only guards a test double built from a
+    // partial result object.
+    await recordAlternateModelUsage(context, query, search.alternateModelsEmbedded ?? []);
 
     const skipNotice = describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
     if (search.results.length === 0) return { output: null, skipNotice, datalakeTags: [] };
