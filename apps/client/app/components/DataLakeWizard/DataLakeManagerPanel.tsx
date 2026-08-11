@@ -223,9 +223,7 @@ export default function DataLakeManagerPanel() {
         }}
         onSelectFile={setSelectedFile}
         onCreateLake={openWizard}
-        isDiscovering={managerTab === 'discover'}
         onDiscover={openDiscover}
-        onExitDiscover={() => openManager('mine')}
         onReviewTaxonomy={setReviewingBatchId}
       />
       {activeLake ? (
@@ -291,12 +289,8 @@ interface ManagerNavProps {
   onExitLake: () => void;
   onSelectFile: (file: IFabFileDocument) => void;
   onCreateLake: () => void;
-  /** True while the right pane shows the public catalog, so the nav offers a way back out. */
-  isDiscovering: boolean;
   /** Opens the public-lake Discover catalog in the right pane. */
   onDiscover: () => void;
-  /** Leaves the catalog for the caller's own lakes. */
-  onExitDiscover: () => void;
   /** Opens the review/apply panel for a batch whose taxonomy suggestions are ready or failed. */
   onReviewTaxonomy: (batchId: string) => void;
 }
@@ -314,9 +308,7 @@ function ManagerNav({
   onExitLake,
   onSelectFile,
   onCreateLake,
-  isDiscovering,
   onDiscover,
-  onExitDiscover,
   onReviewTaxonomy,
 }: ManagerNavProps) {
   const theme = useTheme();
@@ -495,18 +487,12 @@ function ManagerNav({
       </Box>
 
       <Box sx={{ ...TREE_SCROLL_SX, px: '8px' }}>
-        {/* The catalog is a destination, not a toggled mode, so it gets the same way back as a
-            lake does - and this exit works with no lakes to click. */}
-        {(activeLake || isDiscovering) && (
+        {activeLake && (
           <Box sx={TREE_BACK_STICKY_SX}>
-            <ListItemButton
-              onClick={activeLake ? handleBack : onExitDiscover}
-              data-testid="datalake-manager-back"
-              sx={treeBackRowSx(hoverBg)}
-            >
+            <ListItemButton onClick={handleBack} data-testid="datalake-manager-back" sx={treeBackRowSx(hoverBg)}>
               <ArrowBackIcon sx={{ fontSize: 16, color: 'text.secondary', flexShrink: 0 }} />
               <Typography noWrap sx={rowTypographySx}>
-                {activeLake ? backLabel : 'All Lakes'}
+                {backLabel}
               </Typography>
             </ListItemButton>
           </Box>

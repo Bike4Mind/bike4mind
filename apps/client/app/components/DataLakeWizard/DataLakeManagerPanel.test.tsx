@@ -209,29 +209,33 @@ describe('DataLakeManagerPanel - root view', () => {
     await user.click(screen.getByTestId('datalake-manager-discover-btn'));
     // The catalog shows on THIS click: the activeLake branch used to outrank the tab and swallow it.
     expect(screen.getByTestId('mock-discover')).toBeInTheDocument();
-    // The lake is really closed, so Back leaves the catalog for the overview instead of dropping
-    // the user back inside the lake they came from.
-    await user.click(screen.getByTestId('datalake-manager-back'));
-    expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
-    expect(screen.queryByTestId('mock-discover')).not.toBeInTheDocument();
+    // The lake is really closed, so no in-lake Back row survives into the catalog.
+    expect(screen.queryByTestId('datalake-manager-back')).not.toBeInTheDocument();
   });
 
-  it('leaves Discover via Back - an exit that needs no lake of your own to click', async () => {
+  it('reads as a plain destination, never as a pressed mode', async () => {
     const user = userEvent.setup();
-    // No lakes: selectLake, the other route back to the overview, has no row to click.
-    useGetDataLakes.mockReturnValue({ data: [], isLoading: false });
     renderPanel();
     const discover = screen.getByTestId('datalake-manager-discover-btn');
-    // The button navigates rather than holding a mode, so it never reads as pressed.
     expect(discover).not.toHaveAttribute('aria-pressed');
 
     await user.click(discover);
-    expect(screen.getByTestId('mock-discover')).toBeInTheDocument();
-    expect(discover).not.toHaveAttribute('aria-pressed');
 
-    await user.click(screen.getByTestId('datalake-manager-back'));
+    expect(screen.getByTestId('mock-discover')).toBeInTheDocument();
+    // Same button, same look: it navigated rather than latching a mode on.
+    expect(discover).not.toHaveAttribute('aria-pressed');
+    expect(discover.className).toMatch(/MuiButton-variantOutlined/);
+  });
+
+  it('leaves the catalog by opening one of your own lakes', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(screen.getByTestId('datalake-manager-discover-btn'));
+    expect(screen.getByTestId('mock-discover')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+
     expect(screen.queryByTestId('mock-discover')).not.toBeInTheDocument();
-    expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
   });
 
   it('collapses the Data Lakes accordion, hiding the lake rows', async () => {
