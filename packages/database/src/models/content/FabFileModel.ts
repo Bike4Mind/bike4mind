@@ -6,6 +6,7 @@ import {
   IFabFileDocument,
   IFabFileRepository,
   IFabFileVersion,
+  FabFileSourceType,
   KnowledgeType,
 } from '@bike4mind/common';
 import mongoose, { Model, Schema } from 'mongoose';
@@ -53,6 +54,15 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
 
   async deleteManyByFabFileId(fabFileId: string) {
     await this.fabFileChunkModel.deleteMany({ fabFileId });
+  }
+
+  async distinctEmbeddingModelsByFabFileIds(fabFileIds: string[]): Promise<string[]> {
+    if (fabFileIds.length === 0) return [];
+    // Uses the { fabFileId: 1, _id: 1 } compound index below for the filter half of the scan.
+    return this.fabFileChunkModel.distinct('embeddingModel', {
+      fabFileId: { $in: fabFileIds },
+      embeddingModel: { $ne: null },
+    });
   }
 
   async bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]) {
@@ -917,14 +927,18 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   // Omitting `stampedAt` matches every stamped row, which is the pre-mark behavior and the fallback
   // for a lake torn down before the mark existed.
   //
-  // The archive axis deliberately stays unstamped: `archiveByDataLakeTag` is the only writer of a
-  // non-null `archivedAt`, so there is no independently-archived file to protect, and bounding it
-  // would strand any row still holding a stamp its lake no longer names.
+  // The archive axis is stamped the same way (`at`, from `IDataLake.filesArchivedAt`), because
+  // restore now also clears `archivedAt` (an archive->delete->restore must not leave files
+  // archived-and-invisible) - so equality-bounding that clear against the stamp is what stops it
+  // from freeing a prefix-sharing sibling's independently-archived files, the same way the delete
+  // axis avoids reviving a file the creator deleted on their own. `unarchiveByDataLakeTag` still
+  // matches on `archivedAt` alone (unbounded) - that reversal's own bounding is separate,
+  // unresolved scope.
 
-  async archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number> {
+  async archiveByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<number> {
     const result = await this.fabFileModel.updateMany(
       { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: null },
-      { $set: { archivedAt: new Date() } }
+      { $set: { archivedAt: at } }
     );
     return result.modifiedCount;
   }
@@ -946,6 +960,19 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.map(d => d.toJSON());
   }
 
+  // Same predicate as findArchivedByDataLakeTag, but an existence probe rather than a full read -
+  // for a caller (archiveDataLake's hasUnstampedArchive guard) that only needs to know "any?", not
+  // the documents themselves, and would otherwise materialize every archived row on every archive.
+  async hasArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<boolean> {
+    return (
+      (await this.fabFileModel.exists({
+        ...buildDataLakeMembershipFilter(scope),
+        deletedAt: null,
+        archivedAt: { $ne: null },
+      })) != null
+    );
+  }
+
   async findDeletedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]> {
     // `includeDeleted` is load-bearing for BOTH forms, not just tidiness: the soft-delete plugin's
     // find hook does `this.where({ deletedAt: null })`, which REPLACES the condition on that key, so
@@ -959,15 +986,39 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async undeleteByDataLakeTag(
     scope: DataLakeMembershipScope,
     excludeIds: string[] = [],
-    stampedAt?: Date
+    stampedAt?: Date,
+    archiveStampToClear?: Date
   ): Promise<number> {
-    const filter: Record<string, unknown> = {
+    const base: Record<string, unknown> = {
       ...buildDataLakeMembershipFilter(scope),
       deletedAt: stampedAt ?? { $ne: null },
     };
-    if (excludeIds.length > 0) filter._id = { $nin: excludeIds };
-    const result = await this.fabFileModel.updateMany(filter, { $set: { deletedAt: null } });
-    return result.modifiedCount;
+    if (excludeIds.length > 0) base._id = { $nin: excludeIds };
+
+    if (!archiveStampToClear) {
+      const result = await this.fabFileModel.updateMany(base, { $set: { deletedAt: null } });
+      return result.modifiedCount;
+    }
+
+    // Two parallel queries partitioned on `archivedAt`, not one update followed by another - not
+    // for snapshot isolation (Mongo gives none across separate updateMany calls), but because the
+    // shared `deletedAt: stampedAt` base filter is a barrier: once either query flips a row's
+    // `deletedAt` to null, that row no longer matches EITHER filter, so it cannot be picked up
+    // twice. A row stamped by THIS lake's own archive gets both fields cleared; any other value (a
+    // different lake's stamp, or none) only un-deletes, leaving its archive marker exactly as it
+    // was - the equality bound that keeps this from freeing a prefix-sharing sibling's
+    // independently-archived files.
+    const [ownStamp, otherStamp] = await Promise.all([
+      this.fabFileModel.updateMany(
+        { ...base, archivedAt: archiveStampToClear },
+        { $set: { deletedAt: null, archivedAt: null } }
+      ),
+      this.fabFileModel.updateMany(
+        { ...base, archivedAt: { $ne: archiveStampToClear } },
+        { $set: { deletedAt: null } }
+      ),
+    ]);
+    return ownStamp.modifiedCount + otherStamp.modifiedCount;
   }
 
   async softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<string[]> {
@@ -1210,6 +1261,12 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     contentHash: { type: String },
     batchId: { type: String },
     relativePath: { type: String },
+    // Provenance. Declared because strict mode drops undeclared paths silently: `sourceType` was
+    // already being written by the Slack file intake and discarded on every save, so anything
+    // reading it back saw MANUAL_UPLOAD-shaped nothing. Free-form `sourceMetadata` carries the
+    // per-source origin (for Slack: channel + message ts) that makes an ingested file auditable.
+    sourceType: { type: String, enum: Object.values(FabFileSourceType), required: false },
+    sourceMetadata: { type: Schema.Types.Mixed, required: false },
     archivedAt: { type: Date },
     // Absent until the first AI edit of a docx/xlsx; each edit appends an entry.
     versions: { type: [FabFileVersionSchema], default: undefined },

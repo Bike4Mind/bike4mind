@@ -43,7 +43,7 @@ openssl rand -hex 32   # -> SESSION_SECRET
 openssl rand -hex 32   # -> SECRET_ENCRYPTION_KEY
 ```
 
-> **Never change `SECRET_ENCRYPTION_KEY` after first boot.** It encrypts other secrets stored in the database - rotating it makes existing encrypted data unreadable.
+> **Do not rotate `SECRET_ENCRYPTION_KEY` casually.** It encrypts other secrets stored in the database, and rotation is not automated for self-host. If you must change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and leave it set permanently: reads fall back to the previous key, so old ciphertext (admin settings, per-user API keys, OAuth tokens, social connections) stays readable. Dropping the previous key makes anything still encrypted under it unrecoverable.
 
 > **Formatting:** compose reads `.env.selfhost` values verbatim - don't add comments on the same line as a value.
 
@@ -254,6 +254,8 @@ The template's default model needs **24 GB of system RAM**. Check what you have 
 free -g | awk '/^Mem:/ {print $2, "GB RAM"}'                  # Linux
 sysctl -n hw.memsize | awk '{print $1/1073741824, "GB RAM"}'  # macOS
 ```
+
+**On Docker Desktop, match the row against the memory ALLOCATED TO DOCKER (Settings > Resources), not host RAM.** The VM defaults to a fraction of host RAM (commonly 8 GB) regardless of how much the host has, so a host with 24 GB does not mean the container gets 24 GB. Picking the "24 GB" row without raising the Docker VM allocation first makes chat silently fall back to the embedding model with a "Fallback Model Used" badge (the chat model failed to load, so the picker served the only other one available). Not an issue on Linux, where the daemon runs directly on the host.
 
 | System RAM | Set `OLLAMA_PULL_MODELS` to | Download | MoE override |
 |------------|-----------------------------|---------:|--------------|
@@ -501,6 +503,22 @@ Then pick the cloud model under **Settings -> AI -> Default Embedding Model** an
 - **A placeholder value is treated as no key.** If `OPENAI_API_KEY`/`VOYAGE_API_KEY` holds a dummy value (e.g. `sk-oai-dummy-...`, `your-api-key`, `changeme`), self-host ignores it and keeps the keyless local embedder default - a copy-pasted placeholder no longer silently routes embeddings to a cloud provider that then rejects them. A key that is present but genuinely invalid fails fast with an actionable message (see Troubleshooting) instead of an opaque 401.
 - **If you already selected a cloud embedder in Settings**, that choice is persisted and stays selected even after you clear the key. Set a valid key for that provider, or switch **Default Embedding Model** back to a local Ollama embedder for the fully-offline path.
 
+### Faster retrieval with OpenSearch (optional)
+
+By default, self-host Data Lake search ranks every chunk with a bounded brute-force scan - fine for smaller lakes, but it re-scans the whole scoped corpus on every query. An optional bundled OpenSearch container adds real kNN retrieval instead:
+
+1. Uncomment `OPENSEARCH_ENDPOINT` and `B4M_SELF_HOST_OPENSEARCH` in `.env.selfhost` (see the file for the full quick-start, including a Linux host-kernel setting OpenSearch needs).
+2. Bring the stack up with the `opensearch` profile:
+   ```bash
+   docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile opensearch up -d
+   ```
+
+Known limitations:
+
+- **No backfill.** Only chunks vectorized AFTER both variables are set get indexed into OpenSearch. Chunks from before that point keep working (still retrievable) but stay on the brute-force scan path until a future re-embed. This is a correctness-neutral gap: retrieval always re-derives which files you can currently access from live data, so a chunk that isn't in OpenSearch yet just gets scanned instead of returning nothing.
+- **A chunk lost to a transient indexing failure has no automatic repair.** If an OpenSearch write fails mid-vectorize (a transient cluster outage), that chunk's content is missing from OpenSearch results until a future re-embed re-processes the file - the same shape as the no-backfill gap above, and equally correctness-neutral (the scan path still sees it in Mongo). The compensating cleanup that makes this safe is itself best-effort: it only ever touches the chunks from the batch that failed (never a sibling batch for the same file, so it cannot destroy already-good data), and if the cleanup delete itself fails - most likely from the same outage that failed the write - it logs and moves on rather than retrying.
+- Disable it again by unsetting `B4M_SELF_HOST_OPENSEARCH` - search falls back to the scan path immediately, no data loss.
+
 ## Background worker
 
 The `worker` service is the self-host replacement for the hosted background infrastructure (SST queue consumers + cron). It runs no HTTP server and publishes no ports; it just:
@@ -556,6 +574,7 @@ Discovery uses the provider keys already in `.env.selfhost` (or a user's own key
 - **Image generation is very slow** - with no GPU, Stable Diffusion runs on CPU (~1-3 min/image). Start with SD 1.5, and for NVIDIA GPU acceleration add `-f compose.imagegen-gpu.yaml` (see "Local image generation").
 - **`apt-get install nvidia-container-toolkit` says "Unable to locate package"** - NVIDIA's apt repo isn't set up. Add it first (see "GPU acceleration"), then re-run `sudo apt-get update`.
 - **GPU override fails with "could not select device driver \"nvidia\" with capabilities: [[gpu]]"** - the NVIDIA Container Toolkit isn't installed or wired into Docker. Install it and run `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker` (see "GPU acceleration"). Without a working GPU runtime, drop the `-f compose.ollama-gpu.yaml` and run CPU-only.
+- **`opensearch` container exits at boot with a "max virtual memory areas" error** - the OpenSearch JVM needs a higher `vm.max_map_count` than most Linux kernels default to. Run once on the HOST (not in the container): `sudo sysctl -w vm.max_map_count=262144`, then restart the `opensearch` service. Not needed on Docker Desktop (macOS/Windows) - its VM already sets this.
 - **Chat replies only appear after a refresh** - realtime isn't connecting. Check the `ws` gateway is up (`docker compose -f compose.selfhost.yaml ps ws`) and healthy, that `INTERNAL_WS_SECRET` is set and identical for the `app` and `ws` services, and that `WEBSOCKET_URL`/`WEBSOCKET_MANAGEMENT_ENDPOINT` point at the gateway. In the browser console you should see `ws connected`; a reconnect loop usually means the gateway can't reach the app (`docker compose -f compose.selfhost.yaml logs ws`).
 - **Changed `SECRET_ENCRYPTION_KEY` and now secrets fail to decrypt** - restore the original key; it cannot be rotated in place.
 - **Notebook auto-naming / summaries / mementos never happen** - background enrichment runs on the `worker` service via the event queue. Check the worker is up (`docker compose -f compose.selfhost.yaml ps worker`) and that `SELF_HOST_EVENT_QUEUE` is set in `.env.selfhost` (the app warns and drops enrichment events when it's unset). Watch `docker compose -f compose.selfhost.yaml logs -f worker`.
@@ -565,7 +584,7 @@ Discovery uses the provider keys already in `.env.selfhost` (or a user's own key
 
 ## Security notes
 
-The stack is configured for **local, single-host use**: the backing services (Mongo, MinIO, ElasticMQ, Mailpit) run without authentication and bind to `127.0.0.1` only. Before running on a public-facing server you must enable Mongo auth, change the MinIO credentials, use a real SMTP provider, and put the app behind a reverse proxy with TLS. See the header of `compose.selfhost.yaml`.
+The stack is configured for **local, single-host use**: the backing services (Mongo, MinIO, ElasticMQ, Mailpit, and OpenSearch if the optional `opensearch` profile is enabled) run without authentication and bind to `127.0.0.1` only. Before running on a public-facing server you must enable Mongo auth, change the MinIO credentials, use a real SMTP provider, and put the app behind a reverse proxy with TLS. See the header of `compose.selfhost.yaml`.
 
 When you put the app behind a reverse proxy, forward the original `Host` header and set `X-Forwarded-Proto` (e.g. `https` once TLS is terminated at the proxy). The published-artifact viewer derives each page's Content-Security-Policy origin and scheme from those headers, so getting them right is what lets published artifact bundles load their assets over your real origin.
 
@@ -587,10 +606,11 @@ Whichever path you choose, do the checklist first.
 ### Before you expose anything
 
 - [ ] **Change the MinIO credentials off the dev default.** `.env.selfhost.example` ships `minioadmin` / `minioadmin`. The app's S3 client authenticates to MinIO with the `AWS_*` keys, so set `MINIO_ROOT_USER` = `AWS_ACCESS_KEY_ID` and `MINIO_ROOT_PASSWORD` = `AWS_SECRET_ACCESS_KEY` to the same fresh values (generate the secret with `openssl rand -hex 24`).
-- [ ] **Keep the backing services on loopback, and know the Docker/ufw footgun.** Mongo (27017), MinIO (9000/9001), ElasticMQ (9324/9325), and Mailpit (8025) have **no authentication** and are already bound to `127.0.0.1` in `compose.selfhost.yaml` - never publish them. Be aware that on Linux, **Docker's published ports bypass `ufw`/`firewalld`**: Docker DNATs published ports through its own iptables chain before the filter table, so a "deny incoming" ufw policy does **not** block `3000`/`3001`/`8788`. Fixes: bind to `127.0.0.1` in compose (Path B's override does this for you), add `DOCKER-USER` iptables rules, use the `ufw-docker` helper, or - cleanest on a cloud VM - a provider security group that allows only inbound `80`/`443`. **Verify from a SECOND machine** (localhost always sees them), for example:
+- [ ] **Keep the backing services on loopback, and know the Docker/ufw footgun.** Mongo (27017), MinIO (9000/9001), ElasticMQ (9324/9325), Mailpit (8025), and OpenSearch (9200, if the optional `opensearch` profile is enabled) have **no authentication** and are already bound to `127.0.0.1` in `compose.selfhost.yaml` - never publish them. Be aware that on Linux, **Docker's published ports bypass `ufw`/`firewalld`**: Docker DNATs published ports through its own iptables chain before the filter table, so a "deny incoming" ufw policy does **not** block `3000`/`3001`/`8788`. Fixes: bind to `127.0.0.1` in compose (Path B's override does this for you), add `DOCKER-USER` iptables rules, use the `ufw-docker` helper, or - cleanest on a cloud VM - a provider security group that allows only inbound `80`/`443`. **Verify from a SECOND machine** (localhost always sees them), for example:
 
   ```bash
   # Run this from a DIFFERENT computer, against your host's public IP.
+  # Add 9200 if you enabled the opensearch profile.
   nmap -Pn -p 22,80,443,3000,3001,8788,27017,9000,9324,8025 <your-host-public-ip>
   # Path B expectation: only 22 (if you use SSH), 80, and 443 open; everything
   # else closed/filtered. Tailscale-only expectation: none of these open publicly.
@@ -598,7 +618,7 @@ Whichever path you choose, do the checklist first.
 
 - [ ] **Use a real SMTP provider.** Mailpit is local-only, so remote friends cannot read their sign-in codes from it. Point `MAIL_*` at a real provider (port 587 STARTTLS or 465 implicit TLS).
 - [ ] **Keep sign-up invite-only and cap per-user usage.** Registration is invite-only by default (`allowOpenRegistration` is OFF; the first account created becomes admin). Leave it off and invite friends explicitly from the admin settings. Self-host also defaults credit enforcement OFF - as admin, turn on **Enforce Credits** and give each friend a finite credit budget so a runaway (or a shared key) cannot burn your LLM spend. Per-key API rate limits default to 60/min and 1000/day.
-- [ ] **Back up `SECRET_ENCRYPTION_KEY`.** It is write-once (it encrypts other secrets in the database) and cannot be rotated in place - losing it makes that data unrecoverable.
+- [ ] **Back up `SECRET_ENCRYPTION_KEY`.** It encrypts other secrets in the database and losing it makes that data unrecoverable. Rotation is not automated for self-host: if you ever change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and keep it configured permanently so existing ciphertext still decrypts.
 
 ### Path A: Tailscale tailnet (recommended for friends)
 

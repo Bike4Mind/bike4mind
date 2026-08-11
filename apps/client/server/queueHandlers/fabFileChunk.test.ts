@@ -23,6 +23,7 @@ const h = vi.hoisted(() => ({
   isBatchComplete: vi.fn(),
   deferFailureIfRetryable: vi.fn(),
   fabFileUpdateOne: vi.fn(() => ({ catch: vi.fn() })),
+  selfHostOpenSearchEnabled: vi.fn(() => false),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -55,6 +56,8 @@ vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
 }));
 vi.mock('@bike4mind/common', () => ({ isSupportedEmbeddingModel: vi.fn(() => true) }));
 vi.mock('@bike4mind/utils', () => ({ BadRequestError: class BadRequestError extends Error {} }));
+vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: { deleteByFabFileId: vi.fn() } }));
+vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpenSearchEnabled }));
 vi.mock('sst', () => ({
   Resource: new Proxy({}, { get: () => new Proxy({}, { get: () => 'mock' }) }),
 }));
@@ -276,6 +279,35 @@ describe('fabFileChunk handler - passage target passthrough (#1420)', () => {
       expect.anything(),
       expect.objectContaining({ passageTokenTarget: undefined }),
       expect.anything()
+    );
+  });
+});
+
+describe('fabFileChunk handler - self-host OpenSearch searchIndex adapter', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1' });
+    h.chunkFabfile.mockResolvedValue([]);
+  });
+
+  it('passes the searchIndex adapter when self-host OpenSearch is enabled', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.chunkFabfile).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ searchIndex: expect.objectContaining({ deleteByFabFileId: expect.any(Function) }) })
+    );
+  });
+
+  it('omits the searchIndex adapter when self-host OpenSearch is disabled', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(false);
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.chunkFabfile).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ searchIndex: undefined })
     );
   });
 });

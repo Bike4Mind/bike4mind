@@ -1,4 +1,9 @@
-import { IAdminSettings, IUserPreferences } from '@bike4mind/common';
+import {
+  IAdminSettings,
+  IUserPreferences,
+  redactSettingSecretsForBroadcast,
+  type AdminSettingDoc,
+} from '@bike4mind/common';
 import { useShallow } from 'zustand/react/shallow';
 import { useQueryClient } from '@tanstack/react-query';
 import { isAxiosError, isCancel } from 'axios';
@@ -433,7 +438,15 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
   const adminSettingsCallback = useCallback(
     (type: string, data: IAdminSettings) => {
       const operation = type === 'delete' ? type : 'write';
-      updateAllQueryData(queryClient, 'adminsettings', operation, data);
+      // A sensitive value arrives over the wire encrypted (or, pre-migration, plaintext) -
+      // the fanout serializes the raw stored document. Mask it before it lands in the shared
+      // ['adminsettings'] cache so a live cross-admin update never surfaces ciphertext or a
+      // raw secret in the admin field. The broadcast redactor emits a bare mask with no
+      // trailing characters (the browser cannot decrypt, so a last-4 derived here would be
+      // the ciphertext tail - a wrong value an admin could mis-verify). /api/settings/fetch
+      // remains the source of truth for the real last-4.
+      const safe = redactSettingSecretsForBroadcast(data as unknown as AdminSettingDoc) as unknown as IAdminSettings;
+      updateAllQueryData(queryClient, 'adminsettings', operation, safe);
     },
     [queryClient]
   );

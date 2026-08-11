@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Cosine is a hoisted mock so individual tests can vary scores; the default keeps every chunk
 // above the floor, which is what the pre-existing exclusion/scoping tests assume.
@@ -794,8 +794,8 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
     expect(result.scan.chunksScanned).toBe(2);
     expect(result.results.map(r => r.fileId)).toEqual(['ready', 'ready']);
     expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('$vectorSearch failed'),
-      expect.objectContaining({ fileCount: 1 })
+      expect.stringContaining('ANN vector search failed'),
+      expect.objectContaining({ fileCount: 1, backend: 'atlas' })
     );
   });
 
@@ -837,5 +837,153 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
     expect(result.scan.annFilesQueried).toBe(1);
     expect(result.scan.chunksScanned).toBe(1);
     expect(result.results.map(r => r.fileId).sort()).toEqual(['covered', 'missed']);
+  });
+});
+
+describe('semanticDataLakeSearch self-host OpenSearch cutover', () => {
+  const readyStamp = new Date(Date.now() - 120_000);
+  const originalEnv = { ...process.env };
+
+  const enableSelfHostOpenSearch = () => {
+    process.env.B4M_SELF_HOST = 'true';
+    process.env.B4M_SELF_HOST_OPENSEARCH = 'true';
+    process.env.OPENSEARCH_ENDPOINT = 'localhost:9200';
+  };
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  const annFile = (id: string, overrides: Record<string, unknown> = {}) => ({
+    id,
+    fileName: `${id}.pdf`,
+    tags: [],
+    embeddingModel: 'text-embedding-ada-002',
+    vectorizedChunkCount: 1,
+    chunkEmbeddingModelStampedAt: readyStamp,
+    ...overrides,
+  });
+
+  const openSearchAdapters = (args: {
+    files: ReturnType<typeof annFile>[];
+    scanChunks?: { id: string; fabFileId: string; text: string; vector: number[] }[];
+    annHits?: { id: string; fabFileId: string; text: string; score: number }[];
+  }) => {
+    const findVectorsByFabFileIds = pagingChunkMock(args.scanChunks ?? []);
+    const knnSearch = vi.fn().mockResolvedValue(args.annHits ?? []);
+    return {
+      search: filesAdapter([{ data: args.files, hasMore: false, total: args.files.length }]),
+      findVectorsByFabFileIds,
+      knnSearch,
+    };
+  };
+
+  it('never calls knnSearch when self-host OpenSearch is disabled (default env)', async () => {
+    const { search, findVectorsByFabFileIds, knnSearch } = openSearchAdapters({
+      files: [annFile('f1')],
+      scanChunks: chunkRows('f1', 2),
+    });
+
+    const result = await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds } },
+      vectorIndex: { knnSearch },
+    } as never);
+
+    expect(knnSearch).not.toHaveBeenCalled();
+    expect(result.scan.annFilesQueried).toBe(0);
+    expect(result.scan.chunksScanned).toBe(2);
+  });
+
+  it('routes a ready file to OpenSearch when the flag and endpoint are set', async () => {
+    enableSelfHostOpenSearch();
+    const { search, findVectorsByFabFileIds, knnSearch } = openSearchAdapters({
+      files: [annFile('ready')],
+      annHits: [{ id: 'ready-c0', fabFileId: 'ready', text: 'ann hit', score: 0.95 }],
+    });
+
+    const result = await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds } },
+      vectorIndex: { knnSearch },
+    } as never);
+
+    expect(knnSearch).toHaveBeenCalledWith(['ready'], expect.anything(), 'text-embedding-ada-002', {
+      limit: expect.any(Number),
+    });
+    expect(result.scan.annFilesQueried).toBe(1);
+    expect(result.scan.annHits).toBe(1);
+  });
+
+  it('never calls knnSearch when the vectorIndex adapter is not provided, even with the flag on', async () => {
+    enableSelfHostOpenSearch();
+    const { search, findVectorsByFabFileIds } = openSearchAdapters({
+      files: [annFile('f1')],
+      scanChunks: chunkRows('f1', 1),
+    });
+
+    const result = await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds } },
+    } as never);
+
+    expect(result.scan.annFilesQueried).toBe(0);
+    expect(result.scan.chunksScanned).toBe(1);
+  });
+
+  it('fails open to scan when knnSearch throws', async () => {
+    enableSelfHostOpenSearch();
+    const logger = makeLogger();
+    const { search, findVectorsByFabFileIds, knnSearch } = openSearchAdapters({
+      files: [annFile('ready')],
+      scanChunks: chunkRows('ready', 2),
+    });
+    knnSearch.mockRejectedValueOnce(new Error('cluster unreachable'));
+
+    const result = await semanticDataLakeSearch(
+      { ...baseParams(), vectorSearchEnabled: true, logger: logger as never },
+      {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds } },
+        vectorIndex: { knnSearch },
+      } as never
+    );
+
+    expect(result.scan.annFilesQueried).toBe(0);
+    expect(result.scan.chunksScanned).toBe(2);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('ANN vector search failed'),
+      expect.objectContaining({ backend: 'opensearch' })
+    );
+  });
+
+  it('rebuckets a ready file onto scan when knnSearch returns zero hits (not yet dual-written)', async () => {
+    enableSelfHostOpenSearch();
+    const { search, findVectorsByFabFileIds, knnSearch } = openSearchAdapters({
+      files: [annFile('ready')],
+      scanChunks: chunkRows('ready', 2),
+      annHits: [],
+    });
+
+    const result = await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds } },
+      vectorIndex: { knnSearch },
+    } as never);
+
+    expect(result.scan.annFilesQueried).toBe(0);
+    expect(result.scan.chunksScanned).toBe(2);
+    expect(result.results.map(r => r.fileId)).toEqual(['ready', 'ready']);
+  });
+
+  it('never calls knnSearch on an Atlas-backed deployment even if a vectorIndex adapter is (mistakenly) provided', async () => {
+    // Atlas is the default backend with no env vars set - this asserts the if/else-if mutual
+    // exclusion, not just "self-host off".
+    const { search, findVectorsByFabFileIds, knnSearch } = openSearchAdapters({
+      files: [annFile('f1')],
+      scanChunks: chunkRows('f1', 1),
+    });
+
+    await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds } },
+      vectorIndex: { knnSearch },
+    } as never);
+
+    expect(knnSearch).not.toHaveBeenCalled();
   });
 });
