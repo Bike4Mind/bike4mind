@@ -127,8 +127,12 @@ describe('search_knowledge_base keyword fallback retrieval exclusion', () => {
  * (the same one every other test in this file drives via bare makeContext()).
  */
 describe('search_knowledge_base attachmentInlineNotice for inlined attachments (#1163)', () => {
-  it('zero hits + an inlined attachment: notes it may not be searchable yet but is already in the conversation', async () => {
-    const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: ['f1'] });
+  it('zero hits + a FULLY inlined attachment: notes it may not be searchable yet but is already in the conversation', async () => {
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      inlinedAttachmentIds: ['f1'],
+      fullyInlinedAttachmentIds: ['f1'],
+    });
     (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [], total: 0 });
 
     const out = await run(ctx);
@@ -137,7 +141,21 @@ describe('search_knowledge_base attachmentInlineNotice for inlined attachments (
     // inlined attachments here are ordinary, fully-searchable files where a zero-hit result
     // just means the query missed (#1163 review).
     expect(out).toContain('may not be indexed for search yet');
-    expect(out).toContain('already included directly in the conversation above');
+    expect(out).toContain('Their content was already included directly in the conversation above');
+    expect(out).not.toContain('PART of their content');
+  });
+
+  it('zero hits + a PARTIALLY inlined attachment: does not claim the whole document is already above', async () => {
+    // inlinedAttachmentIds without a matching fullyInlinedAttachmentIds entry: delivered as a
+    // cosine excerpt or a truncated head (#1163 review, bot round 3 nit).
+    const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: ['f1'] });
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [], total: 0 });
+
+    const out = await run(ctx);
+
+    expect(out).toContain('may not be indexed for search yet');
+    expect(out).toContain('PART of their content was already included directly in the conversation above');
+    expect(out).not.toContain('Their content was already included');
   });
 
   it('zero hits + no inlinedAttachmentIds: baseline message with no added suffix (regression)', async () => {

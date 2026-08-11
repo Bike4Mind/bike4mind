@@ -439,12 +439,25 @@ function attachmentInlineNotice(context: ToolContext, rankedResults: Array<{ id:
     // (resolveCorpusInlinePlan, lake access + a large corpus), so most inlined attachments here
     // are ordinary, fully-searchable files where a zero-hit result just means the query missed -
     // not that the file is unsearchable. Matches the sibling wording in knowledgeBaseRetrieve.
-    return (
-      `\n\nNOTE: ${inlined.length} file(s) attached to this conversation may not be indexed for ` +
-      `search yet, so they may not be found through this tool. Their content was already included ` +
-      `directly in the conversation above - answer from that rather than telling the user the ` +
-      `attachment is inaccessible.`
-    );
+    const fullyInlinedIds = inlined.filter(id => fullyInlined.has(id));
+    const partialIds = inlined.filter(id => !fullyInlined.has(id));
+    const parts: string[] = [];
+    if (fullyInlinedIds.length > 0) {
+      parts.push(
+        `${fullyInlinedIds.length} file(s) attached to this conversation may not be indexed for search yet, ` +
+          `so they may not be found through this tool. Their content was already included directly in the ` +
+          `conversation above - answer from that rather than telling the user the attachment is inaccessible.`
+      );
+    }
+    if (partialIds.length > 0) {
+      parts.push(
+        `${partialIds.length} file(s) attached to this conversation may not be indexed for search yet, so ` +
+          `they may not be found through this tool. PART of their content was already included directly in ` +
+          `the conversation above, but what is shown may be an excerpt or a truncated head - answer from ` +
+          `that if it covers the question, but do not assume it is the whole document.`
+      );
+    }
+    return `\n\nNOTE: ${parts.join(' ')}`;
   }
 
   const inlinedHits = rankedResults.filter(f => inlined.includes(f.id));
