@@ -1192,6 +1192,11 @@ describe('archiveDataLake - retrieval-index removal', () => {
     adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(lake({ status: 'archiving', filesArchivedAt: stamp }));
     adapters.db.dataLakes.claimFilesArchivedAt = vi.fn().mockResolvedValue(stamp);
     adapters.db.fabFiles.hasArchivedByDataLakeTag = vi.fn().mockResolvedValue(true);
+    // Realistic for this scenario: a crashed prior attempt already stamped every row before it
+    // died, so the re-entered sweep (still filtering archivedAt: null) matches nothing new - not
+    // because the batch was never written. The base mock's default (2) would never exercise the
+    // zero-swept branch and let a regression on this exact path slip past (caught in review).
+    adapters.db.fabFiles.archiveByDataLakeTag = vi.fn().mockResolvedValue(0);
 
     await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
 
@@ -1200,6 +1205,9 @@ describe('archiveDataLake - retrieval-index removal', () => {
     expect(adapters.db.fabFiles.hasArchivedByDataLakeTag).not.toHaveBeenCalled();
     expect(adapters.db.dataLakes.claimFilesArchivedAt).toHaveBeenCalledWith('lake1', expect.any(Date));
     expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, stamp);
+    // The echoed stamp still names every row (they were stamped before the crash) - clearing it
+    // here, despite sweeping zero, would strand them all on a later restore.
+    expect(adapters.db.dataLakes.update).not.toHaveBeenCalledWith(expect.objectContaining({ filesArchivedAt: null }));
   });
 
   it('warns and archives unstamped when the claim comes back empty (the lake vanished under a concurrent delete)', async () => {

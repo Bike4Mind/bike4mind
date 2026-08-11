@@ -100,10 +100,17 @@ export const archiveDataLake = async (
   const swept = await db.fabFiles.archiveByDataLakeTag(scope, stamp);
   // The probe-then-claim window above has no lock, so a concurrent archive on a prefix-colliding
   // sibling can stamp our row between the two and leave this sweep matching nothing: `stamp` gets
-  // claimed, but zero rows actually carry it. Detecting that after the fact and clearing the mark
-  // closes the invariant regardless of how the race arose - an empty lake also sweeps zero and
-  // clearing its (already meaningless) mark is harmless.
-  if (stamp && swept === 0) {
+  // freshly claimed, but zero rows actually carry it. Clearing the mark in that case closes the
+  // race regardless of how it arose - an empty lake also sweeps zero and clearing its
+  // (already meaningless) mark is harmless.
+  //
+  // `!existing.filesArchivedAt` is load-bearing, not incidental: it's what tells a fresh claim
+  // (the race above) apart from a crash re-entry that echoed an ALREADY-set stamp back (:81's
+  // set-if-unset returns the existing value rather than minting one). A re-entry's sweep also
+  // returns 0 - not because the batch was never written, but because every row already carries
+  // this exact stamp from the completed attempt before the crash - and clearing it there would
+  // strand every one of those rows on restore, reintroducing the bug this PR exists to fix.
+  if (stamp && swept === 0 && !existing.filesArchivedAt) {
     await db.dataLakes.update({ id: dataLakeId, filesArchivedAt: null });
   }
   // Same scope the sweep ran on. findIdsByDataLakeTag is the id source rather than the flip's
