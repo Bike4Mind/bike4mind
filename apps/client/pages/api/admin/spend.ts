@@ -3,6 +3,7 @@ import { usageEventRepository, cacheRepository } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { cacheService } from '@bike4mind/services';
 import {
+  ApiKeyScope,
   CreditHolderType,
   type CostByModelRow,
   type DailyCostPoint,
@@ -246,23 +247,30 @@ async function buildSpendData(query: Omit<SpendQuery, 'recache'>): Promise<Spend
  * the UsageEvent collection (frozen costUsd/creditsCharged/latencyMs). Computes the
  * selected window against the immediately prior window for vs-prior KPI deltas.
  * Admin-only; response cached 12h (bust with ?recache=true).
+ *
+ * requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
+ * before req.user is set, so a key issued for a narrow integration can't read org
+ * spend just because its owner is an admin. JWT/browser admins skip that check and
+ * still pass the isAdmin gate below.
  */
-const handler = baseApi().get(async (req: Request<{}, {}, {}, SpendQuery>, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Admin access required');
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
+  async (req: Request<{}, {}, {}, SpendQuery>, res) => {
+    if (!req.user?.isAdmin) {
+      throw new ForbiddenError('Admin access required');
+    }
+
+    const { recache, ...query } = QuerySchema.parse(req.query);
+
+    const cacheKey = CacheKeys.spend(query);
+    const data = await cacheService.getCachedData(cacheKey, () => buildSpendData(query), {
+      db: { caches: cacheRepository },
+      expiry: 12 * 60 * 60 * 1000, // 12 hours
+      recache,
+      logger: req.logger,
+    });
+
+    return res.json(data);
   }
-
-  const { recache, ...query } = QuerySchema.parse(req.query);
-
-  const cacheKey = CacheKeys.spend(query);
-  const data = await cacheService.getCachedData(cacheKey, () => buildSpendData(query), {
-    db: { caches: cacheRepository },
-    expiry: 12 * 60 * 60 * 1000, // 12 hours
-    recache,
-    logger: req.logger,
-  });
-
-  return res.json(data);
-});
+);
 
 export default handler;

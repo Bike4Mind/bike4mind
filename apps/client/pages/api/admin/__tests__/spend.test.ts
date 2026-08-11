@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import type { ISpendSummary } from '@bike4mind/common';
+import { ApiKeyScope, type ISpendSummary } from '@bike4mind/common';
 
+// Captures the config so a test can assert requiredScopes: the scope gate lives in
+// apiKeyAuth (real middleware, not exercised here), so asserting the handler is
+// registered with it is the only guard available at this level.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+  baseApi: (config?: unknown) => {
     const handlers: Record<string, (req: unknown, res: unknown) => Promise<unknown>> = {};
     const chain = async (req: { method: string }, res: unknown) => handlers[req.method](req, res);
     chain.use = () => chain;
@@ -11,6 +14,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
       handlers.GET = fn;
       return chain;
     };
+    chain._config = config;
     return chain;
   },
 }));
@@ -67,6 +71,14 @@ describe('GET /api/admin/spend', () => {
     mockSpendSummary.mockResolvedValue(summary());
     mockOrgFind.mockResolvedValue([]);
     mockResolveUserNames.mockResolvedValue(new Map([['user-1', 'Ada Lovelace']]));
+  });
+
+  it('requires the ADMIN scope so an under-scoped admin-owned key is 403d by apiKeyAuth', () => {
+    // Guards the money endpoint against a narrowly-scoped key inheriting its owner's
+    // isAdmin: apiKeyAuth rejects the key before req.user is set. JWT/browser admins
+    // skip that check and are unaffected.
+    const config = (handler as unknown as { _config?: { requiredScopes?: string[] } })._config;
+    expect(config?.requiredScopes).toEqual([ApiKeyScope.ADMIN]);
   });
 
   it('rejects a non-admin', async () => {
