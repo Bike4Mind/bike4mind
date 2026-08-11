@@ -92,7 +92,6 @@ describe('revalidateSessionOnFocus - guard gating the shared probe', () => {
     resetProbeGuardForTests();
     useAccessToken.setState({
       accessToken: 'tok',
-      refreshToken: 'refresh',
       expired: false,
       expiredReason: null,
       mfaPending: false,
