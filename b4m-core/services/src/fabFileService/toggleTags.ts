@@ -191,26 +191,21 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
     // stamped.
     const isMember = storedTagNames(file).includes(lake.datalakeTag);
     if (!isMember) {
-      // Touched only once the write actually lands: addFileToLake's manage-rights gate throws
-      // before any write, and a rejected join must not still trigger recomputeLakeStats's
-      // activateIfDraft side effect on a lake this actor cannot manage - the same treatment the
-      // prefix-arm join below already gets.
       await addFileToLake(actor, lake, file.id, { db });
-      touchedLakes.set(lake.id, lake);
-      return;
-    }
-    try {
-      await removeFileFromLake(actor, lake, file.id, { db });
-    } catch (error) {
-      // A concurrent removal landing between the read above and this write leaves nothing to
-      // remove, which is the state the caller asked for anyway - still worth a recompute, unlike
-      // an actual gate rejection, which rethrows below and never touches the lake at all.
-      if (error instanceof NotFoundError) {
-        touchedLakes.set(lake.id, lake);
-        return;
+    } else {
+      try {
+        await removeFileFromLake(actor, lake, file.id, { db });
+      } catch (error) {
+        // A concurrent removal landing between the read above and this write leaves nothing to
+        // remove, which is the state the caller asked for anyway.
+        if (!(error instanceof NotFoundError)) throw error;
       }
-      throw error;
     }
+    // Touched only once the write actually lands (or hits the benign race above): both
+    // addFileToLake and removeFileFromLake throw their manage-rights gate's BadRequestError
+    // before any write, and that throw exits this function before reaching here - so a rejected
+    // toggle never triggers recomputeLakeStats's activateIfDraft side effect on a lake this actor
+    // cannot manage. The same treatment the prefix-arm join below already gets.
     touchedLakes.set(lake.id, lake);
   };
 
