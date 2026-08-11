@@ -105,4 +105,24 @@ describe('chunkFabfile', () => {
     expect(mockAdapter.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds).not.toHaveBeenCalled();
     expect(result).toEqual([]);
   });
+
+  // Rejecting at the boundary is what keeps an unmatchable label out of the database: this is the
+  // only writer of FabFile.embeddingModel, and a mis-cased value reads as positively FOREIGN to the
+  // readers rather than unknown. See isForeignEmbeddingModel (dataLakeService/embeddingMismatch.ts)
+  // for those readers and the reasoning. The `embeddingModel` in the message proves it was the
+  // schema that rejected it, not something failing later in the chunker.
+  it.each([
+    ['mis-cased', 'Text-Embedding-3-Small'],
+    ['unrecognized', 'not-a-real-embedder'],
+    ['blank', ''],
+  ])('rejects a %s embedding model without writing anything', async (_label, embeddingModel) => {
+    await expect(chunkFabfile(mockUser, { fabFileId: 'file-1', embeddingModel }, mockAdapter as never)).rejects.toThrow(
+      /embeddingModel/
+    );
+
+    expect(mockAdapter.db.fabFiles.shareable.findAccessibleById).not.toHaveBeenCalled();
+    expect(mockAdapter.db.fabFiles.update).not.toHaveBeenCalled();
+    expect(mockAdapter.db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
+    expect(mockAdapter.db.fabFileChunks.bulkInsert).not.toHaveBeenCalled();
+  });
 });
