@@ -1,12 +1,11 @@
-import { DATALAKE_TAG_PREFIX, normalizeTagPrefix } from '@bike4mind/common';
 import type { IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
-import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { canManageLake } from './authorizeLakeWrite';
+import { NotFoundError } from '@bike4mind/utils';
+import { removeFileFromLake } from './lakeMembership';
 import { recomputeLakeStats } from './recomputeLakeStats';
 
 interface RemoveFileFromDataLakeAdapters {
   db: {
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats'>;
+    dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats' | 'activateIfDraft'>;
     fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'>;
   };
 }
@@ -27,23 +26,25 @@ interface RemoveFileFromDataLakeAdapters {
  * the stats reported it as removed.
  *
  * Membership is TESTED against both signals too, so a file carrying only a prefixed tag can
- * be removed rather than 404ing forever. The prefix arm additionally requires the ACTOR to own
- * the file, because fileTagPrefix is user-chosen and neither unique nor reserved: without that
- * conjunct, minting a lake with someone else's prefix would be a licence to strip their tags.
+ * be removed rather than 404ing forever. The prefix arm additionally requires the file be owned
+ * by the LAKE'S CREATOR, because fileTagPrefix is user-chosen and not org-scope unique: without
+ * that conjunct, minting a lake with someone else's prefix would be a licence to strip their tags.
  *
- * The whole-lake predicate requires ownership on its prefix arm too, but anchored to the lake's
- * CREATOR rather than the actor (buildDataLakeMembershipFilter). Neither rides a read share: both
- * are destructive, and a file someone else owns is not the lake's to hide or purge. The asymmetry
- * is only in WHOSE ownership counts - this endpoint strips tags on behalf of its caller, so it asks
- * "may THIS actor edit this file", while archive and delete act on the lake and ask "is this file
- * the creator's". So an admin removing one file must own it, while the lake-wide sweep they trigger
- * takes the creator's files instead.
+ * The whole-lake predicate (buildDataLakeMembershipFilter, the single-lake browse's own
+ * membership check) requires the same ownership conjunct on its prefix arm, so both this
+ * endpoint and the lake-wide sweep now ask the identical question - "is this file the creator's".
+ * An admin may call this without owning the file themselves, but the file itself must still
+ * belong to the lake's creator; an admin cannot use this to strip a prefixed tag off a file that
+ * predicate never actually admitted to this lake. Other lake readers (the aggregate browse,
+ * semantic search, chat KB tools) still match the prefix within the VIEWER's own access - a
+ * different, ownership-of-the-file question this endpoint does not touch.
  *
- * A second lake sharing this prefix - not necessarily the caller's, since nothing makes
- * fileTagPrefix unique - loses the shared prefixed tag too. A lake holding its own meta-tag on
- * the file keeps it and only loses the folder grouping, but a lake whose membership was
- * prefix-only loses the file outright. One tag string cannot be cleared for one lake and kept
- * for another.
+ * A second lake sharing this prefix - not necessarily the caller's, since fileTagPrefix has no
+ * org-scope uniqueness (same-creator collisions are blocked by a DB index; see the comment on
+ * that index in DataLakeModel.ts for why org-scope is not) - loses the shared prefixed tag too.
+ * A lake holding its own meta-tag on the file keeps it and only loses the folder grouping, but a
+ * lake whose membership was prefix-only loses the file outright. One tag string cannot be
+ * cleared for one lake and kept for another.
  *
  * That "only loses the folder grouping" now costs more than it reads. Every lake file carries a
  * tag under its lake's prefix (see `fallbackLakeTags`), so for a co-prefixed second lake the
@@ -60,9 +61,15 @@ interface RemoveFileFromDataLakeAdapters {
  * Lake owner or admin only. Idempotent-safe: a second call 404s because both signals are
  * already gone - the correct "already removed" response for a retry.
  *
- * No per-file retrieval-index call: RetrievalIndexPort exposes only removeByDataLakeTag,
- * which would de-index the ENTIRE lake, and it has no implementer here (bestEffortIndexRemove
- * no-ops without one). Removal is enforced by Mongo tag state, so it takes effect on the next
+ * This entry point resolves the lake by id and recomputes stats; the membership write itself is
+ * `removeFileFromLake` in lakeMembership.ts, shared with the tag-toggle door so both doors clear
+ * the same signals.
+ *
+ * No retrieval-index call, though RetrievalIndexPort could now express a per-file removal: the
+ * file is leaving the lake, not being deleted, so dropping its index entry would over-remove and
+ * strip it from its OWNER's retrieval everywhere else. That is why the lifecycle doors call the
+ * port and this one does not - they destroy or hide the file, this one only unpicks membership.
+ * That membership removal is enforced by Mongo tag state, so it takes effect on the next
  * read - immediately and completely for the single-lake browse, today the only reader that sets
  * restrictToDataLake. Every other lake reader (the aggregate lake browse, lake semantic search,
  * the chat KB tools) still matches the prefix within the VIEWER's access, so the file's OWNER
@@ -79,35 +86,8 @@ export const removeFileFromDataLake = async (
   if (!lake) {
     throw new NotFoundError('Data lake not found');
   }
-  if (!canManageLake(lake, actor)) {
-    throw new BadRequestError('Only the creator can remove files from this data lake');
-  }
 
-  const file = await db.fabFiles.findById(fabFileId);
-  const tagNames = (file?.tags ?? []).map(t => t.name).filter((name): name is string => typeof name === 'string');
-  // Normalized through the same predicate the read arms use, so a lake whose prefix no query
-  // matches (empty, or missing its trailing colon) also gets nothing cleared by prefix.
-  const prefix = normalizeTagPrefix(lake.fileTagPrefix);
-  // Positive ownership: both ids must be present AND equal, so a file with no owner does not
-  // fall through as a match.
-  const ownsFile = actor.isAdmin || (!!file?.userId && file.userId === actor.userId);
-  const prefixedTags = prefix ? tagNames.filter(name => name.startsWith(prefix)) : [];
-  const inLake = !!file && (tagNames.includes(lake.datalakeTag) || (ownsFile && prefixedTags.length > 0));
-  if (!file || !inLake) {
-    throw new NotFoundError('File not found in this data lake');
-  }
-
-  // One atomic $pull for both signals. Two writes would leave a window - and on a crash, a
-  // permanent state - where the meta-tag is gone but a prefixed tag still matches this lake.
-  // $pull removes only matching elements, so a concurrent removal of the same file from a
-  // DIFFERENT lake can't clobber this write the way a read-filter-write of the whole tags
-  // array would (last-write-wins re-adding a tag).
-  await db.fabFiles.pullTagsByFabFileId(file.id, [
-    lake.datalakeTag,
-    // Never strip another lake's membership: a lake whose fileTagPrefix sits inside the
-    // reserved datalake: namespace would otherwise evict the file from every lake at once.
-    ...prefixedTags.filter(name => !name.startsWith(DATALAKE_TAG_PREFIX)),
-  ]);
+  await removeFileFromLake(actor, lake, fabFileId, { db });
 
   const stats = await recomputeLakeStats(lake, { db });
   return { success: true, ...stats };

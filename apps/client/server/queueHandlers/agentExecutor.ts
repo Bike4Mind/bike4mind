@@ -75,7 +75,7 @@ import {
   type ToolBuilderDeps,
   type ToolBuilderCallbacks,
 } from '@bike4mind/services';
-import { creditService, apiKeyService } from '@bike4mind/services';
+import { creditService, apiKeyService, estimateGeneratedMediaUsd } from '@bike4mind/services';
 // Lattice launch-gate. `resolveLatticeTools` owns the `enableLattice` flag
 // resolution and the Lattice tool contribution (names + `externalTools`
 // definitions); see that module's header for the Next-tracing split and the
@@ -95,12 +95,20 @@ import type { DagHandoffSignal } from '@bike4mind/services';
 // (Mongo, AWS SDK, ReActAgent, etc.). `maybeBuildFirstIterationQuery` wraps
 // it with the new-execution/iteration-0 gate so the gate is testable too.
 import { maybeBuildFirstIterationQuery } from './agentExecutor.firstIterationQuery';
+import { applySessionToolPolicy, runHasAttachments } from './agentExecutor.sessionToolPolicy';
 import { toUserFacingFailureMessage } from './agentExecutor.failureMessage';
 import { buildReActAgentRuntimeConfig } from './agentExecutor.reActAgentConfig';
-// Per-iteration billing (delta math + #657 context-window guard) lives in its
-// own side-effect-free module so the guard can be unit-tested with injected
-// effect doubles; see `agentExecutor.billing.ts`.
-import { billIteration, type BillingCounters } from './agentExecutor.billing';
+// Per-iteration billing (delta math + #657 context-window guard + tool-internal
+// spend fold, #630) lives in its own side-effect-free module so the guard and the
+// fold can be unit-tested with injected effect doubles; see `agentExecutor.billing.ts`.
+import {
+  billIteration,
+  addToolUsage,
+  takeToolUsage,
+  foldGeneratedMediaUsd,
+  type BillingCounters,
+  type PendingToolUsage,
+} from './agentExecutor.billing';
 import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
 import {
   resolveTopLevelProfile,
@@ -127,8 +135,8 @@ import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage
 import { emitMetric } from '@server/utils/cloudwatch';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
 import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
-import { publishMementoCompletion } from '@server/utils/publishMementoCompletion';
-import { getFirstIterationMementosPreamble } from '@server/utils/getFirstIterationMementosPreamble';
+import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
+import { resolveAndBuildMementosPreamble } from '@server/utils/getFirstIterationMementosPreamble';
 import { getFirstIterationSkillsPreamble } from '@server/utils/getFirstIterationSkillsPreamble';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 import { loadAgentMcpTools, type AgentMcpTools } from '@server/utils/loadAgentMcpTools';
@@ -551,6 +559,30 @@ async function loadMcpToolsSafe(userId: string, logger: Logger): Promise<AgentMc
   }
 }
 
+/**
+ * `loadMcpToolsSafe` gated on the session's integration-isolation contract.
+ *
+ * A session with `disableUserIntegrations` promises "no user MCP servers, no agent delegation";
+ * the chat path keeps it by emptying `mcpServers`. EVERY agent-path entry point that loads MCP
+ * tools must go through here, not `loadMcpToolsSafe` directly - the top level and the subagent
+ * re-dispatch each run in their own Lambda and load independently, so a guard on only one of them
+ * lets an isolated session regain every personal MCP server through the other.
+ *
+ * Skipping beats emptying afterwards: it also drops the settings read and the server round-trip.
+ * The returned shape matches the failure path above, so downstream consumers are unchanged.
+ */
+async function loadMcpToolsForSession(
+  session: { disableUserIntegrations?: boolean | null },
+  userId: string,
+  logger: Logger
+): Promise<AgentMcpTools> {
+  if (session.disableUserIntegrations) {
+    logger.info('[AgentExecutor][MCP] Session suppresses user integrations - skipping MCP tool load', { userId });
+    return { mcpToolsByServer: {}, serverAgentConfig: {} };
+  }
+  return loadMcpToolsSafe(userId, logger);
+}
+
 async function processExecution(
   executionId: string,
   connectionId: string,
@@ -827,12 +859,20 @@ async function processExecution(
     // (e.g. project_manager -> atlassian) actually receive them. Agent Mode had
     // NO MCP wiring, so exclusive-MCP subagents spawned with 0 tools and the
     // model fabricated results. Mirrors ChatCompletionProcess's buildMcpTools.
-    const { mcpToolsByServer, serverAgentConfig } = await loadMcpToolsSafe(execution.userId, logger);
+    //
+    // Gated on the session's isolation contract - see `loadMcpToolsForSession`.
+    const { mcpToolsByServer, serverAgentConfig } = await loadMcpToolsForSession(session, execution.userId, logger);
     const agentStore = new ServerAgentStore(serverAgentConfig, { userAgents, orgAgents });
     // MCP servers claimed exclusively by an agent (e.g. atlassian by
     // project_manager). Withheld from the parent LLM's tool list; reach the
     // delegated subagent via buildSharedTools' internal parentTools closure.
-    const agentOnlyMcpServers = agentStore.getExclusiveMcpServers();
+    //
+    // An isolated session has no MCP at all, so there is nothing to claim exclusively. Empty here
+    // rather than downstream: a built-in agent claims a server unconditionally, so carrying its
+    // claim into a run with no loaded tools would make the `missingExclusive` check below warn
+    // "spawned empty-handed" on every isolated run - reporting a deliberate skip as the load
+    // failure that check exists to catch.
+    const agentOnlyMcpServers = session.disableUserIntegrations ? [] : agentStore.getExclusiveMcpServers();
     // An agent that EXCLUSIVELY claims a server spawns with 0 tools if that server produced none
     // (disabled / no cached schemas / load failed) - the exact failure this fix targets. Surface it
     // by server name so it is not a silent fabrication again.
@@ -899,6 +939,11 @@ async function processExecution(
           // required" (no picker UI in a headless run). Omitted when the parent
           // had none, so the tool falls back to its built-in default.
           ...(execution.imageConfig && { imageConfig: execution.imageConfig }),
+          // Inherit the parent's audio config for the same reason as imageConfig:
+          // a subagent that calls audio_generation should reach for the provider/
+          // voice the parent resolved, not the tool's built-in OpenAI default.
+          // Omitted when the parent had none.
+          ...(execution.audioConfig && { audioConfig: execution.audioConfig }),
           // NOTE: `enableLattice` (and other parent-only launch-gate flags) is
           // intentionally omitted here - subagents / DAG children do NOT inherit
           // it. The parent's Lattice toolbelt is scoped to the parent run; a
@@ -1102,6 +1147,22 @@ async function processExecution(
       logger,
     });
 
+    // Tool-internal LLM spend accrued since the last iteration was billed. Tools that
+    // make their own llm.complete() call (deep_research, blog_draft, edit_file, ...)
+    // report usage here via ToolContext.onToolLlmUsage; billIterationIfNeeded folds it
+    // into the iteration's cost delta so nested generation isn't billed at zero (#630).
+    // Priced at each tool's OWN model, so we accumulate USD directly rather than
+    // re-pricing tokens at the agent model's rate. Tokens are kept for the analytics
+    // usage event only - they must NOT enter `counters`/`iterationBilling`, which are
+    // agent-only and summed on resume to rebuild cumulative agent cost.
+    const pendingToolUsage: PendingToolUsage = {
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
+
     const toolDeps: ToolBuilderDeps = {
       userId: execution.userId,
       user: user as IUserDocument,
@@ -1110,6 +1171,7 @@ async function processExecution(
       // knowledge tools honor the same exclusion as the chat path; absent it fails OPEN
       // (an excluded file leaks + gets cited). Session is resolved above at execution start.
       retrievalFilter: toRetrievalFilter(session),
+      onToolLlmUsage: usage => addToolUsage(pendingToolUsage, usage),
       db: {
         apiKeys: apiKeyRepository,
         adminSettings: adminSettingsRepository,
@@ -1176,11 +1238,47 @@ async function processExecution(
           await sendWs('progress', { executionId, status });
         }
       },
-      onToolStart: async () => {
-        // Agent Executor handles credit billing per-iteration, not per-tool-call
+      onToolStart: async (toolName, data) => {
+        // Agent mode bills LLM tokens per-iteration; a generative tool's provider media
+        // cost (image/music/audio USD) is NOT LLM spend, so classic chat's per-tool
+        // toolCreditsMap drain never runs here. Fold the media USD into the same
+        // per-iteration bucket (`pendingToolUsage.costUsd`) that `onToolLlmUsage` feeds, so
+        // `billIteration` charges it on the existing agent rail - otherwise agent-mode
+        // generation is free. Image cost is known up front (n/size/quality), so it is read
+        // at start (mirrors classic reserve-on-start); music/audio settle at finish (see
+        // onToolFinish). The phase->tool routing + `usd > 0` guard live in the billing
+        // module so they are covered by agentExecutor.billing.test.ts.
+        // Subagent-dispatch tool cost stays unbilled until its Phase-1 credit deduction
+        // lands (see processSubagentDispatch) - tracked as a follow-up.
+        foldGeneratedMediaUsd({
+          phase: 'start',
+          toolName,
+          data,
+          models,
+          pending: pendingToolUsage,
+          estimateUsd: estimateGeneratedMediaUsd,
+          onError: err =>
+            logger.warn(`[agentExecutor] failed to estimate ${toolName} media cost; not billed this iteration`, {
+              err,
+            }),
+        });
       },
-      onToolFinish: async () => {
-        // Tool finish side effects tracked via ReActAgent steps
+      onToolFinish: async (toolName, data) => {
+        // Settle music/audio media cost on delivery (see onToolStart for the rail rationale):
+        // the tools' failure paths return before onFinish, so an undelivered clip is never
+        // billed. Charged into the current iteration's pendingToolUsage.
+        foldGeneratedMediaUsd({
+          phase: 'finish',
+          toolName,
+          data,
+          models,
+          pending: pendingToolUsage,
+          estimateUsd: estimateGeneratedMediaUsd,
+          onError: err =>
+            logger.warn(`[agentExecutor] failed to estimate ${toolName} media cost; not billed this iteration`, {
+              err,
+            }),
+        });
       },
       onUiSideEffect: async sideEffect => {
         // Fires inside the wrapped toolFn (sharedToolBuilder extraction), i.e. between the
@@ -1232,6 +1330,7 @@ async function processExecution(
       model: execution.model,
       apiKeyTable: apiKeyTable as ApiKeyTable,
       imageConfig: execution.imageConfig,
+      audioConfig: execution.audioConfig,
     });
 
     // Lattice opt-in pool for delegated subagents. Built UNCONDITIONALLY (unlike
@@ -1267,10 +1366,26 @@ async function processExecution(
       )
     );
 
+    // Dedupe: a caller may already have enabled create_mission/mission_status;
+    // a raw append would make buildSharedTools wrap the same tool twice.
+    // Named rather than inlined because the `[ATTACHED FILES]` preamble below has to know
+    // whether this run can actually read a file - buildSharedTools only surfaces tools named
+    // here, so this array IS the run's toolbelt.
+    //
+    // The session's tool contract is applied LAST so it wins over the profile, the start payload,
+    // and the unconditional mission/lattice appends above - the same precedence
+    // `chat_completion` gives it. See `agentExecutor.sessionToolPolicy.ts` for why
+    // `session.enabledTools` is deliberately not unioned here.
+    const resolvedToolNames = applySessionToolPolicy({
+      toolNames: [...new Set([...profileEnabledTools, ...MISSION_CHAT_TOOL_NAMES, ...latticeEnabledTools])],
+      session,
+      profileDeniedTools: orchestrationProfile?.deniedTools,
+      hasAttachments: runHasAttachments(execution, session.knowledgeIds),
+      logger,
+    });
+
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
-      // Dedupe: a caller may already have enabled create_mission/mission_status;
-      // a raw append would make buildSharedTools wrap the same tool twice.
-      enabledTools: [...new Set([...profileEnabledTools, ...MISSION_CHAT_TOOL_NAMES, ...latticeEnabledTools])],
+      enabledTools: resolvedToolNames,
       externalTools: { ...guardedPremiumTools, ...missionChatTools, ...latticeExternalTools },
       config: subagentToolConfig,
       mcpToolsByServer,
@@ -1506,6 +1621,12 @@ async function processExecution(
       // non-undefined `ModelInfo` type (control-flow narrowing of the outer
       // `const` doesn't always survive into nested closures).
       const resolvedModelInfo = modelInfo;
+      // Snapshot-and-clear the tool-internal LLM spend accrued this iteration (#630) so a
+      // repeat call can't double-count it. The agent cost delta and this are both >= 0, so
+      // any iteration carrying tool spend is always billable; `billIteration` folds the USD
+      // into the charge + analytics event while the resume-critical iterationBilling record
+      // stays agent-only.
+      const toolUsage = takeToolUsage(pendingToolUsage);
       // The fixed billing context (user, org, session, db wiring, WS wire
       // convention) is bound into each effect closure; `billIteration` only
       // decides the amounts and advances `counters` in place. See
@@ -1515,6 +1636,7 @@ async function processExecution(
         checkpoint,
         counters,
         modelInfo: resolvedModelInfo,
+        toolUsage,
         model: execution.model,
         startTime,
         effects: {
@@ -1789,6 +1911,7 @@ async function processExecution(
           execution,
           sessionKnowledgeIds: session.knowledgeIds ?? [],
           scope: fabFileReadScope,
+          availableToolNames: resolvedToolNames,
         },
         logger,
         fabFileRepository
@@ -1799,10 +1922,10 @@ async function processExecution(
       // single materialized string that gets persisted into the checkpoint.
       // Continuation Lambdas, gate-resumes, and DAG-resumes inherit it via
       // the checkpoint replay - same handoff contract as the file preamble.
-      // The helper itself guards on `enableMementos` + `parentExecutionId`,
+      // The helper guards on `parentExecutionId` and the resolved `MementoGates`,
       // matching `publishMementoCompletion` on the write side.
       if (firstIterationQuery !== undefined) {
-        const { preamble: mementoPreamble, mementoIds } = await getFirstIterationMementosPreamble(
+        const { preamble: mementoPreamble, mementoIds } = await resolveAndBuildMementosPreamble(
           execution,
           {
             db: {
@@ -2213,13 +2336,13 @@ async function processExecution(
       allSideEffects
     );
 
-    // Memento parity with chat_completion. Fires only when the user
-    // (or admin default) opted into mementos for this run; skipped for
-    // subagent / DAG children via the `parentExecutionId` guard inside the
-    // helper. Reads `execution` (loaded at the top of this function) so
-    // continuation Lambdas see the persisted flag the WS handler stamped at
-    // dispatch.
-    await publishMementoCompletion(execution, logger);
+    // Memento parity with chat_completion. Resolve the same gates the read side
+    // resolves (one authority, `resolveExecutionMementoGates`) and hand them to the
+    // publisher; it fires only when a gate is live and skips subagent / DAG children
+    // via the `parentExecutionId`/`spawnedByExecutionId` guard inside the helper. Reads `execution` (loaded
+    // at the top of this function) so continuation Lambdas see the persisted tri-state
+    // flag the WS handler stamped at dispatch.
+    await resolveAndPublishMementoCompletion(execution, { db: { adminSettings: adminSettingsRepository } }, logger);
 
     logger.info('[Complete] Agent execution finished', {
       iterations: finalCheckpoint.iteration,
@@ -2402,7 +2525,10 @@ async function processSubagentDispatch(
     }
     // Rebuild MCP tools on THIS invocation - a re-dispatched subagent runs in its
     // own Lambda, so the top-level path's load does not carry over. See Task 3.
-    const { mcpToolsByServer, serverAgentConfig } = await loadMcpToolsSafe(child.userId, logger);
+    // Gated on the same session isolation contract as the top-level load: this dispatch runs in
+    // its own Lambda, so an unguarded load here would hand a subagent every personal MCP server
+    // in a session whose whole point is not having them.
+    const { mcpToolsByServer, serverAgentConfig } = await loadMcpToolsForSession(session, child.userId, logger);
     const agentStore = new ServerAgentStore(serverAgentConfig, { userAgents, orgAgents });
     const agentDef = agentStore.getAgent(agentName);
     if (!agentDef) {
@@ -2489,6 +2615,7 @@ async function processSubagentDispatch(
       model: child.model,
       apiKeyTable: apiKeyTable as ApiKeyTable,
       imageConfig: child.imageConfig,
+      audioConfig: child.audioConfig,
     });
 
     // Lattice opt-in pool for this subagent (and any grandchildren it delegates

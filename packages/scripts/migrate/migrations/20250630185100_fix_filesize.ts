@@ -1,4 +1,4 @@
-import { convertId, FabFile, fileTagRepository, User } from '@bike4mind/database';
+import { convertId, FabFile, User } from '@bike4mind/database';
 import { type MigrationFile } from './index';
 import mongoose from 'mongoose';
 
@@ -28,20 +28,12 @@ const migration: MigrationFile = {
   name: 'fix user storage size',
 
   up: async () => {
-    // Find all deleted FabFiles with tags
-    const deletedFilesWithTags = await FabFile.find(
-      { deletedAt: { $ne: null }, tags: { $exists: true, $not: { $size: 0 } } },
-      { userId: 1, tags: 1 }
-    );
+    // This used to scan deleted-but-still-tagged files first and decrement each tag's stored
+    // fileCount. That counter has since been removed (counts are derived per read), so the scan had
+    // nothing left to do and was dropped. Already run in every environment, so editing it here
+    // changes no outcome.
 
-    for (const file of deletedFilesWithTags) {
-      for (const tag of file.tags || []) {
-        // Decrement fileCount for this tag and user
-        await fileTagRepository.incrementFileCountBy({ name: tag.name, userId: file.userId }, -1);
-      }
-    }
-
-    // Now clear the tags array as before
+    // Clear the tags array as before
     await FabFile.updateMany(
       { deletedAt: { $ne: null }, tags: { $exists: true, $not: { $size: 0 } } },
       { $set: { tags: [] } }

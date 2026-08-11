@@ -90,12 +90,6 @@ export type QuestErrorCode = (typeof QUEST_ERROR_CODES)[number];
 export interface IChatHistoryItem {
   id?: string;
   sessionId: string;
-  /**
-   * Who submitted this quest. Required by the Mongoose schema; optional here because older
-   * call sites construct the shape without it. Read paths that gate on ownership must treat
-   * an absent value as "not the owner".
-   */
-  userId?: string;
   conversationItemId?: string;
   openaiMessageId?: string;
   claudeMessageId?: string;
@@ -498,6 +492,14 @@ export interface ISession {
    * lets a product surface scope a session's behavior without a project record.
    */
   systemPromptText?: string;
+  /**
+   * Optional reference to a curated system prompt in the admin registry (SystemPromptModel), by
+   * `promptId`. When set to a session-activatable id (e.g. 'triage_router'), that registry prompt's
+   * current content is injected as the session's system message - the versioned, admin-editable
+   * counterpart to the raw `systemPromptText`, so the prompt can be tuned with no deploy. Like
+   * `systemPromptText`, it suppresses the generic brand-identity prompt.
+   */
+  systemPromptId?: string;
   /**
    * Optional product surface that owns this session (e.g. 'libreoncology').
    * Default sessions have no surface. Generic capability - lets any product surface

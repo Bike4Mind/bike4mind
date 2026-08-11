@@ -40,6 +40,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     toolIds: [{ type: String, required: false }],
     agentIds: [{ type: String, required: false }],
     systemPromptText: { type: String, required: false },
+    systemPromptId: { type: String, required: false },
     surface: { type: String, required: false },
     enabledTools: [{ type: String, required: false }],
     disabledTools: [{ type: String, required: false }],
@@ -190,6 +191,13 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
 
 export class SessionRepository extends BaseRepository<ISessionDocument> implements ISessionRepository {
   shareable: ISessionRepository['shareable'];
+  /**
+   * Explicit session for the queries below. Null means "let transactionAsyncLocalStorage decide",
+   * which is what callers should want: this instance is shared, so a session assigned here
+   * outlives the transaction that created it and the next reader fails with "Use of expired
+   * sessions". Nothing sets it today.
+   */
+  ctx: mongoose.mongo.ClientSession | null;
   private questModel?: Model<unknown>;
 
   constructor(
@@ -203,10 +211,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     this.sessionModel = sessionModel;
     this.shareable = extensions.shareable;
     this.questModel = extensions.questModel;
-  }
-
-  set ctx(ctx: mongoose.mongo.ClientSession | null) {
-    this.ctx = ctx;
+    this.ctx = null;
   }
 
   async search(

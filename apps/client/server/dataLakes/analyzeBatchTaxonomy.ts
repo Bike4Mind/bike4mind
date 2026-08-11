@@ -41,6 +41,14 @@ export interface AnalyzeBatchTaxonomyResult {
  * here, because the right recovery differs per caller: the queue handler wants to release the
  * claim so SQS can actually retry; the manual endpoint has no retry mechanism and wants to
  * surface an immediate error to the requester instead. Both callers must catch it themselves.
+ *
+ * `runTaxonomyInference` throws for a genuine API-call failure (see its doc comment) - that's
+ * deliberately left in this "unexpected exception" bucket rather than caught and routed through
+ * `fail()` here, so the queue handler's existing claim-release-then-rethrow path can give it a
+ * real automatic SQS retry (a transient 429/5xx is exactly the kind of failure retry helps
+ * with). Note this still can't clobber a prior-good `taxonomySuggestions`: neither caller's own
+ * catch touches that field either - the queue handler only resets `taxonomyStatus`, and the
+ * manual endpoint only sets `taxonomyStatus`/`taxonomyError`.
  */
 export async function analyzeBatchTaxonomy(
   batchId: string,

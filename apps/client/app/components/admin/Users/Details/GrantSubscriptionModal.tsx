@@ -1,3 +1,4 @@
+import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useGrantSubscription } from '@client/app/hooks/data/subscriptions';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
@@ -5,7 +6,6 @@ import {
   ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
   ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
 } from '@client/lib/subscriptions/constants';
-import { IUserDocument } from '@bike4mind/common';
 import {
   Modal,
   ModalDialog,
@@ -28,7 +28,7 @@ import React, { useState, useMemo } from 'react';
 import UserSelector from './UserSelector';
 
 interface GrantSubscriptionModalProps {
-  user: IUserDocument;
+  user: AdminUserListItem;
   open: boolean;
   onClose: () => void;
 }

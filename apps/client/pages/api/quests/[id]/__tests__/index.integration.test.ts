@@ -31,7 +31,10 @@ const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Reset-Day': '0',
 };
 
-vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
+vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
+  // Keep the real (pure) extractApiKeyFromHeaders - apiKeyAuth imports it now; only
+  // checkApiKeyRateLimit is stubbed.
+  ...(await orig<Record<string, unknown>>()),
   checkApiKeyRateLimit: (...a: unknown[]) => mockRateLimit(...a),
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
@@ -195,42 +198,5 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ images: [], files: [] });
-  });
-
-  describe('systemPromptDisclosure', () => {
-    const DISCLOSURE = {
-      blocks: [{ source: 'org', name: 'organization_prompt', tokenCount: 12, wasIncluded: true, redacted: true }],
-      totalTokens: 12,
-      sizeCapped: false,
-    };
-
-    const questOwnedBy = (userId: string) => ({
-      id: 'quest-1',
-      sessionId: 'sess-1',
-      userId,
-      status: 'completed',
-      reply: {},
-      replies: [],
-      promptMeta: { context: { mementoCount: 3, systemPromptDisclosure: DISCLOSURE } },
-    });
-
-    it('returns it to the user whose completion it was', async () => {
-      mockQuestFindById.mockResolvedValue(questOwnedBy('user-1'));
-      validateWithScopes([ApiKeyScope.AI_CHAT]);
-      const { req, res } = fire();
-      await handler(req, res);
-      expect(res._getJSONData().promptMeta.context.systemPromptDisclosure).toEqual(DISCLOSURE);
-    });
-
-    it('withholds it from a user the session was merely shared with', async () => {
-      mockQuestFindById.mockResolvedValue(questOwnedBy('someone-else'));
-      validateWithScopes([ApiKeyScope.AI_CHAT]);
-      const { req, res } = fire();
-      await handler(req, res);
-      const { promptMeta } = res._getJSONData();
-      expect(promptMeta.context.systemPromptDisclosure).toBeUndefined();
-      // The rest of promptMeta is unaffected.
-      expect(promptMeta.context.mementoCount).toBe(3);
-    });
   });
 });

@@ -1,5 +1,6 @@
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { createS3Client } from '@bike4mind/fab-pipeline';
 import {
   FileGeneratePresignedUrlRequestInput,
   FileGeneratePresignedUrlRequestInputType,
@@ -7,10 +8,10 @@ import {
   KnowledgeType,
 } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
-import { adminSettingsRepository, dataLakeRepository } from '@bike4mind/database';
+import { adminSettingsRepository, dataLakeBatchRepository, dataLakeRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { getSettingsMap, resolveSupportedMimeType } from '@bike4mind/utils';
 import { createFabFile } from '@server/managers/fabFileManager';
@@ -20,7 +21,7 @@ import { FileEvents } from '@bike4mind/common';
 import { checkStorageLimit } from '@bike4mind/utils';
 import { Resource } from 'sst';
 
-const s3Client = new S3Client();
+const s3Client = createS3Client();
 
 const handler = baseApi().post(
   asyncHandler<unknown, FileGeneratePresignedUrlResponseType, FileGeneratePresignedUrlRequestInputType>(
@@ -29,6 +30,13 @@ const handler = baseApi().post(
 
       const userId = req.user.id;
       const data = FileGeneratePresignedUrlRequestInput.parse(req.body);
+
+      // Same feature gate as the batch-presign sibling: when this upload is bound to a data
+      // lake batch, the feature must actually be on.
+      if (data.batchId) {
+        const enabled = await adminSettingsRepository.getSettingsValue('EnableDataLakes');
+        if (!enabled) throw new ForbiddenError('Feature not available', { code: 'FEATURE_DISABLED' });
+      }
 
       const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
       let maxFileSize: number = 20 * 1024 * 1024; // Default to 20MB
@@ -67,6 +75,12 @@ const handler = baseApi().post(
         db: { dataLakes: dataLakeRepository },
         logger: req.logger,
       });
+
+      // Verify batch ownership before stamping - batchId comes from the body (IDOR otherwise).
+      // Shared with the batch-presign and createFabFile routes (see assertBatchOwnership).
+      if (data.batchId) {
+        await dataLakeService.assertBatchOwnership(userId, data.batchId, { db: { batches: dataLakeBatchRepository } });
+      }
 
       // Reject unsupported/binary types (e.g. .exe) - the chunker can't
       // vectorize them, and the prior `mime.extension()` guard let generic

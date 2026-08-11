@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ContextTelemetrySchema } from './contextTelemetry';
+import { ContextTelemetrySchema, SystemPromptDetailSchema } from './contextTelemetry';
 
 /**
  * A Date that also accepts its own JSON form. promptMeta makes a round trip through the client:
@@ -93,41 +93,6 @@ const SystemPromptSourceSchema = z.object({
   content: z.string().optional(),
 });
 
-/**
- * One named block of the system prompt a completion was actually assembled with.
- *
- * Distinct from `contextTelemetry.systemPrompts`, which is anonymized, admin-only, and
- * deliberately stores no content. This is the caller-facing disclosure: same itemization,
- * plus the text, scoped to the caller's own completion.
- */
-const SystemPromptBlockSchema = z.object({
-  source: z.enum(['hardcoded', 'admin', 'user', 'project', 'session', 'org']),
-  /** Stable identifier for the assembly site, e.g. "tool_guidance", "organization_prompt". */
-  name: z.string(),
-  tokenCount: z.number(),
-  /** False when the block was assembled but dropped before the request (token budget). */
-  wasIncluded: z.boolean(),
-  /**
-   * Text withheld. Either the block is server-owned proprietary prompt content (same class
-   * as `systemPromptText`, see sessionRedaction) or the disclosure hit its size cap. The
-   * block's presence, source, and token cost are still reported.
-   */
-  redacted: z.boolean(),
-  text: z.string().optional(),
-});
-
-/**
- * Caller-facing record of the effective system prompt, populated only when the request
- * opts in via `includeSystemPrompt`. Readable by the quest's owner alone - a session
- * shared with another user must not hand them the operator prompts it runs under.
- */
-export const SystemPromptDisclosureSchema = z.object({
-  blocks: z.array(SystemPromptBlockSchema),
-  totalTokens: z.number(),
-  /** True when at least one block's text was withheld for size rather than ownership. */
-  sizeCapped: z.boolean(),
-});
-
 // Token breakdown by source (shared with contextTelemetry but also stored directly for overflow diagnostics)
 const PromptMetaTokensBySourceSchema = z.object({
   systemPrompts: z.number(),
@@ -148,6 +113,11 @@ const PromptMetaContextSchema = z.object({
   mementoCount: z.number().optional(),
   mementoIds: z.array(z.string()).optional(),
   tokensBySource: PromptMetaTokensBySourceSchema.optional(),
+  // Per-source system prompt breakdown, derived from the tagged assembly (see
+  // services systemPromptSources). Stored on every completion - unlike contextTelemetry,
+  // which only exists when enhanced telemetry is enabled - so the API layer can report
+  // which prompts fed a completion.
+  systemPromptDetails: z.array(SystemPromptDetailSchema).optional(),
   systemPrompt: z.string().optional(),
   userPrompt: z.string().optional(),
   conversationContext: z
@@ -170,7 +140,6 @@ const PromptMetaContextSchema = z.object({
     )
     .optional(),
   systemPromptSources: z.array(SystemPromptSourceSchema).optional(),
-  systemPromptDisclosure: SystemPromptDisclosureSchema.optional(),
   dedupedSystemPrompts: z.array(z.string()).optional(),
   totalSystemPromptCount: z.number().optional(),
   duplicateSystemPromptCount: z.number().optional(),
@@ -179,6 +148,29 @@ const PromptMetaContextSchema = z.object({
   globalSystemFileIds: z.array(z.string()).optional(),
   userSystemFileIds: z.array(z.string()).optional(),
   projectSystemFileIds: z.array(z.string()).optional(),
+  // What the assembler decided about inlining the attached knowledge corpus vs deferring it to
+  // the offered search_knowledge_base tool. Pairs with `offeredTools` + `tokensBySource.fabFiles`
+  // so one row shows: tools offered, docs deferred, resulting inline token cost. `deferredCount`
+  // counts only the RETRIEVABLE subset (docs the tool can actually reach); non-retrievable
+  // attachments are always inlined and never counted here.
+  knowledgeInlining: z
+    .object({
+      attachedCount: z.number(),
+      retrievableCount: z.number(),
+      deferredCount: z.number(),
+      deferredToRetrieval: z.boolean(),
+      minInlineTokensPerDoc: z.number(),
+    })
+    .optional(),
+  // Lake memory hot-card (#1440): the durable lake-profile beliefs injected on a Data-Lake-mode turn,
+  // and which lakes they came from. Present only when the card fired, so an eval row shows lake
+  // grounding independent of whether the model then also called the knowledge tools.
+  lakeMemory: z
+    .object({
+      beliefCount: z.number(),
+      dataLakeTags: z.array(z.string()),
+    })
+    .optional(),
   // Phase 2: Context window debug fields
   contextWindowUsage: z
     .object({
@@ -317,6 +309,17 @@ export const PromptMetaZodSchema = z.object({
   tokenUsage: PromptMetaTokenUsageSchema.optional(),
   context: PromptMetaContextSchema.optional(),
   functionCalls: z.array(PromptMetaFunctionCallSchema).optional(),
+  /**
+   * Names of the tools actually offered to the model this turn - the output of `buildTools`
+   * (`allTools`), after the post-build denylist pass and the Ollama auto-added trim. This is a
+   * superset of the resolved `enabledTools`: it also includes MCP server tools and the
+   * auto-injected `delegate_to_agent`, neither of which ever appears in `enabledTools`. Distinct
+   * from the chat response's `effectiveTools`, which reflects only the API-layer (phrase-
+   * recommender) selection and so cannot see server-side offers like the attached-knowledge
+   * auto-offer. This is the authoritative "what did the model actually get" signal for
+   * eval/measurement and for diagnosing the silent no-tool-offered state.
+   */
+  offeredTools: z.array(z.string()).optional(),
   performance: PromptMetaPerformanceSchema.optional(),
   session: PromptMetaSessionSchema.optional(),
   questId: z.string().optional(),

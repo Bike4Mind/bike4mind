@@ -55,8 +55,15 @@ export { SlackMessageEnricher } from './SlackMessageEnricher';
 export { CommandHandler } from './CommandHandler';
 
 // ─── Agent Parser ────────────────────────────────────────────────────────────
-export { AGENT_REGISTRY, buildSystemPrompt, parseImageModelOverride } from './agent-parser';
-export type { BuildSystemPromptOptions } from './agent-parser';
+export {
+  AGENT_REGISTRY,
+  buildSystemPrompt,
+  parseImageModelOverride,
+  parseDataLakeCommand,
+  isDataLakeCommand,
+  DATA_LAKE_AGENT_KEY,
+} from './agent-parser';
+export type { BuildSystemPromptOptions, ParsedDataLakeCommand, DataLakeSubcommand } from './agent-parser';
 
 // ─── Tools ───────────────────────────────────────────────────────────────────
 export { generateHelpMessage } from './tools/slackbotHelp';
@@ -177,7 +184,19 @@ export {
   buildAssigneeClarificationMessage,
 } from './handlers/slack-github-mapper';
 export type { SlackGitHubMapping } from './handlers/slack-github-mapper';
-export { findUserBySlackId, handleUnlinkedUser, createMockUser } from './handlers/user-lookup';
+export { findUserBySlackId, handleUnlinkedUser, createMockUser, SLACK_MOCK_USER_ID } from './handlers/user-lookup';
+export {
+  validateSlackFileForIngest,
+  SUPPORTED_SLACK_FILE_MIME_TYPES,
+  SLACK_MAX_FILE_SIZE_BYTES,
+  SLACK_MAX_IMAGE_SIZE_BYTES,
+} from './slackFileValidation';
+export type {
+  SlackAttachment,
+  CompleteSlackAttachment,
+  SlackFileValidation,
+  SlackFileRejectionReason,
+} from './slackFileValidation';
 export { WorkflowStepHandler, WORKFLOW_STEP_CALLBACKS } from './handlers/WorkflowStepHandler';
 export type { FunctionExecutedEvent } from './handlers/WorkflowStepHandler';
 

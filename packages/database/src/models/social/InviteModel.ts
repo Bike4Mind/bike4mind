@@ -166,10 +166,12 @@ export class InviteRepository extends BaseRepository<IInviteDocument> implements
       { type: InviteType.Project, collection: 'projects' },
     ];
 
-    // Always convert documentId to ObjectId for all lookups
+    // Always convert documentId to ObjectId for all lookups. $convert, not $toObjectId: a single
+    // invite whose documentId is not a valid ObjectId would make $toObjectId abort the whole
+    // aggregation, whereas onError: null leaves that one invite unjoined.
     pipeline.push({
       $addFields: {
-        documentObjectId: { $toObjectId: '$documentId' },
+        documentObjectId: { $convert: { input: '$documentId', to: 'objectId', onError: null } },
       },
     });
 

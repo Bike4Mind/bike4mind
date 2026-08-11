@@ -19,6 +19,8 @@ export { createSkillTool, parseArguments, type SkillToolDependencies } from './s
 
 export { createFindDefinitionTool } from './findDefinitionTool';
 
+export { createWorkItemTools } from './workItemTools';
+
 export { createGetFileStructureTool } from './getFileStructure';
 
 export {

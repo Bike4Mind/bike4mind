@@ -34,8 +34,6 @@ const INTENTIONALLY_NOT_PERSISTED: Record<string, string> = {
   'context.extraContextMessages.content': 'carries a server-owned prompt for some product surfaces',
   'context.extraContextMessages.fabFileIds': 'carries a server-owned prompt for some product surfaces',
   'context.systemPromptSources.content': 'system prompt text; readers of this array use source, fileName and length',
-  'context.systemPromptDisclosure.blocks.text':
-    'disclosed prompt text; returned inline to the caller that asked for it, never stored',
 };
 
 /**

@@ -1,149 +1,150 @@
-import { describe, expect, it } from 'vitest';
 import type { IMessage } from '@bike4mind/common';
-import { buildSystemPromptDisclosure, stripDisclosureText, type SystemPromptBlockSpec } from './systemPromptDisclosure';
+import { describe, expect, it } from 'vitest';
+import { buildSystemPromptText, SYSTEM_PROMPT_TEXT_MAX_CHARS } from './systemPromptDisclosure';
+import { buildTaggedContextMessages, PROMPT_SOURCE_METADATA } from './systemPromptSources';
 
-const sys = (content: string): IMessage => ({ role: 'system', content }) as IMessage;
+const sys = (content: string): IMessage => ({ role: 'system' as const, content });
+const user = (content: string): IMessage => ({ role: 'user' as const, content });
 
-// One token per character keeps the assertions about which block got counted, not about tokenizing.
-const countTokens = async (messages: IMessage[]) =>
-  messages.reduce((sum, m) => sum + (typeof m.content === 'string' ? m.content.length : 0), 0);
+const blockNamed = (disclosure: ReturnType<typeof buildSystemPromptText>, name: string) =>
+  disclosure.blocks.find(b => b.name === name);
 
-const build = (specs: SystemPromptBlockSpec[], sentMessages: IMessage[], withText = true, maxTextChars?: number) =>
-  buildSystemPromptDisclosure({ specs, sentMessages, countTokens, withText, ...(maxTextChars && { maxTextChars }) });
-
-describe('buildSystemPromptDisclosure', () => {
-  it('itemizes each non-empty block with its text and token cost', async () => {
-    const specs: SystemPromptBlockSpec[] = [
-      { source: 'hardcoded', name: 'date_time_context', messages: [sys('today')] },
-      { source: 'admin', name: 'tool_guidance', messages: [sys('use tools')] },
-    ];
-
-    const disclosure = await build(specs, [sys('today'), sys('use tools')]);
-
-    expect(disclosure.blocks).toEqual([
-      {
-        source: 'hardcoded',
-        name: 'date_time_context',
-        tokenCount: 5,
-        wasIncluded: true,
-        redacted: false,
-        text: 'today',
-      },
-      { source: 'admin', name: 'tool_guidance', tokenCount: 9, wasIncluded: true, redacted: false, text: 'use tools' },
-    ]);
-    expect(disclosure.totalTokens).toBe(14);
-    expect(disclosure.sizeCapped).toBe(false);
-  });
-
-  it('omits blocks that contributed no messages', async () => {
-    const specs: SystemPromptBlockSpec[] = [
-      { source: 'org', name: 'organization_prompt', messages: [] },
-      { source: 'project', name: 'project_context', messages: [sys('project')] },
-    ];
-
-    const disclosure = await build(specs, [sys('project')]);
-
-    expect(disclosure.blocks.map(b => b.name)).toEqual(['project_context']);
-  });
-
-  it('reports a block that was assembled but dropped before the request', async () => {
-    const specs: SystemPromptBlockSpec[] = [
-      { source: 'user', name: 'mementos', messages: [sys('a memento')] },
-      { source: 'user', name: 'attached_files', messages: [sys('a big file')] },
-    ];
-
-    const disclosure = await build(specs, [sys('a memento')]);
-
-    expect(disclosure.blocks.map(b => [b.name, b.wasIncluded])).toEqual([
-      ['mementos', true],
-      ['attached_files', false],
-    ]);
-    // Dropped blocks still disclose their text - what the caller needs is to see WHAT was cut.
-    expect(disclosure.blocks[1].text).toBe('a big file');
-  });
-
-  it('withholds server-owned text while still reporting presence and cost', async () => {
-    const specs: SystemPromptBlockSpec[] = [
-      { source: 'session', name: 'session_prompt', messages: [sys('proprietary')], serverOwned: true },
-    ];
-
-    const disclosure = await build(specs, [sys('proprietary')]);
-
-    expect(disclosure.blocks[0]).toEqual({
-      source: 'session',
-      name: 'session_prompt',
-      tokenCount: 11,
-      wasIncluded: true,
-      redacted: true,
+describe('buildSystemPromptText', () => {
+  it('returns the text of each contributing source, tagged with that source name and origin', () => {
+    const tagged = buildTaggedContextMessages({
+      dateContext: [sys('today is tuesday')],
+      helpCenter: [sys('the help center exists')],
     });
+
+    const { blocks } = buildSystemPromptText(tagged);
+
+    expect(blocks).toEqual([
+      { source: 'hardcoded', name: 'date_time_context', text: 'today is tuesday', redacted: false },
+      { source: 'admin', name: 'help_center', text: 'the help center exists', redacted: false },
+    ]);
   });
 
-  it('withholds every text when withText is false', async () => {
-    const specs: SystemPromptBlockSpec[] = [{ source: 'admin', name: 'help_center', messages: [sys('help')] }];
-
-    const disclosure = await build(specs, [sys('help')], false);
-
-    expect(disclosure.blocks[0].text).toBeUndefined();
-    expect(disclosure.blocks[0].redacted).toBe(true);
-    expect(disclosure.blocks[0].tokenCount).toBe(4);
-  });
-
-  it('caps total disclosed text and flags it, keeping later metadata intact', async () => {
-    const specs: SystemPromptBlockSpec[] = [
-      { source: 'admin', name: 'first', messages: [sys('12345')] },
-      { source: 'admin', name: 'second', messages: [sys('67890')] },
-    ];
-
-    const disclosure = await build(specs, [sys('12345'), sys('67890')], true, 5);
-
-    expect(disclosure.sizeCapped).toBe(true);
-    expect(disclosure.blocks[0].text).toBe('12345');
-    expect(disclosure.blocks[1]).toEqual({
-      source: 'admin',
-      name: 'second',
-      tokenCount: 5,
-      wasIncluded: true,
-      redacted: true,
+  it('emits rows in assembly order rather than the order the caller listed sources in', () => {
+    const tagged = buildTaggedContextMessages({
+      attachedFiles: [user('a file')],
+      dateContext: [sys('today')],
     });
+
+    expect(buildSystemPromptText(tagged).blocks.map(b => b.name)).toEqual(['date_time_context', 'attached_files']);
   });
 
-  it('joins a multi-message block into one text', async () => {
-    const specs: SystemPromptBlockSpec[] = [{ source: 'user', name: 'mementos', messages: [sys('one'), sys('two')] }];
+  it('joins the messages a single source contributed into one block', () => {
+    const tagged = buildTaggedContextMessages({ mementos: [sys('first'), sys('second')] });
 
-    const disclosure = await build(specs, [sys('one'), sys('two')]);
-
-    expect(disclosure.blocks[0].text).toBe('one\n\ntwo');
+    expect(blockNamed(buildSystemPromptText(tagged), 'mementos')?.text).toBe('first\n\nsecond');
   });
 
-  it('treats a multimodal-only block as having no text rather than as withheld', async () => {
-    const image = { role: 'system', content: [{ type: 'image' }] } as unknown as IMessage;
-    const specs: SystemPromptBlockSpec[] = [{ source: 'user', name: 'attached_files', messages: [image] }];
+  it('reports nothing for a source that contributed no messages', () => {
+    const tagged = buildTaggedContextMessages({ dateContext: [sys('today')], mementos: [] });
 
-    const disclosure = await build(specs, [image]);
+    expect(buildSystemPromptText(tagged).blocks.map(b => b.name)).toEqual(['date_time_context']);
+  });
 
-    expect(disclosure.blocks[0]).toEqual({
+  it('withholds the text of the server-owned session prompt while still reporting it', () => {
+    const tagged = buildTaggedContextMessages({
+      sessionPrompt: [sys('proprietary surface prompt')],
+      dateContext: [sys('today')],
+    });
+
+    const sessionBlock = blockNamed(buildSystemPromptText(tagged), 'session_prompt');
+    expect(sessionBlock).toEqual({ source: 'session', name: 'session_prompt', redacted: true });
+    expect(JSON.stringify(buildSystemPromptText(tagged))).not.toContain('proprietary');
+  });
+
+  it('discloses caller-supplied extra context, which is the caller own content coming back', () => {
+    const tagged = buildTaggedContextMessages({ extraContext: [sys('slack thread')] });
+
+    expect(blockNamed(buildSystemPromptText(tagged), 'extra_context')?.text).toBe('slack thread');
+  });
+
+  it('returns no text for a system source the budget dropped, rather than claiming the model saw it', () => {
+    const kept = sys('today');
+    const dropped = sys('memory');
+    const tagged = buildTaggedContextMessages({ dateContext: [kept], mementos: [dropped] });
+
+    const { blocks } = buildSystemPromptText(tagged, new Set([kept]));
+
+    // The row survives so the payload still joins to the breakdown, which is where wasIncluded lives.
+    expect(blocks.map(b => b.name)).toEqual(['date_time_context', 'mementos']);
+    expect(blockNamed({ blocks, sizeCapped: false }, 'mementos')).toEqual({
       source: 'user',
-      name: 'attached_files',
-      tokenCount: 0,
-      wasIncluded: true,
+      name: 'mementos',
       redacted: false,
     });
   });
-});
 
-describe('stripDisclosureText', () => {
-  it('removes every text and marks the blocks redacted', async () => {
-    const specs: SystemPromptBlockSpec[] = [
-      { source: 'admin', name: 'tool_guidance', messages: [sys('use tools')] },
-      { source: 'session', name: 'session_prompt', messages: [sys('proprietary')], serverOwned: true },
-    ];
-    const disclosure = await build(specs, [sys('use tools'), sys('proprietary')]);
+  it('discloses only the surviving messages when a source partially survived', () => {
+    const kept = sys('first');
+    const dropped = sys('second');
+    const tagged = buildTaggedContextMessages({ mementos: [kept, dropped] });
 
-    const stripped = stripDisclosureText(disclosure);
+    expect(blockNamed(buildSystemPromptText(tagged, new Set([kept])), 'mementos')?.text).toBe('first');
+  });
 
-    expect(stripped.blocks.every(b => b.text === undefined && b.redacted)).toBe(true);
-    expect(stripped.totalTokens).toBe(disclosure.totalTokens);
-    // The input must survive - the caller-facing copy is built from it afterwards.
-    expect(disclosure.blocks[0].text).toBe('use tools');
+  it('discloses a user-role source even when absent from the delivered set, since it is rebuilt not dropped', () => {
+    // processMessages returns a fresh object for a truncated file, so identity cannot distinguish
+    // "shortened" from "never sent" - see the same caveat in toPromptDetails.
+    const attached = user('file body');
+    const tagged = buildTaggedContextMessages({ attachedFiles: [attached] });
+
+    expect(blockNamed(buildSystemPromptText(tagged, new Set<IMessage>()), 'attached_files')?.text).toBe('file body');
+  });
+
+  it('treats every contributing source as delivered when no payload is supplied', () => {
+    const tagged = buildTaggedContextMessages({ dateContext: [sys('today')], mementos: [sys('memory')] });
+
+    expect(buildSystemPromptText(tagged).blocks.map(b => b.name)).toEqual(['date_time_context', 'mementos']);
+  });
+
+  it('reports a multimodal-only source as unredacted, since no text is being withheld', () => {
+    const image: IMessage = { role: 'user' as const, content: [{ type: 'image_url', image_url: { url: 'x' } }] as never };
+    const tagged = buildTaggedContextMessages({ recentImages: [image] });
+
+    expect(blockNamed(buildSystemPromptText(tagged), 'recent_images')).toEqual({
+      source: 'hardcoded',
+      name: 'recent_images',
+      redacted: false,
+    });
+  });
+
+  it('caps total disclosed text, keeping the row and flagging the disclosure', () => {
+    const tagged = buildTaggedContextMessages({
+      dateContext: [sys('a'.repeat(30))],
+      mementos: [sys('b'.repeat(30))],
+    });
+
+    const disclosure = buildSystemPromptText(tagged, undefined, 40);
+
+    expect(disclosure.sizeCapped).toBe(true);
+    expect(blockNamed(disclosure, 'date_time_context')?.text).toBe('a'.repeat(30));
+    expect(blockNamed(disclosure, 'mementos')).toEqual({ source: 'user', name: 'mementos', redacted: true });
+  });
+
+  it('does not flag a disclosure that fit inside the cap', () => {
+    const tagged = buildTaggedContextMessages({ dateContext: [sys('short')] });
+
+    expect(buildSystemPromptText(tagged).sizeCapped).toBe(false);
+    expect(SYSTEM_PROMPT_TEXT_MAX_CHARS).toBeGreaterThan(0);
+  });
+
+  it('names every source the way the breakdown does, so the two can be joined', () => {
+    const everySource = Object.keys(PROMPT_SOURCE_METADATA) as (keyof typeof PROMPT_SOURCE_METADATA)[];
+    const tagged = buildTaggedContextMessages(
+      Object.fromEntries(everySource.map(source => [source, [sys(`text for ${source}`)]]))
+    );
+
+    const { blocks } = buildSystemPromptText(tagged);
+
+    expect(blocks.map(b => b.name).sort()).toEqual(everySource.map(s => PROMPT_SOURCE_METADATA[s].name).sort());
+    for (const block of blocks) {
+      expect(block.source).toBe(
+        PROMPT_SOURCE_METADATA[everySource.find(s => PROMPT_SOURCE_METADATA[s].name === block.name)!].origin
+      );
+    }
   });
 });

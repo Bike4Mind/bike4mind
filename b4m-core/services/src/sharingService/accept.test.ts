@@ -15,7 +15,7 @@ describe('sharingService - acceptInvite (Organization)', () => {
       projects: { findById: Mock; update: Mock };
       fabFiles: { findById: Mock; update: Mock; findAllByIds: Mock };
       groups: { findById: Mock };
-      organization: { findById: Mock; update: Mock };
+      organization: { findById: Mock; update: Mock; ensureUserDetails: Mock };
       users: { findById: Mock; update: Mock };
     };
   };
@@ -56,7 +56,7 @@ describe('sharingService - acceptInvite (Organization)', () => {
         projects: { findById: vi.fn(), update: vi.fn() },
         fabFiles: { findById: vi.fn(), update: vi.fn(), findAllByIds: vi.fn() },
         groups: { findById: vi.fn() },
-        organization: { findById: vi.fn(), update: vi.fn() },
+        organization: { findById: vi.fn(), update: vi.fn(), ensureUserDetails: vi.fn() },
         users: { findById: vi.fn(), update: vi.fn() },
       },
     };
@@ -73,19 +73,51 @@ describe('sharingService - acceptInvite (Organization)', () => {
     expect(mockAdapters.db.users.update).toHaveBeenCalledWith(expect.objectContaining({ id: userId, organizationId }));
   });
 
-  it('adds the user to the organization users and userDetails arrays', async () => {
+  it('adds the user to the organization users[] via a targeted write and seeds the credit row atomically', async () => {
     mockAdapters.db.users.findById.mockResolvedValue(makeUser());
     mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
     mockAdapters.db.organization.findById.mockResolvedValue(makeOrganization());
 
     await acceptInvite(userId, { id: inviteId }, mockAdapters as any);
 
-    expect(mockAdapters.db.organization.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        users: expect.arrayContaining([expect.objectContaining({ userId, permissions: [Permission.read] })]),
-        userDetails: expect.arrayContaining([expect.objectContaining({ id: userId, email: 'member@example.com' })]),
+    // users[] persisted through a targeted write - never the whole document (which would $set a
+    // stale userDetails snapshot able to clobber a concurrent credit increment).
+    const updateArg = mockAdapters.db.organization.update.mock.calls[0][0];
+    expect(updateArg).toEqual({
+      id: organizationId,
+      users: expect.arrayContaining([expect.objectContaining({ userId, permissions: [Permission.read] })]),
+    });
+    expect(updateArg).not.toHaveProperty('userDetails');
+
+    // Credit side-table seeded through the idempotent guarded $push, not an unconditional push.
+    expect(mockAdapters.db.organization.ensureUserDetails).toHaveBeenCalledWith(organizationId, {
+      id: userId,
+      email: 'member@example.com',
+      name: 'Member',
+    });
+  });
+
+  it('seeds the credit row via ensureUserDetails so a re-accept cannot create a duplicate row', async () => {
+    // The old path did `userDetails.push(...)` unconditionally, so re-accepting an invite for an org
+    // the member already had a row in produced a second phantom row. Routing through the guarded
+    // primitive is what makes the seed idempotent - mirrors the Group double-accept guard below.
+    mockAdapters.db.users.findById.mockResolvedValue(makeUser());
+    mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
+    mockAdapters.db.organization.findById.mockResolvedValue(
+      makeOrganization({
+        userDetails: [{ id: userId, email: 'member@example.com', name: 'Member', usedCredits: 7 }],
       })
     );
+
+    await acceptInvite(userId, { id: inviteId }, mockAdapters as any);
+
+    expect(mockAdapters.db.organization.ensureUserDetails).toHaveBeenCalledWith(organizationId, {
+      id: userId,
+      email: 'member@example.com',
+      name: 'Member',
+    });
+    // No raw push into the persisted document.
+    expect(mockAdapters.db.organization.update.mock.calls[0][0]).not.toHaveProperty('userDetails');
   });
 
   it('updates the organization before persisting the user (membership is fully provisioned)', async () => {
@@ -262,5 +294,90 @@ describe('sharingService - acceptInvite (Group)', () => {
     await acceptInvite(userId, { id: inviteId }, mockAdapters as any);
 
     expect(mockAdapters.db.users.update).toHaveBeenCalledWith(expect.objectContaining({ groups: [groupId] }));
+  });
+});
+
+/**
+ * `remaining` on a By-Users FabFile invite now scales to the number of named recipients
+ * (#1151), not a flat 1 - a human reviewer caught that acceptInvite never checked the
+ * accepter was actually one of the recipients named in `pending`, so an unintended
+ * accepter could claim a slot meant for someone else while a named recipient still
+ * hadn't accepted. Link-only invites (empty `pending` from creation) must stay open to
+ * anyone; a fully-consumed named invite is already blocked by the `remaining <= 0` check
+ * regardless of identity, so this only needs to gate the "still has named recipients left" case.
+ */
+describe('sharingService - acceptInvite (FabFile recipient membership)', () => {
+  const userId = 'user-1';
+  const fileId = 'file-1';
+  const inviteId = 'invite-1';
+
+  const makeUser = (email: string) => ({ id: userId, email, username: 'u' });
+
+  const makeInvite = (pending: string[], remaining: number) => ({
+    id: inviteId,
+    type: InviteType.FabFile,
+    documentId: fileId,
+    permissions: [Permission.read, Permission.share],
+    remaining,
+    accepted: 0,
+    recipients: { pending, refused: [], accepted: [] },
+  });
+
+  const makeAdapters = () => ({
+    db: {
+      invites: { findById: vi.fn(), update: vi.fn() },
+      fabFiles: { findById: vi.fn(async () => ({ id: fileId, users: [] })), update: vi.fn() },
+      sessions: { findById: vi.fn(), update: vi.fn() },
+      projects: { findById: vi.fn(), update: vi.fn() },
+      groups: { findById: vi.fn() },
+      organization: { findById: vi.fn(), update: vi.fn(), ensureUserDetails: vi.fn() },
+      users: { findById: vi.fn(), update: vi.fn() },
+    },
+  });
+
+  it('rejects an accepter who is not among the still-pending named recipients', async () => {
+    const adapters = makeAdapters();
+    adapters.db.users.findById.mockResolvedValue(makeUser('uninvited@x.com'));
+    adapters.db.invites.findById.mockResolvedValue(makeInvite(['a@x.com', 'b@x.com'], 2));
+
+    await expect(acceptInvite(userId, { id: inviteId }, adapters as any)).rejects.toThrow(ForbiddenError);
+    expect(adapters.db.invites.update).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.update).not.toHaveBeenCalled();
+  });
+
+  it('allows an accepter who is one of the named pending recipients', async () => {
+    const adapters = makeAdapters();
+    adapters.db.users.findById.mockResolvedValue(makeUser('a@x.com'));
+    adapters.db.invites.findById.mockResolvedValue(makeInvite(['a@x.com', 'b@x.com'], 2));
+
+    await acceptInvite(userId, { id: inviteId }, adapters as any);
+
+    expect(adapters.db.invites.update).toHaveBeenCalled();
+    expect(adapters.db.fabFiles.update).toHaveBeenCalled();
+  });
+
+  it('allows anyone to accept a link-only invite (pending was never populated)', async () => {
+    const adapters = makeAdapters();
+    adapters.db.users.findById.mockResolvedValue(makeUser('anyone@x.com'));
+    adapters.db.invites.findById.mockResolvedValue(makeInvite([], 1000));
+
+    await acceptInvite(userId, { id: inviteId }, adapters as any);
+
+    expect(adapters.db.invites.update).toHaveBeenCalled();
+  });
+
+  it('reports "already accepted" for a re-accept, not "not sent to your account", when other recipients are still pending', async () => {
+    const adapters = makeAdapters();
+    adapters.db.users.findById.mockResolvedValue(makeUser('a@x.com'));
+    // a@x.com already accepted and moved out of pending; b@x.com is still pending.
+    adapters.db.invites.findById.mockResolvedValue({
+      ...makeInvite(['b@x.com'], 1),
+      recipients: { pending: ['b@x.com'], refused: [], accepted: ['a@x.com'] },
+    });
+
+    await expect(acceptInvite(userId, { id: inviteId }, adapters as any)).rejects.toThrow(
+      'User has already accepted the invite'
+    );
+    expect(adapters.db.invites.update).not.toHaveBeenCalled();
   });
 });

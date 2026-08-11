@@ -39,7 +39,7 @@ describe('sharingService - createInvite (group arm authority)', () => {
       users: { findAllByEmailsOrUsernames: vi.fn(async () => []) },
       fabFiles: { findByIdAndUserId: vi.fn(), shareable: { findShareAccessById: vi.fn() } },
       sessions: { findByIdAndUserId: vi.fn() },
-      projects: { findById: vi.fn() },
+      projects: { shareable: { findShareAccessById: vi.fn() } },
       organizations: { findById: vi.fn(async () => organization) },
       groups: { findById: vi.fn(async () => group) },
     };
@@ -117,5 +117,174 @@ describe('sharingService - createInvite (group arm authority)', () => {
     db.organizations.findById = vi.fn(async () => null);
 
     await expect(create(asUser(OWNER_ID))).rejects.toThrow(BadRequestError);
+  });
+});
+
+/**
+ * Authority tests for the InviteType.Project arm. Scoped to the caller's share access
+ * (shareable.findShareAccessById), matching the FabFile arm - previously an unscoped findById,
+ * so any authenticated caller who knew a project id could mint an invite for it.
+ */
+describe('sharingService - createInvite (project arm authority)', () => {
+  const PROJECT_ID = 'project-1';
+  const PROJECT_NAME = 'Confidential Project';
+
+  const asUser = (id: string) => ({ id, username: 'u', isAdmin: false }) as IUserDocument;
+
+  let db: any;
+  let findShareAccessById: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    findShareAccessById = vi.fn();
+    db = {
+      invites: { create: vi.fn(async (build: unknown) => ({ id: 'invite-2', ...(build as object) })) },
+      users: { findAllByEmailsOrUsernames: vi.fn(async () => []) },
+      projects: { shareable: { findShareAccessById } },
+    };
+  });
+
+  const create = (user: IUserDocument, id = PROJECT_ID) =>
+    createInvite(user, { id, type: InviteType.Project, permissions: [Permission.read] } as any, { db });
+
+  it('creates an invite when the caller has share access, scoped to that caller and id', async () => {
+    findShareAccessById.mockResolvedValue({ id: PROJECT_ID, name: PROJECT_NAME });
+    const user = asUser('owner-2');
+
+    const invite = await create(user);
+
+    expect(invite.name).toBe(PROJECT_NAME);
+    expect(findShareAccessById).toHaveBeenCalledWith(user, PROJECT_ID);
+  });
+
+  it('rejects when the scoped lookup finds nothing', async () => {
+    // Deliberately NOT named "indistinguishably from a missing project": with a single mock,
+    // "no access" and "does not exist" are the same input, so nothing here distinguishes them.
+    // That property is real (findShareAccessById returns null for both) but only the e2e test can
+    // demonstrate it - see projectInviteAuth.e2e.test.ts.
+    findShareAccessById.mockResolvedValue(null);
+
+    await expect(create(asUser('outsider-1'))).rejects.toThrow(BadRequestError);
+    expect(db.invites.create).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A recipient that findAllByEmailsOrUsernames does not resolve previously fell through
+ * silently: the invite was still created with an empty pending list and the route returned
+ * 200, so the recipient's inbox stayed empty with no visible failure anywhere (#1151). Scoped
+ * to FabFile/Session, since Organization/Project send raw user ids through this same
+ * recipients array via a different resolution path and must keep tolerating a 0-match result.
+ */
+describe('sharingService - createInvite (recipient resolution)', () => {
+  const FILE_ID = 'file-1';
+  const FILE_NAME = 'doc.pdf';
+  const PROJECT_ID = 'project-9';
+  const PROJECT_NAME = 'Some Project';
+
+  const asUser = (id: string) => ({ id, username: 'u', isAdmin: false }) as IUserDocument;
+
+  let db: any;
+
+  beforeEach(() => {
+    db = {
+      invites: { create: vi.fn(async (build: unknown) => ({ id: 'invite-3', ...(build as object) })) },
+      users: { findAllByEmailsOrUsernames: vi.fn(async () => []) },
+      fabFiles: { shareable: { findShareAccessById: vi.fn(async () => ({ id: FILE_ID, fileName: FILE_NAME })) } },
+      projects: { shareable: { findShareAccessById: vi.fn(async () => ({ id: PROJECT_ID, name: PROJECT_NAME })) } },
+    };
+  });
+
+  const createFabFile = (recipients: string[]) =>
+    createInvite(
+      asUser('owner-3'),
+      { id: FILE_ID, type: InviteType.FabFile, permissions: [Permission.read], recipients } as any,
+      { db }
+    );
+
+  const createProject = (recipients: string[]) =>
+    createInvite(
+      asUser('owner-4'),
+      { id: PROJECT_ID, type: InviteType.Project, permissions: [Permission.read], recipients } as any,
+      { db }
+    );
+
+  it('throws for an unresolved recipient on a FabFile (By Users) invite instead of silently creating a 0-recipient share', async () => {
+    db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: 'a@x.com', username: 'a' }]);
+
+    await expect(createFabFile(['a@x.com', 'nobody@x.com'])).rejects.toSatisfy(
+      (e: Error) => e instanceof BadRequestError && e.message.includes('nobody@x.com')
+    );
+    expect(db.invites.create).not.toHaveBeenCalled();
+  });
+
+  it('resolves a recipient against a matched user record with different casing', async () => {
+    db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: 'Friend@Example.com', username: 'friend' }]);
+
+    const invite = await createFabFile(['friend@example.com']);
+
+    expect(db.invites.create).toHaveBeenCalled();
+    expect((invite as any).recipients.pending).toEqual(['Friend@Example.com']);
+  });
+
+  it('does not throw on an Organization/Project invite with an unmatched, id-shaped recipient', async () => {
+    // No match, same as today, for an id-shaped recipient - the point is this must not become
+    // a hard failure just because milestone 2 added unresolved-recipient checking elsewhere.
+    db.users.findAllByEmailsOrUsernames = vi.fn(async () => []);
+
+    const invite = await createProject(['user-id-123']);
+
+    expect(db.invites.create).toHaveBeenCalled();
+    expect((invite as any).recipients.pending).toEqual([]);
+  });
+
+  it('throws for a recipient matched only by username with no email, instead of silently dropping them', async () => {
+    // accept.ts keys recipients.pending/accepted on email and rejects an emailless accepter
+    // outright, so a username-only match is not actually shareable - it must fail loudly here,
+    // not vanish from pending while the sharer is told the share succeeded.
+    db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: null, username: 'noemail' }]);
+
+    await expect(createFabFile(['noemail'])).rejects.toSatisfy(
+      (e: Error) => e instanceof BadRequestError && e.message.includes('noemail')
+    );
+    expect(db.invites.create).not.toHaveBeenCalled();
+  });
+
+  it('throws when one recipient string matches more than one distinct user (case-insensitive collision)', async () => {
+    // Uniqueness on the User schema is case-sensitive, so "Bob" and "bob" can be two real,
+    // distinct accounts. The now-case-insensitive lookup can return both for one input - that
+    // must fail as ambiguous, not silently grant access to whichever one happened to match.
+    db.users.findAllByEmailsOrUsernames = vi.fn(async () => [
+      { email: 'bob@x.com', username: 'Bob' },
+      { email: 'BOB@x.com', username: 'bob' },
+    ]);
+
+    await expect(createFabFile(['bob'])).rejects.toSatisfy(
+      (e: Error) => e instanceof BadRequestError && e.message.includes('bob')
+    );
+    expect(db.invites.create).not.toHaveBeenCalled();
+  });
+
+  it('sets remaining to the number of distinct resolved recipients, not a flat 1, for a multi-recipient share', async () => {
+    // Previously every By-Users invite defaulted to remaining:1 regardless of recipient count,
+    // so only the first of several recipients could ever accept while the sharer was told all
+    // of them succeeded (#1151 acceptance criteria 1).
+    db.users.findAllByEmailsOrUsernames = vi.fn(async () => [
+      { email: 'a@x.com', username: 'a' },
+      { email: 'b@x.com', username: 'b' },
+    ]);
+
+    const invite = await createFabFile(['a@x.com', 'b@x.com']);
+
+    expect((invite as any).remaining).toBe(2);
+    expect((invite as any).recipients.pending).toEqual(['a@x.com', 'b@x.com']);
+  });
+
+  it('dedupes when two recipient strings resolve to the same person, and remaining matches the unique count', async () => {
+    db.users.findAllByEmailsOrUsernames = vi.fn(async () => [{ email: 'a@x.com', username: 'a' }]);
+
+    const invite = await createFabFile(['a@x.com', 'a']);
+
+    expect((invite as any).remaining).toBe(1);
+    expect((invite as any).recipients.pending).toEqual(['a@x.com']);
   });
 });

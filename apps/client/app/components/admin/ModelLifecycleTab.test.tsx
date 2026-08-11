@@ -17,6 +17,9 @@ vi.mock('./DiscoveryStatusCard', () => ({
 }));
 
 import { ModelLifecycleTab } from './ModelLifecycleTab';
+import { AdminTab } from './adminSidebarConfig';
+import { useAdminModal } from './useAdminModal';
+import { useCreditAnalysisStore } from './CreditAnalysis/store';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
@@ -40,6 +43,11 @@ const STATUS = {
       },
     },
   ],
+  perMTokRates: {
+    'gpt-sunset': { input: 0.3, output: 0.5 },
+    'gpt-live': { input: 2, output: 6 },
+    'gpt-newer': { input: 0.1, output: 0.25 },
+  },
   staleReferences: [
     { surface: 'fallback-chain', key: 'gpt-live', referencedId: 'gpt-sunset', problem: 'deprecated' },
     { surface: 'fallback-default', key: 'default', referencedId: 'gpt-ghost', problem: 'unknown' },
@@ -59,6 +67,8 @@ describe('ModelLifecycleTab', () => {
     vi.clearAllMocks();
     mockGet.mockResolvedValue({ data: STATUS });
     mockPost.mockResolvedValue({ data: {} });
+    useAdminModal.setState({ activeTab: AdminTab.ModelLifecycle });
+    useCreditAnalysisStore.setState({ activeTab: 'users', pricingModelId: null });
   });
 
   it('renders the queue, the horizon and the stale references from one fetch', async () => {
@@ -117,6 +127,47 @@ describe('ModelLifecycleTab', () => {
 
     await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
     expect(mockPost.mock.calls[0][1]).toMatchObject({ replacedBy: 'gpt-newer' });
+  });
+
+  it('prices the suggested successor in the queue row', async () => {
+    renderTab();
+
+    expect(await screen.findByTestId('successor-cost-chip-gpt-sunset')).toHaveTextContent('costs more +1100% (12.0x)');
+  });
+
+  // The whole point of the panel: the operator overriding the suggestion is the
+  // one making a cost decision, and a precomputed delta would price the wrong model.
+  it('reprices the accept panel against the typed successor, not the suggested one', async () => {
+    renderTab();
+    fireEvent.click(await screen.findByTestId('model-lifecycle-accept-gpt-sunset'));
+
+    expect(screen.getByTestId('successor-cost-panel')).toHaveTextContent('costs more');
+
+    fireEvent.change(screen.getByTestId('model-lifecycle-replacedby-input'), { target: { value: 'gpt-newer' } });
+
+    const panel = screen.getByTestId('successor-cost-panel');
+    expect(panel).toHaveTextContent('no cost increase');
+    expect(panel).toHaveTextContent('$0.300 to $0.100 / MTok (-67%)');
+  });
+
+  it('flags a typed successor with no price row rather than showing it as free', async () => {
+    renderTab();
+    fireEvent.click(await screen.findByTestId('model-lifecycle-accept-gpt-sunset'));
+    fireEvent.change(screen.getByTestId('model-lifecycle-replacedby-input'), { target: { value: 'gpt-unpriced' } });
+
+    expect(screen.getByTestId('successor-cost-panel')).toHaveTextContent('no price on file');
+  });
+
+  // A response without rates degrades to the unverifiable verdict everywhere
+  // rather than throwing or reading as free.
+  it('marks both cost surfaces unpriced when the response carries no rates', async () => {
+    mockGet.mockResolvedValue({ data: { ...STATUS, perMTokRates: undefined } });
+    renderTab();
+
+    expect(await screen.findByTestId('successor-cost-chip-gpt-sunset')).toHaveTextContent('no price on file');
+
+    fireEvent.click(screen.getByTestId('model-lifecycle-accept-gpt-sunset'));
+    expect(screen.getByTestId('successor-cost-panel')).toHaveTextContent('no price on file');
   });
 
   it('dismiss confirms before posting, since the suggestion cannot be brought back', async () => {
@@ -253,6 +304,22 @@ describe('ModelLifecycleTab', () => {
     expect(screen.getByRole('button', { name: 'Refresh model lifecycle status' })).toBe(
       screen.getByTestId('model-lifecycle-refresh-btn')
     );
+  });
+
+  it('links to Model Pricing, landing on the pricing sub-tab of another sidebar section', async () => {
+    renderTab();
+    await screen.findByTestId('model-lifecycle-queue-row-gpt-sunset');
+
+    const link = screen.getByTestId('model-lifecycle-model-pricing-link');
+    // A Joy Link with an onClick and no href renders an <a> with no href: not
+    // focusable, not announced, unreachable by keyboard.
+    expect(link.tagName).toBe('BUTTON');
+    fireEvent.click(link);
+
+    expect(useAdminModal.getState().activeTab).toBe(AdminTab.CreditAnalytics);
+    expect(useCreditAnalysisStore.getState().activeTab).toBe('pricing');
+    // The header link is not about one model, so nothing is put in focus.
+    expect(useCreditAnalysisStore.getState().pricingModelId).toBeNull();
   });
 
   it('says so when nothing is awaiting a decision', async () => {

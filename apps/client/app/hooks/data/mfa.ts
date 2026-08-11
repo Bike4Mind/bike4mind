@@ -56,9 +56,9 @@ export function useVerifyMFASetup() {
  * Hook to verify MFA during login (now requires authentication token)
  */
 export function useVerifyMFA() {
-  return useMutation<any, Error, { token: string }>({
-    mutationFn: async ({ token }) => {
-      const response = await api.post('/api/auth/mfa/verify', { token });
+  return useMutation<any, Error, { token: string; rememberDevice?: boolean }>({
+    mutationFn: async ({ token, rememberDevice }) => {
+      const response = await api.post('/api/auth/mfa/verify', { token, rememberDevice });
       return response.data;
     },
   });

@@ -247,3 +247,63 @@ describe('FabFileRepository.countUniqueFilesByNamespaceForUser', () => {
     expect(await countOf('clients')).toBe(0);
   });
 });
+
+/**
+ * The single-tag counterpart. It queries the same `tags.name` data as the tag-lifecycle writes and
+ * carried the same unescaped, unanchored regex they did, so it is pinned here rather than left to
+ * re-seed the bug for its first caller - it has none yet.
+ */
+describe('FabFileRepository.countByUserIdAndTag', () => {
+  const userId = 'single-tag-count-user';
+
+  const seedFor = async (owner: string, tags: string[], overrides: Record<string, unknown> = {}) => {
+    await FabFile.create({
+      userId: owner,
+      fileName: 'seed.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: tags.map(name => ({ name, strength: 1 })),
+      ...overrides,
+    });
+  };
+
+  beforeEach(async () => {
+    await FabFile.deleteMany({});
+  });
+
+  it('counts only files carrying the whole name, not a neighbour containing it', async () => {
+    await seedFor(userId, ['test']);
+    await seedFor(userId, ['testing']);
+    await seedFor(userId, ['unit-test']);
+
+    expect(await fabFileRepository.countByUserIdAndTag(userId, 'test')).toBe(1);
+  });
+
+  it('counts casing variants as the same tag', async () => {
+    await seedFor(userId, ['Invoices']);
+    await seedFor(userId, ['invoices']);
+
+    expect(await fabFileRepository.countByUserIdAndTag(userId, 'INVOICES')).toBe(2);
+  });
+
+  it('treats regex metacharacters literally', async () => {
+    await seedFor(userId, ['.*']);
+    await seedFor(userId, ['anything']);
+
+    expect(await fabFileRepository.countByUserIdAndTag(userId, '.*')).toBe(1);
+  });
+
+  it('excludes soft-deleted files and other users', async () => {
+    await seedFor(userId, ['invoices']);
+    await seedFor(userId, ['invoices'], { deletedAt: new Date() });
+    await seedFor('someone-else', ['invoices']);
+
+    expect(await fabFileRepository.countByUserIdAndTag(userId, 'invoices')).toBe(1);
+  });
+
+  it('reports zero for an empty name rather than counting everything', async () => {
+    await seedFor(userId, ['invoices']);
+
+    expect(await fabFileRepository.countByUserIdAndTag(userId, '')).toBe(0);
+  });
+});

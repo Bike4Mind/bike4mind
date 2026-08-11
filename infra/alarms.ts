@@ -121,6 +121,10 @@ export const modelDiscoveryDocsParserShiftAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('ModelDiscoveryDocsParserShiftAlarm')
   : undefined;
 
+export const deprecatedModelRequestAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('DeprecatedModelRequestAlarm')
+  : undefined;
+
 // --- MetricAlarm definitions (only created for monitored stages) ---
 
 if (isMonitoredStage) {
@@ -985,6 +989,46 @@ if (isMonitoredStage) {
     tags: {
       Application: 'ModelDiscovery',
       Severity: 'Low',
+    },
+  });
+
+  /**
+   * Alarm: requests pinned to a deprecated model
+   *
+   * A model that 404s upstream reports itself; a stored pin on a deprecated
+   * model is silent - the resolver upgrades it and the user sees a plausible
+   * answer either way, so nobody files a ticket. This is the only signal that
+   * stale pins are still arriving, so it fires on the first one rather than a
+   * volume threshold. Notify, do not page.
+   *
+   * Not latching: with treatMissingData=notBreaching and a single 1h period, it
+   * returns to OK after any hour with no stale pin, so an occasional offender
+   * flaps rather than holding ALARM until the pin is rewritten. The dashboard
+   * carries the history.
+   *
+   * Metric emitted by: b4m-core/llm-adapters/src/modelSunsetMetrics.ts, from
+   * resolveDeprecatedModelId - the last point that still sees the id the caller
+   * asked for. Alarms match one exact dimension set, so this uses the Stage-only
+   * datapoint; the per-model breakdown lives on the model-sunset dashboard.
+   */
+  new aws.cloudwatch.MetricAlarm('deprecatedModelRequest', {
+    name: `${$app.name}-${$app.stage}-deprecated-model-request`,
+    alarmDescription: 'A request arrived pinned to a deprecated model - a session or agent pin needs upgrading',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'DeprecatedModelRequest',
+    namespace: 'Lumina5/ModelSunset',
+    period: 3600, // 1 hour - stale pins are chronic, not a spike
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: {
+      Stage: $app.stage,
+    },
+    alarmActions: [deprecatedModelRequestAlarm!.arn],
+    tags: {
+      Application: 'ModelSunset',
+      Severity: 'Medium',
     },
   });
 }

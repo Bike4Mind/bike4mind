@@ -162,13 +162,13 @@ run before the tests:
 
 1. **Creates test users** via `/api/test/create-user` with timestamped emails (e.g., `setup-admin-17100000-e2e@test.com`, or `setup-admin-alice-17100000-e2e@test.com` if `E2E_TEST_ID=alice`). The response carries `accessToken` + `refreshToken`.
 2. **Configures features** — enables Agents globally (admin setting) and per-user (preferences)
-3. **Seeds auth** — `seedAuthStorageState` (in `helpers/auth-seed.ts`) writes the returned tokens into the `access-token-storage` localStorage key and saves the browser's `storageState` to `.auth/`
+3. **Seeds auth** — `seedAuthStorageState` (in `helpers/auth-seed.ts`) plants the returned refresh token as the app's HttpOnly `b4m_rt` cookie and saves the browser's `storageState` to `.auth/`. The app's cold-load silent refresh exchanges it for an access token on the first navigation; nothing is written to localStorage.
 4. **Saves credentials** to `.auth/*-data.json` (including tokens) for API-based test setup and mid-test user switching
 5. **Creates invite code** for the signup spec
 
-For mid-test user switching, `seedAuthOnPage` sets the same localStorage value on
-a live page and navigates to `/` to bootstrap the authenticated app. An agent
-(Claude Code + Playwright MCP) authenticates the same way — by token-seeding, not
+For mid-test user switching, `seedAuthOnPage` swaps the same cookie on a live
+page's context and navigates to `/` to bootstrap the authenticated app. An agent
+(Claude Code + Playwright MCP) authenticates the same way — by cookie-seeding, not
 by a password/OTC UI round-trip.
 
 Before setup runs, `global-setup.ts` calls `/api/test/cleanup` to remove stale test users from prior runs. After all tests, `global-teardown.ts` does the same.

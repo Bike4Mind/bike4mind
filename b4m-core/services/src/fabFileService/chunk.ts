@@ -6,6 +6,9 @@ import { z } from 'zod';
 const chunkFileSchema = z.object({
   fabFileId: z.string(),
   embeddingModel: z.string(),
+  // Soft chunk-size cap in tokens (see DEFAULT_PASSAGE_TOKEN_TARGET). Optional: the
+  // chunker's passage-granularity default applies when omitted.
+  passageTokenTarget: z.number().int().positive().optional(),
 });
 
 type ChunkFileParameters = z.infer<typeof chunkFileSchema>;
@@ -17,6 +20,7 @@ interface ChunkFileAdapters {
       deleteManyByFabFileId: (fabFileId: string) => Promise<void>;
       bulkInsert: (chunks: Omit<IFabFileChunkDocument, 'id'>[]) => Promise<IFabFileChunkDocument[]>;
       update: (chunk: IFabFileChunkDocument) => Promise<unknown>;
+      distinctEmbeddingModelsByFabFileIds: (fabFileIds: string[]) => Promise<string[]>;
     };
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
@@ -26,24 +30,39 @@ interface ChunkFileAdapters {
     getContentAsBuffer: (filePath: string) => Promise<Buffer>;
   };
   logger: Logger;
+  /**
+   * Self-host OpenSearch only (undefined elsewhere). Re-chunking deletes the old
+   * FabFileChunk rows and their embeddingModel with them - without this, the old chunks'
+   * OpenSearch vectors would survive as permanent orphans in the OLD model's index.
+   */
+  searchIndex?: { deleteByFabFileId: (fabFileId: string, embeddingModel: string) => Promise<void> };
 }
 
 export const chunkFabfile = async (
   user: IUserDocument,
   parameters: ChunkFileParameters,
-  { db, storage, logger }: ChunkFileAdapters
+  { db, storage, logger, searchIndex }: ChunkFileAdapters
 ) => {
-  const { fabFileId, embeddingModel } = secureParameters(parameters, chunkFileSchema);
+  const { fabFileId, embeddingModel, passageTokenTarget } = secureParameters(parameters, chunkFileSchema);
 
   const fabFile = await db.fabFiles.shareable.findAccessibleById(user, fabFileId);
   if (!fabFile) throw new NotFoundError('FabFile not found');
 
   logger.updateMetadata({ mimeType: fabFile.mimeType });
 
-  const chunker = new SmartChunker(embeddingModel, storage, logger);
+  const chunker = new SmartChunker(embeddingModel, storage, logger, { passageTokenTarget });
   const chunks = await chunker.chunkFile(fabFile);
   chunker.freeEncoder();
   Logger.globalInstance.log(`Completed chunking file into ${chunks.length} chunks`);
+
+  // Resolved before the old chunks are deleted below - their per-chunk embeddingModel is the
+  // only place this survives once they're gone. Chunks can span more than one model if this
+  // file was already re-embedded once before (see IFabFileChunk.embeddingModel), so
+  // fabFile.embeddingModel alone - the CURRENT model only - would miss an earlier OpenSearch
+  // index left behind by that prior re-embed.
+  const previousChunkEmbeddingModels = searchIndex
+    ? await db.fabFileChunks.distinctEmbeddingModelsByFabFileIds([fabFileId])
+    : [];
 
   fabFile.isChunking = false;
   fabFile.chunked = chunks.length > 0;
@@ -54,10 +73,18 @@ export const chunkFabfile = async (
   fabFile.vectorizedChunkCount = 0;
 
   fabFile.embeddingModel = embeddingModel;
+  // The old chunks (and their embeddingModel stamps) are about to be deleted below - a stale
+  // readiness timestamp would make the Atlas cutover read path treat this file as ANN-ready
+  // before the new chunks are re-stamped, silently returning zero results (see
+  // vectorSearchEligibility.ts).
+  fabFile.chunkEmbeddingModelStampedAt = null;
 
   await db.fabFiles.update(fabFile);
 
   await db.fabFileChunks.deleteManyByFabFileId(fabFileId);
+  if (searchIndex) {
+    await Promise.all(previousChunkEmbeddingModels.map(model => searchIndex.deleteByFabFileId(fabFileId, model)));
+  }
 
   const fabFileChunks = await Promise.all(
     chunks.map(async chunk => {

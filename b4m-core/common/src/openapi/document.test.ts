@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { buildOpenApiDocument, toPythonLiteral } from './document';
 import { ApiKeyScope } from '../types/entities/UserApiKeyTypes';
+import { chatContract } from '../api-contract';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spec doc is loosely typed for traversal
 const doc = buildOpenApiDocument('9.9.9') as any;
 const completions = doc.paths['/api/ai/v1/completions'].post;
 const tools = doc.paths['/api/ai/v1/tools'].post;
+const chat = doc.paths['/api/chat'].post;
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 
 describe('buildOpenApiDocument', () => {
@@ -47,24 +49,24 @@ describe('buildOpenApiDocument', () => {
   it('models the completions response as an SSE stream referencing the stream-event component', () => {
     const ok = completions.responses['200'];
     expect(Object.keys(ok.content)).toEqual(['text/event-stream']);
-    expect(ok.content['text/event-stream'].schema).toEqual(ref('CompletionStreamEvent'));
+    expect(ok.content['text/event-stream'].schema).toEqual(ref('createCompletionResponse200'));
   });
 
   it('wires request bodies and responses via $ref (no inline duplication)', () => {
-    expect(completions.requestBody.content['application/json'].schema).toEqual(ref('CompletionRequest'));
-    expect(tools.requestBody.content['application/json'].schema).toEqual(ref('ToolExecutionRequest'));
+    expect(completions.requestBody.content['application/json'].schema).toEqual(ref('createCompletionRequest'));
+    expect(tools.requestBody.content['application/json'].schema).toEqual(ref('executeToolRequest'));
     // 4xx references the shared error envelope; tools 500 returns the full result body.
     expect(completions.responses['400'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
     expect(tools.responses['400'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
-    expect(tools.responses['200'].content['application/json'].schema).toEqual(ref('ToolExecutionResponse'));
-    expect(tools.responses['500'].content['application/json'].schema).toEqual(ref('ToolExecutionResponse'));
+    expect(tools.responses['200'].content['application/json'].schema).toEqual(ref('executeToolResponse200'));
+    expect(tools.responses['500'].content['application/json'].schema).toEqual(ref('executeToolResponse500'));
   });
 
   it('provides request AND response examples for both operations', () => {
-    expect(doc.components.schemas.CompletionRequest.example).toBeDefined();
-    expect(doc.components.schemas.CompletionStreamEvent.example).toBeDefined();
-    expect(doc.components.schemas.ToolExecutionRequest.example).toBeDefined();
-    expect(doc.components.schemas.ToolExecutionResponse.example).toBeDefined();
+    expect(doc.components.schemas.createCompletionRequest.example).toBeDefined();
+    expect(doc.components.schemas.createCompletionResponse200.example).toBeDefined();
+    expect(doc.components.schemas.executeToolRequest.example).toBeDefined();
+    expect(doc.components.schemas.executeToolResponse200.example).toBeDefined();
   });
 
   it('attaches x-required-scopes ONLY where scopes are enforced, x-codeSamples on both', () => {
@@ -74,6 +76,17 @@ describe('buildOpenApiDocument', () => {
     for (const op of [completions, tools]) {
       expect(op['x-codeSamples'].map((s: { lang: string }) => s.lang)).toEqual(['curl', 'JavaScript', 'Python']);
     }
+  });
+
+  it('derives x-required-scopes AND x-codeSamples for a CONTRACT-based op from the contract itself', () => {
+    // Guards against spec-only drift: the contract-derived operation must publish
+    // exactly the contract's scopes + code samples. This catches a published-vs-
+    // enforced mismatch that runtime tests can't (e.g. dropping the CONTRACTS spread
+    // in document.ts strips x-required-scopes while every runtime test still passes).
+    expect(chat.operationId).toBe(chatContract.operationId);
+    expect(chat['x-required-scopes']).toEqual([...(chatContract.scopes ?? [])]);
+    expect(chat['x-required-scopes'].length).toBeGreaterThan(0);
+    expect(chat['x-codeSamples'].map((s: { lang: string }) => s.lang)).toEqual(['curl', 'JavaScript', 'Python']);
   });
 
   it('documents tools 401/429 and JWT-only code samples (matches the JWT-only handler)', () => {
@@ -86,6 +99,20 @@ describe('buildOpenApiDocument', () => {
     const toolsCurl = tools['x-codeSamples'].find((s: { lang: string }) => s.lang === 'curl').source as string;
     expect(toolsCurl).toContain('Bearer <access_token>');
     expect(toolsCurl).not.toContain('b4m_live_');
+  });
+
+  it('auto-injects 401 (and 403 for scoped ops) on non-streaming authenticated endpoints', () => {
+    // Guards the central auth-response injection in registerContract. chatContract
+    // declares neither 401 nor 403 itself, so both come purely from the injection;
+    // dropping it silently narrows /api/chat's published spec and generated SDKs
+    // stop modelling the missing-credential / under-scoped-key paths.
+    expect(chat.responses['401'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
+    expect(chat.responses['403'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
+    // Streaming completions opens the stream first, so auth/scope failures are
+    // in-band SSE events - it must NOT declare HTTP 401/403 even though it is
+    // authenticated and scoped.
+    expect(completions.responses['401']).toBeUndefined();
+    expect(completions.responses['403']).toBeUndefined();
   });
 
   it('documents OR semantics for required scopes in info.description', () => {

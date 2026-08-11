@@ -14,6 +14,7 @@ import NotebookLayout from '@client/app/components/layouts/Notebook';
 import { useUser } from '@client/app/contexts/UserContext';
 import { buildRedirectTo } from '@client/app/utils/authRedirect';
 import { enforceConsentRedirect } from '@client/app/utils/consentGuard';
+import { bootstrapSession } from '@client/app/utils/sessionBootstrap';
 
 // Keep layout components as eager imports for optimal performance
 import RestrictedPage from './components/common/RestrictedPage';
@@ -71,6 +72,7 @@ const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
 const DataLakesPage = lazy(() => import('./routes/data-lakes'));
 const HudPage = lazy(() => import('./routes/hud'));
 const HearthPage = lazy(() => import('./routes/hearth'));
+const QuestMasterV5Page = lazy(() => import('./routes/quests-v5'));
 
 // AI-themed loading messages for route transitions
 const loadingMessages = [
@@ -178,7 +180,15 @@ const rootRoute = createRootRoute({
 const layoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: 'layout',
-  beforeLoad: ({ location }) => {
+  beforeLoad: async ({ location }) => {
+    // Cold-load ordering: the access token is memory-only, so a fresh page load has no session
+    // until the HttpOnly refresh cookie is exchanged. This guard must wait for that - firing on
+    // a not-yet-populated currentUser would redirect to /login, whose on-mount
+    // clearClientCaches() + removeQueries() tears the session down before it can establish.
+    // bootstrapSession() resolves instantly once the answer is known, so only the first
+    // navigation of a page load actually waits.
+    await bootstrapSession();
+
     const { currentUser } = useUser.getState();
     if (!currentUser) {
       const redirectTo = buildRedirectTo(
@@ -195,7 +205,7 @@ const layoutRoute = createRoute({
     // P0-B abuse gate: route an authenticated-but-not-yet-consented account (in practice a
     // brand-new OAuth/SAML/OTC user) to the acceptance interstitial. Shared with the standalone
     // rootRoute children so the guard can't drift (see enforceConsentRedirect / issue #382).
-    enforceConsentRedirect(location);
+    await enforceConsentRedirect(location);
 
     // Handle redirects stored in sessionStorage to work around CloudFront Access Denied
     // on SPA routes (CloudFront can only serve "/" directly; all other paths return 403).
@@ -375,6 +385,12 @@ const HEARTH_FEATURE_GATE = {
   feature: 'enableHearth' as const,
   featureName: 'Hearth',
   description: 'A shared event log where you, your agents, and your devices all post and catch up as actors.',
+};
+
+const QUESTMASTER_V5_FEATURE_GATE = {
+  feature: 'enableQuestMasterV5' as const,
+  featureName: 'Quest Master v5',
+  description: 'Quests as a graph of nodes: each node is one scoreable task that runs its own agent.',
 };
 
 // Hearth channel view (minimal projection of the shared event log)
@@ -607,10 +623,9 @@ const authSuccessRoute = createRoute({
   ),
   validateSearch: (
     search: Record<string, unknown>
-  ): { token?: string; refreshToken?: string; error?: string; userId?: string; redirectTo?: string } => {
+  ): { token?: string; error?: string; userId?: string; redirectTo?: string } => {
     return {
       token: search.token ? String(search.token) : undefined,
-      refreshToken: search.refreshToken ? String(search.refreshToken) : undefined,
       error: search.error ? String(search.error) : undefined,
       userId: search.userId ? String(search.userId) : undefined,
       redirectTo: search.redirectTo ? String(search.redirectTo) : undefined,
@@ -771,6 +786,20 @@ const questsRoute = createRoute({
       search: search.search ? String(search.search) : undefined,
     };
   },
+});
+
+// QuestMaster v5 node-graph surface. Peer to /quests, which stays untouched
+// until v5 supersedes it.
+const questsV5Route = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/quests-v5',
+  component: () => (
+    <ExperimentalFeatureGate {...QUESTMASTER_V5_FEATURE_GATE} loadingFallback={<RouteLoadingFallback />}>
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <QuestMasterV5Page />
+      </Suspense>
+    </ExperimentalFeatureGate>
+  ),
 });
 
 // Data Lakes home - top-level, Opti-independent destination for a user's own lakes
@@ -988,6 +1017,7 @@ const routeTree = rootRoute.addChildren([
     tutorialsRoute,
     artifactsDemoRoute,
     questsRoute,
+    questsV5Route,
     dataLakesRoute,
     hudRoute,
     hearthRoute,

@@ -3,6 +3,7 @@
 
 import { MigrationManager } from '@bike4mind/scripts';
 import { connectDB, getDB } from '@bike4mind/database';
+import { ensureAtlasVectorSearchIndexes } from '@bike4mind/fab-pipeline';
 import { Context } from 'aws-lambda';
 import { Config } from './config';
 import { Logger } from '@bike4mind/observability';
@@ -15,6 +16,7 @@ export const createDatabase = async (_event: unknown, context: Context) => {
   const manager = new MigrationManager(logger);
   await manager.seed();
   await manager.up(null);
+  await ensureAtlasVectorSearchIndexes(getDB().connection, logger);
 };
 
 // updateDatabase: runs when an existing stack is updated; migrates the schema.
@@ -23,6 +25,7 @@ export const updateDatabase = async (_event: unknown, context: Context) => {
   logger.log(`updateDatabase: ${Config.STAGE}`);
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE));
   await new MigrationManager(logger).up(null);
+  await ensureAtlasVectorSearchIndexes(getDB().connection, logger);
 };
 
 // deleteDatabase: runs when an existing stack is deleted; drops all collections and the database.

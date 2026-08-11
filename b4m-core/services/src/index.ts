@@ -1,5 +1,6 @@
 export * as referService from './referService';
 export * as userService from './userService';
+export * as authSessionService from './authSessionService';
 export * as userApiKeyService from './userApiKeyService';
 export * as counterService from './countersService';
 export * as importHistoryService from './importHistoryService';
@@ -36,6 +37,8 @@ export * as adminSettingsService from './adminSettingsService';
 export * as creditService from './creditService';
 export * from './billing';
 export * from './soundCost';
+export * from './musicCost';
+export * from './llm/agentToolMediaCost';
 export * as emailIngestionService from './emailIngestionService';
 export * as emailAnalysisService from './emailAnalysisService';
 export * as mementoService from './mementoService';

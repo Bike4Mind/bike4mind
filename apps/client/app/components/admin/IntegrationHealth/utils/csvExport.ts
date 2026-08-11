@@ -1,3 +1,4 @@
+import { toCsv } from '@client/app/utils/csv';
 import type { IntegrationDashboardResponse } from '../types';
 
 export function exportDashboardCsv(data: IntegrationDashboardResponse): void {
@@ -46,12 +47,7 @@ export function exportDashboardCsv(data: IntegrationDashboardResponse): void {
     }
   }
 
-  const escapeCell = (cell: string) => {
-    let escaped = cell.replace(/"/g, '""').replace(/\r?\n/g, ' ');
-    if (/^[=+\-@]/.test(escaped)) escaped = "'" + escaped;
-    return `"${escaped}"`;
-  };
-  const csv = rows.map(row => row.map(escapeCell).join(',')).join('\n');
+  const csv = toCsv(rows);
 
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);

@@ -38,24 +38,14 @@ const handler = baseApi({
     throw new NotFoundError('Quest not found');
   }
 
-  // `quest.images` holds bare generated-file basenames (e.g. `<uuid>.png`, or a `.xlsx` from
-  // excel_generation - not everything here is an image). Programmatic pollers shouldn't have to
-  // know the CDN path convention, so we resolve each into a typed descriptor with a ready-to-use
-  // URL server-side (the single source of truth). `images` (raw basenames) is kept for parity
-  // with the WebSocket payload; `files[].isImage` lets a caller pick out renderable images.
+  // `quest.images` holds bare generated-file basenames (e.g. `<uuid>.png`, a `.mp3` from
+  // music_generation, or a `.xlsx` from excel_generation - not everything here is an image).
+  // Programmatic pollers shouldn't have to know the CDN path convention, so we resolve each into
+  // a typed descriptor with a ready-to-use URL server-side (the single source of truth). `images`
+  // (raw basenames) is kept for parity with the WebSocket payload; `files[].isImage`/`isAudio`
+  // let a caller pick out renderable media.
   const images = quest.images ?? [];
   const files = toGeneratedFiles(images);
-
-  // The system-prompt itemization is for whoever made the completion. Session access here
-  // also covers users the session was shared with, and the org/project/admin prompts a
-  // completion runs under are operator detail they were never granted.
-  const promptMeta =
-    quest.userId === userId || !quest.promptMeta?.context?.systemPromptDisclosure
-      ? quest.promptMeta
-      : {
-          ...quest.promptMeta,
-          context: { ...quest.promptMeta.context, systemPromptDisclosure: undefined },
-        };
 
   return res.json({
     id: quest.id,
@@ -67,7 +57,7 @@ const handler = baseApi({
     files,
     createdAt: quest.createdAt,
     updatedAt: quest.updatedAt,
-    promptMeta,
+    promptMeta: quest.promptMeta,
     executionTracking: quest.promptMeta?.executionTracking,
   });
 });

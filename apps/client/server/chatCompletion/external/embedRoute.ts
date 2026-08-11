@@ -19,6 +19,7 @@ import {
   resolveQuestErrorCode,
   buildSharedTools,
   apiKeyService,
+  resolveToolAvailability,
   type ToolBuilderDeps,
   type ToolBuilderCallbacks,
 } from '@bike4mind/services';
@@ -199,15 +200,23 @@ async function buildEmbedServerTools(args: {
   const enabledTools = resolveEmbedTools(hydrated);
   if (enabledTools.length === 0) return undefined;
 
-  // These three reads are independent, so fetch them together (mirrors the
+  // These reads are independent, so fetch them together (mirrors the
   // agent/org parallel fetch on the request path above).
-  const [project, owner, toolApiKeys] = await Promise.all([
+  const [project, owner, toolApiKeys, toolAvailability] = await Promise.all([
     hydrated.projectId ? projectRepository.findById(hydrated.projectId) : Promise.resolve(null),
     userRepository.findById(ctx.userId),
     apiKeyService.getEffectiveLLMApiKeys(ctx.userId, {
       db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
       getSettingsByNames,
     }),
+    // Never rejects (see resolveToolAvailability's doc comment). Fail-closed here (unlike the
+    // Tools picker UI's fail-open default): embed-widget end users have no way to add their own
+    // key, so a tool this lookup couldn't confirm works should not reach the model.
+    resolveToolAvailability(
+      ctx.userId,
+      { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } },
+      { onLookupError: 'unavailable', logger }
+    ),
   ]);
 
   let kbFileIds: string[] = [];
@@ -262,7 +271,7 @@ async function buildEmbedServerTools(args: {
     onToolFinish: async () => {},
   };
 
-  const tools = buildSharedTools(deps, callbacks, { enabledTools, getAbortSignal });
+  const tools = buildSharedTools(deps, callbacks, { enabledTools, getAbortSignal, toolAvailability });
   return tools && tools.length > 0 ? tools : undefined;
 }
 

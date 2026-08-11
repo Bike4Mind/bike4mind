@@ -1,5 +1,6 @@
 export * from './ChatCompletionProcess';
 export * from './ChatCompletionInvoke';
+export * from './mementoGating';
 export * from './ImageGeneration';
 export * from './VideoGeneration';
 export * from './ChatCompletionFeatures';
@@ -20,6 +21,7 @@ export {
 } from './intentClassifier.prompt';
 export * from './sharedToolBuilder';
 export * from './systemPromptDisclosure';
+export * from './toolAvailability';
 export { ServerAgentStore } from './agents/ServerAgentStore';
 export type { ServerAgentStoreOverlays } from './agents/ServerAgentStore';
 export {
@@ -35,6 +37,7 @@ export type {
   BackgroundDispatchResult,
 } from './agents/ServerSubagentOrchestrator';
 export * from './MementoEvaluationService';
+export * from './LakeMemoryExtractionService';
 export * from './SmallLLMService';
 export * from './smallLLMHelpers';
 export * from './reranker';

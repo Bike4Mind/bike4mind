@@ -11,10 +11,15 @@ import {
   NotebookImportError,
   SUPPORTED_IMPORT_VERSIONS,
 } from '../notebookExportService/types';
+import type { IChatHistoryItem } from '@bike4mind/common';
 
 export interface NotebookImportAdapters {
   sessionRepository: any; // SessionRepository
-  chatHistoryRepository: any; // ChatHistoryRepository
+  /** Typed because the caller's implementation of these two carries the insert-never-upsert rule. */
+  chatHistoryRepository: {
+    bulkCreate(items: IChatHistoryItem[]): Promise<unknown>;
+    deleteMany(filter: { sessionId: string }): Promise<unknown>;
+  };
   knowledgeRepository: any; // KnowledgeRepository
   artifactRepository: any; // ArtifactRepository
   toolRepository: any; // ToolRepository
@@ -171,7 +176,7 @@ export class NotebookImportService {
 
     // Import chat history
     if (notebook.chatHistory.length > 0) {
-      await this.importChatHistory(notebook.chatHistory, createdSession.id, options);
+      await this.importChatHistory(notebook.chatHistory, createdSession.id, targetUserId, options);
     }
 
     return createdSession.id;
@@ -203,7 +208,7 @@ export class NotebookImportService {
       case 'overwrite':
         // Delete existing chat history and replace
         await this.adapters.chatHistoryRepository.deleteMany({ sessionId: existingSession.id });
-        await this.importChatHistory(notebook.chatHistory, existingSession.id, options);
+        await this.importChatHistory(notebook.chatHistory, existingSession.id, existingSession.userId, options);
 
         // Update session metadata
         await this.adapters.sessionRepository.updateById(existingSession.id, {
@@ -228,7 +233,7 @@ export class NotebookImportService {
 
       case 'merge':
         // Append chat history to existing session
-        await this.importChatHistory(notebook.chatHistory, existingSession.id, options);
+        await this.importChatHistory(notebook.chatHistory, existingSession.id, existingSession.userId, options);
 
         // Update last updated time
         await this.adapters.sessionRepository.updateById(existingSession.id, {
@@ -245,10 +250,12 @@ export class NotebookImportService {
   private async importChatHistory(
     chatHistory: ExportedChatMessage[],
     sessionId: string,
+    ownerUserId: string,
     options: NotebookImportOptions
   ): Promise<void> {
-    const chatItems = chatHistory.map(message => ({
-      id: options.preserveIds ? message.id : this.adapters.generateId(),
+    const chatItems: IChatHistoryItem[] = chatHistory.map(message => ({
+      // A generated id is not a valid key for the message store; omit the field so it assigns one.
+      ...(options.preserveIds && message.id && { id: message.id }),
       sessionId,
       timestamp: new Date(message.timestamp),
       type: message.type,
@@ -258,7 +265,13 @@ export class NotebookImportService {
       questMasterReply: message.questMasterReply,
       images: message.images || [],
       fabFileIds: message.attachedFiles || [],
-      promptMeta: message.promptMeta,
+      // The store requires the owning session on promptMeta. The export carries metrics only,
+      // and an imported message belongs to the new notebook, so this is rebuilt rather than
+      // carried over.
+      promptMeta: message.promptMeta && {
+        ...message.promptMeta,
+        session: { id: sessionId, userId: ownerUserId },
+      },
       status: message.status,
       creditsUsed: message.creditsUsed,
       pinned: message.pinned,
@@ -266,7 +279,6 @@ export class NotebookImportService {
       questMasterPlanId: message.questMasterPlanId,
     }));
 
-    // Bulk create chat history items
     await this.adapters.chatHistoryRepository.bulkCreate(chatItems);
   }
 

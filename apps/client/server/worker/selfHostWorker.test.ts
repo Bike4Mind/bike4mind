@@ -60,7 +60,7 @@ describe('SelfHostWorker', () => {
     worker.stop();
   });
 
-  it('leaves a failed message for retry below the cap, and drops it as poison above the cap', async () => {
+  it('leaves a failed message for retry below the cap, and drops it as poison above the cap without invoking the handler', async () => {
     const worker = new SelfHostWorker(mockLogger);
     const dispatch = vi.fn().mockRejectedValue(new Error('boom'));
     const belowCap = makeMessage({
@@ -78,10 +78,27 @@ describe('SelfHostWorker', () => {
 
     worker.start();
 
-    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(2));
-    // Below cap: left for redelivery (not deleted). Over cap: deleted as poison.
+    await vi.waitFor(() => expect(mockDeleteFromQueue).toHaveBeenCalledWith('http://sqs/q', 'rc-over'));
+    // Over the cap is dropped WITHOUT ever calling dispatch, mirroring real SQS: the handler's
+    // last real invocation must land at receiveCount === maxReceiveCount, never beyond it.
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ Records: expect.anything() }), expect.anything());
+    // Below cap: left for redelivery (not deleted).
     expect(mockDeleteFromQueue).toHaveBeenCalledTimes(1);
-    expect(mockDeleteFromQueue).toHaveBeenCalledWith('http://sqs/q', 'rc-over');
+    worker.stop();
+  });
+
+  it('drops an over-cap message even when a lower receive count never fails (first message ever seen at count 4)', async () => {
+    const worker = new SelfHostWorker(mockLogger);
+    const dispatch = vi.fn().mockResolvedValue(undefined);
+    const overCap = makeMessage({ Attributes: { ApproximateReceiveCount: '4' } });
+    drainOnce(worker, [overCap]);
+    worker.registerQueueHandler('q', 'http://sqs/q', dispatch, { maxReceiveCount: 3 });
+
+    worker.start();
+
+    await vi.waitFor(() => expect(mockDeleteFromQueue).toHaveBeenCalledWith('http://sqs/q', 'r1'));
+    expect(dispatch).not.toHaveBeenCalled();
     worker.stop();
   });
 
