@@ -1,4 +1,4 @@
-import { Permission, dayjs, type CompletionSource } from '@bike4mind/common';
+import { ApiKeyScope, Permission, dayjs, type CompletionSource } from '@bike4mind/common';
 import {
   CounterLog,
   DailyReport,
@@ -56,9 +56,31 @@ const IsoDateSchema = z
     return !Number.isNaN(parsed.getTime()) && parsed.toISOString().startsWith(value);
   }, 'Not a calendar date');
 
+const isValidTimeZone = (tz: string): boolean => {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const CounterLogsQuerySchema = z.object({
   startDate: IsoDateSchema,
   endDate: IsoDateSchema,
+  /**
+   * IANA zone that startDate/endDate name a calendar day in, and that the day buckets are cut in.
+   * Defaults to UTC, which is how this route behaved before the parameter existed.
+   *
+   * Applies to the `{logs}` branch only. The report branches persist to DailyReport /
+   * WeeklyReport, whose rows are keyed by UTC date and shared across every admin, so honouring a
+   * per-request zone there would let one admin's locale overwrite another's cached report.
+   */
+  timezone: z
+    .string()
+    .optional()
+    .refine(val => val === undefined || isValidTimeZone(val), { message: 'Unknown IANA time zone' })
+    .transform(val => val ?? 'UTC'),
   events: z
     .string()
     .optional()
@@ -146,7 +168,13 @@ interface WeeklyReportData {
   usageBySource?: Array<{ source: CompletionSource; count: number }>;
 }
 
-const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async (req, res) => {
+// requiredScopes: an API key reaching this route gets its CASL ability rebuilt from `user.isAdmin`
+// (server/middlewares/apiKeyAuth.ts), so the `Permission.read` check below passes for any
+// admin-owned key regardless of the scopes it was issued with. The scope gate is what makes a
+// narrow key stay narrow; it only runs for API-key callers, so browser/JWT admins are unaffected.
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get<
+  Request<{}, {}, {}, Record<string, string>>
+>(async (req, res) => {
   if (!req.ability?.can(Permission.read, CounterLog)) {
     throw new ForbiddenError('Unauthorized');
   }
@@ -155,6 +183,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     const {
       startDate,
       endDate,
+      timezone,
       events,
       orgs,
       excludeOrgs,
@@ -215,10 +244,13 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
       // filter sets collide - e.g. counterName='a:b' + userEmail='c' vs counterName='a' +
       // userEmail='b:c' - serving one admin the other's rows and total for the full hour.
       const cacheKey = [
-        'logs:v3',
+        // v4: day buckets are now cut in the caller's timezone, so a v3 window holds rows bucketed
+        // differently for what is otherwise the same filter set.
+        'logs:v4',
         ...[
           startDate,
           endDate,
+          timezone,
           events?.join(',') ?? '',
           orgs?.join(',') ?? '',
           excludeOrgs?.join(',') ?? '',
@@ -248,6 +280,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
       const { pipeline, facetStages } = buildUserActivityPipeline({
         startDate,
         endDate,
+        timezone,
         // A cacheable window always starts at 0 so any earlier page can be sliced out of it.
         skip: windowRows === null ? skip : 0,
         limit: windowRows ?? limit,

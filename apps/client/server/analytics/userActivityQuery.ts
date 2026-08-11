@@ -22,7 +22,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { z } from 'zod';
-import { SAFE_USER_LOOKUP_PROJECT } from '@bike4mind/common';
+import { SAFE_USER_LOOKUP_PROJECT, dayjs } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 
 export const DEFAULT_PAGE_SIZE = 25;
@@ -66,6 +66,11 @@ export function parseMetadataFilters(raw: string | undefined): MetadataFilter[] 
 export interface UserActivityQueryParams {
   startDate: string;
   endDate: string;
+  /**
+   * IANA zone that startDate/endDate name a calendar day in, and that the day buckets are cut in.
+   * One value drives both, or the first and last buckets are partial days. Defaults to UTC.
+   */
+  timezone?: string;
   /** Rows to skip before the returned window. The caller pages by moving this, not by re-sorting. */
   skip: number;
   /** Rows to return. Sized by the caller: one page for a deep page, a whole cache window otherwise. */
@@ -138,6 +143,7 @@ export interface UserActivityPipeline {
 export function buildUserActivityPipeline({
   startDate,
   endDate,
+  timezone = 'UTC',
   skip,
   limit,
   events,
@@ -148,10 +154,13 @@ export function buildUserActivityPipeline({
   metadataFilters = [],
   usersCollection = 'users',
 }: UserActivityQueryParams): UserActivityPipeline {
+  // startDate/endDate name calendar days in `timezone`, so their local midnight and end-of-day
+  // resolve to instants in that zone rather than being pinned to UTC. The same zone cuts the day
+  // buckets below, so the window and the buckets line up.
   const matchCondition: any = {
     datetime: {
-      $gte: new Date(`${startDate}T00:00:00.000Z`),
-      $lte: new Date(`${endDate}T23:59:59.999Z`),
+      $gte: dayjs.tz(`${startDate}T00:00:00.000`, timezone).toDate(),
+      $lte: dayjs.tz(`${endDate}T23:59:59.999`, timezone).toDate(),
     },
   };
 
@@ -163,13 +172,18 @@ export function buildUserActivityPipeline({
     matchCondition.counterName = counterNameCondition;
   }
 
-  // excludeOrgs wins over orgs, matching the pre-existing endpoint behaviour: the UI only
-  // offers the exclusion checkboxes while "All Organizations" is selected.
+  // Both constrain userOrganization, so they merge into one operator. Assigning twice dropped the
+  // $in whenever both were sent - invisible from the UI, which only offers the exclusion
+  // checkboxes while "All Organizations" is selected, but an API caller can send both.
+  const orgFilter: Record<string, string[]> = {};
   if (orgs?.length && !orgs.includes('all')) {
-    matchCondition.userOrganization = { $in: orgs };
+    orgFilter.$in = orgs;
   }
   if (excludeOrgs?.length) {
-    matchCondition.userOrganization = { $nin: excludeOrgs };
+    orgFilter.$nin = excludeOrgs;
+  }
+  if (Object.keys(orgFilter).length) {
+    matchCondition.userOrganization = orgFilter;
   }
 
   if (metadataFilters.length) {
@@ -178,7 +192,7 @@ export function buildUserActivityPipeline({
 
   const pipeline: any[] = [
     { $match: matchCondition },
-    { $addFields: { dateString: { $dateToString: { format: '%Y-%m-%d', date: '$datetime', timezone: 'UTC' } } } },
+    { $addFields: { dateString: { $dateToString: { format: '%Y-%m-%d', date: '$datetime', timezone } } } },
     {
       // Group BEFORE the join: userEmail/userOrganization are functionally determined by userId,
       // so joining once per grouped row instead of once per raw document is ~2x faster on a
@@ -230,6 +244,7 @@ export function buildUserActivityPipeline({
     // across the two facet executions - userEmail cannot do it, since every row whose join
     // missed shares the same '' fallback. Covering the whole group key (userId + metadataKey,
     // ordered by BSON comparison) makes the order unique, because the key is unique per row.
+    // Every field added to the group key has to be added here too.
     {
       $sort: {
         '_id.date': -1,

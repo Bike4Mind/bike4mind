@@ -25,12 +25,16 @@ import { SAFE_USER_LOOKUP_PROJECT, USER_SECRET_FIELDS } from '@bike4mind/common'
  * and live in counterLogs.paging.test.ts, which cannot share this file's real-Mongo harness.
  */
 
+// The mock surfaces baseApi's options as `_config`. Without that, no test could see the route's
+// requiredScopes and a suite that read as scope coverage would pass with requiredScopes omitted -
+// the same trap documented in pages/api/hearth/__tests__/hearthRoutes.test.ts.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+  baseApi: (options?: Record<string, unknown>) => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
       {
+        _config: options,
         use: () => chain,
         get: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.GET = fns[fns.length - 1]), chain),
       }
@@ -41,6 +45,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 import handler from '../counterLogs';
 import { buildUserActivityPipeline } from '@server/analytics/userActivityQuery';
+import { ApiKeyScope } from '@bike4mind/common';
 
 let mongoServer: MongoMemoryServer;
 
@@ -248,5 +253,169 @@ describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
     // else about them (day, counter, user) is identical.
     expect(rows).toHaveLength(2);
     expect(new Set(rows.map(r => r.metadata.reportId))).toEqual(new Set(['report-1', 'report-2']));
+  });
+
+  it('requires the admin API-key scope', () => {
+    // The CASL check inside the handler is not sufficient on its own: apiKeyAuth rebuilds
+    // req.ability from user.isAdmin, so `can(read, CounterLog)` passes for ANY key an admin owns,
+    // whatever scopes it was issued with. The scope gate in baseApi is what keeps a narrow key
+    // narrow, so assert it is actually declared.
+    const config = (handler as unknown as { _config?: { requiredScopes?: ApiKeyScope[] } })._config;
+    expect(config?.requiredScopes).toEqual([ApiKeyScope.ADMIN]);
+  });
+
+  it('cuts the window and the day buckets in the requested timezone', async () => {
+    const user = await User.create({
+      username: 'e2e-tz-user',
+      name: 'TZ User',
+      email: 'tz-user@example.com',
+    });
+
+    const log = (datetime: string, sessionId: string) => ({
+      userId: user.id,
+      userName: 'TZ User',
+      userLevel: 'User',
+      counterName: 'Session Created',
+      counterValue: 1,
+      datetime: new Date(datetime),
+      metadata: { sessionId },
+    });
+
+    await CounterLog.create([
+      // 2026-07-21 18:00 in America/Chicago (UTC-5 in July) - a UTC window would place this on
+      // the 21st too, so it only pins the bucket label.
+      log('2026-07-21T23:00:00.000Z', 'evening-of-21st'),
+      // 2026-07-21 20:00 Chicago, but already 2026-07-22 in UTC. Under the old UTC-only window
+      // this fell outside a "21st to 21st" request entirely.
+      log('2026-07-22T01:00:00.000Z', 'late-on-21st'),
+      // 2026-07-20 23:00 Chicago - the previous local day, so it must stay excluded.
+      log('2026-07-21T04:00:00.000Z', 'still-the-20th'),
+    ]);
+
+    const { res, promise } = run({
+      startDate: '2026-07-21',
+      endDate: '2026-07-21',
+      timezone: 'America/Chicago',
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const rows = JSON.parse(JSON.stringify(res._getJSONData())).logs as Array<{
+      date: string;
+      count: number;
+    }>;
+
+    // Both in-window events share the row unit (same local day, counter and user), so they land in
+    // one row labelled with the local 21st rather than splitting across a UTC 21st/22nd pair - and
+    // its count is 2, not 3, because the previous local day stays excluded.
+    expect(rows).toHaveLength(1);
+    expect(rows[0].date).toBe('2026-07-21');
+    expect(rows[0].count).toBe(2);
+  });
+
+  it('defaults to UTC when no timezone is given', async () => {
+    const user = await User.create({
+      username: 'e2e-tz-default-user',
+      name: 'TZ Default User',
+      email: 'tz-default-user@example.com',
+    });
+
+    await CounterLog.create({
+      userId: user.id,
+      userName: 'TZ Default User',
+      userLevel: 'User',
+      counterName: 'Session Created',
+      counterValue: 1,
+      datetime: new Date('2026-07-21T23:30:00.000Z'),
+      metadata: { sessionId: 'late-utc' },
+    });
+
+    const { res, promise } = run({ startDate: '2026-07-21', endDate: '2026-07-21' });
+    await promise;
+
+    const rows = JSON.parse(JSON.stringify(res._getJSONData())).logs as Array<{ date: string }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].date).toBe('2026-07-21');
+  });
+
+  it('labels the org column with the same field the org filter matches on', async () => {
+    // The filter matches CounterLog.userOrganization; the column used to be projected from the
+    // joined user, so a user who moved orgs filtered under one name and displayed under another
+    // (and in practice displayed nothing at all, since the User schema has no `organization`).
+    const user = await User.create({
+      username: 'e2e-moved-user',
+      name: 'Moved User',
+      email: 'moved-user@example.com',
+    });
+
+    await CounterLog.create([
+      {
+        userId: user.id,
+        userName: 'Moved User',
+        userLevel: 'User',
+        userOrganization: 'Old Org',
+        counterName: 'Session Created',
+        counterValue: 1,
+        datetime: new Date('2026-07-21T10:00:00.000Z'),
+        metadata: { sessionId: 'while-at-old-org' },
+      },
+      {
+        userId: user.id,
+        userName: 'Moved User',
+        userLevel: 'User',
+        userOrganization: 'New Org',
+        counterName: 'Session Created',
+        counterValue: 1,
+        datetime: new Date('2026-07-21T11:00:00.000Z'),
+        metadata: { sessionId: 'while-at-new-org' },
+      },
+    ]);
+
+    const { res, promise } = run({ startDate: '2026-07-21', endDate: '2026-07-21', orgs: 'Old Org' });
+    await promise;
+
+    const rows = JSON.parse(JSON.stringify(res._getJSONData())).logs as Array<{
+      metadata: { sessionId: string };
+      userOrganization: string;
+    }>;
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].metadata.sessionId).toBe('while-at-old-org');
+    expect(rows[0].userOrganization).toBe('Old Org');
+  });
+
+  it('applies orgs and excludeOrgs together instead of letting one drop the other', async () => {
+    const user = await User.create({
+      username: 'e2e-both-org-filters',
+      name: 'Both Filters User',
+      email: 'both-filters@example.com',
+    });
+
+    const log = (org: string, sessionId: string) => ({
+      userId: user.id,
+      userName: 'Both Filters User',
+      userLevel: 'User',
+      userOrganization: org,
+      counterName: 'Session Created',
+      counterValue: 1,
+      datetime: new Date('2026-07-21T10:00:00.000Z'),
+      metadata: { sessionId },
+    });
+
+    await CounterLog.create([log('Keep Org', 'keep'), log('Drop Org', 'drop'), log('Unlisted Org', 'unlisted')]);
+
+    const { res, promise } = run({
+      startDate: '2026-07-21',
+      endDate: '2026-07-21',
+      orgs: 'Keep Org,Drop Org',
+      excludeOrgs: 'Drop Org',
+    });
+    await promise;
+
+    const rows = JSON.parse(JSON.stringify(res._getJSONData())).logs as Array<{ metadata: { sessionId: string } }>;
+
+    // Only 'keep' satisfies both operators. The previous code assigned userOrganization twice, so
+    // the $nin overwrote the $in and 'unlisted' came back too.
+    expect(rows.map(r => r.metadata.sessionId)).toEqual(['keep']);
   });
 });
