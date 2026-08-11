@@ -270,6 +270,38 @@ describe('FabFileChunkSearchIndex.deleteByFabFileId', () => {
   });
 });
 
+describe('FabFileChunkSearchIndex.deleteByFabFileIdOrThrow', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.OPENSEARCH_ENDPOINT = 'localhost:9200';
+    FabFileChunkSearchIndex['ensuredModels'].clear();
+  });
+
+  it('deletes by fabFileId term query on the model-specific index', async () => {
+    mockOsClient.deleteDocumentByQuery.mockResolvedValueOnce(undefined);
+
+    await FabFileChunkSearchIndex.deleteByFabFileIdOrThrow('file-1', MODEL);
+
+    expect(mockOsClient.deleteDocumentByQuery).toHaveBeenCalledWith(selfHostVectorIndexName(MODEL), {
+      query: { term: { 'metadata.fabFileId': 'file-1' } },
+    });
+  });
+
+  // The opposite of deleteByFabFileId's contract - used by openSearchRetrievalIndex.ts, whose
+  // caller (strictIndexRemove) needs the failure to reach it, not be swallowed here.
+  it('propagates a delete failure rather than swallowing it', async () => {
+    mockOsClient.deleteDocumentByQuery.mockRejectedValueOnce(new Error('cluster unreachable'));
+    await expect(FabFileChunkSearchIndex.deleteByFabFileIdOrThrow('file-1', MODEL)).rejects.toThrow(
+      'cluster unreachable'
+    );
+  });
+
+  it('no-ops for an unregistered model', async () => {
+    await FabFileChunkSearchIndex.deleteByFabFileIdOrThrow('file-1', 'not-a-real-model');
+    expect(mockOsClient.deleteDocumentByQuery).not.toHaveBeenCalled();
+  });
+});
+
 describe('FabFileChunkSearchIndex.deleteByChunkIds', () => {
   beforeEach(() => {
     vi.clearAllMocks();

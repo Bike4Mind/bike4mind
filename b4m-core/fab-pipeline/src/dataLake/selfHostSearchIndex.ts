@@ -146,16 +146,28 @@ export class FabFileChunkSearchIndex extends BaseSearchIndex {
 
   /** Remove every OpenSearch doc for a deleted/re-chunked file, across the given model's index. */
   static async deleteByFabFileId(fabFileId: string, embeddingModel: string): Promise<void> {
-    const indexName = selfHostVectorIndexName(embeddingModel);
-    if (!indexName) return;
-    const osClient = await this.loadSearchIndexClient();
     try {
-      await osClient.deleteDocumentByQuery(indexName, {
-        query: { term: { 'metadata.fabFileId': fabFileId } },
-      });
+      await this.deleteByFabFileIdOrThrow(fabFileId, embeddingModel);
     } catch (error) {
       Logger.globalInstance.warn(`Failed to delete self-host OpenSearch vectors for FabFile ${fabFileId}:`, error);
     }
+  }
+
+  /**
+   * Same delete as `deleteByFabFileId`, but propagates a failure instead of swallowing it. For
+   * `openSearchRetrievalIndex.ts`'s `RetrievalIndexPort` implementation: the port itself must
+   * stay failure-neutral so its CALLER decides the posture - `bestEffortIndexRemove` (archive/
+   * delete) wraps the whole call and logs, while `strictIndexRemove` (the phase-2 purge) does
+   * NOT catch, so a real OpenSearch failure aborts the sweep for a clean DLQ retry rather than
+   * the purge hard-deleting Mongo rows an OpenSearch removal never actually completed.
+   */
+  static async deleteByFabFileIdOrThrow(fabFileId: string, embeddingModel: string): Promise<void> {
+    const indexName = selfHostVectorIndexName(embeddingModel);
+    if (!indexName) return;
+    const osClient = await this.loadSearchIndexClient();
+    await osClient.deleteDocumentByQuery(indexName, {
+      query: { term: { 'metadata.fabFileId': fabFileId } },
+    });
   }
 
   /**

@@ -3,7 +3,17 @@ import type { RetrievalIndexPort, RetrievalIndexRemoval } from './ports';
 
 export interface OpenSearchRetrievalIndexAdapters {
   db: { fabFileChunks: Pick<IFabFileChunkRepository, 'distinctEmbeddingModelsByFabFileIds'> };
-  searchIndex: { deleteByFabFileId: (fabFileId: string, embeddingModel: string) => Promise<void> };
+  searchIndex: { deleteByFabFileIdOrThrow: (fabFileId: string, embeddingModel: string) => Promise<void> };
+}
+
+/** Bounds peak concurrency against OpenSearch - matches cleanupDeletedDataLake.ts's own fan-outs. */
+const REMOVAL_CHUNK_SIZE = 20;
+
+/** Run `fn` over `items` in sequential slices of `size` - a rejection propagates immediately, unlike `Promise.all` over the whole set or a `parallelLimit`-style runner (which settles every lane and never rejects). */
+async function inChunks<T>(items: T[], size: number, fn: (item: T) => Promise<unknown>): Promise<void> {
+  for (let i = 0; i < items.length; i += size) {
+    await Promise.all(items.slice(i, i + size).map(fn));
+  }
 }
 
 /**
@@ -18,17 +28,25 @@ export interface OpenSearchRetrievalIndexAdapters {
  * intentionally scope-agnostic), so this resolves it per-batch from the chunk store rather than
  * trusting FabFile.embeddingModel, which is only a file's CURRENT model and can miss chunks left
  * behind by an earlier embed (see IFabFileChunk.embeddingModel).
+ *
+ * Deliberately failure-neutral: uses `deleteByFabFileIdOrThrow`, NOT the fail-open
+ * `deleteByFabFileId` the write/delete paths use directly. This port backs both
+ * `bestEffortIndexRemove` (archive/delete, which wraps the whole call and logs) AND
+ * `strictIndexRemove` (the phase-2 purge, which does NOT catch) - baking in fail-open here would
+ * silently break the purge's abort-on-failure contract (see ports.ts), letting it hard-delete
+ * Mongo rows an OpenSearch removal never actually completed. The chunked (not unbounded
+ * `Promise.all`) fan-out is for the same reason: the purge is the one sweep step that must not
+ * fail, so it gets the same bounded-concurrency discipline as every other step in
+ * cleanupDeletedDataLake.ts, not a single unbounded burst against the cluster.
  */
 export function openSearchRetrievalIndex(adapters: OpenSearchRetrievalIndexAdapters): RetrievalIndexPort {
   return {
     async removeForDataLake({ fabFileIds }: RetrievalIndexRemoval): Promise<void> {
       if (fabFileIds.length === 0) return;
       const models = await adapters.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds(fabFileIds);
-      // Every (file, model) pair rather than a per-model bulk query: deleteByFabFileId is already
-      // the fail-open, per-file primitive the write/delete paths use, so reusing it here keeps
-      // one removal semantics across the whole feature instead of introducing a second one.
-      await Promise.all(
-        fabFileIds.flatMap(fabFileId => models.map(model => adapters.searchIndex.deleteByFabFileId(fabFileId, model)))
+      const pairs = fabFileIds.flatMap(fabFileId => models.map(model => ({ fabFileId, model })));
+      await inChunks(pairs, REMOVAL_CHUNK_SIZE, ({ fabFileId, model }) =>
+        adapters.searchIndex.deleteByFabFileIdOrThrow(fabFileId, model)
       );
     },
   };
