@@ -3867,6 +3867,24 @@ export function redactSettingSecrets(setting: AdminSettingDoc): AdminSettingDoc 
   };
 }
 
+/**
+ * Redact a setting for a WebSocket / change-stream broadcast, where the payload is the RAW
+ * stored document. Post-encryption an isSensitive value is ciphertext the browser cannot
+ * decrypt, so it collapses to the bare mask with NO trailing characters: masking the
+ * ciphertext tail (as maskSensitiveSettingValue would) surfaces a wrong "last 4" and lets an
+ * admin watching a live cross-admin update mis-verify which credential is loaded. An unset
+ * value stays empty. The authoritative mask carrying the real last-4 still comes from
+ * /api/settings/fetch. Non-sensitive shapes (sreAgentConfig) fall through to redactSettingSecrets.
+ */
+export function redactSettingSecretsForBroadcast(setting: AdminSettingDoc): AdminSettingDoc {
+  const definition = (settingsMap as Record<string, { isSensitive?: boolean } | undefined>)[setting.settingName];
+  if (definition?.isSensitive) {
+    const hasValue = typeof setting.settingValue === 'string' && setting.settingValue.length > 0;
+    return { ...setting, settingValue: hasValue ? SENSITIVE_SETTING_MASK : '' };
+  }
+  return redactSettingSecrets(setting);
+}
+
 /** Setting keys explicitly tagged `publicSafe` - the only keys allowed in the public artifact. */
 export function publicSafeSettingKeys(): string[] {
   return (Object.values(settingsMap) as Array<{ key: string; publicSafe?: boolean }>)

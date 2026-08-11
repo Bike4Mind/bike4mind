@@ -47,7 +47,417 @@
       }
     },
     "schemas": {
-      "CompletionRequest": {
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Human-readable error message."
+          },
+          "request_id": {
+            "type": "string",
+            "description": "Correlation id, mirrors the X-Request-ID header."
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "example": {
+          "error": "Missing or invalid toolName",
+          "request_id": "abc-123"
+        }
+      },
+      "sendChatMessageResponse200": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "message_received": {
+            "type": "boolean"
+          },
+          "timestamp": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "tracking_info": {
+            "type": "object",
+            "properties": {
+              "quest_id": {
+                "type": "string"
+              },
+              "check_status_url": {
+                "type": "string"
+              },
+              "poll_url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "quest_id",
+              "check_status_url"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "message_received",
+          "timestamp",
+          "model",
+          "tracking_info"
+        ]
+      },
+      "sendChatMessageRequest": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "temperature": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2
+          },
+          "max_tokens": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "maxTokens": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "maxOutputTokens": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "stream": {
+            "type": "boolean",
+            "default": false
+          },
+          "historyCount": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "default": 10
+          },
+          "fileIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "wait": {
+            "type": "boolean",
+            "default": false
+          },
+          "enableTools": {
+            "type": "boolean",
+            "default": false
+          },
+          "toolMode": {
+            "type": "string",
+            "enum": [
+              "fast",
+              "smart"
+            ]
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "enableQuestMaster": {
+            "type": "boolean"
+          },
+          "enableMementos": {
+            "type": "boolean"
+          },
+          "enableAgents": {
+            "type": "boolean"
+          },
+          "promptMode": {
+            "type": "string",
+            "enum": [
+              "raw",
+              "grounded",
+              "surface"
+            ]
+          },
+          "includePromptDetails": {
+            "type": "boolean"
+          },
+          "includeSystemPrompt": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "example": {
+          "message": "How do I reset my password?",
+          "toolMode": "smart"
+        }
+      },
+      "executeToolResponse200": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "result": {},
+          "error": {
+            "type": "string"
+          },
+          "errorType": {
+            "type": "string"
+          },
+          "executionTimeMs": {
+            "type": "number"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "example": {
+          "success": true,
+          "result": {
+            "summary": "Top results for the query."
+          },
+          "executionTimeMs": 842,
+          "request_id": "abc-123"
+        }
+      },
+      "executeToolResponse500": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "success": {
+                "type": "boolean"
+              },
+              "result": {},
+              "error": {
+                "type": "string"
+              },
+              "errorType": {
+                "type": "string"
+              },
+              "executionTimeMs": {
+                "type": "number"
+              },
+              "request_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "success",
+              "request_id"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "error": {
+                "type": "string"
+              },
+              "request_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "error"
+            ]
+          }
+        ]
+      },
+      "executeToolRequest": {
+        "type": "object",
+        "properties": {
+          "toolName": {
+            "type": "string",
+            "enum": [
+              "weather_info",
+              "web_search",
+              "web_fetch"
+            ]
+          },
+          "input": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "toolName",
+          "input"
+        ],
+        "example": {
+          "toolName": "web_search",
+          "input": {
+            "query": "how to reset a password"
+          }
+        }
+      },
+      "createCompletionResponse200": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "meta"
+                ]
+              },
+              "requestId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "requestId"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "content",
+                  "tool_use"
+                ]
+              },
+              "text": {
+                "type": "string"
+              },
+              "tools": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "arguments": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ]
+                }
+              },
+              "usage": {
+                "type": "object",
+                "properties": {
+                  "inputTokens": {
+                    "type": "number"
+                  },
+                  "outputTokens": {
+                    "type": "number"
+                  },
+                  "cacheReadInputTokens": {
+                    "type": "number"
+                  },
+                  "cacheCreationInputTokens": {
+                    "type": "number"
+                  }
+                }
+              },
+              "credits": {
+                "type": "object",
+                "properties": {
+                  "used": {
+                    "type": "number"
+                  },
+                  "usdCost": {
+                    "type": "number"
+                  }
+                }
+              },
+              "responseFormatMode": {
+                "type": "string",
+                "enum": [
+                  "native",
+                  "tool_use",
+                  "best-effort"
+                ]
+              },
+              "thinking": {
+                "type": "array",
+                "items": {}
+              }
+            },
+            "required": [
+              "type",
+              "text"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "error"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "code": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "message"
+            ]
+          }
+        ],
+        "example": {
+          "type": "content",
+          "text": "To reset your password, click 'Forgot password' on the login screen.",
+          "usage": {
+            "inputTokens": 42,
+            "outputTokens": 12
+          },
+          "credits": {
+            "used": 1,
+            "usdCost": 0.00037
+          }
+        }
+      },
+      "createCompletionRequest": {
         "type": "object",
         "properties": {
           "model": {
@@ -349,442 +759,15 @@
           "model",
           "messages"
         ],
-        "description": "OpenAI-compatible completion request. Top-level `response_format`, `stream`, `tools`, `temperature`, and `max_tokens` are also accepted nested under `options` (legacy shape).",
         "example": {
           "model": "claude-opus-4-8",
           "messages": [
-            {
-              "role": "system",
-              "content": "You are a support agent."
-            },
             {
               "role": "user",
               "content": "How do I reset my password?"
             }
           ],
-          "temperature": 0.7,
           "max_tokens": 500
-        }
-      },
-      "CompletionStreamEvent": {
-        "anyOf": [
-          {
-            "$ref": "#/components/schemas/CompletionMetaEvent"
-          },
-          {
-            "$ref": "#/components/schemas/CompletionContentEvent"
-          },
-          {
-            "$ref": "#/components/schemas/CompletionSseErrorEvent"
-          }
-        ],
-        "description": "One `data:` event in the `text/event-stream` response. Order: one `meta`, then one or more `content`/`tool_use` events, terminated by the literal line `data: [DONE]`. Comment lines (`: keep-alive`) are interleaved as heartbeats and carry no event.",
-        "example": {
-          "type": "content",
-          "text": "To reset your password, click 'Forgot password' on the login screen.",
-          "usage": {
-            "inputTokens": 42,
-            "outputTokens": 12
-          },
-          "credits": {
-            "used": 1,
-            "usdCost": 0.00037
-          }
-        }
-      },
-      "CompletionMetaEvent": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "enum": [
-              "meta"
-            ]
-          },
-          "requestId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "requestId"
-        ],
-        "description": "First non-keepalive event; carries the correlation id for log lookup."
-      },
-      "CompletionContentEvent": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "enum": [
-              "content",
-              "tool_use"
-            ]
-          },
-          "text": {
-            "type": "string"
-          },
-          "tools": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "name": {
-                  "type": "string"
-                },
-                "arguments": {
-                  "type": "string"
-                },
-                "id": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "name"
-              ]
-            }
-          },
-          "usage": {
-            "type": "object",
-            "properties": {
-              "inputTokens": {
-                "type": "number"
-              },
-              "outputTokens": {
-                "type": "number"
-              },
-              "cacheReadInputTokens": {
-                "type": "number"
-              },
-              "cacheCreationInputTokens": {
-                "type": "number"
-              }
-            }
-          },
-          "credits": {
-            "type": "object",
-            "properties": {
-              "used": {
-                "type": "number"
-              },
-              "usdCost": {
-                "type": "number"
-              }
-            }
-          },
-          "responseFormatMode": {
-            "type": "string",
-            "enum": [
-              "native",
-              "tool_use",
-              "best-effort"
-            ]
-          },
-          "thinking": {
-            "type": "array",
-            "items": {}
-          }
-        },
-        "required": [
-          "type",
-          "text"
-        ],
-        "description": "A streamed chunk of assistant output; `usage`/`credits` ride on the final chunks."
-      },
-      "CompletionSseErrorEvent": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "enum": [
-              "error"
-            ]
-          },
-          "message": {
-            "type": "string"
-          },
-          "requestId": {
-            "type": "string"
-          },
-          "code": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "type",
-          "message"
-        ],
-        "description": "In-band stream error. The completions endpoint reports failures as this SSE event (HTTP status stays 200 once the stream has opened), terminating the stream."
-      },
-      "ToolExecutionRequest": {
-        "type": "object",
-        "properties": {
-          "toolName": {
-            "type": "string",
-            "enum": [
-              "weather_info",
-              "web_search",
-              "web_fetch"
-            ]
-          },
-          "input": {
-            "type": "object",
-            "additionalProperties": {}
-          }
-        },
-        "required": [
-          "toolName",
-          "input"
-        ],
-        "description": "Server-side tool execution request. Not the same shape as a completion `tools` entry.",
-        "example": {
-          "toolName": "web_search",
-          "input": {
-            "query": "how to reset a password"
-          }
-        }
-      },
-      "ToolExecutionResponse": {
-        "type": "object",
-        "properties": {
-          "success": {
-            "type": "boolean"
-          },
-          "result": {},
-          "error": {
-            "type": "string"
-          },
-          "errorType": {
-            "type": "string"
-          },
-          "executionTimeMs": {
-            "type": "number"
-          },
-          "request_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "success",
-          "request_id"
-        ],
-        "description": "Tool execution result. `success: false` carries `error`; `request_id` echoes X-Request-ID.",
-        "example": {
-          "success": true,
-          "result": {
-            "summary": "Top results for the query."
-          },
-          "executionTimeMs": 842,
-          "request_id": "abc-123"
-        }
-      },
-      "ErrorResponse": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string",
-            "description": "Human-readable error message."
-          },
-          "request_id": {
-            "type": "string",
-            "description": "Correlation id, mirrors the X-Request-ID header."
-          }
-        },
-        "required": [
-          "error"
-        ],
-        "example": {
-          "error": "Missing or invalid toolName",
-          "request_id": "abc-123"
-        }
-      },
-      "sendChatMessageResponse200": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          },
-          "message_received": {
-            "type": "boolean"
-          },
-          "timestamp": {
-            "type": "string"
-          },
-          "model": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "tracking_info": {
-            "type": "object",
-            "properties": {
-              "quest_id": {
-                "type": "string"
-              },
-              "check_status_url": {
-                "type": "string"
-              },
-              "poll_url": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "quest_id",
-              "check_status_url"
-            ]
-          }
-        },
-        "required": [
-          "id",
-          "status",
-          "message_received",
-          "timestamp",
-          "model",
-          "tracking_info"
-        ]
-      },
-      "sendChatMessageResponse400": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string"
-          },
-          "request_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "error"
-        ]
-      },
-      "sendChatMessageResponse404": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string"
-          },
-          "request_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "error"
-        ]
-      },
-      "sendChatMessageResponse429": {
-        "type": "object",
-        "properties": {
-          "error": {
-            "type": "string"
-          },
-          "request_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "error"
-        ]
-      },
-      "sendChatMessageRequest": {
-        "type": "object",
-        "properties": {
-          "sessionId": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "message": {
-            "type": "string"
-          },
-          "model": {
-            "type": "string"
-          },
-          "temperature": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 2
-          },
-          "max_tokens": {
-            "type": "number",
-            "exclusiveMinimum": 0
-          },
-          "maxTokens": {
-            "type": "number",
-            "exclusiveMinimum": 0
-          },
-          "maxOutputTokens": {
-            "type": "number",
-            "exclusiveMinimum": 0
-          },
-          "stream": {
-            "type": "boolean",
-            "default": false
-          },
-          "historyCount": {
-            "type": "number",
-            "exclusiveMinimum": 0,
-            "default": 10
-          },
-          "fileIds": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "default": []
-          },
-          "wait": {
-            "type": "boolean",
-            "default": false
-          },
-          "enableTools": {
-            "type": "boolean",
-            "default": false
-          },
-          "toolMode": {
-            "type": "string",
-            "enum": [
-              "fast",
-              "smart"
-            ]
-          },
-          "tools": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "enableQuestMaster": {
-            "type": "boolean"
-          },
-          "enableMementos": {
-            "type": "boolean"
-          },
-          "enableAgents": {
-            "type": "boolean"
-          },
-          "promptMode": {
-            "type": "string",
-            "enum": [
-              "raw",
-              "grounded",
-              "surface"
-            ]
-          },
-          "includePromptDetails": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "message"
-        ],
-        "example": {
-          "message": "How do I reset my password?",
-          "toolMode": "smart"
         }
       }
     },
@@ -841,7 +824,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/sendChatMessageResponse400"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             },
@@ -895,7 +878,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/sendChatMessageResponse404"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             },
@@ -931,7 +914,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/sendChatMessageResponse429"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             },
@@ -968,93 +951,6 @@
         ]
       }
     },
-    "/api/ai/v1/completions": {
-      "post": {
-        "operationId": "createCompletion",
-        "summary": "Create a chat completion",
-        "description": "OpenAI-compatible completion. The response is ALWAYS an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, terminated by `data: [DONE]`. Once the stream has opened the HTTP status stays 200 and failures arrive as an in-band `error` event. Authenticate with an API key (`b4m_live_`) or a JWT.",
-        "tags": [
-          "AI"
-        ],
-        "security": [
-          {
-            "bearerAuth": []
-          },
-          {
-            "apiKeyAuth": []
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CompletionRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "SSE stream of completion events (see CompletionStreamEvent).",
-            "content": {
-              "text/event-stream": {
-                "schema": {
-                  "$ref": "#/components/schemas/CompletionStreamEvent"
-                }
-              }
-            },
-            "headers": {
-              "X-Request-ID": {
-                "description": "Correlation id for this request; safe to log and quote in support requests.",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Malformed JSON body (rejected before the stream opens).",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "headers": {
-              "X-Request-ID": {
-                "description": "Correlation id for this request; safe to log and quote in support requests.",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "x-required-scopes": [
-          "ai:chat",
-          "ai:generate"
-        ],
-        "x-codeSamples": [
-          {
-            "lang": "curl",
-            "label": "curl",
-            "source": "curl -sN -X POST \"https://your-deployment.example.com/api/ai/v1/completions\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"model\": \"claude-opus-4-8\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"How do I reset my password?\"\n    }\n  ],\n  \"max_tokens\": 500\n}\nB4M_REQUEST_BODY"
-          },
-          {
-            "lang": "JavaScript",
-            "label": "fetch",
-            "source": "const res = await fetch(\"https://your-deployment.example.com/api/ai/v1/completions\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"model\": \"claude-opus-4-8\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"How do I reset my password?\"\n    }\n  ],\n  \"max_tokens\": 500\n}),\n});"
-          },
-          {
-            "lang": "Python",
-            "label": "requests",
-            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/ai/v1/completions\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"model\": \"claude-opus-4-8\",\n        \"messages\": [\n            {\n                \"role\": \"user\",\n                \"content\": \"How do I reset my password?\"\n            }\n        ],\n        \"max_tokens\": 500\n    },\n    stream=True,\n)"
-          }
-        ]
-      }
-    },
     "/api/ai/v1/tools": {
       "post": {
         "operationId": "executeTool",
@@ -1073,7 +969,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ToolExecutionRequest"
+                "$ref": "#/components/schemas/executeToolRequest"
               }
             }
           }
@@ -1084,7 +980,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ToolExecutionResponse"
+                  "$ref": "#/components/schemas/executeToolResponse200"
                 }
               }
             },
@@ -1116,7 +1012,7 @@
             }
           },
           "400": {
-            "description": "Missing/invalid `toolName` or `input`.",
+            "description": "Malformed JSON body.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1153,6 +1049,42 @@
           },
           "401": {
             "description": "Missing or invalid JWT (an API key is rejected here).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Request quota for the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Unix epoch (seconds) when the window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request body failed validation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1224,11 +1156,11 @@
             }
           },
           "500": {
-            "description": "Tool execution failed; body carries `success: false` with `error`.",
+            "description": "Tool execution failed (`success: false` with `error`) or an unexpected server error.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ToolExecutionResponse"
+                  "$ref": "#/components/schemas/executeToolResponse500"
                 }
               }
             },
@@ -1275,6 +1207,93 @@
             "lang": "Python",
             "label": "requests",
             "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/ai/v1/tools\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n    json={\n        \"toolName\": \"web_search\",\n        \"input\": {\n            \"query\": \"how to reset a password\"\n        }\n    },\n)"
+          }
+        ]
+      }
+    },
+    "/api/ai/v1/completions": {
+      "post": {
+        "operationId": "createCompletion",
+        "summary": "Create a chat completion",
+        "description": "OpenAI-compatible completion. The response is ALWAYS an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, terminated by `data: [DONE]`. Once the stream has opened the HTTP status stays 200 and failures arrive as an in-band `error` event. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/createCompletionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SSE stream of completion events (see the CompletionStreamEvent shape).",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/createCompletionResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON body (rejected before the stream opens).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "ai:chat",
+          "ai:generate"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -sN -X POST \"https://your-deployment.example.com/api/ai/v1/completions\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"model\": \"claude-opus-4-8\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"How do I reset my password?\"\n    }\n  ],\n  \"max_tokens\": 500\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/ai/v1/completions\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"model\": \"claude-opus-4-8\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"How do I reset my password?\"\n    }\n  ],\n  \"max_tokens\": 500\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/ai/v1/completions\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"model\": \"claude-opus-4-8\",\n        \"messages\": [\n            {\n                \"role\": \"user\",\n                \"content\": \"How do I reset my password?\"\n            }\n        ],\n        \"max_tokens\": 500\n    },\n    stream=True,\n)"
           }
         ]
       }

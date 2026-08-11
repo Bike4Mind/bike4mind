@@ -85,6 +85,9 @@ const toManageableConfig = (
   // projection actually resolved one (name-or-username, never email - see resolveOwnerNames).
   ...(!isOwn && ownerDisplayName ? { ownerDisplayName } : {}),
   ...(manageable && dl.systemPrompt?.trim() ? { systemPrompt: dl.systemPrompt.trim() } : {}),
+  // Editor-only, same gate as systemPrompt. An empty stored value means "no preferred prompt",
+  // so it is reported as absent (never '') - the picker then shows "None".
+  ...(manageable && dl.preferredSystemPromptId ? { preferredSystemPromptId: dl.preferredSystemPromptId } : {}),
 });
 
 /**

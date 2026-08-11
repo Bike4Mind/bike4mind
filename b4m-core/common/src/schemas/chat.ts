@@ -54,6 +54,10 @@ export const SimplifiedChatRequestSchema = z.object({
   // assembled from (promptDetails), so callers can verify what fed the model instead of
   // inferring it from behavior.
   includePromptDetails: z.boolean().optional(),
+  // With wait, also return the system prompt TEXT itself (promptText), not just the breakdown.
+  // Returned inline on this response only and never persisted, since a stored prompt would
+  // reach every reader of the quest. Server-authored blocks stay redacted even here.
+  includeSystemPrompt: z.boolean().optional(),
 });
 
 export type SimplifiedChatRequest = z.infer<typeof SimplifiedChatRequestSchema>;

@@ -120,4 +120,31 @@ describe('atlasVectorSearch', () => {
     expect(result.results).toEqual([]);
     expect(result.filesWithHits).toEqual(new Set(['f2']));
   });
+
+  // A production adapter is a repository INSTANCE, not an object literal - its method reads
+  // `this.someField`. Every case above passes `{ vectorSearch }` (a plain object), which has no
+  // `this` to lose, so a wrapper that strips the binding (`{ knnSearch: adapters.vectorSearch }`)
+  // would pass every one of them while still breaking in production.
+  it('keeps `this` bound when the adapter is a class instance, not an object literal', async () => {
+    class RepoLikeAdapter {
+      private calls: unknown[] = [];
+      async vectorSearch(...args: unknown[]) {
+        this.calls.push(args); // throws if `this` is not the instance
+        return [{ id: 'c1', fabFileId: 'f1', text: 'hello', score: 0.9 }];
+      }
+    }
+    const adapters = new RepoLikeAdapter();
+
+    const result = await atlasVectorSearch({
+      fileIds: ['f1'],
+      fileById,
+      queryVector: [1, 2, 3],
+      model: 'text-embedding-3-small',
+      limit: 10,
+      minScore: 0,
+      adapters,
+    });
+
+    expect(result.results).toHaveLength(1);
+  });
 });

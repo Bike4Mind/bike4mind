@@ -25,6 +25,52 @@ describe('CreateDataLakeRequestInput.fileTagPrefix', () => {
   it('rejects the reserved namespace behind leading whitespace', () => {
     expect(CreateDataLakeRequestInput.safeParse(input('  datalake:')).success).toBe(false);
   });
+
+  // A degenerate prefix ("::", "a::", ":a:", "a: :") gives every derived tag a blank tree
+  // segment; the tag-tree UIs can only guard around it downstream, so the schema is the
+  // durable gate. Whitespace-only and zero-width segments (U+200B/U+2060 survive trim())
+  // are the same failure mode as bare "::".
+  it.each(['::', 'a::', ':a:', 'a::b:', 'a: :', 'acme: :', 'a:\u200b:', 'a:\u2060:', 'a:\u3164:', 'a:\u2800:'])(
+    'rejects a prefix with a blank segment (%s)',
+    prefix => {
+      const result = CreateDataLakeRequestInput.safeParse(input(prefix));
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some(i => /non-empty/i.test(i.message))).toBe(true);
+      }
+    }
+  );
+
+  it('accepts a multi-segment prefix with non-empty segments', () => {
+    expect(CreateDataLakeRequestInput.safeParse(input('acme:legal:')).success).toBe(true);
+  });
+
+  it('accepts non-Latin prefixes', () => {
+    expect(CreateDataLakeRequestInput.safeParse(input('\u0444\u0430\u0439\u043b\u044b:')).success).toBe(true);
+    expect(CreateDataLakeRequestInput.safeParse(input('\u6587\u4ef6:')).success).toBe(true);
+  });
+
+  // Consumers split between raw reads (tree roots) and normalizeTagPrefix reads (tag
+  // stamping); an untrimmed " acme:" stored raw would desynchronize them.
+  it('trims edge whitespace so the stored prefix equals its normalized form', () => {
+    const result = CreateDataLakeRequestInput.safeParse(input('  acme:  '));
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.fileTagPrefix).toBe('acme:');
+    }
+  });
+
+  // Without the endsWith guard inside the segment check, slice(0, -1) on a colon-less
+  // prefix chops real content and manufactures a phantom "empty segment" issue next to
+  // the real trailing-colon one - misleading for API-key callers reading the issue list.
+  it('reports only the trailing-colon issue for a colon-less prefix', () => {
+    const result = CreateDataLakeRequestInput.safeParse(input('a:b'));
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some(i => /must end with/i.test(i.message))).toBe(true);
+      expect(result.error.issues.some(i => /non-empty/i.test(i.message))).toBe(false);
+    }
+  });
 });
 
 // Bounds cap worst-case request size/storage/CPU from a crafted body (see comment in

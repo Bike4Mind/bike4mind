@@ -6,6 +6,7 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../../../../../packages/database/src/__test__/createMongoServer';
 import { apiKeyRepository } from '@bike4mind/database';
 import { ApiKeyType } from '@bike4mind/common';
+import { configureSecretsAtRest, generateEncryptionKey } from '@bike4mind/utils/security';
 
 /**
  * Agreement test for BYOK key creation, driving the REAL service, repository and
@@ -41,6 +42,10 @@ let mongoServer: MongoMemoryServer;
 beforeAll(async () => {
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
+  // This test connects via mongoose directly, not the package connectDB, so the at-rest key
+  // seam never fires. Register a key so provider-key creation (now fail-closed without one)
+  // stores ciphertext; findAllByUserId decrypts it back, so the plaintext assertions hold.
+  configureSecretsAtRest(generateEncryptionKey());
 }, 30000);
 afterAll(async () => {
   await mongoose.disconnect();

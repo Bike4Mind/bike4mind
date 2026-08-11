@@ -46,6 +46,10 @@ const DataLakeSchema = new mongoose.Schema(
     // Per-lake system prompt (see IDataLake.systemPrompt). Not yet consumed; a later PR (#843)
     // injects it at answer time. Stored uncapped, matching the other system-prompt fields.
     systemPrompt: { type: String },
+    // Preferred registry system-prompt id for sessions created for this lake (see
+    // IDataLake.preferredSystemPromptId). Validated against the session-activatable allowlist at
+    // the write boundary; resolved to session.systemPromptId once at create time.
+    preferredSystemPromptId: { type: String },
     fileTagPrefix: { type: String, required: true },
     datalakeTag: { type: String, required: true },
     requiredUserTag: { type: String },
@@ -76,6 +80,9 @@ const DataLakeSchema = new mongoose.Schema(
     // no sweep ever wrote, and the restore keyed to it reverses nothing. Restore clears it to null.
     // No index - the lakes collection is tiny, and it is only ever read from a lake already in hand.
     filesDeletedAt: { type: Date },
+    // Archive batch key (see IDataLake.filesArchivedAt): mirrors filesDeletedAt but on the
+    // archive axis. Set only through claimFilesArchivedAt; cleared by unarchive and by restore.
+    filesArchivedAt: { type: Date },
     // Lake-memory producer (#1440) bookkeeping - server-managed, never client-writable. No index
     // (tiny collection, only read from a lake already in hand, same rationale as filesDeletedAt).
     // lakeMemoryExtractionAt is a concurrency lease; lakeMemoryCursor is the bounded-continuation
@@ -380,6 +387,18 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     if (claimed) return claimed.filesDeletedAt ?? null;
     const holder = await this.dataLakeModel.findById(id);
     return holder?.filesDeletedAt ?? null;
+  }
+
+  async claimFilesArchivedAt(id: string, at: Date): Promise<Date | null> {
+    // Same set-if-unset contract as claimFilesDeletedAt (see its comment above).
+    const claimed = await this.dataLakeModel.findOneAndUpdate(
+      { _id: id, $or: [{ filesArchivedAt: null }, { filesArchivedAt: { $exists: false } }] },
+      { $set: { filesArchivedAt: at } },
+      { new: true }
+    );
+    if (claimed) return claimed.filesArchivedAt ?? null;
+    const holder = await this.dataLakeModel.findById(id);
+    return holder?.filesArchivedAt ?? null;
   }
 
   async setStats(id: string, stats: { fileCount: number; totalSizeBytes: number }): Promise<IDataLakeDocument | null> {

@@ -68,6 +68,15 @@ export const PROMPT_SOURCE_ORDER: PromptSourceId[] = [
   'attachedFiles',
 ];
 
+/**
+ * Sources billed on every normal turn, and therefore inventoried even when a gate excluded them:
+ * buildAlwaysOnFloorDetails emits a row for each regardless (wasIncluded false,
+ * exclusionReason 'disabled'), so anything else itemizing the stack has to do the same or the two
+ * lists cannot be joined. Their rows come from that helper rather than from toPromptDetails, which
+ * only sees sources that contributed a message.
+ */
+export const ALWAYS_ON_FLOOR_SOURCES: PromptSourceId[] = ['artifactEmission', 'helpCenter'];
+
 export interface TaggedSystemMessage {
   source: PromptSourceId;
   message: IMessage;

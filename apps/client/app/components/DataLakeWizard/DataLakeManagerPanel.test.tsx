@@ -98,6 +98,12 @@ vi.mock('./DataLakeSettingsModal', () => ({
 vi.mock('./DataLakeDiscoverPanel', () => ({
   default: () => <div data-testid="mock-discover" />,
 }));
+// LakeInfoPanel's "Start chat with this lake" button pulls in this hook, which reaches
+// SessionsContext, react-router and react-query. This suite exercises the manager's navigation
+// and affordance wiring, not the create-and-navigate flow, so stub the hook to a no-op.
+vi.mock('@client/app/hooks/useStartChatWithLake', () => ({
+  default: () => vi.fn(),
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => (

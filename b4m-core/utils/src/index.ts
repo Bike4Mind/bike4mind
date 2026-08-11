@@ -105,3 +105,7 @@ export * from './circuitBreaker';
 export * from './rateLimitHeaders';
 export * from './voiceHistory';
 export * from './lambdaErrorHandler';
+// NOT barrel-exported on purpose: at-rest crypto is reached only via the
+// `@bike4mind/utils/security` subpath, so importing it never drags the utils barrel
+// (artifactParser et al.) into a caller's graph or its test mocks. Same pattern as
+// artifactElision above.

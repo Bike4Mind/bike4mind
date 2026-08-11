@@ -1407,3 +1407,64 @@ describe('DataLakeRepository teardown stamp', () => {
     expect((await dataLakeRepository.claimFilesDeletedAt(created.id, second))?.getTime()).toBe(second.getTime());
   });
 });
+
+// Mirrors the delete-axis teardown stamp above, on the archive axis - same set-if-unset
+// concurrency guard, same round-trip contract, so restore can bound its archive-clear to the
+// batch this lake's own archive wrote.
+describe('DataLakeRepository archive stamp', () => {
+  setupMongoTest();
+
+  it('round-trips the stamp as a Date', async () => {
+    const stamp = new Date('2026-05-01T00:00:00.000Z');
+    const created = await dataLakeRepository.create(baseLake({ slug: 'archived-lake' }));
+
+    await dataLakeRepository.update({ id: created.id, filesArchivedAt: stamp });
+
+    const found = await dataLakeRepository.findById(created.id);
+    expect(found?.filesArchivedAt).toBeInstanceOf(Date);
+    expect(found?.filesArchivedAt?.getTime()).toBe(stamp.getTime());
+  });
+
+  it('clears a spent stamp back to null', async () => {
+    const created = await dataLakeRepository.create(
+      baseLake({ slug: 'unarchived', filesArchivedAt: new Date('2026-05-01T00:00:00.000Z') })
+    );
+
+    await dataLakeRepository.update({ id: created.id, filesArchivedAt: null });
+
+    expect((await dataLakeRepository.findById(created.id))?.filesArchivedAt ?? null).toBeNull();
+  });
+
+  it('leaves the stamp unset on a lake that was never archived', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'untouched-archive' }));
+    expect((await dataLakeRepository.findById(created.id))?.filesArchivedAt ?? null).toBeNull();
+  });
+
+  it('claims an unset stamp and echoes it back', async () => {
+    const at = new Date('2026-05-01T00:00:00.000Z');
+    const created = await dataLakeRepository.create(baseLake({ slug: 'claiming-archive' }));
+
+    expect((await dataLakeRepository.claimFilesArchivedAt(created.id, at))?.getTime()).toBe(at.getTime());
+    expect((await dataLakeRepository.findById(created.id))?.filesArchivedAt?.getTime()).toBe(at.getTime());
+  });
+
+  it('refuses to overwrite a claimed stamp and hands back the holder', async () => {
+    const first = new Date('2026-05-01T00:00:00.000Z');
+    const second = new Date('2026-05-02T00:00:00.000Z');
+    const created = await dataLakeRepository.create(baseLake({ slug: 'contended-archive' }));
+    await dataLakeRepository.claimFilesArchivedAt(created.id, first);
+
+    expect((await dataLakeRepository.claimFilesArchivedAt(created.id, second))?.getTime()).toBe(first.getTime());
+    expect((await dataLakeRepository.findById(created.id))?.filesArchivedAt?.getTime()).toBe(first.getTime());
+  });
+
+  it('claims again once an unarchive has cleared the stamp', async () => {
+    const first = new Date('2026-05-01T00:00:00.000Z');
+    const second = new Date('2026-05-02T00:00:00.000Z');
+    const created = await dataLakeRepository.create(baseLake({ slug: 'recycled-archive' }));
+    await dataLakeRepository.claimFilesArchivedAt(created.id, first);
+    await dataLakeRepository.update({ id: created.id, filesArchivedAt: null });
+
+    expect((await dataLakeRepository.claimFilesArchivedAt(created.id, second))?.getTime()).toBe(second.getTime());
+  });
+});
