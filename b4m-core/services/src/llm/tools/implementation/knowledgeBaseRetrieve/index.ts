@@ -331,18 +331,35 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             // so a tool-eager model does not read "no indexed content" as "I cannot access this file"
             // and discard content it already has. A file NOT in inlinedAttachmentIds (e.g. a lake doc
             // genuinely still indexing) keeps the honest "not yet processed" wording - it is not
-            // inline anywhere, so claiming otherwise would be false.
+            // inline anywhere, so claiming otherwise would be false. "Full content" is only claimed
+            // for fullyInlinedAttachmentIds - a merely-inlined file can be a cosine excerpt or a
+            // truncated head (#1163 review), so that claim would be false for it.
             const inlined = new Set(context.inlinedAttachmentIds ?? []);
-            const inlinedNames = zeroChunkFiles.filter(f => inlined.has(f.id)).map(f => `"${f.fileName}"`);
-            if (inlinedNames.length > 0) {
-              return (
-                `The document(s) ${inlinedNames.join(', ')} are attached to this conversation and still ` +
-                `being indexed, so this tool has no stored text for them yet. Their full content was ` +
-                `already provided earlier in this conversation (look for a message starting with ` +
-                `"Here is the content from the attached file" or, with multiple files, "Here are the ` +
-                `contents from"). Answer the user's question from that content. Do NOT tell the user ` +
-                `you cannot access the attachment.`
-              );
+            const fullyInlined = new Set(context.fullyInlinedAttachmentIds ?? []);
+            const inlinedZeroChunkFiles = zeroChunkFiles.filter(f => inlined.has(f.id));
+            const fullNames = inlinedZeroChunkFiles.filter(f => fullyInlined.has(f.id)).map(f => `"${f.fileName}"`);
+            const partialNames = inlinedZeroChunkFiles.filter(f => !fullyInlined.has(f.id)).map(f => `"${f.fileName}"`);
+            if (fullNames.length > 0 || partialNames.length > 0) {
+              const parts: string[] = [];
+              if (fullNames.length > 0) {
+                parts.push(
+                  `The document(s) ${fullNames.join(', ')} are attached to this conversation and still ` +
+                    `being indexed, so this tool has no stored text for them yet. Their full content was ` +
+                    `already provided earlier in this conversation (look for a message starting with ` +
+                    `"Here is the content from the attached file" or, with multiple files, "Here are the ` +
+                    `contents from"). Answer the user's question from that content.`
+                );
+              }
+              if (partialNames.length > 0) {
+                parts.push(
+                  `The document(s) ${partialNames.join(', ')} are attached to this conversation and still ` +
+                    `being indexed, so this tool has no stored text for them yet. PART of their content was ` +
+                    `already provided earlier in this conversation, but what was shown may be an excerpt or ` +
+                    `a truncated head - answer from that if it covers the question, but do not assume it is ` +
+                    `the whole document.`
+                );
+              }
+              return `${parts.join(' ')} Do NOT tell the user you cannot access the attachment.`;
             }
             return (
               'Found matching documents but no stored text for them yet - indexing may still be in ' +

@@ -419,20 +419,29 @@ function formatSearchResults(files: IFabFileDocument[]): string {
  * Extra note when the session has an attachment still chunking, so the model does not read a
  * zero/near-zero result as "this file is inaccessible" when its raw content is already inlined
  * elsewhere in the prompt (see ToolContext.inlinedAttachmentIds). Two shapes:
- *  - zero hits at all: the attachment cannot be found by search yet, but is already above.
+ *  - zero hits at all: the attachment may not be findable by search yet, but is already above.
  *  - a hit IS an inlined attachment: heads off a follow-up retrieve_knowledge_content call that
- *    would just return the same "not indexed yet" result for content the model already has.
+ *    would just return the same "not indexed yet" result for content the model already has -
+ *    but only when the WHOLE file is above (ToolContext.fullyInlinedAttachmentIds). A file that
+ *    is merely inlined can still be a cosine excerpt or a truncated head (#1163 review), so
+ *    telling the model it never needs retrieval for that file would suppress the one path that
+ *    can fetch the rest of it.
  * Returns '' when there is nothing to add, so an unpopulated context (agent/embed surfaces) is a
  * byte-identical no-op.
  */
 function attachmentInlineNotice(context: ToolContext, rankedResults: Array<{ id: string; fileName: string }>): string {
   const inlined = context.inlinedAttachmentIds;
   if (!inlined?.length) return '';
+  const fullyInlined = new Set(context.fullyInlinedAttachmentIds ?? []);
 
   if (rankedResults.length === 0) {
+    // Hedged ("may") rather than asserted: deferral to retrieval is the exception
+    // (resolveCorpusInlinePlan, lake access + a large corpus), so most inlined attachments here
+    // are ordinary, fully-searchable files where a zero-hit result just means the query missed -
+    // not that the file is unsearchable. Matches the sibling wording in knowledgeBaseRetrieve.
     return (
-      `\n\nNOTE: ${inlined.length} file(s) attached to this conversation are not indexed for ` +
-      `search yet, so they cannot be found through this tool. Their content was already included ` +
+      `\n\nNOTE: ${inlined.length} file(s) attached to this conversation may not be indexed for ` +
+      `search yet, so they may not be found through this tool. Their content was already included ` +
       `directly in the conversation above - answer from that rather than telling the user the ` +
       `attachment is inaccessible.`
     );
@@ -440,12 +449,27 @@ function attachmentInlineNotice(context: ToolContext, rankedResults: Array<{ id:
 
   const inlinedHits = rankedResults.filter(f => inlined.includes(f.id));
   if (inlinedHits.length === 0) return '';
-  const names = inlinedHits.map(f => `"${f.fileName}"`).join(', ');
-  return (
-    `\n\nNOTE: ${names} are attached to this conversation and their content is already included ` +
-    `above - you do not need retrieve_knowledge_content for them (it may return nothing while ` +
-    `indexing is still in progress).`
-  );
+
+  const fullHits = inlinedHits.filter(f => fullyInlined.has(f.id));
+  const partialHits = inlinedHits.filter(f => !fullyInlined.has(f.id));
+  const parts: string[] = [];
+  if (fullHits.length > 0) {
+    const names = fullHits.map(f => `"${f.fileName}"`).join(', ');
+    parts.push(
+      `${names} are attached to this conversation and their content is already included above - ` +
+        `you do not need retrieve_knowledge_content for them (it may return nothing while indexing ` +
+        `is still in progress).`
+    );
+  }
+  if (partialHits.length > 0) {
+    const names = partialHits.map(f => `"${f.fileName}"`).join(', ');
+    parts.push(
+      `${names} are attached to this conversation and part of their content is already included ` +
+        `above, but what is shown may be an excerpt or a truncated head - retrieve_knowledge_content ` +
+        `may still surface additional passages from them.`
+    );
+  }
+  return `\n\nNOTE: ${parts.join(' ')}`;
 }
 
 export const knowledgeBaseSearchTool: ToolDefinition = {

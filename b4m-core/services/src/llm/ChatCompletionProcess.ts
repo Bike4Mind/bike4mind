@@ -2153,6 +2153,7 @@ export class ChatCompletionProcess {
         dedupedFileIds,
         featureContextMessages,
         actuallyInlinedKnowledgeIds,
+        fullyInlinedAttachmentIds,
       } = dataSources;
 
       // Step 5b: Build MCP tools and tool prompts before message assembly
@@ -2174,6 +2175,7 @@ export class ChatCompletionProcess {
         // out of the knowledge tools' search + retrieve arms, matching the surface's listing predicate.
         retrievalFilter: toRetrievalFilter(session),
         inlinedAttachmentIds: actuallyInlinedKnowledgeIds,
+        fullyInlinedAttachmentIds,
         logger: this.logger,
         storage: this.storage,
         imageGenerateStorage: this.imageGenerateStorage,
@@ -5120,6 +5122,7 @@ export class ChatCompletionProcess {
     const {
       userMessages: promptMessages,
       deliveredFileIds,
+      fullyDeliveredFileIds,
       // errorMessages,
     } = await processFabFilesServer(
       embeddingFactory,
@@ -5161,7 +5164,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       });
     }
 
-    const result = { promptMessages, convertedFabFiles, deliveredFileIds };
+    const result = { promptMessages, convertedFabFiles, deliveredFileIds, fullyDeliveredFileIds };
     return result;
   }
 
@@ -5492,6 +5495,11 @@ When using tools that require file IDs (like edit_image), use the ID shown above
      *  audio, an unserveable image, an unsupported/corrupted file) - the set the knowledge tools
      *  can truthfully call "already in the conversation above". */
     actuallyInlinedKnowledgeIds: string[];
+    /** Subset of `actuallyInlinedKnowledgeIds` whose ENTIRE content is in the prompt, not a cosine
+     *  excerpt or a truncated-to-budget head - the set the knowledge tools can truthfully call
+     *  "you already have everything, no need to search/retrieve further" for (#1163 review: the
+     *  wording was claiming this for a merely-inlined file, which can still be a partial delivery). */
+    fullyInlinedAttachmentIds: string[];
   }> {
     // Load feature contexts in parallel with data sources
     const featureContextPromise = Promise.all(
@@ -5636,6 +5644,8 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     // Only a knowledge id present in BOTH sets actually has its content in the prompt right now.
     const deliveredKnowledgeIds = new Set(fabResult?.deliveredFileIds ?? []);
     const actuallyInlinedKnowledgeIds = inlineKnowledgeIds.filter(id => deliveredKnowledgeIds.has(id));
+    const fullyDeliveredKnowledgeIds = new Set(fabResult?.fullyDeliveredFileIds ?? []);
+    const fullyInlinedAttachmentIds = actuallyInlinedKnowledgeIds.filter(id => fullyDeliveredKnowledgeIds.has(id));
 
     return {
       urlMessages: urlResult.userMessages,
@@ -5648,6 +5658,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       dedupedFileIds,
       featureContextMessages,
       actuallyInlinedKnowledgeIds,
+      fullyInlinedAttachmentIds,
     };
   }
 }

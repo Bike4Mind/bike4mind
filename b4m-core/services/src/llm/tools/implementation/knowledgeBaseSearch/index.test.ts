@@ -127,13 +127,16 @@ describe('search_knowledge_base keyword fallback retrieval exclusion', () => {
  * (the same one every other test in this file drives via bare makeContext()).
  */
 describe('search_knowledge_base attachmentInlineNotice for inlined attachments (#1163)', () => {
-  it('zero hits + an inlined attachment: notes it is not yet searchable but already in the conversation', async () => {
+  it('zero hits + an inlined attachment: notes it may not be searchable yet but is already in the conversation', async () => {
     const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: ['f1'] });
     (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [], total: 0 });
 
     const out = await run(ctx);
 
-    expect(out).toContain('not indexed for search yet');
+    // Hedged ("may") rather than asserted: deferral to retrieval is the exception, so most
+    // inlined attachments here are ordinary, fully-searchable files where a zero-hit result
+    // just means the query missed (#1163 review).
+    expect(out).toContain('may not be indexed for search yet');
     expect(out).toContain('already included directly in the conversation above');
   });
 
@@ -146,13 +149,29 @@ describe('search_knowledge_base attachmentInlineNotice for inlined attachments (
     expect(out).toBe('No documents found matching your search query in your knowledge base.');
   });
 
-  it('a hit that IS inlined: notes retrieve_knowledge_content is unnecessary for it', async () => {
-    const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: ['m'] });
+  it('a hit that IS fully inlined: notes retrieve_knowledge_content is unnecessary for it', async () => {
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      inlinedAttachmentIds: ['m'],
+      fullyInlinedAttachmentIds: ['m'],
+    });
 
     const out = await run(ctx);
 
     expect(out).toContain('"MARK - retired.pdf" are attached to this conversation');
     expect(out).toContain('do not need retrieve_knowledge_content');
+  });
+
+  it('a hit that is inlined but only PARTIALLY (excerpt/truncated head): does not claim retrieval is unneeded', async () => {
+    // inlinedAttachmentIds without a matching fullyInlinedAttachmentIds entry: delivered as a
+    // cosine excerpt or a truncated head, not the whole file (#1163 review).
+    const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: ['m'] });
+
+    const out = await run(ctx);
+
+    expect(out).toContain('"MARK - retired.pdf" are attached to this conversation');
+    expect(out).toContain('may still surface additional passages');
+    expect(out).not.toContain('do not need retrieve_knowledge_content');
   });
 
   it('a hit that is NOT inlined: no note is appended', async () => {

@@ -37,11 +37,13 @@ export const generateTools = (
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,
+    fullyInlinedAttachmentIds,
   }: {
     db: ToolContext['db'];
     retrievalFilter?: ToolContext['retrievalFilter'];
     kbScope?: ToolContext['kbScope'];
     inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
+    fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
   },
   storage: BaseStorage,
   imageGenerateStorage: BaseStorage,
@@ -83,6 +85,7 @@ export const generateTools = (
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,
+    fullyInlinedAttachmentIds,
     codeMinifier,
     availableModels,
     onToolLlmUsage,

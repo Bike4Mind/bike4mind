@@ -231,8 +231,8 @@ describe('processFabFilesServer deliveredFileIds', () => {
     mockGetFileContent.mockResolvedValue('hello world');
   });
 
-  it('lists every text file that was actually delivered', async () => {
-    const { deliveredFileIds } = await processFabFilesServer(
+  it('lists every text file that was actually delivered, in full', async () => {
+    const { deliveredFileIds, fullyDeliveredFileIds } = await processFabFilesServer(
       embeddingFactory,
       [textFile('a'), textFile('b')],
       'prompt',
@@ -243,6 +243,26 @@ describe('processFabFilesServer deliveredFileIds', () => {
     );
 
     expect(deliveredFileIds.sort()).toEqual(['a', 'b']);
+    // 'hello world' fits comfortably under the budget, so neither file was truncated.
+    expect(fullyDeliveredFileIds.sort()).toEqual(['a', 'b']);
+  });
+
+  it('a raw-content file truncated to fit the token budget is delivered but not FULLY delivered', async () => {
+    mockGetFileContent.mockResolvedValue('x'.repeat(50_000));
+
+    const { deliveredFileIds, fullyDeliveredFileIds } = await processFabFilesServer(
+      embeddingFactory,
+      [textFile('big')],
+      'prompt',
+      // A tiny budget forces the raw-content truncation branch (see finalMaxFileSize).
+      10,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    expect(deliveredFileIds).toEqual(['big']);
+    expect(fullyDeliveredFileIds).toEqual([]);
   });
 
   it('excludes an image skipped because the model does not support vision', async () => {
@@ -269,7 +289,7 @@ describe('processFabFilesServer deliveredFileIds', () => {
       return 'hello world';
     });
 
-    const { deliveredFileIds, userMessages } = await processFabFilesServer(
+    const { deliveredFileIds, fullyDeliveredFileIds, userMessages } = await processFabFilesServer(
       embeddingFactory,
       [textFile('good'), textFile('bad')],
       'prompt',
@@ -282,6 +302,7 @@ describe('processFabFilesServer deliveredFileIds', () => {
     // The corrupted file is silently skipped (caught, not rethrown) - the turn as a whole
     // still succeeds and the sibling file's content still reaches the model.
     expect(deliveredFileIds).toEqual(['good']);
+    expect(fullyDeliveredFileIds).toEqual(['good']);
     expect(emittedChars(userMessages)).toBeGreaterThan(0);
   });
 });

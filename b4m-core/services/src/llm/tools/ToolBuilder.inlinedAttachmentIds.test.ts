@@ -34,7 +34,7 @@ describe('ToolBuilder threads inlinedAttachmentIds into ToolContext', () => {
     return { tool, getContext: () => seen };
   }
 
-  function makeBuilder(inlinedAttachmentIds?: string[]): ToolBuilder {
+  function makeBuilder(inlinedAttachmentIds?: string[], fullyInlinedAttachmentIds?: string[]): ToolBuilder {
     const deps = {
       user: { id: 'u1' },
       db: {},
@@ -45,6 +45,7 @@ describe('ToolBuilder threads inlinedAttachmentIds into ToolContext', () => {
       subagentTelemetryData: [],
       sendStatusUpdate: vi.fn(),
       inlinedAttachmentIds,
+      fullyInlinedAttachmentIds,
     } as unknown as ToolBuilderConfig;
     return new ToolBuilder(deps);
   }
@@ -70,5 +71,18 @@ describe('ToolBuilder threads inlinedAttachmentIds into ToolContext', () => {
     const { tool, getContext } = probeTool();
     callBuildTools(makeBuilder(undefined), tool);
     expect(getContext()?.inlinedAttachmentIds).toBeUndefined();
+  });
+
+  it('passes fullyInlinedAttachmentIds through to the tool context, independent of inlinedAttachmentIds', () => {
+    const { tool, getContext } = probeTool();
+    callBuildTools(makeBuilder(['f1', 'f2'], ['f1']), tool);
+    expect(getContext()?.inlinedAttachmentIds).toEqual(['f1', 'f2']);
+    expect(getContext()?.fullyInlinedAttachmentIds).toEqual(['f1']);
+  });
+
+  it('leaves fullyInlinedAttachmentIds undefined when the caller never sets it', () => {
+    const { tool, getContext } = probeTool();
+    callBuildTools(makeBuilder(['f1'], undefined), tool);
+    expect(getContext()?.fullyInlinedAttachmentIds).toBeUndefined();
   });
 });

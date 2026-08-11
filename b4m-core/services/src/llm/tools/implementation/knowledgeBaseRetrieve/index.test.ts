@@ -484,7 +484,28 @@ describe('retrieve_knowledge_content bounds its chunk read', () => {
 describe('retrieve_knowledge_content zero-chunk wording for inlined attachments (#1163)', () => {
   const zeroChunkRepo = () => pagedTextChunkRepo([]);
 
-  it('a zero-chunk file that IS inlined points the model at the already-provided content', async () => {
+  it('a fully-inlined zero-chunk file points the model at the already-provided full content', async () => {
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      inlinedAttachmentIds: [FILE_ID],
+      fullyInlinedAttachmentIds: [FILE_ID],
+    });
+    (ctx.db as { fabfilechunks: unknown }).fabfilechunks = zeroChunkRepo();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Report.pdf' })
+    );
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('"Report.pdf"');
+    expect(out).toContain('Their full content was already provided earlier in this conversation');
+    expect(out).not.toContain('may not have been processed');
+    expect(out).not.toContain('no indexed content');
+  });
+
+  it('a partially-inlined zero-chunk file does not claim its FULL content is already provided', async () => {
+    // inlinedAttachmentIds without a matching fullyInlinedAttachmentIds entry: this file was
+    // delivered as a cosine excerpt or a truncated head, not in full (#1163 review).
     const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: [FILE_ID] });
     (ctx.db as { fabfilechunks: unknown }).fabfilechunks = zeroChunkRepo();
     (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
@@ -494,7 +515,8 @@ describe('retrieve_knowledge_content zero-chunk wording for inlined attachments 
     const out = await runById(ctx);
 
     expect(out).toContain('"Report.pdf"');
-    expect(out).toContain('already provided earlier in this conversation');
+    expect(out).toContain('PART of their content was already provided');
+    expect(out).not.toContain('Their full content was already provided');
     expect(out).not.toContain('may not have been processed');
     expect(out).not.toContain('no indexed content');
   });
