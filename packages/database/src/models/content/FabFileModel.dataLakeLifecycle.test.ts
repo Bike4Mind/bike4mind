@@ -139,6 +139,33 @@ describe('FabFile data lake lifecycle membership', () => {
     });
   });
 
+  // #1040: the single-lake browse (fabFileRepository.search with lakeMembership +
+  // restrictToDataLake, what GET /api/data-lakes/:id/articles runs) must agree with
+  // computeDataLakeStats above about who is a member - a file only reached through a share or a
+  // group grant is excluded from the listing itself, not merely from the count, so it can never
+  // be "listed but unremovable".
+  describe('search under a single-lake browse scope (lakeMembership)', () => {
+    const pagination = { page: 1, limit: 20 };
+    const order = { by: 'fileName', direction: 'asc' } as const;
+
+    it('lists exactly the members computeDataLakeStats counts, excluding every stranger-owned prefix match', async () => {
+      const rows = await seedLakeRows();
+
+      const result = await fabFileRepository.search(CREATOR, '', {}, pagination, order, {
+        includeShared: true,
+        userGroups: [CREATOR_GROUP],
+        lakeMembership: scope,
+        restrictToDataLake: true,
+      });
+
+      expect(result.data.map(f => f.fileName).sort()).toEqual(['meta.txt', 'prefix-owned.txt']);
+      const listedIds = result.data.map(f => f.id);
+      for (const id of rows.strangerIds) {
+        expect(listedIds).not.toContain(id);
+      }
+    });
+  });
+
   describe('archiveByDataLakeTag / unarchiveByDataLakeTag', () => {
     it('archives the members and leaves every stranger-owned prefix match live', async () => {
       const rows = await seedLakeRows();
