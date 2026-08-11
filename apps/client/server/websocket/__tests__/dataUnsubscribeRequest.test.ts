@@ -8,7 +8,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * decides whether `previousSecret` is passed to `verifyToken`.
  */
 
-vi.mock('@bike4mind/common', () => ({
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
   DataUnsubscribeRequestAction: { parse: (x: unknown) => x },
 }));
 

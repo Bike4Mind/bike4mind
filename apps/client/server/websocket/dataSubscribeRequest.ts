@@ -22,16 +22,12 @@ import { Session as SessionModel } from '@bike4mind/database/auth';
 import { accessibleBy } from '@casl/mongoose';
 import { Subscription } from '@server/models/Subscription';
 import { questMasterPlanSubscriptionScope } from '@server/websocket/subscriptionScopes';
-import { NotFoundError } from '@server/utils/errors';
 import { sendToConnection, withWebSocketContext } from '@server/websocket/utils';
+import { verifyWsAccessToken } from '@server/websocket/verifyWsAccessToken';
 import crypto from 'crypto';
-import jwt from 'jsonwebtoken';
 import { pickBy } from 'lodash';
 import pLimit from 'p-limit';
 import ability from '../auth/ability';
-import { secretRotationRepository } from '@bike4mind/database/infra';
-import { authTokenGenerator } from '@server/auth/tokenGenerator';
-import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { Resource } from 'sst';
 
@@ -53,16 +49,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     fetchInitialData,
   } = DataSubscribeRequestAction.parse(JSON.parse(event.body ?? ''));
 
-  const secretRotation = await secretRotationRepository.findByKeyName('JWT_SECRET');
-  let previousSecret = undefined;
-  // Accept the previous key only within the shared rotation grace window.
-  if (isRotatedSecretWithinGraceWindow(secretRotation?.rotatedAt)) {
-    previousSecret = secretRotation?.previousKey;
-  }
-  const decoded = authTokenGenerator.verifyToken(accessToken!, previousSecret) as jwt.JwtPayload;
-
-  const user = await User.findById(decoded.id);
-  if (!user) throw new NotFoundError('User not found');
+  const user = await verifyWsAccessToken(accessToken);
   const userAbility = ability(user);
 
   // 'scope' limits the scope of the query, to only things you're allowed to see.
