@@ -53,6 +53,9 @@ vi.mock('@bike4mind/services', async () => {
       error instanceof MockInsufficientCreditsError ? error.code : getQuestErrorCode(error),
     buildSharedTools: mockBuildSharedTools,
     apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({ openai: 'k' }) },
+    // Availability filter that runs alongside buildSharedTools - tests here assert on
+    // enabledTools/kbScope, not on which tools are gated, so every tool reads as available.
+    resolveToolAvailability: vi.fn().mockResolvedValue({}),
   };
 });
 
@@ -552,6 +555,11 @@ describe('POST /api/embed/chat - server-side tools', () => {
     const deps = mockBuildSharedTools.mock.calls[0][0] as { kbScope: unknown; entitlementKeys: string[] };
     expect(deps.kbScope).toEqual({ fileIds: ['f1', 'f2'] });
     expect(deps.entitlementKeys).toEqual([]);
+
+    // The resolved availability map must reach buildSharedTools' options (not just
+    // enabledTools/kbScope) - see toolAvailability.ts's enforcement filter.
+    const opts = mockBuildSharedTools.mock.calls[0][2] as { toolAvailability: unknown };
+    expect(opts.toolAvailability).toEqual({});
 
     const params = executeParams();
     expect(params.serverTools.map((t: { toolSchema: { name: string } }) => t.toolSchema.name)).toEqual([

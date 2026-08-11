@@ -125,7 +125,19 @@ const MAX_SAFETY_SHRINK_ROUNDS = 5;
  * model only - what later steps read to know a message was cut is processMessages' truncatedMessages.
  */
 const CONTENT_TRUNCATION_NOTICE =
-  '\n\n[Content truncated to fit the context window. This is NOT the end of the file - later content was not sent.]';
+  '\n\n[Content truncated to fit the context window. This is NOT the end of the file - later content was ' +
+  'not sent. Do not infer a total row, record, or section count, or a final row, from what is above.]';
+
+/**
+ * Prefixed onto a delivered attachment's own content in `assemble`, never added as a separate system
+ * message: the system-message loop further down picks messages first-fit-with-break by budget, so a new
+ * one there risks silently starving the `file.system` branch's own content on a marginal turn. Riding on
+ * the content message itself means it lives or dies with what it is asserting, so it can never claim
+ * content is present when `declareUndeliveredAttachments` has already dropped or replaced it.
+ */
+export const ATTACHMENT_DELIVERED_NOTICE =
+  '[The content below is included in this request and you can read it. Do not tell the user you are ' +
+  'unable to access or open it.]\n\n';
 
 /**
  * Below this many tokens of a file, a slice is not worth sending. A few dozen characters of a CSV does
@@ -167,8 +179,17 @@ const sanitizeNoticeFileName = (fileName: string): string =>
     .trim()
     .slice(0, MAX_NOTICE_FILENAME_CHARS);
 
+// A name that is only brackets/quotes/newlines sanitizes to '', which would otherwise show the model an
+// empty quoted name or break the line-anchored ATTACHMENT_NAME_HEADERS match.
+const noticeFileName = (fileName: string): string => sanitizeNoticeFileName(fileName) || 'unnamed attachment';
+
+// Placed next to a filename, never inside CONTENT_TRUNCATION_NOTICE: that notice is also used for
+// URL-derived content with no filename at all, where this sentence would be nonsensical.
+const FILENAME_DIGIT_NOTICE =
+  '(Digits in the file name are part of the name, not a count of its rows, records, or sections.)';
+
 const excerptNotice = (fileName: string): string =>
-  `${EXCERPT_NOTICE_PREFIX}"${sanitizeNoticeFileName(fileName)}"${EXCERPT_NOTICE_TAIL}`;
+  `${EXCERPT_NOTICE_PREFIX}"${noticeFileName(fileName)}"${EXCERPT_NOTICE_TAIL}`;
 
 const URL_TRUNCATION_NOTICE =
   '\n\n[Fetched page content truncated to fit the context window. This is NOT the end of the page - later ' +
@@ -1537,7 +1558,7 @@ export async function processFabFilesServer(
             if (!deliveredEveryChunk) notice = excerptNotice(file.fileName);
             else if (anyChunkCut) notice = CONTENT_TRUNCATION_NOTICE;
 
-            const body = `Data for ${file.fileName}:\n${truncatedResults.map(r => `For context: ${r.content}`).join('\n')}`;
+            const body = `Data for ${noticeFileName(file.fileName)}:\n${FILENAME_DIGIT_NOTICE}\n${truncatedResults.map(r => `For context: ${r.content}`).join('\n')}`;
             userMessages.push({ role: 'user', content: body + notice });
 
             if (notice) {
@@ -1679,12 +1700,12 @@ export async function processFabFilesServer(
 
     if (contextFiles.length === 1) {
       // Single file: simple format
-      combinedContent = `Here is the content from the attached file "${contextFiles[0].fileName}" for context:\n\n${contextFiles[0].content}`;
+      combinedContent = `Here is the content from the attached file "${noticeFileName(contextFiles[0].fileName)}" for context:\n${FILENAME_DIGIT_NOTICE}\n\n${contextFiles[0].content}`;
     } else {
       // Multiple files: structured format with clear separation
-      combinedContent = `Here are the contents from ${contextFiles.length} attached files for context:\n\n`;
+      combinedContent = `Here are the contents from ${contextFiles.length} attached files for context. ${FILENAME_DIGIT_NOTICE}\n\n`;
       contextFiles.forEach((file, index) => {
-        combinedContent += `--- File ${index + 1}: ${file.fileName} ---\n${file.content}\n\n`;
+        combinedContent += `--- File ${index + 1}: ${noticeFileName(file.fileName)} ---\n${file.content}\n\n`;
       });
       combinedContent += `--- End of attached files ---`;
     }
@@ -2441,7 +2462,21 @@ export async function buildAndSortMessages(
    * tool_use and the prompt carries the matching tool_result, other context moves after the prompt to
    * keep the pair adjacent.
    */
+  // Gated on the exact survivor predicate declareUndeliveredAttachments already applies, so a message
+  // this array still holds is one that really did survive: excludes undeliveredNote by identity (it
+  // exists to say content did NOT arrive) and mirrors the cutContentMessages/fileTokens sliver check,
+  // even though a sliver never reaches this array today - a future caller of assemble should not have to
+  // re-derive that invariant to stay correct.
+  const withDeliveredNotice = (message: IMessage): IMessage =>
+    typeof message.content === 'string' &&
+    message !== undeliveredNote &&
+    isAttachment(message) &&
+    !(cutContentMessages.has(message) && fileTokens(message) < MIN_USEFUL_ATTACHED_CONTENT_TOKENS)
+      ? { ...message, content: ATTACHMENT_DELIVERED_NOTICE + message.content }
+      : message;
+
   const assemble = (content: IMessage[], history: IMessage[]): IMessage[] => {
+    const deliveredContent = content.map(withDeliveredNotice);
     const lastHistoryMessage = history[history.length - 1];
     const historyEndsWithToolUse =
       lastHistoryMessage?.role === 'assistant' &&
@@ -2449,8 +2484,8 @@ export async function buildAndSortMessages(
       lastHistoryMessage.content.some((block: any) => block.type === 'tool_use');
 
     return historyEndsWithToolUse && promptHasToolResult
-      ? [...systemMessages, ...history, ...userPrompt, ...imageMessages, ...content]
-      : [...systemMessages, ...history, ...imageMessages, ...content, ...userPrompt];
+      ? [...systemMessages, ...history, ...userPrompt, ...imageMessages, ...deliveredContent]
+      : [...systemMessages, ...history, ...imageMessages, ...deliveredContent, ...userPrompt];
   };
 
   const messages: IMessage[] = assemble(processedContentMessages, processedPreviousMessages);

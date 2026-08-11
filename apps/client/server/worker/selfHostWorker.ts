@@ -163,29 +163,35 @@ export class SelfHostWorker {
 
   private async handleMessage(q: QueueHandlerRegistration, message: Message): Promise<void> {
     const receiveCount = Number(message.Attributes?.ApproximateReceiveCount ?? '1');
+    // Mirror real SQS's redrive semantics: once a message's receive count exceeds
+    // maxReceiveCount, AWS routes it straight to the DLQ WITHOUT another delivery - the handler
+    // never sees a (maxReceiveCount+1)th attempt. Checking this BEFORE dispatch (rather than
+    // dispatching unconditionally and only deciding redeliver-vs-drop in the catch) is what
+    // keeps that guarantee true here too: a handler that gates its own final-attempt behavior
+    // on receive count (e.g. isFinalDeliveryAttempt) needs the count it sees at its own last
+    // invocation to line up with maxReceiveCount, exactly as it would on a real SQS-backed queue.
+    if (receiveCount > q.maxReceiveCount) {
+      // Poison guard: no DLQ in ElasticMQ, so drop after the cap and log loudly.
+      this.logger.error(
+        `[selfHostWorker] "${q.name}" message dropped after ${receiveCount} deliveries (> ${q.maxReceiveCount})`,
+        { messageId: message.MessageId }
+      );
+      if (message.ReceiptHandle) {
+        await deleteFromQueue(q.url, message.ReceiptHandle);
+      }
+      return;
+    }
     try {
       await q.dispatch(this.toSqsEvent(message), this.fakeContext(q.name));
       if (message.ReceiptHandle) {
         await deleteFromQueue(q.url, message.ReceiptHandle);
       }
     } catch (err) {
-      const detail = { error: err instanceof Error ? err.message : String(err), messageId: message.MessageId };
-      if (receiveCount > q.maxReceiveCount) {
-        // Poison guard: no DLQ in ElasticMQ, so drop after the cap and log loudly.
-        this.logger.error(
-          `[selfHostWorker] "${q.name}" message dropped after ${receiveCount} deliveries (> ${q.maxReceiveCount})`,
-          detail
-        );
-        if (message.ReceiptHandle) {
-          await deleteFromQueue(q.url, message.ReceiptHandle);
-        }
-      } else {
-        // Leave the message: it becomes visible again after the visibility timeout and is redelivered.
-        this.logger.warn(
-          `[selfHostWorker] "${q.name}" handler threw (delivery ${receiveCount}); leaving for retry`,
-          detail
-        );
-      }
+      // Leave the message: it becomes visible again after the visibility timeout and is redelivered.
+      this.logger.warn(`[selfHostWorker] "${q.name}" handler threw (delivery ${receiveCount}); leaving for retry`, {
+        error: err instanceof Error ? err.message : String(err),
+        messageId: message.MessageId,
+      });
     }
   }
 

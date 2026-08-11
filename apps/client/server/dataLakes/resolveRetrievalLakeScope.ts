@@ -51,6 +51,23 @@ export function withStaticRegistryBypass(
     dataLakeTags: dedupe([...scope.dataLakeTags, ...registry.map(lake => lake.datalakeTag)]),
     dataLakeTagPrefixes: dedupe([...scope.dataLakeTagPrefixes, ...registry.map(lake => lake.fileTagPrefix)]),
     scopedTagPrefixes: scope.scopedTagPrefixes,
+    // Per-lake entries follow the same widening, or a privileged caller could search a registry
+    // lake but not count it. Registry-sourced by construction, like the prefixes above, and
+    // keyed on the globally-unique meta-tag so a lake the scope already resolved keeps its own
+    // (possibly membership-carrying) entry.
+    lakes: [
+      ...scope.lakes,
+      ...registry
+        .filter(lake => !scope.lakes.some(resolved => resolved.datalakeTag === lake.datalakeTag))
+        .map(lake => ({
+          id: lake.id,
+          name: lake.name,
+          slug: lake.slug,
+          datalakeTag: lake.datalakeTag,
+          fileTagPrefix: lake.fileTagPrefix,
+          source: 'registry' as const,
+        })),
+    ],
   };
 }
 

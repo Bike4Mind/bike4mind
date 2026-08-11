@@ -76,6 +76,12 @@ const DataLakeSchema = new mongoose.Schema(
     // no sweep ever wrote, and the restore keyed to it reverses nothing. Restore clears it to null.
     // No index - the lakes collection is tiny, and it is only ever read from a lake already in hand.
     filesDeletedAt: { type: Date },
+    // Lake-memory producer (#1440) bookkeeping - server-managed, never client-writable. No index
+    // (tiny collection, only read from a lake already in hand, same rationale as filesDeletedAt).
+    // lakeMemoryExtractionAt is a concurrency lease; lakeMemoryCursor is the bounded-continuation
+    // watermark (last attempted doc id). See IDataLake for the full contract.
+    lakeMemoryExtractionAt: { type: Date },
+    lakeMemoryCursor: { type: String },
   },
   {
     timestamps: true,
@@ -397,6 +403,38 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     );
     return res.modifiedCount === 1;
   }
+
+  async claimLakeMemoryExtraction(id: string, at: Date, staleBefore: Date): Promise<boolean> {
+    // Guard in the FILTER, not a prior read: an unset/missing field OR a stamp older than staleBefore (a
+    // crashed run's expired lease) is claimable. A concurrent claimer that already wrote a FRESH stamp
+    // fails this filter and loses, so exactly one run holds the lease. Mirrors activateIfDraft's
+    // guarded-in-query idiom.
+    const res = await this.dataLakeModel.updateOne(
+      {
+        _id: id,
+        $or: [
+          { lakeMemoryExtractionAt: null },
+          { lakeMemoryExtractionAt: { $exists: false } },
+          { lakeMemoryExtractionAt: { $lt: staleBefore } },
+        ],
+      },
+      { $set: { lakeMemoryExtractionAt: at } }
+    );
+    return res.modifiedCount === 1;
+  }
+
+  async releaseLakeMemoryExtraction(id: string, claimedAt: Date): Promise<void> {
+    // Compare-and-clear: only release if our stamp is still the one in force. If a stale takeover
+    // replaced it, clearing would strand the newer run's lease.
+    await this.dataLakeModel.updateOne(
+      { _id: id, lakeMemoryExtractionAt: claimedAt },
+      { $set: { lakeMemoryExtractionAt: null } }
+    );
+  }
+
+  async setLakeMemoryCursor(id: string, cursor: string | null): Promise<void> {
+    await this.dataLakeModel.updateOne({ _id: id }, { $set: { lakeMemoryCursor: cursor } });
+  }
 }
 
 export const dataLakeRepository = new DataLakeRepository(DataLakeModel);
@@ -435,6 +473,11 @@ const DataLakeBatchSchema = new mongoose.Schema(
     vectorizedFiles: { type: Number, default: 0 },
     failedFiles: { type: Number, default: 0 },
     failedFileNames: [{ type: String }],
+    // Subset of failedFiles caused by the chunk/vectorize pipeline (as opposed to a browser
+    // upload failure) - lets the UI say WHICH stage a file failed at instead of a bare "failed"
+    // (#1412). Only ever incremented by fabFileChunk.ts/fabFileVectorize.ts's final-attempt
+    // accounting; upload-complete.ts's browser-reported failures never touch it.
+    processingFailedFiles: { type: Number, default: 0 },
     skippedFiles: { type: Number, default: 0 },
     totalSizeBytes: { type: Number, default: 0 },
     uploadedSizeBytes: { type: Number, default: 0 },
@@ -455,7 +498,7 @@ const DataLakeBatchSchema = new mongoose.Schema(
     wantsTaxonomy: { type: Boolean, default: false },
     taxonomyStatus: {
       type: String,
-      enum: ['none', 'queued', 'analyzing', 'ready', 'applying', 'applied', 'failed'],
+      enum: ['none', 'queued', 'analyzing', 'ready', 'applying', 'applied', 'failed', 'dismissed'],
       default: 'none',
     },
     taxonomyStartedAt: { type: Date },
@@ -474,8 +517,16 @@ DataLakeBatchSchema.index({ userId: 1, status: 1 });
 DataLakeBatchSchema.index({ dataLakeId: 1, status: 1 });
 // Read-time reconciler scan: non-terminal batches ordered by staleness.
 DataLakeBatchSchema.index({ status: 1, updatedAt: 1 });
-// Same shape, for the taxonomy stuck-job reconciler.
-DataLakeBatchSchema.index({ taxonomyStatus: 1, updatedAt: 1 });
+// findTaxonomyAttentionByUserId's list-response query (userId equality + taxonomyStatus $in,
+// sorted updatedAt desc) - the batches-list poll hits this on every call. Previously this was
+// { taxonomyStatus: 1, updatedAt: 1 }, which was never actually an equality prefix for that
+// query (userId comes first) - replaced rather than just re-commented, since the old shape
+// served no query at all. NOT the stuck-job reconciler scan, which needs taxonomyStartedAt
+// (see the index below).
+DataLakeBatchSchema.index({ userId: 1, taxonomyStatus: 1, updatedAt: -1 });
+// findStuckTaxonomy's staleness scan - see its doc comment for why taxonomyStartedAt, not
+// updatedAt, is the correct clock for "how long has this taxonomy attempt been stuck."
+DataLakeBatchSchema.index({ taxonomyStatus: 1, taxonomyStartedAt: 1 });
 
 const DataLakeBatchModel =
   (mongoose.models['DataLakeBatch'] as unknown as mongoose.Model<IDataLakeBatchDocument>) ||
@@ -561,8 +612,48 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     field: BatchCounterField,
     amount: number = 1
   ): Promise<IDataLakeBatchDocument | null> {
-    const doc = await this.batchModel.findOneAndUpdate({ _id: batchId }, { $inc: { [field]: amount } }, { new: true });
-    return doc?.toJSON() as IDataLakeBatchDocument | null;
+    return this.incrementCounters(batchId, { [field]: amount });
+  }
+
+  /**
+   * Increment multiple counters in ONE atomic $inc, so a crash between two sequential
+   * incrementCounter calls can never leave a caller's counters partially applied (e.g.
+   * failedFiles bumped but processingFailedFiles not, misclassifying a processing failure
+   * as an upload failure with no automatic recovery). Guarded on non-terminal status like every
+   * other mutator here - without it, a late-arriving increment (e.g. a final-attempt failure that
+   * lands after the reconciler already forced the batch terminal) could push a counter past what
+   * a caller already treated as the batch's final tally, even though the terminal status itself
+   * cannot be re-flipped (finalizeBatchIfComplete's own transition is separately guarded).
+   */
+  async incrementCounters(
+    batchId: string,
+    fields: Partial<Record<BatchCounterField, number>>
+  ): Promise<IDataLakeBatchDocument | null> {
+    if (Object.keys(fields).length === 0) return null; // $inc: {} throws; nothing to apply anyway.
+    const doc = await this.batchModel.findOneAndUpdate(
+      { _id: batchId, status: { $in: BATCH_NON_TERMINAL_STATUSES } },
+      { $inc: fields },
+      { new: true }
+    );
+    return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
+  }
+
+  /**
+   * Shared guard behind markTerminalIfActive/setStatusIfActive/touchIfActive: apply `set` only
+   * while the batch is still non-terminal, so a redelivered message, a reconciler race, or a
+   * client-driven status flip can never resurrect or double-finalize a batch another caller
+   * already settled.
+   */
+  private async guardedActiveUpdate(
+    batchId: string,
+    set: Record<string, unknown>
+  ): Promise<IDataLakeBatchDocument | null> {
+    const doc = await this.batchModel.findOneAndUpdate(
+      { _id: batchId, status: { $in: BATCH_NON_TERMINAL_STATUSES } },
+      { $set: set },
+      { new: true }
+    );
+    return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
   }
 
   /**
@@ -577,28 +668,21 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
   ): Promise<IDataLakeBatchDocument | null> {
     const set: Record<string, unknown> = { status, completedAt: new Date() };
     if (completionReason) set.completionReason = completionReason;
-    const doc = await this.batchModel.findOneAndUpdate(
-      { _id: batchId, status: { $in: BATCH_NON_TERMINAL_STATUSES } },
-      { $set: set },
-      { new: true }
-    );
-    return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
+    return this.guardedActiveUpdate(batchId, set);
   }
 
   async setStatusIfActive(
     batchId: string,
     status: Extract<BatchStatus, 'preparing' | 'uploading' | 'processing'>
   ): Promise<IDataLakeBatchDocument | null> {
-    // Guarded non-terminal transition: never resurrect a batch the pipeline already
-    // finalized. The client flips a batch to 'processing' after the browser upload phase,
-    // but a fast pipeline can finalize it first - an unguarded $set would revive the dead
-    // batch and strand it (no further events arrive). Mirrors markTerminalIfActive.
-    const doc = await this.batchModel.findOneAndUpdate(
-      { _id: batchId, status: { $in: BATCH_NON_TERMINAL_STATUSES } },
-      { $set: { status } },
-      { new: true }
-    );
-    return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
+    // The client flips a batch to 'processing' after the browser upload phase, but a fast
+    // pipeline can finalize it first - an unguarded $set would revive the dead batch and
+    // strand it (no further events arrive).
+    return this.guardedActiveUpdate(batchId, { status });
+  }
+
+  async touchIfActive(batchId: string): Promise<void> {
+    await this.guardedActiveUpdate(batchId, { updatedAt: new Date() });
   }
 
   /**
@@ -621,13 +705,45 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
   }
 
   async findStuckTaxonomy(cutoff: Date, limit = 500): Promise<IDataLakeBatchDocument[]> {
-    // taxonomyStatus equality prefix + updatedAt range -> served by the
-    // { taxonomyStatus:1, updatedAt:1 } index, mirroring findStuck.
+    // taxonomyStatus equality prefix + taxonomyStartedAt range -> served by the
+    // { taxonomyStatus:1, taxonomyStartedAt:1 } index, mirroring findStuck. Deliberately NOT
+    // updatedAt: an unrelated write to the batch (an ingest counter tick) keeps bumping that
+    // while taxonomyStartedAt - when this taxonomy attempt actually began - stays fixed, so
+    // filtering on updatedAt could let a genuinely stuck batch dodge every scan.
+    // $not/$gte (not $lt), matching forceFailStuckTaxonomy's write guard: a plain $lt never
+    // matches a document missing taxonomyStartedAt entirely, which would let such a batch dodge
+    // this scan forever - the write guard's missing-field handling is dead code otherwise, since
+    // the scan is what selects candidates for it in the first place.
     const results = await this.batchModel
-      .find({ taxonomyStatus: { $in: TAXONOMY_NON_TERMINAL_STATUSES }, updatedAt: { $lt: cutoff } })
-      .sort({ updatedAt: 1 })
+      .find({
+        taxonomyStatus: { $in: TAXONOMY_NON_TERMINAL_STATUSES },
+        taxonomyStartedAt: { $not: { $gte: cutoff } },
+      })
+      .sort({ taxonomyStartedAt: 1 })
       .limit(limit);
     return results.map(r => r.toJSON() as IDataLakeBatchDocument);
+  }
+
+  /**
+   * Force a stuck taxonomy job to 'failed', guarded on BOTH status and staleness - see the
+   * interface doc comment for why the staleness guard is needed on top of a status-only one.
+   */
+  async forceFailStuckTaxonomy(
+    batchId: string,
+    from: TaxonomyStatus[],
+    startedBefore: Date,
+    taxonomyError: string
+  ): Promise<IDataLakeBatchDocument | null> {
+    const doc = await this.batchModel.findOneAndUpdate(
+      // $not/$gte (not $lt) so a batch with no taxonomyStartedAt at all still matches - every
+      // current writer sets it alongside a non-terminal status, but a doc missing it shouldn't
+      // be able to dodge this guard the way it dodges a plain $lt (Mongo's range operators never
+      // match a missing field).
+      { _id: batchId, taxonomyStatus: { $in: from }, taxonomyStartedAt: { $not: { $gte: startedBefore } } },
+      { $set: { taxonomyStatus: 'failed', taxonomyError } },
+      { new: true }
+    );
+    return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
   }
 
   async findTaxonomyAttentionByUserId(userId: string, limit = 500): Promise<IDataLakeBatchSummary[]> {

@@ -71,11 +71,12 @@ const emittedChars = (userMessages: Array<{ content: unknown }>) =>
 
 /**
  * Each included file carries a short label ("Here is the content from the attached
- * file ...") that is not charged against the content budget. It is tens of characters
- * per file against a budget in the thousands, and assembly re-counts everything with
- * the real tokenizer afterwards, so it is allowed for rather than engineered away.
+ * file ...") plus the anti-inference/truncation notices, none of which are charged
+ * against the content budget. It is roughly a hundred characters per file against a
+ * budget in the thousands, and assembly re-counts everything with the real tokenizer
+ * afterwards, so it is allowed for rather than engineered away.
  */
-const FRAMING_ALLOWANCE_PER_FILE = 200;
+const FRAMING_ALLOWANCE_PER_FILE = 300;
 
 describe('processFabFilesServer attached-content budget', () => {
   beforeEach(() => {
@@ -282,5 +283,88 @@ describe('processFabFilesServer deliveredFileIds', () => {
     // still succeeds and the sibling file's content still reaches the model.
     expect(deliveredFileIds).toEqual(['good']);
     expect(emittedChars(userMessages)).toBeGreaterThan(0);
+  });
+});
+
+describe('filename handling in the delivered-content wrapper', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetFileContent.mockResolvedValue('some file content');
+  });
+
+  it('keeps digits in a filename out of the wrapper header un-flagged', async () => {
+    // A number embedded in the filename (e.g. 30000.txt) sits right next to the content; the model
+    // must be told it is part of the name, not a row/record count it can echo back.
+    const { userMessages } = await processFabFilesServer(
+      embeddingFactory,
+      [textFile('30000')],
+      'prompt',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    const content = userMessages[0].content as string;
+    expect(content).toContain('Here is the content from the attached file "30000.txt" for context:');
+    expect(content).toContain(
+      'Digits in the file name are part of the name, not a count of its rows, records, or sections.'
+    );
+  });
+
+  it('sanitizes bracket and quote characters out of the wrapper header filename', async () => {
+    const crafted = {
+      id: 'a',
+      fileName: 'weird[1]"name.txt',
+      mimeType: 'text/plain',
+      vectorized: false,
+    } as IFabFileDocument;
+    const { userMessages } = await processFabFilesServer(
+      embeddingFactory,
+      [crafted],
+      'prompt',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    const content = userMessages[0].content as string;
+    expect(content).not.toContain('weird[1]"name.txt');
+    expect(content).toContain('weird 1  name.txt');
+  });
+
+  it('falls back to a placeholder when sanitizing empties the filename', async () => {
+    const crafted = { id: 'a', fileName: '["]', mimeType: 'text/plain', vectorized: false } as IFabFileDocument;
+    const { userMessages } = await processFabFilesServer(
+      embeddingFactory,
+      [crafted],
+      'prompt',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    const content = userMessages[0].content as string;
+    expect(content).toContain('Here is the content from the attached file "unnamed attachment" for context:');
+  });
+
+  it('states the digit-in-filename caveat once, not per file, when multiple files are attached', async () => {
+    const { userMessages } = await processFabFilesServer(
+      embeddingFactory,
+      [textFile('30000'), textFile('40000')],
+      'prompt',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    const content = userMessages[0].content as string;
+    const occurrences = content.split('Digits in the file name are part of the name').length - 1;
+    expect(occurrences).toBe(1);
+    expect(content).toContain('--- File 1: 30000.txt ---');
+    expect(content).toContain('--- File 2: 40000.txt ---');
   });
 });

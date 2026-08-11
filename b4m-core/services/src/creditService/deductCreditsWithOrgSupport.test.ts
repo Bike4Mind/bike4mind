@@ -21,6 +21,8 @@ const mockSubtractCredits = vi.mocked(subtractCredits);
 describe('creditService - deductCreditsWithOrgSupport', () => {
   const mockUser = {
     id: 'user1',
+    name: 'Test User',
+    email: 'user1@example.com',
     currentCredits: 100,
   } as IUserDocument;
 
@@ -149,6 +151,9 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
         lastCreditUsedAt: expect.any(Date),
       });
 
+      // Member already has a userDetails row, so no self-heal seed is issued.
+      expect(mockOrgRepo.ensureUserDetails).not.toHaveBeenCalled();
+
       expect(mockSubtractCredits).toHaveBeenCalledWith(
         expect.objectContaining({
           type: 'text_generation_usage',
@@ -169,7 +174,7 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
       );
     });
 
-    it('should call updateUserDetails even when user has no existing entry (repo handles warning)', async () => {
+    it('self-heals a missing userDetails row before incrementing, so the positional $inc lands (#1460)', async () => {
       const orgWithoutUser = {
         id: 'org1',
         currentCredits: 500,
@@ -188,7 +193,13 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
 
       await deductCreditsWithOrgSupport(params, mockAdapters);
 
-      // Should still call updateUserDetails - the repo layer handles the no-match warning
+      // The member has no row, so seed one first - otherwise the positional $inc below no-ops and
+      // the spend (and the cap) never track for them.
+      expect(mockOrgRepo.ensureUserDetails).toHaveBeenCalledWith('org1', {
+        id: 'user1',
+        email: 'user1@example.com',
+        name: 'Test User',
+      });
       expect(mockOrgRepo.updateUserDetails).toHaveBeenCalledWith('org1', 'user1', {
         creditsDelta: 50,
         lastCreditUsedAt: expect.any(Date),

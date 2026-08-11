@@ -4,6 +4,7 @@ import { diceRollTool } from './implementation/diceroll';
 import { weatherTool } from './implementation/weather';
 import { imageGenerationTool } from './implementation/imageGeneration';
 import { musicGenerationTool } from './implementation/musicGeneration';
+import { audioGenerationTool } from './implementation/audioGeneration';
 import { webSearchTool } from './implementation/websearch';
 import { webFetchTool } from './implementation/webfetch';
 import { wolframAlphaTool } from './implementation/wolfram_alpha';
@@ -26,6 +27,7 @@ import { issTrackerTool } from './implementation/issTracker';
 import { planetVisibilityTool } from './implementation/planetVisibility';
 import { knowledgeBaseSearchTool } from './implementation/knowledgeBaseSearch';
 import { knowledgeBaseRetrieveTool } from './implementation/knowledgeBaseRetrieve';
+import { knowledgeBaseCountTool } from './implementation/knowledgeBaseCount';
 import { navigateViewTool } from './implementation/navigateView';
 import { jupyterNotebookTool } from './implementation/jupyterNotebook';
 import { excelGenerationTool } from './implementation/excelGeneration';
@@ -100,6 +102,7 @@ export const b4mTools = {
   image_generation: imageGenerationTool,
   edit_image: imageEditTool,
   music_generation: musicGenerationTool,
+  audio_generation: audioGenerationTool,
   web_search: webSearchTool,
   web_fetch: webFetchTool,
   wolfram_alpha: wolframAlphaTool,
@@ -125,6 +128,7 @@ export const b4mTools = {
   // Chess engine
   chess_engine: chessEngineTool,
   retrieve_knowledge_content: knowledgeBaseRetrieveTool,
+  count_knowledge_base: knowledgeBaseCountTool,
 
   // Navigation tool
   navigate_view: navigateViewTool,

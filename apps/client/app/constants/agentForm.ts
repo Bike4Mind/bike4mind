@@ -150,5 +150,6 @@ export const TOOLS_REQUIRING_APPROVAL: ReadonlySet<string> = new Set([
   'image_generation',
   'edit_image',
   'music_generation',
+  'audio_generation',
   'video_generation',
 ]);

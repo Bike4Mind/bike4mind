@@ -3,9 +3,13 @@ import {
   dataLakeBatchRepository,
   fabFileRepository,
   fabFileChunkRepository,
+  memoryLedgerRepository,
+  memoryPrincipalKeyRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { shredPrincipalMemory } from '@server/memory/ledgerMemoryStore';
+import { createKeyProvider } from '@server/memory/factCipher';
 import { BadRequestError } from '@bike4mind/utils';
 import { z, ZodError } from 'zod';
 
@@ -32,6 +36,23 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         batches: dataLakeBatchRepository,
         fabFiles: fabFileRepository,
         fabFileChunks: fabFileChunkRepository,
+      },
+      // Crypto-shred the lake's memory profile as part of the purge (#1440) - destroy the DEK and mark
+      // the ledger shredded, so a deleted lake leaves no readable belief ledger behind.
+      //
+      // LOG IT. This is a data-retention operation, and until it logged, a successful shred and a
+      // shred that never ran were indistinguishable from the outside: the port is optional, so a host
+      // that failed to wire it would still exit 0 and look identical in CloudWatch. Verified live on a
+      // preview - the cleanup Lambda ran clean and emitted nothing, which is exactly the evidence gap
+      // this closes. The log is the only artifact that says a given lake's beliefs were destroyed.
+      shredMemory: async ({ datalakeTag, ownerUserId }) => {
+        await shredPrincipalMemory(
+          memoryLedgerRepository,
+          createKeyProvider(memoryPrincipalKeyRepository),
+          { kind: 'lake', id: datalakeTag },
+          ownerUserId
+        );
+        logger.info('[lakeMemory] crypto-shredded the lake memory profile', { datalakeTag, ownerUserId });
       },
       logger,
     });

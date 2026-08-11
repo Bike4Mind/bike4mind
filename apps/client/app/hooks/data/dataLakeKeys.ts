@@ -13,6 +13,9 @@
  *   Invalidate the root so every variant refreshes; a fully-specified key would refresh only
  *   one surface.
  */
+// Type-only: keeps this module runtime-free (no cycle with dataLakes.ts, which value-imports us).
+import type { DataLakeArticlesParams, DataLakeBrowseSource } from '@client/app/hooks/data/dataLakes';
+
 export const dataLakeKeys = {
   /** The lake list (GET /api/data-lakes). */
   list: ['data-lakes'] as const,
@@ -29,8 +32,9 @@ export const dataLakeKeys = {
   filesOf: (dataLakeId: string) => ['dataLakeFiles', dataLakeId] as const,
   /** Invalidation prefix covering all lakes' file lists. */
   filesRoot: ['dataLakeFiles'] as const,
-  tagCounts: (source: string) => ['dataLakeTagCounts', source] as const,
+  tagCounts: (source: DataLakeBrowseSource) => ['dataLakeTagCounts', source] as const,
   tagCountsRoot: ['dataLakeTagCounts'] as const,
-  articles: (source: string, params?: unknown) => ['dataLakeArticles', source, params] as const,
+  articles: (source: DataLakeBrowseSource, params?: DataLakeArticlesParams) =>
+    ['dataLakeArticles', source, params] as const,
   articlesRoot: ['dataLakeArticles'] as const,
 };

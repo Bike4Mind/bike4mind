@@ -8,6 +8,7 @@ import {
   ModelInfo,
   MusicGenerationVendor,
 } from '@bike4mind/common';
+import type { SoundGenerationVendor, VoiceGenerationVendor } from '@bike4mind/common';
 import { type ApiKeyTable, type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
@@ -15,14 +16,16 @@ import type { ServerAgentConfig } from '@bike4mind/agents';
 import { ServerAgentStore } from '../agents/ServerAgentStore';
 import { generateMcpToolsFromCache, LlmTools } from './index';
 import { ToolDefinition, type ToolContext } from './base/types';
-import { validateUserCredits, validateMusicCredits } from './base/utils';
+import { validateUserCredits, validateMusicCredits, validateAudioCredits } from './base/utils';
 import type { CostInput } from '../imageCostCalculator/types';
 import { estimateMusicCredits } from '../../musicCost';
+import { estimateAudioCredits, type AudioCostInput } from '../../audioCost';
 import {
   extractAndSaveEntitiesFromUserMessage,
   getConversationContextSystemMessage,
 } from '../../conversationContextService';
 import { buildSharedTools } from '../sharedToolBuilder';
+import type { ToolAvailability } from '../toolAvailability';
 import type { SubagentTelemetryData } from './implementation/delegateToAgent';
 import type { IChatCompletionServiceOptions, QuestStartBodySchema } from '../ChatCompletionFeatures';
 
@@ -140,12 +143,14 @@ const TOOL_PREAMBLES: Record<string, string> = {
   web_search: 'Searching the web…',
   search_knowledge_base: 'Looking through your knowledge base…',
   retrieve_knowledge_content: 'Pulling that up…',
+  count_knowledge_base: 'Counting your knowledge base…',
   weather_info: 'Checking the weather…',
   wolfram_alpha: 'Running that through Wolfram…',
   deep_research: 'Doing deeper research — give me a moment…',
   image_generation: 'Generating an image…',
   edit_image: 'Editing the image…',
   music_generation: 'Composing music…',
+  audio_generation: 'Generating audio…',
 };
 
 function resolveToolPreamble(toolName: string): string | null {
@@ -176,6 +181,8 @@ function resolveToolStatus(toolName: string, data: any): string | null {
       return query ? `🔎 Searching the data lake${tags}: “${truncateForStatus(query)}”` : '🔎 Searching the data lake…';
     case 'retrieve_knowledge_content':
       return '📄 Reading the most relevant articles…';
+    case 'count_knowledge_base':
+      return '🔢 Counting the documents in the data lake…';
     case 'web_search':
       return query ? `🌐 Searching the web: “${truncateForStatus(query)}”` : '🌐 Searching the web…';
     case 'web_fetch':
@@ -281,6 +288,7 @@ export interface BuildToolsArgs {
   thinking?: { enabled: boolean; budget_tokens: number };
   agentStore?: ServerAgentStore;
   externalTools?: Record<string, ToolDefinition>;
+  toolAvailability?: ToolAvailability;
 }
 
 // Reuse the role enum validated at the API boundary by QuestStartBodySchema so the
@@ -378,6 +386,81 @@ export class ToolBuilder {
           costUsd: usdCost,
           creditsCharged: creditsUsed,
           units: billedSeconds,
+        })
+      );
+    }
+    if (!quest.images) quest.images = [];
+    data.paths.forEach(path => {
+      if (!quest.images?.includes(path)) quest.images?.push(path);
+    });
+  }
+
+  /**
+   * Up-front affordability gate for audio_generation (onToolStart): throws
+   * insufficient_credits before the paid provider call. Speech is gated on a conservative
+   * per-character estimate (the resolved model is not known until synthesis returns);
+   * sound effects on the duration. The reservation is deferred to settleAudioCredits so a
+   * failed generation is never billed. Exposed for unit-testing the audio credit branch.
+   */
+  gateAudioCredits(data: AudioCostInput, enforceCredits: boolean, organization?: IOrganizationDocument | null): void {
+    if (!enforceCredits || !this.deps.db.creditTransactions) return;
+    validateAudioCredits(this.deps.user, data, this.deps.logger, organization);
+  }
+
+  /**
+   * Reserve + record a delivered audio clip's credits (onToolFinish) and ride its path on
+   * quest.images. Reached only after generation succeeds. Speech settles on the ACTUAL
+   * resolved model + character count so the charge matches the direct /api/ai/tts endpoint
+   * exactly; sound effects settle on the duration. Does not persist the quest - the caller
+   * saves. Exposed for unit-testing the audio credit branch.
+   */
+  settleAudioCredits(
+    quest: IChatHistoryItemDocument,
+    data: {
+      kind: 'speech' | 'sound_effect';
+      provider: VoiceGenerationVendor | SoundGenerationVendor;
+      model?: string;
+      characters?: number;
+      durationSeconds?: number;
+      paths: string[];
+    },
+    enforceCredits: boolean,
+    organization?: IOrganizationDocument | null
+  ): void {
+    if (enforceCredits && !!this.deps.db.creditTransactions) {
+      const costInput: AudioCostInput =
+        data.kind === 'sound_effect'
+          ? {
+              kind: 'sound_effect',
+              provider: data.provider as SoundGenerationVendor,
+              durationSeconds: data.durationSeconds,
+            }
+          : {
+              kind: 'speech',
+              provider: data.provider as VoiceGenerationVendor,
+              model: data.model,
+              characters: data.characters ?? 0,
+            };
+      const { requiredCredits: creditsUsed, usdCost, units } = estimateAudioCredits(costInput);
+      this.deps.logger.info(`Credits used for tool audio_generation (${data.kind}): ${creditsUsed}`);
+      this.reserveToolCredits('audio_generation', creditsUsed);
+      quest.creditsUsed = (quest.creditsUsed ?? 0) + creditsUsed;
+      recordToolUsageEvent(
+        this.deps.db,
+        this.deps.logger,
+        'audio_generation',
+        buildToolUsageEvent({
+          quest,
+          user: this.deps.user,
+          organization,
+          provider: data.provider,
+          // Speech always resolves a real model id; a sound effect has none, so
+          // qualify it by provider (e.g. "elevenlabs-sound_effect") instead of the
+          // bare kind so per-model COGS analytics stays clean.
+          model: data.model ?? `${data.provider}-${data.kind}`,
+          costUsd: usdCost,
+          creditsCharged: creditsUsed,
+          units,
         })
       );
     }
@@ -588,6 +671,7 @@ export class ToolBuilder {
     thinking,
     agentStore,
     externalTools,
+    toolAvailability,
   }: BuildToolsArgs): ICompletionOptionTools[] | undefined {
     return buildSharedTools(
       {
@@ -664,6 +748,11 @@ export class ToolBuilder {
             const { provider, lengthMs } = data as { provider: MusicGenerationVendor; lengthMs: number };
             this.gateMusicCredits({ provider, lengthMs }, enforceCredits, organization);
           }
+
+          if (toolName === 'audio_generation') {
+            const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
+            this.gateAudioCredits(data as AudioCostInput, enforceCredits, organization);
+          }
         },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         onToolFinish: async (toolName: string, data: any) => {
@@ -680,6 +769,26 @@ export class ToolBuilder {
             this.settleMusicCredits(
               quest,
               data as { paths: string[]; provider: MusicGenerationVendor; lengthMs: number; modelId: string },
+              enforceCredits,
+              organization
+            );
+            await saveQuest(quest);
+          }
+          if (toolName === 'audio_generation') {
+            // Settle audio billing HERE (not onToolStart) so only a delivered clip is charged:
+            // the tool's failure paths return before onFinish. Audio rides quest.images; the
+            // client splits by extension to render an inline player.
+            const enforceCredits = precomputed?.adminSettingsEnforceCredits ?? true;
+            this.settleAudioCredits(
+              quest,
+              data as {
+                kind: 'speech' | 'sound_effect';
+                provider: VoiceGenerationVendor | SoundGenerationVendor;
+                model?: string;
+                characters?: number;
+                durationSeconds?: number;
+                paths: string[];
+              },
               enforceCredits,
               organization
             );
@@ -769,6 +878,7 @@ export class ToolBuilder {
         agentOnlyMcpServers,
         getAbortSignal,
         externalTools,
+        toolAvailability,
       }
     );
   }

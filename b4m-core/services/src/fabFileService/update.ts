@@ -118,7 +118,7 @@ export const updateFabFile = async (
           id,
           (fabFile.tags ?? []).map(t => t?.name).filter((name): name is string => typeof name === 'string'),
           params.tags,
-          { db, logger }
+          { db, logger, fileOwnerUserId: fabFile.userId }
         );
 
   const updatedFabFile: Partial<IFabFileDocument> = {

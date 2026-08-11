@@ -66,8 +66,10 @@ function formatSemanticResults(
   });
   // A truncated scan ranked only part of the corpus. Say so, or the model will read "no further
   // matches" into what is really "we stopped looking" and assert the library holds nothing else.
+  // filesScanned + annFilesQueried, not filesScanned alone: an Atlas-served file was searched too,
+  // just never handed to the brute-force scan (see SemanticSearchScanAccounting.annFilesQueried).
   const partial = scan?.truncated
-    ? `NOTE: this search covered only ${scan.filesScanned} of ${scan.filesMatching} documents (a scan budget was reached), so these passages may be incomplete. Do not state or imply the knowledge base has nothing further on this topic.\n\n`
+    ? `NOTE: this search covered only ${scan.filesScanned + scan.annFilesQueried} of ${scan.filesMatching} documents (a scan budget was reached), so these passages may be incomplete. Do not state or imply the knowledge base has nothing further on this topic.\n\n`
     : '';
   return (
     formatSkipNotice(skipNotice) +
@@ -99,13 +101,24 @@ async function resolveEmbeddingContext(context: ToolContext): Promise<{
   provider: string;
   apiKeyTable: Awaited<ReturnType<typeof getEffectiveLLMApiKeys>>;
   budgets: SemanticSearchBudgets;
+  vectorSearchEnabled: boolean;
 } | null> {
   const adminSettings = context.db.adminSettings;
   const apiKeys = context.db.apiKeys;
-  if (!adminSettings || !apiKeys) return null;
+  if (!adminSettings || !apiKeys) {
+    context.logger.warn(
+      `📚 [semantic] falling back to keyword search: ${!adminSettings ? 'adminSettings' : 'apiKeys'} adapter not wired`
+    );
+    return null;
+  }
 
   const modelRaw = await adminSettings.getSettingsValue('defaultEmbeddingModel');
-  if (!modelRaw || !isSupportedEmbeddingModel(modelRaw)) return null;
+  if (!modelRaw || !isSupportedEmbeddingModel(modelRaw)) {
+    context.logger.warn(
+      `📚 [semantic] falling back to keyword search: ${!modelRaw ? 'no defaultEmbeddingModel configured' : `unsupported defaultEmbeddingModel "${modelRaw}"`}`
+    );
+    return null;
+  }
   const embeddingModel = modelRaw as SupportedEmbeddingModel;
 
   const apiKeyTable = await getEffectiveLLMApiKeys(
@@ -117,11 +130,15 @@ async function resolveEmbeddingContext(context: ToolContext): Promise<{
   // A missing credential means the semantic arm cannot run, so fall back to keyword search.
   // Keyless providers (Bedrock, authenticating through the AWS credential chain) report
   // nothing missing and proceed.
-  if (resolveEmbeddingConfig(provider, apiKeyTable).missing) return null;
+  if (resolveEmbeddingConfig(provider, apiKeyTable).missing) {
+    context.logger.warn(`📚 [semantic] falling back to keyword search: no credential for provider "${provider}"`);
+    return null;
+  }
 
   const budgets = await resolveSearchBudgets({ adminSettings }, context.logger);
+  const vectorSearchEnabled = (await adminSettings.getSettingsValue('EnableDataLakeVectorSearch')) ?? false;
 
-  return { embeddingModel, provider, apiKeyTable, budgets };
+  return { embeddingModel, provider, apiKeyTable, budgets, vectorSearchEnabled };
 }
 
 /**
@@ -242,12 +259,13 @@ async function trySemanticKbSearch(
 ): Promise<SemanticArmResult> {
   const chunkRepo = context.db.fabfilechunks;
   if (!context.db.fabfiles || !chunkRepo?.findVectorsByFabFileIds) {
+    context.logger.warn('📚 [semantic] falling back to keyword search: fabfiles/fabfilechunks not wired');
     return NO_SEMANTIC_RESULT; // semantic deps not wired - use keyword
   }
   try {
     const embedCtx = await resolveEmbeddingContext(context);
     if (!embedCtx) return NO_SEMANTIC_RESULT;
-    const { embeddingModel, provider, apiKeyTable, budgets } = embedCtx;
+    const { embeddingModel, provider, apiKeyTable, budgets, vectorSearchEnabled } = embedCtx;
 
     const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await getDynamicDataLakeAccess(context);
     // No accessible data lake - keyword search owns the user's own files.
@@ -267,6 +285,7 @@ async function trySemanticKbSearch(
         dataLakeTagPrefixes,
         scopedTagPrefixes,
         budgets,
+        vectorSearchEnabled,
         // Retrieval exclusion (opt-in) - agree with the surface's listing predicate. No-op when unset.
         retrievalFilter: context.retrievalFilter,
         logger: context.logger,
@@ -318,12 +337,13 @@ async function tryScopedSemanticKbSearch(
 ): Promise<SemanticArmResult> {
   const chunkRepo = context.db.fabfilechunks;
   if (!context.db.fabfiles || !chunkRepo?.findVectorsByFabFileIds) {
+    context.logger.warn('📚 [semantic] falling back to keyword search: fabfiles/fabfilechunks not wired');
     return NO_SEMANTIC_RESULT;
   }
   try {
     const embedCtx = await resolveEmbeddingContext(context);
     if (!embedCtx) return NO_SEMANTIC_RESULT;
-    const { embeddingModel, provider, apiKeyTable, budgets } = embedCtx;
+    const { embeddingModel, provider, apiKeyTable, budgets, vectorSearchEnabled } = embedCtx;
 
     const search = await fileScopedSemanticSearch(
       {
@@ -334,6 +354,7 @@ async function tryScopedSemanticKbSearch(
         embeddingModel,
         apiKeyTable,
         budgets,
+        vectorSearchEnabled,
         logger: context.logger,
       },
       { db: { fabfiles: context.db.fabfiles, fabfilechunks: chunkRepo } }

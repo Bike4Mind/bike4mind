@@ -29,7 +29,11 @@ export class TokenCounter {
    * Count tokens in a text string
    */
   countTokens(text: string): number {
-    return this.getEncoder().encode(text).length;
+    // encode_ordinary, not encode: pasted text, file content and tool output can all contain a
+    // special-token literal ("<|endoftext|>"), which makes encode reject. Callers here do not guard
+    // it (turnController, ConversationContext, /context), so that throw breaks the turn or command.
+    // See TiktokenTokenizer in @bike4mind/utils for the why.
+    return this.getEncoder().encode_ordinary(text).length;
   }
 
   /**

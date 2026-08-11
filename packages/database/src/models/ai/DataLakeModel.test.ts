@@ -563,6 +563,62 @@ describe('DataLakeRepository - fileTagPrefix is unique per creator (DB backstop)
   });
 });
 
+describe('DataLakeRepository - lake-memory extraction lease + continuation cursor (#1501)', () => {
+  setupMongoTest();
+
+  const makeLake = () => dataLakeRepository.create(baseLake({ slug: 'mem-lake' }));
+
+  it('claims the lease when free, blocks a fresh concurrent claim, and frees it on release', async () => {
+    const lake = await makeLake();
+    const t1 = new Date('2026-01-01T00:00:00Z');
+    const staleBefore1 = new Date(t1.getTime() - 15 * 60_000);
+    expect(await dataLakeRepository.claimLakeMemoryExtraction(lake.id, t1, staleBefore1)).toBe(true);
+
+    // A run a minute later sees a FRESH stamp (not older than its staleBefore) and loses.
+    const t2 = new Date('2026-01-01T00:01:00Z');
+    const staleBefore2 = new Date(t2.getTime() - 15 * 60_000);
+    expect(await dataLakeRepository.claimLakeMemoryExtraction(lake.id, t2, staleBefore2)).toBe(false);
+
+    // The holder releases and the lease is claimable again.
+    await dataLakeRepository.releaseLakeMemoryExtraction(lake.id, t1);
+    expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryExtractionAt ?? null).toBeNull();
+    expect(await dataLakeRepository.claimLakeMemoryExtraction(lake.id, t2, staleBefore2)).toBe(true);
+  });
+
+  it('reclaims a lease whose stamp has aged past the window (crashed run, no reconciler)', async () => {
+    const lake = await makeLake();
+    await DataLakeModel.updateOne(
+      { _id: lake.id },
+      { $set: { lakeMemoryExtractionAt: new Date('2026-01-01T00:00:00Z') } }
+    );
+
+    const now = new Date('2026-01-01T01:00:00Z'); // an hour later - well past the 15-minute lease
+    const staleBefore = new Date(now.getTime() - 15 * 60_000);
+    expect(await dataLakeRepository.claimLakeMemoryExtraction(lake.id, now, staleBefore)).toBe(true);
+  });
+
+  it('release is a compare-and-clear: a late finish does not clear a newer run lease', async () => {
+    const lake = await makeLake();
+    const mine = new Date('2026-01-01T00:00:00Z');
+    // A stale takeover has since replaced my stamp with a newer one.
+    const newer = new Date('2026-01-01T00:30:00Z');
+    await DataLakeModel.updateOne({ _id: lake.id }, { $set: { lakeMemoryExtractionAt: newer } });
+
+    await dataLakeRepository.releaseLakeMemoryExtraction(lake.id, mine);
+    const after = await dataLakeRepository.findById(lake.id);
+    expect(after?.lakeMemoryExtractionAt?.getTime()).toBe(newer.getTime());
+  });
+
+  it('persists and clears the continuation cursor', async () => {
+    const lake = await makeLake();
+    await dataLakeRepository.setLakeMemoryCursor(lake.id, 'doc-42');
+    expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryCursor).toBe('doc-42');
+
+    await dataLakeRepository.setLakeMemoryCursor(lake.id, null);
+    expect((await dataLakeRepository.findById(lake.id))?.lakeMemoryCursor ?? null).toBeNull();
+  });
+});
+
 describe('DataLakeBatchRepository.markTerminalIfActive — completionReason', () => {
   setupMongoTest();
 
@@ -606,6 +662,73 @@ describe('DataLakeBatchRepository.setStatusIfActive - guarded non-terminal trans
   });
 });
 
+describe('DataLakeBatchRepository.claimFileStatus - from-set gating', () => {
+  setupMongoTest();
+
+  const batchWithFile = async (status: import('@bike4mind/common').BatchFileStatus) => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 1 } as never);
+    await dataLakeBatchRepository.appendFiles(batch.id, [{ fabFileId: 'ff1', fileName: 'a.pdf', status }]);
+    return batch;
+  };
+
+  it('claims a manifest file from uploaded to chunking', async () => {
+    const batch = await batchWithFile('uploaded');
+    const claimed = await dataLakeBatchRepository.claimFileStatus(batch.id, 'ff1', ['uploaded', 'pending'], 'chunking');
+    expect(claimed).toBe(true);
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.files[0].status).toBe('chunking');
+  });
+
+  it('is a no-op once the entry is failed - the exact mechanism a premature failure exploits (#1412): no success path can ever claim a file back out of failed, so marking one failed before a retry has a chance to succeed is unrecoverable', async () => {
+    const batch = await batchWithFile('failed');
+    const claimed = await dataLakeBatchRepository.claimFileStatus(
+      batch.id,
+      'ff1',
+      ['chunking', 'uploaded', 'pending'],
+      'complete'
+    );
+    expect(claimed).toBe(false);
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.files[0].status).toBe('failed');
+  });
+
+  it('a repeated claim to the same target is a no-op (redelivery safety)', async () => {
+    const batch = await batchWithFile('uploaded');
+    const first = await dataLakeBatchRepository.claimFileStatus(batch.id, 'ff1', ['uploaded', 'pending'], 'chunking');
+    const second = await dataLakeBatchRepository.claimFileStatus(batch.id, 'ff1', ['uploaded', 'pending'], 'chunking');
+    expect(first).toBe(true);
+    expect(second).toBe(false);
+  });
+});
+
+describe('DataLakeBatchRepository.touchIfActive - guarded heartbeat', () => {
+  setupMongoTest();
+
+  const activeBatch = () => dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1' });
+
+  it('advances updatedAt on a non-terminal batch', async () => {
+    const batch = await activeBatch();
+    const before = batch.updatedAt.getTime();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    await dataLakeBatchRepository.touchIfActive(batch.id);
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh!.updatedAt.getTime()).toBeGreaterThan(before);
+  });
+
+  it('is a no-op on an already-terminal batch, so it cannot resurrect one the pipeline finalized', async () => {
+    const batch = await activeBatch();
+    const finalized = await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed_with_errors');
+    const terminalUpdatedAt = finalized!.updatedAt.getTime();
+
+    await new Promise(resolve => setTimeout(resolve, 5));
+    await dataLakeBatchRepository.touchIfActive(batch.id);
+
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.status).toBe('completed_with_errors');
+    expect(fresh!.updatedAt.getTime()).toBe(terminalUpdatedAt);
+  });
+});
+
 describe('DataLakeBatchRepository.incrementCounter - additive, not clobbering', () => {
   setupMongoTest();
 
@@ -617,6 +740,53 @@ describe('DataLakeBatchRepository.incrementCounter - additive, not clobbering', 
     await dataLakeBatchRepository.incrementCounter(batch.id, 'failedFiles', 2);
     const after = await dataLakeBatchRepository.incrementCounter(batch.id, 'failedFiles', 1);
     expect(after?.failedFiles).toBe(3);
+  });
+});
+
+describe('DataLakeBatchRepository.incrementCounters - atomic multi-field increment', () => {
+  setupMongoTest();
+
+  it('bumps two counters in one write, so neither can land without the other', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 5 } as never);
+    const after = await dataLakeBatchRepository.incrementCounters(batch.id, {
+      failedFiles: 1,
+      processingFailedFiles: 1,
+    });
+    expect(after?.failedFiles).toBe(1);
+    expect(after?.processingFailedFiles).toBe(1);
+  });
+
+  it('composes with prior single-field increments rather than clobbering them', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 5 } as never);
+    await dataLakeBatchRepository.incrementCounter(batch.id, 'vectorizedFiles', 2);
+    const after = await dataLakeBatchRepository.incrementCounters(batch.id, {
+      failedFiles: 1,
+      processingFailedFiles: 1,
+    });
+    expect(after?.vectorizedFiles).toBe(2);
+    expect(after?.failedFiles).toBe(1);
+    expect(after?.processingFailedFiles).toBe(1);
+  });
+
+  it('is a no-op on an already-terminal batch, so a late-arriving increment cannot push a counter past what a caller already treated as final', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 5 } as never);
+    await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed');
+
+    const result = await dataLakeBatchRepository.incrementCounters(batch.id, {
+      failedFiles: 1,
+      processingFailedFiles: 1,
+    });
+    expect(result).toBeNull();
+
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.failedFiles).toBe(0);
+    expect(fresh?.processingFailedFiles).toBe(0);
+    expect(fresh?.status).toBe('completed');
+  });
+
+  it('returns null without querying Mongo for an empty fields object', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 5 } as never);
+    await expect(dataLakeBatchRepository.incrementCounters(batch.id, {})).resolves.toBeNull();
   });
 });
 
@@ -693,22 +863,159 @@ describe('DataLakeBatchRepository.findStuckTaxonomy - global cross-user stale sc
   setupMongoTest();
 
   const CUTOFF = new Date('2021-01-01T00:00:00Z');
+  const STALE = new Date('2020-01-01T00:00:00Z');
 
-  const seedBatch = async (taxonomyStatus: string, updatedAt?: Date) => {
-    const b = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', taxonomyStatus } as never);
-    if (updatedAt) {
-      await mongoose.models.DataLakeBatch.updateOne({ _id: b.id }, { $set: { updatedAt } }, { timestamps: false });
-    }
-    return b;
-  };
+  const seedBatch = async (taxonomyStatus: string, taxonomyStartedAt?: Date) =>
+    dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', taxonomyStatus, taxonomyStartedAt } as never);
 
-  it('returns only stale non-terminal taxonomy phases (excludes fresh, ready, applied, and none)', async () => {
-    const stale = await seedBatch('analyzing', new Date('2020-01-01T00:00:00Z'));
-    await seedBatch('analyzing'); // fresh -> excluded
-    await seedBatch('ready', new Date('2020-01-01T00:00:00Z')); // stale but terminal-ish -> excluded
-    await seedBatch('none', new Date('2020-01-01T00:00:00Z')); // never opted in -> excluded
+  it('returns stale non-terminal phases and never-started ones, excluding fresh/ready/none', async () => {
+    const neverStarted = await seedBatch('analyzing'); // no taxonomyStartedAt -> treated as maximally stale, not excluded
+    const stale = await seedBatch('analyzing', STALE);
+    await seedBatch('analyzing', new Date('2022-01-01T00:00:00Z')); // fresh -> excluded
+    await seedBatch('ready', STALE); // stale but terminal-ish -> excluded
+    await seedBatch('none', STALE); // never opted in -> excluded
     const stuck = await dataLakeBatchRepository.findStuckTaxonomy(CUTOFF);
-    expect(stuck.map(b => b.id)).toEqual([stale.id]);
+    // Missing sorts first in ascending order (Mongo treats it like null), so neverStarted leads.
+    // Inclusion here matters beyond this scan: it's what makes the never-started batch reachable
+    // at all for forceFailStuckTaxonomy's own missing-field handling - if the scan excluded it,
+    // that write-side guard would never actually be exercised for such a batch.
+    expect(stuck.map(b => b.id)).toEqual([neverStarted.id, stale.id]);
+  });
+
+  it('filters on taxonomyStartedAt, not updatedAt - an unrelated write must not hide a stuck batch', async () => {
+    const stillStuck = await seedBatch('analyzing', STALE);
+    // Simulates an unrelated write (e.g. an ingest counter tick) bumping updatedAt well past
+    // the cutoff while taxonomyStartedAt - when this taxonomy attempt actually began - stays
+    // fixed. If the query filtered on updatedAt, this batch would wrongly dodge the scan.
+    await mongoose.models.DataLakeBatch.updateOne(
+      { _id: stillStuck.id },
+      { $set: { updatedAt: new Date('2022-01-01T00:00:00Z') } },
+      { timestamps: false }
+    );
+
+    const stuck = await dataLakeBatchRepository.findStuckTaxonomy(CUTOFF);
+    expect(stuck.map(b => b.id)).toEqual([stillStuck.id]);
+  });
+
+  it('excludes a batch whose taxonomyStartedAt is fresh even if its updatedAt looks stale', async () => {
+    const freshlyReclaimed = await seedBatch('analyzing', new Date('2022-01-01T00:00:00Z'));
+    await mongoose.models.DataLakeBatch.updateOne(
+      { _id: freshlyReclaimed.id },
+      { $set: { updatedAt: STALE } },
+      { timestamps: false }
+    );
+
+    const stuck = await dataLakeBatchRepository.findStuckTaxonomy(CUTOFF);
+    expect(stuck).toEqual([]);
+  });
+
+  it('orders oldest-taxonomyStartedAt-first, not by updatedAt - the cron caps results per run and must reconcile the truly-oldest first', async () => {
+    // updatedAt is deliberately the OPPOSITE order of taxonomyStartedAt here: if the query
+    // sorted on updatedAt (the wrong clock, same bug the filter itself was fixed for), this
+    // assertion would see [newest, oldest] instead.
+    const oldest = await seedBatch('analyzing', new Date('2019-01-01T00:00:00Z'));
+    const newest = await seedBatch('analyzing', new Date('2020-06-01T00:00:00Z'));
+    await mongoose.models.DataLakeBatch.updateOne(
+      { _id: oldest.id },
+      { $set: { updatedAt: new Date('2020-12-31T00:00:00Z') } },
+      { timestamps: false }
+    );
+    await mongoose.models.DataLakeBatch.updateOne(
+      { _id: newest.id },
+      { $set: { updatedAt: new Date('2020-01-01T00:00:00Z') } },
+      { timestamps: false }
+    );
+
+    const stuck = await dataLakeBatchRepository.findStuckTaxonomy(CUTOFF);
+    expect(stuck.map(b => b.id)).toEqual([oldest.id, newest.id]);
+  });
+});
+
+describe('DataLakeBatchRepository.forceFailStuckTaxonomy - reconciler write, guarded on status AND staleness', () => {
+  setupMongoTest();
+
+  const CUTOFF = new Date('2021-01-01T00:00:00Z');
+  const STALE = new Date('2020-01-01T00:00:00Z');
+  const FRESH = new Date('2022-01-01T00:00:00Z');
+
+  it('succeeds when status is in `from` and taxonomyStartedAt is before the cutoff', async () => {
+    const b = await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      taxonomyStatus: 'analyzing',
+      taxonomyStartedAt: STALE,
+    } as never);
+
+    const result = await dataLakeBatchRepository.forceFailStuckTaxonomy(
+      b.id,
+      ['queued', 'analyzing', 'applying'],
+      CUTOFF,
+      'Timed out waiting for AI tag suggestion'
+    );
+
+    expect(result?.taxonomyStatus).toBe('failed');
+    expect(result?.taxonomyError).toBe('Timed out waiting for AI tag suggestion');
+  });
+
+  it('is a no-op when taxonomyStartedAt is NOT before the cutoff, even if status still matches - the exact race this guard closes', async () => {
+    // Simulates a legitimate re-claim (e.g. a manual re-analyze) landing between the
+    // reconciler's read and its write: taxonomyStatus is still non-terminal, but
+    // taxonomyStartedAt now reflects the NEW attempt, not the stale one the reconciler saw.
+    const b = await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      taxonomyStatus: 'analyzing',
+      taxonomyStartedAt: FRESH,
+    } as never);
+
+    const result = await dataLakeBatchRepository.forceFailStuckTaxonomy(
+      b.id,
+      ['queued', 'analyzing', 'applying'],
+      CUTOFF,
+      'Timed out waiting for AI tag suggestion'
+    );
+
+    expect(result).toBeNull();
+    const fresh = await dataLakeBatchRepository.findById(b.id);
+    expect(fresh?.taxonomyStatus).toBe('analyzing'); // untouched - the re-claim's work survives
+  });
+
+  it('is a no-op when status does not match, regardless of staleness', async () => {
+    const b = await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      taxonomyStatus: 'ready',
+      taxonomyStartedAt: STALE,
+    } as never);
+
+    const result = await dataLakeBatchRepository.forceFailStuckTaxonomy(
+      b.id,
+      ['queued', 'analyzing', 'applying'],
+      CUTOFF,
+      'Timed out waiting for AI tag suggestion'
+    );
+
+    expect(result).toBeNull();
+  });
+
+  it('succeeds when taxonomyStartedAt is missing entirely, not just when it is before the cutoff', async () => {
+    // reconcileStuckTaxonomy.ts treats a missing taxonomyStartedAt as "definitely stuck" (epoch
+    // 0). A plain $lt guard would never match a missing field, silently no-opping forever on
+    // such a batch - this proves the guard's $not/$gte form closes that gap.
+    const b = await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      taxonomyStatus: 'analyzing',
+    } as never);
+
+    const result = await dataLakeBatchRepository.forceFailStuckTaxonomy(
+      b.id,
+      ['queued', 'analyzing', 'applying'],
+      CUTOFF,
+      'Timed out waiting for AI tag suggestion'
+    );
+
+    expect(result?.taxonomyStatus).toBe('failed');
   });
 });
 

@@ -125,9 +125,9 @@ export interface ToolContext {
    * consult owner-wide access (getDynamicDataLakeAccess). Absent on all non-agent paths.
    *
    * INVARIANT: any NEW tool that reads db.fabfiles / db.fabfilechunks must honor kbScope
-   * (reject / restrict to scope.fileIds) - today only search_knowledge_base and
-   * retrieve_knowledge_content do, and the embed surface stays safe only because its tool
-   * resolver excludes every other fabfiles-reading tool. Enforcement is per-tool, not
+   * (reject / restrict to scope.fileIds) - today only search_knowledge_base,
+   * retrieve_knowledge_content and count_knowledge_base do, and the embed surface stays safe only
+   * because its tool resolver excludes every other fabfiles-reading tool. Enforcement is per-tool, not
    * per-repository, so a new fabfiles tool added to a scoped surface without this handling
    * would silently read unscoped.
    */

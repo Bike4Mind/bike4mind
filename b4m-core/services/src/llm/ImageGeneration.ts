@@ -915,6 +915,9 @@ export class ImageGenerationService {
             aspect_ratio,
             output_format,
             safety_tolerance,
+            // GeminiImageService maps this to Google's `enhancePrompt`. Only the text-to-image path
+            // honours it: `edit()` takes ImageEditOptions and does not build a generation config.
+            prompt_upsampling,
           });
         }
       } else if (BFL_IMAGE_MODELS.includes(model as any)) {

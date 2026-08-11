@@ -353,6 +353,27 @@ export function useReanalyzeTaxonomy(batchId: string) {
   });
 }
 
+/**
+ * Clears a ready/failed taxonomy batch's attention chip without applying or re-analyzing it.
+ * No file/tag data changes - only invalidates the active-batches list (unlike apply, which also
+ * invalidates file/tag-count queries since it actually writes tags).
+ */
+export function useDismissTaxonomy(batchId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const res = await api.post<{ success: true }>(`/api/data-lakes/batches/${batchId}/dismiss-taxonomy`, {});
+      return res.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.activeBatches });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to dismiss tag suggestions');
+    },
+  });
+}
+
 // ── Per-lake files ──────────────────────────────────────────────────────────
 
 /**
@@ -520,7 +541,8 @@ export function useDataLakeArticleCounts(): { total: number; sales: number; opti
  */
 export function useGetDataLakeArticles(params?: DataLakeArticlesParams | null, source: DataLakeBrowseSource = 'opti') {
   return useQuery({
-    queryKey: dataLakeKeys.articles(source, params),
+    // `null` means disabled-below, but the key type takes the params shape or undefined only.
+    queryKey: dataLakeKeys.articles(source, params ?? undefined),
     queryFn: async () => {
       const response = await api.get<{ data: IFabFileDocument[]; total: number; hasMore: boolean }>(
         `${browseBase(source)}/articles`,

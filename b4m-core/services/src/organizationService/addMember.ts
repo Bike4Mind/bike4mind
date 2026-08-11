@@ -55,7 +55,21 @@ export async function addMember(user: IUserDocument, parameters: AddMemberParame
     organization.users.push({ userId: userToAdd.id, permissions: [Permission.read] });
   }
 
-  await db.organizations.update(organization);
+  // Persist ONLY the users[] edit with a targeted write. A whole-document write would $set the entire
+  // userDetails array from this stale snapshot and could revert a concurrent credit increment
+  // (updateUserDetails' atomic positional $inc), defeating the very cap this seeding enables.
+  await db.organizations.update({ id: organization.id, users: organization.users });
+
+  // Seed the per-member credit side-table so `users[]` and `userDetails[]` stay in sync at the grant
+  // point. Without a row, `updateUserDetails`'s positional $inc no-ops and the member escapes
+  // `maxCreditsPerMember` entirely (reads as 0 spend forever). ensureUserDetails is an idempotent
+  // guarded $push: a re-add never duplicates, and an existing member who predates this seeding is
+  // backfilled - all as a targeted atomic op, never a whole-doc overwrite.
+  await db.organizations.ensureUserDetails(organizationId, {
+    id: userToAdd.id,
+    email: userToAdd.email ?? userToAdd.username,
+    name: userToAdd.name,
+  });
 
   // Establish org membership on the user document. Org-scoped features (e.g.
   // data-lake AccessContext) read user.organizationId; without this, members

@@ -1,5 +1,6 @@
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { createS3Client } from '@bike4mind/fab-pipeline';
 import {
   FileGeneratePresignedUrlRequestInput,
   FileGeneratePresignedUrlRequestInputType,
@@ -20,7 +21,7 @@ import { FileEvents } from '@bike4mind/common';
 import { checkStorageLimit } from '@bike4mind/utils';
 import { Resource } from 'sst';
 
-const s3Client = new S3Client();
+const s3Client = createS3Client();
 
 const handler = baseApi().post(
   asyncHandler<unknown, FileGeneratePresignedUrlResponseType, FileGeneratePresignedUrlRequestInputType>(

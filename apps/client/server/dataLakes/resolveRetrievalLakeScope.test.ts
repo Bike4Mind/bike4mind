@@ -19,12 +19,13 @@ import { resolveRetrievalLakeScope, withStaticRegistryBypass } from './resolveRe
 import { dataLakeRepository } from '@bike4mind/database';
 import type { EntitlementRequest } from '@server/entitlements';
 
-type Scope = { dataLakeTags: string[]; dataLakeTagPrefixes: string[]; scopedTagPrefixes: string[] };
+type Scope = Parameters<typeof withStaticRegistryBypass>[0];
 
 const scopeOf = (over: Partial<Scope> = {}): Scope => ({
   dataLakeTags: [],
   dataLakeTagPrefixes: [],
   scopedTagPrefixes: [],
+  lakes: [],
   ...over,
 });
 
@@ -103,6 +104,33 @@ describe('withStaticRegistryBypass', () => {
 
     expect(out.dataLakeTags).toEqual(['datalake:dyn', 'datalake:opti-knowledge', 'datalake:house-kb']);
     expect(out.dataLakeTagPrefixes).toEqual(['dyn-open:', 'opti:', 'house:']);
+  });
+
+  it('widens the per-lake entries alongside the tags, so a privileged caller can count what it searches', () => {
+    const out = withStaticRegistryBypass(scopeOf(), REGISTRY);
+
+    expect(out.lakes.map(l => l.datalakeTag)).toEqual(['datalake:opti-knowledge', 'datalake:house-kb']);
+    // Registry-sourced entries carry no membership scope - they have no creator to anchor one to.
+    expect(out.lakes.every(l => l.source === 'registry' && !l.membership)).toBe(true);
+  });
+
+  it('keeps a lake the scope already resolved, rather than replacing it with a registry entry', () => {
+    // The scope's own entry may carry a membership scope; a registry copy of the same tag would
+    // count the lake through the weaker prefix arm instead.
+    const resolved = {
+      id: 'opti-knowledge',
+      name: 'Opti',
+      slug: 'opti-knowledge',
+      datalakeTag: 'datalake:opti-knowledge',
+      fileTagPrefix: 'opti:',
+      membership: { datalakeTag: 'datalake:opti-knowledge', fileTagPrefix: 'opti:', creatorUserId: 'owner1' },
+      source: 'dynamic' as const,
+    };
+
+    const out = withStaticRegistryBypass(scopeOf({ lakes: [resolved] }), REGISTRY);
+
+    expect(out.lakes.filter(l => l.datalakeTag === 'datalake:opti-knowledge')).toEqual([resolved]);
+    expect(out.lakes).toHaveLength(2);
   });
 
   it('is a no-op on the OPEN buckets for an empty registry', () => {

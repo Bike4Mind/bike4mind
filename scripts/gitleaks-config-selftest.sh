@@ -46,11 +46,16 @@ FAILED=0
 # not from the domain rules in .gitleaks.toml, so it can only match when
 # `[extend] useDefault = true` is in effect. Generated, never hardcoded. Do not
 # substitute AWS's canonical documentation key - this repo allowlists it by design.
-CANARY_SUFFIX=$(LC_ALL=C tr -dc 'A-Z0-9' < /dev/urandom | head -c 16)
+#
+# The suffix charset is base32, not A-Z0-9: gitleaks 8.28 narrowed the builtin rule
+# to [A-Z2-7]{16} (real AWS key ids are base32), so a suffix containing 0/1/8/9 goes
+# undetected there and this assertion reports a config outage that is not happening.
+# Base32 matches the wider 8.24.3 charset too, so one canary covers both versions.
+CANARY_SUFFIX=$(LC_ALL=C tr -dc 'A-Z2-7' < /dev/urandom | head -c 16)
 printf "const canary = 'AKIA%s';\n" "$CANARY_SUFFIX" > "$TEMP_DIR/canary.ts"
 
 if "$GITLEAKS_PATH" detect --no-git --redact --no-banner \
-    --config "$CONFIG" -s "$TEMP_DIR" >/dev/null 2>&1; then
+    --config "$CONFIG" -s "$TEMP_DIR/canary.ts" >/dev/null 2>&1; then
   echo "FAIL: builtin rules are not active - a planted AWS-key shape was not detected."
   echo "      Check that .gitleaks.toml still contains [extend] useDefault = true."
   FAILED=1
@@ -100,6 +105,68 @@ if [ -f "$REPO_ROOT/$PROBE" ]; then
     FAILED=1
   fi
 fi
+
+# --- Assertion 4: every domain rule is reachable ------------------------------
+# Assertions 1-3 all pass while a domain rule matches nothing, which is how two of
+# them stayed dead: gitleaks applies an `entropy` floor to capture group 1 rather
+# than to the group named by `secretGroup`, so a rule whose regex captured a short
+# literal (`(\+srv)`, `(sk|pk|whsec)`) scored that literal and never reported. The
+# stripe one was invisible from the outside because the builtin stripe-access-token
+# rule caught the same shape.
+#
+# So each rule is checked by rule id in the JSON report, not by exit status - an
+# overlapping builtin must not be able to stand in for a dead domain rule.
+rand_str() {
+  LC_ALL=C tr -dc "$1" < /dev/urandom | head -c "$2"
+}
+
+assert_rule_reachable() {
+  rule_id=$1
+  canary=$2
+  canary_file="$TEMP_DIR/domain-$rule_id.ts"
+  report_file="$TEMP_DIR/domain-$rule_id.json"
+  printf '%s\n' "$canary" > "$canary_file"
+  "$GITLEAKS_PATH" detect --no-git --redact --no-banner --config "$CONFIG" \
+    -s "$canary_file" --report-format json --report-path "$report_file" \
+    >/dev/null 2>&1 || true
+  if [ -f "$report_file" ] && grep -q "\"RuleID\": *\"$rule_id\"" "$report_file"; then
+    echo "ok: $rule_id matched a generated canary"
+  else
+    echo "FAIL: $rule_id matched nothing - the rule is unreachable and scans nothing."
+    echo "      Most likely its regex has a capture group that an entropy floor is"
+    echo "      being applied to. Make the group non-capturing, or point the floor at"
+    echo "      the credential. Verify with: gitleaks detect --no-git -s <canary>."
+    FAILED=1
+  fi
+}
+
+# Three of the canaries below would be findings in this very file if written out
+# whole, because the shape that makes them match is a literal rather than generated:
+# the mongodb rule needs only a bare scheme, and the JWT/session rules need only
+# `<KEY>=` followed by any run of non-space. Splitting the shape across a variable
+# keeps this script clean under its own config. The other rules need a long
+# high-entropy run that `$(rand_str ...)` does not supply, so they are safe inline.
+MONGO_SCHEME="mongodb+srv"
+JWT_KEY="JWT_SECRET"
+SESSION_KEY="SESSION_SECRET"
+
+assert_rule_reachable bike4mind-mongodb-uri \
+  "const uri = '$MONGO_SCHEME://svc_$(rand_str 'a-z0-9' 8):$(rand_str 'A-Za-z0-9' 24)@cluster0.$(rand_str 'a-z0-9' 5).mongodb.net/app';"
+# The JWT/session rules require [_.] or start-of-text before the key name, and
+# gitleaks compiles rule regexes without the multiline flag, so `^` only ever
+# matches the start of the file - the prefix here is what makes the canary match.
+assert_rule_reachable bike4mind-jwt-secret \
+  "B4M_$JWT_KEY=$(rand_str 'A-Za-z0-9' 40)"
+assert_rule_reachable bike4mind-session-secret \
+  "B4M_$SESSION_KEY=$(rand_str 'A-Za-z0-9' 40)"
+assert_rule_reachable bike4mind-stripe-keys \
+  "const key = 'sk_live_$(rand_str 'A-Za-z0-9' 32)';"
+assert_rule_reachable bike4mind-anthropic-key \
+  "const key = 'sk-ant-$(rand_str 'A-Za-z0-9' 48)';"
+assert_rule_reachable bike4mind-gemini-key \
+  "const key = 'AIza$(rand_str 'A-Za-z0-9' 35)';"
+assert_rule_reachable bike4mind-slack-webhook \
+  "const hook = 'https://hooks.slack.com/services/T$(rand_str 'A-Za-z0-9' 9)/B$(rand_str 'A-Za-z0-9' 9)/$(rand_str 'A-Za-z0-9' 24)';"
 
 if [ "$FAILED" -ne 0 ]; then
   echo ""

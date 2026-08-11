@@ -1,16 +1,18 @@
 import { describe, it, expect, beforeEach, Mock, vi } from 'vitest';
 import { remove } from './remove';
-import { IFabFileRepository, ITagRepository } from '@bike4mind/common';
+import { IDataLakeDocument, IDataLakeRepository, IFabFileRepository, ITagRepository } from '@bike4mind/common';
 
 describe('tagService - remove', () => {
   const userId = 'test-user-123';
   const existingTagId = 'existing-tag-123';
   let mockTagRepo: Pick<ITagRepository, 'findByIdAndUserId' | 'delete'>;
-  let mockFabFileRepo: Pick<IFabFileRepository, 'removeTagByUserId'>;
+  let mockFabFileRepo: Pick<IFabFileRepository, 'removeTagByUserId' | 'computeDataLakeStats'>;
+  let mockDataLakeRepo: Pick<IDataLakeRepository, 'find' | 'setStats' | 'activateIfDraft'>;
   let adapters: {
     db: {
       tags: Pick<ITagRepository, 'findByIdAndUserId' | 'delete'>;
-      fabFiles: Pick<IFabFileRepository, 'removeTagByUserId'>;
+      fabFiles: typeof mockFabFileRepo;
+      dataLakes: typeof mockDataLakeRepo;
     };
   };
 
@@ -23,6 +25,18 @@ describe('tagService - remove', () => {
     lastActivityAt: new Date(),
   });
 
+  const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
+    ({
+      id: 'lake1',
+      name: 'Lake',
+      slug: 'lake',
+      fileTagPrefix: 'lk:',
+      datalakeTag: 'datalake:lake',
+      createdByUserId: userId,
+      status: 'active',
+      ...overrides,
+    }) as IDataLakeDocument;
+
   beforeEach(() => {
     mockTagRepo = {
       delete: vi.fn(),
@@ -30,11 +44,18 @@ describe('tagService - remove', () => {
     };
     mockFabFileRepo = {
       removeTagByUserId: vi.fn().mockResolvedValue(0),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 }),
+    };
+    mockDataLakeRepo = {
+      find: vi.fn().mockResolvedValue([]),
+      setStats: vi.fn(),
+      activateIfDraft: vi.fn(),
     };
     adapters = {
       db: {
         tags: mockTagRepo,
         fabFiles: mockFabFileRepo,
+        dataLakes: mockDataLakeRepo,
       },
     };
   });
@@ -159,4 +180,67 @@ describe('tagService - remove', () => {
       expect(mockTagRepo.delete).not.toHaveBeenCalled();
     }
   );
+
+  describe('deleting a tag that is a lake prefix-arm signal', () => {
+    it('recomputes stats for a lake whose prefix the deleted tag matches', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc('lk:invoices'));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+
+      await remove(userId, { id: existingTagId }, adapters);
+
+      expect(mockDataLakeRepo.find).toHaveBeenCalledWith({ createdByUserId: { $in: [userId] } });
+      expect(mockFabFileRepo.computeDataLakeStats).toHaveBeenCalled();
+      expect(mockDataLakeRepo.setStats).toHaveBeenCalledWith('lake1', { fileCount: 0, totalSizeBytes: 0 });
+    });
+
+    it('does not recompute a lake whose prefix the deleted tag does not match', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc('unrelated:tag'));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+
+      await remove(userId, { id: existingTagId }, adapters);
+
+      expect(mockDataLakeRepo.setStats).not.toHaveBeenCalled();
+    });
+
+    it('runs the bulk strip before recomputing, so the recompute sees the write', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc('lk:invoices'));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+
+      await remove(userId, { id: existingTagId }, adapters);
+
+      const stripOrder = (mockFabFileRepo.removeTagByUserId as Mock).mock.invocationCallOrder[0];
+      const recomputeOrder = (mockDataLakeRepo.setStats as Mock).mock.invocationCallOrder[0];
+      expect(stripOrder).toBeLessThan(recomputeOrder);
+    });
+
+    // removeTagByUserId strips a stored name case-INSENSITIVELY, so a mixed-case tag document can
+    // still be the thing that clears a lake's real (correctly-cased) signal tag off some file.
+    // A case-sensitive recompute trigger would miss that and leave fileCount stale.
+    it('recomputes stats for a lake whose prefix the deleted tag matches only case-insensitively', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc('LK:Invoices'));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+
+      await remove(userId, { id: existingTagId }, adapters);
+
+      expect(mockDataLakeRepo.setStats).toHaveBeenCalledWith('lake1', { fileCount: 0, totalSizeBytes: 0 });
+    });
+
+    it('issues no dataLakes.find call when the tag name has no colon', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc('plain'));
+
+      await remove(userId, { id: existingTagId }, adapters);
+
+      expect(mockDataLakeRepo.find).not.toHaveBeenCalled();
+    });
+
+    it('queries lakes scoped to this userId, so another user cannot be affected', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc('lk:invoices'));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([]);
+
+      await remove(userId, { id: existingTagId }, adapters);
+
+      expect(mockDataLakeRepo.find).toHaveBeenCalledWith({ createdByUserId: { $in: [userId] } });
+      expect(mockDataLakeRepo.setStats).not.toHaveBeenCalled();
+    });
+  });
 });

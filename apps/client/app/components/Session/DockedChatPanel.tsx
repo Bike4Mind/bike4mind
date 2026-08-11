@@ -16,9 +16,16 @@ interface DockedChatPanelProps {
 const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActions, title }) => {
   const layout = useSessionLayout(s => s.layout);
 
-  const handleClose = useCallback(() => {
-    setSessionLayout({ layout: 'floatingChat' });
-  }, []);
+  // Dismiss the panel down to the bottom-right "AI Chat" launcher (the minimized
+  // FloatingChatWindow pill) rather than opening the floating window. previousLayout is
+  // recorded so expanding and then closing the float window returns to this dock.
+  const handleMinimize = useCallback(() => {
+    setSessionLayout({
+      layout: 'floatingChat',
+      floatingChatMinimized: true,
+      previousLayout: layout === 'dockRight' || layout === 'dockBottom' ? layout : undefined,
+    });
+  }, [layout]);
 
   return (
     <Box
@@ -67,12 +74,12 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
             activeLayout={layout === 'dockRight' || layout === 'dockBottom' ? layout : undefined}
             showFloat
           />
-          <Tooltip title="Close" disableInteractive>
+          <Tooltip title="Minimize" disableInteractive>
             <IconButton
               size="sm"
               variant="plain"
               color="neutral"
-              onClick={handleClose}
+              onClick={handleMinimize}
               data-testid="docked-chat-close"
               sx={{ '--IconButton-size': '28px' }}
             >

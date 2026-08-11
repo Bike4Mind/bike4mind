@@ -44,6 +44,7 @@ describe('addMember', () => {
         organizations: {
           findById: vi.fn(),
           update: vi.fn(),
+          ensureUserDetails: vi.fn(),
           shareable: {
             findAccessibleById: vi.fn(),
           },
@@ -195,8 +196,10 @@ describe('addMember', () => {
       },
       user: mockUser,
     });
+    // Targeted write: only users[] is persisted, never the whole document (which would carry a stale
+    // userDetails snapshot able to clobber a concurrent credit increment).
     expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith({
-      ...mockOrganization,
+      id: 'org-id',
       users: [{ userId: 'user-id', permissions: [Permission.read] }],
     });
   });
@@ -262,8 +265,49 @@ describe('addMember', () => {
       user: mockUser,
     });
     expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith({
-      ...mockOrganization,
+      id: 'org-id',
       users: [{ userId: 'user-id', permissions: [Permission.read] }],
+    });
+  });
+
+  describe('userDetails seeding (#1460)', () => {
+    it('seeds the per-member credit row via the atomic ensureUserDetails primitive', async () => {
+      mockAdapters.db.users.findById.mockResolvedValue(mockUser);
+      mockAdapters.db.organizations.shareable.findAccessibleById.mockResolvedValue(cloneDeep(mockOrganization));
+
+      await addMember(mockOwnerUser, { userId: 'user-id', organizationId: 'org-id' }, mockAdapters);
+
+      // Seeded through the guarded $push, NOT pushed into the whole-doc write - so it can never
+      // clobber a concurrent credit increment. Idempotency is the primitive's own guarantee
+      // (see OrganizationModel.integration.test.ts), so addMember calls it unconditionally.
+      expect(mockAdapters.db.organizations.ensureUserDetails).toHaveBeenCalledWith('org-id', {
+        id: 'user-id',
+        email: 'test@example.com',
+        name: 'Test User',
+      });
+    });
+
+    it('never carries userDetails through the whole-doc write', async () => {
+      mockAdapters.db.users.findById.mockResolvedValue(mockUser);
+      mockAdapters.db.organizations.shareable.findAccessibleById.mockResolvedValue({
+        ...cloneDeep(mockOrganization),
+        users: [{ userId: 'user-id', permissions: [] }],
+        userDetails: [
+          { id: 'user-id', email: 'test@example.com', name: 'Test User', usedCredits: 42, lastCreditUsedAt: null },
+        ],
+      });
+
+      await addMember(mockOwnerUser, { userId: 'user-id', organizationId: 'org-id' }, mockAdapters);
+
+      // The persisted document update is scoped to users[] only; a stale userDetails snapshot
+      // (usedCredits: 42 here) is never $set back over a possibly-newer value.
+      const updateArg = mockAdapters.db.organizations.update.mock.calls[0][0];
+      expect(updateArg).not.toHaveProperty('userDetails');
+      expect(mockAdapters.db.organizations.ensureUserDetails).toHaveBeenCalledWith('org-id', {
+        id: 'user-id',
+        email: 'test@example.com',
+        name: 'Test User',
+      });
     });
   });
 });
