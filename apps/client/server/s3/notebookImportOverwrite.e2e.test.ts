@@ -5,7 +5,7 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
 import { Quest, Session, sessionRepository } from '@bike4mind/database';
 import { notebookImportService } from '@bike4mind/services';
-import { createChatHistoryWrites } from './notebookImportComplete';
+import { createChatHistoryWrites, createSessionWrites } from './notebookImportComplete';
 
 /**
  * Guards the invariant this handler exists for: importing an export NEVER rewrites messages that
@@ -13,9 +13,13 @@ import { createChatHistoryWrites } from './notebookImportComplete';
  * database it came from matched the original documents and re-pointed them at the new notebook -
  * the source notebook was emptied and the import reported success.
  *
- * Drives the REAL service through the REAL write adapter against a real database, because the
- * defect lived in the adapter, not in the service. Consumes the built dist, so
- * `pnpm turbo:core:build` must be current.
+ * Drives the REAL service through the REAL write adapters against a real database, because the
+ * defect lived in the adapter, not in the service.
+ *
+ * Run `pnpm --filter @bike4mind/services build` (or `pnpm turbo:core:build`) first. This imports
+ * the service from the built dist, not from src, so a stale dist reports green against whatever
+ * was last compiled - on exactly the service this file exists to guard. CI builds core fresh, so
+ * the hazard is local only.
  */
 
 const { NotebookImportService } = notebookImportService;
@@ -88,13 +92,9 @@ function exportPayload(name: string, ids: string[]) {
 
 function makeService() {
   const adapters = {
-    sessionRepository: {
-      create: async (d: unknown) => sessionRepository.create(d as never),
-      find: async (q: unknown) => sessionRepository.find(q as never),
-      // Delegates to the real repository, as the handler does. Stubbing this with a raw
-      // Session.updateOne is what hid `update` rejecting `_id` and failing every overwrite/merge.
-      updateById: async (id: string, d: Record<string, unknown>) => sessionRepository.update({ id, ...d } as never),
-    },
+    // The real adapter, not a copy: re-implementing it here is what let `update` regress to `_id`
+    // - the test kept passing because it was exercising its own copy, not the handler's.
+    sessionRepository: createSessionWrites(),
     // the real thing, not a copy
     chatHistoryRepository: createChatHistoryWrites(),
     knowledgeRepository: { create: async () => null },
