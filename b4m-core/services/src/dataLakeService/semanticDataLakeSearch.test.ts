@@ -2,19 +2,31 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Cosine is a hoisted mock so individual tests can vary scores; the default keeps every chunk
 // above the floor, which is what the pre-existing exclusion/scoping tests assume.
-const { mockCosine } = vi.hoisted(() => ({ mockCosine: vi.fn(() => 0.9) }));
+// mockCreateEmbeddingService is a spy (not just a stub) so multi-model tests can assert exactly
+// which models were embedded and how many times.
+const { mockCosine, mockCreateEmbeddingService } = vi.hoisted(() => ({
+  mockCosine: vi.fn(() => 0.9),
+  mockCreateEmbeddingService: vi.fn(),
+}));
 
 // Mock only the embedding/provider helpers from the utils barrel; keep the real
 // `@bike4mind/utils/retrievalExclusion` subpath so filterRetrievalExcluded runs for real.
+//
+// getProviderFromModel branches on a 'voyage-' prefix (not a hardcoded 'openai') and
+// createEmbeddingService returns a vector that ENCODES the model, so a mixed-model test can prove
+// each ANN call embedded the query under its OWN model rather than reusing the primary embed.
+// This does not affect scoring: computeCosineSimilarity is mocked separately below and the ANN
+// path never calls it (adapter mocks supply raw hit scores directly).
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/utils')>();
   return {
     ...actual,
-    getProviderFromModel: () => 'openai',
+    getProviderFromModel: (m: string) => (m.startsWith('voyage-') ? 'voyageai' : 'openai'),
     computeCosineSimilarity: mockCosine,
     EmbeddingFactory: class {
-      createEmbeddingService() {
-        return { generateEmbedding: async () => [1, 0] };
+      createEmbeddingService(model: string) {
+        mockCreateEmbeddingService(model);
+        return { generateEmbedding: async () => [model.length, 0] };
       }
     },
   };
@@ -29,6 +41,7 @@ import {
 beforeEach(() => {
   mockCosine.mockReset();
   mockCosine.mockReturnValue(0.9);
+  mockCreateEmbeddingService.mockClear();
 });
 
 const baseParams = (): SemanticDataLakeSearchParams => ({
@@ -655,6 +668,49 @@ describe('fileScopedSemanticSearch (allow-list scope)', () => {
     expect(result.totalChunksSearched).toBe(result.scan.chunksScanned);
     expect(result.filesInScope).toBe(result.scan.filesScoped);
   });
+
+  it('a curated allow-list spanning two models serves both via ANN (mixed-model cutover inherited for free)', async () => {
+    const readyStamp = new Date(Date.now() - 120_000);
+    const SMALL_3 = 'text-embedding-3-small';
+    const getAccessibleFiles = vi.fn().mockResolvedValue([
+      {
+        id: 'primary',
+        fileName: 'Primary.pdf',
+        tags: [],
+        embeddingModel: 'text-embedding-ada-002',
+        vectorizedChunkCount: 1,
+        chunkEmbeddingModelStampedAt: readyStamp,
+      },
+      {
+        id: 'alt',
+        fileName: 'Alt.pdf',
+        tags: [],
+        embeddingModel: SMALL_3,
+        vectorizedChunkCount: 1,
+        chunkEmbeddingModelStampedAt: readyStamp,
+      },
+    ]);
+    const findVectorsByFabFileIds = pagingChunkMock([]);
+    const vectorSearch = vi.fn((_ids: string[], _vec: number[], model: string) =>
+      Promise.resolve(
+        model === SMALL_3
+          ? [{ id: 'a-c0', fabFileId: 'alt', text: 'alt hit', score: 0.9 }]
+          : [{ id: 'p-c0', fabFileId: 'primary', text: 'primary hit', score: 0.9 }]
+      )
+    );
+    const getAtlasIndexStatus = vi.fn().mockResolvedValue({ queryable: true, status: 'READY' });
+
+    const result = await fileScopedSemanticSearch({ ...scopedParams(['primary', 'alt']), vectorSearchEnabled: true }, {
+      db: {
+        fabfiles: { getAccessibleFiles },
+        fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus },
+      },
+    } as never);
+
+    expect(vectorSearch).toHaveBeenCalledTimes(2);
+    expect(result.results.map(r => r.fileId).sort()).toEqual(['alt', 'primary']);
+    expect(result.embeddingMismatch.excludedFiles.count).toBe(0);
+  });
 });
 
 describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
@@ -672,15 +728,40 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
     ...overrides,
   });
 
+  const PRIMARY_MODEL = 'text-embedding-ada-002';
+
+  /**
+   * Keyed on the `model` argument every call carries, so an alternate-model ANN attempt (which
+   * queries a DIFFERENT model than the primary) gets its own independent response instead of
+   * silently inheriting the primary model's mocked hits/queryable status - a flat
+   * `mockResolvedValue` would let a foreign-model file elsewhere in scope spuriously "hit" on the
+   * primary model's fixture data once the alternate phase can fire.
+   *
+   * `annHits`/`indexQueryable` remain as shorthand for the PRIMARY model only, so every
+   * single-model test written before the multi-model cutover keeps working unchanged - a model
+   * absent from `annHitsByModel`/`queryableModels` defaults to "no hits"/"not queryable", exactly
+   * today's behavior for any model the caller didn't opt into.
+   */
   const annAdapters = (args: {
     files: ReturnType<typeof annFile>[];
     scanChunks?: { id: string; fabFileId: string; text: string; vector: number[] }[];
     annHits?: { id: string; fabFileId: string; text: string; score: number }[];
     indexQueryable?: boolean;
+    annHitsByModel?: Record<string, { id: string; fabFileId: string; text: string; score: number }[]>;
+    queryableModels?: string[];
   }) => {
     const findVectorsByFabFileIds = pagingChunkMock(args.scanChunks ?? []);
-    const vectorSearch = vi.fn().mockResolvedValue(args.annHits ?? []);
-    const getAtlasIndexStatus = vi.fn().mockResolvedValue({ queryable: args.indexQueryable ?? true, status: 'READY' });
+    const hitsByModel: Record<string, { id: string; fabFileId: string; text: string; score: number }[]> = {
+      ...(args.annHitsByModel ?? {}),
+    };
+    if (args.annHits !== undefined) hitsByModel[PRIMARY_MODEL] = args.annHits;
+    const queryableModels = new Set(args.queryableModels ?? (args.indexQueryable === false ? [] : [PRIMARY_MODEL]));
+    const vectorSearch = vi.fn((_fileIds: string[], _vector: number[], model: string) =>
+      Promise.resolve(hitsByModel[model] ?? [])
+    );
+    const getAtlasIndexStatus = vi.fn((model: string) =>
+      Promise.resolve({ queryable: queryableModels.has(model), status: 'READY' })
+    );
     return {
       search: filesAdapter([{ data: args.files, hasMore: false, total: args.files.length }]),
       findVectorsByFabFileIds,
@@ -838,6 +919,237 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
     expect(result.scan.chunksScanned).toBe(1);
     expect(result.results.map(r => r.fileId).sort()).toEqual(['covered', 'missed']);
   });
+
+  describe('mixed-embeddingModel lake (alternate-model ANN cutover)', () => {
+    const SMALL_3 = 'text-embedding-3-small';
+    const VOYAGE_3 = 'voyage-3';
+
+    it('single-model lake calls vectorSearch, getAtlasIndexStatus, and the embed factory exactly once', async () => {
+      const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+        files: [annFile('ready')],
+        annHits: [{ id: 'ready-c0', fabFileId: 'ready', text: 'ann hit', score: 0.95 }],
+      });
+
+      await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never);
+
+      expect(vectorSearch).toHaveBeenCalledTimes(1);
+      expect(getAtlasIndexStatus).toHaveBeenCalledTimes(1);
+      expect(mockCreateEmbeddingService).toHaveBeenCalledTimes(1);
+    });
+
+    it('serves both models of a mixed-model lake via their own ANN query and merges the results', async () => {
+      const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+        files: [annFile('primary-hit'), annFile('alt-hit', { embeddingModel: SMALL_3 })],
+        annHitsByModel: {
+          'text-embedding-ada-002': [{ id: 'p-c0', fabFileId: 'primary-hit', text: 'primary hit', score: 0.9 }],
+          [SMALL_3]: [{ id: 'a-c0', fabFileId: 'alt-hit', text: 'alt hit', score: 0.9 }],
+        },
+        queryableModels: ['text-embedding-ada-002', SMALL_3],
+      });
+
+      const result = await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never);
+
+      expect(vectorSearch).toHaveBeenCalledTimes(2);
+      expect(vectorSearch).toHaveBeenCalledWith(['primary-hit'], expect.anything(), 'text-embedding-ada-002', {
+        limit: expect.any(Number),
+      });
+      expect(vectorSearch).toHaveBeenCalledWith(['alt-hit'], expect.anything(), SMALL_3, { limit: expect.any(Number) });
+      // Each model embedded with its OWN vector - the mocked factory encodes model name length.
+      expect(mockCreateEmbeddingService).toHaveBeenCalledWith('text-embedding-ada-002');
+      expect(mockCreateEmbeddingService).toHaveBeenCalledWith(SMALL_3);
+      expect(result.results.map(r => r.fileId).sort()).toEqual(['alt-hit', 'primary-hit']);
+      expect(result.embeddingMismatch.excludedFiles.count).toBe(0);
+      expect(result.embeddingMismatch.alternateModelServed).toEqual({ files: 1, models: [SMALL_3] });
+      expect(result.alternateModelsEmbedded).toEqual([SMALL_3]);
+      expect(result.scan.annModelsQueried).toBe(2);
+      // The alternate model's file is served entirely via its own ANN index, never the scan path.
+      expect(findVectorsByFabFileIds).not.toHaveBeenCalled();
+    });
+
+    it('excludes an alternate model with no queryable index, naming it in excludedFiles.models', async () => {
+      const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+        files: [annFile('primary'), annFile('alt', { embeddingModel: SMALL_3, vectorizedChunkCount: 3 })],
+        annHits: [{ id: 'p-c0', fabFileId: 'primary', text: 'hit', score: 0.9 }],
+        queryableModels: ['text-embedding-ada-002'], // SMALL_3 not queryable
+      });
+
+      const result = await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never);
+
+      expect(vectorSearch).toHaveBeenCalledTimes(1); // primary only
+      expect(result.embeddingMismatch.excludedFiles.count).toBe(1);
+      expect(result.embeddingMismatch.excludedFiles.models).toEqual([SMALL_3]);
+      expect(result.embeddingMismatch.alternateModelServed).toEqual({ files: 0, models: [] });
+    });
+
+    it('excludes a freshly-stamped alternate-model file without scanning it', async () => {
+      const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+        files: [
+          annFile('primary'),
+          annFile('alt-fresh', { embeddingModel: SMALL_3, chunkEmbeddingModelStampedAt: freshStamp }),
+        ],
+        annHits: [{ id: 'p-c0', fabFileId: 'primary', text: 'hit', score: 0.9 }],
+        queryableModels: ['text-embedding-ada-002', SMALL_3],
+      });
+
+      const result = await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never);
+
+      expect(vectorSearch).toHaveBeenCalledTimes(1); // primary only - alt file not yet ANN-ready
+      expect(findVectorsByFabFileIds).not.toHaveBeenCalled(); // and never scanned either
+      expect(result.embeddingMismatch.excludedFiles.models).toEqual([SMALL_3]);
+    });
+
+    it('an alternate vectorSearch throw still returns the primary results and does not reject', async () => {
+      const logger = makeLogger();
+      const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+        files: [annFile('primary'), annFile('alt', { embeddingModel: SMALL_3 })],
+        annHitsByModel: { 'text-embedding-ada-002': [{ id: 'p-c0', fabFileId: 'primary', text: 'hit', score: 0.9 }] },
+        queryableModels: ['text-embedding-ada-002', SMALL_3],
+      });
+      vectorSearch.mockImplementation((_ids: string[], _vec: number[], model: string) =>
+        model === SMALL_3
+          ? Promise.reject(new Error('alt index down'))
+          : Promise.resolve([{ id: 'p-c0', fabFileId: 'primary', text: 'hit', score: 0.9 }])
+      );
+
+      const result = await semanticDataLakeSearch(
+        { ...baseParams(), vectorSearchEnabled: true, logger: logger as never },
+        {
+          db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+        } as never
+      );
+
+      expect(result.results.map(r => r.fileId)).toEqual(['primary']);
+      expect(result.embeddingMismatch.excludedFiles.models).toEqual([SMALL_3]);
+      expect(logger.warn).toHaveBeenCalledWith(
+        '[semanticSearch] alternate-model ANN query failed',
+        expect.objectContaining({ model: SMALL_3 })
+      );
+    });
+
+    it('excludes an alternate model with no credential in the key table, without attempting to embed it', async () => {
+      const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+        files: [annFile('primary'), annFile('alt-voyage', { embeddingModel: VOYAGE_3, vectorizedChunkCount: 1 })],
+        annHits: [{ id: 'p-c0', fabFileId: 'primary', text: 'hit', score: 0.9 }],
+        queryableModels: ['text-embedding-ada-002', VOYAGE_3],
+      });
+
+      const result = await semanticDataLakeSearch(
+        { ...baseParams(), apiKeyTable: { openai: 'k' }, vectorSearchEnabled: true }, // no voyageai key
+        {
+          db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+        } as never
+      );
+
+      expect(vectorSearch).toHaveBeenCalledTimes(1); // primary only - never attempted for voyage-3
+      expect(mockCreateEmbeddingService).not.toHaveBeenCalledWith(VOYAGE_3);
+      expect(result.embeddingMismatch.excludedFiles.models).toEqual([VOYAGE_3]);
+    });
+
+    it('caps at MAX_ALTERNATE_ANN_MODELS extra vectorSearch calls when more distinct models are present', async () => {
+      const models = [SMALL_3, VOYAGE_3, 'text-embedding-3-large', 'amazon.titan-embed-text-v2:0'];
+      const files = [
+        annFile('primary'),
+        ...models.map((m, i) => annFile(`alt-${i}`, { embeddingModel: m, vectorizedChunkCount: 1 })),
+      ];
+      const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+        files,
+        annHits: [{ id: 'p-c0', fabFileId: 'primary', text: 'hit', score: 0.9 }],
+        queryableModels: ['text-embedding-ada-002', ...models],
+      });
+
+      await semanticDataLakeSearch(
+        { ...baseParams(), apiKeyTable: { openai: 'k', voyageai: 'k2' }, vectorSearchEnabled: true },
+        {
+          db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+        } as never
+      );
+
+      // 1 primary + at most 3 alternates (MAX_ALTERNATE_ANN_MODELS), regardless of 4 being eligible.
+      expect(vectorSearch).toHaveBeenCalledTimes(4);
+    });
+
+    it('a higher-scoring alternate hit outranks a primary hit (documented raw-cosine cross-model bias)', async () => {
+      const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+        files: [annFile('primary'), annFile('alt', { embeddingModel: SMALL_3 })],
+        annHitsByModel: {
+          'text-embedding-ada-002': [{ id: 'p-c0', fabFileId: 'primary', text: 'primary hit', score: 0.5 }],
+          [SMALL_3]: [{ id: 'a-c0', fabFileId: 'alt', text: 'alt hit', score: 0.95 }],
+        },
+        queryableModels: ['text-embedding-ada-002', SMALL_3],
+      });
+
+      const result = await semanticDataLakeSearch({ ...baseParams(), topK: 1, vectorSearchEnabled: true }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never);
+
+      // topK: 1 forces the merge to pick a single winner - the higher raw-cosine alternate hit wins,
+      // even though cross-model scores are not truly comparable. This is the accepted tradeoff.
+      expect(result.results).toHaveLength(1);
+      expect(result.results[0].fileId).toBe('alt');
+    });
+
+    it('does not warn "nothing could be compared" when only an alternate model returned hits', async () => {
+      const logger = makeLogger();
+      const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+        files: [annFile('alt', { embeddingModel: SMALL_3 })],
+        annHitsByModel: { [SMALL_3]: [{ id: 'a-c0', fabFileId: 'alt', text: 'alt hit', score: 0.9 }] },
+        queryableModels: ['text-embedding-ada-002', SMALL_3],
+      });
+
+      await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true, logger: logger as never }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never);
+
+      expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('nothing could be compared'));
+    });
+
+    it('never queries the primary model twice', async () => {
+      const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+        files: [annFile('primary'), annFile('alt', { embeddingModel: SMALL_3 })],
+        annHits: [{ id: 'p-c0', fabFileId: 'primary', text: 'hit', score: 0.9 }],
+        queryableModels: ['text-embedding-ada-002', SMALL_3],
+      });
+
+      await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never);
+
+      const primaryCalls = vectorSearch.mock.calls.filter(c => c[2] === 'text-embedding-ada-002');
+      expect(primaryCalls).toHaveLength(1);
+    });
+
+    it('kill switch off: a 3-distinct-model lake makes zero extra embeds/probes and matches today byte-for-byte', async () => {
+      const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+        files: [
+          annFile('primary'),
+          annFile('alt1', { embeddingModel: SMALL_3, vectorizedChunkCount: 1 }),
+          annFile('alt2', { embeddingModel: VOYAGE_3, vectorizedChunkCount: 1 }),
+        ],
+        scanChunks: chunkRows('primary', 1),
+        queryableModels: ['text-embedding-ada-002', SMALL_3, VOYAGE_3],
+      });
+
+      // vectorSearchEnabled omitted (defaults false) - the kill switch.
+      const result = await semanticDataLakeSearch(baseParams(), {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never);
+
+      expect(vectorSearch).not.toHaveBeenCalled();
+      expect(getAtlasIndexStatus).not.toHaveBeenCalled();
+      expect(mockCreateEmbeddingService).toHaveBeenCalledTimes(1); // primary query embed only
+      expect(result.embeddingMismatch.excludedFiles.count).toBe(2);
+      expect(result.embeddingMismatch.excludedFiles.models).toEqual([SMALL_3, VOYAGE_3]);
+      expect(result.embeddingMismatch.alternateModelServed).toEqual({ files: 0, models: [] });
+    });
+  });
 });
 
 describe('semanticDataLakeSearch self-host OpenSearch cutover', () => {
@@ -864,13 +1176,23 @@ describe('semanticDataLakeSearch self-host OpenSearch cutover', () => {
     ...overrides,
   });
 
+  const PRIMARY_MODEL = 'text-embedding-ada-002';
+
+  /** Keyed on `model`, same reasoning as the Atlas harness's annAdapters above. */
   const openSearchAdapters = (args: {
     files: ReturnType<typeof annFile>[];
     scanChunks?: { id: string; fabFileId: string; text: string; vector: number[] }[];
     annHits?: { id: string; fabFileId: string; text: string; score: number }[];
+    annHitsByModel?: Record<string, { id: string; fabFileId: string; text: string; score: number }[]>;
   }) => {
     const findVectorsByFabFileIds = pagingChunkMock(args.scanChunks ?? []);
-    const knnSearch = vi.fn().mockResolvedValue(args.annHits ?? []);
+    const hitsByModel: Record<string, { id: string; fabFileId: string; text: string; score: number }[]> = {
+      ...(args.annHitsByModel ?? {}),
+    };
+    if (args.annHits !== undefined) hitsByModel[PRIMARY_MODEL] = args.annHits;
+    const knnSearch = vi.fn((_fileIds: string[], _vector: number[], model: string) =>
+      Promise.resolve(hitsByModel[model] ?? [])
+    );
     return {
       search: filesAdapter([{ data: args.files, hasMore: false, total: args.files.length }]),
       findVectorsByFabFileIds,
@@ -985,5 +1307,80 @@ describe('semanticDataLakeSearch self-host OpenSearch cutover', () => {
     } as never);
 
     expect(knnSearch).not.toHaveBeenCalled();
+  });
+
+  describe('mixed-embeddingModel lake (alternate-model ANN cutover)', () => {
+    const SMALL_3 = 'text-embedding-3-small';
+
+    it('issues one knnSearch per distinct model, proving the seam is shared, not Atlas-special', async () => {
+      enableSelfHostOpenSearch();
+      const { search, findVectorsByFabFileIds, knnSearch } = openSearchAdapters({
+        files: [annFile('primary'), annFile('alt', { embeddingModel: SMALL_3 })],
+        annHitsByModel: {
+          'text-embedding-ada-002': [{ id: 'p-c0', fabFileId: 'primary', text: 'hit', score: 0.9 }],
+          [SMALL_3]: [{ id: 'a-c0', fabFileId: 'alt', text: 'alt hit', score: 0.9 }],
+        },
+      });
+
+      const result = await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds } },
+        vectorIndex: { knnSearch },
+      } as never);
+
+      expect(knnSearch).toHaveBeenCalledTimes(2);
+      expect(knnSearch).toHaveBeenCalledWith(['primary'], expect.anything(), 'text-embedding-ada-002', {
+        limit: expect.any(Number),
+      });
+      expect(knnSearch).toHaveBeenCalledWith(['alt'], expect.anything(), SMALL_3, { limit: expect.any(Number) });
+      expect(result.results.map(r => r.fileId).sort()).toEqual(['alt', 'primary']);
+    });
+
+    it('leaves an alternate model excluded (not scanned) when its knnSearch returns zero hits', async () => {
+      enableSelfHostOpenSearch();
+      const { search, findVectorsByFabFileIds, knnSearch } = openSearchAdapters({
+        files: [annFile('primary'), annFile('alt', { embeddingModel: SMALL_3, vectorizedChunkCount: 1 })],
+        annHits: [{ id: 'p-c0', fabFileId: 'primary', text: 'hit', score: 0.9 }],
+        // alt's model gets no entry in annHitsByModel -> knnSearch resolves [] for it.
+      });
+
+      const result = await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds } },
+        vectorIndex: { knnSearch },
+      } as never);
+
+      expect(findVectorsByFabFileIds).not.toHaveBeenCalled();
+      expect(result.embeddingMismatch.excludedFiles.models).toEqual([SMALL_3]);
+    });
+
+    it('runs no alternate phase when self-host OpenSearch is disabled, even for a mixed-model lake', async () => {
+      // Default env (no enableSelfHostOpenSearch() call) - canUseOpenSearch is false.
+      const { search, findVectorsByFabFileIds, knnSearch } = openSearchAdapters({
+        files: [annFile('primary'), annFile('alt', { embeddingModel: SMALL_3, vectorizedChunkCount: 1 })],
+        scanChunks: chunkRows('primary', 1),
+      });
+
+      const result = await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds } },
+        vectorIndex: { knnSearch },
+      } as never);
+
+      expect(knnSearch).not.toHaveBeenCalled();
+      expect(result.embeddingMismatch.excludedFiles.models).toEqual([SMALL_3]);
+    });
+
+    it('runs no alternate phase when the vectorIndex adapter is absent, even with the flag on', async () => {
+      enableSelfHostOpenSearch();
+      const { search, findVectorsByFabFileIds } = openSearchAdapters({
+        files: [annFile('primary'), annFile('alt', { embeddingModel: SMALL_3, vectorizedChunkCount: 1 })],
+        scanChunks: chunkRows('primary', 1),
+      });
+
+      const result = await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds } },
+        // no vectorIndex passed
+      } as never);
+
+      expect(result.embeddingMismatch.excludedFiles.models).toEqual([SMALL_3]);
+    });
   });
 });

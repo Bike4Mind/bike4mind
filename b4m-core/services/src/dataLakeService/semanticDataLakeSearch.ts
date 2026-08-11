@@ -21,7 +21,8 @@ import {
   classifyLoadedChunk,
   createEmbeddingMismatchAccumulator,
   emptyEmbeddingMismatchReport,
-  partitionFilesByEmbeddingModel,
+  groupFilesByEmbeddingModel,
+  isForeignEmbeddingModel,
   type EmbeddingMismatchAccumulator,
   type EmbeddingMismatchReport,
 } from './embeddingMismatch';
@@ -29,6 +30,8 @@ import { BoundedTopK } from './boundedTopK';
 import { partitionByVectorSearchReadiness } from './vectorSearchEligibility';
 import { atlasVectorSearch, type AtlasVectorSearchAdapters } from './atlasVectorSearch';
 import { openSearchVectorSearch, type OpenSearchVectorSearchAdapters } from './openSearchVectorSearch';
+import { planAlternateAnnModels, runAlternateModelAnn, type AlternateAnnOutcome } from './alternateModelAnn';
+import type { AnnVectorSearchResult } from './annVectorSearch';
 
 /**
  * Shared vector/semantic search over FabFile chunks in a user's accessible data lakes.
@@ -127,15 +130,25 @@ export interface SemanticSearchScanAccounting {
   /** Of those, skipped because their width differs from the query's (embedding model changed). */
   chunksSkippedDimensionMismatch: number;
   /**
-   * Files served by ANN retrieval (Atlas `$vectorSearch` or self-host OpenSearch) instead of the
-   * brute-force scan. Additive to `filesScanned`, not a replacement for it - an ann-served file
-   * was never handed to the scan path at all, so `filesScanned + annFilesQueried` is the files
-   * actually searched by either route (still <= `filesScoped`; ineligible/not-yet-ready files
-   * may be searched by neither if a budget stopped the scan first).
+   * Files served by ANN retrieval (Atlas `$vectorSearch` or self-host OpenSearch), across the
+   * query's own model AND every alternate model that got its own ANN query (see
+   * alternateModelAnn.ts), instead of the brute-force scan. Additive to `filesScanned`, not a
+   * replacement for it - an ann-served file was never handed to the scan path at all, so
+   * `filesScanned + annFilesQueried` is the files actually searched by either route (still <=
+   * `filesScoped`; ineligible/not-yet-ready files may be searched by neither if a budget stopped
+   * the scan first).
    */
   annFilesQueried: number;
-  /** Chunk hits returned by ANN retrieval across all ann-queried files, before minScore/scope filtering. */
+  /** Chunk hits returned by ANN retrieval across all ann-queried files and models, before minScore/scope filtering. */
   annHits: number;
+  /**
+   * Distinct embedding models an ANN query was actually issued under this search: 0 when ANN
+   * never ran, 1 for a healthy single-model lake, up to `1 + MAX_ALTERNATE_ANN_MODELS`. Without
+   * this, `annFilesQueried` alone cannot distinguish "one model served 10 files" from "three
+   * models served 10" - the distinction this ticket's cutover introduces, and the number an
+   * operator needs to see cap pressure.
+   */
+  annModelsQueried: number;
   /** Budgets in force, echoed so a caller can explain a truncation without guessing. */
   budgets: { maxFiles: number; maxChunks: number };
 }
@@ -156,6 +169,14 @@ export interface SemanticDataLakeSearchResult {
   filesInScope: number;
   embeddingModel: string;
   scan: SemanticSearchScanAccounting;
+  /**
+   * Every alternate embedding model this search actually ran a query embed under (successfully),
+   * in `plan.selected` order (the embeds run concurrently, but `Promise.all` preserves input order
+   * in its output regardless of completion timing) - a caller must bill a usage event for each of these IN ADDITION TO the primary
+   * `embeddingModel`, regardless of whether that model's ANN query then found any hits. See
+   * knowledgeBaseSearch/index.ts and apps/client/pages/api/data-lakes/semantic-search.ts.
+   */
+  alternateModelsEmbedded: string[];
 }
 
 export interface SemanticDataLakeSearchParams {
@@ -275,6 +296,7 @@ export function emptyScanAccounting(budgets?: SemanticSearchBudgets): SemanticSe
     chunksSkippedDimensionMismatch: 0,
     annFilesQueried: 0,
     annHits: 0,
+    annModelsQueried: 0,
     budgets: { maxFiles: resolved.maxFiles, maxChunks: resolved.maxChunks },
   };
 }
@@ -292,6 +314,7 @@ function emptyResult(
     embeddingModel,
     embeddingMismatch: emptyEmbeddingMismatchReport(),
     scan: { ...emptyScanAccounting(budgets), ...overrides },
+    alternateModelsEmbedded: [],
   };
 }
 
@@ -561,8 +584,14 @@ async function rankChunksForFiles(args: {
       chunkEmbeddingModelStampedAt: file?.chunkEmbeddingModelStampedAt,
     };
   });
-  const { rankable, foreign } = partitionFilesByEmbeddingModel(scopedFiles, embeddingModel);
-  const mismatch = createEmbeddingMismatchAccumulator(foreign, embeddingModel);
+  const { primary: rankable, alternates } = groupFilesByEmbeddingModel(scopedFiles, embeddingModel);
+  // Foreign-model files no path has served (yet). Filtering `scopedFiles` (rather than
+  // concatenating the grouper's alternate buckets) preserves scope order, so `excludedFiles.sample`
+  // stays byte-identical to before this cutover on any lake with no served alternates. `served` is
+  // populated once the alternate-model ANN phase below runs; every earlier return passes an empty
+  // set, reproducing today's `foreign` list exactly.
+  const excludedForeignFiles = (served: ReadonlySet<string>) =>
+    scopedFiles.filter(f => isForeignEmbeddingModel(f.embeddingModel, embeddingModel) && !served.has(f.id));
 
   // An empty query embedding would make every chunk look like a width mismatch and return nothing.
   // Report the real cause rather than ranking against a meaningless vector, and do not throw: a
@@ -572,6 +601,7 @@ async function rankChunksForFiles(args: {
       queryEmbeddingModel: embeddingModel,
       filesInScope: fileIds.length,
     });
+    const mismatch = createEmbeddingMismatchAccumulator(excludedForeignFiles(new Set()), embeddingModel);
     mismatch.queryEmbeddingFailed();
     return {
       ...emptyResult(embeddingModel, budgets, { filesMatching: args.filesMatching, filesScoped: fileIds.length }),
@@ -614,33 +644,37 @@ async function rankChunksForFiles(args: {
     scanEligible = split.scanOnly;
   }
 
-  let annResult: Awaited<ReturnType<typeof atlasVectorSearch>> = {
+  // Shared backend seam for the primary model AND every alternate model - this module never
+  // learns that Atlas or OpenSearch exist beyond this one closure.
+  const runAnn = (a: { fileIds: string[]; queryVector: number[]; model: string }): Promise<AnnVectorSearchResult> =>
+    canUseAtlas
+      ? atlasVectorSearch({
+          ...a,
+          fileById,
+          limit: topK,
+          minScore,
+          adapters: args.fabfilechunks as AtlasVectorSearchAdapters,
+        })
+      : openSearchVectorSearch({ ...a, fileById, limit: topK, minScore, adapters: args.vectorIndex! });
+
+  let annResult: AnnVectorSearchResult = {
     results: [],
     hitsReturned: 0,
     hitsSkippedUnknownFile: 0,
     filesWithHits: new Set(),
   };
+  // Set on a primary-model ANN failure so the alternate-model phase below is skipped entirely -
+  // an outage that broke the primary model's query almost certainly breaks every other model on
+  // the same backend/connection, so there is no point spending alternate-model embeds against it.
+  let primaryAnnFailed = false;
+  const primaryAnnQueried = annEligible.length > 0;
   if (annEligible.length > 0) {
     try {
-      annResult = canUseAtlas
-        ? await atlasVectorSearch({
-            fileIds: annEligible.map(f => f.id),
-            fileById,
-            queryVector: queryEmbedding,
-            model: embeddingModel,
-            limit: topK,
-            minScore,
-            adapters: args.fabfilechunks as AtlasVectorSearchAdapters,
-          })
-        : await openSearchVectorSearch({
-            fileIds: annEligible.map(f => f.id),
-            fileById,
-            queryVector: queryEmbedding,
-            model: embeddingModel,
-            limit: topK,
-            minScore,
-            adapters: args.vectorIndex!,
-          });
+      annResult = await runAnn({
+        fileIds: annEligible.map(f => f.id),
+        queryVector: queryEmbedding,
+        model: embeddingModel,
+      });
     } catch (error) {
       // A broken ANN index (transient outage, IAM regression, quota exhaustion, unreachable
       // self-host cluster) must degrade to the scan path, not surface as a 500 - the whole point
@@ -654,6 +688,7 @@ async function rankChunksForFiles(args: {
       });
       scanEligible = [...scanEligible, ...annEligible];
       annEligible = [];
+      primaryAnnFailed = true;
     }
 
     // A queryable index does not guarantee a given file's chunks are actually IN it yet. On
@@ -676,7 +711,34 @@ async function rankChunksForFiles(args: {
       annEligible = annEligible.filter(f => annResult.filesWithHits.has(f.id));
     }
   }
+
+  // Multi-model ANN cutover: give every OTHER embedding model actually present in the lake its
+  // own query (re-embedded under that model) against its own ANN index, instead of dropping those
+  // files outright. Gated on the same backend capability as the primary model, and skipped
+  // entirely when the primary model's own ANN call just failed (see `primaryAnnFailed` above).
+  let outcomes: AlternateAnnOutcome[] = [];
+  if ((canUseAtlas || canUseOpenSearch) && !primaryAnnFailed) {
+    const isModelQueryable = canUseAtlas
+      ? async (m: string) => !!(await args.fabfilechunks.getAtlasIndexStatus!(m))?.queryable
+      : // Self-host has no per-model status port. openSearchChunkAdapter already fails closed on
+        // an unregistered model or a missing index (returns [] -> filesMissed, not a throw), and
+        // that "stay excluded" outcome is already correct - the only cost of an optimistic answer
+        // here is one wasted embed per model, bounded by MAX_ALTERNATE_ANN_MODELS.
+        async () => true;
+    const plan = await planAlternateAnnModels({ alternates, now: new Date(), apiKeyTable, isModelQueryable, logger });
+    outcomes = await Promise.all(
+      plan.selected.map(candidate => runAlternateModelAnn({ query, candidate, apiKeyTable, runAnn, logger }))
+    );
+  }
+  const servedByAlternateAnn = new Set(outcomes.flatMap(o => [...o.filesWithHits]));
+  // Billable regardless of whether the ANN query itself then found anything - the embed call ran.
+  const alternateModelsEmbedded = outcomes.filter(o => o.embedded).map(o => o.model);
+
+  const mismatch = createEmbeddingMismatchAccumulator(excludedForeignFiles(servedByAlternateAnn), embeddingModel);
   for (let i = 0; i < annResult.hitsSkippedUnknownFile; i++) mismatch.skip('unknownFile');
+  for (const outcome of outcomes) {
+    for (let i = 0; i < outcome.hitsSkippedUnknownFile; i++) mismatch.skip('unknownFile');
+  }
 
   const scanned = await scanAndRank({
     fileIds: scanEligible.map(f => f.id),
@@ -691,13 +753,36 @@ async function rankChunksForFiles(args: {
     mismatch,
     fabfilechunks: args.fabfilechunks,
   });
+  // A model counts as "served" only if it actually returned >=1 raw hit - a model that was
+  // embedded and queried but found nothing served zero files, so its files correctly remain in
+  // `excludedFiles` (via `servedByAlternateAnn` above) and must not also appear here.
+  const servedOutcomes = outcomes.filter(o => o.filesWithHits.size > 0);
+  if (servedOutcomes.length > 0) {
+    mismatch.alternateModelServed(
+      servedOutcomes.reduce((sum, o) => sum + o.filesWithHits.size, 0),
+      servedOutcomes.map(o => o.model)
+    );
+  }
   const mismatchReport = mismatch.report();
 
-  // Merge both sources into one bounded top-K - each already ranks its own subset, so this is a
-  // cheap second pass over at most 2*topK items, not a rescore of the corpus.
+  const alternateResults = outcomes.flatMap(o => o.results);
+  const alternateHitsReturned = outcomes.reduce((sum, o) => sum + o.hitsReturned, 0);
+  const alternateModelsQueried = outcomes.filter(o => o.embedded).length;
+
+  // Merge every source into one bounded top-K - each already ranks its own subset, so this is a
+  // cheap second pass over at most (2 + alternates)*topK items, not a rescore of the corpus.
+  //
+  // Cross-model caveat: raw cosine is NOT directly comparable across different embedding models -
+  // their score distributions differ (see MEMENTO_MIN_SIMILARITY's documented history of exactly
+  // this failure when a deployment's default model changed). Merging the primary and alternate
+  // models' hits by raw cosine therefore systematically favors whichever model's scale runs
+  // higher, a rank bias rather than a correctness bug: both data-lake surfaces default minScore
+  // to 0, so this can only reorder results, never silently drop one model's hits below a floor
+  // tuned for another model's scale. See the pinned test for the accepted behavior.
   const merged = new BoundedTopK<SemanticChunkResult>(topK, compareByScore);
   for (const result of scanned.results) merged.offer(result);
   for (const result of annResult.results) merged.offer(result);
+  for (const result of alternateResults) merged.offer(result);
   const mergedResults = merged.drain();
 
   const scan: SemanticSearchScanAccounting = {
@@ -709,8 +794,9 @@ async function rankChunksForFiles(args: {
     filesScanned: scanned.filesScanned,
     chunksScanned: scanned.chunksScanned,
     chunksSkippedDimensionMismatch: scanned.chunksSkippedDimensionMismatch,
-    annFilesQueried: annEligible.length,
-    annHits: annResult.hitsReturned,
+    annFilesQueried: annEligible.length + outcomes.reduce((sum, o) => sum + o.filesWithHits.size, 0),
+    annHits: annResult.hitsReturned + alternateHitsReturned,
+    annModelsQueried: (primaryAnnQueried ? 1 : 0) + alternateModelsQueried,
     budgets: { maxFiles: budgets.maxFiles, maxChunks: budgets.maxChunks },
   };
 
@@ -728,13 +814,19 @@ async function rankChunksForFiles(args: {
     );
   }
 
-  // Warn only when NOTHING could be compared by EITHER path. A few withheld chunks mid-revectorize
+  // Warn only when NOTHING could be compared by ANY path. A few withheld chunks mid-revectorize
   // are expected and must stay quiet - the same policy the truncation warning above applies, and
   // the reason unlabeled files and budgets do not raise the flag either. Excludes annResult.hitsReturned
-  // (not annEligible.length): a lake fully served by ANN retrieval (either backend) legitimately
-  // scores zero chunks on the scan path, and without this the warning would false-fire on every
-  // healthy all-ANN search that also happens to have an unrelated off-model file elsewhere in scope.
-  if (mismatchReport.partial && scanned.chunksScored === 0 && annResult.hitsReturned === 0) {
+  // and alternateHitsReturned (not annEligible.length/outcome file counts): a lake fully served by
+  // ANN retrieval - the primary model, an alternate model, or both - legitimately scores zero
+  // chunks on the scan path, and without this the warning would false-fire on every healthy
+  // all-ANN search that also happens to have an unrelated excluded file elsewhere in scope.
+  if (
+    mismatchReport.partial &&
+    scanned.chunksScored === 0 &&
+    annResult.hitsReturned === 0 &&
+    alternateHitsReturned === 0
+  ) {
     logger?.warn?.('[semanticSearch] nothing could be compared in the query embedding space', {
       queryEmbeddingModel: embeddingModel,
       excludedFiles: mismatchReport.excludedFiles.count,
@@ -756,8 +848,13 @@ async function rankChunksForFiles(args: {
   }
 
   logger?.debug?.(
-    `[semanticSearch] ${fileIds.length} files (${rankable.length} rankable, ${annEligible.length} via ${canUseAtlas ? 'atlas' : 'opensearch'}), ${scan.chunksScanned} chunks scanned + ${scan.annHits} ann hits -> ${scanned.chunksScored} scored, ${mergedResults.length} above min ${minScore}, top score ${mergedResults[0]?.score?.toFixed(3) ?? 'n/a'}`
+    `[semanticSearch] ${fileIds.length} files (${rankable.length} rankable, ${annEligible.length} via ${canUseAtlas ? 'atlas' : 'opensearch'} ${embeddingModel}), ${scan.chunksScanned} chunks scanned + ${scan.annHits} ann hits across ${scan.annModelsQueried} model(s) -> ${scanned.chunksScored} scored, ${mergedResults.length} above min ${minScore}, top score ${mergedResults[0]?.score?.toFixed(3) ?? 'n/a'}`
   );
+  if (outcomes.length > 0) {
+    logger?.debug?.(
+      `[semanticSearch] alternate-model ANN: ${outcomes.map(o => `${o.model}=${o.failed ? 'failed' : `${o.hitsReturned}hits/${o.filesWithHits.size}files`}`).join(', ')}`
+    );
+  }
 
   return {
     results: mergedResults,
@@ -767,6 +864,7 @@ async function rankChunksForFiles(args: {
     embeddingMismatch: mismatchReport,
     embeddingModel,
     scan,
+    alternateModelsEmbedded,
   };
 }
 

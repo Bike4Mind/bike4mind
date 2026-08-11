@@ -5,6 +5,7 @@ import {
   createEmbeddingMismatchAccumulator,
   describeEmbeddingMismatch,
   emptyEmbeddingMismatchReport,
+  groupFilesByEmbeddingModel,
   isForeignEmbeddingModel,
   partitionFilesByEmbeddingModel,
   resolveMajorityEmbeddingModel,
@@ -93,6 +94,68 @@ describe('partitionFilesByEmbeddingModel', () => {
     );
     expect(rankable.map(f => f.id)).toEqual(['legacy', 'match', 'blank']);
     expect(foreign.map(f => f.id)).toEqual(['foreign']);
+  });
+});
+
+describe('groupFilesByEmbeddingModel', () => {
+  const VOYAGE_3 = 'voyage-3';
+
+  it('groups unlabeled, blank, and query-model files as primary, matching partitionFilesByEmbeddingModel', () => {
+    const files = [
+      { id: 'legacy' },
+      { id: 'match', embeddingModel: ADA },
+      { id: 'foreign-small', embeddingModel: SMALL_3 },
+      { id: 'blank', embeddingModel: '  ' },
+      { id: 'foreign-voyage', embeddingModel: VOYAGE_3 },
+    ];
+    const groups = groupFilesByEmbeddingModel(files, ADA);
+    expect(groups.primary.map(f => f.id)).toEqual(['legacy', 'match', 'blank']);
+    // Anti-drift: `primary` must stay byte-identical to partitionFilesByEmbeddingModel's `rankable`
+    // on the same input, so a future refactor cannot silently widen or narrow either function.
+    expect(groups.primary).toEqual(partitionFilesByEmbeddingModel(files, ADA).rankable);
+  });
+
+  it('buckets each distinct foreign label separately, in first-appearance order, preserving input order within a bucket', () => {
+    const groups = groupFilesByEmbeddingModel(
+      [
+        { id: 'v1', embeddingModel: VOYAGE_3 },
+        { id: 's1', embeddingModel: SMALL_3 },
+        { id: 'v2', embeddingModel: VOYAGE_3 },
+        { id: 's2', embeddingModel: SMALL_3 },
+      ],
+      ADA
+    );
+    expect(groups.alternates.map(b => b.model)).toEqual([VOYAGE_3, SMALL_3]);
+    expect(groups.alternates.find(b => b.model === VOYAGE_3)?.files.map(f => f.id)).toEqual(['v1', 'v2']);
+    expect(groups.alternates.find(b => b.model === SMALL_3)?.files.map(f => f.id)).toEqual(['s1', 's2']);
+  });
+
+  it('collapses labels differing only in surrounding whitespace into one bucket', () => {
+    const groups = groupFilesByEmbeddingModel(
+      [
+        { id: 'a', embeddingModel: `  ${SMALL_3}` },
+        { id: 'b', embeddingModel: `${SMALL_3}  ` },
+      ],
+      ADA
+    );
+    expect(groups.alternates).toHaveLength(1);
+    expect(groups.alternates[0].model).toBe(SMALL_3);
+    expect(groups.alternates[0].files.map(f => f.id)).toEqual(['a', 'b']);
+  });
+
+  it('gives a case variant of a real model its own separate bucket (no case folding)', () => {
+    const groups = groupFilesByEmbeddingModel(
+      [
+        { id: 'lower', embeddingModel: SMALL_3 },
+        { id: 'upper', embeddingModel: SMALL_3.toUpperCase() },
+      ],
+      ADA
+    );
+    expect(groups.alternates.map(b => b.model).sort()).toEqual([SMALL_3, SMALL_3.toUpperCase()].sort());
+  });
+
+  it('returns no alternates for an empty file set', () => {
+    expect(groupFilesByEmbeddingModel([], ADA)).toEqual({ primary: [], alternates: [] });
   });
 });
 
@@ -284,6 +347,41 @@ describe('createEmbeddingMismatchAccumulator', () => {
     expect(acc.report().excludedFiles.count).toBe(0);
     expect(acc.report().partial).toBe(false);
   });
+
+  describe('alternateModelServed', () => {
+    it('starts zeroed on a fresh report', () => {
+      expect(emptyEmbeddingMismatchReport().alternateModelServed).toEqual({ files: 0, models: [] });
+    });
+
+    it('records served files/models without touching partial', () => {
+      const acc = createEmbeddingMismatchAccumulator([], ADA);
+      acc.alternateModelServed(3, ['voyage-3']);
+      const report = acc.report();
+      expect(report.alternateModelServed).toEqual({ files: 3, models: ['voyage-3'] });
+      expect(report.partial).toBe(false);
+    });
+
+    it('accumulates across multiple calls and sorts/dedupes models', () => {
+      const acc = createEmbeddingMismatchAccumulator([], ADA);
+      acc.alternateModelServed(2, [SMALL_3]);
+      acc.alternateModelServed(1, ['voyage-3']);
+      acc.alternateModelServed(1, [SMALL_3]);
+      const report = acc.report();
+      expect(report.alternateModelServed).toEqual({ files: 4, models: [SMALL_3, 'voyage-3'] });
+    });
+
+    it('does not flip partial to true even when combined with a genuine exclusion elsewhere', () => {
+      const acc = createEmbeddingMismatchAccumulator(
+        [{ id: 'a', embeddingModel: 'voyage-3', vectorizedChunkCount: 1 }],
+        ADA
+      );
+      // Served comes from a DIFFERENT alternate model than the one still excluded.
+      acc.alternateModelServed(2, [SMALL_3]);
+      const report = acc.report();
+      expect(report.partial).toBe(true); // from the excluded voyage-3 file, not from being served
+      expect(report.alternateModelServed).toEqual({ files: 2, models: [SMALL_3] });
+    });
+  });
 });
 
 describe('describeEmbeddingMismatch', () => {
@@ -336,5 +434,26 @@ describe('describeEmbeddingMismatch', () => {
 
   it('returns null for a missing report rather than throwing', () => {
     expect(describeEmbeddingMismatch(undefined, ADA)).toBeNull();
+  });
+
+  it('mentions alternate-model-served files only alongside a genuine withholding', () => {
+    const acc = createEmbeddingMismatchAccumulator(
+      [{ id: 'a', embeddingModel: 'voyage-3', vectorizedChunkCount: 1 }],
+      ADA
+    );
+    acc.alternateModelServed(2, [SMALL_3]);
+    const text = describeEmbeddingMismatch(acc.report(), ADA);
+    expect(text).toContain('2 file(s) embedded with');
+    expect(text).toContain(SMALL_3);
+    expect(text).toContain('searched through their own vector index');
+    // The exclusion sentence about voyage-3 is still present too - served and excluded coexist.
+    expect(text).toContain('voyage-3');
+  });
+
+  it('stays silent (null) when the only thing to report is alternate-model coverage, nothing withheld', () => {
+    const acc = createEmbeddingMismatchAccumulator([], ADA);
+    acc.alternateModelServed(5, [SMALL_3]);
+    expect(acc.report().partial).toBe(false);
+    expect(describeEmbeddingMismatch(acc.report(), ADA)).toBeNull();
   });
 });
