@@ -18,7 +18,16 @@ export default function DataLakeRailViewer() {
   return (
     <Box
       data-testid="datalake-rail-viewer"
-      sx={{ flex: 1, minWidth: 0, minHeight: 0, height: '100%', display: 'flex' }}
+      sx={{
+        flex: 1,
+        minWidth: 0,
+        minHeight: 0,
+        height: '100%',
+        display: 'flex',
+        // The viewer's own root sets a height but no width, so as a flex child it would shrink to
+        // its content instead of filling the pane out to the host's dock.
+        '& .knowledge-viewer-container': { flex: 1, minWidth: 0 },
+      }}
     >
       <KnowledgeViewer autoHideOnEmpty={false} />
     </Box>

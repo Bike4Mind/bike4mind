@@ -278,7 +278,18 @@ describe('DataLakeExplorer chat-first surface', () => {
 
     expect(screen.queryByTestId('datalake-rail-viewer')).toBeNull();
     expect(screen.getByTestId('my-chat')).toBeInTheDocument();
-    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
+    // Nothing is on screen any more, so the tree must not keep claiming a file is open.
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', '');
+  });
+
+  it('closing the viewer clears the row highlight on the embedded host too', async () => {
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-view'));
+    await vi.waitFor(() => expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123'));
+
+    act(() => useSessionLayoutStore.setState({ layout: 'hide' }));
+
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', '');
   });
 
   it('deep-linked articleId opens it the same way View does', async () => {

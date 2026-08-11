@@ -304,16 +304,18 @@ export default function DataLakeExplorer({
   const selectedFile = userSelectedFile ?? (articleId ? deepLinkTarget : null);
 
   // Chat mode: show the URL's article in the rail reader once it resolves, once per id.
-  // The viewer's own Close button asks for `layout: 'hide'`. An external-chat host never honours
-  // that - its chat is docked, so it re-docks anything else, often within the same tick - which
-  // would leave our pane open with its close button doing nothing. A store subscription catches
-  // the write regardless of whether the value survives to a render.
+  // The viewer's own Close button asks for `layout: 'hide'`. Watch for that write rather than the
+  // resulting value: an external-chat host reverts it within the same tick (its chat is docked, so
+  // it re-docks anything else), which would otherwise leave our pane open with a dead close button.
+  // Either way the file is no longer on screen, so the tree's highlight has to go with it.
   useEffect(() => {
-    if (!railViewerOpen) return;
+    if (!chatMode) return;
     return useSessionLayout.subscribe((state, prev) => {
-      if (state.layout === 'hide' && prev.layout !== 'hide') setRailViewerOpen(false);
+      if (state.layout !== 'hide' || prev.layout === 'hide') return;
+      setRailViewerOpen(false);
+      setViewerFileId(null);
     });
-  }, [railViewerOpen]);
+  }, [chatMode]);
 
   const openedDeepLinkRef = useRef<string | null>(null);
   useEffect(() => {
