@@ -893,6 +893,9 @@ export class ChatCompletionProcess {
    * Returns `null` on a lookup failure rather than throwing - callers decide their own fail
    * direction (the tool-offer gate fails toward offering; `resolveCorpusInlinePlan` fails toward
    * keeping content inline), so this method must not force one on them.
+   * The memo is NOT keyed on `ids` - every caller within a turn must pass `session.knowledgeIds`
+   * (both call sites do); a future caller passing a different subset would silently get the
+   * first call's cached result instead of its own.
    */
   private async getAttachedKnowledgeFiles(ids: string[]): Promise<IFabFileDocument[] | null> {
     if (this.attachedKnowledgeFilesMemo === undefined) {

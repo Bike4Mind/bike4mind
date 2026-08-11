@@ -474,12 +474,14 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           context.logger.log(
             `📚 Knowledge Base Search: call #${searchCallCount} — capped, instructing model to answer`
           );
+          // No attachmentInlineNotice here: by this point real searches have already run and may
+          // have found hits, so a hardcoded empty-results notice would wrongly claim attachments
+          // "are not indexed for search yet" and cast doubt on passages already surfaced above.
           return (
             `You have already run ${searchCallCount - 1} knowledge-base searches; the relevant passages are in the conversation above. ` +
             `STOP searching and compose your complete answer NOW from those results. Do NOT call search_knowledge_base ` +
             `or retrieve_knowledge_content again unless a specific named fact is genuinely missing.` +
-            formatSkipNotice(lastSkipNotice) +
-            attachmentInlineNotice(context, [])
+            formatSkipNotice(lastSkipNotice)
           );
         }
 

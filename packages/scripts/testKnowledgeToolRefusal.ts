@@ -44,6 +44,7 @@
  */
 
 import { writeFileSync, mkdirSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 
 // ---------------------------------------------------------------------------
@@ -204,8 +205,7 @@ const FILLER_PARAGRAPH =
   'document length for internal processing benchmarks and carries no operational meaning. ';
 
 async function createUnvectorizedFile(baseUrl: string, token: string, runId: string, n: number): Promise<FileResult> {
-  const canaryValue = Math.floor(1000 + Math.random() * 9000);
-  const canary = `${canaryValue}`;
+  const canary = randomBytes(4).toString('hex');
   const filler = FILLER_PARAGRAPH.repeat(400);
   const content = `Zephyr Protocol - internal calibration record.\nThe calibration constant for unit QX-9 is ${canary}.\n${filler}\n`;
   const body = await httpJson<{ id?: string; _id?: string }>(baseUrl, '/api/files/createFabFile', {
