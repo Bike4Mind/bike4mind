@@ -90,6 +90,13 @@ export async function handleUnlinkedUser(
 }
 
 /**
+ * Identity of the SLACK_BYPASS_USER_LOOKUP stand-in. Exported so authorization-bearing paths can
+ * refuse it by value rather than trusting that the env var is unset wherever they run: this user
+ * corresponds to no real account, so any permission decision made about it is meaningless.
+ */
+export const SLACK_MOCK_USER_ID = 'mock-user-id';
+
+/**
  * Create a mock user for testing purposes (when SLACK_BYPASS_USER_LOOKUP is enabled)
  * @param slackUserId - Slack user ID
  * @param eventId - Slack event ID
@@ -106,7 +113,7 @@ export function createMockUser(slackUserId: string, eventId: string, messageTs: 
   });
 
   return {
-    id: 'mock-user-id',
+    id: SLACK_MOCK_USER_ID,
     name: 'Mock User',
     slackSettings: {
       slackUserId,

@@ -6,6 +6,7 @@ import {
   IFabFileDocument,
   IFabFileRepository,
   IFabFileVersion,
+  FabFileSourceType,
   KnowledgeType,
 } from '@bike4mind/common';
 import mongoose, { Model, Schema } from 'mongoose';
@@ -1210,6 +1211,12 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     contentHash: { type: String },
     batchId: { type: String },
     relativePath: { type: String },
+    // Provenance. Declared because strict mode drops undeclared paths silently: `sourceType` was
+    // already being written by the Slack file intake and discarded on every save, so anything
+    // reading it back saw MANUAL_UPLOAD-shaped nothing. Free-form `sourceMetadata` carries the
+    // per-source origin (for Slack: channel + message ts) that makes an ingested file auditable.
+    sourceType: { type: String, enum: Object.values(FabFileSourceType), required: false },
+    sourceMetadata: { type: Schema.Types.Mixed, required: false },
     archivedAt: { type: Date },
     // Absent until the first AI edit of a docx/xlsx; each edit appends an entry.
     versions: { type: [FabFileVersionSchema], default: undefined },
