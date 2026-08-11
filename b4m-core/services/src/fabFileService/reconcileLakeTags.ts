@@ -90,6 +90,9 @@ export const reconcileLakeTags = async (
   desiredTags: { name: string; strength: number }[],
   { db, logger, fileOwnerUserId }: ReconcileLakeTagsAdapters
 ): Promise<LakeTagReconciliation> => {
+  // `primaryTag` (a separate string field on the route, gated there against `datalake:*` meta-tags
+  // alongside `tags`) is deliberately absent from `ordinaryTags`: no lake read arm consults
+  // `primaryTag`, so it cannot carry static-registry membership the way a `tags` entry can.
   const ordinaryTags = desiredTags.filter(tag => !isMetaTag(tag.name));
   // Gate only NEWLY-appearing static-registry tags, not ones already stored: a whole-array write
   // must not brick an unrelated edit to a file that already illegitimately carries a legacy

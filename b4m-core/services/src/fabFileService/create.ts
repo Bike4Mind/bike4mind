@@ -49,15 +49,6 @@ export const createFabFileSchema = z.object({
 
 type CreateFabFileParameters = z.infer<typeof createFabFileSchema>;
 
-/**
- * Every caller of `createFabFile` is gated against lake membership here, whether or not it also
- * gates itself up front (a few HTTP routes already call `assertCanWriteDataLakeTags` before
- * reaching this) - so a new caller, like `researchTaskService`/`downloadRelevantLinks` used to
- * be, cannot forget the check by omission. A write that bypasses this service entirely (e.g.
- * `fabFileRepository.create()`/a direct model call) gets NO such gate; today's few such bypasses
- * only ever set hardcoded or no tags, never a caller-controlled name, but a future one gaining a
- * caller-supplied `tags` field must route through here instead.
- */
 export interface CreateFabFileAdapters {
   db: {
     fabFiles: {
@@ -98,6 +89,15 @@ export interface CreateFabFileAdapters {
 const DEFAULT_MAX_FILE_SIZE = 20;
 const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
 
+/**
+ * Every caller of `createFabFile` is gated against lake membership here, whether or not it also
+ * gates itself up front (a few HTTP routes already call `assertCanWriteDataLakeTags` before
+ * reaching this) - so a new caller, like `researchTaskService`/`downloadRelevantLinks` used to
+ * be, cannot forget the check by omission. A write that bypasses this service entirely (e.g.
+ * `fabFileRepository.create()`/a direct model call) gets NO such gate; today's few such bypasses
+ * only ever set hardcoded or no tags, never a caller-controlled name, but a future one gaining a
+ * caller-supplied `tags` field must route through here instead.
+ */
 export const createFabFile = async (
   userId: string,
   parameters: CreateFabFileParameters,

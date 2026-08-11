@@ -20,6 +20,8 @@ const h = vi.hoisted(() => ({
   findPrefixArmLakes: vi.fn(
     async () => [] as { createdByUserId: string; fileTagPrefix: string; datalakeTag: string }[]
   ),
+  findByDatalakeTag: vi.fn(async () => null as { createdByUserId: string } | null),
+  canManageLake: vi.fn(() => false),
   session: {} as Record<string, unknown>,
 }));
 
@@ -45,7 +47,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   sessionRepository: { update: h.sessionUpdate },
   fabFileRepository: { findOne: h.findOne },
-  dataLakeRepository: { find: vi.fn() },
+  dataLakeRepository: { find: vi.fn(), findByDatalakeTag: h.findByDatalakeTag },
   adminSettingsRepository: {},
   userRepository: {},
   withTransaction: (fn: () => Promise<unknown>) => fn(),
@@ -53,7 +55,21 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@bike4mind/services', () => ({
   fabFilesService: { updateFabFile: h.updateFabFile, createFabFile: h.createFabFile },
-  dataLakeService: { loadPrefixArmCandidateLakes: h.findPrefixArmLakes },
+  dataLakeService: {
+    loadPrefixArmCandidateLakes: h.findPrefixArmLakes,
+    // Real (not faked) extraction logic: cheap, pure, and this is exactly what the code under
+    // test needs to see the tags it passes as meta-tags or not.
+    extractDataLakeMetaTags: (names: unknown[]) =>
+      Array.from(
+        new Set(
+          names
+            .filter((n): n is string => typeof n === 'string')
+            .map(n => n.toLowerCase())
+            .filter(n => n.startsWith('datalake:'))
+        )
+      ),
+    canManageLake: h.canManageLake,
+  },
 }));
 
 vi.mock('@client/services/operationsModelService', () => ({
@@ -231,5 +247,46 @@ describe('sessionSummarization summary-file lookup', () => {
 
     const call = h.updateFabFile.mock.calls[0][1] as { tags: { name: string }[] };
     expect(call.tags.filter(t => t.name === 'lk:invoices')).toHaveLength(1);
+  });
+
+  // createFabFile's new lake-tag gate (see fabFileService/create.ts) now throws for a datalake:
+  // meta-tag the session's user cannot manage, where before this PR it landed on the file
+  // ungated - the bug #1101 describes. A stale/unmanageable tag on an otherwise-unrelated session
+  // must not take the whole summary down with it.
+  describe('an unmanageable datalake: tag on a brand-new summary', () => {
+    beforeEach(() => {
+      h.session = {
+        id: SESSION_ID,
+        _id: SESSION_ID,
+        userId: OWNER,
+        name: 'Notebook',
+        tags: [{ name: 'datalake:someone-elses-lake' }, { name: 'plain' }],
+      };
+      h.canManageLake.mockReturnValue(false);
+    });
+
+    it('drops it and still creates the summary with the rest of the tags', async () => {
+      await run();
+
+      expect(h.createFabFile).toHaveBeenCalledTimes(1);
+      const [, data] = h.createFabFile.mock.calls[0] as [string, { tags: { name: string }[] }];
+      expect(data.tags.map(t => t.name)).toEqual(['plain']);
+    });
+
+    it('logs a warning naming the dropped tag', async () => {
+      await run();
+
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('datalake:someone-elses-lake'));
+    });
+
+    it('keeps a tag the session user CAN manage', async () => {
+      h.findByDatalakeTag.mockResolvedValueOnce({ createdByUserId: OWNER });
+      h.canManageLake.mockReturnValue(true);
+
+      await run();
+
+      const [, data] = h.createFabFile.mock.calls[0] as [string, { tags: { name: string }[] }];
+      expect(data.tags.map(t => t.name)).toEqual(['datalake:someone-elses-lake', 'plain']);
+    });
   });
 });

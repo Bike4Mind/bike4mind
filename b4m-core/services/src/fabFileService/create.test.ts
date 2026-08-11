@@ -295,4 +295,38 @@ describe('createFabFile - lake-tag gate at create time', () => {
     );
     expect(findByDatalakeTag).not.toHaveBeenCalled();
   });
+
+  // This is exactly the call shape packages/scripts/datalake/ingest-pdf-datalake.ts makes to seed
+  // a STATIC REGISTRY lake (datalake:opti-knowledge, no owning DB document) - the only supported
+  // way to populate one. Centralizing assertCanWriteDataLakeTags here must not break it.
+  it('allows an admin to create a file tagged into a static-registry lake with no DB lookup', async () => {
+    findByDatalakeTag.mockClear();
+    const result = await createFabFile(
+      'u1',
+      {
+        ...base,
+        fileName: 'notes.txt',
+        mimeType: 'text/plain',
+        tags: [{ name: 'datalake:opti-knowledge', strength: 1 }],
+      },
+      mockAdaptersFor(true)
+    );
+    expect(result.id).toBe('fab-1');
+    expect(findByDatalakeTag).not.toHaveBeenCalled();
+  });
+
+  it('refuses a non-admin creating a file tagged into a static-registry lake', async () => {
+    await expect(
+      createFabFile(
+        'u1',
+        {
+          ...base,
+          fileName: 'notes.txt',
+          mimeType: 'text/plain',
+          tags: [{ name: 'datalake:opti-knowledge', strength: 1 }],
+        },
+        mockAdaptersFor(false)
+      )
+    ).rejects.toThrow(/only an admin can change this data lake/i);
+  });
 });

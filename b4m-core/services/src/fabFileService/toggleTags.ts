@@ -125,6 +125,10 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
   const prefixJoinsByFile = new Map<string, PrefixArmChange[]>();
   // Short-circuits the whole thing (no query) when nothing requested could carry a prefix arm -
   // every usable prefix ends in ':' (see `prefixArmTagNames`), and a meta-tag never matches one.
+  // The static-registry gate below rides on this same condition: normalizeTagPrefix requires a
+  // trailing ':' too, so a registry-prefixed tag always contains one - but nothing enforces that
+  // coupling, so narrowing this condition for the prefix-arm case alone would silently disable
+  // the registry gate as well.
   if (tags.some(tag => !isDataLakeTag(tag) && tag.includes(':'))) {
     const candidateLakes = await loadPrefixArmCandidateLakes(
       fabFiles.map(f => f.userId),

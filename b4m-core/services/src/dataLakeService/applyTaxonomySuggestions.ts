@@ -56,8 +56,10 @@ export const applyTaxonomySuggestions = async (
   // everyone entitled to the registry lake. Create already refuses such a prefix (see
   // createDataLake.ts); this only catches a row that predates that check.
   if (collidesWithRegistryPrefix(lake.fileTagPrefix)) {
+    // No admin remedy exists today - there is no path to change a lake's fileTagPrefix after
+    // creation - so this refusal is not pointing anyone at a fix that doesn't exist.
     throw new BadRequestError(
-      "This lake's tag prefix overlaps a built-in data lake, so new tags cannot be applied. Ask an admin to update the lake's prefix."
+      "This lake's tag prefix overlaps a built-in data lake, so new tags cannot be applied to it."
     );
   }
 

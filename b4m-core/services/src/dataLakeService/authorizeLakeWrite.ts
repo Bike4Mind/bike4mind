@@ -73,11 +73,23 @@ export const extractDataLakeMetaTags = (tagNames: readonly unknown[]): string[] 
   );
 
 /**
+ * The `datalake:*` meta-tags naming a lake in the STATIC REGISTRY (e.g. `datalake:opti-knowledge`),
+ * lowercased to match `extractDataLakeMetaTags`' normalization. These lakes have no owning DB
+ * document by construction, so `db.dataLakes.findByDatalakeTag` always returns null for them -
+ * without this arm, `assertCanWriteDataLakeTags` would refuse every write into a static lake
+ * unconditionally, including the platform-admin ingest scripts that are the only supported way to
+ * populate one.
+ */
+const STATIC_REGISTRY_DATALAKE_TAGS = new Set(DATA_LAKES.map(lake => lake.datalakeTag.toLowerCase()));
+
+/**
  * Gate the file-tag write paths (Send-to-Data-Lake, direct create/update, tag toggle): given the
  * `datalake:*` meta-tags a caller is applying to a file, assert they may write into EVERY
- * referenced lake. Non-meta tags are ignored. A meta-tag that resolves to no lake, or to a lake
- * the caller can't manage, is rejected - this is the check that stops a read-only member from
- * injecting a file into a lake they don't own, mirroring the creator check on the remove path.
+ * referenced lake. Non-meta tags are ignored. A meta-tag naming a STATIC REGISTRY lake is
+ * admin-only (mirrors `assertCanWriteStaticRegistryTags`' rule for that lake's content-prefix
+ * tags - there is no creator to check against). Any other meta-tag that resolves to no lake, or to
+ * a lake the caller can't manage, is rejected - this is the check that stops a read-only member
+ * from injecting a file into a lake they don't own, mirroring the creator check on the remove path.
  */
 export const assertCanWriteDataLakeTags = async (
   actor: ManageActor,
@@ -86,6 +98,12 @@ export const assertCanWriteDataLakeTags = async (
 ): Promise<void> => {
   const metaTags = extractDataLakeMetaTags(tagNames);
   for (const tag of metaTags) {
+    if (STATIC_REGISTRY_DATALAKE_TAGS.has(tag)) {
+      if (!actor.isAdmin) {
+        throw new BadRequestError("Only an admin can change this data lake's files");
+      }
+      continue;
+    }
     const lake = await db.dataLakes.findByDatalakeTag(tag);
     if (!lake || !canManageLake(lake, actor)) {
       // Direction-neutral wording: this gate sees a tag payload, not an intent, so the same

@@ -284,6 +284,27 @@ export const handler = withEventContext(async (event, logger) => {
         );
       } else {
         logger.info(`Creating Summary File`);
+        // A session's tags are carried forward, not a fresh self-tag action - #1101 asks that this
+        // path not SILENTLY join a lake, not that one stale/unmanageable datalake: tag (from before
+        // the session's user lost access, or was never granted it) takes the whole summary down.
+        // createFabFile's gate now refuses such a tag outright, so drop it here first and log it;
+        // the summary is the primary value this handler exists to preserve.
+        const sessionMetaTagNames = new Set(
+          dataLakeService.extractDataLakeMetaTags((fabFileData.tags ?? []).map(t => t.name))
+        );
+        const unmanageableMetaTags: string[] = [];
+        for (const tag of sessionMetaTagNames) {
+          const lake = await dataLakeRepository.findByDatalakeTag(tag);
+          if (!lake || !dataLakeService.canManageLake(lake, { userId: session.userId, isAdmin: !!user?.isAdmin })) {
+            unmanageableMetaTags.push(tag);
+          }
+        }
+        if (unmanageableMetaTags.length > 0) {
+          logger.warn(
+            `Dropping unmanageable data-lake tag(s) from session ${session.id} summary: ${unmanageableMetaTags.join(', ')}`
+          );
+          fabFileData.tags = (fabFileData.tags ?? []).filter(t => !unmanageableMetaTags.includes(t.name.toLowerCase()));
+        }
         const newFabFile = await fabFilesService.createFabFile(session.userId, fabFileData, {
           db: {
             fabFiles: fabFileRepository,

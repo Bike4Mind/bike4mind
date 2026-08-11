@@ -84,6 +84,33 @@ describe('assertCanWriteDataLakeTags - the same rule at the write gate', () => {
 
     expect(adapters.db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
   });
+
+  // A STATIC REGISTRY lake's meta-tag (e.g. datalake:opti-knowledge, the hardcoded fixture -
+  // never an env-sourced premium entry) has no owning document: findByDatalakeTag always returns
+  // null for it. Without its own arm, this gate would refuse EVERY write into a static lake,
+  // including the platform-admin ingest scripts that are the only supported way to populate one.
+  describe('static registry lakes (no owning document)', () => {
+    it('accepts an admin with no DB lookup at all', async () => {
+      const adapters = dbWith(null) as unknown as {
+        db: { dataLakes: { findByDatalakeTag: ReturnType<typeof vi.fn> } };
+      };
+
+      await expect(
+        assertCanWriteDataLakeTags(
+          { userId: 'ingest-admin', isAdmin: true },
+          ['datalake:opti-knowledge'],
+          adapters as never
+        )
+      ).resolves.toBeUndefined();
+      expect(adapters.db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
+    });
+
+    it('refuses a non-admin, without ever finding a document to say so', async () => {
+      await expect(
+        assertCanWriteDataLakeTags({ userId: 'someone', isAdmin: false }, ['datalake:opti-knowledge'], dbWith(null))
+      ).rejects.toThrow("Only an admin can change this data lake's files");
+    });
+  });
 });
 
 describe('assertBatchBelongsToLake - the batch decides which lake its files join', () => {
