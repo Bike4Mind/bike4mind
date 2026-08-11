@@ -142,6 +142,7 @@ const UserPreferencesSchema = new Schema(
     agentModeDefault: { type: String, enum: ['off', 'auto', 'on'] },
     showFunTools: { type: Boolean },
     saveGeneratedAudio: { type: Boolean },
+    showSplashCards: { type: Boolean },
   },
   { _id: false }
 );
@@ -811,7 +812,10 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
       default: 'auto',
     },
 
-    // Cross-device user preferences (synced from client localStorage)
+    // Cross-device user preferences (synced from client localStorage). Defaults to null, not
+    // {} - a dot-path $set (e.g. 'preferences.foo') on a user who has never set a preference
+    // fails with "Cannot create field 'foo' in element {preferences: null}"; coerce to {} in
+    // a separate update first (see docx-template.ts) before writing a nested path.
     preferences: { type: UserPreferencesSchema, default: null },
 
     lastCreditGrantAt: { type: Date, required: false },
@@ -827,6 +831,15 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
   }
 );
 
+// Dedupe key for an authProviders entry: strategy and id joined by a U+0000 delimiter, a
+// byte no legitimate strategy or id contains - nothing schema-level enforces this (the
+// strategy enum blocks it on validated paths; id has no validator), but no real value
+// carries it. Written as an escape (not a raw NUL) so the file stays greppable; see #1221.
+// Exported so the delimiter's separating property is unit-tested directly (see
+// UserModel.test.ts).
+export const authProviderDedupeKey = (strategy: AuthStrategy, id: string | null): string =>
+  `${strategy}\u0000${id ?? ''}`;
+
 // Duplicate-(strategy, id) integrity guard for authProviders. A concurrent
 // first-login race (two logins racing stage-1 miss -> stage-2 miss, see
 // verifyCallback.ts) can try to persist the same provider identity twice on
@@ -841,9 +854,11 @@ UserSchema.pre('save', function (next) {
   const providers = this.authProviders;
   if (Array.isArray(providers) && providers.length > 1) {
     const lastIndexByKey = new Map<string, number>();
-    providers.forEach((p, i) => lastIndexByKey.set(`${p?.strategy} ${p?.id ?? ''}`, i));
+    providers.forEach((p, i) => lastIndexByKey.set(authProviderDedupeKey(p?.strategy, p?.id), i));
     if (lastIndexByKey.size !== providers.length) {
-      this.authProviders = providers.filter((p, i) => lastIndexByKey.get(`${p?.strategy} ${p?.id ?? ''}`) === i);
+      this.authProviders = providers.filter(
+        (p, i) => lastIndexByKey.get(authProviderDedupeKey(p?.strategy, p?.id)) === i
+      );
     }
   }
   next();

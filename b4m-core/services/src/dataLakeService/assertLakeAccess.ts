@@ -1,6 +1,6 @@
 import type { AccessContext, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
 import { DATA_LAKES, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
-import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { BadRequestError, NotFoundError, normalizeId } from '@bike4mind/utils';
 
 interface AssertLakeAccessAdapters {
   db: {
@@ -47,13 +47,23 @@ export function canAccessLake(
   // keeps holding), but a normal public lake is gate-less so this returns true for everyone.
   if (lake.isPublic) return lakeMatchesAccess(lake, normalizedTags, normalizedKeys);
 
+  // Normalize the lake's org id ONCE up front so "does this lake have an org" (private-by-default,
+  // below) and "does the org match" (further down) agree on the same value. If they diverged - raw
+  // truthiness here, normalized value there - a truthy-but-not-id-shaped org would read as
+  // "has an org" (skip the private deny) yet normalize to undefined (skip the org-match deny),
+  // letting a gate-less lake fall through to lakeMatchesAccess and become world-readable. Sharing
+  // lakeOrgId keeps the gate failing CLOSED.
+  const lakeOrgId = normalizeId(lake.organizationId);
+
   // Private (no org, no gate of any kind) -> owner/admin only; deny every other caller.
   // Must run before lakeMatchesAccess, which treats a no-requirement lake as public.
-  if (!lake.organizationId && !lake.requiredUserTag && !lake.requiredEntitlement) return false;
+  if (!lakeOrgId && !lake.requiredUserTag && !lake.requiredEntitlement) return false;
 
   // Org is a hard prerequisite when the lake is org-scoped - evaluated BEFORE the
-  // tag/entitlement any-of so a holder in a different org can never pass.
-  if (lake.organizationId && lake.organizationId !== ctx.organizationId) return false;
+  // tag/entitlement any-of so a holder in a different org can never pass. Normalize both
+  // sides: the ctx org id can reach here as an ObjectId or populated doc, and a raw strict
+  // compare then 404s a lake the casting Mongo collection query still returns.
+  if (lakeOrgId && lakeOrgId !== normalizeId(ctx.organizationId)) return false;
 
   return lakeMatchesAccess(lake, normalizedTags, normalizedKeys);
 }
@@ -88,7 +98,8 @@ export function assertLakeWritable(lake: Pick<IDataLakeDocument, 'id'>): void {
 function resolveFallbackLake(lakeIdOrSlug: string, ctx: AccessContext): IDataLakeDocument | null {
   const config = DATA_LAKES.find(dl => dl.id === lakeIdOrSlug || dl.slug === lakeIdOrSlug);
   if (!config) return null;
-  if (config.organizationId && config.organizationId !== ctx.organizationId) return null;
+  const configOrgId = normalizeId(config.organizationId);
+  if (configOrgId && configOrgId !== normalizeId(ctx.organizationId)) return null;
   if (!ctx.isAdmin) {
     const normalizedTags = ctx.userTags.map(t => t.toLowerCase());
     const normalizedKeys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);

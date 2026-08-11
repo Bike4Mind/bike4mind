@@ -8,7 +8,7 @@ import { api, isPublicPath } from '@client/app/contexts/ApiContext';
 import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
 import ExpiredSession from '../components/ExpiredSession';
 import { useSubscribeCollection } from '../utils/react-query';
-import { useGetIdentify, useReturnTokenValidation } from '@client/app/hooks/data/user';
+import { useGetIdentify } from '@client/app/hooks/data/user';
 import { persist, PersistStorage, StorageValue } from 'zustand/middleware';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
@@ -341,7 +341,6 @@ export const UserProvider: React.FC<UserProviderProps> = ({ children }) => {
     useShallow(s => [s.setAccessToken, s.expired, s.accessToken, s.mfaPending, s.setMfaPending])
   );
   const identity = useGetIdentify();
-  useReturnTokenValidation();
   const { t } = useTranslation();
 
   // Real-time subscription updates instead of periodic polling

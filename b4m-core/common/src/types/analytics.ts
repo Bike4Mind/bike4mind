@@ -40,6 +40,38 @@ export interface UsageBySourceResponse {
 }
 
 /**
+ * One endpoint+method's request/latency rollup from the API-key usage log
+ * (ApiKeyUsageLog). Request counts and latency only - this collection carries no
+ * credits/COGS/feature, so this section must stay distinct from the UsageEvent
+ * (COGS/credits) cuts and never imply COGS-per-endpoint.
+ */
+export interface IEndpointUsageBucket {
+  endpoint: string;
+  method: string;
+  requests: number;
+  avgResponseTimeMs: number;
+  p95ResponseTimeMs: number;
+  /** Fraction 0..1 of requests with statusCode >= 400. */
+  errorRate: number;
+}
+
+/** Endpoint request count for one UTC day (over-time chart point). */
+export interface IEndpointUsageDay {
+  day: string; // YYYY-MM-DD (UTC)
+  requests: number;
+}
+
+/**
+ * Endpoint-level platform usage from ApiKeyUsageLog. This collection logs only
+ * API-key-authed requests and has a 90-day TTL, so windows beyond 90d degrade to
+ * credit/feature (UsageEvent) data only.
+ */
+export interface IPlatformEndpointUsage {
+  byEndpoint: IEndpointUsageBucket[];
+  overTime: IEndpointUsageDay[];
+}
+
+/**
  * Resolves source for the /api/ai/v1/completions endpoint. This endpoint is
  * called only by CLI and 3rd-party API users (never by web chat - that uses a
  * different pipeline). We distinguish CLI from raw API by the `b4m-cli/`

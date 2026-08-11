@@ -21,6 +21,14 @@ export interface TokenizerOptions {
 /**
  * Tiktoken-based implementation of the tokenizer interface
  * Provides caching for performance and configurable logging
+ *
+ * Both methods encode via `encode_ordinary`, never `encode`: the text here is untrusted (user
+ * messages, fab-file chunks, fetched pages, MCP tool descriptions) and `encode` REJECTS a
+ * special-token literal such as "<|endoftext|>" - which zeroes the input-token breakdown and fails
+ * prompt assembly outright. Admitting them as real special tokens (`allowed_special: 'all'`) is the
+ * wrong repair: it charges one token instead of the several their characters cost, under-counting a
+ * figure we bill on. Providers treat user-supplied literals as ordinary text too.
+ * fab-pipeline's chunker/embedding service and the CLI TokenCounter use the same call for this reason.
  */
 export class TiktokenTokenizer implements ITokenizer {
   private encoderCache = new Map<string, Tiktoken>();
@@ -49,7 +57,7 @@ export class TiktokenTokenizer implements ITokenizer {
     const encoder = await this.getEncoder(modelId, logger);
 
     const texts = Array.isArray(text) ? text : [text];
-    return texts.reduce((sum, t) => sum + encoder.encode(t).length, 0);
+    return texts.reduce((sum, t) => sum + encoder.encode_ordinary(t).length, 0);
   }
 
   /**
@@ -64,7 +72,7 @@ export class TiktokenTokenizer implements ITokenizer {
     }
 
     const encoder = await this.getEncoder(modelId, logger);
-    return Array.from(encoder.encode(text));
+    return Array.from(encoder.encode_ordinary(text));
   }
 
   /**

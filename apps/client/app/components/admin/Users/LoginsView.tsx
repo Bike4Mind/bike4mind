@@ -1,12 +1,13 @@
+import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import React, { useState } from 'react';
-import { Tooltip, Stack, Button } from '@mui/joy';
-import { IUserDocument, WithOrgRef } from '@bike4mind/common';
+import { Chip, Tooltip } from '@mui/joy';
+import CircleIcon from '@mui/icons-material/Circle';
 import LoginDetailsModal from './LoginDetailsModal';
 import { useGetUserActivityCounters } from '@client/app/hooks/data/user';
 import { AuthEvents } from '@bike4mind/common';
 
 interface LoginsViewProps {
-  user: WithOrgRef<IUserDocument>;
+  user: AdminUserListItem;
 }
 
 const LoginsView: React.FC<LoginsViewProps> = ({ user }) => {
@@ -32,19 +33,20 @@ const LoginsView: React.FC<LoginsViewProps> = ({ user }) => {
 
   return (
     <>
-      <Stack direction="row" spacing={2} display={'flex'} justifyContent={'flex-start'}>
-        <Tooltip title="Tap for Last Login Details">
-          <Button
-            size="md"
-            variant="plain"
-            startDecorator={isAlert ? '🚨' : '🟢'}
-            color={isAlert ? 'danger' : 'neutral'}
-            onClick={handleOpenModal}
-          >
-            {logins}
-          </Button>
-        </Tooltip>
-      </Stack>
+      <Tooltip title="Tap for Last Login Details">
+        <Chip
+          data-testid="admin-user-logins-chip"
+          // The count alone announces as a bare number; Tooltip only sets aria-describedby.
+          aria-label={`${logins} logins, view last login details`}
+          size="sm"
+          variant="soft"
+          color={isAlert ? 'danger' : 'success'}
+          startDecorator={<CircleIcon sx={{ fontSize: 8 }} />}
+          onClick={handleOpenModal}
+        >
+          {logins}
+        </Chip>
+      </Tooltip>
       <LoginDetailsModal open={isModalOpen} onClose={handleCloseModal} user={user} lastLoginRecord={lastLoginRecord} />
     </>
   );

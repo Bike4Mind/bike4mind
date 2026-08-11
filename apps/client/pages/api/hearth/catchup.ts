@@ -9,6 +9,7 @@ import { requireUser } from '@server/middlewares/requireUser';
 import {
   toWireHearthEvent,
   HearthActorParamSchema,
+  HearthSessionParamSchema,
   resolveRequestActor,
   assertHearthWriteScope,
 } from '@server/utils/hearthWire';
@@ -28,6 +29,8 @@ const CatchupSchema = z.object({
    */
   tail: z.number().int().min(1).max(500).optional(),
   actor: HearthActorParamSchema,
+  /** Per-session human identity; what gives concurrent CLI sessions their own cursors. */
+  session: HearthSessionParamSchema,
 });
 
 const hearthLog = new HearthLog(hearthRepository.store);
@@ -59,7 +62,7 @@ const handler = baseApi({
 
     if (body.advance) assertHearthWriteScope(req);
 
-    const actor = await resolveRequestActor(req.user, body.actor);
+    const actor = await resolveRequestActor(req.user, body.actor, body.session);
     const actorId = actor._id.toString();
 
     const events = await hearthLog.catchup(actorId, body.channelId, {

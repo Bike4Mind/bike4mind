@@ -34,12 +34,31 @@ const embeddingFactory = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal factory shape for this unit test
 } as any;
 
+// Models an embedding outage: the provider rejects every embed call (e.g. a 401 on a revoked or
+// endpoint-scoped key). The query embedding must degrade to raw content, not abort the whole turn.
+const throwingEmbeddingFactory = {
+  getDefaultEmbeddingModel: () => 'text-embedding-3-small',
+  createEmbeddingService: () => ({
+    getModelInfo: () => ({ model: 'text-embedding-3-small', contextWindow: 8191 }),
+    generateEmbedding: async () => {
+      throw new Error('OpenAI rejected the embedding request (401 Unauthorized)');
+    },
+  }),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal factory shape for this unit test
+} as any;
+
+const vectorizedTextFile = (id: string, embeddingModel = 'text-embedding-ada-002'): IFabFileDocument =>
+  ({ id, fileName: `${id}.txt`, mimeType: 'text/plain', vectorized: true, embeddingModel }) as IFabFileDocument;
+
 const deps = () => ({
   logger: logger as never,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- storage is unused on the raw-content path
   storage: {} as any,
   db: {
-    fabfilechunks: { findByFabFileId: vi.fn().mockResolvedValue([]) },
+    fabfilechunks: {
+      findVectorsByFabFileIds: vi.fn().mockResolvedValue([]),
+      countByFabFileId: vi.fn().mockResolvedValue(0),
+    },
     fabfiles: { update: vi.fn().mockResolvedValue(undefined) },
     caches: {},
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal adapter shape
@@ -52,11 +71,12 @@ const emittedChars = (userMessages: Array<{ content: unknown }>) =>
 
 /**
  * Each included file carries a short label ("Here is the content from the attached
- * file ...") that is not charged against the content budget. It is tens of characters
- * per file against a budget in the thousands, and assembly re-counts everything with
- * the real tokenizer afterwards, so it is allowed for rather than engineered away.
+ * file ...") plus the anti-inference/truncation notices, none of which are charged
+ * against the content budget. It is roughly a hundred characters per file against a
+ * budget in the thousands, and assembly re-counts everything with the real tokenizer
+ * afterwards, so it is allowed for rather than engineered away.
  */
-const FRAMING_ALLOWANCE_PER_FILE = 200;
+const FRAMING_ALLOWANCE_PER_FILE = 300;
 
 describe('processFabFilesServer attached-content budget', () => {
   beforeEach(() => {
@@ -131,6 +151,55 @@ describe('processFabFilesServer attached-content budget', () => {
     expect(emittedChars(large.userMessages)).toBeGreaterThan(emittedChars(small.userMessages));
   });
 
+  it('still emits raw content when the query embedding fails, instead of throwing', async () => {
+    // The E2E regression: a 401 on the up-front query embedding must not abort file processing.
+    // A non-vectorized file has always used the raw-content path, so the only thing that could
+    // sink it is the query embedding throwing before the file loop - which this guards against.
+    const { userMessages } = await processFabFilesServer(
+      throwingEmbeddingFactory,
+      [textFile('a')],
+      'prompt',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    expect(emittedChars(userMessages)).toBeGreaterThan(0);
+  });
+
+  it('falls back to raw content for a vectorized file when the query embedding fails', async () => {
+    // Previously a vectorized file with no usable query vector was dropped outright (an early
+    // return), so an embedding outage silently removed the attachment. It must now raw-read.
+    const { userMessages } = await processFabFilesServer(
+      throwingEmbeddingFactory,
+      [vectorizedTextFile('a')],
+      'prompt',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    expect(emittedChars(userMessages)).toBeGreaterThan(0);
+  });
+
+  it('raw-reads a vectorized file whose embedding model differs from this turn default', async () => {
+    // Even with a healthy embedder, a file stored under a different model than the turn's default
+    // has no matching query vector. That is not a reason to drop it - it raw-reads instead.
+    const { userMessages } = await processFabFilesServer(
+      embeddingFactory, // healthy: query embeds as 'text-embedding-3-small'
+      [vectorizedTextFile('a', 'text-embedding-ada-002')], // stored under a different model
+      'prompt',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    expect(emittedChars(userMessages)).toBeGreaterThan(0);
+  });
+
   it('does not restore the flat per-file cap when the budget is zero', async () => {
     // The trap: the char caps read a non-positive budget as "no budget supplied" and
     // fall back to MAX_FILE_SIZE *per file*. With three files that is 18k characters,
@@ -147,5 +216,88 @@ describe('processFabFilesServer attached-content budget', () => {
     );
 
     expect(emittedChars(userMessages)).toBeLessThan(MAX_FILE_SIZE);
+  });
+});
+
+describe('filename handling in the delivered-content wrapper', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetFileContent.mockResolvedValue('some file content');
+  });
+
+  it('keeps digits in a filename out of the wrapper header un-flagged', async () => {
+    // A number embedded in the filename (e.g. 30000.txt) sits right next to the content; the model
+    // must be told it is part of the name, not a row/record count it can echo back.
+    const { userMessages } = await processFabFilesServer(
+      embeddingFactory,
+      [textFile('30000')],
+      'prompt',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    const content = userMessages[0].content as string;
+    expect(content).toContain('Here is the content from the attached file "30000.txt" for context:');
+    expect(content).toContain(
+      'Digits in the file name are part of the name, not a count of its rows, records, or sections.'
+    );
+  });
+
+  it('sanitizes bracket and quote characters out of the wrapper header filename', async () => {
+    const crafted = {
+      id: 'a',
+      fileName: 'weird[1]"name.txt',
+      mimeType: 'text/plain',
+      vectorized: false,
+    } as IFabFileDocument;
+    const { userMessages } = await processFabFilesServer(
+      embeddingFactory,
+      [crafted],
+      'prompt',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    const content = userMessages[0].content as string;
+    expect(content).not.toContain('weird[1]"name.txt');
+    expect(content).toContain('weird 1  name.txt');
+  });
+
+  it('falls back to a placeholder when sanitizing empties the filename', async () => {
+    const crafted = { id: 'a', fileName: '["]', mimeType: 'text/plain', vectorized: false } as IFabFileDocument;
+    const { userMessages } = await processFabFilesServer(
+      embeddingFactory,
+      [crafted],
+      'prompt',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    const content = userMessages[0].content as string;
+    expect(content).toContain('Here is the content from the attached file "unnamed attachment" for context:');
+  });
+
+  it('states the digit-in-filename caveat once, not per file, when multiple files are attached', async () => {
+    const { userMessages } = await processFabFilesServer(
+      embeddingFactory,
+      [textFile('30000'), textFile('40000')],
+      'prompt',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    const content = userMessages[0].content as string;
+    const occurrences = content.split('Digits in the file name are part of the name').length - 1;
+    expect(occurrences).toBe(1);
+    expect(content).toContain('--- File 1: 30000.txt ---');
+    expect(content).toContain('--- File 2: 40000.txt ---');
   });
 });

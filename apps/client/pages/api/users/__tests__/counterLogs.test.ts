@@ -8,26 +8,33 @@ import { CounterLog, User } from '@bike4mind/database';
 import { SAFE_USER_LOOKUP_PROJECT, USER_SECRET_FIELDS } from '@bike4mind/common';
 
 /**
- * Tests for the M1 $lookup reorder (see counterlogs-phase2-payload-reduction.md).
+ * End-to-end tests for the `{logs}` branch, driving the real handler against createMongoServer.
  *
- * Tests 1 and 3 are AGREEMENT tests: they drive the real handler against createMongoServer and
- * pin the output contract, which is unchanged by the reorder. They pass against both the old and
- * new pipeline by design - that is the point, since the PR's claim is "identical output, faster".
- * The staging before/after diff (13,308 rows, byte-identical once resorted, ~2x faster) is the
- * empirical parity proof.
+ * Originally written for the M1 $lookup reorder; the row shape they pin is now flat (one row per
+ * day/counter/user, split by SPLIT_METADATA_KEYS) rather than nested under `users[]`, because
+ * paging moved server-side. The properties each test guards are unchanged: grouping/count
+ * correctness, the orphaned-user $ifNull fallback, the $convert onError arm, and the $lookup
+ * projection.
  *
- * Test 2 asserts on `buildCounterLogsPipeline` - the exported builder the handler actually calls -
- * NOT on a copy of the stages. An earlier version re-declared its own pipeline, which meant
- * deleting the production `$project` failed nothing; it was asserting that MongoDB's `$project`
- * works rather than that this route uses it.
+ * The projection test asserts on the exported builder the handler actually calls, NOT on a copy of
+ * the stages. An earlier version re-declared its own pipeline, which meant deleting the production
+ * `$project` failed nothing; it was asserting that MongoDB's `$project` works rather than that this
+ * route uses it.
+ *
+ * Handler-level paging concerns (envelope, clamping, cache keys, auth) are mocked-dependency tests
+ * and live in counterLogs.paging.test.ts, which cannot share this file's real-Mongo harness.
  */
 
+// The mock surfaces baseApi's options as `_config`. Without that, no test could see the route's
+// requiredScopes and a suite that read as scope coverage would pass with requiredScopes omitted -
+// the same trap documented in pages/api/hearth/__tests__/hearthRoutes.test.ts.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+  baseApi: (options?: Record<string, unknown>) => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
       {
+        _config: options,
         use: () => chain,
         get: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.GET = fns[fns.length - 1]), chain),
       }
@@ -36,7 +43,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-import handler, { buildCounterLogsPipeline } from '../counterLogs';
+import handler from '../counterLogs';
+import { buildUserActivityPipeline } from '@server/analytics/userActivityQuery';
+import { ApiKeyScope } from '@bike4mind/common';
 
 let mongoServer: MongoMemoryServer;
 
@@ -74,7 +83,7 @@ function run(query: Record<string, string>) {
 }
 
 describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
-  it('aggregates counts per user via the reordered lookup', async () => {
+  it('aggregates counts per user via the post-group lookup', async () => {
     const goodUser = await User.create({
       username: 'e2e-good-user',
       name: 'Good User',
@@ -94,8 +103,8 @@ describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
         metadata: { sessionId: 'session-a' },
       },
       {
-        // Second event for the same user/date/counterName/metadata -> should collapse into the
-        // same group and sum, exactly like the pre-reorder pipeline.
+        // Second event for the same user/date/counterName -> should collapse into the same
+        // group and sum, exactly like the pre-reorder pipeline.
         userId: goodUser.id,
         userName: 'Good User',
         userLevel: 'User',
@@ -127,8 +136,9 @@ describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
       counterName: string;
       count: number;
       totalValue: number;
+      userId: string;
+      userEmail: string;
       metadata: Record<string, unknown>;
-      users: Array<{ userId: string; userEmail: string; count: number; totalValue: number }>;
     }>;
 
     expect(rows).toHaveLength(2);
@@ -137,13 +147,11 @@ describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
     expect(goodRow).toBeDefined();
     expect(goodRow!.count).toBe(2);
     expect(goodRow!.totalValue).toBe(2);
-    expect(goodRow!.users).toHaveLength(1);
-    expect(goodRow!.users[0].userEmail).toBe('good-user@example.com');
-    expect(goodRow!.users[0].count).toBe(2);
+    expect(goodRow!.userEmail).toBe('good-user@example.com');
 
     const orphanRow = rows.find(r => (r.metadata as { sessionId: string }).sessionId === 'session-b');
     expect(orphanRow).toBeDefined();
-    expect(orphanRow!.users[0].userEmail).toBe('');
+    expect(orphanRow!.userEmail).toBe('');
   });
 
   it('does not abort the aggregation when a userId is not a valid ObjectId', async () => {
@@ -168,25 +176,31 @@ describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
     expect(res._getStatusCode()).toBe(200);
     const rows = JSON.parse(JSON.stringify(res._getJSONData())).logs as Array<{
       metadata: { sessionId: string };
-      users: Array<{ userId: string; userEmail: string }>;
+      userId: string;
+      userEmail: string;
     }>;
 
     const systemRow = rows.find(r => r.metadata.sessionId === 'session-system');
     expect(systemRow, 'the row must still be returned, not dropped or thrown on').toBeDefined();
-    expect(systemRow!.users[0].userId).toBe('SYSTEM');
-    expect(systemRow!.users[0].userEmail).toBe('');
+    expect(systemRow!.userId).toBe('SYSTEM');
+    expect(systemRow!.userEmail).toBe('');
   });
 
   it('builds the user $lookup with an inner $project restricted to non-secret fields', () => {
+    // email is the only field the route reads off the joined user; the organization comes off
+    // the counter log itself, which is also what the org filters match on.
     // Asserts on the EXPORTED builder the handler calls, so deleting or widening the production
     // $project fails here. Do not inline a copy of the stages: the $lookup's projection has no
     // effect on the HTTP response (the outer $group/$project already forward only named scalars),
     // so an output-level assertion cannot pin it - the property is structural.
-    const stages = buildCounterLogsPipeline({ datetime: { $gte: new Date(0) } }) as Array<
-      Record<string, { pipeline?: Array<{ $project?: Record<string, unknown> }>; as?: string }>
-    >;
+    const { pipeline: stages } = buildUserActivityPipeline({
+      startDate: '2026-07-21',
+      endDate: '2026-07-21',
+      skip: 0,
+      limit: 25,
+    });
 
-    const lookup = stages.find(s => s.$lookup?.as === 'user')?.$lookup;
+    const lookup = stages.find((s: Record<string, any>) => s.$lookup?.as === 'user')?.$lookup;
     expect(lookup, 'the pipeline must contain a $lookup aliased to "user"').toBeDefined();
 
     const projection = lookup!.pipeline?.[0]?.$project;
@@ -195,15 +209,13 @@ describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
     // Exact key set: an inclusion projection that gains a field is exactly the regression to catch,
     // so assert equality rather than a subset. Secret fields are named explicitly too, so the
     // intent survives even if SAFE_USER_LOOKUP_PROJECT itself is ever widened by mistake.
-    expect(new Set(Object.keys(projection!))).toEqual(
-      new Set([...Object.keys(SAFE_USER_LOOKUP_PROJECT), 'email', 'organization'])
-    );
+    expect(new Set(Object.keys(projection!))).toEqual(new Set([...Object.keys(SAFE_USER_LOOKUP_PROJECT), 'email']));
     for (const secret of USER_SECRET_FIELDS) {
       expect(projection, `secret field "${secret}" must never be projected`).not.toHaveProperty(secret);
     }
   });
 
-  it('keeps metadata fragments in separate groups (M1 does not change the group key)', async () => {
+  it('keeps report activity in separate groups per report', async () => {
     const user = await User.create({
       username: 'e2e-frag-user',
       name: 'Frag User',
@@ -237,8 +249,173 @@ describe('GET /api/users/counterLogs (end-to-end, real model + Mongo)', () => {
     const body = JSON.parse(JSON.stringify(res._getJSONData()));
     const rows = body.logs as Array<{ metadata: { reportId: string } }>;
 
-    // Still two rows, one per distinct reportId - the group-key collapse is M2's job, not M1's.
+    // reportId is a SPLIT_METADATA_KEY, so these two views stay apart even though everything
+    // else about them (day, counter, user) is identical.
     expect(rows).toHaveLength(2);
     expect(new Set(rows.map(r => r.metadata.reportId))).toEqual(new Set(['report-1', 'report-2']));
+  });
+
+  it('requires the admin API-key scope', () => {
+    // The CASL check inside the handler is not sufficient on its own: apiKeyAuth rebuilds
+    // req.ability from user.isAdmin, so `can(read, CounterLog)` passes for ANY key an admin owns,
+    // whatever scopes it was issued with. The scope gate in baseApi is what keeps a narrow key
+    // narrow, so assert it is actually declared.
+    const config = (handler as unknown as { _config?: { requiredScopes?: ApiKeyScope[] } })._config;
+    expect(config?.requiredScopes).toEqual([ApiKeyScope.ADMIN]);
+  });
+
+  it('cuts the window and the day buckets in the requested timezone', async () => {
+    const user = await User.create({
+      username: 'e2e-tz-user',
+      name: 'TZ User',
+      email: 'tz-user@example.com',
+    });
+
+    const log = (datetime: string, sessionId: string) => ({
+      userId: user.id,
+      userName: 'TZ User',
+      userLevel: 'User',
+      counterName: 'Session Created',
+      counterValue: 1,
+      datetime: new Date(datetime),
+      metadata: { sessionId },
+    });
+
+    await CounterLog.create([
+      // 2026-07-21 18:00 in America/Chicago (UTC-5 in July) - a UTC window would place this on
+      // the 21st too, so it only pins the bucket label.
+      log('2026-07-21T23:00:00.000Z', 'evening-of-21st'),
+      // 2026-07-21 20:00 Chicago, but already 2026-07-22 in UTC. Under the old UTC-only window
+      // this fell outside a "21st to 21st" request entirely.
+      log('2026-07-22T01:00:00.000Z', 'late-on-21st'),
+      // 2026-07-20 23:00 Chicago - the previous local day, so it must stay excluded.
+      log('2026-07-21T04:00:00.000Z', 'still-the-20th'),
+    ]);
+
+    const { res, promise } = run({
+      startDate: '2026-07-21',
+      endDate: '2026-07-21',
+      timezone: 'America/Chicago',
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const rows = JSON.parse(JSON.stringify(res._getJSONData())).logs as Array<{
+      date: string;
+      count: number;
+    }>;
+
+    // Both in-window events share the row unit (same local day, counter and user), so they land in
+    // one row labelled with the local 21st rather than splitting across a UTC 21st/22nd pair - and
+    // its count is 2, not 3, because the previous local day stays excluded.
+    expect(rows).toHaveLength(1);
+    expect(rows[0].date).toBe('2026-07-21');
+    expect(rows[0].count).toBe(2);
+  });
+
+  it('defaults to UTC when no timezone is given', async () => {
+    const user = await User.create({
+      username: 'e2e-tz-default-user',
+      name: 'TZ Default User',
+      email: 'tz-default-user@example.com',
+    });
+
+    await CounterLog.create({
+      userId: user.id,
+      userName: 'TZ Default User',
+      userLevel: 'User',
+      counterName: 'Session Created',
+      counterValue: 1,
+      datetime: new Date('2026-07-21T23:30:00.000Z'),
+      metadata: { sessionId: 'late-utc' },
+    });
+
+    const { res, promise } = run({ startDate: '2026-07-21', endDate: '2026-07-21' });
+    await promise;
+
+    const rows = JSON.parse(JSON.stringify(res._getJSONData())).logs as Array<{ date: string }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].date).toBe('2026-07-21');
+  });
+
+  it('labels the org column with the same field the org filter matches on', async () => {
+    // The filter matches CounterLog.userOrganization; the column used to be projected from the
+    // joined user, so a user who moved orgs filtered under one name and displayed under another
+    // (and in practice displayed nothing at all, since the User schema has no `organization`).
+    const user = await User.create({
+      username: 'e2e-moved-user',
+      name: 'Moved User',
+      email: 'moved-user@example.com',
+    });
+
+    await CounterLog.create([
+      {
+        userId: user.id,
+        userName: 'Moved User',
+        userLevel: 'User',
+        userOrganization: 'Old Org',
+        counterName: 'Session Created',
+        counterValue: 1,
+        datetime: new Date('2026-07-21T10:00:00.000Z'),
+        metadata: { sessionId: 'while-at-old-org' },
+      },
+      {
+        userId: user.id,
+        userName: 'Moved User',
+        userLevel: 'User',
+        userOrganization: 'New Org',
+        counterName: 'Session Created',
+        counterValue: 1,
+        datetime: new Date('2026-07-21T11:00:00.000Z'),
+        metadata: { sessionId: 'while-at-new-org' },
+      },
+    ]);
+
+    const { res, promise } = run({ startDate: '2026-07-21', endDate: '2026-07-21', orgs: 'Old Org' });
+    await promise;
+
+    const rows = JSON.parse(JSON.stringify(res._getJSONData())).logs as Array<{
+      metadata: { sessionId: string };
+      userOrganization: string;
+    }>;
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].metadata.sessionId).toBe('while-at-old-org');
+    expect(rows[0].userOrganization).toBe('Old Org');
+  });
+
+  it('applies orgs and excludeOrgs together instead of letting one drop the other', async () => {
+    const user = await User.create({
+      username: 'e2e-both-org-filters',
+      name: 'Both Filters User',
+      email: 'both-filters@example.com',
+    });
+
+    const log = (org: string, sessionId: string) => ({
+      userId: user.id,
+      userName: 'Both Filters User',
+      userLevel: 'User',
+      userOrganization: org,
+      counterName: 'Session Created',
+      counterValue: 1,
+      datetime: new Date('2026-07-21T10:00:00.000Z'),
+      metadata: { sessionId },
+    });
+
+    await CounterLog.create([log('Keep Org', 'keep'), log('Drop Org', 'drop'), log('Unlisted Org', 'unlisted')]);
+
+    const { res, promise } = run({
+      startDate: '2026-07-21',
+      endDate: '2026-07-21',
+      orgs: 'Keep Org,Drop Org',
+      excludeOrgs: 'Drop Org',
+    });
+    await promise;
+
+    const rows = JSON.parse(JSON.stringify(res._getJSONData())).logs as Array<{ metadata: { sessionId: string } }>;
+
+    // Only 'keep' satisfies both operators. The previous code assigned userOrganization twice, so
+    // the $nin overwrote the $in and 'unlisted' came back too.
+    expect(rows.map(r => r.metadata.sessionId)).toEqual(['keep']);
   });
 });

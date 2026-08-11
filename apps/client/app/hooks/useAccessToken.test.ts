@@ -5,13 +5,11 @@ import { useAccessToken, useIsFullyAuthenticated } from './useAccessToken';
 describe('useAccessToken store', () => {
   beforeEach(() => {
     // Start each test from a populated, logged-in-and-impersonating state so a
-    // clear action has something to clear on every field (including the
-    // returnToken/returnRefreshToken impersonation tokens).
+    // clear action has something to clear on every field.
     useAccessToken.setState({
       accessToken: 'access',
-      refreshToken: 'refresh',
-      returnToken: 'return',
-      returnRefreshToken: 'return-refresh',
+      impersonating: true,
+      hasSession: true,
       mfaPending: true,
       expired: false,
       expiredReason: null,
@@ -19,14 +17,13 @@ describe('useAccessToken store', () => {
   });
 
   describe('markSessionExpired', () => {
-    it('clears every token field and sets expired: true with reason "expired"', () => {
+    it('clears the session and sets expired: true with reason "expired"', () => {
       useAccessToken.getState().markSessionExpired();
 
       expect(useAccessToken.getState()).toMatchObject({
         accessToken: null,
-        refreshToken: null,
-        returnToken: null,
-        returnRefreshToken: null,
+        impersonating: false,
+        hasSession: false,
         mfaPending: false,
         expired: true,
         expiredReason: 'expired',
@@ -61,24 +58,23 @@ describe('useAccessToken store', () => {
       expect(state.accessToken).toBeNull();
       expect(state.expired).toBe(true);
       expect(state.expiredReason).toBe('revoked');
-      // Intentionally PRESERVES the impersonation return tokens (unlike markSessionRevoked,
-      // which clears them) - lock that divergence so a refactor can't silently drop it.
-      expect(state.returnToken).toBe('return');
-      expect(state.returnRefreshToken).toBe('return-refresh');
+      // Intentionally leaves the impersonation flag alone (unlike markSessionRevoked, which
+      // clears it): an MFA lockout is the impersonated user's failure, not the admin's, and the
+      // admin's HttpOnly return cookie is still valid. Lock that divergence.
+      expect(state.impersonating).toBe(true);
     });
   });
 
   describe('markSessionRevoked', () => {
-    it('clears every token including impersonation return tokens, with reason "revoked"', () => {
-      // The hard-revocation path (server-side tokenVersion kill-switch) must not leave an
-      // admin's stashed return token behind - unlike forceLogoutTokens, which keeps it.
+    it('clears the session including the impersonation flag, with reason "revoked"', () => {
+      // The hard-revocation path (server-side tokenVersion kill-switch) must not leave the
+      // session looking like a live impersonation - unlike forceLogoutTokens, which keeps it.
       useAccessToken.getState().markSessionRevoked();
 
       expect(useAccessToken.getState()).toMatchObject({
         accessToken: null,
-        refreshToken: null,
-        returnToken: null,
-        returnRefreshToken: null,
+        impersonating: false,
+        hasSession: false,
         mfaPending: false,
         expired: true,
         expiredReason: 'revoked',
@@ -118,19 +114,19 @@ describe('useAccessToken store', () => {
       const { result } = renderHook(() => useIsFullyAuthenticated());
       expect(result.current).toBe(false);
 
-      act(() => useAccessToken.getState().setVerifiedTokens('verified-token', 'refresh'));
+      act(() => useAccessToken.getState().setVerifiedSession('verified-token'));
       expect(result.current).toBe(true);
     });
   });
 
   describe('re-auth clears a stale expiredReason', () => {
-    it('setVerifiedTokens resets expiredReason after a prior forced logout', () => {
+    it('setVerifiedSession resets expiredReason after a prior forced logout', () => {
       // Without the reset, a 'revoked' value would linger with expired: false -
       // misleading any future consumer that reads expiredReason without the gate.
       useAccessToken.getState().forceLogoutTokens();
       expect(useAccessToken.getState().expiredReason).toBe('revoked');
 
-      useAccessToken.getState().setVerifiedTokens('new-access', 'new-refresh');
+      useAccessToken.getState().setVerifiedSession('new-access');
 
       const state = useAccessToken.getState();
       expect(state.expired).toBe(false);

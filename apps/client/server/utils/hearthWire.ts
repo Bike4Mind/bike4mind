@@ -1,5 +1,12 @@
 import { z } from 'zod';
-import { reasonForHookEvent, type ActorKind, type HearthEvent } from '@bike4mind/hearth';
+import {
+  presencePayloadSchema,
+  humanSessionActorName,
+  sanitizeSessionLabel,
+  reasonForHookEvent,
+  type ActorKind,
+  type HearthEvent,
+} from '@bike4mind/hearth';
 import {
   hearthRepository,
   MAX_PRESENCE_FIELD_LENGTH,
@@ -53,6 +60,31 @@ export const HearthActorParamSchema = z
   .optional();
 
 /**
+ * Per-session identity for a HUMAN caller (the B4M CLI). Distinct from
+ * HearthActorParamSchema on purpose: that schema lets a machine name ITSELF,
+ * which is why 'human' had to be reserved out of it. Here the caller supplies
+ * only a session discriminator and the server still derives the name, so the
+ * kind stays server-owned and unforgeable.
+ *
+ * Why this exists at all: actor identity is (userId, kind, displayName), so
+ * without a discriminator every CLI session of one user collapsed onto a single
+ * actor - and therefore a single per-channel CURSOR. Two CLI agents running
+ * hearth_catchup on the same channel consumed each other's events and each saw
+ * a partial, non-overlapping slice while believing it was current.
+ *
+ * `id` is opaque and never rendered raw; `label` is a human-recognizable name
+ * for the session (a notebook name) used for display only. Forging either can
+ * at most mislabel one of the caller's OWN sessions - the authenticated
+ * username is always the prefix - which is why neither needs to be trusted.
+ */
+export const HearthSessionParamSchema = z
+  .object({
+    id: z.string().min(1).max(200),
+    label: z.string().max(200).optional(),
+  })
+  .optional();
+
+/**
  * Guard for Hearth operations that mutate state: appending events, creating
  * channels, and advancing an actor cursor (consuming events out from under a
  * legitimate agent reader is a mutation, not a read).
@@ -69,32 +101,7 @@ export function assertHearthWriteScope(req: { apiKeyInfo?: { scopes?: string[] }
 }
 
 type ActorParam = z.infer<typeof HearthActorParamSchema>;
-
-/**
- * Machine payload the roster projects from: the body written by the Claude Code
- * hook (packages/cli/bin/hearth-hook.mjs, schema 'hearth.claude-code-hook@1').
- * Every field is optional and unknown keys are dropped, so a presence event
- * posted by hand - or by a low-disclosure hook tier that forwards no activity -
- * still refreshes lastSeen; it just carries no detail. No length caps here on
- * purpose: an over-long value is truncated rather than rejected, because losing
- * a whole presence update over a long workspace name is the worse failure.
- */
-const PresencePayloadSchema = z.object({
-  hook_event_name: z.string().nullish(),
-  session_id: z.string().nullish(),
-  slug: z.string().nullish(),
-  workspace: z.string().nullish(),
-  activity: z
-    .object({
-      reason: z.string().nullish(),
-      tool: z.string().nullish(),
-      permission_mode: z.string().nullish(),
-      effort: z.string().nullish(),
-      subagent: z.string().nullish(),
-      background_tasks: z.number().int().min(0).nullish(),
-    })
-    .nullish(),
-});
+type SessionParam = z.infer<typeof HearthSessionParamSchema>;
 
 function clamp(value: string | null | undefined): string | undefined {
   if (!value) return undefined;
@@ -105,13 +112,19 @@ function clamp(value: string | null | undefined): string | undefined {
  * Map a presence event onto the roster row it projects. Returns null when the
  * payload is not a shape we recognize at all, so the caller can skip the write
  * instead of stamping a contentless row.
+ *
+ * THE ONLY writer of a presence roster row, deliberately: every reporter's live
+ * write goes through here, so the live row and a row rebuilt by replaying the
+ * log cannot disagree. The bridge used to build its own UpsertPresenceInput
+ * instead, which is how it kept a correct live roster while every one of its
+ * events replayed to `running`.
  */
 export function toPresenceProjection(args: {
   event: HearthEvent;
   userId: string;
   payload: unknown;
 }): UpsertPresenceInput | null {
-  const parsed = PresencePayloadSchema.safeParse(args.payload ?? {});
+  const parsed = presencePayloadSchema.safeParse(args.payload ?? {});
   if (!parsed.success) return null;
   const { activity } = parsed.data;
 
@@ -179,12 +192,38 @@ export function toWireHearthPresence(row: IHearthPresenceDoc, actor?: HearthActo
   };
 }
 
-/** Find-or-create the acting Hearth actor for this request. */
+/**
+ * Find-or-create the acting Hearth actor for this request.
+ *
+ * A machine that named itself takes that name. Otherwise the actor is the
+ * authenticated human, named from the account - per SESSION when the caller
+ * supplied one, so concurrent CLI sessions get independent cursors.
+ *
+ * The identity key deliberately uses the slug form (no label): see
+ * humanSessionActorName for why a renameable string must not reach it.
+ * `displayLabel` carries the friendly name separately, so a notebook rename
+ * changes what the roster shows without minting a new actor mid-session.
+ */
 export async function resolveRequestActor(
   user: { id: string; username?: string | null; email?: string | null },
-  actor: ActorParam
+  actor: ActorParam,
+  session?: SessionParam
 ) {
-  return actor
-    ? hearthRepository.ensureActor(user.id, actor.kind, actor.displayName)
-    : hearthRepository.ensureActor(user.id, 'human', user.username ?? user.email ?? 'user');
+  if (actor) return hearthRepository.ensureActor(user.id, actor.kind, actor.displayName);
+
+  const base = user.username ?? user.email ?? 'user';
+  const identity = humanSessionActorName(base, session?.id);
+  // Sanitize BEFORE deciding whether to set a label. Keying off the raw label's
+  // truthiness would let one that sanitizes away entirely ('()', control chars)
+  // still resolve to the slug form and overwrite a friendly label already
+  // stored for this session; omitting it leaves that stored value alone.
+  const safeLabel = sanitizeSessionLabel(session?.label);
+  const displayLabel = safeLabel ? humanSessionActorName(base, session?.id, safeLabel) : undefined;
+
+  // Omit the options argument entirely when there is no label, rather than
+  // passing an explicit undefined: ensureActor treats a missing label as "leave
+  // whatever is stored alone", and this keeps the common call shape unchanged.
+  return displayLabel
+    ? hearthRepository.ensureActor(user.id, 'human', identity, { displayLabel })
+    : hearthRepository.ensureActor(user.id, 'human', identity);
 }

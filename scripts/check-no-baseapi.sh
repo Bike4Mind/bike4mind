@@ -20,7 +20,12 @@ fi
 # every build): bare `export { default } from '@bike4mind/premium-…'` re-exports.
 # The real handlers behind them live in packages/premium/*/src/api and DO use
 # baseApi — scanning the stubs only false-positives on trees where codegen ran.
-violators=$(grep -rL "baseApi" "$API_DIR" --include="*.ts" --include="*.tsx" --exclude-dir='premium-*' | sort)
+#
+# `nextRouteForContract` (the contract adapter, server/middlewares/defineNextRoute.ts)
+# is auth-enforced: it builds on baseApi and applies the contract's scopes. A handler
+# routed through it is authenticated exactly like a baseApi() handler, so it satisfies
+# this check without a direct baseApi import.
+violators=$(grep -rLE "baseApi|nextRouteForContract" "$API_DIR" --include="*.ts" --include="*.tsx" --exclude-dir='premium-*' | sort)
 
 allowed=$(grep -v '^#' "$ALLOWLIST" | grep -v '^$' | sed 's/[[:space:]]*#.*//' | sed 's/[[:space:]]*$//' | sort)
 
@@ -32,7 +37,7 @@ if [ -n "$new_violators" ]; then
   echo "$new_violators" | sed 's/^/  /'
   echo ""
   echo "Fix options:"
-  echo "  1. Add 'import { baseApi } from ...' to each file, OR"
+  echo "  1. Use baseApi() directly, or route the handler through nextRouteForContract (contract adapter), OR"
   echo "  2. Add the path to scripts/no-baseapi-allowlist.txt with a comment explaining the alternative auth"
   exit 1
 fi

@@ -7,6 +7,14 @@
 export const DATALAKE_TAG_PREFIX = 'datalake:';
 
 /**
+ * Relevance weight stored on the membership meta-tag itself. Membership is binary - the tag is
+ * either there or it isn't - so this is a constant, not a score. It exists only because every
+ * tag carries a strength; keep every door that stamps the meta-tag agreeing on one value, or the
+ * same membership reads as differently weighted depending on which door wrote it.
+ */
+export const DATALAKE_TAG_STRENGTH = 1;
+
+/**
  * Trim a lake's `fileTagPrefix` and return it only if it is usable as a tag prefix
  * (non-empty, ends with ':'), else null. An empty prefix would match every tag, so it is
  * rejected rather than honored.
@@ -34,6 +42,56 @@ export const normalizeTagPrefix = (prefix: string | undefined | null): string | 
  */
 export const isReservedTagPrefix = (prefix: string | undefined | null): boolean =>
   typeof prefix === 'string' && prefix.trim().startsWith(DATALAKE_TAG_PREFIX);
+
+/**
+ * Does any of these tag names already place a file under `prefix`?
+ *
+ * The ONE satisfaction rule, so the write-door reconciler and the backfill migration cannot
+ * disagree about which files still need a content tag. `buildLacksContentPrefixTagFilter` in
+ * `@bike4mind/database` is its Mongo mirror; a parity test asserts they agree.
+ *
+ * Case-SENSITIVE on purpose, unlike the meta-tag match: the consumers that decide whether the
+ * file shows up under the prefix - `buildOwnershipConditions` and the tag-count aggregates -
+ * build their regexes with no `i` flag, so `Acme:legal` genuinely does not satisfy `acme:`
+ * for them. Lowercasing here would skip the stamp on a file those queries still see as
+ * uncategorized.
+ *
+ * A meta-tag never satisfies a prefix (the counters exclude `datalake:*` from the tree), and
+ * neither does a bare `acme:` with no suffix: that splits to `['acme', '']` and renders as an
+ * unlabeled row in the tag tree, so it is not a category a user can navigate to.
+ */
+export const satisfiesTagPrefix = (tagNames: readonly unknown[], prefix: string): boolean =>
+  tagNames.some(
+    name =>
+      typeof name === 'string' &&
+      name.startsWith(prefix) &&
+      name.length > prefix.length &&
+      !name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX)
+  );
+
+/**
+ * The tag names that place a file under a lake's PREFIX ARM - the exact JS mirror of the
+ * `$regex: ^prefix` membership arm in `buildDataLakeMembershipFilter` (`@bike4mind/database`),
+ * and of the `prefixedTags` computed inline inside `removeFileFromLake`.
+ *
+ * Deliberately NOT `satisfiesTagPrefix`, which is the fallback-STAMP rule: it also requires a
+ * suffix (a bare `lk:` is not a category anyone can navigate to) and excludes meta-tags. The read
+ * arm's regex has neither restriction - a bare `lk:` tag genuinely IS membership - so a gate
+ * built on `satisfiesTagPrefix` would miss exactly the leave this predicate exists to catch.
+ *
+ * Fails closed to `[]` on an unusable or reserved-namespace prefix, matching the read arm (which
+ * drops the whole prefix clause in both cases). Case-SENSITIVE, matching the read arm's unflagged
+ * regex.
+ */
+export const prefixArmTagNames = (tagNames: readonly unknown[], fileTagPrefix: string | undefined | null): string[] => {
+  const prefix = normalizeTagPrefix(fileTagPrefix);
+  if (!prefix || isReservedTagPrefix(prefix)) return [];
+  return tagNames.filter((name): name is string => typeof name === 'string' && name.startsWith(prefix));
+};
+
+/** True when any tag names a file under a lake's prefix arm. See `prefixArmTagNames`. */
+export const matchesTagPrefixArm = (tagNames: readonly unknown[], fileTagPrefix: string | undefined | null): boolean =>
+  prefixArmTagNames(tagNames, fileTagPrefix).length > 0;
 
 /**
  * True when two `fileTagPrefix` values would match each other's tags, so two lakes carrying them
@@ -80,9 +138,9 @@ export const tagPrefixIssue = (
 export interface DataLakeConfig {
   id: string;
   /**
-   * URL/tag slug, unique per org. Needed by clients that resolve a lake by slug - notably
-   * the Add-files (append) upload, which sends `dataLakeSlug` so the server can stamp the
-   * lake meta-tag. Omitting it here silently broke append-mode registration.
+   * URL/tag slug, unique per org. Kept on the projection because a client holding a lake still
+   * reads it - the wizard checks its length to explain a rejected create. Uploads target a lake
+   * by id instead: the server can disambiguate a slug out from under the client.
    */
   slug: string;
   name: string;

@@ -76,6 +76,9 @@ vi.mock('@bike4mind/services', async () => ({
       await import('../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch')
     ).emptyEmbeddingMismatchReport,
     resolveSearchBudgets: mockResolveSearchBudgets,
+    // A distinct, identifiable value (not a real adapter) so a test can assert reference
+    // equality without depending on openSearchChunkAdapter's own implementation.
+    openSearchChunkAdapter: 'OPENSEARCH_CHUNK_ADAPTER_MARKER',
     emptyScanAccounting: (b?: { maxFiles?: number; maxChunks?: number }) => ({
       truncated: false,
       fileBudgetHit: false,
@@ -135,6 +138,7 @@ const makeRes = () => {
 };
 
 const searchParams = () => mockSemanticSearch.mock.calls[0][0];
+const searchAdapters = () => mockSemanticSearch.mock.calls[0][1];
 
 describe('POST /api/data-lakes/semantic-search lake scoping', () => {
   beforeEach(() => {
@@ -160,11 +164,51 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
     expect(searchParams().embeddingModel).toBe('voyage-3-large');
   });
 
-  it('still honours an explicit embedding_model without reading the admin setting', async () => {
+  it('still honours an explicit embedding_model without reading the defaultEmbeddingModel setting', async () => {
     await handler(makeReq({ query: 'onboarding', embedding_model: 'text-embedding-3-small' }), makeRes());
 
     expect(searchParams().embeddingModel).toBe('text-embedding-3-small');
-    expect(mockGetSettingsValue).not.toHaveBeenCalled();
+    // Not a blanket "never calls getSettingsValue": the vector-search kill-switch is read
+    // regardless of how embeddingModel was resolved, since it gates a separate concern.
+    expect(mockGetSettingsValue).not.toHaveBeenCalledWith('defaultEmbeddingModel');
+  });
+
+  it('threads the EnableDataLakeVectorSearch setting through as vectorSearchEnabled', async () => {
+    mockGetSettingsValue.mockImplementation(async (key: string) =>
+      key === 'EnableDataLakeVectorSearch' ? true : 'text-embedding-ada-002'
+    );
+
+    await handler(makeReq({ query: 'onboarding' }), makeRes());
+
+    expect(searchParams().vectorSearchEnabled).toBe(true);
+  });
+
+  it('defaults vectorSearchEnabled to false when the setting is unset', async () => {
+    mockGetSettingsValue.mockImplementation(async (key: string) =>
+      key === 'EnableDataLakeVectorSearch' ? undefined : 'text-embedding-ada-002'
+    );
+
+    await handler(makeReq({ query: 'onboarding' }), makeRes());
+
+    expect(searchParams().vectorSearchEnabled).toBe(false);
+  });
+
+  it('wires the self-host OpenSearch adapter when the backend and flag are on', async () => {
+    const originalEnv = { ...process.env };
+    process.env.B4M_SELF_HOST = 'true';
+    process.env.B4M_SELF_HOST_OPENSEARCH = 'true';
+    process.env.OPENSEARCH_ENDPOINT = 'localhost:9200';
+    try {
+      await handler(makeReq({ query: 'onboarding' }), makeRes());
+      expect(searchAdapters().vectorIndex).toBe('OPENSEARCH_CHUNK_ADAPTER_MARKER');
+    } finally {
+      process.env = originalEnv;
+    }
+  });
+
+  it('never wires the OpenSearch adapter on the default (Atlas) backend', async () => {
+    await handler(makeReq({ query: 'onboarding' }), makeRes());
+    expect(searchAdapters().vectorIndex).toBeUndefined();
   });
 
   it('falls back to ada-002 when the admin setting is unset or no longer supported', async () => {

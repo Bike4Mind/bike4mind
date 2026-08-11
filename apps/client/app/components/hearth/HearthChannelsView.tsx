@@ -9,8 +9,6 @@ import { useActorColor } from './actorColors';
 import ActorKindBadge from './ActorKindBadge';
 import HearthPresencePanel from './HearthPresencePanel';
 
-export { actorColorSlot } from './actorColors';
-
 type WireHearthEvent = IHearthEventAction['event'];
 
 interface HearthChannel {

@@ -2,7 +2,9 @@ import { adminService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository } from '@bike4mind/database';
-import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { issueBrowserSession } from '@server/auth/issueSession';
+import { readRefreshCookie, setAdminReturnCookie } from '@server/auth/refreshCookie';
+import { UnauthorizedError } from '@server/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
 
@@ -15,6 +17,15 @@ const handler = baseApi().post(
 
     if (!mfaToken || typeof mfaToken !== 'string') {
       throw new BadRequestError('MFA token is required to use loginAs');
+    }
+
+    // Capture the admin's own refresh token BEFORE the impersonated one overwrites the cookie
+    // slot; it is parked in the return cookie so /api/auth/returnToAdmin can restore the admin
+    // session. Without it there is no way back, so refuse to start rather than strand the admin
+    // (a caller with no refresh cookie is not a browser session - e.g. an API key).
+    const adminRefreshToken = readRefreshCookie(req);
+    if (!adminRefreshToken) {
+      throw new UnauthorizedError('loginAs requires an interactive browser session');
     }
 
     const targetUser = await adminService.loginAs(
@@ -34,22 +45,23 @@ const handler = baseApi().post(
       }
     );
 
-    // Mint a full token PAIR for the impersonated user. The refresh token must
-    // belong to the target - if the client kept the admin's refresh token, the
-    // first 401-triggered refresh would mint an admin access token and silently
-    // flip the session back to the admin mid-impersonation.
+    // Mint a full session for the impersonated user; its refresh token takes over the primary
+    // cookie. The refresh token must belong to the target - if the browser kept the admin's,
+    // the first 401-triggered refresh would mint an admin access token and silently flip the
+    // session back to the admin mid-impersonation.
     //
     // Stamp an impersonatedBy claim so downstream can tell a real customer session
     // from an admin-driven one: /api/logout skips the tokenVersion revoke for these,
     // otherwise an admin clicking "Log Out" mid-impersonation would force-log-out the
     // real customer on every device.
-    const { accessToken, refreshToken } = authTokenGenerator.createAccessToken(
-      targetUser.id,
-      targetUser.tokenVersion ?? 0,
-      { impersonatedBy: adminUser.id }
-    );
+    const { accessToken } = await issueBrowserSession(req, res, targetUser.id, {
+      createdVia: 'impersonation',
+      tokenVersion: targetUser.tokenVersion ?? 0,
+      impersonatedBy: adminUser.id,
+    });
+    setAdminReturnCookie(res, adminRefreshToken);
 
-    return res.json({ user: redactUserSecretsForSelf(targetUser), accessToken, refreshToken });
+    return res.json({ user: redactUserSecretsForSelf(targetUser), accessToken, impersonating: true });
   })
 );
 

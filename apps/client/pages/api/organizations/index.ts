@@ -4,9 +4,10 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { Request } from 'express';
 import qs from 'qs';
-import { organizationRepository } from '@bike4mind/database';
+import { organizationRepository, userRepository } from '@bike4mind/database';
 import { organizationService } from '@bike4mind/services';
 import { toSafeOrganization, toSafeOrganizations } from '@bike4mind/common';
+import { ensureAdmin } from '@server/utils/errors';
 
 const handler = baseApi()
   .get<Request<{}, {}, {}, Record<string, string>>>(async (req, res) => {
@@ -31,6 +32,12 @@ const handler = baseApi()
     });
   })
   .post(async (req, res) => {
+    // Admin-only: creating an org also re-points the caller's own billing/scope to it when they
+    // have none (#1405), and this org starts at 0 credits (#1428). The only caller today is the
+    // admin panel's Create Organization action; gate the route so a stray authenticated caller
+    // can't create an org and silently move their own spend onto an unfunded balance.
+    ensureAdmin(req.user?.isAdmin);
+
     const organization = await organizationService.create(
       req.user,
       {
@@ -40,7 +47,9 @@ const handler = baseApi()
       {
         db: {
           organizations: organizationRepository,
+          users: userRepository,
         },
+        logger: req.logger,
       }
     );
 

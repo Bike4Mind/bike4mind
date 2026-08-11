@@ -46,4 +46,43 @@ describe('MemoryPrincipalKeyRepository', () => {
     await memoryPrincipalKeyRepository.destroy('user', 'u1');
     expect(await memoryPrincipalKeyRepository.findDek('user', 'u2')).toBe('dek-2'); // u2 untouched
   });
+
+  it('mints and reads back a key for a lake-kind principal (schema enum admits the new principal)', async () => {
+    const dek = await memoryPrincipalKeyRepository.getOrCreate('lake', 'lake:corpus', 'owner1', 'dek-lake');
+    expect(dek).toBe('dek-lake');
+    expect(await memoryPrincipalKeyRepository.findDek('lake', 'lake:corpus')).toBe('dek-lake');
+  });
+
+  it('persists a lake-kind key through the validating create path (enum admits lake)', async () => {
+    // getOrCreate's upsert is the functional path; create() is the one that runs the schema enum
+    // unconditionally, so this pins that the enum itself - not just the upsert - accepts 'lake'.
+    const doc = await MemoryPrincipalKeyModel.create({
+      principalKind: 'lake',
+      principalId: 'lake:corpus',
+      ownerUserId: 'owner1',
+      dek: 'dek-lake',
+    });
+    expect(doc.principalKind).toBe('lake');
+  });
+
+  it('rejects an unknown principalKind on create (enum enforcement intact)', async () => {
+    await expect(
+      MemoryPrincipalKeyModel.create({
+        // @ts-expect-error - deliberately invalid value to prove the enum still enforces
+        principalKind: 'bogus',
+        principalId: 'x',
+        ownerUserId: 'x',
+        dek: 'd',
+      })
+    ).rejects.toThrow(/enum|validation/i);
+  });
+
+  it('rejects an unknown principalKind through getOrCreate (runValidators gates the production path)', async () => {
+    // The real write path is the upsert, not create(); without runValidators it would silently mint a
+    // key the ledger enum rejects. This locks in that the upsert validates.
+    await expect(
+      // @ts-expect-error - deliberately invalid value
+      memoryPrincipalKeyRepository.getOrCreate('bogus', 'x', 'x', 'd')
+    ).rejects.toThrow(/enum|validation/i);
+  });
 });

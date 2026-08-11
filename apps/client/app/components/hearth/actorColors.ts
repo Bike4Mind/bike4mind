@@ -1,8 +1,6 @@
 import { useTheme } from '@mui/joy/styles';
 import { actorColor } from '@bike4mind/hearth';
 
-export { actorColorSlot } from '@bike4mind/hearth';
-
 /**
  * Resolves an actorId to its palette color for the active theme mode. The
  * palette itself, and why it is only four hues, lives in @bike4mind/hearth so

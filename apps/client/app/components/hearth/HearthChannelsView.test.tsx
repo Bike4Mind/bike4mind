@@ -17,8 +17,7 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
   useWebsocket: () => ({ subscribeToAction: subscribeToActionMock }),
 }));
 
-import { ACTOR_COLOR_SLOTS } from '@bike4mind/hearth';
-import HearthChannelsView, { actorColorSlot } from './HearthChannelsView';
+import HearthChannelsView from './HearthChannelsView';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -211,14 +210,6 @@ describe('HearthChannelsView', () => {
     const swatch = await screen.findByTestId('hearth-event-actor-swatch');
     const name = screen.getByTestId('hearth-event-actor-name');
     expect(getComputedStyle(name).color).not.toBe(getComputedStyle(swatch).backgroundColor);
-  });
-
-  it('actorColorSlot is deterministic and stays inside the validated palette', () => {
-    expect(actorColorSlot('actor-1')).toBe(actorColorSlot('actor-1'));
-    for (const id of ['a', 'actor-1', '6540b58d1f703ade3ea1e82c', '']) {
-      expect(actorColorSlot(id)).toBeGreaterThanOrEqual(0);
-      expect(actorColorSlot(id)).toBeLessThan(ACTOR_COLOR_SLOTS.length);
-    }
   });
 
   it('dedupes the optimistic post against its own WS echo', async () => {

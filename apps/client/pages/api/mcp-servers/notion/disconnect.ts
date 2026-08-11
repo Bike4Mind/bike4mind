@@ -53,9 +53,9 @@ const handler = baseApi().delete(async (req, res) => {
     res.status(200).json({ success: true });
   } catch (error) {
     console.error('[Notion Disconnect] Fatal error during disconnect:', error);
+    const detail = error instanceof Error ? error.message : 'Unknown error';
     res.status(500).json({
-      error: 'Failed to disconnect Notion',
-      message: error instanceof Error ? error.message : 'Unknown error',
+      error: `Failed to disconnect Notion: ${detail}. Please try again or contact support.`,
     });
   }
 });

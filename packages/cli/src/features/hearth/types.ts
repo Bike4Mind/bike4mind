@@ -61,6 +61,22 @@ export const HearthEventSchema = z.object({
 });
 export type HearthEvent = z.infer<typeof HearthEventSchema>;
 
+/**
+ * Per-session identity sent with every write and cursor read.
+ *
+ * The server derives the actor NAME from the authenticated account and uses
+ * only `id` to discriminate sessions, so this cannot forge an identity. Sending
+ * it is what gives each concurrent CLI session its own actor and therefore its
+ * own per-channel cursor; without it, two sessions running hearth_catchup on
+ * one channel consume each other's events.
+ */
+export const HearthSessionSchema = z.object({
+  id: z.string().min(1).max(200),
+  /** Friendly name for the session (the notebook name); display only. */
+  label: z.string().max(200).optional(),
+});
+export type HearthSession = z.infer<typeof HearthSessionSchema>;
+
 // GET /api/hearth/channels
 
 export const HearthChannelSchema = z.object({
@@ -84,6 +100,7 @@ export const PostEventRequestSchema = z.object({
   human: HearthHumanBodySchema,
   machine: HearthMachineBodySchema.optional(),
   refs: HearthEventRefsSchema.optional(),
+  session: HearthSessionSchema.optional(),
 });
 export type PostEventRequest = z.infer<typeof PostEventRequestSchema>;
 
@@ -98,6 +115,7 @@ export const CatchupRequestSchema = z.object({
   channelId: z.string().min(1),
   advance: z.boolean().optional(),
   limit: z.number().optional(),
+  session: HearthSessionSchema.optional(),
 });
 export type CatchupRequest = z.infer<typeof CatchupRequestSchema>;
 

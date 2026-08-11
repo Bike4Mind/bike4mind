@@ -30,3 +30,4 @@ export * from './ToolDefinitionOverrideModel';
 export * from './ToolExecutionLogModel';
 export * from './ToolModel';
 export * from './TransformBatchModel';
+export * from './WorkItemModel';

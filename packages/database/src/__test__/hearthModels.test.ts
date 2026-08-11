@@ -333,4 +333,92 @@ describe('Hearth models + MongoHearthStore', () => {
       expect((await store.eventsSince(channelId, 0, { limit: 2 })).map(e => e.seq)).toEqual([2, 4]);
     });
   });
+
+  describe('per-session actor identity', () => {
+    /**
+     * The defect this guards: actor identity is (userId, kind, displayName), so
+     * before sessions were discriminated every CLI session of one user resolved
+     * to ONE actor and therefore ONE cursor per channel. Two agents running
+     * catchup on the same channel consumed each other's events and each saw a
+     * partial, non-overlapping slice while believing it was current.
+     */
+    it('gives concurrent sessions independent cursors over the same channel', async () => {
+      const channel = await hearthRepository.createChannel(USER, 'agents');
+      const channelId = channel._id.toString();
+      const log = new HearthLog(store);
+
+      const sessionA = await hearthRepository.ensureActor(USER, 'human', 'erik (amber-otter)');
+      const sessionB = await hearthRepository.ensureActor(USER, 'human', 'erik (teal-lynx)');
+      expect(sessionA._id.toString()).not.toBe(sessionB._id.toString());
+
+      const writer = await hearthRepository.ensureActor(USER, 'agent', 'writer');
+      for (const text of ['one', 'two', 'three']) {
+        await store.appendEvent(messageInput(channelId, writer._id.toString(), text));
+      }
+
+      // Each session must see ALL three, not a slice the other left behind.
+      const seenByA = await log.catchup(sessionA._id.toString(), channelId, { advance: true });
+      const seenByB = await log.catchup(sessionB._id.toString(), channelId, { advance: true });
+      expect(seenByA.map(e => e.human.text)).toEqual(['one', 'two', 'three']);
+      expect(seenByB.map(e => e.human.text)).toEqual(['one', 'two', 'three']);
+
+      // And advancing one cursor must not move the other's.
+      expect(await store.getCursor(sessionA._id.toString(), channelId)).toBe(3);
+      expect(await store.getCursor(sessionB._id.toString(), channelId)).toBe(3);
+      await store.appendEvent(messageInput(channelId, writer._id.toString(), 'four'));
+      expect((await log.catchup(sessionA._id.toString(), channelId, { advance: true })).map(e => e.human.text)).toEqual(
+        ['four']
+      );
+      expect((await log.catchup(sessionB._id.toString(), channelId, { advance: true })).map(e => e.human.text)).toEqual(
+        ['four']
+      );
+    });
+
+    it('keeps one actor per session identity across repeat calls', async () => {
+      const first = await hearthRepository.ensureActor(USER, 'human', 'erik (amber-otter)');
+      const again = await hearthRepository.ensureActor(USER, 'human', 'erik (amber-otter)');
+      expect(again._id.toString()).toBe(first._id.toString());
+    });
+  });
+
+  describe('actor display label', () => {
+    /**
+     * displayLabel exists so a RENAMEABLE name (a notebook's, which B4M also
+     * auto-titles) can be shown without entering the identity key. If it ever
+     * reached the key, a rename would mint a new actor - and a new cursor -
+     * mid-session, which is the exact defect the per-session work fixed.
+     */
+    it('refreshes on later calls without changing actor identity', async () => {
+      const first = await hearthRepository.ensureActor(USER, 'human', 'erik (amber-otter)', {
+        displayLabel: 'erik (planning notebook)',
+      });
+      const renamed = await hearthRepository.ensureActor(USER, 'human', 'erik (amber-otter)', {
+        displayLabel: 'erik (shipping notebook)',
+      });
+
+      expect(renamed._id.toString()).toBe(first._id.toString());
+      expect(renamed.displayLabel).toBe('erik (shipping notebook)');
+    });
+
+    it('leaves a stored label alone when a caller supplies none', async () => {
+      const actor = await hearthRepository.ensureActor(USER, 'human', 'erik (amber-otter)', {
+        displayLabel: 'erik (planning notebook)',
+      });
+      const withoutLabel = await hearthRepository.ensureActor(USER, 'human', 'erik (amber-otter)');
+
+      expect(withoutLabel._id.toString()).toBe(actor._id.toString());
+      expect(withoutLabel.displayLabel).toBe('erik (planning notebook)');
+    });
+
+    it('renders the label in preference to the identity name, falling back when absent', async () => {
+      const labelled = await hearthRepository.ensureActor(USER, 'human', 'erik (amber-otter)', {
+        displayLabel: 'erik (planning notebook)',
+      });
+      const bare = await hearthRepository.ensureActor(USER, 'agent', 'Claude Code (teal-lynx)');
+
+      const identities = await hearthRepository.actorIdentitiesById([labelled._id.toString(), bare._id.toString()]);
+      expect(identities.get(labelled._id.toString())).toEqual({ displayName: 'erik (planning notebook)', kind: 'human' });
+      expect(identities.get(bare._id.toString())).toEqual({ displayName: 'Claude Code (teal-lynx)', kind: 'agent' });
+    });
+  });
 });

@@ -9,6 +9,7 @@ import {
 } from '../backend';
 import { BaseBedrockBackend } from './base';
 import { hasNativeToolMarker, parseNativeToolSection, KimiNativeToolStream } from './kimiNativeTools';
+import { normalizeOpenAIFinishReason } from '../stopReason';
 
 /** The assistant payload Moonshot returns, on `message` or streamed as `delta`. */
 interface MoonshotMessage {
@@ -162,7 +163,12 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
       // Bedrock's ceiling for both ids, and the parameter is required by the
       // Invoke body. Clamped rather than passed through: a caller asking for the
       // 262K the direct API allows would otherwise get a validation error.
-      max_tokens: Math.min(options.maxTokens ?? 4_096, 16_384),
+      // The default IS that ceiling, not a smaller round number: both ids reason
+      // inside max_tokens, so a 4K default was spent entirely on the monologue and
+      // the turn ended mid-thought with no answer after it. ChatCompletionProcess
+      // sizes this the same way (see REASONS_WITHIN_OUTPUT_BUDGET in
+      // thinkingParams.ts); this keeps direct backend callers out of the same trap.
+      max_tokens: Math.min(options.maxTokens ?? 16_384, 16_384),
     };
 
     // Bedrock's copies accept a temperature (models.dev reports both as
@@ -406,7 +412,13 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
       choices.push({ status: ChoiceStatus.END, statusEndReason: endReason, index, chunkText, ...usageForIndex });
     }
 
-    return { done: true, chunk: { model, choices } };
+    // Reported separately from statusEndReason, which collapses 'stop' and 'length'
+    // onto ChoiceEndReason.STOP. Without this a k2-thinking turn that spent its whole
+    // output budget on the monologue reached the user as a reasoning trace ending at
+    // </think>, with nothing marking it as cut off.
+    const stopReason = normalizeOpenAIFinishReason(response.choices?.[0]?.finish_reason);
+
+    return { done: true, chunk: { model, choices, ...(stopReason ? { stopReason } : {}) } };
   }
 
   /**

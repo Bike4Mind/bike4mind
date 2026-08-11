@@ -6,8 +6,10 @@ import {
   setSeats,
   pickPrimarySubscription,
   resolveSubscriptionSource,
+  reconcileOrgSeatsFromSubscription,
 } from './organizationService';
 import { SubscriptionSource } from '@client/lib/subscriptions/types';
+import { ORGANIZATION_SUBSCRIPTION_MAX_SEATS } from '@client/lib/subscriptions/constants';
 
 // Vitest hoists vi.mock() calls above imports, so the mocked modules win
 // even though imports appear higher in source order.
@@ -87,6 +89,32 @@ describe('organizationService', () => {
         /Minimum required seats: 5.*including 4 pending invites/
       );
       expect(() => validateSeatChange(org, 5, { type: 'admin', userId: 'a1' }, 4)).not.toThrow();
+    });
+
+    describe('over-capacity recovery (#1424)', () => {
+      // owner + MAX members = team size MAX + 1, one past the ceiling.
+      const overCapOrg = () =>
+        ({
+          users: Array.from({ length: ORGANIZATION_SUBSCRIPTION_MAX_SEATS }, (_, i) => ({ userId: `m${i}` })),
+        }) as any;
+
+      it('lets an over-cap org be corrected DOWN to the maximum in one call', () => {
+        expect(() =>
+          validateSeatChange(overCapOrg(), ORGANIZATION_SUBSCRIPTION_MAX_SEATS, { type: 'admin', userId: 'a1' })
+        ).not.toThrow();
+      });
+
+      it('rejects a reduction below the maximum with the over-cap guidance', () => {
+        expect(() =>
+          validateSeatChange(overCapOrg(), ORGANIZATION_SUBSCRIPTION_MAX_SEATS - 1, { type: 'admin', userId: 'a1' })
+        ).toThrow(/over the 100-seat maximum.*remove members/is);
+      });
+
+      it('still rejects any raise past the maximum', () => {
+        expect(() =>
+          validateSeatChange(overCapOrg(), ORGANIZATION_SUBSCRIPTION_MAX_SEATS + 1, { type: 'admin', userId: 'a1' })
+        ).toThrow(/cannot exceed/i);
+      });
     });
   });
 
@@ -210,6 +238,62 @@ describe('organizationService', () => {
       await expect(setSeats('org1', 2, { type: 'admin', userId: 'a1' })).rejects.toThrow(
         /Minimum required seats: 5.*including 4 pending invites/
       );
+      expect(organizationRepository.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('reconcileOrgSeatsFromSubscription', () => {
+    it('pulls seats up to the active subscription quantity, skipping seat-change validation', async () => {
+      // Stale org: seats stuck at the default 10 while the billed sub is 30.
+      // Note there are no members, so validateSeatChange is irrelevant here -
+      // reconcile must set 30 regardless of team-size rules.
+      const org = orgFixture({ id: 'orgR', seats: 10, users: [] });
+      (organizationRepository.findById as any).mockResolvedValue(org);
+      (subscriptionRepository.findActiveSubscriptionsByOwner as any).mockResolvedValue([
+        { id: 's1', source: SubscriptionSource.Stripe, subscriptionId: 'sub_x', quantity: 30 },
+      ]);
+
+      const result = await reconcileOrgSeatsFromSubscription('orgR');
+
+      expect(result).toEqual({ organization: org, before: 10, after: 30 });
+      expect(organizationRepository.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'orgR', seats: 30 }));
+    });
+
+    it('is a no-op when seats already match the billed quantity', async () => {
+      const org = orgFixture({ id: 'orgR', seats: 30, users: [] });
+      (organizationRepository.findById as any).mockResolvedValue(org);
+      (subscriptionRepository.findActiveSubscriptionsByOwner as any).mockResolvedValue([
+        { id: 's1', source: SubscriptionSource.Stripe, subscriptionId: 'sub_x', quantity: 30 },
+      ]);
+
+      const result = await reconcileOrgSeatsFromSubscription('orgR');
+
+      expect(result).toEqual({ organization: org, before: 30, after: 30 });
+      expect(organizationRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('returns null when the org has no active subscription to reconcile from', async () => {
+      (organizationRepository.findById as any).mockResolvedValue(orgFixture({ id: 'orgR', seats: 10, users: [] }));
+      (subscriptionRepository.findActiveSubscriptionsByOwner as any).mockResolvedValue([]);
+
+      const result = await reconcileOrgSeatsFromSubscription('orgR');
+
+      expect(result).toBeNull();
+      expect(organizationRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('returns null (no repair) when the only active subscription is an admin_grant', async () => {
+      // A grant has no billed quantity, so the skip-validation rationale does not
+      // hold; grant-org seat changes must go through setSeats instead. Reconcile
+      // must not pull seats down to the grant quantity.
+      (organizationRepository.findById as any).mockResolvedValue(orgFixture({ id: 'orgR', seats: 20, users: [] }));
+      (subscriptionRepository.findActiveSubscriptionsByOwner as any).mockResolvedValue([
+        { id: 'g1', source: SubscriptionSource.AdminGrant, subscriptionId: 'admin_grant_x', quantity: 5 },
+      ]);
+
+      const result = await reconcileOrgSeatsFromSubscription('orgR');
+
+      expect(result).toBeNull();
       expect(organizationRepository.update).not.toHaveBeenCalled();
     });
   });

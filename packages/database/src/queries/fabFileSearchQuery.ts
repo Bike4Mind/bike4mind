@@ -379,10 +379,15 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
     }
   }
 
-  // Tag filter
+  // Tag filter. Anchored: these are whole tag names picked from the user's tag list, not a search
+  // term, so filtering by `test` must not also return files tagged `testing`. Unanchored, this
+  // disagreed with countFilesByTagForUser, which groups on the exact stored name - so the badge and
+  // the list it is compared against could cover different files.
   if (filters.tags && filters.tags.length > 0) {
     andConditions.push({
-      tags: { $elemMatch: { name: { $in: filters.tags.map(tag => new RegExp(escapeRegex(String(tag)), 'i')) } } },
+      tags: {
+        $elemMatch: { name: { $in: filters.tags.map(tag => new RegExp(`^${escapeRegex(String(tag))}$`, 'i')) } },
+      },
     });
   }
 

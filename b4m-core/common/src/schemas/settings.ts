@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CREDITS_PER_USD_COST } from '../pricing';
+import { DEFAULT_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET } from '../constants/chunking';
 import { CHAT_MODELS, ChatModels } from '../models';
 import {
   BedrockEmbeddingModel,
@@ -24,9 +25,23 @@ import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
  * nobody checks for; the reverse means the detector flags wording the prompt never warned against.
  * Because this text is live-editable per environment, that drift is silent - an admin edit cannot
  * update the detector. Prefer changing both in one commit.
+ *
+ * The SCOPE paragraph is load-bearing, not throat-clearing. This block lands as an undifferentiated
+ * system message alongside org/lake/session prompts, so without it the "never deliver less than the
+ * complete artifact" mandate below reads as a general instruction on turns where no artifact is
+ * possible - biasing the model against "I do not have enough to answer that" on exactly the
+ * retrieval-grounded questions where abstention is the correct answer. Keep any edit to the
+ * completeness rules bounded to artifact bodies.
+ *
+ * Live-editability cuts both ways: an environment whose `ArtifactEmissionPrompt` row holds a saved
+ * copy of an older default keeps that copy and silently misses every fix made here. Behavioural
+ * changes to this text therefore need the stored values checked (or cleared) per environment - the
+ * code change alone does not ship them.
  */
 export const ARTIFACT_EMISSION_PROMPT = `ARTIFACT OUTPUT:
-When asked to create something substantial and self-contained - a complete HTML page, an interactive visualization, a React component, an SVG, a Mermaid diagram, or a long code file/document - emit it inside an <artifact> tag, never as raw inline markup. The body between the opening and closing tags MUST be the complete file you generate - the entire document, top to bottom. NEVER put an ellipsis (...), a stand-in, or a "code here" comment as the body; write the real, full content and close the document before </artifact>. Shape (replace the body with your actual complete file):
+SCOPE: everything below is about artifacts - when to emit one, and what must go inside it once you do. The COMPLETENESS and NEVER ABBREVIATE rules bind the BODY of an artifact you have chosen to emit; they are not a general instruction to always produce a deliverable, and nothing below decides WHETHER to answer or how much of an answer you owe. When a question is underspecified, rests on a premise you cannot verify, or asks for something your sources do not cover, say so and name what is missing. "I do not have enough to answer that" and "that is not in the material I can see" are correct, high-value answers, and no completeness rule below outranks them. Never invent facts about the user, their business, or their data in order to have something complete to put in an artifact.
+
+When asked to create something substantial and self-contained - a complete HTML page, an interactive visualization, a React component, an SVG, a Mermaid diagram, or a long code file/document - emit it inside an <artifact> tag, never as raw inline markup - never paste large raw HTML or code into the chat body outside an <artifact> tag. The body between the opening and closing tags MUST be the complete file you generate - the entire document, top to bottom. NEVER put an ellipsis (...), a stand-in, or a "code here" comment as the body; write the real, full content and close the document before </artifact>. Shape (replace the body with your actual complete file):
 <artifact identifier="kebab-case-id" type="text/html" title="Short Title">THE FULL FILE, WRITTEN OUT IN FULL</artifact>
 Types: text/html, application/vnd.ant.react, image/svg+xml, application/vnd.ant.mermaid, application/vnd.ant.python, application/vnd.ant.code.
 
@@ -69,10 +84,10 @@ SHARING A REACT ARTIFACT (publishing to a /p/ link): the in-chat preview is perm
 - File downloads are sandbox-blocked on the published page (no allow-downloads) - \`XLSX.writeFile\`/save-to-disk buttons won't fire; render results in the page (a table, inline preview) instead of offering a download.
 - Only the importable packages above publish; importing anything else fails the publish with a clear "not publishable yet" error.
 
-COMPLETENESS: Deliver the full artifact - favor completeness over brevity; trim only genuine bloat (boilerplate, dead code, repetition), never requested scope. Only when a deliverable is genuinely too large for one response, build it incrementally: ship a complete first version, then expand under the SAME identifier rather than letting it get cut off mid-tag. Always emit the closing </artifact>. Never paste large raw HTML or code into the chat body outside an <artifact> tag.
+COMPLETENESS (artifact bodies only - see SCOPE): Deliver the full artifact - favor completeness over brevity; trim only genuine bloat (boilerplate, dead code, repetition), never requested scope. Only when a deliverable is genuinely too large for one response, build it incrementally: ship a complete first version, then expand under the SAME identifier rather than letting it get cut off mid-tag. Always emit the closing </artifact>.
 
 NEVER ABBREVIATE THE BODY - THIS IS THE MOST DAMAGING FAILURE YOU CAN PRODUCE HERE: every function the artifact needs must be written out in full, every time, even when you already wrote it in an earlier turn. An artifact whose logic is replaced by a summary comment still parses and still renders a complete-looking UI whose controls silently do nothing - the user cannot see the difference, ships it, and only finds out when a teammate clicks a dead button. That is far worse than an obviously unfinished artifact. Specifically FORBIDDEN as artifact body content, in any comment form: "same as above", "same as before", "identical to previous", "from the previous version", "for brevity" and any padded variant of it ("for the sake of brevity", "in the interest of brevity"), "omitted", "unchanged", "rest of the ...", "<rest of the code>", "code goes here", "implementation here", "[...]", or any comment that stands in for code you wrote previously or intend the reader to copy from elsewhere. Equally forbidden inside the artifact: anything addressed to the reader rather than to the runtime - asking them to reply "CONTINUE", pointing at a "next response", or promising in the first person what you are about to write ("I will include the remaining 84 entries"). The artifact is a standalone document; it has no next turn. Re-emitting the same 300 lines verbatim is CORRECT and expected; referring to them is not.
-If the full deliverable genuinely will not fit, do NOT stub the difference. REDUCE SCOPE EXPLICITLY: build fewer features, completely and working, then say in the chat body (outside the artifact) which features you left out and offer to add them in a follow-up under the same identifier. A working artifact with three of five features plus an honest note beats five features where two are hollow.`;
+If the full deliverable genuinely will not fit, do NOT stub the difference. REDUCE SCOPE EXPLICITLY: build fewer features, completely and working, then say in the chat body (outside the artifact) which features you left out and offer to add them in a follow-up under the same identifier. A working artifact with three of five features plus an honest note beats five features where two are hollow. And where the request itself is the thing that will not hold - too little given, a premise you cannot check, a corpus that does not cover it - saying so and asking for what is missing beats any artifact built on details you invented on the user's behalf.`;
 
 /**
  * Default text for the help-center nudge system prompt. Single source of truth used BOTH as the
@@ -85,6 +100,34 @@ If the full deliverable genuinely will not fit, do NOT stub the difference. REDU
  * verify (relevant when that tool isn't enabled for the session).
  */
 export const HELP_CENTER_PROMPT = `HELP CENTER: Bike4Mind has a built-in Help Center that documents how to use the app. Users reach it from the "Help Center" item in the left sidebar, the help (?) icons beside feature titles, or the ? keyboard shortcut. When the user is clearly asking how to DO something in Bike4Mind itself (navigation, settings, files, the data lake, OptiHashi, agents, projects, sharing, billing, etc.) — as opposed to asking you to perform a task — give a brief, helpful answer and point them to the Help Center for full, up-to-date steps. If a knowledge-base/help search tool is available, use it to ground your answer in the actual help docs first. Do NOT invent menu paths, button names, or features you are not sure exist; if unsure, say so and direct them to the Help Center rather than guessing.`;
+
+/**
+ * Default text for the abstention licence. Single source of truth used BOTH as the
+ * `AbstentionPrompt` admin setting's default AND as the runtime fallback in ChatCompletionProcess -
+ * so an unset/empty/cleared DB value reverts to this and never strips the licence.
+ *
+ * Counterweight to the completeness pressure the rest of the system prompt applies: without an
+ * explicit licence to abstain, the model treats "answer fully" as unconditional and fills gaps with
+ * invented specifics about the user or their data. Measured as the single largest quality gain on
+ * questions whose correct answer is a refusal, so it ships on every completion rather than only on
+ * the grounded surfaces. Kept short on purpose - it must be cheap and behaviorally light.
+ */
+export const ABSTENTION_PROMPT = `When a request is underspecified or your sources do not cover it, say so and name what is missing. "I do not have enough to answer that" is a correct, high-value answer. Never invent facts about the user, their business, or their data.`;
+
+/**
+ * Default text for the formatting system message. Runtime fallback used by
+ * `includeHardcodedSystemMessage` (b4m-core/utils/src/llm/utils.ts) when the `FormatPromptTemplate`
+ * admin setting is blank; that setting's own default is intentionally '' - keep this the sole home.
+ *
+ * Deliberately scoped to formatting ONLY. The previous wording ("Adhere to specific formatting
+ * requests...") read as a general compliance instruction and bled into WHETHER to answer: as the
+ * only system content it roughly halved refusal quality. The opening clause is the fix - it fences
+ * this message off from the answer/abstain decision. Injected only when `UseFormatPrompt` is on.
+ *
+ * NOTE: a stored settings row pins its own wording, so changing this default does not reach an
+ * existing deployment that has already saved a value - the row must be edited in admin settings too.
+ */
+export const FORMAT_PROMPT_TEMPLATE = `Formatting only - nothing here decides whether or how fully to answer. Format replies to maintain the integrity of the requested style; default to markdown for text. Preserve proper structure for poems, songs, or haikus. When the user specifies an output format (e.g. TypeScript), use that format for the parts you do answer.`;
 
 export const SettingKeySchema = z.enum([
   'openaiDemoKey',
@@ -104,6 +147,7 @@ export const SettingKeySchema = z.enum([
   'FormatPromptTemplate',
   'ArtifactEmissionPrompt',
   'HelpCenterPrompt',
+  'AbstentionPrompt',
   'UseFormatPrompt',
   'EnableQuestMaster',
   'EnableQuestMasterDefault',
@@ -123,6 +167,9 @@ export const SettingKeySchema = z.enum([
   'EnableLatticeDefault',
   'EnableDataLakes',
   'EnableDataLakesDefault',
+  'EnableDataLakeSlackAdd',
+  'EnableLakeMemory',
+  'EnableDataLakeVectorSearch',
   'EnableBriefcase',
   'EnableBriefcaseDefault',
   'EnableImageTemplates',
@@ -244,6 +291,7 @@ export const SettingKeySchema = z.enum([
 
   // MFA SETTINGS
   'enforceMFA',
+  'allowTrustedDevices',
 
   // VOICE SESSION SETTINGS
   'enableVoiceSession',
@@ -311,6 +359,7 @@ export const SettingKeySchema = z.enum([
   'EnableContextTelemetry',
   'contextTelemetryAlerts',
   'ContextVerbatimWindowFraction',
+  'CorpusRetrievalMinInlineTokensPerDoc',
 
   // SRE AGENT SETTINGS
   'sreAgentConfig',
@@ -385,6 +434,8 @@ export const OrchestrationDefaultsSchema = z.object({
     // AGENT_MODE_TOOL_IDS (apps/client/app/utils/toolMapping.ts).
     'image_generation',
     'edit_image',
+    'music_generation',
+    'audio_generation',
     'excel_generation',
     // Inline visualization artifacts: these emit an <artifact> block in the
     // tool result and write nothing - no storage, no user-data mutation - so
@@ -1235,6 +1286,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'SystemFiles', order: 8 },
       { key: 'ArtifactEmissionPrompt', order: 9 },
       { key: 'HelpCenterPrompt', order: 10 },
+      { key: 'AbstentionPrompt', order: 11 },
     ],
   },
   EMBEDDING: {
@@ -1708,6 +1760,39 @@ export const settingsMap = {
     order: 89,
     dependsOn: 'EnableDataLakes',
   }),
+  EnableDataLakeSlackAdd: makeBooleanSetting({
+    key: 'EnableDataLakeSlackAdd',
+    name: 'Data Lakes: Slack "@datalake add" path',
+    defaultValue: false,
+    description:
+      'Server-side gate for adding content to a Data Lake from Slack via "@datalake add". Off by default - the Slack command is intercepted deterministically but performs no ingest until this is turned on.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 90,
+    dependsOn: 'EnableDataLakes',
+  }),
+  EnableLakeMemory: makeBooleanSetting({
+    key: 'EnableLakeMemory',
+    name: 'Data Lakes: Lake memory profile (extraction)',
+    defaultValue: false,
+    description:
+      "Server-side gate for the lake memory producer - LLM extraction of a data lake's documents into a durable memory profile on ingest. Off by default (measurement rollout); the consumer that injects the profile is inert until this is on and a lake has been extracted.",
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 91,
+    dependsOn: 'EnableDataLakes',
+  }),
+  EnableDataLakeVectorSearch: makeBooleanSetting({
+    key: 'EnableDataLakeVectorSearch',
+    name: 'Data Lakes: Use Atlas $vectorSearch',
+    defaultValue: false,
+    description:
+      'Kill-switch for the Atlas $vectorSearch cutover on Data Lake semantic search. Off by default; even when on, only files whose chunks are fully re-indexed on an Atlas backend actually use it - everything else keeps using the brute-force scan.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 92,
+    dependsOn: 'EnableDataLakes',
+  }),
   EnableBriefcase: makeBooleanSetting({
     key: 'EnableBriefcase',
     name: 'Enable Briefcase',
@@ -1827,7 +1912,9 @@ export const settingsMap = {
   EnableArtifactsDefault: makeBooleanSetting({
     key: 'EnableArtifactsDefault',
     name: 'Artifacts: On by default for users',
-    defaultValue: false,
+    // The completion pipeline honors this flag, so false would withdraw artifacts from every
+    // never-toggled user rather than merely leaving them un-surfaced.
+    defaultValue: true,
     description: 'When enabled, the Artifacts feature is active for users who have never explicitly toggled it.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
@@ -1940,8 +2027,18 @@ export const settingsMap = {
   DefaultChunkSize: makeNumberSetting({
     key: 'DefaultChunkSize',
     name: 'Default Chunk Size',
-    defaultValue: 2100,
-    description: 'The default chunk size for splitting large documents.',
+    // Must equal the chunker's own default, or a reprocess driven through the UI (which sends this
+    // as an explicit chunkSize override) produces a different granularity than one driven through
+    // /api/files/reprocess, which sends none and gets the chunker default. They disagreed by ~4x.
+    defaultValue: DEFAULT_PASSAGE_TOKEN_TARGET,
+    // Floor matches the chunker's own clamp, so the UI cannot report a value the chunker will
+    // silently raise (chunk.ts clamps to MIN_PASSAGE_TOKEN_TARGET).
+    min: MIN_PASSAGE_TOKEN_TARGET,
+    description:
+      'Passage target in TOKENS for splitting large documents. The DEFAULT matches the chunker; a ' +
+      'value stored here overrides it, and a stored value larger than the chunker default makes the ' +
+      'UI reprocess path produce coarser chunks than /api/files/reprocess. Coarser chunks measurably ' +
+      'worsen retrieval.',
     category: 'AI',
     order: 3,
   }),
@@ -1964,7 +2061,8 @@ export const settingsMap = {
     key: 'FormatPromptTemplate',
     name: 'Format Prompt Template',
     defaultValue: '',
-    description: 'The template to use for formatting prompts.',
+    description:
+      'System prompt fragment injected when Use Format Prompt is on. Scope it to FORMATTING ONLY - wording that reads as general compliance ("adhere to requests") measurably degrades refusal behavior on underspecified asks (#1320). Leave empty to use the built-in scoped default. After an upgrade, diff a saved copy against that default: a saved copy pins the wording from whenever it was saved and will not pick up fixes made since.',
     category: 'AI',
     order: 4,
   }),
@@ -1973,7 +2071,7 @@ export const settingsMap = {
     name: 'Artifact Emission Prompt',
     defaultValue: ARTIFACT_EMISSION_PROMPT,
     description:
-      'System prompt instructing the model how to emit <artifact> tags (HTML/React/SVG/Mermaid/etc.). Live-editable; clearing it reverts to the built-in default. Only injected when the Enable Artifacts feature is on. (The sandbox runtime that renders artifacts is intentionally NOT editable — it is a security boundary.)',
+      'System prompt instructing the model how to emit <artifact> tags (HTML/React/SVG/Mermaid/etc.). Injected only when the Enable Artifacts feature is on AND the request did not disable artifacts. Live-editable; clearing it reverts to the built-in default. After an upgrade, diff a saved copy against that default: a saved copy pins the wording from whenever it was saved and will not pick up fixes made since. (The sandbox runtime that renders artifacts is intentionally NOT editable — it is a security boundary.)',
     category: 'AI',
     order: 9,
   }),
@@ -1985,6 +2083,15 @@ export const settingsMap = {
       'Short system prompt that makes the model aware of the in-app Help Center and tells it to point users there for app how-to questions. Injected on every chat completion. Live-editable; clearing it reverts to the built-in default.',
     category: 'AI',
     order: 10,
+  }),
+  AbstentionPrompt: makeStringSetting({
+    key: 'AbstentionPrompt',
+    name: 'Abstention Prompt',
+    defaultValue: ABSTENTION_PROMPT,
+    description:
+      'Short system prompt licensing the model to say "I do not have enough to answer that" and to name what is missing instead of inventing facts about the user or their data. Injected on every chat completion. Live-editable; clearing it reverts to the built-in default.',
+    category: 'AI',
+    order: 11,
   }),
   UseFormatPrompt: makeBooleanSetting({
     key: 'UseFormatPrompt',
@@ -2898,6 +3005,17 @@ export const settingsMap = {
     // A policy boolean - exposing it reveals nothing exploitable.
     publicSafe: true,
   }),
+  allowTrustedDevices: makeBooleanSetting({
+    key: 'allowTrustedDevices',
+    name: 'Allow "Remember This Device"',
+    description:
+      'Let users mark a device as trusted at the MFA prompt so a fresh login from it skips the TOTP challenge for 30 days. The emailed one-time code is still required every time. Turning this off stops new grants and ignores existing ones immediately.',
+    defaultValue: true,
+    category: 'Users',
+    // publicSafe: the login UI needs it before authentication to decide whether to
+    // render the checkbox. A policy boolean - it reveals nothing exploitable.
+    publicSafe: true,
+  }),
   FirecrawlApiKey: makeStringSetting({
     key: 'FirecrawlApiKey',
     name: 'Firecrawl API Key',
@@ -2987,7 +3105,7 @@ export const settingsMap = {
     name: 'ElevenLabs Server API Key (Voice v2)',
     defaultValue: '',
     description:
-      'Server-side ElevenLabs API key. Mints Conversational AI signed URLs for /api/voice/v2/sessions and is the org-wide fallback key for ElevenLabs text-to-speech (/api/ai/tts) and sound-effects (/api/ai/sound-effects) when a user has no personal key. A per-user ElevenLabs key still takes precedence.',
+      'Server-side ElevenLabs API key. Mints Conversational AI signed URLs for /api/voice/v2/sessions and is the org-wide fallback key for ElevenLabs text-to-speech (/api/ai/tts), sound-effects (/api/ai/sound-effects), and music generation (/api/ai/music) when a user has no personal key. A per-user ElevenLabs key still takes precedence.',
     isSensitive: true,
     category: 'AI',
     group: API_SERVICE_GROUPS.VOICE_SESSION.id,
@@ -3489,6 +3607,17 @@ export const settingsMap = {
     category: 'AI',
     order: 121,
   }),
+  CorpusRetrievalMinInlineTokensPerDoc: makeNumberSetting({
+    key: 'CorpusRetrievalMinInlineTokensPerDoc',
+    name: 'Corpus Retrieval Min Inline Tokens Per Doc',
+    defaultValue: 0,
+    min: 0,
+    max: 100000,
+    description:
+      'When a session has a large RETRIEVABLE knowledge corpus attached, stop force-inlining it and let the offered search_knowledge_base tool fetch the relevant docs on demand, IF the even-split inline depth (attached-content budget / retrievable doc count) would fall below this many tokens per doc. 0 disables (always inline). Only documents the retrieval tool can actually reach are ever deferred; other attachments always inline.',
+    category: 'AI',
+    order: 122,
+  }),
   sreAgentConfig: makeObjectSetting({
     key: 'sreAgentConfig',
     name: 'SRE Agent Config',
@@ -3611,7 +3740,7 @@ export const settingsMap = {
     name: 'Model Discovery Price Band (%)',
     defaultValue: 50,
     description:
-      'The largest price move discovery applies without a human, in either direction, measured against the rate in the row it would supersede - so 200 passes anything up to a 3x change. A bigger move is flagged with both sources shown and the existing price keeps billing. 0 flags every move.',
+      'The largest price move discovery applies without a human, measured as the ratio between the new rate and the rate in the row it would supersede - so 200 passes anything up to a 3x change, and 500, the highest this accepts, passes up to 6x. Both read the same in either direction: a 3x cut is the same 200% as a 3x rise. A bigger move is flagged with both sources shown and the existing price keeps billing. 0 flags every move.',
     min: 0,
     max: 500,
     category: 'AI',
@@ -3736,6 +3865,24 @@ export function redactSettingSecrets(setting: AdminSettingDoc): AdminSettingDoc 
       })),
     },
   };
+}
+
+/**
+ * Redact a setting for a WebSocket / change-stream broadcast, where the payload is the RAW
+ * stored document. Post-encryption an isSensitive value is ciphertext the browser cannot
+ * decrypt, so it collapses to the bare mask with NO trailing characters: masking the
+ * ciphertext tail (as maskSensitiveSettingValue would) surfaces a wrong "last 4" and lets an
+ * admin watching a live cross-admin update mis-verify which credential is loaded. An unset
+ * value stays empty. The authoritative mask carrying the real last-4 still comes from
+ * /api/settings/fetch. Non-sensitive shapes (sreAgentConfig) fall through to redactSettingSecrets.
+ */
+export function redactSettingSecretsForBroadcast(setting: AdminSettingDoc): AdminSettingDoc {
+  const definition = (settingsMap as Record<string, { isSensitive?: boolean } | undefined>)[setting.settingName];
+  if (definition?.isSensitive) {
+    const hasValue = typeof setting.settingValue === 'string' && setting.settingValue.length > 0;
+    return { ...setting, settingValue: hasValue ? SENSITIVE_SETTING_MASK : '' };
+  }
+  return redactSettingSecrets(setting);
 }
 
 /** Setting keys explicitly tagged `publicSafe` - the only keys allowed in the public artifact. */

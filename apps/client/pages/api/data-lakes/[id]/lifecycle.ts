@@ -1,7 +1,14 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository, dataLakeBatchRepository, fabFileRepository } from '@bike4mind/database';
+import {
+  dataLakeRepository,
+  dataLakeBatchRepository,
+  fabFileRepository,
+  fabFileChunkRepository,
+} from '@bike4mind/database';
+import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
+import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
@@ -11,6 +18,19 @@ import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 const LifecycleInput = z.object({
   action: z.enum(['archive', 'unarchive', 'restore', 'delete', 'cleanup']),
 });
+
+/**
+ * Undefined everywhere except self-host OpenSearch (see ports.ts) - Atlas's vector index lives
+ * on the FabFileChunk collection itself, so removing chunks there already removes it; only a
+ * genuinely separate store needs this port wired.
+ */
+const retrievalIndex = () =>
+  selfHostOpenSearchEnabled()
+    ? dataLakeService.openSearchRetrievalIndex({
+        db: { fabFileChunks: fabFileChunkRepository },
+        searchIndex: FabFileChunkSearchIndex,
+      })
+    : undefined;
 
 /**
  * POST /api/data-lakes/:id/lifecycle  { action }
@@ -35,6 +55,7 @@ const handler = baseApi()
       case 'archive': {
         const result = await dataLakeService.archiveDataLake(actor, lake.id, {
           db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
+          retrievalIndex: retrievalIndex(),
           logger: req.logger,
         });
         return res.json(result);
@@ -55,6 +76,7 @@ const handler = baseApi()
       case 'delete': {
         const result = await dataLakeService.deleteDataLake(actor, lake.id, {
           db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
+          retrievalIndex: retrievalIndex(),
           // The prefix-overlap warning is the point of logging here: without a sink it no-ops.
           logger: req.logger,
         });

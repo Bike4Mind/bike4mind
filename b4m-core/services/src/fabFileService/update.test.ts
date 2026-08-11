@@ -128,17 +128,86 @@ describe('updateFabFile (upload moderation gate)', () => {
 
     expect(result.fileUrl).toBe('https://s3.example.com/stale-signed-url');
   });
+
+  // A leave clears the lake's prefixed content tags AFTER the array write, so the object
+  // assembled from the request no longer matches storage. Reported by QA on PR #1128: an API
+  // client trusting the response would think tags survived that were already gone.
+  it('reports the tags as persisted after a lake leave, not the pre-cleanup array', async () => {
+    const inLake = baseFile({
+      mimeType: 'text/plain',
+      fileName: 'notes.txt',
+      moderationStatus: 'clean',
+      tags: [
+        { name: 'datalake:qa-lake', strength: 1 },
+        { name: 'qa:invoices', strength: 1 },
+      ],
+    } as Partial<IFabFileDocument>);
+    findAccessibleById.mockResolvedValue(inLake);
+
+    const lake = {
+      id: 'lake1',
+      datalakeTag: 'datalake:qa-lake',
+      fileTagPrefix: 'qa:',
+      createdByUserId: 'user-123',
+      status: 'active',
+    };
+    // First read is removeFileFromLake testing membership; the second is the post-commit re-read.
+    const findById = vi
+      .fn()
+      .mockResolvedValueOnce(inLake)
+      .mockResolvedValue({ ...inLake, tags: [] });
+
+    const adapters = {
+      db: {
+        fabFiles: {
+          shareable: { findAccessibleById },
+          update: dbUpdate,
+          findById,
+          pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
+          computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 }),
+        },
+        dataLakes: { findByDatalakeTag: vi.fn().mockResolvedValue(lake), setStats: vi.fn(), activateIfDraft: vi.fn() },
+      },
+      storage: mockAdapters.storage,
+    };
+
+    // The caller drops the meta-tag but asks to keep the folder tag; the leave clears both.
+    const result = await updateFabFile(
+      mockUser,
+      { id: 'file-1', tags: [{ name: 'qa:invoices', strength: 1 }] },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      adapters as any
+    );
+
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('file-1', [
+      'datalake:qa-lake',
+      'qa:invoices',
+    ]);
+    expect(result.tags).toEqual([]);
+  });
 });
 
-describe('updateFabFile (reconcileTags port)', () => {
+// The lake-tag reconciliation itself (joins, leaves, casing, the fallback content-tag backfill)
+// is `reconcileLakeTags`'s own contract and is tested exhaustively in reconcileLakeTags.test.ts.
+// These pin only that updateFabFile WIRES it in correctly: skipped on an omitted `tags` field,
+// triggered by an explicit `[]`, and its recommendation reaching the persisted document.
+describe('updateFabFile (lake-tag reconciliation wiring)', () => {
   const mockUser = { id: 'user-123' } as IUserDocument;
 
   let findAccessibleById: Mock;
   let dbUpdate: Mock;
-  let reconcileTags: Mock;
+  let findByDatalakeTag: Mock;
   let mockAdapters: {
-    db: { fabFiles: { shareable: { findAccessibleById: Mock }; update: Mock } };
-    reconcileTags: Mock;
+    db: {
+      fabFiles: {
+        shareable: { findAccessibleById: Mock };
+        update: Mock;
+        findById: Mock;
+        pullTagsByFabFileId: Mock;
+        computeDataLakeStats: Mock;
+      };
+      dataLakes: { findByDatalakeTag: Mock; find: Mock; setStats: Mock };
+    };
     storage: { upload: Mock; generateSignedUrl: Mock };
   };
 
@@ -161,27 +230,28 @@ describe('updateFabFile (reconcileTags port)', () => {
       ...overrides,
     }) as IFabFileDocument;
 
-  // Appends a stamped tag so the reconciled output is always visibly different from
-  // whatever it was handed - a no-op port would fail every assertion here.
-  const reconcile = async (tags: { name: string; strength: number }[]) => [
-    ...tags,
-    { name: 'acme:uncategorized', strength: 1 },
-  ];
-
   beforeEach(() => {
     vi.clearAllMocks();
     findAccessibleById = vi.fn();
     dbUpdate = vi.fn().mockResolvedValue(undefined);
-    reconcileTags = vi.fn().mockImplementation(reconcile);
+    findByDatalakeTag = vi.fn().mockResolvedValue(null);
 
     mockAdapters = {
       db: {
         fabFiles: {
           shareable: { findAccessibleById },
           update: dbUpdate,
+          findById: vi.fn().mockResolvedValue(null),
+          pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
+          computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 }),
+        },
+        dataLakes: {
+          findByDatalakeTag,
+          find: vi.fn().mockResolvedValue([]),
+          setStats: vi.fn(),
+          activateIfDraft: vi.fn(),
         },
       },
-      reconcileTags,
       storage: {
         upload: vi.fn().mockResolvedValue(undefined),
         generateSignedUrl: vi.fn().mockResolvedValue('https://s3.example.com/new-signed-url'),
@@ -189,47 +259,70 @@ describe('updateFabFile (reconcileTags port)', () => {
     };
   });
 
-  it('calls reconcileTags with (params.tags, fabFile.tags) and persists its return value', async () => {
-    findAccessibleById.mockResolvedValue(baseFile({ tags: [{ name: 'design', strength: 1 }] }));
-    const newTags = [
-      { name: 'design', strength: 1 },
-      { name: 'urgent', strength: 1 },
-    ];
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await updateFabFile(mockUser, { id: 'file-1', tags: newTags }, mockAdapters as any);
-
-    expect(reconcileTags).toHaveBeenCalledOnce();
-    expect(reconcileTags).toHaveBeenCalledWith(newTags, [{ name: 'design', strength: 1 }]);
-
-    expect(dbUpdate).toHaveBeenCalledOnce();
-    const persisted = dbUpdate.mock.calls[0][0];
-    expect(persisted.tags).toEqual([...newTags, { name: 'acme:uncategorized', strength: 1 }]);
-  });
-
-  it('does not call reconcileTags when tags is omitted (a rename)', async () => {
+  it('does not touch data lakes when tags is omitted (a rename)', async () => {
     findAccessibleById.mockResolvedValue(baseFile({ tags: [{ name: 'design', strength: 1 }] }));
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await updateFabFile(mockUser, { id: 'file-1', fileName: 'renamed.png' }, mockAdapters as any);
+    const result = await updateFabFile(mockUser, { id: 'file-1', fileName: 'renamed.png' }, mockAdapters as any);
 
-    expect(reconcileTags).not.toHaveBeenCalled();
-    expect(dbUpdate).toHaveBeenCalledOnce();
-    const persisted = dbUpdate.mock.calls[0][0];
+    expect(findByDatalakeTag).not.toHaveBeenCalled();
     // Untouched tags array proves the rename never routed through the reconciler.
-    expect(persisted.tags).toEqual([{ name: 'design', strength: 1 }]);
+    expect(result.tags).toEqual([{ name: 'design', strength: 1 }]);
   });
 
-  it('calls reconcileTags when tags: [] is passed explicitly (a real replacement, not an omission)', async () => {
-    findAccessibleById.mockResolvedValue(baseFile({ tags: [{ name: 'design', strength: 1 }] }));
+  it('reconciles when tags: [] is passed explicitly (a real replacement, not an omission)', async () => {
+    const lake = {
+      id: 'lake1',
+      datalakeTag: 'datalake:acme',
+      fileTagPrefix: 'acme:',
+      createdByUserId: 'user-123',
+      status: 'active',
+    };
+    findAccessibleById.mockResolvedValue(baseFile({ tags: [{ name: 'datalake:acme', strength: 1 }] }));
+    findByDatalakeTag.mockResolvedValue(lake);
+    // removeFileFromLake's own membership check reads this first (still a member, so the pull
+    // fires); the post-commit re-read in update.ts then sees what that pull left behind.
+    mockAdapters.db.fabFiles.findById
+      .mockResolvedValueOnce({ id: 'file-1', userId: 'user-123', tags: [{ name: 'datalake:acme', strength: 1 }] })
+      .mockResolvedValue({ id: 'file-1', userId: 'user-123', tags: [] });
+    mockAdapters.db.fabFiles.pullTagsByFabFileId = vi.fn().mockResolvedValue(1);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await updateFabFile(mockUser, { id: 'file-1', tags: [] }, mockAdapters as any);
+    const result = await updateFabFile(mockUser, { id: 'file-1', tags: [] }, mockAdapters as any);
 
-    expect(reconcileTags).toHaveBeenCalledOnce();
-    expect(reconcileTags).toHaveBeenCalledWith([], [{ name: 'design', strength: 1 }]);
+    // An explicit [] reads as leaving every lake the file was in, which requires resolving one -
+    // an omitted field never would.
+    expect(findByDatalakeTag).toHaveBeenCalledWith('datalake:acme');
+    expect(mockAdapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('file-1', ['datalake:acme']);
+    expect(result.tags).toEqual([]);
+  });
 
+  it('persists a backfilled content tag from a join, proving the fallback tagger is wired through', async () => {
+    const lake = {
+      id: 'lake1',
+      datalakeTag: 'datalake:acme',
+      fileTagPrefix: 'acme:',
+      createdByUserId: 'user-123',
+      status: 'active',
+    };
+    findAccessibleById.mockResolvedValue(baseFile({ tags: [] }));
+    findByDatalakeTag.mockResolvedValue(lake);
+
+    const result = await updateFabFile(
+      mockUser,
+      { id: 'file-1', tags: [{ name: 'datalake:acme', strength: 1 }] },
+      mockAdapters as any
+    );
+
+    // The join stamps only the meta-tag; the file has no other tag under the lake's prefix, so
+    // the fallback tagger backfills one into the array this door actually persists.
+    expect(result.tags).toEqual(
+      expect.arrayContaining([
+        { name: 'datalake:acme', strength: 1 },
+        { name: 'acme:uncategorized', strength: 1 },
+      ])
+    );
     const persisted = dbUpdate.mock.calls[0][0];
-    expect(persisted.tags).toEqual([{ name: 'acme:uncategorized', strength: 1 }]);
+    expect(persisted.tags).toEqual(result.tags);
   });
 });

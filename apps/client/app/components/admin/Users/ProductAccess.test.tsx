@@ -55,25 +55,25 @@ describe('ProductAccess', () => {
 
   it('shows Grant + None when the live user lacks the grant tag', () => {
     mockProductAccess.mockReturnValue({
-      data: { entitlements: [{ key: 'optihashi:compute', held: false, grantTag: 'opti-compute', sources: [] }] },
+      data: { entitlements: [{ key: 'optihashi:pro', held: false, grantTag: 'opti', sources: [] }] },
       isLoading: false,
       error: null,
     });
     render(<ProductAccess user={makeUser([])} onFieldChange={vi.fn()} />, { wrapper: TestWrapper });
     expect(screen.getByText('None')).toBeInTheDocument();
-    expect(screen.getByTestId('product-access-toggle-optihashi:compute')).toHaveTextContent('Grant (opti-compute)');
+    expect(screen.getByTestId('product-access-toggle-optihashi:pro')).toHaveTextContent('Grant (opti)');
   });
 
   it('staging a Grant calls onFieldChange with the tag appended (single batched-save source of truth)', () => {
     const onFieldChange = vi.fn();
     mockProductAccess.mockReturnValue({
-      data: { entitlements: [{ key: 'optihashi:compute', held: false, grantTag: 'opti-compute', sources: [] }] },
+      data: { entitlements: [{ key: 'optihashi:pro', held: false, grantTag: 'opti', sources: [] }] },
       isLoading: false,
       error: null,
     });
     render(<ProductAccess user={makeUser(['existing-tag'])} onFieldChange={onFieldChange} />, { wrapper: TestWrapper });
-    fireEvent.click(screen.getByTestId('product-access-toggle-optihashi:compute'));
-    expect(onFieldChange).toHaveBeenCalledWith('tags', ['existing-tag', 'opti-compute']);
+    fireEvent.click(screen.getByTestId('product-access-toggle-optihashi:pro'));
+    expect(onFieldChange).toHaveBeenCalledWith('tags', ['existing-tag', 'opti']);
   });
 
   it('staging a Revoke removes the tag case-insensitively', () => {

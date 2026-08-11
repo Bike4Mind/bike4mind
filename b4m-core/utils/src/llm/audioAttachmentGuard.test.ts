@@ -40,7 +40,7 @@ describe('processFabFilesServer — audio is never attached to an LLM', () => {
       getSignedUrl: vi.fn(),
     } as any;
     const db = {
-      fabfilechunks: { findByFabFileId: vi.fn() },
+      fabfilechunks: { findVectorsByFabFileIds: vi.fn(), countByFabFileId: vi.fn() },
       fabfiles: { update: vi.fn() },
       caches: { get: vi.fn(), set: vi.fn() },
     } as any;
@@ -62,6 +62,9 @@ describe('processFabFilesServer — audio is never attached to an LLM', () => {
     // and no RAG/vector lookup. If the guard regresses, audio falls to the
     // non-image branch and at least one of these is exercised.
     expect(storage.download).not.toHaveBeenCalled();
-    expect(db.fabfilechunks.findByFabFileId).not.toHaveBeenCalled();
+    // Both readers, not just one: the guard proof has to name whatever the cosine path actually
+    // calls, or it passes vacuously the next time that reader is swapped.
+    expect(db.fabfilechunks.findVectorsByFabFileIds).not.toHaveBeenCalled();
+    expect(db.fabfilechunks.countByFabFileId).not.toHaveBeenCalled();
   });
 });

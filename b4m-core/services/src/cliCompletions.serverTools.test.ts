@@ -42,6 +42,7 @@ function buildDb() {
   const organizations = {
     findById: vi.fn().mockResolvedValue(org),
     incrementCredits: vi.fn().mockResolvedValue({ ...org, currentCredits: 490 }),
+    ensureUserDetails: vi.fn().mockResolvedValue(undefined),
     updateUserDetails: vi.fn().mockResolvedValue(undefined),
   };
   const usageEvents = { record: vi.fn().mockResolvedValue(undefined) };

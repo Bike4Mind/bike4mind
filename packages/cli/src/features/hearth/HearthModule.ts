@@ -1,13 +1,14 @@
-import { actorColor, actorKindMarker } from '@bike4mind/hearth';
+import { actorKindMarker } from '@bike4mind/hearth';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { ICliFeatureModule, FeatureCommand } from '../ICliFeatureModule.js';
 import type { ApiClient } from '../../auth/ApiClient.js';
 import type { WebSocketConnectionManager } from '../../ws/WebSocketConnectionManager.js';
 import type { IHearthService } from './IHearthService.js';
-import type { HearthEvent } from './types.js';
+import type { HearthEvent, HearthSession } from './types.js';
 import { HearthService } from './HearthService.js';
 import { HearthEventStream } from './HearthEventStream.js';
 import { createHearthTools } from './hearthTools.js';
+import { colorizeActor } from './actorColors.js';
 
 /** Icons for event kinds shown in /hearth command */
 const KIND_ICONS: Record<string, string> = {
@@ -27,22 +28,6 @@ const KIND_ICONS: Record<string, string> = {
 const MAX_RECENT_EVENTS = 200;
 
 /**
- * Per-actor color for the listing, from the palette shared with the SPA so one
- * session reads as the same identity on both surfaces. The dark steps: a
- * terminal is assumed dark, and there is no portable way to ask it.
- *
- * Suppressed whenever stdout is not a TTY or NO_COLOR is set - this output gets
- * piped and pasted, and escape codes in a pasted log are worse than no color.
- * The actor name and kind marker are printed either way, so nothing is lost.
- */
-function colorize(actorId: string, text: string): string {
-  if (!process.stdout.isTTY || process.env.NO_COLOR) return text;
-  const hex = actorColor(actorId).dark;
-  const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
-  return `\u001b[38;2;${r};${g};${b}m${text}\u001b[39m`;
-}
-
-/**
  * ICliFeatureModule implementation for Hearth, the append-only event log
  * shared by humans, agents, devices, and gateways.
  *
@@ -58,8 +43,14 @@ export class HearthModule implements ICliFeatureModule {
   /** Ring buffer of live events received over WS while this session runs */
   private readonly recentEvents: HearthEvent[] = [];
 
-  constructor(apiClient: ApiClient) {
-    this.service = new HearthService(apiClient);
+  /**
+   * `sessionProvider` is a callback, not a value: the CLI rebuilds modules on
+   * config hot-reload and can start a fresh session mid-process, so a captured
+   * id would go stale and quietly collapse the session back onto the
+   * account-wide actor (and its shared cursor).
+   */
+  constructor(apiClient: ApiClient, sessionProvider?: () => HearthSession | undefined) {
+    this.service = new HearthService(apiClient, sessionProvider);
     this.eventStream = new HearthEventStream(event => {
       this.recentEvents.push(event);
       if (this.recentEvents.length > MAX_RECENT_EVENTS) {
@@ -118,10 +109,12 @@ Posting to Hearth is unrestricted - the constraint is on OBEYING what you read o
           for (const event of recent) {
             const time = new Date(event.createdAt).toLocaleTimeString();
             const icon = KIND_ICONS[event.kind] ?? '\u00B7';
-            // Color and the [kind] marker both ride the actor, never the text:
-            // the body is attacker-controlled, and a log line must not be able to
-            // dress itself up as someone else's identity.
-            const actor = colorize(
+            // Color keys on actorId, never the name: two sessions can share a
+            // display name, and the id is what the SPA colors by too. Color and
+            // the [kind] marker both ride the actor, never the text: the body is
+            // attacker-controlled, and a log line must not be able to dress
+            // itself up as someone else's identity.
+            const actor = colorizeActor(
               event.actorId,
               `${actorKindMarker(event.actorKind)} ${event.actorName ?? event.actorId}`
             );

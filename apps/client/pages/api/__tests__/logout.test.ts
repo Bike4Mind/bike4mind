@@ -28,7 +28,7 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
-vi.mock('@bike4mind/database', () => ({ userRepository: {} }));
+vi.mock('@bike4mind/database', () => ({ userRepository: {}, authSessionRepository: {} }));
 vi.mock('@bike4mind/services', () => {
   mockRefs.revokeUserSessions = vi.fn().mockResolvedValue(1);
   mockRefs.updateLogoutTime = vi.fn().mockResolvedValue(undefined);

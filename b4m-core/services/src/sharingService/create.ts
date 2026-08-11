@@ -42,7 +42,7 @@ interface CreateInviteAdapters {
     // add findShareAccessById to fabFiles
     fabFiles: Pick<IFabFileRepository, 'findByIdAndUserId' | 'shareable'>;
     sessions: Pick<ISessionRepository, 'findByIdAndUserId'>;
-    projects: Pick<IProjectRepository, 'findById'>;
+    projects: Pick<IProjectRepository, 'shareable'>;
     // TODO: Use Organization model create type def
     organizations: IOrganizationRepository;
     // TODO: Use Group model create type def
@@ -109,7 +109,10 @@ export const createInvite = async (
     }
     case InviteType.Project:
       if (!rest.permissions.length) throw new BadRequestError('Invalid invite group request');
-      doc = await db.projects.findById(id);
+      // Scoped to the caller's share access (owner, users[].share, or groups[].share), matching
+      // the FabFile arm above. A caller with no share access gets the same generic "Document not
+      // found" as a nonexistent project, since findShareAccessById returns null for both.
+      doc = await db.projects.shareable.findShareAccessById(user, id);
       name = doc?.name;
       break;
     default:

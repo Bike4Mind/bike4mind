@@ -33,6 +33,24 @@ function makeFile(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * Keyset-paging stand-in for the chunk text reader, implementing the REAL cursor arithmetic. A mock
+ * that returns a canned page per call cannot observe a wrong cursor, which is the defect paging
+ * introduces.
+ */
+function pagedTextChunkRepo(rows: Array<{ id: string; text: string }>) {
+  return {
+    findTextsByFabFileId: vi.fn(async (_id: string, opts?: { limit?: number; afterChunkId?: string }) =>
+      rows
+        .filter(r => (opts?.afterChunkId ? r.id > opts.afterChunkId : true))
+        .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .slice(0, opts?.limit ?? rows.length)
+        .map(r => ({ id: r.id, text: r.text }))
+    ),
+    countByFabFileId: vi.fn(async () => rows.length),
+  };
+}
+
 function makeContext(overrides: Partial<ToolContext> = {}): ToolContext {
   return {
     userId: 'u1',
@@ -47,9 +65,7 @@ function makeContext(overrides: Partial<ToolContext> = {}): ToolContext {
         findById: vi.fn(),
         search: vi.fn(),
       },
-      fabfilechunks: {
-        findByFabFileId: vi.fn().mockResolvedValue([{ id: 'c1', text: 'chunk body', vector: [0.1] }]),
-      },
+      fabfilechunks: pagedTextChunkRepo([{ id: 'c1', text: 'chunk body' }]),
     } as never,
     ...overrides,
   } as ToolContext;
@@ -72,7 +88,7 @@ describe('retrieve_knowledge_content — by-id (Path A) retrieval exclusion', ()
     const out = await runById(ctx);
 
     expect(out).toContain(`No document found with ID "${FILE_ID}"`);
-    expect(ctx.db.fabfilechunks!.findByFabFileId).not.toHaveBeenCalled();
+    expect(ctx.db.fabfilechunks!.findTextsByFabFileId).not.toHaveBeenCalled();
   });
 
   it('OWNED branch: an allowed (clean, vectorized) file IS retrieved', async () => {
@@ -108,7 +124,7 @@ describe('retrieve_knowledge_content — by-id (Path A) retrieval exclusion', ()
 
     expect(out).toContain(`No document found with ID "${FILE_ID}"`);
     // Guard short-circuits the if-condition before lake resolution / chunk read.
-    expect(ctx.db.fabfilechunks!.findByFabFileId).not.toHaveBeenCalled();
+    expect(ctx.db.fabfilechunks!.findTextsByFabFileId).not.toHaveBeenCalled();
   });
 
   it('SHARED branch: a clean shared file IS retrieved', async () => {
@@ -261,6 +277,72 @@ describe('retrieve_knowledge_content agent kbScope enforcement', () => {
   });
 });
 
+/**
+ * Retrieval-scoped lake-prompt injection (#1108). Retrieving a trusted lake's CONTENT prepends that
+ * lake's operating instructions (defended); the agent-scoped branch never does. This is the
+ * keyword-fallback deployments' grounding surface - search returns metadata there, content enters
+ * here. Trust is covered by getDataLakePrompts.test.ts; here we lock the WIRING.
+ */
+describe('retrieve_knowledge_content scoped lake-prompt injection (#1108)', () => {
+  const lake = {
+    id: 'lakeX',
+    slug: 'x',
+    name: 'Lake X',
+    fileTagPrefix: 'x:',
+    datalakeTag: 'datalake:x',
+    createdByUserId: 'u1',
+    status: 'active',
+    systemPrompt: 'Prefer the 2026 revision.',
+  };
+
+  function lakeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
+    return makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: {
+          findByIdAndUserId: vi
+            .fn()
+            .mockResolvedValue(makeFile({ fileName: 'Doc.pdf', tags: [{ name: 'datalake:x' }] })),
+          findById: vi.fn().mockResolvedValue(makeFile({ fileName: 'Doc.pdf', tags: [{ name: 'datalake:x' }] })),
+          search: vi.fn(),
+        },
+        fabfilechunks: pagedTextChunkRepo([{ id: 'c1', text: 'chunk body' }]),
+        dataLakes: {
+          findActiveByUserTags: vi.fn(),
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([lake]),
+        },
+      } as never,
+      ...overrides,
+    });
+  }
+
+  it('unscoped: prepends the retrieved lake prompt ahead of the document content', async () => {
+    const out = await runById(lakeCtx());
+    expect(out).toContain('[Data Lake Instructions]');
+    expect(out).toContain('[Data Lake - Lake X]\nPrefer the 2026 revision.');
+    expect(out).toContain('chunk body');
+    expect(out.indexOf('[Data Lake - Lake X]')).toBeLessThan(out.indexOf('Retrieved content from'));
+  });
+
+  it('agent-scoped: never injects a lake prompt, even for a lake-tagged file', async () => {
+    const ctx = lakeCtx({ kbScope: { fileIds: [FILE_ID] } as never });
+    const out = await knowledgeBaseRetrieveTool.implementation(ctx, undefined).toolFn({ file_id: FILE_ID });
+    expect(out).not.toContain('[Data Lake -');
+    expect(out).toContain('chunk body');
+  });
+
+  it('dedupes across repeated retrieves: the same lake is injected once per completion', async () => {
+    // One tool instance = one completion; its injectedLakeTags closure must survive across calls
+    // (MAX_RETRIEVES allows two). A per-call set would re-inject the prompt on the second retrieve.
+    const tool = knowledgeBaseRetrieveTool.implementation(lakeCtx(), undefined);
+    const first = (await tool.toolFn({ file_id: FILE_ID })) as string;
+    const second = (await tool.toolFn({ file_id: FILE_ID })) as string;
+    expect(first).toContain('[Data Lake - Lake X]');
+    expect(second).not.toContain('[Data Lake - Lake X]');
+    expect(second).toContain('chunk body');
+  });
+});
+
 // Org Groups Phase 2b (#1174): exercise the dormant `user.groups` consumer in the by-id
 // (Path A) in-memory access guard with a NON-empty array. A file is group-accessible only
 // when the user is a member of a group whose entry on the file grants read or write - the
@@ -314,5 +396,176 @@ describe('retrieve_knowledge_content - group-shared access (Path A)', () => {
   it('a user with no groups is denied (empty array is the prod no-op)', async () => {
     const out = await runById(sharedFileCtx([], [{ groupId: 'g1', permissions: ['read'] }]));
     expect(out).toContain(`No document found with ID "${FILE_ID}"`);
+  });
+});
+
+/**
+ * The chunk read is paged and stops at the file's share of the char budget. Before this it read every
+ * chunk of the file and then sliced, hydrating a whole document to throw most of it away.
+ */
+describe('retrieve_knowledge_content bounds its chunk read', () => {
+  const bigChunks = (count: number, charsEach: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      id: `chunk-${String(i).padStart(6, '0')}`,
+      text: `C${i}-`.padEnd(charsEach, 'x'),
+    }));
+
+  const ctxWithChunks = (rows: Array<{ id: string; text: string }>) => {
+    const ctx = makeContext({ retrievalFilter: {} });
+    (ctx.db as { fabfilechunks: unknown }).fabfilechunks = pagedTextChunkRepo(rows);
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Handbook.pdf' })
+    );
+    return ctx;
+  };
+
+  it('stops paging once the character budget is met', async () => {
+    // 400 chunks of 100 chars against the 8000-char default: the walk must not drain the file.
+    const ctx = ctxWithChunks(bigChunks(400, 100));
+
+    const out = await runById(ctx);
+
+    const reader = (ctx.db.fabfilechunks as { findTextsByFabFileId: ReturnType<typeof vi.fn> }).findTextsByFabFileId;
+    const rowsRead = reader.mock.calls.length * 50;
+    expect(rowsRead).toBeLessThan(400);
+    expect(out).toContain('C0-');
+  });
+
+  it('advances the cursor across pages instead of re-reading the first', async () => {
+    const ctx = ctxWithChunks(bigChunks(120, 100));
+
+    await runById(ctx);
+
+    const reader = (ctx.db.fabfilechunks as { findTextsByFabFileId: ReturnType<typeof vi.fn> }).findTextsByFabFileId;
+    const cursors = reader.mock.calls.map(c => c[1]?.afterChunkId);
+    expect(cursors[0]).toBeUndefined();
+    expect(new Set(cursors).size).toBe(cursors.length);
+  });
+
+  it('reports the FILE chunk count, not the number it happened to read', async () => {
+    // Reporting chunks-read as "Chunks" would tell the model a partial file was the whole one.
+    const ctx = ctxWithChunks(bigChunks(400, 100));
+
+    const out = await runById(ctx);
+
+    expect(out).toMatch(/Chunks: 400 \(\d+ read\)/);
+    expect(out).toContain('truncated at budget');
+  });
+
+  it('reports a bare count and no truncation when the whole file fits', async () => {
+    // Healthy path: a warning or a hedge that fires here is one nobody reads.
+    const ctx = ctxWithChunks(bigChunks(3, 100));
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('Chunks: 3 |');
+    expect(out).not.toContain('read)');
+    expect(out).not.toContain('truncated at budget');
+  });
+
+  it('refuses a context whose chunk repository lacks the paged reader', async () => {
+    // Guard the methods, not the repository: a truthiness check passes a partial adapter straight
+    // through to a TypeError mid-retrieval.
+    const ctx = makeContext({ retrievalFilter: {} });
+    (ctx.db as { fabfilechunks: unknown }).fabfilechunks = { findByFabFileId: vi.fn() };
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('chunk reader unavailable');
+  });
+});
+
+/**
+ * The two guards on the paged read that no other test reaches: the page cap, and the cursor that
+ * fails to advance. Both were added with the paging and neither would fail if it were deleted.
+ */
+describe('retrieve_knowledge_content paged-read guards', () => {
+  const PAGE_SIZE = 50;
+  const MAX_PAGES = 200;
+  const CAP_CHUNKS = PAGE_SIZE * MAX_PAGES; // 10000: the most the cap can read
+
+  const ctxWith = (repo: unknown) => {
+    const ctx = makeContext({ retrievalFilter: {} });
+    (ctx.db as { fabfilechunks: unknown }).fabfilechunks = repo;
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Handbook.pdf' })
+    );
+    return ctx;
+  };
+
+  /**
+   * `max_chars` at the absolute maximum is what makes the page cap reachable AT ALL. Even a chunk with
+   * empty text accrues one separator character, so at the 8000 default the character budget always
+   * ends the walk before 10000 chunks and the cap is dead code. That is worth knowing on its own.
+   */
+  const runBigBudget = (ctx: ToolContext) => {
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    return tool.toolFn({ file_id: FILE_ID, max_chars: 16000 }) as Promise<string>;
+  };
+
+  const emptyChunks = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ id: `c-${String(i).padStart(7, '0')}`, text: '' }));
+
+  it('names the page cap, not the budget, when the cap is what stopped the walk', async () => {
+    // One page-worth beyond what the cap can read, so chunks are genuinely left unread.
+    const ctx = ctxWith(pagedTextChunkRepo(emptyChunks(CAP_CHUNKS + PAGE_SIZE)));
+
+    const out = await runBigBudget(ctx);
+
+    expect(out).toContain('truncated at the chunk-page cap');
+    expect(out).not.toContain('truncated at budget');
+  });
+
+  it('does not call a whole file truncated just because it ended on the last allowed page', async () => {
+    // Exactly what the cap can read, nothing left over: delivered whole, so no truncation label at all.
+    const ctx = ctxWith(pagedTextChunkRepo(emptyChunks(CAP_CHUNKS)));
+
+    const out = await runBigBudget(ctx);
+
+    expect(out).not.toContain('truncated at the chunk-page cap');
+    expect(out).toContain(`Chunks: ${CAP_CHUNKS} |`);
+  });
+
+  it('skips the count query when the walk already reached the end of the file', async () => {
+    // A short page proves exhaustion for this reader (it applies no filter), so chunksRead already IS
+    // the file's chunk count and the extra round trip buys nothing. This is the normal shape for a file
+    // inside the budget, and it runs once per delivered file.
+    const repo = pagedTextChunkRepo([
+      { id: 'c-0000001', text: 'alpha' },
+      { id: 'c-0000002', text: 'beta' },
+    ]);
+    const ctx = ctxWith(repo);
+
+    const out = await runById(ctx);
+
+    expect(repo.countByFabFileId).not.toHaveBeenCalled();
+    expect(out).toContain('Chunks: 2 |');
+  });
+
+  it('still asks for the count when a budget or cap cut the walk short', async () => {
+    // Cut short, so chunksRead is NOT the file total and the count is the only honest source for it.
+    const ctx = ctxWith(pagedTextChunkRepo(emptyChunks(CAP_CHUNKS + PAGE_SIZE)));
+    const repo = ctx.db.fabfilechunks as unknown as { countByFabFileId: ReturnType<typeof vi.fn> };
+
+    await runBigBudget(ctx);
+
+    expect(repo.countByFabFileId).toHaveBeenCalled();
+  });
+
+  it('stops on a cursor that does not advance instead of re-reading the same page', async () => {
+    // A repository ignoring afterChunkId. The throw is caught by the tool's own handler and surfaced as
+    // a refusal string rather than propagating - the point is that it STOPS, not that it rejects.
+    const stuck = {
+      findTextsByFabFileId: vi.fn(async () =>
+        Array.from({ length: PAGE_SIZE }, (_, i) => ({ id: `c-${String(i).padStart(7, '0')}`, text: 'body' }))
+      ),
+      countByFabFileId: vi.fn(async () => 99999),
+    };
+
+    const out = await runById(ctxWith(stuck));
+
+    expect(out).toContain('error occurred while retrieving');
+    // Bounded: it did not drain the page cap re-reading page one.
+    expect(stuck.findTextsByFabFileId.mock.calls.length).toBeLessThan(4);
   });
 });

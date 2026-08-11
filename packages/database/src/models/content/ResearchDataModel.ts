@@ -87,7 +87,9 @@ class ResearchDataRepository extends BaseRepository<IResearchData> implements IR
       {
         $addFields: {
           originalFabFileId: '$fabFileId',
-          fabFileId: { $toObjectId: '$fabFileId' },
+          // $convert, not $toObjectId: one row with a non-ObjectId fabFileId would abort the
+          // whole aggregation; onError: null leaves just that row unjoined.
+          fabFileId: { $convert: { input: '$fabFileId', to: 'objectId', onError: null } },
         },
       },
       {

@@ -1,8 +1,18 @@
 import { adminSettingsRepository, ccBridgeDeviceRepository, hearthRepository } from '@bike4mind/database';
-import { DEFAULT_HEARTH_CHANNEL_NAME, HearthLog, sessionSlug } from '@bike4mind/hearth';
+import {
+  DEFAULT_HEARTH_CHANNEL_NAME,
+  HearthLog,
+  PRESENCE_PAYLOAD_SCHEMA_NAME,
+  sessionActorName,
+  sessionSlug,
+  type PresencePayload,
+  type PresenceSurface,
+} from '@bike4mind/hearth';
 import { settingsMap, type ICcAgentSource, type ICcAgentStatus } from '@bike4mind/common';
 import { getSettingByName } from '@bike4mind/utils';
 import { isSettingEnabled } from '@server/middlewares/featureFlag';
+import { toPresenceProjection, toWireHearthEvent } from '@server/utils/hearthWire';
+import { sendToClient } from '@server/websocket/utils';
 
 /**
  * cc-bridge as a Hearth gateway: the bridge WS write points additionally report
@@ -27,15 +37,17 @@ import { isSettingEnabled } from '@server/middlewares/featureFlag';
  * external gateways, so the forwarded field set is an explicit allowlist, the
  * same discipline bin/hearth-hook.mjs documents in its disclosure tiers. Only
  * the session id, its derived slug, the workspace BASENAME, the closed-set
- * status value, the engine, and the Claude version cross this boundary. Message
- * bodies, status `text` summaries, tool input/output, `lastSummary`, and
+ * status value, a constant reporter tag, the engine, and the Claude version
+ * cross this boundary. Message bodies, status `text` summaries, tool
+ * input/output, `lastSummary`, and
  * `workspacePath` (a full local path) never do. The human-readable line is
  * COMPOSED here from the closed reason set rather than passing an upstream
  * string through. ccAgentHearth.test.ts pins this with bait strings.
  */
 
-/** Machine payload contract for bridge-sourced presence events. */
-const CC_BRIDGE_MACHINE_SCHEMA = 'hearth.cc-bridge@1';
+/** Reporter tag written into the shared presence payload. Typed, so a value
+ *  outside the known surface set is a compile error rather than a wire typo. */
+const CC_BRIDGE_SURFACE: PresenceSurface = 'cc-bridge';
 
 /**
  * Why a session was reported. Either a lifecycle edge the handler knows or a
@@ -78,6 +90,8 @@ export interface CcAgentPresenceInput {
   deviceId?: string;
   /** Already-resolved per-device channel override; skips the device lookup. */
   hearthChannelId?: string;
+  /** WS management endpoint, for the `hearth_event` push. */
+  endpoint: string;
   logger: BestEffortLogger;
 }
 
@@ -127,7 +141,7 @@ async function isHearthEnabled(): Promise<boolean> {
  * failing a register, an event, or a disconnect sweep.
  */
 export async function reportCcAgentPresence(input: CcAgentPresenceInput): Promise<void> {
-  const { userId, instanceId, workspaceName, reason, source, claudeVersion, logger } = input;
+  const { userId, instanceId, workspaceName, reason, source, claudeVersion, endpoint, logger } = input;
   try {
     // The four HTTP hearth routes all gate on this; the WS path did not, and
     // EnableHearth defaults to FALSE. Without the gate, a bridge register on a
@@ -140,47 +154,66 @@ export async function reportCcAgentPresence(input: CcAgentPresenceInput): Promis
 
     const channelId = await resolveChannelId(userId, input.hearthChannelId, input.deviceId);
     const slug = sessionSlug(instanceId);
-    // Same one-actor-per-session convention as the hook's `Claude Code (slug)`:
-    // per-session actors are what make roster rows distinguishable and give
-    // each session its own cursor and stable color downstream.
-    const displayName = `${workspaceName} (${slug})`;
+    // Shared convention, NOT a bridge-local one: the hook covering this same
+    // session composes the identical name, so both reporters converge on one
+    // actor, one roster row and one cursor. See sessionActorName.
+    const displayName = sessionActorName(instanceId);
     const actor = await hearthRepository.ensureActor(userId, 'agent', displayName);
+
+    const payload: PresencePayload = {
+      session_id: instanceId,
+      slug,
+      workspace: workspaceName,
+      surface: CC_BRIDGE_SURFACE,
+      // `reason` is a CcAgentStatus value, which presenceStateForReason maps to
+      // itself - that identity mapping is what lets one function serve both
+      // reporters. It sits under `activity` because that is where the shared
+      // contract puts it; writing it at the top level is what made every bridge
+      // event replay to `running`.
+      activity: { reason },
+      ...(source ? { source } : {}),
+      ...(claudeVersion ? { claude_version: claudeVersion } : {}),
+    };
 
     const event = await hearthLog.append({
       channelId,
       actorId: actor._id.toString(),
       kind: 'presence',
-      human: { text: `${displayName} ${REASON_PHRASES[reason] ?? 'is active'}`, format: 'text' },
-      machine: {
-        schema: CC_BRIDGE_MACHINE_SCHEMA,
-        payload: {
-          instanceId,
-          slug,
-          workspace: workspaceName,
-          reason,
-          ...(source ? { source } : {}),
-          ...(claudeVersion ? { claudeVersion } : {}),
-        },
+      human: {
+        text: `${displayName} in ${workspaceName} ${REASON_PHRASES[reason] ?? 'is active'}`,
+        format: 'text',
       },
+      machine: { schema: PRESENCE_PAYLOAD_SCHEMA_NAME, payload },
       refs: {},
     });
 
-    // Roster projection, in the same best-effort block: the log is the source of
-    // truth and the row is derived state that the next presence event repairs.
-    // `reason` is a CcAgentStatus value, which presenceStateForReason maps to
-    // itself - that identity mapping is what lets one function serve both the
-    // bridge and the hook.
-    await hearthRepository.upsertPresence({
-      channelId,
-      actorId: actor._id.toString(),
-      userId,
-      // Event time, not write time, so a delayed report cannot outrank a newer one.
-      lastSeen: event.createdAt,
-      reason,
-      workspace: workspaceName,
-      sessionId: instanceId,
-      slug,
-    });
+    // Roster projection through the SAME function the HTTP route uses, so the
+    // live row and a row rebuilt from the log cannot diverge. Still in the
+    // best-effort block: the log is the source of truth and the row is derived
+    // state that the next presence event repairs.
+    const projection = toPresenceProjection({ event, userId, payload });
+    if (projection) await hearthRepository.upsertPresence(projection);
+
+    // Live fanout, the same push POST /api/hearth/events makes. Without it the
+    // roster held the current state in Mongo while an open panel rendered the
+    // snapshot it last fetched - one roster in the data, two in the UI.
+    //
+    // AFTER the upsert on purpose: the push tells clients to refetch, so
+    // emitting it first would race them onto the pre-update row. By the same
+    // reasoning it is ordered after rather than before the row write - if that
+    // write failed, nothing changed and there is nothing to announce.
+    //
+    // Caught separately so "wrote the row but could not notify open tabs" stays
+    // distinguishable from "the write itself failed", matching the split the
+    // HTTP route makes. A client that misses the push recovers via catchup.
+    try {
+      await sendToClient(userId, endpoint, {
+        action: 'hearth_event',
+        event: toWireHearthEvent(event, { displayName, kind: 'agent' }),
+      });
+    } catch (err) {
+      logger.warn(`[CC_AGENT_HEARTH] hearth_event fanout failed for ${instanceId} (non-fatal):`, err as Error);
+    }
   } catch (err) {
     logger.warn(`[CC_AGENT_HEARTH] Presence report failed for ${instanceId} (non-fatal):`, err as Error);
   }

@@ -205,6 +205,7 @@
     "@bike4mind/agents": "workspace:*",
     "@bike4mind/auth": "workspace:*",
     "@bike4mind/common": "workspace:*",
+    "@bike4mind/db-core": "workspace:*",
     "@bike4mind/fab-pipeline": "workspace:*",
     "@bike4mind/llm-adapters": "workspace:*",
     "@bike4mind/mcp": "workspace:*",

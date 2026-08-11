@@ -60,6 +60,7 @@
   "dependencies": {
     "@bike4mind/common": "workspace:*",
     "@bike4mind/db-core": "workspace:*",
+    "@bike4mind/fab-pipeline": "workspace:*",
     "@bike4mind/hearth": "workspace:*",
     "@bike4mind/llm-adapters": "workspace:*",
     "@bike4mind/utils": "workspace:*",
@@ -69,6 +70,7 @@
     "dayjs": "^1.11.21",
     "mongoose": "^8.24.1",
     "mongoose-lean-virtuals": "^2.1.0",
+    "sst": "4.17.1",
     "typescript": "^5.9.3"
   },
   "devDependencies": {

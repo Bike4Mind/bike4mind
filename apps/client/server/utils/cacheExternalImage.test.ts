@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mockS3Send = vi.hoisted(() => vi.fn());
 const mockValidateTargetUrl = vi.hoisted(() => vi.fn());
+const s3ClientConfigs = vi.hoisted(() => [] as unknown[]);
 
 vi.mock('sst', () => ({
   Resource: {
@@ -11,6 +12,9 @@ vi.mock('sst', () => ({
 
 vi.mock('@aws-sdk/client-s3', () => ({
   S3Client: class {
+    constructor(config: unknown) {
+      s3ClientConfigs.push(config);
+    }
     send(...args: unknown[]) {
       return mockS3Send(...args);
     }
@@ -28,6 +32,10 @@ import { cacheExternalImage } from './cacheExternalImage';
 describe('cacheExternalImage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('sets requestChecksumCalculation to WHEN_REQUIRED (#1535)', () => {
+    expect(s3ClientConfigs[0]).toMatchObject({ requestChecksumCalculation: 'WHEN_REQUIRED' });
   });
 
   describe('SSRF protection', () => {

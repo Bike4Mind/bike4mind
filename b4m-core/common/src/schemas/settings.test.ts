@@ -3,6 +3,7 @@ import {
   settingsMap,
   publicSafeSettingKeys,
   redactSettingSecrets,
+  redactSettingSecretsForBroadcast,
   buildPublicSettingsProjection,
   experimentalFeatureSettingKeys,
   experimentalNonGroupSettingKeys,
@@ -12,6 +13,7 @@ import {
   isMaskedSensitiveSettingValue,
   type AdminSettingDoc,
 } from './settings';
+import { DEFAULT_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET } from '../constants/chunking';
 import { SRE_SECRET_PLACEHOLDER } from '../types/entities/SreTypes';
 
 describe('makeObjectSetting JSON preprocess', () => {
@@ -285,6 +287,40 @@ describe('public settings projection (M2.5 security boundary)', () => {
       expect(offenders, `isSensitive settings that are not plain string inputs: ${offenders.join(', ')}`).toEqual([]);
     });
   });
+
+  describe('redactSettingSecretsForBroadcast', () => {
+    it('emits a bare mask with NO tail for a sensitive setting (browser cannot decrypt ciphertext)', () => {
+      // The WS fanout carries the raw stored document - ciphertext post-migration. Masking its
+      // tail would surface a wrong "last 4"; a bare mask cannot be mis-verified.
+      const ciphertext = 'a'.repeat(32) + ':' + 'b'.repeat(32) + ':deadbeef';
+      const redacted = redactSettingSecretsForBroadcast({ settingName: 'anthropicDemoKey', settingValue: ciphertext });
+      expect(redacted.settingValue).toBe(SENSITIVE_SETTING_MASK);
+      // Never the ciphertext tail (the whole point of the fix).
+      expect(redacted.settingValue).not.toBe(`${SENSITIVE_SETTING_MASK}beef`);
+    });
+
+    it('leaves an unset sensitive setting empty', () => {
+      expect(redactSettingSecretsForBroadcast({ settingName: 'anthropicDemoKey', settingValue: '' }).settingValue).toBe(
+        ''
+      );
+    });
+
+    it('still masks sreAgentConfig per-repo secrets (delegates to redactSettingSecrets)', () => {
+      const redacted = redactSettingSecretsForBroadcast({
+        settingName: 'sreAgentConfig',
+        settingValue: { repos: [{ owner: 'a', repo: 'b', webhookSecret: 'hunter2', callbackToken: 'tok' }] },
+      });
+      const repo = (redacted.settingValue as { repos: Array<{ webhookSecret: string; callbackToken: string }> })
+        .repos[0];
+      expect(repo.webhookSecret).toBe(SRE_SECRET_PLACEHOLDER);
+      expect(repo.callbackToken).toBe(SRE_SECRET_PLACEHOLDER);
+    });
+
+    it('passes a non-sensitive setting through untouched', () => {
+      const setting: AdminSettingDoc = { settingName: 'enforceMFA', settingValue: 'true' };
+      expect(redactSettingSecretsForBroadcast(setting)).toEqual(setting);
+    });
+  });
 });
 
 describe('sensitive setting masking', () => {
@@ -369,5 +405,30 @@ describe('experimentalFeatureSettingKeys (#9516)', () => {
 
   it('has no duplicate keys', () => {
     expect(new Set(experimentalFeatureSettingKeys).size).toBe(experimentalFeatureSettingKeys.length);
+  });
+});
+
+describe('DefaultChunkSize agrees with the chunker', () => {
+  // The whole point of moving DEFAULT_PASSAGE_TOKEN_TARGET into this package: before it, the
+  // number was hand-copied and had drifted four ways, and the admin setting is sent to
+  // /api/files/chunk as an explicit chunkSize override - so a divergence here silently produces a
+  // different chunk granularity through the UI than through /api/files/reprocess. Nothing tested
+  // that invariant, which is exactly how it drifted the first time.
+  it('defaults to the chunker passage target, not a hand-copied literal', () => {
+    expect(settingsMap.DefaultChunkSize.defaultValue).toBe(DEFAULT_PASSAGE_TOKEN_TARGET);
+  });
+
+  it('cannot be set below the floor the chunker would silently clamp to', () => {
+    // Without a min, an admin could save 10, the UI would report 10, and chunk.ts would quietly
+    // use MIN_PASSAGE_TOKEN_TARGET instead - the same class of silent disagreement.
+    expect(settingsMap.DefaultChunkSize.min).toBe(MIN_PASSAGE_TOKEN_TARGET);
+    expect(() => settingsMap.DefaultChunkSize.schema.parse(MIN_PASSAGE_TOKEN_TARGET - 1)).toThrow();
+    expect(settingsMap.DefaultChunkSize.schema.parse(MIN_PASSAGE_TOKEN_TARGET)).toBe(MIN_PASSAGE_TOKEN_TARGET);
+  });
+
+  it('prefaults to the chunker target rather than makeNumberSetting fallback 0', () => {
+    // makeNumberSetting does `prefault(config.defaultValue ?? 0)`, so a broken import resolves to
+    // 0 silently instead of throwing. Pin it.
+    expect(settingsMap.DefaultChunkSize.schema.parse(undefined)).toBe(DEFAULT_PASSAGE_TOKEN_TARGET);
   });
 });

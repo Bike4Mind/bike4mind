@@ -2,6 +2,7 @@ import { withEventContext } from '@server/events/utils';
 import { SessionEvents } from '@server/utils/eventBus';
 import {
   adminSettingsRepository,
+  dataLakeRepository,
   fabFileRepository,
   Quest,
   Session,
@@ -11,8 +12,16 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { OperationsModelService } from '@client/services/operationsModelService';
-import { AiEvents, ChatModelName, IMessage, KnowledgeType, SupportedFabFileMimeTypes } from '@bike4mind/common';
-import { fabFilesService } from '@bike4mind/services';
+import {
+  AiEvents,
+  ChatModelName,
+  DATALAKE_TAG_PREFIX,
+  IMessage,
+  KnowledgeType,
+  prefixArmTagNames,
+  SupportedFabFileMimeTypes,
+} from '@bike4mind/common';
+import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { getFilesStorage } from '@server/utils/storage';
 import { logEvent } from '@server/utils/analyticsLog';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
@@ -37,6 +46,16 @@ export const handler = withEventContext(async (event, logger) => {
   const session = await Session.findById(sessionId);
   if (!session) {
     logger.warn(`Record not found`);
+    return;
+  }
+
+  // Everything downstream keys off the session's owner: it is the conjunct that stops the
+  // summary-file lookup selecting someone else's document, and the owner createFabFile stamps.
+  // Mongoose drops an undefined value from a filter, so an owner-less session would silently
+  // restore the unscoped lookup - and the acting user comes from the event on the spider and
+  // agent-run paths, so the `!user` check below does not catch it.
+  if (!session.userId) {
+    logger.warn(`Session ${sessionId} has no owner; skipping summarization`);
     return;
   }
 
@@ -181,8 +200,61 @@ export const handler = withEventContext(async (event, logger) => {
   // entire summarization - the summary text is already saved on the session.
   try {
     await withTransaction(async () => {
-      const fabfile = await fabFileRepository.findOne({ sessionId: session.id });
+      // The owner conjunct is load-bearing: a sessionId is not an ownership claim (any user can
+      // stamp one on their own file via PUT /api/files/[id]) and updateFabFile below gates on
+      // findAccessibleById, which a read share satisfies. Without it, a file merely shared with
+      // the summarizing user gets its content and tags overwritten with this summary. A miss
+      // falls through to createFabFile - a duplicate beats clobbering someone else's file.
+      const fabfile = await fabFileRepository.findOne({ sessionId: session.id, userId: session.userId });
       if (fabfile) {
+        // Re-summarizing must not change which data lakes this file belongs to. The tags here are
+        // the SESSION's, which are not expected to carry a `datalake:` meta-tag or a prefix-arm
+        // content tag, and a whole-array tag write omitting one reads as leaving that lake - so
+        // without carrying the file's existing membership tags through, every re-summarization
+        // would evict a lake-indexed summary (and fail outright for a summariser who cannot
+        // manage the lake). `lakeTags` below drops anything already present in the session's own
+        // tags, so an overlap (an unusual case, not the norm described above) still can't produce
+        // a duplicate entry in the persisted array.
+        //
+        // Carries BOTH signals: the meta-tag, and any tag under a prefix arm the file's OWNER
+        // (session.userId - this query is anchored to it above) runs. Since #1263, a prefix tag
+        // alone is membership too, and reconcileLakeTags now gates its loss the same as a
+        // meta-tag's - this file must round-trip both or a re-summarization silently (or, for a
+        // non-managing summariser, loudly) evicts it.
+        //
+        // reconcileLakeTags may stamp a content tag for one of these lakes if this file lacks
+        // one - never a NEW membership, since `lakeTags` only ever carries through tags already
+        // stored on the file. Harmless either way: this FabFile always carries a sessionId,
+        // which both tag counters exclude unless it is a curated notebook, so a stamp here could
+        // never reach the tag tree.
+        const storedTagNames = (fabfile.tags ?? [])
+          .map(t => t?.name)
+          .filter((name): name is string => typeof name === 'string');
+        // Short-circuits the query when nothing stored could carry a prefix arm - every usable
+        // prefix ends in ':' (see `prefixArmTagNames`), and a meta-tag never matches one. Mirrors
+        // the guard `reconcileLakeTags`, `toggleTags`, and the bulk tag doors all use.
+        const couldCarryPrefixArm = storedTagNames.some(
+          name => !name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX) && name.includes(':')
+        );
+        const prefixArmLakes = couldCarryPrefixArm
+          ? await dataLakeService.loadPrefixArmCandidateLakes([fabfile.userId], {
+              db: { dataLakes: dataLakeRepository },
+            })
+          : [];
+        // Computed once, not per tag: prefixArmTagNames re-scans the whole tag list per lake, so
+        // calling it inside the filter below would redo that scan for every tag on the file.
+        const prefixArmSignalNames = new Set(
+          prefixArmLakes.flatMap(lake => prefixArmTagNames(storedTagNames, lake.fileTagPrefix))
+        );
+        const sessionTagNames = new Set((fabFileData.tags ?? []).map(t => t.name));
+        const lakeTags = (fabfile.tags ?? []).filter(t => {
+          if (typeof t?.name !== 'string') return false;
+          if (sessionTagNames.has(t.name)) return false;
+          if (t.name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX)) return true;
+          // prefixArmLakes is already scoped to fabfile.userId (the $in query above), so no
+          // further owner check is needed here.
+          return prefixArmSignalNames.has(t.name);
+        });
         await fabFilesService.updateFabFile(
           user,
           {
@@ -192,18 +264,13 @@ export const handler = withEventContext(async (event, logger) => {
             type: fabFileData.type,
             fileContent: fabFileData.fileContent,
             sessionId: fabFileData.sessionId,
-            tags: fabFileData.tags,
+            tags: [...(fabFileData.tags ?? []), ...lakeTags],
           },
           {
             db: {
               fabFiles: fabFileRepository,
+              dataLakes: dataLakeRepository,
             },
-            // Pass-through on purpose, for two reasons. This path writes `session.tags` with no
-            // assertCanWriteDataLakeTags gate, so stamping a lake's content prefix here would
-            // mint tags for a lake the session owner may not manage. And it would buy nothing
-            // anyway: this FabFile always carries a sessionId, which both tag counters exclude
-            // unless the file is a curated-notebook, so a stamp could never reach the tag tree.
-            reconcileTags: async tags => tags,
             storage: {
               upload: (filepath, content, options) => {
                 return getFilesStorage().upload(content, filepath, {

@@ -1,21 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import { ACTOR_COLOR_SLOTS, NEUTRAL_ACTOR_COLOR, actorColor, actorColorSlot } from './actorColors';
+import { ACTOR_COLOR_SLOTS, NEUTRAL_ACTOR_COLOR, actorColor } from './actorColors';
+import { ACTOR_COLOR_SLOT_COUNT, actorColorIndex } from './identity';
 
-describe('actorColorSlot', () => {
+describe('actorColor', () => {
   it('is a pure function of actorId, so a session keeps its color across reloads', () => {
-    expect(actorColorSlot('actor-1')).toBe(actorColorSlot('actor-1'));
-    expect(actorColorSlot('6540b58d1f703ade3ea1e82c')).toBe(actorColorSlot('6540b58d1f703ade3ea1e82c'));
+    expect(actorColor('actor-1')).toBe(actorColor('actor-1'));
+    expect(actorColor('6540b58d1f703ade3ea1e82c')).toBe(actorColor('6540b58d1f703ade3ea1e82c'));
   });
 
   it('stays inside the palette for every input', () => {
-    for (const id of ['', 'a', 'actor-1', '6540b58d1f703ade3ea1e82c', 'x'.repeat(500)]) {
-      expect(actorColorSlot(id)).toBeGreaterThanOrEqual(0);
-      expect(actorColorSlot(id)).toBeLessThan(ACTOR_COLOR_SLOTS.length);
+    for (const id of ['a', 'actor-1', '6540b58d1f703ade3ea1e82c', 'x'.repeat(500)]) {
+      expect(ACTOR_COLOR_SLOTS).toContain(actorColor(id));
     }
   });
-});
 
-describe('actorColor', () => {
   it('falls back to the neutral rather than a palette slot when there is no actorId', () => {
     expect(actorColor('')).toBe(NEUTRAL_ACTOR_COLOR);
   });
@@ -38,8 +36,12 @@ describe('the validated palette', () => {
     ]);
   });
 
+  it('has one hue per shared slot, so no slot folds onto another surface', () => {
+    expect(ACTOR_COLOR_SLOTS).toHaveLength(ACTOR_COLOR_SLOT_COUNT);
+  });
+
   it('never generates a hue for the overflow case - it reuses slots', () => {
-    const slots = new Set(Array.from({ length: 200 }, (_, i) => actorColorSlot(`actor-${i}`)));
+    const slots = new Set(Array.from({ length: 200 }, (_, i) => actorColorIndex(`actor-${i}`)));
     expect(slots.size).toBeLessThanOrEqual(ACTOR_COLOR_SLOTS.length);
   });
 });

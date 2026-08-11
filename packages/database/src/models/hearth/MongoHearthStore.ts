@@ -243,11 +243,25 @@ export const hearthRepository = {
   /**
    * Find-or-create an actor by (user, kind, displayName). Atomic upsert so
    * concurrent first-posts from the same actor identity cannot double-create.
+   *
+   * `displayLabel` is refreshed on every call rather than set on insert: it is
+   * the renameable friendly name, so the point is that it tracks the current
+   * value without disturbing the identity the cursor hangs off. Passing it as
+   * undefined leaves whatever is stored alone, so a caller that has no label
+   * cannot blank one another caller set.
    */
-  async ensureActor(userId: string, kind: IHearthActorDoc['kind'], displayName: string): Promise<IHearthActorDoc> {
+  async ensureActor(
+    userId: string,
+    kind: IHearthActorDoc['kind'],
+    displayName: string,
+    options: { displayLabel?: string } = {}
+  ): Promise<IHearthActorDoc> {
     return HearthActor.findOneAndUpdate(
       { userId: new Types.ObjectId(userId), kind, displayName },
-      { $setOnInsert: { capabilities: [], reachability: [] } },
+      {
+        $setOnInsert: { capabilities: [], reachability: [] },
+        ...(options.displayLabel ? { $set: { displayLabel: options.displayLabel } } : {}),
+      },
       { upsert: true, new: true }
     );
   },
@@ -266,13 +280,16 @@ export const hearthRepository = {
 
   /**
    * Resolve actor identities for a batch of events (for rendering surfaces).
-   * Carries `kind` as well as the name: surfaces badge the kind so a
+   * The name prefers the renameable friendly label and falls back to the
+   * identity name. `kind` travels with it because surfaces badge the kind, so a
    * self-chosen displayName cannot pass for a session-derived human actor.
    */
   async actorIdentitiesById(actorIds: string[]): Promise<Map<string, HearthActorIdentity>> {
     const unique = [...new Set(actorIds)].map(id => new Types.ObjectId(id));
-    const actors = await HearthActor.find({ _id: { $in: unique } }, { displayName: 1, kind: 1 });
-    return new Map(actors.map(a => [a._id.toString(), { displayName: a.displayName, kind: a.kind }]));
+    const actors = await HearthActor.find({ _id: { $in: unique } }, { displayName: 1, displayLabel: 1, kind: 1 });
+    return new Map(
+      actors.map(a => [a._id.toString(), { displayName: a.displayLabel ?? a.displayName, kind: a.kind }])
+    );
   },
 
   /**

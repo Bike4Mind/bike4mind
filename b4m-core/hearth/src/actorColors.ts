@@ -1,3 +1,5 @@
+import { actorColorIndex } from './identity';
+
 /**
  * Per-actor color identity, shared by every surface that renders the log (the
  * SPA channel view and roster, the CLI /hearth command) so one actor reads as
@@ -26,6 +28,10 @@
  * Light-mode yellow and magenta sit below 3:1 against the surface, so callers
  * must keep the actor name in normal text ink and let a mark carry the hue -
  * never color the name itself.
+ *
+ * The slot MAPPING is not here: actorColorIndex lives in identity.ts alongside
+ * ACTOR_COLOR_SLOT_COUNT, because a terminal cannot express these hex pairs and
+ * needs its own palette of the same length off the same mapping.
  */
 export interface ActorColor {
   light: string;
@@ -42,18 +48,6 @@ export const ACTOR_COLOR_SLOTS: ReadonlyArray<ActorColor> = [
 /** For a row with no usable actorId. Never a generated hue. */
 export const NEUTRAL_ACTOR_COLOR: ActorColor = { light: '#898781', dark: '#898781' };
 
-/**
- * djb2 over the actorId, folded into the slot list. Exported so the surfaces'
- * tests can pin determinism: the same actorId must always map to the same slot.
- */
-export function actorColorSlot(actorId: string): number {
-  let hash = 5381;
-  for (let i = 0; i < actorId.length; i++) {
-    hash = ((hash << 5) + hash + actorId.charCodeAt(i)) | 0;
-  }
-  return Math.abs(hash) % ACTOR_COLOR_SLOTS.length;
-}
-
 export function actorColor(actorId: string): ActorColor {
-  return actorId ? ACTOR_COLOR_SLOTS[actorColorSlot(actorId)] : NEUTRAL_ACTOR_COLOR;
+  return actorId ? ACTOR_COLOR_SLOTS[actorColorIndex(actorId)] : NEUTRAL_ACTOR_COLOR;
 }
