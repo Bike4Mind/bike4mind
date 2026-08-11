@@ -28,7 +28,7 @@ const ROWS = [
 const renderTab = (props: Partial<React.ComponentProps<typeof UserActivityTab>> = {}) =>
   render(
     <TestWrapper>
-      <UserActivityTab rows={ROWS} total={2} loading={false} error={null} onRefresh={vi.fn()} {...props} />
+      <UserActivityTab rows={ROWS} total={2} isFetching={false} error={null} onRefresh={vi.fn()} {...props} />
     </TestWrapper>
   );
 
@@ -70,5 +70,14 @@ describe('UserActivityTab', () => {
     fireEvent.click(screen.getByLabelText('Next page'));
 
     expect(useAnalyticsStore.getState().page).toBe(2);
+  });
+
+  it('disables Refresh and pagination while a refetch is in flight, without hiding the retained rows', () => {
+    renderTab({ total: 4210, isFetching: true });
+
+    expect(screen.getByTestId('user-activity-refresh-btn').closest('button')).toBeDisabled();
+    expect(screen.getByLabelText('Next page').closest('button')).toBeDisabled();
+    expect(screen.getByLabelText('Previous page').closest('button')).toBeDisabled();
+    expect(screen.getAllByTestId('user-activity-row').length).toBeGreaterThan(0);
   });
 });

@@ -22,7 +22,7 @@ describe('DailyReportTab', () => {
   it('renders the error card when the error prop is set', () => {
     render(
       <TestWrapper>
-        <DailyReportTab loading={false} error={new Error('boom')} onRefresh={vi.fn()} />
+        <DailyReportTab error={new Error('boom')} onRefresh={vi.fn()} />
       </TestWrapper>
     );
 
@@ -32,7 +32,7 @@ describe('DailyReportTab', () => {
   it('does not render the error card without an error prop', () => {
     render(
       <TestWrapper>
-        <DailyReportTab loading={false} onRefresh={vi.fn()} />
+        <DailyReportTab onRefresh={vi.fn()} />
       </TestWrapper>
     );
 
@@ -53,7 +53,7 @@ describe('DailyReportTab', () => {
 
     render(
       <TestWrapper>
-        <DailyReportTab loading={false} onRefresh={vi.fn()} />
+        <DailyReportTab onRefresh={vi.fn()} />
       </TestWrapper>
     );
 

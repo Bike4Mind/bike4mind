@@ -12,12 +12,11 @@ import { AnalyticsErrorCard } from '../AnalyticsErrorCard';
 dayjs.extend(isSameOrBefore);
 
 interface DailyReportTabProps {
-  loading: boolean;
   error?: unknown;
   onRefresh: () => void;
 }
 
-export const DailyReportTab: React.FC<DailyReportTabProps> = ({ loading, error, onRefresh }) => {
+export const DailyReportTab: React.FC<DailyReportTabProps> = ({ error, onRefresh }) => {
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(5);
   const [dateRange, setDateRange] = useState({
@@ -64,7 +63,7 @@ export const DailyReportTab: React.FC<DailyReportTabProps> = ({ loading, error, 
           <Button
             startDecorator={<RefreshIcon />}
             onClick={handleRefresh}
-            disabled={loading || analyticsQuery.isLoading}
+            disabled={analyticsQuery.isLoading}
             sx={{ height: '100%' }}
           >
             Refresh
@@ -72,7 +71,7 @@ export const DailyReportTab: React.FC<DailyReportTabProps> = ({ loading, error, 
         </Stack>
       </Card>
 
-      {loading || analyticsQuery.isLoading ? (
+      {analyticsQuery.isLoading ? (
         <LinearProgress />
       ) : error || analyticsQuery.error ? (
         <AnalyticsErrorCard

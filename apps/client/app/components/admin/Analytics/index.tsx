@@ -71,24 +71,24 @@ const AnalyticsTab: React.FC = () => {
         </Box>
 
         {!isLoading && (
-          <Grid xs={12} mt={0.5} sx={{ opacity: isFetching ? 0.55 : 1, transition: 'opacity 0.15s ease-in-out' }}>
+          <Grid xs={12} mt={0.5}>
             <Sheet sx={{ width: '100%' }}>
               {activeSubTab === AnalyticsSubTab.UserActivity && (
                 <UserActivityTab
                   rows={analyticsQuery.data?.logs || []}
                   total={analyticsQuery.data?.total || 0}
-                  loading={isLoading}
+                  isFetching={isFetching}
                   error={analyticsQuery.error}
                   onRefresh={handleRefresh}
                 />
               )}
 
               {activeSubTab === AnalyticsSubTab.DailyReport && (
-                <DailyReportTab loading={isLoading} error={analyticsQuery.error} onRefresh={handleRefresh} />
+                <DailyReportTab error={analyticsQuery.error} onRefresh={handleRefresh} />
               )}
 
               {activeSubTab === AnalyticsSubTab.WeeklyReport && (
-                <WeeklyReportTab loading={isLoading} error={analyticsQuery.error} onRefresh={handleRefresh} />
+                <WeeklyReportTab error={analyticsQuery.error} onRefresh={handleRefresh} />
               )}
             </Sheet>
           </Grid>

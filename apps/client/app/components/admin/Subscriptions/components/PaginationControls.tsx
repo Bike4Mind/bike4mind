@@ -13,6 +13,7 @@ interface PaginationControlsProps {
   showItemsPerPage?: boolean;
   showTotal?: boolean;
   pageLimitOptions?: number[];
+  disabled?: boolean;
 }
 
 const PaginationControls = ({
@@ -25,6 +26,7 @@ const PaginationControls = ({
   showItemsPerPage = true,
   showTotal = true,
   pageLimitOptions = [10, 20, 50, 100],
+  disabled = false,
 }: PaginationControlsProps) => {
   const isMobile = useIsMobile();
 
@@ -35,7 +37,7 @@ const PaginationControls = ({
         <IconButton
           size="sm"
           variant="outlined"
-          disabled={currentPage <= 1}
+          disabled={disabled || currentPage <= 1}
           onClick={() => onPageChange(currentPage - 1)}
           aria-label="Previous page"
         >
@@ -47,7 +49,7 @@ const PaginationControls = ({
         <IconButton
           size="sm"
           variant="outlined"
-          disabled={currentPage >= totalPages}
+          disabled={disabled || currentPage >= totalPages}
           onClick={() => onPageChange(currentPage + 1)}
           aria-label="Next page"
         >

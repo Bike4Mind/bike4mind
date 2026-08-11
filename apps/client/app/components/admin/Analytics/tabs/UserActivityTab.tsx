@@ -3,7 +3,6 @@ import {
   Box,
   Card,
   Grid,
-  LinearProgress,
   Stack,
   Typography,
   Button,
@@ -43,12 +42,12 @@ import { AnalyticsErrorCard } from '../AnalyticsErrorCard';
 interface UserActivityTabProps {
   rows: CounterLogRow[];
   total: number;
-  loading: boolean;
+  isFetching: boolean;
   error?: unknown;
   onRefresh: () => void;
 }
 
-export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, loading, error, onRefresh }) => {
+export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, isFetching, error, onRefresh }) => {
   const isMobile = useIsMobile();
   const [expandedMetadata, setExpandedMetadata] = useState<Set<string>>(new Set());
   const [isExporting, setIsExporting] = useState(false);
@@ -289,7 +288,7 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, l
                   size="sm"
                   startDecorator={<RefreshIcon />}
                   onClick={onRefresh}
-                  disabled={loading}
+                  disabled={isFetching}
                   data-testid="user-activity-refresh-btn"
                   sx={{ flex: { xs: 1, sm: 'none' } }}
                 >
@@ -300,7 +299,7 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, l
                   startDecorator={<DownloadIcon />}
                   onClick={handleExport}
                   loading={isExporting}
-                  disabled={loading || isExporting}
+                  disabled={isExporting}
                   color="success"
                   data-testid="user-activity-export-btn"
                   sx={{ flex: { xs: 1, sm: 'none' } }}
@@ -342,9 +341,7 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, l
       </Card>
 
       {/* Results */}
-      {loading ? (
-        <LinearProgress />
-      ) : error ? (
+      {error ? (
         <AnalyticsErrorCard
           error={error}
           onRetry={onRefresh}
@@ -352,7 +349,7 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, l
           testId="user-activity-error"
         />
       ) : (
-        <>
+        <Box sx={{ opacity: isFetching ? 0.55 : 1, transition: 'opacity 0.15s ease-in-out' }}>
           {/* Keyed on `total`, not on this page's rows: a page past the end of a shrunken result
               set has no rows, and hiding the controls there would leave no way back to page 1. */}
           {total > 0 && (
@@ -364,6 +361,7 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, l
               onPageChange={setPage}
               onItemsPerPageChange={setLimit}
               pageLimitOptions={[25, 50, 100]}
+              disabled={isFetching}
             />
           )}
           {rows.length === 0 ? (
@@ -547,7 +545,7 @@ export const UserActivityTab: React.FC<UserActivityTabProps> = ({ rows, total, l
               })}
             </Box>
           )}
-        </>
+        </Box>
       )}
     </Box>
   );
