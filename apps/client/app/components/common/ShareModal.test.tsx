@@ -7,8 +7,6 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { InviteType, IFabFileDocument } from '@bike4mind/common';
 import ShareDocumentModal from './ShareModal';
 
-const RECIPIENT_INPUT_PLACEHOLDER = 'Enter email or username - press Enter to add multiple recipients';
-
 // ShareModal pulls in several data/context hooks. Stub them so the modal renders
 // in isolation. useShareDocument's options are captured so a test can simulate
 // react-query's real onError-then-reject sequence on shareDocument.mutateAsync.
@@ -99,7 +97,7 @@ describe('ShareModal - By Link tab', () => {
 describe('ShareModal - By Users tab', () => {
   it('fires the share request when a recipient is committed with Enter', async () => {
     const user = await openByUsersTab();
-    const input = screen.getByPlaceholderText(RECIPIENT_INPUT_PLACEHOLDER);
+    const input = screen.getByTestId('share-modal-recipients-input');
     await user.type(input, 'friend@test.com{Enter}');
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
@@ -110,7 +108,7 @@ describe('ShareModal - By Users tab', () => {
 
   it('fires the share request from the typed value alone, without pressing Enter', async () => {
     const user = await openByUsersTab();
-    const input = screen.getByPlaceholderText(RECIPIENT_INPUT_PLACEHOLDER);
+    const input = screen.getByTestId('share-modal-recipients-input');
     await user.type(input, 'friend@test.com');
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
@@ -122,7 +120,7 @@ describe('ShareModal - By Users tab', () => {
   it('still fires the share request when currentUser has not loaded yet (regression guard)', async () => {
     mocks.currentUser = null;
     const user = await openByUsersTab();
-    const input = screen.getByPlaceholderText(RECIPIENT_INPUT_PLACEHOLDER);
+    const input = screen.getByTestId('share-modal-recipients-input');
     await user.type(input, 'friend@test.com{Enter}');
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
@@ -133,7 +131,7 @@ describe('ShareModal - By Users tab', () => {
 
   it('blocks self-sharing and surfaces one error, without ever calling the API', async () => {
     const user = await openByUsersTab();
-    const input = screen.getByPlaceholderText(RECIPIENT_INPUT_PLACEHOLDER);
+    const input = screen.getByTestId('share-modal-recipients-input');
     // Deliberately not pressing Enter: the Autocomplete's onChange filter already strips a
     // self-share chip on commit, so this exercises the submit-time backstop check instead
     // (the currentInputValue merge at handleShareSubmit), which is what surfaces this message.
@@ -151,7 +149,7 @@ describe('ShareModal - By Users tab', () => {
     // the onChange filter instead (also fixed, but then the array is empty by submit time and
     // "Recipients is required" fires first) - the backstop path is what this test targets.
     const user = await openByUsersTab();
-    const input = screen.getByPlaceholderText(RECIPIENT_INPUT_PLACEHOLDER);
+    const input = screen.getByTestId('share-modal-recipients-input');
     await user.type(input, 'Me@Test.com');
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
@@ -163,7 +161,7 @@ describe('ShareModal - By Users tab', () => {
     // Exercises the OTHER guard (the Autocomplete onChange filter, not the submit backstop):
     // committing a case-varied self-share with Enter must still end up with nothing to submit.
     const user = await openByUsersTab();
-    const input = screen.getByPlaceholderText(RECIPIENT_INPUT_PLACEHOLDER);
+    const input = screen.getByTestId('share-modal-recipients-input');
     await user.type(input, 'Me@Test.com{Enter}');
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
@@ -174,7 +172,7 @@ describe('ShareModal - By Users tab', () => {
   it('shows exactly one error toast, with the server message, when the share request fails', async () => {
     rejectWith({ isAxiosError: true, response: { data: { message: 'File no longer exists' } } });
     const user = await openByUsersTab();
-    const input = screen.getByPlaceholderText(RECIPIENT_INPUT_PLACEHOLDER);
+    const input = screen.getByTestId('share-modal-recipients-input');
     await user.type(input, 'friend@test.com{Enter}');
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
@@ -197,7 +195,7 @@ describe('ShareModal - By Users tab', () => {
       { id: 'file-1', fileName: 'a.pdf' } as IFabFileDocument,
       { id: 'file-2', fileName: 'b.pdf' } as IFabFileDocument,
     ]);
-    const input = screen.getByPlaceholderText(RECIPIENT_INPUT_PLACEHOLDER);
+    const input = screen.getByTestId('share-modal-recipients-input');
     await user.type(input, 'friend@test.com{Enter}');
     await user.click(screen.getByTestId('share-modal-submit-button'));
 

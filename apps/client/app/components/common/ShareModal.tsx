@@ -565,6 +565,9 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
                             alignItems: 'flex-start',
                           },
                         },
+                        input: {
+                          'data-testid': 'share-modal-recipients-input',
+                        },
                       }}
                       sx={{ width: '100%', '--Input-minHeight': '100px' }}
                       value={recipients.value}
