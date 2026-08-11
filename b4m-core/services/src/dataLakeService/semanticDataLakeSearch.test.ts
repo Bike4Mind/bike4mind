@@ -1149,6 +1149,42 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
       expect(result.embeddingMismatch.excludedFiles.models).toEqual([SMALL_3, VOYAGE_3]);
       expect(result.embeddingMismatch.alternateModelServed).toEqual({ files: 0, models: [] });
     });
+
+    it('reports partial coverage within one alternate model: served files are not double-counted as excluded', async () => {
+      // The alternate model's own ANN query finds hits for only 2 of its 3 ready files - the
+      // served/excluded split must be computed PER FILE, not per model.
+      const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+        files: [
+          annFile('primary'),
+          annFile('alt-hit-1', { embeddingModel: SMALL_3 }),
+          annFile('alt-hit-2', { embeddingModel: SMALL_3 }),
+          annFile('alt-miss', { embeddingModel: SMALL_3 }),
+        ],
+        annHitsByModel: {
+          'text-embedding-ada-002': [{ id: 'p-c0', fabFileId: 'primary', text: 'hit', score: 0.9 }],
+          [SMALL_3]: [
+            { id: 'a1-c0', fabFileId: 'alt-hit-1', text: 'alt hit 1', score: 0.9 },
+            { id: 'a2-c0', fabFileId: 'alt-hit-2', text: 'alt hit 2', score: 0.9 },
+          ],
+        },
+        queryableModels: ['text-embedding-ada-002', SMALL_3],
+      });
+
+      const result = await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never);
+
+      expect(result.results.map(r => r.fileId).sort()).toEqual(['alt-hit-1', 'alt-hit-2', 'primary']);
+      // alt-miss stays excluded (SMALL_3 is still a genuinely-foreign model for it), but the two
+      // served files are NOT in excludedFiles - the model still appears there because one of its
+      // files is still uncovered.
+      expect(result.embeddingMismatch.excludedFiles.count).toBe(1);
+      expect(result.embeddingMismatch.excludedFiles.sample.map(f => f.fileId)).toEqual(['alt-miss']);
+      expect(result.embeddingMismatch.excludedFiles.models).toEqual([SMALL_3]);
+      expect(result.embeddingMismatch.alternateModelServed).toEqual({ files: 2, models: [SMALL_3] });
+      // alt-miss never reaches the scan path either - the ticket's explicit scope boundary.
+      expect(findVectorsByFabFileIds).not.toHaveBeenCalled();
+    });
   });
 });
 
