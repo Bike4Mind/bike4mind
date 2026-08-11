@@ -79,6 +79,13 @@ export interface IOrgGoogleDriveConnection {
   /** Last time the folder was polled for changes. */
   lastPolledAt?: Date;
 
+  /**
+   * When the current 'syncing' claim was taken. Lets a STALE claim - left by an ingest process that
+   * died past the queue's Lambda timeout without releasing - be reclaimed, instead of wedging the
+   * connection in 'syncing' forever. Only meaningful while status === 'syncing'.
+   */
+  syncClaimedAt?: Date;
+
   // === Incremental sync ===
 
   /**
@@ -180,9 +187,11 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
   updateSyncCursor(id: string, syncCursor: string, polledAt: Date): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
   /**
-   * Guarded per-connection ingest lock. Atomically flips `status` to 'syncing' iff it is NOT
-   * already 'syncing'; returns true only if THIS caller won the claim. Serializes concurrent
-   * ingests (double-clicked connect, retried POST) so exactly one run walks + creates FabFiles.
+   * Guarded per-connection ingest lock. Atomically flips `status` to 'syncing' (stamping
+   * `syncClaimedAt`) iff the connection is idle ('connected') OR its existing 'syncing' claim is
+   * STALE (older than the Lambda timeout) - so a process that died mid-sync can't wedge it forever,
+   * and a claim never lands OVER a credential_error/needs_reconnect state (which a later release
+   * would erase). Returns whether THIS caller won the claim; exactly one concurrent run proceeds.
    */
   claimForSync(id: string): Promise<boolean>;
 

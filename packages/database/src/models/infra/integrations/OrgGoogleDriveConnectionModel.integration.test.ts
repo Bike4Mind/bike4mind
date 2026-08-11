@@ -189,4 +189,31 @@ describe('OrgGoogleDriveConnectionModel - sync claim (per-connection serializati
     expect(released).toBeNull();
     expect((await OrgGoogleDriveConnection.findById(created.id))?.status).toBe('credential_error');
   });
+
+  it('reclaims a STALE syncing claim so a dead ingest process cannot wedge it forever', async () => {
+    const created = await OrgGoogleDriveConnection.create(base);
+    expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBe(true);
+
+    // A fresh claim is not reclaimable...
+    expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBe(false);
+
+    // ...but once the claim ages past the stale bound (simulating a process that died without
+    // releasing), the next run can reclaim it instead of the connection being stuck 'syncing'.
+    await OrgGoogleDriveConnection.updateOne(
+      { _id: created.id },
+      { $set: { syncClaimedAt: new Date(Date.now() - 60 * 60 * 1000) } } // 1h ago >> 20min bound
+    );
+    expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBe(true);
+    expect((await OrgGoogleDriveConnection.findById(created.id))?.status).toBe('syncing');
+  });
+
+  it('does not claim OVER an error state (credential_error / needs_reconnect)', async () => {
+    const created = await OrgGoogleDriveConnection.create(base);
+    await orgGoogleDriveConnectionRepository.updateHealth(created.id, { status: 'credential_error' });
+
+    // Claiming a broken connection would let a later release flip it to 'connected' and erase the
+    // real error. The claim must refuse, leaving the error state intact.
+    expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBe(false);
+    expect((await OrgGoogleDriveConnection.findById(created.id))?.status).toBe('credential_error');
+  });
 });

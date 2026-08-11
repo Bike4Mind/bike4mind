@@ -6,12 +6,7 @@ import {
   fabFileRepository,
   orgGoogleDriveConnectionRepository,
 } from '@bike4mind/database';
-import {
-  DATALAKE_TAG_STRENGTH,
-  KnowledgeType,
-  FabFileSourceType,
-  type IUserDocument,
-} from '@bike4mind/common';
+import { DATALAKE_TAG_STRENGTH, KnowledgeType, FabFileSourceType, type IUserDocument } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
 import { createFabFile } from '@server/managers/fabFileManager';
 import defineAbilitiesFor from '@server/auth/ability';
@@ -20,11 +15,21 @@ import { getValidConnectionDriveAccessToken } from '@server/integrations/google/
 import { createDriveClient } from '@server/integrations/google/drive/driveClient';
 import { walkFolder, fetchDriveFileContent } from '@server/integrations/google/drive/driveContent';
 import { finalizeBatchIfComplete } from '@server/queueHandlers/dataLakeBatchProgress';
+import { sendToQueue } from '@server/utils/sqs';
+import { Resource } from 'sst';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { z, ZodError } from 'zod';
 
-const Payload = z.object({ connectionId: z.string() });
+const Payload = z.object({ connectionId: z.string(), redriveCount: z.number().int().min(0).default(0) });
+
+// A claim loser re-enqueues itself (with a delay) so a GENUINE second sync - files added to the
+// folder while a long run is mid-loop - isn't silently dropped until some later sync (there is no
+// re-sync cron yet, issue E). Bounded so a permanently-losing message can't spin: past this many
+// redrives we give up and let the next real sync pick the files up. Delay x max stays comfortably
+// past the handler's 10-minute in-flight ceiling.
+const MAX_INGEST_REDRIVES = 12;
+const INGEST_REDRIVE_DELAY_SECONDS = 90;
 
 // Per-file hard cap. Files are fetched and uploaded ONE at a time (only one buffer is ever live),
 // so this bounds peak memory well under the ingest queue Lambda's 1024 MB default. An oversized
@@ -61,7 +66,9 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
   let connectionId: string | undefined;
   let claimed = false;
   try {
-    ({ connectionId } = Payload.parse(JSON.parse(event.Records[0].body)));
+    const payload = Payload.parse(JSON.parse(event.Records[0].body));
+    connectionId = payload.connectionId;
+    const { redriveCount } = payload;
     logger.updateMetadata({ handler: 'driveLakeIngest', connectionId });
 
     const connection = await orgGoogleDriveConnectionRepository.findById(connectionId);
@@ -75,20 +82,47 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
     // help while the first run's rows are still `pending`. The loser here is a cheap no-op.
     claimed = await orgGoogleDriveConnectionRepository.claimForSync(connectionId);
     if (!claimed) {
-      logger.info('[driveLakeIngest] connection already syncing; skipping duplicate run', { connectionId });
+      // Someone else holds the claim. If a real ingest is in flight ('syncing'), DEFER this run by
+      // re-enqueuing with a delay so a genuine second sync (new files added mid-run) isn't dropped -
+      // bounded so it can't spin. If instead the connection is in an error state (claimForSync won't
+      // claim over one), there's nothing to defer behind, so just drop the duplicate.
+      const current = await orgGoogleDriveConnectionRepository.findById(connectionId);
+      if (current?.status === 'syncing' && redriveCount < MAX_INGEST_REDRIVES) {
+        await sendToQueue(
+          Resource.driveLakeIngestQueue.url,
+          { connectionId, redriveCount: redriveCount + 1 },
+          INGEST_REDRIVE_DELAY_SECONDS
+        );
+        logger.info('[driveLakeIngest] another sync in flight; deferred', {
+          connectionId,
+          redriveCount: redriveCount + 1,
+        });
+      } else {
+        logger.info('[driveLakeIngest] could not claim (not syncing or redrive exhausted); skipping', {
+          connectionId,
+          status: current?.status,
+          redriveCount,
+        });
+      }
       return;
     }
 
     const lake = await dataLakeRepository.findById(connection.targetDataLakeId);
     if (!lake) {
       logger.warn('[driveLakeIngest] target data lake not found; dropping', { connectionId });
-      await orgGoogleDriveConnectionRepository.updateHealth(connectionId, { status: 'connected', lastPolledAt: new Date() });
+      await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
+        status: 'connected',
+        lastPolledAt: new Date(),
+      });
       return;
     }
     const user = await User.findById(connection.connectedBy);
     if (!user) {
       logger.warn('[driveLakeIngest] connecting user not found; dropping', { connectionId });
-      await orgGoogleDriveConnectionRepository.updateHealth(connectionId, { status: 'connected', lastPolledAt: new Date() });
+      await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
+        status: 'connected',
+        lastPolledAt: new Date(),
+      });
       return;
     }
     const ability = defineAbilitiesFor(user as unknown as IUserDocument);
@@ -116,7 +150,10 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
         walked: walked.length,
         alreadyIngested: alreadyIngested.size,
       });
-      await orgGoogleDriveConnectionRepository.updateHealth(connectionId, { status: 'connected', lastPolledAt: new Date() });
+      await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
+        status: 'connected',
+        lastPolledAt: new Date(),
+      });
       return;
     }
 
@@ -248,7 +285,9 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
     if (claimed && connectionId) {
       await orgGoogleDriveConnectionRepository
         .releaseSyncClaim(connectionId)
-        .catch(e => logger.error(`[driveLakeIngest] failed to release sync claim: ${e instanceof Error ? e.message : String(e)}`));
+        .catch(e =>
+          logger.error(`[driveLakeIngest] failed to release sync claim: ${e instanceof Error ? e.message : String(e)}`)
+        );
     }
     if (err instanceof ZodError || err instanceof SyntaxError) {
       logger.warn(`Skipping drive-lake-ingest message: ${err instanceof Error ? err.message : String(err)}`);

@@ -23,6 +23,7 @@ const h = vi.hoisted(() => ({
   walkFolder: vi.fn(),
   fetchDriveFileContent: vi.fn(),
   finalizeBatchIfComplete: vi.fn(),
+  sendToQueue: vi.fn(),
   // records the interleaving of manifest-append vs byte-upload to assert ordering
   order: [] as string[],
 }));
@@ -61,12 +62,15 @@ vi.mock('@server/integrations/google/drive/driveContent', () => ({
 vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: h.finalizeBatchIfComplete,
 }));
+vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('sst', () => ({ Resource: { driveLakeIngestQueue: { url: 'ingest-queue-url' } } }));
 
 import { dispatch } from './driveLakeIngest';
 
 const logger = { warn: vi.fn(), error: vi.fn(), log: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() } as never;
 const makeEvent = (body: unknown) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
-const run = () => dispatch(makeEvent({ connectionId: 'conn1' }), {} as never, logger);
+const run = (body: Record<string, unknown> = { connectionId: 'conn1' }) =>
+  dispatch(makeEvent(body), {} as never, logger);
 
 const okBytes = (n = 10) => ({ ok: true as const, bytes: Buffer.alloc(n), mimeType: 'text/plain' });
 
@@ -88,7 +92,13 @@ describe('driveLakeIngest consumer', () => {
     h.userFindById.mockResolvedValue({ id: 'user1' });
     h.findByDriveFileIdsInDataLake.mockResolvedValue([]);
     h.batchCreate.mockResolvedValue({ id: 'batch1' });
-    h.batchFindById.mockResolvedValue({ id: 'batch1', totalFiles: 0, vectorizedFiles: 0, failedFiles: 0, skippedFiles: 0 });
+    h.batchFindById.mockResolvedValue({
+      id: 'batch1',
+      totalFiles: 0,
+      vectorizedFiles: 0,
+      failedFiles: 0,
+      skippedFiles: 0,
+    });
     h.appendFiles.mockImplementation(async () => void h.order.push('append'));
     h.incrementCounter.mockResolvedValue(null);
     h.upload.mockImplementation(async () => void h.order.push('upload'));
@@ -96,13 +106,52 @@ describe('driveLakeIngest consumer', () => {
     h.createFabFile.mockImplementation(async () => ({ id: `ff${++n}` }));
   });
 
-  it('is a cheap no-op when another run already holds the syncing claim', async () => {
+  it('is a cheap no-op when the claim is lost and there is nothing in flight to defer behind', async () => {
     h.claimForSync.mockResolvedValue(false);
+    // Default connection has no 'syncing' status, so this is a duplicate/errored case, not a genuine
+    // second sync - drop it (do not re-enqueue) and do not release a claim it does not own.
     await run();
     expect(h.walkFolder).not.toHaveBeenCalled();
     expect(h.batchCreate).not.toHaveBeenCalled();
-    // The loser must NOT release a claim it does not own.
     expect(h.releaseSyncClaim).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('defers a genuine second sync (re-enqueue with delay) when a real run is in flight', async () => {
+    h.claimForSync.mockResolvedValue(false);
+    h.connFindById.mockResolvedValue({
+      id: 'conn1',
+      status: 'syncing', // another run genuinely holds the claim
+      targetDataLakeId: 'lake1',
+      connectedBy: 'user1',
+      organizationId: 'org1',
+      driveFolderId: 'FOLDER',
+    });
+
+    await run();
+
+    expect(h.sendToQueue).toHaveBeenCalledWith(
+      'ingest-queue-url',
+      { connectionId: 'conn1', redriveCount: 1 },
+      expect.any(Number)
+    );
+    expect(h.walkFolder).not.toHaveBeenCalled();
+  });
+
+  it('stops deferring once the redrive bound is hit (cannot spin)', async () => {
+    h.claimForSync.mockResolvedValue(false);
+    h.connFindById.mockResolvedValue({
+      id: 'conn1',
+      status: 'syncing',
+      targetDataLakeId: 'lake1',
+      connectedBy: 'user1',
+      organizationId: 'org1',
+      driveFolderId: 'FOLDER',
+    });
+
+    await run({ connectionId: 'conn1', redriveCount: 99 });
+
+    expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
   it('appends each manifest entry BEFORE its bytes are uploaded', async () => {
@@ -148,10 +197,7 @@ describe('driveLakeIngest consumer', () => {
 
     expect(h.batchCreate).toHaveBeenCalledWith(expect.objectContaining({ totalFiles: 1 }));
     expect(h.createFabFile).toHaveBeenCalledTimes(1);
-    expect(h.createFabFile).toHaveBeenCalledWith(
-      expect.objectContaining({ driveFileId: 'd2' }),
-      expect.anything()
-    );
+    expect(h.createFabFile).toHaveBeenCalledWith(expect.objectContaining({ driveFileId: 'd2' }), expect.anything());
   });
 
   it('creates no batch and releases the claim when nothing is new', async () => {
