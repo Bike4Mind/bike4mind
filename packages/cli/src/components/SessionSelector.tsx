@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
-import SelectInput from 'ink-select-input';
+import SelectInput, { type ItemProps } from 'ink-select-input';
 import type { Session } from '../storage/types';
 
 interface SessionSelectorProps {
@@ -106,7 +106,7 @@ export function SessionSelector({ sessions, currentSession, onSelect, onCancel }
         <SelectInput
           items={items}
           onSelect={handleSelectionSelect}
-          itemComponent={({ isSelected, label }) => (
+          itemComponent={({ isSelected, label }: ItemProps) => (
             <Box>
               <Text color={isSelected ? 'cyan' : undefined}>{label}</Text>
             </Box>
@@ -142,7 +142,7 @@ export function SessionSelector({ sessions, currentSession, onSelect, onCancel }
       <SelectInput
         items={confirmationItems}
         onSelect={handleConfirmationSelect}
-        itemComponent={({ isSelected, label }) => (
+        itemComponent={({ isSelected, label }: ItemProps) => (
           <Box>
             <Text color={isSelected ? 'cyan' : undefined}>{label}</Text>
           </Box>

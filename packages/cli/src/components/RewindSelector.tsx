@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
-import SelectInput from 'ink-select-input';
+import SelectInput, { type ItemProps } from 'ink-select-input';
 import type { Message } from '../storage/types';
 
 interface RewindSelectorProps {
@@ -92,7 +92,7 @@ export function RewindSelector({ messages, onSelect, onCancel }: RewindSelectorP
         <SelectInput
           items={items}
           onSelect={handleSelectionSelect}
-          itemComponent={({ isSelected, label }) => (
+          itemComponent={({ isSelected, label }: ItemProps) => (
             <Box>
               <Text color={isSelected ? 'cyan' : undefined}>
                 {isSelected ? '❯ ' : '  '}
@@ -140,7 +140,7 @@ export function RewindSelector({ messages, onSelect, onCancel }: RewindSelectorP
       <SelectInput
         items={confirmationItems}
         onSelect={handleConfirmationSelect}
-        itemComponent={({ isSelected, label }) => (
+        itemComponent={({ isSelected, label }: ItemProps) => (
           <Box>
             <Text color={isSelected ? 'cyan' : undefined}>
               {isSelected ? '❯ ' : '  '}

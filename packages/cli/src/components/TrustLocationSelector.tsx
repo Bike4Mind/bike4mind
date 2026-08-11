@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, Text } from 'ink';
-import SelectInput from 'ink-select-input';
+import SelectInput, { type ItemProps } from 'ink-select-input';
 
 interface TrustLocationSelectorProps {
   inProject: boolean;
@@ -46,7 +46,7 @@ export function TrustLocationSelector({ inProject, onSelect, onCancel }: TrustLo
       <SelectInput
         items={items}
         onSelect={handleSelect}
-        itemComponent={({ isSelected, label }) => (
+        itemComponent={({ isSelected, label }: ItemProps) => (
           <Box>
             <Text color={isSelected ? 'cyan' : undefined}>
               {isSelected ? '❯ ' : '  '}

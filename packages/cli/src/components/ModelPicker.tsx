@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
-import SelectInput from 'ink-select-input';
+import SelectInput, { type ItemProps } from 'ink-select-input';
 import type { ModelInfo } from '@bike4mind/common';
 import { CustomTextInput } from './CustomTextInput';
 
@@ -60,7 +60,7 @@ export function ModelPicker({ models, currentModelId, onSelect, onCancel }: Mode
           items={items}
           limit={10}
           onSelect={item => onSelect(item.value)}
-          itemComponent={({ isSelected, label }) => (
+          itemComponent={({ isSelected, label }: ItemProps) => (
             <Box>
               <Text color={isSelected ? 'cyan' : undefined}>{label}</Text>
             </Box>

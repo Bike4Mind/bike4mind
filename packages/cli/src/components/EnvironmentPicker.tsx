@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Box, Text } from 'ink';
-import SelectInput from 'ink-select-input';
+import SelectInput, { type ItemProps } from 'ink-select-input';
 import TextInput from 'ink-text-input';
 import { LOCAL_DEV_URL, parseApiUrl } from '../utils/apiUrl.js';
 
@@ -90,7 +90,7 @@ export function EnvironmentPicker({ onSelect }: EnvironmentPickerProps) {
       <SelectInput
         items={items}
         onSelect={handleMenuSelect}
-        itemComponent={({ isSelected, label }) => (
+        itemComponent={({ isSelected, label }: ItemProps) => (
           <Box>
             <Text color={isSelected ? 'cyan' : undefined}>
               {isSelected ? '❯ ' : '  '}
