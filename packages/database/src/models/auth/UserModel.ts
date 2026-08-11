@@ -812,7 +812,10 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
       default: 'auto',
     },
 
-    // Cross-device user preferences (synced from client localStorage)
+    // Cross-device user preferences (synced from client localStorage). Defaults to null, not
+    // {} - a dot-path $set (e.g. 'preferences.foo') on a user who has never set a preference
+    // fails with "Cannot create field 'foo' in element {preferences: null}"; coerce to {} in
+    // a separate update first (see docx-template.ts) before writing a nested path.
     preferences: { type: UserPreferencesSchema, default: null },
 
     lastCreditGrantAt: { type: Date, required: false },

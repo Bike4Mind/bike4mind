@@ -65,6 +65,12 @@ export interface FetchCounterLogsParams {
   counterName?: string;
   userEmail?: string;
   metadataFilters?: MetadataFilter[];
+  /**
+   * IANA zone startDate/endDate name a day in. Defaults to the viewer's own zone so "today" means
+   * their today rather than a UTC day shifted by their offset. Ignored by the report paths, whose
+   * cached rows are UTC-day-keyed and shared between admins.
+   */
+  timezone?: string;
 }
 
 /**
@@ -114,11 +120,17 @@ export const fetchCounterLogs = async ({
   counterName,
   userEmail,
   metadataFilters,
+  timezone,
 }: FetchCounterLogsParams): Promise<CounterLogsResponse> => {
   const queryParams: Record<string, string> = {
     startDate: startDate || '',
     endDate: endDate || '',
   };
+
+  // The report paths stay UTC-keyed: their rows are cached per UTC day and shared between admins.
+  if (!report && !weeklyReport) {
+    queryParams.timezone = timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  }
 
   // Handle arrays by joining with commas and encoding each value
   if (events?.length) {

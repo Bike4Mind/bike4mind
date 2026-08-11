@@ -205,6 +205,12 @@ export interface IFabFile {
   // Data Lake fields
   /** The source where this file originated from */
   sourceType?: FabFileSourceType;
+  /**
+   * Origin details for the `sourceType`, shaped by that source (for SLACK: the channel id and
+   * the message ts the file was posted in). Server-supplied only - never accepted from a request
+   * body, or a caller could forge the audit trail this exists to provide.
+   */
+  sourceMetadata?: Record<string, unknown>;
   /** Whether this file was automatically processed (vs manual upload) */
   automaticallyProcessed?: boolean;
   /** Metadata for data lake files */
@@ -278,6 +284,13 @@ export interface FabFileChunkVector {
 
 export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDocument> {
   deleteManyByFabFileId(fabFileId: string): Promise<void>;
+  /**
+   * Every DISTINCT embeddingModel actually used by chunks of the given files - not
+   * FabFile.embeddingModel, which is only the file's current/latest model (see
+   * IFabFileChunk.embeddingModel: chunks can outlive a re-embed). A retrieval index keyed
+   * per-model (e.g. self-host OpenSearch) needs this to know every index a removal must reach.
+   */
+  distinctEmbeddingModelsByFabFileIds(fabFileIds: string[]): Promise<string[]>;
   bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]): Promise<IFabFileChunkDocument[]>;
   findByFabFileId(fabFileId: string): Promise<IFabFileChunkDocument[]>;
   /** Count chunks that are terminal (have a vector OR are oversized) - for idempotent vectorizedChunkCount recompute. */
@@ -681,22 +694,36 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   // lower bound, which would also match a file the creator deleted during the deleted window (the
   // per-file delete routes stamp `deletedAt` too) and revive it on restore. Omitting `stampedAt`
   // matches every stamped row: the pre-mark behavior, and the fallback for a lake torn down before
-  // the mark existed. The archive axis is deliberately NOT stamped - archiveByDataLakeTag is the
-  // only writer of a non-null archivedAt, so no independently-archived file exists to protect.
+  // the mark existed. The archive axis is stamped the same way (`at`, `filesArchivedAt`) so restore
+  // can also clear `archivedAt` for exactly the batch this lake's own archive wrote, without
+  // freeing a prefix-sharing sibling's independently-archived files.
 
-  /** Soft-archive (reversible) all live member files. Returns affected count. */
-  archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number>;
-  /** Reverse archive for all archived member files. */
+  /**
+   * Soft-archive (reversible) all live member files, stamped `at`. Returns affected count.
+   * Omitting `at` still writes a real per-row timestamp - it is orphaned (no lake names it), not
+   * absent. See archiveDataLake's `hasUnstampedArchive` guard for when that's intentional.
+   */
+  archiveByDataLakeTag(scope: DataLakeMembershipScope, at?: Date): Promise<number>;
+  /** Reverse archive for all archived member files. Unbounded - matches on archivedAt alone. */
   unarchiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number>;
   /** Archived member files - used by the unarchive dedup pass. */
   findArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]>;
+  /** Existence-only form of findArchivedByDataLakeTag, for a caller that just needs "any?". */
+  hasArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<boolean>;
   /** Soft-deleted member files stamped `stampedAt` - used by the deleted->active restore dedup pass. */
   findDeletedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]>;
   /**
    * Reverse soft-delete for member files stamped `stampedAt`, minus `excludeIds` (discarded
-   * duplicates). Returns count.
+   * duplicates). When `archiveStampToClear` is given, also clears `archivedAt` on the subset of
+   * the restored batch whose archivedAt equals it (the batch this lake's own archive wrote) -
+   * everything else keeps its archive marker untouched. Returns count restored.
    */
-  undeleteByDataLakeTag(scope: DataLakeMembershipScope, excludeIds?: string[], stampedAt?: Date): Promise<number>;
+  undeleteByDataLakeTag(
+    scope: DataLakeMembershipScope,
+    excludeIds?: string[],
+    stampedAt?: Date,
+    archiveStampToClear?: Date
+  ): Promise<number>;
   /** Soft-delete (phase 1) all member files, stamped `at`. Returns affected file ids. */
   softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at?: Date): Promise<string[]>;
   /**

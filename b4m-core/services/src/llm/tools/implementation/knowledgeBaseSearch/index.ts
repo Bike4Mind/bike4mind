@@ -30,8 +30,10 @@ import {
   type SemanticSearchScanAccounting,
 } from '../../../../dataLakeService/semanticDataLakeSearch';
 import { resolveSearchBudgets } from '../../../../dataLakeService/resolveSearchBudgets';
+import { openSearchChunkAdapter } from '../../../../dataLakeService/openSearchChunkAdapter';
 import { getEffectiveLLMApiKeys } from '../../../../apiKeyService';
 import { recordOperationalUsage } from '../../../../billing';
+import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 
 const CHUNK_TEXT_CAP = 1200;
 
@@ -287,7 +289,10 @@ async function trySemanticKbSearch(
         retrievalFilter: context.retrievalFilter,
         logger: context.logger,
       },
-      { db: { fabfiles: context.db.fabfiles, fabfilechunks: chunkRepo } }
+      {
+        db: { fabfiles: context.db.fabfiles, fabfilechunks: chunkRepo },
+        vectorIndex: selfHostOpenSearchEnabled() ? openSearchChunkAdapter : undefined,
+      }
     );
 
     await recordQueryEmbeddingUsage(context, query, embeddingModel, provider);
@@ -353,7 +358,10 @@ async function tryScopedSemanticKbSearch(
         vectorSearchEnabled,
         logger: context.logger,
       },
-      { db: { fabfiles: context.db.fabfiles, fabfilechunks: chunkRepo } }
+      {
+        db: { fabfiles: context.db.fabfiles, fabfilechunks: chunkRepo },
+        vectorIndex: selfHostOpenSearchEnabled() ? openSearchChunkAdapter : undefined,
+      }
     );
 
     await recordQueryEmbeddingUsage(context, query, embeddingModel, provider);

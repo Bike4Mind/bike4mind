@@ -19,7 +19,9 @@ import {
   resolveEmbeddingConfig,
   isEmbeddingAuthError,
   getAtlasIndexForModel,
+  FabFileChunkSearchIndex,
 } from '@bike4mind/fab-pipeline';
+import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { apiKeyService, embeddingCacheService, fabFilesService } from '@bike4mind/services';
 import {
   finalizeBatchIfComplete,
@@ -243,6 +245,27 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         })
       );
     });
+
+    // Self-host OpenSearch dual-write: outside the transaction (an OpenSearch write cannot be
+    // rolled back with Mongo) and fail-open (an indexing failure leaves the chunk scan-only, not
+    // failed - the Mongo write above already succeeded and is the source of truth).
+    if (selfHostOpenSearchEnabled()) {
+      try {
+        // embeddingModel is NOT persisted per-chunk yet at this point - stampChunkEmbeddingModel
+        // below writes it to Mongo in bulk, only once the whole file finishes. Setting it on
+        // these in-memory objects is accurate right now regardless (this IS the model `vectors`
+        // was generated with) and mapDocument requires it to build the right per-model index
+        // document; it does not touch Mongo or the file-completion timing invariant.
+        embeddableChunks.forEach(chunk => {
+          chunk.embeddingModel = embeddingModel;
+        });
+        await FabFileChunkSearchIndex.indexChunks(embeddableChunks);
+      } catch (error) {
+        logger.warn(`Self-host OpenSearch indexing failed for FabFile ${fabFileId}, chunks remain scan-only`, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
 
     // Recompute vectorizedChunkCount from SOURCE (terminal = has-vector OR oversized)
     // rather than `+= validChunks.length`. With multiple vectorize messages per file,

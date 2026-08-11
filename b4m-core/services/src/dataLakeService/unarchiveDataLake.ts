@@ -73,7 +73,9 @@ export const unarchiveDataLake = async (
   // Restore the remaining archived files (the non-duplicates).
   const restoredCount = await db.fabFiles.unarchiveByDataLakeTag(scope);
 
-  await db.dataLakes.update({ id: dataLakeId, status: 'active' });
+  // Explicit null, not undefined (mongoose drops undefined): a later re-archive claims a FRESH
+  // stamp via claimFilesArchivedAt's set-if-unset, rather than reusing this spent one.
+  await db.dataLakes.update({ id: dataLakeId, status: 'active', filesArchivedAt: null });
   await recomputeLakeStats(existing, { db });
 
   return { restoredCount, skippedDuplicates };

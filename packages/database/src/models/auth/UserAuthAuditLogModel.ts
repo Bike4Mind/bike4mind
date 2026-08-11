@@ -18,7 +18,10 @@ export type UserAuthAuditEvent =
   | 'mfa_disabled'
   | 'oauth_link'
   | 'oauth_unlink'
-  | 'session_revoked';
+  | 'session_revoked'
+  | 'trusted_device_granted'
+  | 'trusted_device_used'
+  | 'trusted_device_revoked';
 
 const USER_AUTH_AUDIT_EVENTS: UserAuthAuditEvent[] = [
   'login_success',
@@ -29,6 +32,9 @@ const USER_AUTH_AUDIT_EVENTS: UserAuthAuditEvent[] = [
   'oauth_link',
   'oauth_unlink',
   'session_revoked',
+  'trusted_device_granted',
+  'trusted_device_used',
+  'trusted_device_revoked',
 ];
 
 export interface IUserAuthAuditLogDocument extends Document {

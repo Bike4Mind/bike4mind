@@ -206,6 +206,7 @@ export interface CliConfig {
     exportFormat: 'markdown' | 'json';
     maxIterations: number | null; // null = infinite iterations
     enableSkillTool?: boolean; // Enable AI skill invocation (default: true)
+    enableWorkItemTools?: boolean; // Enable the persistent work_item_* tools, which need a signed-in B4M account (default: false)
     enableRemoteSkills?: boolean; // Sync skills from B4M web on startup (default: true)
     enableParallelToolExecution?: boolean; // Enable parallel execution of read-only tools (default: false)
     enableDynamicAgentCreation?: boolean; // Enable dynamic agent creation (default: false, experimental)

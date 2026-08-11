@@ -70,6 +70,7 @@
     "dayjs": "^1.11.21",
     "mongoose": "^8.24.1",
     "mongoose-lean-virtuals": "^2.1.0",
+    "sst": "4.17.1",
     "typescript": "^5.9.3"
   },
   "devDependencies": {
