@@ -250,6 +250,13 @@ export default function TaxonomyReviewPanel({
   // default structural sharing compares arrays positionally, so a batch that merely moved
   // position (its own suggestions unchanged) gets a brand-new object reference, which would
   // wipe this panel's in-progress edits with no warning.
+  //
+  // Stringifies the WHOLE tag (including strength/matchingFolders, which the panel never lets
+  // the user edit), not just suffix/originalName - deliberately broad, not narrowed to what's
+  // editable, because analyzeBatchTaxonomy.ts is the only writer of taxonomySuggestions content
+  // and it always replaces the entire tag set in one shot; there is no partial-re-score writer
+  // today that would change strength alone. If one is ever added, narrow this key to just the
+  // fields the panel actually edits (originalName + suffix) so a re-score doesn't wipe edits.
   const suggestionsKey = JSON.stringify(batch.taxonomySuggestions?.tags ?? []);
   useEffect(() => {
     setTags(batch.taxonomySuggestions?.tags ?? []);
