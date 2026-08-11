@@ -34,7 +34,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
   const mfaStatus = mfaStatusQuery.data;
   const mfaQueryFailed = mfaStatusQuery.isError;
 
-  const isImpersonating = useAccessToken(s => !!s.returnToken);
+  const isImpersonating = useAccessToken(s => s.impersonating);
 
   // MFA mutations
   const setupMFA = useSetupMFA();
@@ -157,13 +157,6 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
             // cross-tab background-tab UX.
             window.location.replace(buildLoginRedirectUrl('session_revoked', window.location));
             return;
-          }
-
-          // Update tokens if new attempt count provided (for next try)
-          if (errorData?.accessToken && errorData?.refreshToken) {
-            // Still mid-MFA (next attempt): keep mfaPending true via the named action so the
-            // invariant can't be dropped.
-            useAccessToken.getState().setMfaPendingTokens(errorData.accessToken, errorData.refreshToken);
           }
 
           // Show error with attempts remaining

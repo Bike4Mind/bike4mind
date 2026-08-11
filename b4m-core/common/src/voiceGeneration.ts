@@ -5,6 +5,14 @@ export const supportedVoiceGenerationVendor = z.enum(['openai', 'elevenlabs']);
 
 export type VoiceGenerationVendor = z.infer<typeof supportedVoiceGenerationVendor>;
 
+// Display names for the TTS providers. Shared so the provider picker and any
+// message that has to name the vendor that actually produced the audio (e.g. a
+// fallback notice) read identically.
+export const VOICE_VENDOR_LABELS: Record<VoiceGenerationVendor, string> = {
+  openai: 'OpenAI',
+  elevenlabs: 'ElevenLabs',
+};
+
 // Output container the caller wants back. All providers accept mp3; the rest are
 // best-effort per provider (OpenAI supports the full set, ElevenLabs maps a
 // subset). The vendor implementation is responsible for the format -> API param
@@ -77,3 +85,22 @@ export const ttsRequestSchema = z.object({
 });
 
 export type TTSRequest = z.infer<typeof ttsRequestSchema>;
+
+export type TtsVoiceOption = {
+  value: string;
+  label: string;
+  description: string;
+};
+
+// Voices selectable for OpenAI TTS synthesis. Single source of truth reused by
+// the Settings voice audition and the in-app audio generator. These are the
+// realtime-API voices, a subset shared with the TTS API (both accept them).
+// ElevenLabs resolves its voice server-side from the user's stored voiceId, so
+// this list is OpenAI-only.
+export const AVAILABLE_TTS_VOICES: readonly TtsVoiceOption[] = [
+  { value: 'alloy', label: 'Alloy', description: 'Professional and balanced (Female)' },
+  { value: 'cedar', label: 'Cedar', description: 'Warm and grounded (Male)' },
+  { value: 'echo', label: 'Echo', description: 'Clear and articulate (Male)' },
+  { value: 'marin', label: 'Marin', description: 'Natural and expressive (Female)' },
+  { value: 'shimmer', label: 'Shimmer', description: 'Energetic and vibrant (Female)' },
+] as const;

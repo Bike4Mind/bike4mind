@@ -1,6 +1,7 @@
 import { OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
 import { registry } from './registry';
 import { ALL_API_KEY_SCOPES, REQUIRED_SCOPES } from './security';
+import { CONTRACTS } from '../api-contract';
 
 // Importing these modules is what registers their schemas/paths against the
 // shared registry (side-effect imports). Keep them before generateDocument().
@@ -136,23 +137,26 @@ function codeSamples(path: string, body: unknown, streaming: boolean, authToken:
   ];
 }
 
-// `authToken` is the placeholder shown in the Authorization header: completions
-// accepts a b4m_live_ API key; the tools endpoint is JWT-only (see security.ts).
-const CODE_SAMPLES: Record<string, { streaming: boolean; authToken: string; body: unknown }> = {
-  createCompletion: {
-    streaming: true,
-    authToken: 'b4m_live_<key>',
-    body: {
-      model: 'claude-opus-4-8',
-      messages: [{ role: 'user', content: 'How do I reset my password?' }],
-      max_tokens: 500,
-    },
-  },
-  executeTool: {
-    streaming: false,
-    authToken: '<access_token>',
-    body: { toolName: 'web_search', input: { query: 'how to reset a password' } },
-  },
+// Legacy hand-registered code samples. Now EMPTY: every operation is a contract
+// that carries its own `codeSample`. Kept as an extension point (see REQUIRED_SCOPES).
+const CODE_SAMPLES: Record<string, { streaming: boolean; authToken: string; body: unknown }> = {};
+
+// Merge legacy (hand-registered) scopes/samples with contract-derived ones, so a
+// contract-based operation publishes x-required-scopes + x-codeSamples with no
+// second declaration. Contracts are the source of truth for their own metadata.
+const REQUIRED_SCOPES_BY_OP: Record<string, readonly string[]> = {
+  ...(REQUIRED_SCOPES as Record<string, readonly string[]>),
+  ...Object.fromEntries(CONTRACTS.filter(c => c.scopes?.length).map(c => [c.operationId, c.scopes as string[]])),
+};
+
+const CODE_SAMPLES_BY_OP: Record<string, { streaming: boolean; authToken: string; body: unknown }> = {
+  ...CODE_SAMPLES,
+  ...Object.fromEntries(
+    CONTRACTS.filter(c => c.codeSample).map(c => [
+      c.operationId,
+      { streaming: c.codeSample!.streaming ?? false, authToken: c.codeSample!.authToken, body: c.codeSample!.body },
+    ])
+  ),
 };
 
 const REQUEST_ID_HEADER_SPEC = {
@@ -211,9 +215,9 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       const opId = op?.operationId as string | undefined;
       if (!opId) continue;
 
-      const scopes = (REQUIRED_SCOPES as Record<string, readonly string[]>)[opId];
+      const scopes = REQUIRED_SCOPES_BY_OP[opId];
       if (scopes) op['x-required-scopes'] = scopes;
-      const sample = CODE_SAMPLES[opId];
+      const sample = CODE_SAMPLES_BY_OP[opId];
       if (sample) op['x-codeSamples'] = codeSamples(pathKey, sample.body, sample.streaming, sample.authToken);
 
       for (const status of Object.keys(op.responses ?? {})) {

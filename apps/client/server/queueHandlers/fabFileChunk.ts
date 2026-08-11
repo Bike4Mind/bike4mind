@@ -10,23 +10,37 @@ import {
 import { sendToClient } from '@server/websocket/utils';
 import { z } from 'zod';
 import { fabFilesService } from '@bike4mind/services';
+import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
+import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { getFilesStorage } from '@server/utils/storage';
 import { sendToQueue } from '@server/utils/sqs';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
-import { finalizeBatchIfComplete, isBatchComplete } from '@server/queueHandlers/dataLakeBatchProgress';
+import {
+  finalizeBatchIfComplete,
+  isBatchComplete,
+  deferFailureIfRetryable,
+} from '@server/queueHandlers/dataLakeBatchProgress';
+import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
 import { isSupportedEmbeddingModel } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
+import { NO_EXTRACTABLE_TEXT_NOTE_PREFIX } from '@server/worker/chunkScan';
 import { Resource } from 'sst';
 
 const ChunkFabFilePayload = z.object({
   fabFileId: z.string(),
   userId: z.string(),
-  chunkSize: z.coerce.number().optional(),
+  // Optional soft chunk-size override in TOKENS, forwarded to the chunker as its passage
+  // target. Historically this field was sent but silently ignored (whole documents became
+  // single context-window-sized chunks - #1420); most producers now omit it and rely on
+  // the chunker's passage-granularity default. `.catch(undefined)` fails soft: a malformed
+  // value from a legacy or hand-crafted message falls back to the default instead of turning
+  // the whole message into a DLQ poison pill.
+  chunkSize: z.coerce.number().int().positive().optional().catch(undefined),
 });
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = event.Records[0].body;
-  const { fabFileId, userId } = ChunkFabFilePayload.parse(JSON.parse(body));
+  const { fabFileId, userId, chunkSize } = ChunkFabFilePayload.parse(JSON.parse(body));
 
   const user = await User.findById(userId);
   if (!user) throw new Error(`User not found for userId: ${userId}`);
@@ -51,6 +65,17 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     return;
   }
 
+  // Idempotency: skip a duplicate delivery once the file is already chunked. Without this,
+  // chunkFabfile's own deleteManyByFabFileId (called unconditionally on every run) would wipe out
+  // and replace chunks a prior successful delivery already created - possibly ones already
+  // vectorized - the exact destructive case the rescue sweep can trigger (a deferred, non-final
+  // attempt clears isChunking/leaves error unset for the whole retry window, matching the sweep's
+  // filter; see chunkScan.ts). Mirrors fabFileVectorize.ts's own early-return.
+  if (fabFile.chunked || fabFile.notes?.startsWith(NO_EXTRACTABLE_TEXT_NOTE_PREFIX)) {
+    logger.log(`FabFile ${fabFileId} already chunked, skipping duplicate message`);
+    return;
+  }
+
   // Mark the file as actively chunking so the self-host safety-net scan (worker) doesn't
   // re-enqueue it mid-run - a duplicate would re-chunk and re-embed the whole file. Cleared
   // in `finally` on success AND failure so it can still be retried/reprocessed. Default: false.
@@ -67,6 +92,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         {
           fabFileId,
           embeddingModel: defaultEmbeddingModel,
+          passageTokenTarget: chunkSize,
         },
         {
           db: {
@@ -80,25 +106,49 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             },
           },
           logger,
+          searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
         }
       )
     ).catch(async (err: unknown) => {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+
+      // Only account a failure into the batch/file state on the LAST SQS delivery attempt -
+      // see deferFailureIfRetryable's doc comment for why an earlier attempt must leave
+      // 'failed' status untouched.
+      if (
+        await deferFailureIfRetryable(event, FAB_FILE_CHUNK_MAX_RECEIVE_COUNT, {
+          fabFileId,
+          batchId: fabFile.batchId,
+          action: 'Chunking',
+          errorMessage,
+          logger,
+        })
+      ) {
+        throw err;
+      }
+
       // chunkFabfile can throw on a genuinely bad file (e.g. a corrupt PDF). Without this,
       // the file would sit at chunkCount:0 with no error - visually identical to a
       // silently-dropped record. Persist a per-file error and account it as failed in its
       // batch (so the batch still reaches a terminal state), mirroring fabFileVectorize's
       // failure handling, then re-throw so SQS retries then routes to the DLQ.
-      const errorMessage = err instanceof Error ? err.message : String(err);
       const isFirstFailure = await fabFileRepository.markFailedIfNotAlready(fabFileId, errorMessage);
       if (fabFile.batchId && isFirstFailure) {
         try {
           await dataLakeBatchRepository.updateFileStatus(fabFile.batchId, fabFileId, 'failed', errorMessage);
-          const batch = await dataLakeBatchRepository.incrementCounter(fabFile.batchId, 'failedFiles');
+          // One atomic $inc for both counters - two sequential incrementCounter calls could
+          // leave failedFiles bumped without processingFailedFiles on a crash between them,
+          // misclassifying this as an upload failure with no automatic recovery (#1412).
+          const batch = await dataLakeBatchRepository.incrementCounters(fabFile.batchId, {
+            failedFiles: 1,
+            processingFailedFiles: 1,
+          });
           await finalizeBatchIfComplete(batch, logger);
           await sendToClient(userId, Resource.websocket.managementEndpoint, {
             action: 'data_lake_batch_progress',
             batchId: fabFile.batchId,
             failedFiles: batch?.failedFiles ?? 1,
+            processingFailedFiles: batch?.processingFailedFiles ?? 1,
             status: isBatchComplete(batch)
               ? batch!.failedFiles > 0
                 ? 'completed_with_errors'
@@ -116,12 +166,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       fabFileChunksCount: fabFileChunks.length,
     });
 
+    // Non-fatal: this whole block runs inside a plain try/finally (no catch), so an
+    // uncaught throw here would fail the entire message over a best-effort UI push and
+    // force a wasted re-chunk on redelivery instead of just missing one notification.
     await sendToClient(userId, Resource.websocket.managementEndpoint, {
       action: 'update_file_chunk_vector_status',
       fabFileId,
       chunkStatus: 'complete',
       vectorizeStatus: 'ongoing',
-    });
+    }).catch(err => logger.error(`Error notifying chunk-complete for ${fabFileId}: ${err}`));
 
     // Track batch progress if file belongs to a data lake batch.
     // Reuse the fabFile loaded earlier - batchId is set on upload and doesn't change.
@@ -156,9 +209,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // instead of silently completing. We still close the batch below so it
       // doesn't hang.
       logger.log(`fabFile ${fabFileId} produced 0 chunks - no extractable text`);
+      // The prefix doubles as the chunk-scan exclusion marker (see buildFabFileChunkScanFilter),
+      // so the rescue sweep never re-enqueues a file that deterministically chunks to zero.
       await FabFile.updateOne(
         { _id: fabFileId },
-        { $set: { notes: 'No extractable text - re-process or re-upload (e.g. image-only or unsupported content).' } }
+        {
+          $set: {
+            notes: `${NO_EXTRACTABLE_TEXT_NOTE_PREFIX} - re-process or re-upload (e.g. image-only or unsupported content).`,
+          },
+        }
       ).catch(err => logger.error(`Failed to flag zero-chunk fabFile ${fabFileId}: ${err}`));
       // A zero-chunk file (empty / unparseable) produces no vectorize message, so it
       // would never reach a terminal batch counter and the batch would hang until the

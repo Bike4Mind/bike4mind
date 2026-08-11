@@ -38,7 +38,8 @@ interface AcceptInviteAdapters {
     };
     organization: {
       findById: (id: string) => Promise<IOrganizationDocument | null>;
-      update: (data: IOrganizationDocument) => Promise<unknown>;
+      update: (data: Partial<IOrganizationDocument>) => Promise<unknown>;
+      ensureUserDetails: (organizationId: string, member: { id: string; email: string; name: string }) => Promise<void>;
     };
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
@@ -69,8 +70,22 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
     throw new UnprocessableEntityError('Invite has no remaining users');
   }
 
+  // Checked before the pending-membership gate below: a user who already accepted has moved
+  // out of `pending` into `accepted`, so on a multi-recipient invite where others are still
+  // pending, checking membership first would misreport a re-accept as "not sent to your
+  // account" instead of "already accepted".
   if ((invite.recipients?.accepted || []).includes(user.email)) {
     throw new UnprocessableEntityError('User has already accepted the invite');
+  }
+
+  // A By-Users invite names specific recipients in `pending`; only they may consume a slot,
+  // or `remaining` (now sized to the recipient count, not a flat 1) lets an unintended
+  // accepter claim a share meant for someone else while a named recipient still hasn't
+  // accepted. A link-only invite never populates `pending`, so this never applies to one -
+  // and once every named recipient has accepted, `pending` is empty and `remaining <= 0`
+  // above already blocks further accepts regardless of who is asking.
+  if ((invite.recipients?.pending?.length ?? 0) > 0 && !invite.recipients?.pending?.includes(user.email)) {
+    throw new ForbiddenError('This invite was not sent to your account');
   }
 
   if (invite.recipients) {
@@ -201,17 +216,19 @@ const acceptOrganization = async (
   }
 
   pushShareable(organization, { userId: user.id, permissions });
-  organization.userDetails ||= [];
 
-  organization.userDetails.push({
+  // Persist ONLY the users[] edit with a targeted write. A whole-document write would $set the entire
+  // userDetails array from this stale snapshot and could revert a concurrent credit increment
+  // (updateUserDetails' atomic positional $inc); see organizationService/addMember.
+  await db.organization.update({ id: organization.id, users: organization.users });
+
+  // Seed the credit side-table via the idempotent guarded $push - keeps users[]/userDetails[] in sync
+  // and, unlike the previous unconditional push, never creates a duplicate row on a re-accept.
+  await db.organization.ensureUserDetails(organizationId, {
     id: user.id,
     email: user.email ?? user.username,
     name: user.name,
-    usedCredits: 0,
-    lastCreditUsedAt: null,
   });
-
-  await db.organization.update(organization);
 
   // Establish full membership on the user document. Without this, the accepting
   // user's `organizationId` stays null and every org-scoped feature that reads
@@ -270,6 +287,17 @@ export const pushShareable = (
   if (userIndex === -1) {
     entity.users.push({ userId: data.userId, permissions: data.permissions, projectId: data.projectId });
   } else {
-    entity.users[userIndex] = data;
+    // Merge, don't replace: pushShareable's callers are this file's own invite-accept arms plus
+    // projectService's addFiles/addSessions/addSystemPrompts (propagating a member's current
+    // project access onto a newly-added file/session) - every one of them grants or refreshes
+    // access, none narrows it, so an update here must never silently drop the existing entry's
+    // projectId/extraData or narrow permissions it already carries down to just this grant.
+    const existing = entity.users[userIndex];
+    entity.users[userIndex] = {
+      ...existing,
+      userId: data.userId,
+      projectId: data.projectId ?? existing.projectId,
+      permissions: Array.from(new Set([...(existing.permissions ?? []), ...data.permissions])),
+    };
   }
 };

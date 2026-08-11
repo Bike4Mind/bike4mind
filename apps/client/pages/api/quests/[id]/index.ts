@@ -38,11 +38,12 @@ const handler = baseApi({
     throw new NotFoundError('Quest not found');
   }
 
-  // `quest.images` holds bare generated-file basenames (e.g. `<uuid>.png`, or a `.xlsx` from
-  // excel_generation - not everything here is an image). Programmatic pollers shouldn't have to
-  // know the CDN path convention, so we resolve each into a typed descriptor with a ready-to-use
-  // URL server-side (the single source of truth). `images` (raw basenames) is kept for parity
-  // with the WebSocket payload; `files[].isImage` lets a caller pick out renderable images.
+  // `quest.images` holds bare generated-file basenames (e.g. `<uuid>.png`, a `.mp3` from
+  // music_generation, or a `.xlsx` from excel_generation - not everything here is an image).
+  // Programmatic pollers shouldn't have to know the CDN path convention, so we resolve each into
+  // a typed descriptor with a ready-to-use URL server-side (the single source of truth). `images`
+  // (raw basenames) is kept for parity with the WebSocket payload; `files[].isImage`/`isAudio`
+  // let a caller pick out renderable media.
   const images = quest.images ?? [];
   const files = toGeneratedFiles(images);
 

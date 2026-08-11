@@ -1,4 +1,4 @@
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback } from 'react';
 import { Sheet, Stack, LinearProgress, Box, Grid, Tabs, TabList, Tab } from '@mui/joy';
 import DescriptionIcon from '@mui/icons-material/Description';
 import PeopleIcon from '@mui/icons-material/People';
@@ -21,8 +21,6 @@ const AnalyticsTab: React.FC = () => {
   const handleRefresh = useCallback(() => {
     analyticsQuery.refetch();
   }, [analyticsQuery]);
-
-  const exportFunctionRef = useRef<(() => void) | null>(null);
 
   const getTabIcon = (tabId: AnalyticsSubTab) => {
     switch (tabId) {
@@ -74,10 +72,11 @@ const AnalyticsTab: React.FC = () => {
             <Sheet sx={{ width: '100%' }}>
               {activeSubTab === AnalyticsSubTab.UserActivity && (
                 <UserActivityTab
-                  rawData={analyticsQuery.data?.logs || []}
+                  rows={analyticsQuery.data?.logs || []}
+                  total={analyticsQuery.data?.total || 0}
                   loading={isLoading}
+                  error={analyticsQuery.error}
                   onRefresh={handleRefresh}
-                  onExport={exportFunctionRef}
                 />
               )}
 
@@ -85,6 +84,7 @@ const AnalyticsTab: React.FC = () => {
                 <DailyReportTab
                   rawData={analyticsQuery.data?.reports || []}
                   loading={isLoading}
+                  error={analyticsQuery.error}
                   onRefresh={handleRefresh}
                 />
               )}
@@ -93,6 +93,7 @@ const AnalyticsTab: React.FC = () => {
                 <WeeklyReportTab
                   rawData={analyticsQuery.data?.reports || []}
                   loading={isLoading}
+                  error={analyticsQuery.error}
                   onRefresh={handleRefresh}
                 />
               )}

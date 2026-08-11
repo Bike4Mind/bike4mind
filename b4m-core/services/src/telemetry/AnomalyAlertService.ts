@@ -507,6 +507,8 @@ export class AnomalyAlertService {
     switch (type) {
       case 'context_overflow':
         return 'Context Overflow';
+      case 'high_utilization':
+        return 'High Utilization';
       case 'high_truncation':
         return 'High Truncation';
       case 'tool_failure':

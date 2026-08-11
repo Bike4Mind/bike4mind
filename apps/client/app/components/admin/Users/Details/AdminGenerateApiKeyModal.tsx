@@ -1,6 +1,6 @@
+import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { useAdminGenerateApiKey, CreateUserApiKeyRequest } from '@client/app/hooks/data/userApiKeys';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
-import { IUserDocument } from '@bike4mind/common';
 import { GENERIC_MODAL_API_KEY_SCOPES } from '@client/app/constants/apiKeyScopes';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import WarningIcon from '@mui/icons-material/Warning';
@@ -26,7 +26,7 @@ import dayjs from 'dayjs';
 interface AdminGenerateApiKeyModalProps {
   open: boolean;
   onClose: () => void;
-  user: IUserDocument;
+  user: AdminUserListItem;
 }
 
 // Embed keys are minted through the dedicated embed flow (epic #41 Phase E), not

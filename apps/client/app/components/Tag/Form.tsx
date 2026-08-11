@@ -1,4 +1,4 @@
-import { ITag } from '@bike4mind/common';
+import { IFileTagWithFileCount, ISessionTag, TagType } from '@bike4mind/common';
 import { colorPalettes, emojis, shades } from '@client/app/constants/tools';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Casino } from '@mui/icons-material';
@@ -52,7 +52,10 @@ const tagSchema = z.object({
 type TagFormValues = z.infer<typeof tagSchema>;
 
 const TagForm: FC<{
-  data?: ITag;
+  // A file tag has to arrive as IFileTagWithFileCount, not IFileTag: the count the preview chip
+  // renders is derived per read by tagService/listFileTags and is not stored on the document, so
+  // only a tag that came through the tag-list query carries one.
+  data?: ISessionTag | IFileTagWithFileCount;
   submitting?: boolean;
   onSubmit: (data: TagFormValues) => void;
 }> = ({ data, submitting, onSubmit }) => {
@@ -60,6 +63,9 @@ const TagForm: FC<{
 
   // Pre-select a random inspiration item if creating a new tag
   const initialInspiration = !data ? inspirationItems[0] : null;
+
+  // Only file tags carry a count; create mode (no data) correctly previews 0
+  const fileCount = data?.type === TagType.FILE ? data.fileCount : 0;
 
   const {
     control,
@@ -151,13 +157,14 @@ const TagForm: FC<{
           </Typography>
           <Typography
             level="body-xs"
+            data-testid="tag-form-preview-file-count"
             sx={{
               color: 'fileBrowser.createTag.previewTextSecondaryColor',
               fontWeight: '400',
               fontSize: '11px',
             }}
           >
-            📁 0 files
+            📁 {fileCount} {fileCount === 1 ? 'file' : 'files'}
           </Typography>
         </Box>
       </Box>

@@ -15,15 +15,14 @@ describe('tagService - listFileTags', () => {
     };
   };
 
-  // `fileCount` is deliberately wrong on every fixture tag: that stale value is exactly what the
-  // unmaintained write paths leave behind, so a test asserting on it would pass against the bug.
-  const tag = (name: string, storedFileCount: number): IFileTag =>
+  // No count on the fixtures, because a tag document does not carry one. Every number asserted
+  // below is therefore produced by listFileTags itself rather than read off the document.
+  const tag = (name: string): IFileTag =>
     ({
       id: `tag-${name}`,
       userId,
       name,
       type: TagType.FILE,
-      fileCount: storedFileCount,
       lastActivityAt: new Date(),
     }) as IFileTag;
 
@@ -33,8 +32,8 @@ describe('tagService - listFileTags', () => {
     adapters = { db: { fileTags: mockFileTagRepo, fabFiles: mockFabFileRepo } };
   });
 
-  it('returns the live aggregate count, not the drifted stored counter', async () => {
-    (mockFileTagRepo.findAllByUserId as Mock).mockResolvedValueOnce([tag('invoices', 99)]);
+  it('computes the count from the live aggregate', async () => {
+    (mockFileTagRepo.findAllByUserId as Mock).mockResolvedValueOnce([tag('invoices')]);
     (mockFabFileRepo.countFilesByTagForUser as Mock).mockResolvedValueOnce([{ tag: 'invoices', count: 2 }]);
 
     const result = await listFileTags(userId, params, adapters);
@@ -46,7 +45,7 @@ describe('tagService - listFileTags', () => {
   // toggleTags lowercases what it writes onto files, tagService/create keeps the casing the user
   // typed, so the common shape is a capitalised document over lowercase file tags.
   it('matches case-insensitively when no document claims the bucket exactly', async () => {
-    (mockFileTagRepo.findAllByUserId as Mock).mockResolvedValueOnce([tag('Invoices', 0)]);
+    (mockFileTagRepo.findAllByUserId as Mock).mockResolvedValueOnce([tag('Invoices')]);
     (mockFabFileRepo.countFilesByTagForUser as Mock).mockResolvedValueOnce([
       { tag: 'invoices', count: 2 },
       { tag: 'INVOICES', count: 1 },
@@ -60,7 +59,7 @@ describe('tagService - listFileTags', () => {
   // The unique index is { userId, name } with no collation, so these are two real documents.
   // Folding them together would credit each with the other's files and double-count the surface.
   it('keeps documents that differ only in case on their own exact counts', async () => {
-    (mockFileTagRepo.findAllByUserId as Mock).mockResolvedValueOnce([tag('Invoices', 0), tag('invoices', 0)]);
+    (mockFileTagRepo.findAllByUserId as Mock).mockResolvedValueOnce([tag('Invoices'), tag('invoices')]);
     (mockFabFileRepo.countFilesByTagForUser as Mock).mockResolvedValueOnce([
       { tag: 'Invoices', count: 3 },
       { tag: 'invoices', count: 2 },
@@ -72,7 +71,7 @@ describe('tagService - listFileTags', () => {
   });
 
   it('drops a bucket it cannot attribute rather than crediting both candidates', async () => {
-    (mockFileTagRepo.findAllByUserId as Mock).mockResolvedValueOnce([tag('Invoices', 0), tag('invoices', 0)]);
+    (mockFileTagRepo.findAllByUserId as Mock).mockResolvedValueOnce([tag('Invoices'), tag('invoices')]);
     (mockFabFileRepo.countFilesByTagForUser as Mock).mockResolvedValueOnce([
       { tag: 'Invoices', count: 3 },
       { tag: 'invoices', count: 2 },
@@ -85,7 +84,7 @@ describe('tagService - listFileTags', () => {
   });
 
   it('adds unclaimed case variants to the single document that folds to them', async () => {
-    (mockFileTagRepo.findAllByUserId as Mock).mockResolvedValueOnce([tag('invoices', 0)]);
+    (mockFileTagRepo.findAllByUserId as Mock).mockResolvedValueOnce([tag('invoices')]);
     (mockFabFileRepo.countFilesByTagForUser as Mock).mockResolvedValueOnce([
       { tag: 'invoices', count: 2 },
       { tag: 'Invoices', count: 3 },
@@ -97,7 +96,7 @@ describe('tagService - listFileTags', () => {
   });
 
   it('reports zero for a tag no live file carries', async () => {
-    (mockFileTagRepo.findAllByUserId as Mock).mockResolvedValueOnce([tag('orphaned', 7)]);
+    (mockFileTagRepo.findAllByUserId as Mock).mockResolvedValueOnce([tag('orphaned')]);
     (mockFabFileRepo.countFilesByTagForUser as Mock).mockResolvedValueOnce([{ tag: 'something-else', count: 4 }]);
 
     const result = await listFileTags(userId, params, adapters);
@@ -106,7 +105,7 @@ describe('tagService - listFileTags', () => {
   });
 
   it('preserves the rest of the tag document', async () => {
-    const stored = tag('invoices', 99);
+    const stored = tag('invoices');
     (mockFileTagRepo.findAllByUserId as Mock).mockResolvedValueOnce([stored]);
     (mockFabFileRepo.countFilesByTagForUser as Mock).mockResolvedValueOnce([{ tag: 'invoices', count: 2 }]);
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { KnowledgeType, type DataLakeMembershipScope } from '@bike4mind/common';
 import { createMongoServer } from '../../__test__/createMongoServer';
@@ -125,6 +125,18 @@ describe('FabFile data lake lifecycle membership', () => {
 
       expect((await fabFileRepository.computeDataLakeStats(scope)).fileCount).toBe(0);
     });
+
+    it('excludes a presigned member whose bytes have not landed yet (#1342)', async () => {
+      // Same exclusion countDataLakeFilesByMembership pins - counting an orphan 'pending' row
+      // would let an abandoned upload permanently activate the lake.
+      const rows = await seedLakeRows();
+      await FabFile.updateOne({ _id: rows.metaTagged._id }, { $set: { status: 'pending' } });
+
+      const stats = await fabFileRepository.computeDataLakeStats(scope);
+
+      expect(stats.fileCount).toBe(1);
+      expect(stats.totalSizeBytes).toBe(100);
+    });
   });
 
   describe('archiveByDataLakeTag / unarchiveByDataLakeTag', () => {
@@ -165,6 +177,16 @@ describe('FabFile data lake lifecycle membership', () => {
       const found = await fabFileRepository.findArchivedByDataLakeTag(scope);
 
       expect(found.map(f => f.fileName).sort()).toEqual(['meta.txt', 'prefix-owned.txt']);
+    });
+
+    it('hasArchivedByDataLakeTag reports existence without materializing the rows', async () => {
+      await seedLakeRows();
+
+      expect(await fabFileRepository.hasArchivedByDataLakeTag(scope)).toBe(false);
+
+      await fabFileRepository.archiveByDataLakeTag(scope);
+
+      expect(await fabFileRepository.hasArchivedByDataLakeTag(scope)).toBe(true);
     });
   });
 
@@ -207,6 +229,270 @@ describe('FabFile data lake lifecycle membership', () => {
       const found = await fabFileRepository.findDeletedByDataLakeTag(scope);
 
       expect(found).toHaveLength(2);
+    });
+  });
+
+  // A teardown stamps one shared value across the rows it flips and the lake records it, so the
+  // reversal can name that batch exactly. What these pin is that "exactly" is equality: a range
+  // would readmit a file the creator deleted on their own on either side of the teardown.
+  describe('stamp-keyed teardown batches', () => {
+    const EARLIER = new Date('2026-01-01T00:00:00.000Z');
+    const STAMP = new Date('2026-06-01T00:00:00.000Z');
+    const LATER = new Date('2026-07-01T00:00:00.000Z');
+
+    /** A member the creator had already deleted on their own, at its own unrelated stamp. */
+    const deleteIndependently = (id: mongoose.Types.ObjectId, at: Date) =>
+      FabFile.updateOne({ _id: id }, { $set: { deletedAt: at } });
+
+    describe('delete axis', () => {
+      it('writes the caller stamp on every row it flips', async () => {
+        const rows = await seedLakeRows();
+
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        for (const id of rows.memberIds) {
+          expect((await readRaw(id))?.deletedAt?.getTime()).toBe(STAMP.getTime());
+        }
+      });
+
+      it('leaves an independently deleted member on its own stamp', async () => {
+        const rows = await seedLakeRows();
+        await deleteIndependently(rows.prefixOwned._id, EARLIER);
+
+        const flipped = await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        expect(flipped).toEqual([rows.metaTagged._id.toString()]);
+        expect((await readRaw(rows.prefixOwned._id.toString()))?.deletedAt?.getTime()).toBe(EARLIER.getTime());
+      });
+
+      it('un-deletes the named batch and nothing deleted before it', async () => {
+        const rows = await seedLakeRows();
+        await deleteIndependently(rows.prefixOwned._id, EARLIER);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP);
+
+        expect(restored).toBe(1);
+        expect((await readRaw(rows.metaTagged._id.toString()))?.deletedAt ?? null).toBeNull();
+        expect((await readRaw(rows.prefixOwned._id.toString()))?.deletedAt?.getTime()).toBe(EARLIER.getTime());
+      });
+
+      it('un-deletes a row stamped exactly at the mark', async () => {
+        // The boundary a `$gt` bound would drop on the floor - every row a teardown flips carries
+        // the mark itself, so an exclusive comparison skips the whole batch.
+        await seedLakeRows();
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        expect(await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP)).toBe(2);
+      });
+
+      it('leaves a member deleted DURING the window deleted', async () => {
+        // The case a lower bound readmits: the per-file delete routes keep stamping members while
+        // the lake sits deleted, and those deletions are the creator's, not the teardown's.
+        const rows = await seedLakeRows();
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+        const laterMember = await makeFile({
+          fileName: 'added-later.txt',
+          userId: CREATOR,
+          tags: [{ name: 'acme:x' }],
+        });
+        await deleteIndependently(laterMember._id, LATER);
+
+        const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP);
+
+        expect(restored).toBe(2);
+        expect((await readRaw(laterMember._id.toString()))?.deletedAt?.getTime()).toBe(LATER.getTime());
+        for (const id of rows.memberIds) {
+          expect((await readRaw(id))?.deletedAt ?? null).toBeNull();
+        }
+      });
+
+      it('reverses everything when no stamp is given, for a lake torn down before the mark existed', async () => {
+        const rows = await seedLakeRows();
+        await deleteIndependently(rows.prefixOwned._id, EARLIER);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        expect(await fabFileRepository.undeleteByDataLakeTag(scope)).toBe(2);
+      });
+
+      it('narrows the dedup read to the batch', async () => {
+        const rows = await seedLakeRows();
+        await deleteIndependently(rows.prefixOwned._id, EARLIER);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        expect((await fabFileRepository.findDeletedByDataLakeTag(scope, STAMP)).map(f => f.fileName)).toEqual([
+          'meta.txt',
+        ]);
+        expect(await fabFileRepository.findDeletedByDataLakeTag(scope)).toHaveLength(2);
+      });
+
+      it('composes the stamp with excludeIds', async () => {
+        const rows = await seedLakeRows();
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [rows.prefixOwned._id.toString()], STAMP);
+
+        expect(restored).toBe(1);
+        expect((await readRaw(rows.prefixOwned._id.toString()))?.deletedAt?.getTime()).toBe(STAMP.getTime());
+      });
+    });
+
+    // Archive->delete->restore: restore also clears archivedAt, bounded the same way as the
+    // delete axis - by equality against the stamp this lake's own archive wrote.
+    describe('archive axis (restore also clears archivedAt)', () => {
+      const ARCHIVE_STAMP = new Date('2026-05-01T00:00:00.000Z');
+      const OTHER_STAMP = new Date('2026-04-01T00:00:00.000Z');
+
+      it('writes the caller stamp on every row archiveByDataLakeTag flips', async () => {
+        const rows = await seedLakeRows();
+
+        await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
+
+        for (const id of rows.memberIds) {
+          expect((await readRaw(id))?.archivedAt?.getTime()).toBe(ARCHIVE_STAMP.getTime());
+        }
+      });
+
+      it('clears archivedAt alongside deletedAt when the archive stamp matches this lake', async () => {
+        const rows = await seedLakeRows();
+        await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
+
+        expect(restored).toBe(2);
+        for (const id of rows.memberIds) {
+          const row = await readRaw(id);
+          expect(row?.deletedAt ?? null).toBeNull();
+          expect(row?.archivedAt ?? null).toBeNull();
+        }
+      });
+
+      it('splits a single mixed batch correctly: one row matches the stamp, the other does not', async () => {
+        // Proves the two-partition update's arithmetic in the one case that actually exercises
+        // both branches at once - every other test here has all-or-nothing rows, which cannot
+        // catch a double-count or a dropped row in ownStamp.modifiedCount + otherStamp.modifiedCount.
+        const rows = await seedLakeRows();
+        await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
+        // One member's stamp diverges after the fact (e.g. re-archived by another mechanism).
+        await FabFile.updateOne({ _id: rows.prefixOwned._id }, { $set: { archivedAt: OTHER_STAMP } });
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
+
+        expect(restored).toBe(2);
+        const matched = await readRaw(rows.metaTagged._id.toString());
+        expect(matched?.deletedAt ?? null).toBeNull();
+        expect(matched?.archivedAt ?? null).toBeNull();
+        const diverged = await readRaw(rows.prefixOwned._id.toString());
+        expect(diverged?.deletedAt ?? null).toBeNull();
+        expect(diverged?.archivedAt?.getTime()).toBe(OTHER_STAMP.getTime());
+      });
+
+      it('sends the $ne bound to Mongo on the non-matching partition, not just an end-state that could pass by resolution-order luck', async () => {
+        // An end-state assertion alone does not reliably catch this: removing partition B's `$ne`
+        // bound (replacing it with the bare base filter) makes the two updateMany calls race on
+        // shared rows against a real DB, so this file's row-level tests fail only intermittently
+        // under that mutation, not every run - easy to write off as flakiness rather than catch.
+        // Spying on the actual filter sent to Mongo asserts the predicate itself, not what it
+        // happens to produce this run, so it fails deterministically.
+        await seedLakeRows();
+        await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+        const spy = vi.spyOn(FabFile, 'updateMany');
+
+        await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
+
+        expect(spy).toHaveBeenCalledTimes(2);
+        const filters = spy.mock.calls.map(call => call[0] as Record<string, unknown>);
+        // Partition A: bare equality. Partition B: $ne - both must be present as sent to Mongo,
+        // not merely implied by the rows this run happened to produce.
+        expect(filters.some(f => f.archivedAt === ARCHIVE_STAMP)).toBe(true);
+        expect(filters.some(f => JSON.stringify(f.archivedAt) === JSON.stringify({ $ne: ARCHIVE_STAMP }))).toBe(true);
+        spy.mockRestore();
+      });
+
+      it('leaves a member archived under a DIFFERENT stamp untouched (a prefix-sharing sibling lake)', async () => {
+        const rows = await seedLakeRows();
+        // Simulates a file this lake's delete swept up (matching deletedAt) but whose archivedAt
+        // was written by a different lake's archive - a different stamp this restore does not own.
+        await FabFile.updateOne({ _id: rows.metaTagged._id }, { $set: { archivedAt: OTHER_STAMP } });
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
+
+        expect(restored).toBe(2);
+        const row = await readRaw(rows.metaTagged._id.toString());
+        expect(row?.deletedAt ?? null).toBeNull();
+        expect(row?.archivedAt?.getTime()).toBe(OTHER_STAMP.getTime());
+      });
+
+      it('leaves archivedAt untouched when no archive stamp is given (pre-mark lake, the known limitation)', async () => {
+        const rows = await seedLakeRows();
+        await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP);
+
+        expect(restored).toBe(2);
+        for (const id of rows.memberIds) {
+          const row = await readRaw(id);
+          expect(row?.deletedAt ?? null).toBeNull();
+          expect(row?.archivedAt?.getTime()).toBe(ARCHIVE_STAMP.getTime());
+        }
+      });
+
+      it('never clears archivedAt on a dedup-discarded duplicate (excludeIds)', async () => {
+        const rows = await seedLakeRows();
+        await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        const restored = await fabFileRepository.undeleteByDataLakeTag(
+          scope,
+          [rows.prefixOwned._id.toString()],
+          STAMP,
+          ARCHIVE_STAMP
+        );
+
+        expect(restored).toBe(1);
+        const excluded = await readRaw(rows.prefixOwned._id.toString());
+        expect(excluded?.deletedAt).not.toBeNull();
+        expect(excluded?.archivedAt?.getTime()).toBe(ARCHIVE_STAMP.getTime());
+      });
+
+      it('leaves a file archived-by-lake but individually deleted (a different delete stamp) untouched', async () => {
+        const rows = await seedLakeRows();
+        await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
+        // Deleted on its own, at a stamp the teardown never wrote.
+        await deleteIndependently(rows.metaTagged._id, EARLIER);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
+
+        // Only prefixOwned matched the teardown's stamp; metaTagged kept its own earlier one.
+        expect(restored).toBe(1);
+        const independentlyDeleted = await readRaw(rows.metaTagged._id.toString());
+        expect(independentlyDeleted?.deletedAt?.getTime()).toBe(EARLIER.getTime());
+        expect(independentlyDeleted?.archivedAt?.getTime()).toBe(ARCHIVE_STAMP.getTime());
+      });
+
+      it('the displayed file count agrees with the Files browser after restore (the stale-count symptom)', async () => {
+        const rows = await seedLakeRows();
+        await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
+        await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
+
+        await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
+
+        // computeDataLakeStats is what the lake's displayed fileCount is recomputed from - it must
+        // count both restored members now that neither carries a deletedAt or archivedAt marker.
+        const stats = await fabFileRepository.computeDataLakeStats(scope);
+        expect(stats.fileCount).toBe(rows.memberIds.length);
+        for (const id of rows.memberIds) {
+          const row = await readRaw(id);
+          expect(row?.deletedAt ?? null).toBeNull();
+          expect(row?.archivedAt ?? null).toBeNull();
+        }
+      });
     });
   });
 
@@ -253,6 +539,33 @@ describe('FabFile data lake lifecycle membership', () => {
       await fabFileRepository.hardDeleteByDataLakeTag(scope);
 
       expect(await fabFileRepository.hardDeleteByDataLakeTag(scope)).toEqual([]);
+    });
+  });
+
+  describe('hardDeleteByIds', () => {
+    it('destroys exactly the ids given, soft-deleted included, and nothing a re-resolve would add', async () => {
+      const rows = await seedLakeRows();
+      await FabFile.updateOne({ _id: rows.prefixOwned._id }, { $set: { deletedAt: new Date() } });
+      // Stands in for a file tagged into the lake after the sweep resolved its ids: a member by
+      // the predicate, absent from the snapshot, and so not this run's to destroy.
+      const joinedMidSweep = await makeFile({ fileName: 'late.txt', userId: CREATOR, tags: [{ name: 'acme:late' }] });
+
+      const purged = await fabFileRepository.hardDeleteByIds(rows.memberIds);
+
+      expect(purged.sort()).toEqual([...rows.memberIds].sort());
+      for (const id of rows.memberIds) expect(await readRaw(id)).toBeNull();
+      expect(await readRaw(joinedMidSweep._id.toString())).not.toBeNull();
+      // Whereas the predicate-resolving door would have taken it.
+      expect(await fabFileRepository.findIdsByDataLakeTag(scope)).toContain(joinedMidSweep._id.toString());
+    });
+
+    it('is a no-op on an empty set and on already-purged ids', async () => {
+      const rows = await seedLakeRows();
+      expect(await fabFileRepository.hardDeleteByIds([])).toEqual([]);
+      await fabFileRepository.hardDeleteByIds(rows.memberIds);
+
+      expect(await fabFileRepository.hardDeleteByIds(rows.memberIds)).toEqual(rows.memberIds);
+      for (const id of rows.strangerIds) expect(await readRaw(id)).not.toBeNull();
     });
   });
 

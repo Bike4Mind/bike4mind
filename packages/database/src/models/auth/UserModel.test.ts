@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { AuthStrategy } from '@bike4mind/common';
-import { User } from './UserModel';
+import { User, authProviderDedupeKey } from './UserModel';
 import { setupMongoTest } from '../../__test__/utils';
 
 describe('UserModel authProviders', () => {
@@ -120,5 +120,64 @@ describe('UserModel authProviders', () => {
       expect(reloaded?.authProviders).toHaveLength(1);
       expect(reloaded?.authProviders![0].accessToken).toBe('fresh');
     });
+  });
+});
+
+describe('authProviderDedupeKey', () => {
+  // The only place the delimiter's separating property is actually exercised. The
+  // model-level "keeps distinct identities" test cannot: AuthStrategy
+  // (b4m-core/common/src/schemas/user.ts) has no value that is a prefix of another, so no
+  // two schema-valid identities collide under concatenation regardless of the delimiter.
+  // That is why this pure test exists - it is not a safety claim (the delimiter keeps
+  // working whatever gets added to the enum), just the reason the boundary case is tested
+  // here rather than through the model.
+  const NUL = String.fromCharCode(0);
+
+  it('keeps distinct the identities that would collide at the concatenation boundary without a delimiter', () => {
+    // ('ab','c') and ('a','bc') both concatenate to 'abc' with no separator; only the
+    // U+0000 delimiter keeps their keys distinct - remove it and both collapse to 'abc'.
+    // Cast: these are deliberately non-enum stand-ins - real AuthStrategy values never share
+    // a boundary prefix, so a genuine collision case cannot be built from the enum.
+    expect(authProviderDedupeKey('ab' as AuthStrategy, 'c')).not.toBe(authProviderDedupeKey('a' as AuthStrategy, 'bc'));
+  });
+
+  it('joins strategy and id with a single U+0000 byte', () => {
+    expect(authProviderDedupeKey(AuthStrategy.Okta, 'sub-a')).toBe(`okta${NUL}sub-a`);
+  });
+
+  it('treats a null id as an empty id', () => {
+    expect(authProviderDedupeKey(AuthStrategy.Github, null)).toBe(`github${NUL}`);
+  });
+});
+
+describe('UserModel preferences', () => {
+  setupMongoTest();
+
+  beforeEach(async () => {
+    await User.deleteMany({});
+  });
+
+  // UserPreferencesSchema is a strict subdocument, so it silently drops any key not
+  // declared on it - a pref added to the client types and the Zod allowlist but not
+  // here still reverts on reload. Drop showSplashCards from the schema -> this fails.
+  it('persists declared boolean display preferences and drops undeclared keys', async () => {
+    const user = await User.create({
+      name: 'Preferences Test',
+      username: `prefs-test-${Math.random().toString(36).slice(2, 10)}`,
+      password: null,
+      hasUsablePassword: false,
+      preferences: {
+        showSplashCards: true,
+        showFunTools: false,
+        saveGeneratedAudio: true,
+        notAPreference: true,
+      },
+    } as unknown as Parameters<typeof User.create>[0]);
+
+    const reloaded = await User.findById(user._id);
+    expect(reloaded?.preferences?.showSplashCards).toBe(true);
+    expect(reloaded?.preferences?.showFunTools).toBe(false);
+    expect(reloaded?.preferences?.saveGeneratedAudio).toBe(true);
+    expect((reloaded?.preferences as Record<string, unknown>)?.notAPreference).toBeUndefined();
   });
 });

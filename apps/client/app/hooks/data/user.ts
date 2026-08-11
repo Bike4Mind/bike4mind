@@ -1,7 +1,7 @@
-import { useEffect } from 'react';
 import {
   Collection,
   CollectionType,
+  IActiveSessionDto,
   ICounterLogDocument,
   InviteType,
   ISessionDocument,
@@ -24,7 +24,14 @@ import {
   updateUserToServer,
   fetchUserTags,
 } from '@client/app/utils/userAPICalls';
-import { keepPreviousData, useMutation, useQuery, useQueryClient, UseQueryOptions } from '@tanstack/react-query';
+import {
+  keepPreviousData,
+  QueryClient,
+  useMutation,
+  useQuery,
+  useQueryClient,
+  UseQueryOptions,
+} from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import { clearClientCaches } from '@client/app/utils/clearClientCaches';
@@ -215,6 +222,38 @@ export function useUserRevokeSharing(
   });
 }
 
+/**
+ * Client-side teardown shared by every sign-out path (this-device logout, log-out-all-devices):
+ * drop the in-memory user + tokens, wipe client persistence, purge queries (keeping only the
+ * non-user-specific public server config), then hard-reload to /login so no in-memory state
+ * (components, query subscriptions, WebSocket) survives. The server-side revoke differs per path
+ * and is done by the caller BEFORE this runs.
+ */
+async function tearDownClientSession(opts: {
+  setCurrentUser: (user: IUserDocument | null) => void;
+  resetTokens: () => void;
+  queryClient: QueryClient;
+}): Promise<void> {
+  opts.setCurrentUser(null);
+  opts.resetTokens();
+  // Clear all client-side persistence (IndexedDB: React Query, Dexie, TagCache,
+  // and user-specific localStorage) before removing in-memory queries.
+  await clearClientCaches();
+  // Preserve server-config-public: it contains only apiUrl + defaultTheme and is not user-specific.
+  // The full server-config (auth'd) is intentionally purged on logout to prevent
+  // bucket names and the PDF Express key from persisting in memory across sessions.
+  opts.queryClient.removeQueries({
+    predicate: query => query.queryKey[0] !== 'server-config-public',
+  });
+
+  // Hard reload to /login to destroy all in-memory state (React components,
+  // query subscriptions, WebSocket connections). Matches the pattern used by
+  // loginAs/returnToAdmin flows which also use window.location.replace().
+  const redirectTo = new URLSearchParams(window.location.search).get('redirectTo');
+  const qs = redirectTo ? `?redirectTo=${encodeURIComponent(redirectTo)}` : '';
+  window.location.replace(`/login${qs}`);
+}
+
 export function useUserLogout() {
   const { setCurrentUser } = useUser();
   const resetTokens = useAccessToken(s => s.resetTokens);
@@ -223,6 +262,8 @@ export function useUserLogout() {
   return useMutation({
     mutationFn: async () => {
       try {
+        // Per-device: revokes ONLY this browser's session server-side (no tokenVersion bump),
+        // so other devices stay signed in (issue #1194).
         await api.get('/api/logout');
       } catch (error) {
         // Ignore 401 errors during logout
@@ -230,25 +271,61 @@ export function useUserLogout() {
           throw error;
         }
       }
+      await tearDownClientSession({ setCurrentUser, resetTokens, queryClient });
+    },
+  });
+}
 
-      setCurrentUser(null);
-      resetTokens();
-      // Clear all client-side persistence (IndexedDB: React Query, Dexie, TagCache,
-      // and user-specific localStorage) before removing in-memory queries.
-      await clearClientCaches();
-      // Preserve server-config-public: it contains only apiUrl + defaultTheme and is not user-specific.
-      // The full server-config (auth'd) is intentionally purged on logout to prevent
-      // bucket names and the PDF Express key from persisting in memory across sessions.
-      queryClient.removeQueries({
-        predicate: query => query.queryKey[0] !== 'server-config-public',
-      });
+const ACTIVE_SESSIONS_KEY = ['users', 'me', 'sessions'] as const;
 
-      // Hard reload to /login to destroy all in-memory state (React components,
-      // query subscriptions, WebSocket connections). Matches the pattern used by
-      // loginAs/returnToAdmin flows which also use window.location.replace().
-      const redirectTo = new URLSearchParams(window.location.search).get('redirectTo');
-      const qs = redirectTo ? `?redirectTo=${encodeURIComponent(redirectTo)}` : '';
-      window.location.replace(`/login${qs}`);
+/** The caller's own active auth sessions (devices), newest-active first. Powers the
+ *  Active Sessions list in Settings -> Security. */
+export function useGetActiveSessions() {
+  return useQuery({
+    queryKey: ACTIVE_SESSIONS_KEY,
+    queryFn: async () => {
+      const res = await api.get<{ items: IActiveSessionDto[] }>('/api/users/me/sessions');
+      return res.data.items;
+    },
+  });
+}
+
+/** Revoke a single session ("sign out this device") by sid, then refresh the list. */
+export function useRevokeSession() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (sid: string) => {
+      await api.delete('/api/users/me/sessions', { params: { sid } });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ACTIVE_SESSIONS_KEY });
+      toast.success('Device signed out');
+    },
+    onError: error => {
+      const data = isAxiosError(error) ? (error.response?.data as ErrorResponse | undefined) : undefined;
+      toast.error(data?.error ?? 'Failed to sign out device');
+    },
+  });
+}
+
+/**
+ * "Log out of all other devices" - revoke every session EXCEPT the current one (GitHub/Google/Slack
+ * model). The current device stays signed in, so there is no teardown/redirect; just refresh the
+ * list so the now-revoked devices drop off.
+ */
+export function useRevokeOtherSessions() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      await api.post('/api/users/me/sessions/revoke-others');
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ACTIVE_SESSIONS_KEY });
+      toast.success('Signed out of all other devices');
+    },
+    onError: error => {
+      const data = isAxiosError(error) ? (error.response?.data as ErrorResponse | undefined) : undefined;
+      toast.error(data?.error ?? 'Failed to sign out other devices');
     },
   });
 }
@@ -330,16 +407,14 @@ export function useGetUserCollections(userId: string | undefined | null, params:
 
 export function useLoginAsUser() {
   const queryClient = useQueryClient();
-  const { accessToken, refreshToken, setAccessToken, setRefreshToken, setReturnToken, setReturnRefreshToken } =
-    useAccessToken();
+  const { setVerifiedSession, setImpersonating } = useAccessToken();
   const { setCurrentUser } = useUser();
 
   return useMutation({
     mutationFn: async ({ id, mfaToken }: { id: string; mfaToken: string }) => {
-      const { data } = await api.post<{ user: IUserDocument; accessToken: string; refreshToken: string }>(
-        `/api/users/${id}/loginAs`,
-        { mfaToken }
-      );
+      const { data } = await api.post<{ user: IUserDocument; accessToken: string }>(`/api/users/${id}/loginAs`, {
+        mfaToken,
+      });
       return data;
     },
     onSuccess: async data => {
@@ -354,25 +429,12 @@ export function useLoginAsUser() {
       // null currentUser and redirects to /login (logging the admin out).
       await clearClientCaches();
 
-      // Stash BOTH of the admin's tokens so "Return to Admin" can restore a
-      // consistent session: returnToken (access) is used to validate the return,
-      // returnRefreshToken restores the admin's refresh token (the active one is
-      // about to be swapped to the impersonated user's).
-      // Read from the store (not the hook closure) so we capture the freshest
-      // admin tokens: if the loginAs request hit a 401, ApiContext rotated both
-      // tokens via /api/auth/refreshToken before the retry succeeded, leaving the
-      // closure values stale (and the old refresh token possibly invalidated).
-      // clearClientCaches() above does not touch the token store, so these are
-      // still the admin's. Fall back to the closure values defensively.
-      const { accessToken: adminAccessToken, refreshToken: adminRefreshToken } = useAccessToken.getState();
-      setReturnToken(adminAccessToken ?? accessToken);
-      setReturnRefreshToken(adminRefreshToken ?? refreshToken);
-
-      // Switch the active session to the impersonated user - full token PAIR so a
-      // later refresh keeps the impersonated identity instead of flipping to admin.
-      // Persist their identity so it survives the hard reload below.
-      setAccessToken(data.accessToken);
-      setRefreshToken(data.refreshToken);
+      // The token swap itself happened server-side: /api/users/[id]/loginAs parked the admin's
+      // refresh token in the HttpOnly return cookie and handed the primary cookie to the
+      // impersonated user. Nothing sensitive is stashed here any more - only the access token
+      // (in memory) and the impersonation flag the UI reads.
+      setVerifiedSession(data.accessToken);
+      setImpersonating(true);
       setCurrentUser(data.user);
 
       // Remove in-memory queries only AFTER the impersonated identity is active, so any
@@ -382,7 +444,7 @@ export function useLoginAsUser() {
       toast.success('Successfully logged in as user');
 
       // Wait for state to persist before redirecting
-      // This ensures the new token and user data are saved to localStorage
+      // This ensures the new user data is saved to localStorage
       setTimeout(() => {
         window.location.replace('/new');
       }, 50);
@@ -400,20 +462,21 @@ export function useLoginAsUser() {
   });
 }
 
-// Sentinel for a confirmed-dead admin return token (identify 401/403). onError matches it
-// EXACTLY (not a loose 'expired' substring) so an unrelated error can't trip force-logout.
+// Sentinel for a confirmed-dead admin return session (the return cookie is gone, expired, or
+// its token was already rotated away). onError matches it EXACTLY (not a loose 'expired'
+// substring) so an unrelated error can't trip force-logout.
 export const ADMIN_SESSION_EXPIRED = 'Admin session has expired. Please log in again.';
 
-// Customer-facing message for a transient (5xx / other non-OK) validation failure. No
-// status code (not actionable for a user), and it must NOT equal the sentinel so onError
-// leaves the session intact on flaky connectivity.
+// Customer-facing message for a transient (5xx / network) failure. No status code (not
+// actionable for a user), and it must NOT equal the sentinel so onError leaves the session
+// intact on flaky connectivity.
 export const ADMIN_SESSION_VALIDATION_FAILED = "We couldn't verify your admin session. Please try again.";
 
 /**
- * Maps a /api/identify return-token validation response to the error message to throw, or
- * null on success. Pure so the "a 5xx must not force a logout" invariant is unit-testable
- * without rendering the mutation: only 401/403 yields the force-logout sentinel; any other
- * non-OK yields a transient message that onError won't act on.
+ * Maps a /api/auth/returnToAdmin response to the error message to throw, or null on success.
+ * Pure so the "a 5xx must not force a logout" invariant is unit-testable without rendering the
+ * mutation: only 401/403 yields the force-logout sentinel; any other non-OK yields a transient
+ * message that onError won't act on.
  */
 export function adminReturnValidationError(status: number, ok: boolean): string | null {
   if (status === 401 || status === 403) {
@@ -427,43 +490,37 @@ export function adminReturnValidationError(status: number, ok: boolean): string 
 
 export function useReturnToAdmin() {
   const queryClient = useQueryClient();
-  const { returnToken, returnRefreshToken, setAccessToken, setRefreshToken, setReturnToken, setReturnRefreshToken } =
-    useAccessToken();
+  const { setVerifiedSession, setImpersonating } = useAccessToken();
   const { setCurrentUser } = useUser();
 
   return useMutation({
     mutationFn: async () => {
-      if (!returnToken) {
-        throw new Error('No admin token available');
-      }
-      // Validate the return token is still usable by calling identify with it.
-      // Use fetch directly (not the api axios instance) to bypass the request
-      // interceptor that would overwrite the Authorization header with the
-      // impersonated user's token.
+      // The admin's refresh token lives in the HttpOnly return cookie, so the whole swap is a
+      // single server round-trip: it rotates that token, hands it back as the primary refresh
+      // cookie, revokes the impersonation session and returns a fresh admin access token.
+      // Uses fetch rather than the `api` instance so the request interceptor can't attach the
+      // impersonated user's bearer token - the route authenticates on the cookie alone.
       let res: Response;
       try {
-        res = await fetch('/api/identify', {
-          headers: { Authorization: `Bearer ${returnToken}` },
-        });
+        res = await fetch('/api/auth/returnToAdmin', { method: 'POST', credentials: 'same-origin' });
       } catch (err) {
-        // Network failure (offline / DNS) - transient, like a 5xx: show the friendly
-        // message and keep the session (not the ADMIN_SESSION_EXPIRED sentinel, so onError
-        // won't force a logout) rather than a raw "Failed to fetch".
-        // Log the raw error first so genuinely broken connectivity is visible in telemetry
-        // (the friendly remap below would otherwise swallow it entirely).
-        console.warn('Return-to-admin identify request failed (network error):', err);
+        // Network failure (offline / DNS) - transient, like a 5xx: show the friendly message and
+        // keep the session (not the ADMIN_SESSION_EXPIRED sentinel, so onError won't force a
+        // logout) rather than a raw "Failed to fetch". Log the raw error first so genuinely
+        // broken connectivity is visible in telemetry.
+        console.warn('Return-to-admin request failed (network error):', err);
         throw new Error(ADMIN_SESSION_VALIDATION_FAILED);
       }
-      // Only an auth rejection (401/403) means the admin's return token is actually dead
-      // and the session must be torn down; any other non-OK (5xx) is transient and must not
-      // force a logout. adminReturnValidationError encodes that rule (and is unit-tested).
+      // Only an auth rejection (401/403) means the admin's return cookie is actually dead and the
+      // session must be torn down; any other non-OK (5xx) is transient and must not force a
+      // logout. adminReturnValidationError encodes that rule (and is unit-tested).
       const validationError = adminReturnValidationError(res.status, res.ok);
       if (validationError) {
         throw new Error(validationError);
       }
       return (await res.json()) as { user: IUserDocument; accessToken: string };
     },
-    onSuccess: async ({ user: adminUser, accessToken: freshToken }) => {
+    onSuccess: async ({ user: adminUser, accessToken }) => {
       // Cancel in-flight queries (e.g. admin-settings) BEFORE clearing caches so a
       // request dispatched under the impersonated token can't resolve and re-persist
       // impersonated data after clearClientCaches() deletes the IndexedDB blob.
@@ -475,17 +532,8 @@ export function useReturnToAdmin() {
       // redirects to /login.
       await clearClientCaches();
 
-      // Use the fresh token from identify (may have been refreshed if near expiry)
-      // and restore the admin's refresh token. In the current flow the active
-      // refresh token is the impersonated user's, so swap in returnRefreshToken.
-      // If returnRefreshToken is absent we're in a pre-upgrade session (old loginAs
-      // never stashed it) - and old loginAs also never swapped the refresh token,
-      // so the active one is still the admin's. Fall back to it rather than clearing
-      // it, which would otherwise break the restored admin session's token refresh.
-      setAccessToken(freshToken ?? returnToken);
-      setRefreshToken(returnRefreshToken ?? useAccessToken.getState().refreshToken);
-      setReturnToken(null);
-      setReturnRefreshToken(null);
+      setVerifiedSession(accessToken);
+      setImpersonating(false);
       setCurrentUser(adminUser);
 
       // Remove in-memory queries only AFTER the admin identity is restored, so any
@@ -495,7 +543,6 @@ export function useReturnToAdmin() {
       toast.success('Successfully returned to admin account');
 
       // Wait for state to persist before redirecting
-      // This ensures the token and user data are saved to localStorage
       setTimeout(() => {
         window.location.replace('/new');
       }, 50);
@@ -505,12 +552,12 @@ export function useReturnToAdmin() {
 
       toast.error(errorMessage);
 
-      // Only a confirmed-expired admin token (401/403) forces a full logout; transient
+      // Only a confirmed-dead return cookie (401/403) forces a full logout; transient
       // 5xx / network failures leave the session intact (don't log the admin out on flaky
-      // connectivity). markSessionExpired() clears every token (including the impersonation
-      // return tokens, as resetTokens() did) and stamps expiredReason: 'expired'. Redirect
-      // via session_expired so the reason reliably shows on the login page - the toast above
-      // can be lost when window.location.replace tears down the DOM before sonner paints.
+      // connectivity). markSessionExpired() clears the session and stamps
+      // expiredReason: 'expired'. Redirect via session_expired so the reason reliably shows on
+      // the login page - the toast above can be lost when window.location.replace tears down the
+      // DOM before sonner paints.
       if (errorMessage === ADMIN_SESSION_EXPIRED) {
         useAccessToken.getState().markSessionExpired();
         setCurrentUser(null);
@@ -518,26 +565,6 @@ export function useReturnToAdmin() {
       }
     },
   });
-}
-
-export function useReturnTokenValidation() {
-  useEffect(() => {
-    const { returnToken, setReturnToken, setReturnRefreshToken, accessToken } = useAccessToken.getState();
-    if (!accessToken || !returnToken) return;
-    fetch('/api/identify', { headers: { Authorization: `Bearer ${returnToken}` } })
-      .then(res => {
-        if (res.status === 401 || res.status === 403) {
-          // Admin return credential is dead - drop both halves together.
-          setReturnToken(null);
-          setReturnRefreshToken(null);
-        }
-        // Other non-ok statuses (5xx, etc.) are server errors - don't clear
-      })
-      .catch(() => {
-        // Network error - token validity is unknown; preserve it so the admin
-        // can still use "Return to Admin" once connectivity is restored
-      });
-  }, []); // [] is correct — getState() is a snapshot, not a React subscription
 }
 
 export function useGetOrganizationUsers(organizationId: string | null | undefined) {

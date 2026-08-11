@@ -2,9 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { Box, Button, CircularProgress, Input, Stack, Tooltip, Typography } from '@mui/joy';
 import SegmentIcon from '@mui/icons-material/Segment';
 import CheckIcon from '@mui/icons-material/Check';
-import { IFabFileDocument } from '@bike4mind/common';
+import { DEFAULT_PASSAGE_TOKEN_TARGET, IFabFileDocument } from '@bike4mind/common';
 import { useChunkFile } from '@client/app/hooks/data/fabFiles';
-import { useServerSettings } from '@client/app/contexts/UserSettingsContext';
+import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { toast } from 'sonner';
 import { updateFileUtility } from '@client/app/utils/filesAPICalls';
 import { useQueryClient } from '@tanstack/react-query';
@@ -14,11 +14,14 @@ interface IKnowledgeChunkControlsProps {
 }
 
 export const KnowledgeChunkControls: React.FC<IKnowledgeChunkControlsProps> = ({ fabFile }) => {
-  const { serverSettings } = useServerSettings();
-  const defaultChunkSizeSetting = serverSettings.find(setting => setting.settingName === 'DefaultChunkSize');
-  const [chunkSize, setChunkSize] = useState<number>(
-    defaultChunkSizeSetting ? parseInt(defaultChunkSizeSetting.settingValue, 10) : 2000
-  );
+  // `useGetSettingsValue` merges the stored value over the schema default, so this does not depend
+  // on `serverSettings` having arrived. It matters more than it looks: this is a useState
+  // INITIALIZER, which latches whatever was available on first render and never re-reads. Before the
+  // stored value loads the fallback applies, and the two answers now differ by ~4x (512 vs a stored
+  // 2100) where they used to differ by 5% - so a cold mount would silently chunk at a different
+  // granularity than a warm one. The effect below resyncs if the setting arrives after mount.
+  const configuredChunkSize = useGetSettingsValue('DefaultChunkSize');
+  const [chunkSize, setChunkSize] = useState<number>(Number(configuredChunkSize) || DEFAULT_PASSAGE_TOKEN_TARGET);
   const [chunkSizeDisplay, setChunkSizeDisplay] = useState<string>(`${chunkSize} tokens`);
   const queryClient = useQueryClient();
   const [recheckingVectorization, setRecheckingVectorization] = useState<boolean>(false);
@@ -28,6 +31,13 @@ export const KnowledgeChunkControls: React.FC<IKnowledgeChunkControlsProps> = ({
   useEffect(() => {
     setChunkSizeDisplay(`${chunkSize} tokens`);
   }, [chunkSize]);
+
+  // Adopt the admin value if the settings query resolves after this mounted. Guarded on the setting
+  // rather than on `chunkSize` so a user's manual edit is not stomped on a later settings refetch.
+  useEffect(() => {
+    const resolved = Number(configuredChunkSize);
+    if (resolved) setChunkSize(resolved);
+  }, [configuredChunkSize]);
 
   return (
     <Box

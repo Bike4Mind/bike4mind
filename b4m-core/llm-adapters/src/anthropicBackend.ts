@@ -30,12 +30,17 @@ import {
 } from './backend';
 import { Logger } from '@bike4mind/observability';
 import { handleToolResultStreaming } from './toolStreamingHelper';
-import { ensureToolPairingIntegrity, stripAllToolBlocks } from './toolPairingUtils';
+import { ensureToolPairingIntegrity, stripAllToolBlocks, stripToolDependentMessages } from './toolPairingUtils';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { withRetry, isUserInitiatedAbort, isRetryableError } from '@bike4mind/common';
-import { buildThinkingParams, type ThinkingConfig } from './thinkingParams';
+import { buildThinkingParams, THINKING_ANSWER_HEADROOM_TOKENS, type ThinkingConfig } from './thinkingParams';
 import { DispatchModel } from './dispatchModel';
 import { acquireSlot, releaseSlot } from './_anthropicSemaphore';
+import {
+  createDegenerateStreamGuard,
+  DEGENERATE_STREAM_STOP_REASON,
+  type DegenerateStreamVerdict,
+} from './degenerateStreamGuard';
 
 type ExtendedMessageCreateParams = MessageCreateParamsBase &
   Partial<ThinkingConfig> & {
@@ -64,6 +69,14 @@ const DEFAULT_IDLE_TIMEOUT_MS = 90000; // 90s between events for standard models
 const THINKING_IDLE_TIMEOUT_MS = 180000; // 180s for thinking models (can pause during extended thinking)
 const REQUEST_TIMEOUT_MS = 60000; // 60s timeout for the initial API request before any streaming starts
 const SLOW_MODEL_REQUEST_TIMEOUT_MS = 120000; // 120s for slow/opus-class models that need longer to begin streaming
+
+/**
+ * Largest max_tokens the SDK will accept without streaming. It derives a projected
+ * duration of 60min * max_tokens / 128000 and throws outright once that exceeds its
+ * 10-minute non-streaming ceiling, so the real limit is 128000 * 10 / 60 = 21333.
+ * Floored to a round number for headroom against that formula being retuned.
+ */
+const ANTHROPIC_NONSTREAMING_MAX_TOKENS = 21_000;
 
 /**
  * Accumulated multi-turn cache token total. Undefined when zero so turns
@@ -719,7 +732,8 @@ export class AnthropicBackend implements ICompletionBackend {
       // Don't increment toolCallCount so subsequent no-tool calls skip this check
       await this.complete(
         model,
-        messages,
+        // Tools are going away, so the prompts that order the model to use one have to go with them.
+        stripToolDependentMessages(messages),
         {
           ...options,
           tools: undefined,
@@ -791,8 +805,12 @@ export class AnthropicBackend implements ICompletionBackend {
     // append the model-identity reminder as a separate uncached block to keep
     // the cached prefix stable across requests (otherwise the suffix would
     // bust the cache key on every model identifier change).
-    const identityReminder = `IMPORTANT! Only when someone asks, remember that you are specifically the ${model} model.`;
-    let system: string | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }>;
+    // Omitted for callers whose contract is a bare completion (API promptMode raw) -
+    // with no system messages left either, the request then carries no system at all.
+    const identityReminder = options.omitIdentityReminder
+      ? null
+      : `IMPORTANT! Only when someone asks, remember that you are specifically the ${model} model.`;
+    let system: string | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> | undefined;
     if (anySystemCacheControlled) {
       const systemMessages = messages.filter(m => m.role === 'system');
       const blocks: Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> = [];
@@ -804,11 +822,14 @@ export class AnthropicBackend implements ICompletionBackend {
           blocks.push({ type: 'text', text });
         }
       }
-      blocks.push({ type: 'text', text: identityReminder });
-      system = blocks.length > 0 ? blocks : identityReminder;
+      if (identityReminder) {
+        blocks.push({ type: 'text', text: identityReminder });
+      }
+      system = blocks.length > 0 ? blocks : undefined;
     } else {
       const joined = this.consolidateSystemMessages(messages);
-      system = joined ? `${joined}\n${identityReminder}` : identityReminder;
+      const parts = [joined, identityReminder].filter(Boolean);
+      system = parts.length > 0 ? parts.join('\n') : undefined;
     }
 
     // Ensure tool_use/tool_result pairing integrity after filterRelevantMessages.
@@ -1001,9 +1022,44 @@ export class AnthropicBackend implements ICompletionBackend {
       });
     }
 
+    // The SDK refuses a non-streaming request whose max_tokens implies it could run
+    // past its 10-minute ceiling, throwing before any HTTP call is made (see
+    // Anthropic.calculateNonstreamingTimeout: 60min * max_tokens / 128000 > 10min).
+    // Clamping is strictly better than the alternative, which is not a shorter answer
+    // but no answer at all. Reachable from any caller that pairs a large budget with
+    // stream:false - notably an adaptive model, where both the no-budget default and
+    // buildThinkingParams size max_tokens at ADAPTIVE_THINKING_MAX_TOKENS_FLOOR (64K).
+    if (!options.stream && apiParams.max_tokens > ANTHROPIC_NONSTREAMING_MAX_TOKENS) {
+      this.logger.warn(
+        `[AnthropicBackend] max_tokens ${apiParams.max_tokens} exceeds the non-streaming ceiling; clamping to ${ANTHROPIC_NONSTREAMING_MAX_TOKENS}. Stream this request to use the full budget.`,
+        { model }
+      );
+      apiParams.max_tokens = ANTHROPIC_NONSTREAMING_MAX_TOKENS;
+
+      // A legacy thinking budget is spent inside max_tokens, so lowering the ceiling has
+      // to bring the budget down with it. Keyed on the headroom rather than on max_tokens
+      // itself: a budget merely below the ceiling (20_999 against 21_000) satisfies the
+      // API yet leaves a single token for the visible answer, which is the same empty
+      // reply this whole clamp exists to avoid. The ceiling keeps the result well above
+      // Anthropic's 1024 minimum budget.
+      const maxThinkingBudget = apiParams.max_tokens - THINKING_ANSWER_HEADROOM_TOKENS;
+      const thinking = apiParams.thinking;
+      if (thinking?.type === 'enabled' && thinking.budget_tokens > maxThinkingBudget) {
+        thinking.budget_tokens = maxThinkingBudget;
+      }
+    }
+
     // Setup the actual API call with API-specific options
     try {
       const func: { name?: string; id?: string; parameters?: string }[] = [];
+      // Set when the degeneration guard aborts this turn's stream. Declared HERE,
+      // outside the streaming promise, because the tool-execution branch below is
+      // what must honour it: a turn that had already collected a tool call before
+      // degenerating would otherwise execute those tools and recurse, so the run
+      // would continue after the abort - overwriting the stop reason and replaying
+      // stale assistant content. The in-promise `degenerateVerdict` is invisible
+      // from there.
+      let degeneratedThisTurn = false;
       // Capture per-turn token usage so the post-stream tool-recursion site
       // can carry it forward as accumulated multi-turn billable usage.
       // Populated from the message_delta event inside the streaming Promise.
@@ -1054,6 +1110,12 @@ export class AnthropicBackend implements ICompletionBackend {
           // Track idle timeout state at a scope accessible to catch block
           let isIdleTimeout = false;
           let idleTimeoutMsForError = 0; // Store for error message
+
+          // Degeneration state, also read from the catch block. The idle timer
+          // cannot cover this case - it resets on every stream event, and a
+          // repetition loop emits events continuously - so a stream that has
+          // stopped making progress would otherwise run to the token ceiling.
+          let degenerateVerdict: DegenerateStreamVerdict | undefined;
 
           (async () => {
             // Acquire semaphore slot before the API call. Released in the finally
@@ -1119,6 +1181,34 @@ export class AnthropicBackend implements ICompletionBackend {
               // input_json_delta events on these indices stream as text content
               // rather than being collected as a tool call.
               const responseFormatToolIndices = new Set<number>();
+
+              // Degeneration guard: watches emitted text for a stream that has
+              // stopped making progress and is just repeating itself. Aborts the
+              // same way the idle timeout does, but the abort path RESOLVES with
+              // the clean prefix rather than rejecting - the useful part of the
+              // answer is normally written before the loop starts, and throwing
+              // it away would be a worse outcome than a short reply.
+              const degenerateGuard = createDegenerateStreamGuard(options._internal?.degenerateStreamGuard);
+
+              /** Feed emitted text to the guard; abort the stream on the first verdict. */
+              const checkDegenerate = (emitted: string | undefined) => {
+                if (!emitted || degenerateVerdict) return;
+                const verdict = degenerateGuard.push(emitted);
+                if (!verdict) return;
+                degenerateVerdict = verdict;
+                degeneratedThisTurn = true;
+                // WARN, not error: this is a benign, handled abort that returns
+                // partial content - error severity would page LiveOps.
+                this.logger.warn('[AnthropicBackend] Stream aborted - output degenerated into repetition', {
+                  model,
+                  periodChars: verdict.periodChars,
+                  repeats: verdict.repeats,
+                  runChars: verdict.runChars,
+                  charsBeforeAbort: verdict.totalChars,
+                  unit: verdict.unit,
+                });
+                (stream as { controller?: AbortController }).controller?.abort?.();
+              };
 
               // Idle timeout setup for detecting streaming hangs
               // Feature flag controlled via options._internal.enableIdleTimeout
@@ -1217,6 +1307,7 @@ export class AnthropicBackend implements ICompletionBackend {
                       await cb(streamedText, { toolsUsed: toolsUsed });
                     } else if ('delta' in event && event.delta.type === 'text_delta') {
                       streamedText[event.index] = event.delta.text;
+                      checkDegenerate(event.delta.text);
                       await cb(streamedText, { toolsUsed: toolsUsed });
                     } else if ('delta' in event && event.delta.type === 'input_json_delta') {
                       // response_format=json_schema: stream the tool's
@@ -1227,6 +1318,7 @@ export class AnthropicBackend implements ICompletionBackend {
                         const partial = event.delta.partial_json || '';
                         if (partial) {
                           streamedText[event.index] = partial;
+                          checkDegenerate(partial);
                           await cb(streamedText, {
                             toolsUsed,
                             responseFormatMode: 'tool_use',
@@ -1237,6 +1329,13 @@ export class AnthropicBackend implements ICompletionBackend {
                         if (func[event.index]) {
                           func[event.index].parameters += event.delta.partial_json || '';
                         }
+                        // Tool ARGUMENTS count against the same output ceiling, so a
+                        // model that degenerates while writing a tool call would
+                        // otherwise run to the ceiling unwatched. Feed these deltas
+                        // too; the abort then also skips tool execution (see
+                        // `degeneratedThisTurn`), since half-written arguments from a
+                        // cut-off stream must not be executed.
+                        checkDegenerate(event.delta.partial_json || '');
                         // Also accumulate in collected content
                         if (collectedContent[event.index] && collectedContent[event.index].type === 'tool_use') {
                           // We'll parse the complete JSON at the end
@@ -1301,6 +1400,31 @@ export class AnthropicBackend implements ICompletionBackend {
               } finally {
                 // CRITICAL: Always cleanup idle timer to prevent memory leaks
                 if (idleTimer) clearTimeout(idleTimer);
+              }
+
+              // Same shape as the idle-timeout check below: the guard aborted, but the
+              // stream ended naturally instead of throwing AbortError, so the catch
+              // block never ran. Emit the degeneration stop reason and stop here
+              // rather than falling through to the clean terminal path, which would
+              // report this turn as a normal finish.
+              if (degenerateVerdict) {
+                this.logger.warn('[AnthropicBackend] Stream ended after degeneration abort - reporting partial reply', {
+                  model,
+                  charsBeforeAbort: degenerateVerdict.totalChars,
+                });
+                await cb([], {
+                  toolsUsed,
+                  stopReason: DEGENERATE_STREAM_STOP_REASON,
+                  // Forward the accumulated usage the clean terminal path forwards.
+                  // Omitting it drops settlement to the local tokenizer estimate, and a
+                  // degenerate turn is the worst case for an estimate: real output is large.
+                  inputTokens:
+                    accumInputTokens + ((usageInfo as { input_tokens?: number } | undefined)?.input_tokens ?? 0),
+                  outputTokens:
+                    accumOutputTokens + ((usageInfo as { output_tokens?: number } | undefined)?.output_tokens ?? 0),
+                });
+                resolve();
+                return;
               }
 
               // If idle timeout was triggered but the stream ended naturally (e.g., HTTP connection dropped
@@ -1458,6 +1582,32 @@ export class AnthropicBackend implements ICompletionBackend {
                       `Anthropic API request timeout after ${requestTimeoutMs}ms - no streaming response received`
                     )
                   );
+                } else if (degenerateVerdict) {
+                  // Our own abort after the output degenerated into repetition.
+                  // Resolve rather than reject: the text emitted before the loop
+                  // started has already reached the caller through `cb` and is
+                  // normally the useful answer, so throwing an error here would
+                  // discard a good partial reply. Emit a terminal cb first (the
+                  // same shape as the clean path) so the caller learns WHY the
+                  // stream ended; DEGENERATE_STREAM_STOP_REASON is deliberately
+                  // outside CLEAN_FINISH_REASONS, so the reply renders with a
+                  // truncation notice rather than as a normal completion.
+                  this.logger.warn('[AnthropicBackend] Returning partial reply after degeneration abort', {
+                    model,
+                    charsBeforeAbort: degenerateVerdict.totalChars,
+                    repeats: degenerateVerdict.repeats,
+                  });
+                  await cb([], {
+                    toolsUsed,
+                    stopReason: DEGENERATE_STREAM_STOP_REASON,
+                    // No usage forwarded here: this is the AbortError path, so the
+                    // terminal message_delta that carries provider usage never arrived
+                    // and `usageInfo` is out of scope. The post-loop site above (stream
+                    // ended without throwing) does forward it.
+                    inputTokens: accumInputTokens,
+                    outputTokens: accumOutputTokens,
+                  });
+                  resolve();
                 } else if (isIdleTimeout) {
                   // Idle timeout - the stream was aborted due to no events being received
                   // The abort causes AbortError to be thrown, which we catch here.
@@ -1487,8 +1637,13 @@ export class AnthropicBackend implements ICompletionBackend {
           })();
         });
 
-        // If there are tool calls, execute them and continue the conversation
-        if (func.some(f => f && f.name)) {
+        // If there are tool calls, execute them and continue the conversation.
+        // Skipped entirely when the guard aborted this turn: the point of the abort
+        // is that the run STOPS, and any tool call collected before the loop began
+        // is from a stream we deliberately cut off, so executing it and recursing
+        // would resume the run, overwrite the degeneration stop reason, and replay
+        // stale assistant content.
+        if (!degeneratedThisTurn && func.some(f => f && f.name)) {
           // Track tool usage first (including ID for history reconstruction)
           const toolCallNames = func.filter(t => t?.name).map(t => t.name);
           this.logger.info('[Tool Execution] Model requested tool calls', {

@@ -1,10 +1,10 @@
 import { useEffect, useRef } from 'react';
-import type { IMessageDataToClient, IFabFileDocument, ManageableDataLakeConfig } from '@bike4mind/common';
+import type { IMessageDataToClient } from '@bike4mind/common';
 import { isSupportedFabFileMimeType, folderTagForFile } from '@bike4mind/common';
 import type { CreateDataLakeRequestInputType } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   useDataLakeWizardStore,
@@ -12,6 +12,7 @@ import {
   type UploadErrorKind,
 } from '@client/app/stores/useDataLakeWizardStore';
 import { activeOrgId } from '@client/app/hooks/data/dataLakes';
+import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 import { slugifyDataLakeName, MIN_DATA_LAKE_SLUG_LENGTH } from '@client/app/hooks/data/dataLakeSlug';
 import { computeFileHash } from '@client/app/utils/folderTreeParser';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
@@ -196,19 +197,22 @@ function classifyUploadError(error: unknown): { kind: UploadErrorKind; message: 
   // rather than surfacing the raw validator string.
   if (status === 422) {
     const { config, targetLake } = useDataLakeWizardStore.getState();
-    const slug = targetLake ? targetLake.slug : slugifyDataLakeName(config.name);
-    if (slug.length < MIN_DATA_LAKE_SLUG_LENGTH) {
-      return {
-        kind: 'validation',
-        message: 'The data lake name is too short. Use a name with at least 2 letters or numbers.',
-      };
-    }
-    const prefix = config.tagPrefix.endsWith(':') ? config.tagPrefix : `${config.tagPrefix}:`;
-    if (prefix.length < 2) {
-      return {
-        kind: 'validation',
-        message: 'The tag prefix is too short. Use at least 2 characters ending in ":" (e.g. "legal:").',
-      };
+    // Only create mode submits a name and prefix; append mode locks both, so neither can be
+    // what the server rejected there - fall through to the neutral message instead.
+    if (!targetLake) {
+      if (slugifyDataLakeName(config.name).length < MIN_DATA_LAKE_SLUG_LENGTH) {
+        return {
+          kind: 'validation',
+          message: 'The data lake name is too short. Use a name with at least 2 letters or numbers.',
+        };
+      }
+      const prefix = config.tagPrefix.endsWith(':') ? config.tagPrefix : `${config.tagPrefix}:`;
+      if (prefix.length < 2) {
+        return {
+          kind: 'validation',
+          message: 'The tag prefix is too short. Use at least 2 characters ending in ":" (e.g. "legal:").',
+        };
+      }
     }
     // Neutral fallback: a 422 can also come from the batch/presigned-URL endpoints or
     // requiredEntitlement, and in append mode the Config fields are locked - so don't
@@ -321,8 +325,6 @@ export function useBatchUpload() {
 
       // Ensure tag prefix ends with ':'
       const tagPrefix = config.tagPrefix.endsWith(':') ? config.tagPrefix : config.tagPrefix + ':';
-      // Append mode reuses the target lake's slug; create mode derives it from the name.
-      const slug = targetLake ? targetLake.slug : slugifyDataLakeName(config.name);
 
       // Step 1: Create the data lake; skipped in append mode (upload into the existing lake).
       let dataLakeId: string;
@@ -334,7 +336,9 @@ export function useBatchUpload() {
         const organizationId = activeOrgId();
         const dataLakeRes = await api.post<{ id: string }>('/api/data-lakes', {
           name: config.name,
-          slug,
+          // The slug we ask for. The server disambiguates it against lakes in scope, so the
+          // created lake's real slug can differ - everything downstream keys off the id.
+          slug: slugifyDataLakeName(config.name),
           description: config.description || undefined,
           fileTagPrefix: tagPrefix,
           requiredUserTag: config.requiredUserTag || undefined,
@@ -350,6 +354,9 @@ export function useBatchUpload() {
       // `reconciled` tells the catch the outcome branch already handled cleanup, so the
       // catch only rolls back a setup-phase failure (e.g. creating the batch threw).
       let batchId: string | undefined;
+      // The first presign refusal, kept so a batch where NOTHING uploaded can report the
+      // server's actual reason instead of the generic transport message below.
+      let firstPresignError: unknown;
       let failedCount = 0;
       const failedNames: string[] = [];
       const failedFileIds: string[] = [];
@@ -388,6 +395,7 @@ export function useBatchUpload() {
           vectorizedFiles: 0,
           failedFiles: 0,
           failedFileNames: [],
+          processingFailedFiles: 0,
           status: 'uploading',
           currentBatchId: batchId,
           // Clear any error from a prior attempt so a retry starts clean.
@@ -418,14 +426,19 @@ export function useBatchUpload() {
                 // later, post-upload, once the background job's suggestions are reviewed.
                 tags: folderTagForFile(f.relativePath, tagPrefix),
               })),
-              dataLakeSlug: slug,
+              // The lake id, never a slug derived from the name: on a name collision the server
+              // creates the lake under a disambiguated slug, and the name-derived one still
+              // resolves - to the lake that was already there, possibly another user's. The
+              // route accepts either form.
+              dataLakeSlug: dataLakeId,
               // Correlate every uploaded file to its batch so the pipeline
               // (objectCreated -> chunk -> vectorize) updates batch progress and the
               // batch can complete. Also populates the batch manifest server-side.
               batchId,
             });
             urlMap = urlsRes.data.files;
-          } catch {
+          } catch (err) {
+            if (firstPresignError === undefined) firstPresignError = err;
             for (const f of chunk) {
               failedCount++;
               failedNames.push(f.file.name);
@@ -530,9 +543,13 @@ export function useBatchUpload() {
               .catch(() => {});
             await api.delete(`/api/data-lakes/${dataLakeId}`).catch(() => {});
           }
-          // Surfaced via classifyUploadError as an 'upload' problem (transport, not the
-          // user's lake settings), so onError shows the right message + retry.
-          throw new Error(UPLOAD_ALL_FAILED_MESSAGE);
+          // A presign refusal already says WHY (e.g. the request did not name the batch's lake),
+          // and classifyUploadError surfaces a 4xx's server message - so rethrow it rather than
+          // blaming the network. Only when it carries a status: a timeout or abort has no response
+          // and would fall through to its raw axios text ("timeout of 30000ms exceeded"), where the
+          // generic transport message is both friendlier and true.
+          const refusalStatus = axios.isAxiosError(firstPresignError) ? firstPresignError.response?.status : undefined;
+          throw refusalStatus ? firstPresignError : new Error(UPLOAD_ALL_FAILED_MESSAGE);
         }
 
         // Partial or full success: the uploaded files proceed through the pipeline.
@@ -553,7 +570,7 @@ export function useBatchUpload() {
 
         updateUploadProgress({ status: 'complete' });
 
-        queryClient.invalidateQueries({ queryKey: ['data-lakes'] });
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
         // First lake unlocks the 'datalakes' nav slot; first file unlocks 'files'.
         // Reveal them without waiting out the gears/status staleTime (#833).
         invalidateGearsStatusWhileLocked(queryClient, ['datalakes', 'files']);
@@ -643,6 +660,9 @@ export function useBatchProgressListener() {
       if (message.failedFiles !== undefined) {
         updates.failedFiles = message.failedFiles;
       }
+      if (message.processingFailedFiles !== undefined) {
+        updates.processingFailedFiles = message.processingFailedFiles;
+      }
       if (message.status === 'completed' || message.status === 'completed_with_errors') {
         updates.status = 'complete';
       }
@@ -657,107 +677,4 @@ export function useBatchProgressListener() {
 
     return unsubscribe;
   }, [batchId, subscribeToAction, updateUploadProgress]);
-}
-
-// ── Data Lake File Viewer ───────────────────────────────────────────────────
-
-/**
- * Hook: Fetch files belonging to a specific data lake by ID.
- */
-export function useDataLakeFiles(dataLakeId: string | null, params?: { limit?: number }) {
-  return useQuery({
-    queryKey: ['dataLakeFiles', dataLakeId, params],
-    queryFn: async () => {
-      const response = await api.get<{ data: IFabFileDocument[]; total: number; hasMore: boolean }>(
-        `/api/data-lakes/${dataLakeId}/articles`,
-        { params: { limit: params?.limit ?? 100 } }
-      );
-      return response.data;
-    },
-    enabled: !!dataLakeId,
-    refetchOnWindowFocus: false,
-    staleTime: 1000 * 60 * 5,
-  });
-}
-
-/**
- * Hook: List all data lakes accessible to the current user.
- */
-export function useDataLakes(enabled = true) {
-  return useQuery({
-    queryKey: ['data-lakes'],
-    // Data lakes are an admin-gated feature (EnableDataLakes, default off); the
-    // endpoint 403s when disabled. Skip the call until the consumer actually
-    // needs it (e.g. the modal is open) and don't retry the gate rejection, so
-    // a closed app-wide modal doesn't spam a 403 on every page.
-    enabled,
-    retry: false,
-    queryFn: async () => {
-      // The server's own shape, not a hand-maintained twin: `canManage` and the editor-only
-      // `systemPrompt` are attached per lake by listDataLakes, and the latter only when the
-      // caller may manage that lake. The former inline type also declared `createdAt` and
-      // `fileCount`, neither of which this projection returns.
-      const response = await api.get<{ data: ManageableDataLakeConfig[] }>('/api/data-lakes');
-      return response.data.data;
-    },
-    refetchOnWindowFocus: false,
-    staleTime: 1000 * 60 * 2,
-  });
-}
-
-/**
- * Hook: Re-run chunking + vectorization for a single fabFile in a data lake.
- * Useful for files that landed with 0 chunks (failed/partial extraction).
- */
-export function useReprocessFabFile(dataLakeId: string | null) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (fabFileId: string) => {
-      const res = await api.post<{ messageId: string }>('/api/files/reprocess', { fabFileId });
-      return res.data;
-    },
-    onSuccess: () => {
-      toast.success('Re-processing started — chunking and vectorization will re-run.');
-      if (dataLakeId) queryClient.invalidateQueries({ queryKey: ['dataLakeFiles', dataLakeId] });
-    },
-    onError: (error: Error) => {
-      toast.error(error.message || 'Failed to re-process file');
-    },
-  });
-}
-
-/**
- * Hook: Remove a single file from a data lake. Drops the lake's membership tags from the file
- * and leaves the file itself alone - no soft-delete, no chunk teardown. Owner/admin only; the
- * server verifies the file actually belongs to the lake.
- */
-export function useRemoveFileFromDataLake(dataLakeId: string | null) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (fabFileId: string) => {
-      const res = await api.delete<{ success: true; fileCount: number; totalSizeBytes: number }>(
-        `/api/data-lakes/${dataLakeId}/files/${fabFileId}`
-      );
-      return res.data;
-    },
-    onSuccess: () => {
-      toast.success('File removed from data lake.');
-      if (dataLakeId) queryClient.invalidateQueries({ queryKey: ['dataLakeFiles', dataLakeId] });
-      // Refresh the lake list to pick up the recomputed stats. fileCount counts meta-tagged
-      // files only, so removing a file that was in the lake by prefix alone drops a row from
-      // the list without moving the count.
-      queryClient.invalidateQueries({ queryKey: ['data-lakes'] });
-      // Removal also drops the file's tags under the lake's prefix, so every tag-derived view
-      // is stale. Invalidate on the bare key prefixes: these are keyed by an opti/datalakes
-      // source discriminator, and a fully-specified key would refresh only one surface.
-      queryClient.invalidateQueries({ queryKey: ['dataLakeTagCounts'] });
-      queryClient.invalidateQueries({ queryKey: ['dataLakeArticles'] });
-      // Bare prefix: the tag list carries a fileCount derived from the files that hold each tag,
-      // so dropping tags here staled the list too, not only the counts endpoint.
-      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
-    },
-    onError: (error: Error) => {
-      toast.error(error.message || 'Failed to remove file from data lake');
-    },
-  });
 }

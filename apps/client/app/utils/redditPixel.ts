@@ -47,17 +47,35 @@ function ensureQueueStub(pixelId: string): RdtFn {
   return window.rdt;
 }
 
+/** Event metadata Reddit accepts alongside a conversion (used by "Purchase"). */
+export interface RedditEventParams {
+  /** Order value in the currency's MAJOR unit (29.99, not 2999). */
+  value?: number;
+  /** ISO 4217, e.g. "USD". */
+  currency?: string;
+  /** Dedupe key - the same id must be sent if the event is ever retried. */
+  transactionId?: string;
+}
+
 /**
- * Queue a Reddit conversion event (e.g. "SignUp" - use Reddit's standard
- * event names so Events Manager recognizes them). Safe to call before the
- * pixel script has loaded, before consent, during SSR, and when the pixel
+ * Queue a Reddit conversion event (e.g. "SignUp", "Purchase" - use Reddit's
+ * standard event names so Events Manager recognizes them). Safe to call before
+ * the pixel script has loaded, before consent, during SSR, and when the pixel
  * isn't configured - all of those either queue in memory or no-op.
+ *
+ * `params` is omitted from the call entirely when empty, so value-less events
+ * keep the exact two-argument shape Reddit's examples use.
  */
-export function trackRedditEvent(eventName: string): void {
+export function trackRedditEvent(eventName: string, params?: RedditEventParams): void {
   if (typeof window === 'undefined') return;
   const pixelId = process.env.NEXT_PUBLIC_REDDIT_PIXEL_ID;
   if (!pixelId) return;
-  ensureQueueStub(pixelId)('track', eventName);
+  const rdt = ensureQueueStub(pixelId);
+  if (params && Object.keys(params).length > 0) {
+    rdt('track', eventName, params);
+  } else {
+    rdt('track', eventName);
+  }
 }
 
 /**

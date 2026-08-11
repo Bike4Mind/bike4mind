@@ -1,4 +1,5 @@
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { AGENT_QUEST_ID, AGENT_QUEST_MANIFEST, AGENT_QUEST_MCP_URI } from '@bike4mind/common';
 import type { B4mApiClient, RawArtifact, RawFile, RawNotebook, RawProject } from './b4mApiClient.js';
 import { mapApiError } from './b4mApiClient.js';
 import { logger } from '../utils/Logger.js';
@@ -94,10 +95,39 @@ function registerJsonResource<T>(server: McpServer, client: B4mApiClient, spec: 
 }
 
 /**
- * Register the Bike4Mind MCP resource templates. Each is served as
- * application/json and backed by its REST list/read pair.
+ * Register `b4m://agent-quest`: the machine-readable invitation to The Open Door.
+ *
+ * A fixed URI rather than a `ResourceTemplate` - there is exactly one manifest, so
+ * there is nothing to list or address by id. It is also the only resource here that
+ * needs no API call and no credentials: the document is a constant in
+ * @bike4mind/common, shared with the public HTTP route that serves it
+ * (apps/client/pages/api/agent-quest/manifest.ts). That means an agent can read the
+ * invitation before it has an API key - which is the point, since the quest is how
+ * it earns one.
+ */
+function registerAgentQuest(server: McpServer): void {
+  server.registerResource(
+    AGENT_QUEST_ID,
+    AGENT_QUEST_MCP_URI,
+    {
+      title: AGENT_QUEST_MANIFEST.title,
+      description: AGENT_QUEST_MANIFEST.summary,
+      mimeType: 'application/json',
+    },
+    uri => ({
+      contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(AGENT_QUEST_MANIFEST, null, 2) }],
+    })
+  );
+}
+
+/**
+ * Register the Bike4Mind MCP resources: the four templates below, each served as
+ * application/json and backed by its REST list/read pair, plus the credential-free
+ * `b4m://agent-quest` manifest.
  */
 export function registerResources(server: McpServer, client: B4mApiClient): void {
+  registerAgentQuest(server);
+
   registerJsonResource<RawNotebook>(server, client, {
     name: 'notebook',
     title: 'Notebook',

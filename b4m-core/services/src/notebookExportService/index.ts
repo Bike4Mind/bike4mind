@@ -12,16 +12,114 @@ import {
   CURRENT_EXPORT_VERSION,
 } from './types';
 import { isImageServeable } from '@bike4mind/common';
+import type { ILogger } from '@bike4mind/observability';
+import type {
+  IAgentDocument,
+  IArtifactDocument,
+  IChatHistoryItem,
+  IFabFileDocument,
+  ISession,
+  IToolDocument,
+} from '@bike4mind/common';
+
+/** Mongo filter; stays loose because callers pass operator objects (`{ _id: { $in: [...] } }`). */
+type ExportQuery = Record<string, unknown>;
+
+/** Built by mutation below, so the date sub-filter needs a declared shape. */
+type SessionQuery = {
+  userId: string;
+  _id?: { $in: string[] };
+  lastUpdated?: { $gte?: Date; $lte?: Date };
+};
+
+/** What BaseRepository.find destructures; a typo here would land in its projection instead. */
+interface ExportReadOptions {
+  skip?: number;
+  limit?: number;
+  sort?: Record<string, 1 | -1>;
+}
+
+/** The read surface this service uses. Callers wire a real repository or a minimal stand-in. */
+interface ExportReads<T> {
+  // Method syntax on purpose: parameters stay bivariant, which is what lets the real repositories
+  // (and the hand-rolled stub in the API route) satisfy this. An arrow property would not compile.
+  find(query: ExportQuery, options?: ExportReadOptions): Promise<T[]>;
+}
+
+/**
+ * Rows are derived from the entity types rather than typed as `any`, so a field rename on an entity
+ * breaks this file at compile time.
+ */
+type SessionRow = Pick<
+  ISession,
+  | 'id'
+  | 'name'
+  | 'firstCreated'
+  | 'lastUpdated'
+  | 'language'
+  | 'summary'
+  | 'summaryAt'
+  | 'tags'
+  | 'isAutoNamed'
+  | 'lastUsedModel'
+  | 'knowledgeIds'
+  | 'artifactIds'
+  | 'toolIds'
+  | 'agentIds'
+  | 'clonedSourceId'
+  | 'forkedSourceId'
+>;
+
+type KnowledgeRow = Pick<
+  IFabFileDocument,
+  'id' | 'fileName' | 'fileSize' | 'mimeType' | 'createdAt' | 'updatedAt' | 'filePath' | 'moderationStatus' | 'fileUrl'
+>;
+
+/** No `content`: the body lives in a separate collection, reached via contentId. */
+type ArtifactRow = Pick<IArtifactDocument, 'id' | 'title' | 'type' | 'createdAt' | 'updatedAt' | 'metadata'>;
+
+type ToolRow = Pick<IToolDocument, 'id' | 'name' | 'createdAt'>;
+
+type AgentRow = Pick<IAgentDocument, 'id' | 'name' | 'description' | 'createdAt'>;
+
+type ChatMessageRow = Pick<
+  IChatHistoryItem,
+  | 'id'
+  | 'timestamp'
+  | 'type'
+  | 'prompt'
+  | 'status'
+  | 'pinned'
+  | 'reply'
+  | 'replies'
+  | 'questMasterReply'
+  | 'images'
+  | 'fabFileIds'
+  | 'agentIds'
+  | 'questMasterPlanId'
+  | 'creditsUsed'
+  | 'promptMeta'
+>;
+
+/** Only the three storage calls this service makes, not a whole storage client. */
+interface ExportFileStorage {
+  getFileContent(filePath: string): Promise<string | null>;
+  uploadFile(path: string, content: Buffer): Promise<void>;
+  getSignedUrl(filePath: string, expiresIn?: number): Promise<string | null>;
+}
 
 export interface NotebookExportAdapters {
-  sessionRepository: any; // SessionRepository
-  chatHistoryRepository: any; // ChatHistoryRepository
-  knowledgeRepository: any; // KnowledgeRepository
-  artifactRepository: any; // ArtifactRepository
-  toolRepository: any; // ToolRepository
-  agentRepository: any; // AgentRepository
-  fileStorageService: any; // FileStorageService
-  logger: any; // Logger
+  sessionRepository: ExportReads<SessionRow>;
+  /** The caller wires the quest repository here; the name predates that. */
+  chatHistoryRepository: ExportReads<ChatMessageRow>;
+  knowledgeRepository: ExportReads<KnowledgeRow> & {
+    findOne(query: ExportQuery): Promise<KnowledgeRow | null>;
+  };
+  artifactRepository: ExportReads<ArtifactRow>;
+  toolRepository: ExportReads<ToolRow>;
+  agentRepository: ExportReads<AgentRow>;
+  fileStorageService: ExportFileStorage;
+  logger: ILogger;
 }
 
 export class NotebookExportService {
@@ -100,7 +198,7 @@ export class NotebookExportService {
   }
 
   private async getSessionsToExport(userId: string, options: NotebookExportOptions) {
-    const query: any = { userId };
+    const query: SessionQuery = { userId };
 
     // Filter by specific notebook IDs
     if (options.notebookIds && options.notebookIds.length > 0) {
@@ -121,7 +219,7 @@ export class NotebookExportService {
     return await this.adapters.sessionRepository.find(query);
   }
 
-  private async exportSession(session: any, options: NotebookExportOptions): Promise<ExportedNotebook> {
+  private async exportSession(session: SessionRow, options: NotebookExportOptions): Promise<ExportedNotebook> {
     // Export chat history
     const chatHistory = await this.exportChatHistory(session.id, options);
 
@@ -144,37 +242,32 @@ export class NotebookExportService {
       summaryAt: session.summaryAt ? new Date(session.summaryAt).toISOString() : undefined,
       tags: session.tags || [],
       isAutoNamed: session.isAutoNamed || false,
-      lastUsedModel: session.lastUsedModel,
+      lastUsedModel: session.lastUsedModel ?? undefined,
       chatHistory,
       knowledge,
       artifacts,
       tools,
       agents,
-      clonedFromId: session.clonedSourceId,
-      forkedFromId: session.forkedSourceId,
+      clonedFromId: session.clonedSourceId ?? undefined,
+      forkedFromId: session.forkedSourceId ?? undefined,
     };
   }
 
   private async exportChatHistory(sessionId: string, options: NotebookExportOptions): Promise<ExportedChatMessage[]> {
-    // Load messages in token-aware batches (like Claude Code does)
-    // Stop at 100 messages OR 50,000 tokens, whichever comes first
     const MAX_MESSAGES_PER_BATCH = 100;
-    const MAX_TOKENS_PER_BATCH = 50000; // Ratchet: stop early if budget exceeded
 
     const allMessages: ExportedChatMessage[] = [];
     let skip = 0;
     let hasMore = true;
     let totalTokensProcessed = 0;
 
-    this.adapters.logger.info('Starting chat history export with token-aware batched loading', {
+    this.adapters.logger.info('Starting chat history export with batched loading', {
       sessionId,
       maxMessagesPerBatch: MAX_MESSAGES_PER_BATCH,
-      maxTokensPerBatch: MAX_TOKENS_PER_BATCH,
     });
 
     while (hasMore) {
-      // Load batch chronologically (oldest first)
-      // We load MAX_MESSAGES_PER_BATCH, but may stop early if tokens exceeded
+      // Chronological, oldest first
       const batch = await this.adapters.chatHistoryRepository.find(
         { sessionId },
         {
@@ -189,57 +282,20 @@ export class NotebookExportService {
         break;
       }
 
-      // Token-aware processing: stop batch early if token budget exceeded
-      let batchTokens = 0;
-      let messagesInBatch = 0;
       const processedBatch: ExportedChatMessage[] = [];
 
-      this.adapters.logger.debug('Processing message batch (token-aware)', {
-        sessionId,
-        batchNumber: Math.floor(skip / MAX_MESSAGES_PER_BATCH) + 1,
-        maxMessagesInBatch: batch.length,
-        totalProcessed: skip,
-      });
-
-      // Process messages sequentially with token budget checking
       for (const message of batch) {
-        // Estimate tokens for this message (rough: total chars / 4)
-        const messageTokens = this.estimateTokens(message);
-
-        // Ratchet check: would this message exceed our token budget?
-        if (messagesInBatch > 0 && batchTokens + messageTokens > MAX_TOKENS_PER_BATCH) {
-          this.adapters.logger.debug('Token budget exceeded mid-batch, stopping early', {
-            sessionId,
-            messagesInBatch,
-            batchTokens,
-            nextMessageTokens: messageTokens,
-            budgetExceeded: true,
-          });
-          // Stop processing this batch, continue in next iteration
-          break;
-        }
-
-        // Process this message
+        totalTokensProcessed += this.estimateTokens(message);
+        // A row with no id is skipped; see processMessage.
         const exportedMessage = await this.processMessage(message, options);
-        processedBatch.push(exportedMessage);
-
-        batchTokens += messageTokens;
-        messagesInBatch++;
+        if (exportedMessage) processedBatch.push(exportedMessage);
       }
 
-      totalTokensProcessed += batchTokens;
-
-      this.adapters.logger.debug('Batch processing complete', {
-        sessionId,
-        messagesInBatch,
-        batchTokens,
-        totalTokensProcessed,
-        totalMessagesProcessed: skip + messagesInBatch,
-      });
-
       allMessages.push(...processedBatch);
-      skip += messagesInBatch; // Advance by actual messages processed (not MAX_MESSAGES_PER_BATCH)
-      hasMore = messagesInBatch === MAX_MESSAGES_PER_BATCH; // Only continue if we hit message limit (not token limit)
+      // Advance by what the repository returned, not by what we kept: skipped rows still occupy a
+      // position in the sort, so cursoring past anything less would re-read them forever.
+      skip += batch.length;
+      hasMore = batch.length === MAX_MESSAGES_PER_BATCH;
     }
 
     this.adapters.logger.info('Chat history export completed', {
@@ -262,20 +318,18 @@ export class NotebookExportService {
     });
 
     return Promise.all(
-      knowledgeFiles.map(async (file: any) => {
+      knowledgeFiles.map(async (file: KnowledgeRow) => {
         const exportedFile: ExportedKnowledgeFile = {
           id: file.id,
-          name: file.fileName ?? file.name,
+          name: file.fileName,
           mimeType: file.mimeType,
-          size: file.fileSize ?? file.size ?? 0,
+          size: file.fileSize,
           uploadedAt: (file.createdAt ?? file.updatedAt ?? new Date()).toISOString(),
-          // metadata is optional; include if present
-          metadata: file.metadata,
         };
 
-        // A held/blocked uploaded image must not have its bytes or URL exported. Keep the
-        // metadata entry but omit content/contentUrl, matching how a file whose content
-        // fails to load still keeps its metadata.
+        // A held/blocked uploaded image must not have its bytes or URL exported. Keep the file's
+        // listing entry but omit content/contentUrl, matching how a file whose content fails to
+        // load still appears in the export.
         if (!isImageServeable(file)) {
           this.adapters.logger.warn('Skipping content for non-serveable image', {
             fileId: file.id,
@@ -283,7 +337,7 @@ export class NotebookExportService {
           });
         } else if ((exportedFile.size || 0) <= options.maxFileSize) {
           try {
-            const storagePath: string | undefined = file.filePath ?? file.path;
+            const storagePath = file.filePath;
             if (storagePath) {
               const content = await this.adapters.fileStorageService.getFileContent(storagePath);
               if (content) {
@@ -314,11 +368,11 @@ export class NotebookExportService {
       _id: { $in: artifactIds },
     });
 
-    return artifacts.map((artifact: any) => ({
+    return artifacts.map((artifact: ArtifactRow) => ({
       id: artifact.id,
-      name: artifact.name,
+      // Artifacts store this as `title`; reading `name` here always produced undefined.
+      name: artifact.title,
       type: artifact.type,
-      content: artifact.content,
       createdAt: artifact.createdAt?.toISOString() || new Date().toISOString(),
       updatedAt: artifact.updatedAt?.toISOString() || new Date().toISOString(),
       metadata: artifact.metadata,
@@ -332,13 +386,10 @@ export class NotebookExportService {
       _id: { $in: toolIds },
     });
 
-    return tools.map((tool: any) => ({
+    return tools.map((tool: ToolRow) => ({
       id: tool.id,
       name: tool.name,
-      description: tool.description,
-      configuration: tool.configuration,
       createdAt: tool.createdAt?.toISOString() || new Date().toISOString(),
-      metadata: tool.metadata,
     }));
   }
 
@@ -349,13 +400,11 @@ export class NotebookExportService {
       _id: { $in: agentIds },
     });
 
-    return agents.map((agent: any) => ({
+    return agents.map((agent: AgentRow) => ({
       id: agent.id,
       name: agent.name,
       description: agent.description,
-      configuration: agent.configuration,
       createdAt: agent.createdAt?.toISOString() || new Date().toISOString(),
-      metadata: agent.metadata,
     }));
   }
 
@@ -389,6 +438,12 @@ export class NotebookExportService {
 
         try {
           const imageContent = await this.adapters.fileStorageService.getFileContent(imagePath);
+          // getFileContent reports a failed read as null. Buffer.from(null) throws, so without
+          // this the miss would surface as an exception and take the same path as a real error.
+          if (imageContent === null) {
+            this.adapters.logger.warn('Image content unavailable, exporting the path instead', { imagePath });
+            return imagePath;
+          }
           return Buffer.from(imageContent).toString('base64');
         } catch (error) {
           this.adapters.logger.warn('Failed to export image', { imagePath, error });
@@ -404,7 +459,7 @@ export class NotebookExportService {
    * Estimate token count for a message (rough approximation)
    * Uses the standard LLM heuristic: total chars / 4
    */
-  private estimateTokens(message: any): number {
+  private estimateTokens(message: ChatMessageRow): number {
     let totalChars = 0;
 
     // Count prompt
@@ -432,7 +487,17 @@ export class NotebookExportService {
   /**
    * Process a single message into exported format
    */
-  private async processMessage(message: any, options: NotebookExportOptions): Promise<ExportedChatMessage> {
+  private async processMessage(
+    message: ChatMessageRow,
+    options: NotebookExportOptions
+  ): Promise<ExportedChatMessage | null> {
+    // IChatHistoryItem declares `id?`, and re-import keys updateOne on it: a missing id casts the
+    // filter to {} and upserts over an arbitrary quest. Drop the row rather than emit that.
+    if (!message.id) {
+      this.adapters.logger.warn('Skipping chat message with no id');
+      return null;
+    }
+
     const exportedMessage: ExportedChatMessage = {
       id: message.id,
       timestamp: new Date(message.timestamp ?? Date.now()).toISOString(),
@@ -463,16 +528,15 @@ export class NotebookExportService {
 
     // Add metadata
     if (message.promptMeta && options.includeMetadata) {
+      const { model, tokenUsage, performance, context } = message.promptMeta;
       exportedMessage.promptMeta = {
-        model: message.promptMeta.model,
-        temperature: message.promptMeta.temperature,
-        maxTokens: message.promptMeta.maxTokens,
-        tokensUsed: message.promptMeta.tokensUsed,
-        inputTokens: message.promptMeta.inputTokens,
-        outputTokens: message.promptMeta.outputTokens,
-        cost: message.promptMeta.cost,
-        responseTime: message.promptMeta.responseTime,
-        contextLength: message.promptMeta.contextLength,
+        model,
+        tokenUsage,
+        // performance and context are projected, not passed through: the full context group
+        // carries systemPrompt, userPrompt and conversationContext - raw prompt text that this
+        // export has never contained, and that `anonymize` does not strip.
+        performance: performance && { totalResponseTime: performance.totalResponseTime },
+        context: context && { contextWindowUsage: context.contextWindowUsage },
       };
     }
 

@@ -68,7 +68,9 @@ export const list = async (userId: string, parameters: ListArtifactsParameters, 
   // Get artifacts with filtering
   let artifacts;
   if (search) {
-    artifacts = await db.artifacts.searchByText(search, filter);
+    // Passed explicitly: the text search applies its own live-only default otherwise, which
+    // would ignore includeDeleted on this path.
+    artifacts = await db.artifacts.searchByText(search, filter, includeDeleted);
   } else {
     artifacts = await db.artifacts.find(filter);
   }

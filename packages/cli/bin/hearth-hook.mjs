@@ -16,10 +16,16 @@
 // forwarded field set is an explicit tier rather than "whatever the hook
 // happened to receive". B4M_HEARTH_DISCLOSURE selects it:
 //   0 - event name, session id, session slug. Zero environment disclosure.
-//   1 - adds the workspace BASENAME (the repo name, never a full path).
-//   2 - adds non-sensitive activity state: a closed-set reason code, tool name,
-//       permission mode, effort level, tool duration, subagent type, and a
-//       background-task count. Default.
+//   1 - adds the workspace BASENAME (the repo name, never a full path), except
+//       when that basename would BE the OS username - the home directory is
+//       omitted rather than sent, since `/Users/<user>` basenames to <user>.
+//   2 - adds non-sensitive activity state: a reason code checked against the
+//       known set, a tool name that is either a plain identifier or the bare
+//       kind `mcp` (an mcp__<server>__<tool> name would otherwise disclose the
+//       configured integration), permission mode, effort level, tool duration,
+//       subagent type, and a background-task count. Default.
+// Values are VALIDATED, not merely selected: a field documented as a closed set
+// but forwarded unchecked is only a closed set until upstream adds a value.
 // No tier forwards a field the hook docs mark as content-bearing: prompt,
 // tool_input, tool_response, last_assistant_message, compact_summary,
 // custom_instructions, transcript_path, the full cwd, or the raw notification
@@ -30,9 +36,10 @@
 // newly added field cannot silently escape its tier.
 // Shipped standalone and run under bare `node`, so it stays dependency-free.
 
-import { basename } from 'node:path';
+import { basename, resolve } from 'node:path';
+import { homedir } from 'node:os';
 
-const { B4M_API_URL, B4M_API_KEY, B4M_HEARTH_CHANNEL, B4M_HEARTH_LABEL, B4M_HEARTH_DISCLOSURE } = process.env;
+const { B4M_API_URL, B4M_API_KEY, B4M_HEARTH_CHANNEL, B4M_HEARTH_DISCLOSURE } = process.env;
 
 const DEFAULT_DISCLOSURE = 2;
 const MAX_DISCLOSURE = 2;
@@ -50,6 +57,11 @@ const MALFORMED_DISCLOSURE = 0;
 /** Must match DEFAULT_HEARTH_CHANNEL_NAME in b4m-core/hearth; the hook is
  *  dependency-free and cannot import it. */
 const DEFAULT_CHANNEL_NAME = 'agents';
+
+/** Must match PRESENCE_PAYLOAD_SCHEMA_NAME and PRESENCE_SURFACES in
+ *  b4m-core/hearth/src/presence.ts, which presence.test.ts pins. */
+const PAYLOAD_SCHEMA = 'hearth.presence@1';
+const SURFACE = 'claude-code-hook';
 
 /**
  * UNSET means the default tier. SET-BUT-UNPARSEABLE means the minimum, because
@@ -128,13 +140,16 @@ function reasonForEvent(eventName) {
  * task descriptions and commands inside it are content-bearing.
  */
 function activityOf(hook) {
-  const activity = {
-    reason:
-      typeof hook.notification_type === 'string' && hook.notification_type
-        ? hook.notification_type
-        : reasonForEvent(hook.hook_event_name),
-  };
-  if (typeof hook.tool_name === 'string' && hook.tool_name) activity.tool = hook.tool_name;
+  // notification_type is forwarded ONLY if it is a reason we actually know.
+  // REASON_PHRASES already enumerates that vocabulary, so an unknown value falls
+  // back to the event-derived code instead of passing an upstream string through.
+  const notified =
+    typeof hook.notification_type === 'string' && Object.hasOwn(REASON_PHRASES, hook.notification_type)
+      ? hook.notification_type
+      : undefined;
+  const activity = { reason: notified ?? reasonForEvent(hook.hook_event_name) };
+  const tool = toolOf(hook.tool_name);
+  if (tool) activity.tool = tool;
   if (typeof hook.permission_mode === 'string' && hook.permission_mode) {
     activity.permission_mode = hook.permission_mode;
   }
@@ -143,6 +158,55 @@ function activityOf(hook) {
   if (typeof hook.agent_type === 'string' && hook.agent_type) activity.subagent = hook.agent_type;
   if (Array.isArray(hook.background_tasks)) activity.background_tasks = hook.background_tasks.length;
   return activity;
+}
+
+/**
+ * Workspace name for tier >= 1: the basename of the session's directory, or
+ * undefined when there is no name safe to send.
+ *
+ * The HOME directory is excluded because its basename IS the OS username on
+ * macOS and Linux (`/Users/<user>`, `/home/<user>`) - and starting a session in
+ * the home directory is ordinary, so this fired on real sessions at the default
+ * tier while the file header promised "the repo name, never a full path". A
+ * filesystem root has no useful name either.
+ *
+ * What this does NOT try to solve: any basename is still a directory name the
+ * user chose, so a directory named after a client or a project discloses that
+ * name. That is the acknowledged cost of tier 1 and the reason tier 0 exists.
+ */
+function workspaceOf(cwd) {
+  if (typeof cwd !== 'string' || !cwd) return undefined;
+  const absolute = resolve(cwd);
+  let home;
+  try {
+    home = homedir();
+  } catch {
+    home = undefined;
+  }
+  if (home && absolute === resolve(home)) return undefined;
+  const name = basename(absolute);
+  // basename('/') is '' and basename('/root') is a system account, not a workspace.
+  if (!name || name === 'root') return undefined;
+  return name;
+}
+
+/**
+ * Tool names that may be forwarded verbatim vs. reduced.
+ *
+ * An MCP tool is named `mcp__<server>__<tool>`, so forwarding it verbatim
+ * disclosed every configured MCP SERVER name at the default tier - the field was
+ * documented as a closed set but was `hook.tool_name` unchecked. Reducing it to
+ * a bare `mcp` keeps the signal a roster actually wants ("it is calling out to a
+ * tool") without naming the integration. Anything else unrecognized is dropped
+ * rather than guessed at, since a built-in tool name is a short identifier and a
+ * value that is not one did not come from the closed set.
+ */
+const TOOL_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,39}$/;
+
+function toolOf(toolName) {
+  if (typeof toolName !== 'string' || !toolName) return undefined;
+  if (toolName.startsWith('mcp__')) return 'mcp';
+  return TOOL_NAME_PATTERN.test(toolName) ? toolName : undefined;
 }
 
 /** Phrases for the closed reason set. Anything unrecognized degrades to a
@@ -187,10 +251,18 @@ process.stdin.on('end', async () => {
     // One actor per session. That is what makes presence rows distinguishable,
     // gives each reader an independent cursor, and yields a stable per-session
     // color downstream - all three followed from the single collapsed actor.
-    const label = B4M_HEARTH_LABEL || `Claude Code (${slug})`;
+    //
+    // The slug ALONE, matching sessionActorName in b4m-core/hearth/src/identity.ts:
+    // the cc-bridge covers these same sessions and ensureActor upserts on
+    // displayName, so any disagreement splits one session into two actors. See
+    // that function for why neither the workspace nor a client name belongs here.
+    //
+    // No operator override: a configurable displayName is exactly what splits
+    // one session into two actors, so identity is derived and not settable.
+    const label = slug;
 
-    const payload = { hook_event_name: eventName, session_id: sessionId, slug };
-    const workspace = typeof hook.cwd === 'string' && hook.cwd ? basename(hook.cwd) : undefined;
+    const payload = { hook_event_name: eventName, session_id: sessionId, slug, surface: SURFACE };
+    const workspace = workspaceOf(hook.cwd);
     if (tier >= 1 && workspace) payload.workspace = workspace;
     const activity = activityOf(hook);
     if (tier >= 2) payload.activity = activity;
@@ -202,7 +274,7 @@ process.stdin.on('end', async () => {
         ...(B4M_HEARTH_CHANNEL ? { channelId: B4M_HEARTH_CHANNEL } : { channelName: DEFAULT_CHANNEL_NAME }),
         kind: 'presence',
         human: { text: describe({ label, tier, workspace, activity }), format: 'text' },
-        machine: { schema: 'hearth.claude-code-hook@1', payload },
+        machine: { schema: PAYLOAD_SCHEMA, payload },
         refs: {},
         // Self-identify as an agent actor. Without this the hook resolved to the
         // account's HUMAN actor, so every heartbeat rendered as if the person

@@ -2,11 +2,30 @@
 
 export default $config({
   app(input) {
+    // `production` and `shared-dev` are the permanent stages: state is retained and
+    // `sst remove` is blocked.
+    const permanent = ['production', 'shared-dev'].includes(input?.stage);
+    // Purge is narrower than `permanent` on purpose. It runs SST's Purge() on a
+    // successful `sst remove`, which deletes the stage's secrets AND its encryption
+    // passphrase — unrecoverable (sst/sst#6593). `dev` is the shared STAGING box
+    // (see isStagingStage / PRODUCTION_STAGES in infra/constants.ts), so it is
+    // excluded even though `sst remove` is not blocked there. Only genuinely
+    // ephemeral stages — personal stages and pr#### previews — are purgeable.
+    const purgeable = !permanent && input?.stage !== 'dev';
     return {
       name: process.env.SEED_APP_NAME || 'bike4mind',
-      removal: ['production', 'shared-dev'].includes(input?.stage) ? 'retain' : 'remove',
-      protect: ['production', 'shared-dev'].includes(input?.stage),
+      removal: permanent ? 'retain' : 'remove',
+      protect: permanent,
       home: 'aws',
+      // Without this SST keeps every completed snapshot forever AND every
+      // noncurrent version of the mutable current-state object. On 2026-08-04
+      // `app/bike4mind/dev.json` alone held 621,505 noncurrent versions /
+      // 8.51 TiB — 31% of the whole state bucket. Pruning runs after each
+      // successful update for that stage only. See sst/sst#6925.
+      state: {
+        retention: 30,
+        purge: purgeable,
+      },
       watch: ['infra', 'apps', 'packages', 'b4m-core'],
       providers: {
         aws: {
