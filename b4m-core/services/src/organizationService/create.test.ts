@@ -213,7 +213,12 @@ describe('organizationService - create', () => {
     });
 
     it('sets the org context on the billing owner (loaded) when billingOwnerId differs from the caller', async () => {
-      mockAdapters.db.users.findById.mockResolvedValue({ id: 'owner2', organizationId: undefined });
+      mockAdapters.db.users.findById.mockResolvedValue({
+        id: 'owner2',
+        name: 'Owner Two',
+        email: 'owner2@example.com',
+        organizationId: undefined,
+      });
       await create(
         mockUser as IUserDocument,
         { name: 'Test Organization', personal: false, seats: 1, stripeCustomerId: null, billingOwnerId: 'owner2' },
@@ -224,13 +229,69 @@ describe('organizationService - create', () => {
     });
 
     it('leaves an on-behalf owner untouched when they already have an active org', async () => {
-      mockAdapters.db.users.findById.mockResolvedValue({ id: 'owner2', organizationId: 'owner2-org' });
+      mockAdapters.db.users.findById.mockResolvedValue({
+        id: 'owner2',
+        name: 'Owner Two',
+        email: 'owner2@example.com',
+        organizationId: 'owner2-org',
+      });
       await create(
         mockUser as IUserDocument,
         { name: 'Test Organization', personal: false, seats: 1, stripeCustomerId: null, billingOwnerId: 'owner2' },
         mockAdapters
       );
       expect(mockAdapters.db.users.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('userDetails seeding at create (#1460)', () => {
+    it('seeds the credit side-table for the acting user when no billingOwnerId is given', async () => {
+      await create(
+        mockUser as IUserDocument,
+        { name: 'Test Organization', personal: false, seats: 1, stripeCustomerId: null },
+        mockAdapters
+      );
+      expect(mockAdapters.db.organizations.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userDetails: [
+            { id: 'user1', email: 'test@example.com', name: 'Test User', usedCredits: 0, lastCreditUsedAt: null },
+          ],
+        })
+      );
+    });
+
+    it('seeds the credit side-table for the resolved billing owner, not the acting caller', async () => {
+      mockAdapters.db.users.findById.mockResolvedValue({
+        id: 'owner2',
+        name: 'Owner Two',
+        email: 'owner2@example.com',
+        organizationId: undefined,
+      });
+      await create(
+        mockUser as IUserDocument,
+        { name: 'Test Organization', personal: false, seats: 1, stripeCustomerId: null, billingOwnerId: 'owner2' },
+        mockAdapters
+      );
+      expect(mockAdapters.db.organizations.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'owner2',
+          userDetails: [
+            { id: 'owner2', email: 'owner2@example.com', name: 'Owner Two', usedCredits: 0, lastCreditUsedAt: null },
+          ],
+        })
+      );
+    });
+
+    it('throws when an explicit billingOwnerId cannot be resolved to a user', async () => {
+      mockAdapters.db.users.findById.mockResolvedValue(null);
+      await expect(
+        create(
+          mockUser as IUserDocument,
+          { name: 'Test Organization', personal: false, seats: 1, stripeCustomerId: null, billingOwnerId: 'ghost' },
+          mockAdapters
+        )
+      ).rejects.toThrow(/Billing owner ghost not found/);
+      expect(mockAdapters.db.organizations.create).not.toHaveBeenCalled();
     });
   });
 });

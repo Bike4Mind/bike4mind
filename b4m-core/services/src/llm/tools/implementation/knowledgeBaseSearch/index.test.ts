@@ -121,6 +121,69 @@ describe('search_knowledge_base keyword fallback retrieval exclusion', () => {
   });
 });
 
+describe('search_knowledge_base semantic fallback logging', () => {
+  // fabfiles + fabfilechunks must both be wired to reach resolveEmbeddingContext at all -
+  // trySemanticKbSearch bails (silently, no log) before that if either is missing.
+  function makeSemanticContext(overrides: { adminSettings?: unknown; apiKeys?: unknown }): ToolContext {
+    return makeContext({
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }) },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn().mockResolvedValue([]) },
+        adminSettings: overrides.adminSettings,
+        apiKeys: overrides.apiKeys,
+      } as never,
+    });
+  }
+
+  beforeEach(() => {
+    (logger.warn as ReturnType<typeof vi.fn>).mockClear();
+  });
+
+  it('warns naming the missing adapter when adminSettings/apiKeys are not wired', async () => {
+    await run(makeSemanticContext({}));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('adminSettings adapter not wired'));
+  });
+
+  it('warns that no defaultEmbeddingModel is configured when adapters are wired but the setting is unset', async () => {
+    const context = makeSemanticContext({
+      adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
+      apiKeys: {},
+    });
+    await run(context);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('no defaultEmbeddingModel configured'));
+  });
+
+  it('warns naming the missing provider credential when the model is configured but keyless', async () => {
+    getEffectiveLLMApiKeysMock.mockResolvedValueOnce({});
+    const context = makeSemanticContext({
+      adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+      apiKeys: {},
+    });
+    await run(context);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('no credential for provider'));
+  });
+
+  it('does not log a fallback warning when the embedding context resolves successfully', async () => {
+    const context = makeSemanticContext({
+      adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+      apiKeys: {},
+    });
+    await run(context);
+    const fallbackWarnings = (logger.warn as ReturnType<typeof vi.fn>).mock.calls.filter(call =>
+      String(call[0]).includes('falling back to keyword search')
+    );
+    expect(fallbackWarnings).toHaveLength(0);
+  });
+
+  it('warns when fabfilechunks is not wired, before resolveEmbeddingContext ever runs', async () => {
+    // The default makeContext() only wires fabfiles, not fabfilechunks - this is the earlier,
+    // real-production-reachable gate trySemanticKbSearch checks before calling
+    // resolveEmbeddingContext at all (unlike the type-guaranteed adminSettings/apiKeys check).
+    await run(makeContext());
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('fabfiles/fabfilechunks not wired'));
+  });
+});
+
 describe('search_knowledge_base agent kbScope enforcement', () => {
   // Context with full semantic deps so the scoped SEMANTIC arm engages (not just keyword).
   function makeScopedContext(fileIds: string[] | undefined, overrides: Partial<ToolContext> = {}): ToolContext {
@@ -219,6 +282,8 @@ describe('search_knowledge_base partial-corpus disclosure', () => {
     filesScanned: 3,
     chunksScanned: 9,
     chunksSkippedDimensionMismatch: 0,
+    annFilesQueried: 0,
+    annHits: 0,
     budgets: { maxFiles: 20000, maxChunks: 100000 },
     ...overrides,
   });

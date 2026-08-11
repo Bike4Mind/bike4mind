@@ -77,6 +77,11 @@ const handler = baseApi()
     // Data-lake membership is conferred by the lake's `datalake:*` meta-tag. Applying one is a
     // WRITE into that lake, so gate it with the same creator/admin check the remove path uses -
     // otherwise a read-only member could inject files via Send-to-Data-Lake.
+    //
+    // A `fileTagPrefix` content tag is membership too (since #1263), but this route-level gate
+    // is NOT extended to cover it: it has no resolved file, so it cannot know the owner a
+    // prefix-arm leave/join is anchored to. `reconcileLakeTags` (inside `updateFabFile` below)
+    // owns that check.
     const candidateTagNames = [
       ...(req.body.tags?.map(t => t.name) ?? []),
       ...(req.body.primaryTag ? [req.body.primaryTag] : []),
@@ -164,9 +169,7 @@ const handler = baseApi()
 
     let sizeToDeduct = 0;
 
-    let deleteAction: string = 'not_found';
-
-    await withTransaction(async session => {
+    const deleteAction = await withTransaction(async session => {
       const result = await fabFilesService.deleteFabFile(
         userId,
         { id: fabFileId },
@@ -184,8 +187,6 @@ const handler = baseApi()
         }
       );
 
-      deleteAction = result.action;
-
       if (result.action === 'deleted') {
         await logEvent(
           { userId, type: FileEvents.DELETE_FILE, metadata: { fileId: fabFileId } },
@@ -201,6 +202,8 @@ const handler = baseApi()
           { ability: req.ability, session }
         );
       }
+
+      return result.action;
     });
 
     // Deduct storage size after successful deletion
@@ -230,7 +233,10 @@ const handler = baseApi()
       );
     }
 
-    return res.json({ msg: 'Fab file deleted', action: deleteAction });
+    return res.json({
+      msg: 'Fab file deleted',
+      action: fabFilesService.toPublicDeleteAction(deleteAction),
+    });
   });
 
 export const config = {

@@ -9,12 +9,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
  * and the rollback of orphan state (lake / FabFiles / batch) when an upload fails (#816).
  */
 
-const { toastMock, apiPost, apiPut, apiDelete, uploadFileToUrlMock } = vi.hoisted(() => ({
+const { toastMock, apiPost, apiPut, apiDelete, uploadFileToUrlMock, subscribeToAction } = vi.hoisted(() => ({
   toastMock: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
   apiPost: vi.fn(),
   apiPut: vi.fn(() => Promise.resolve({ data: {} })),
   apiDelete: vi.fn(() => Promise.resolve({ data: {} })),
   uploadFileToUrlMock: vi.fn(() => Promise.resolve()),
+  subscribeToAction: vi.fn(() => () => {}),
 }));
 
 vi.mock('sonner', () => ({ toast: toastMock }));
@@ -25,14 +26,14 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 // can make individual file PUTs succeed or fail deterministically.
 vi.mock('@client/app/utils/uploadFileToUrl', () => ({ uploadFileToUrl: uploadFileToUrlMock }));
 vi.mock('@client/app/contexts/WebsocketContext', () => ({
-  useWebsocket: () => ({ subscribeToAction: () => () => {} }),
+  useWebsocket: () => ({ subscribeToAction }),
 }));
 // Create mode reads the active org and reveals nav slots after the first upload -
 // both reached only once a test runs past the offline short-circuit.
 vi.mock('@client/app/hooks/data/dataLakes', () => ({ activeOrgId: () => undefined }));
 vi.mock('@client/app/hooks/useGearsStatus', () => ({ invalidateGearsStatusWhileLocked: () => {} }));
 
-import { useBatchUpload } from './dataLakeWizard';
+import { useBatchUpload, useBatchProgressListener } from './dataLakeWizard';
 import { slugifyDataLakeName } from './dataLakeSlug';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 
@@ -602,5 +603,56 @@ describe('useBatchUpload rollback (#816)', () => {
     expect(deleteCalledWith('/api/data-lakes/lake1')).toBe(true);
     expect(putCall('/api/data-lakes/batches/batch1')?.[1]).toMatchObject({ status: 'failed' });
     expect(toastMock.success).not.toHaveBeenCalled();
+  });
+});
+
+describe('useBatchProgressListener - processingFailedFiles (#1412)', () => {
+  beforeEach(() => {
+    subscribeToAction.mockClear();
+    useDataLakeWizardStore.setState({
+      uploadProgress: {
+        totalFiles: 1,
+        uploadedFiles: 1,
+        chunkedFiles: 0,
+        vectorizedFiles: 0,
+        failedFiles: 0,
+        failedFileNames: [],
+        processingFailedFiles: 0,
+        status: 'uploading',
+        currentBatchId: 'batch1',
+      },
+    });
+  });
+
+  it('applies processingFailedFiles from a data_lake_batch_progress message for the active batch', () => {
+    mountHook(useBatchProgressListener);
+    const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+
+    act(() => {
+      onMessage({
+        action: 'data_lake_batch_progress',
+        batchId: 'batch1',
+        failedFiles: 1,
+        processingFailedFiles: 1,
+      });
+    });
+
+    expect(useDataLakeWizardStore.getState().uploadProgress.processingFailedFiles).toBe(1);
+    expect(useDataLakeWizardStore.getState().uploadProgress.failedFiles).toBe(1);
+  });
+
+  it('ignores a message for a different batch', () => {
+    mountHook(useBatchProgressListener);
+    const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+
+    act(() => {
+      onMessage({
+        action: 'data_lake_batch_progress',
+        batchId: 'someone-elses-batch',
+        processingFailedFiles: 5,
+      });
+    });
+
+    expect(useDataLakeWizardStore.getState().uploadProgress.processingFailedFiles).toBe(0);
   });
 });

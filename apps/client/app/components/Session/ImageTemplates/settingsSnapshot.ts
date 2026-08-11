@@ -2,6 +2,7 @@ import {
   canonicalizeTemplateSettings,
   isBflImageModel,
   isKontextModel,
+  supportsPromptUpsampling,
   ImageModels,
   type ImageTemplateSettingsType,
   type IImageGenerationTemplateDocument,
@@ -34,7 +35,8 @@ export type ImageSettingsSource = Pick<
  * by model family keeps both sides the same shape.
  *
  * KEEP IN SYNC with the per-model settings gating in AdvancedAIModal:
- *  - width/height/safety_tolerance/prompt_upsampling: BFL only
+ *  - width/height/safety_tolerance: BFL only
+ *  - prompt_upsampling: BFL or Gemini, via the shared supportsPromptUpsampling predicate
  *  - style: not GPT-Image-1, not BFL
  *  - size: not Kontext
  */
@@ -53,7 +55,7 @@ export function imageTemplateSettingsSnapshot(model: string, s: ImageSettingsSou
     aspect_ratio: s.aspect_ratio,
     output_format: s.output_format ?? undefined,
     safety_tolerance: isBfl ? s.safety_tolerance : undefined,
-    prompt_upsampling: isBfl ? s.prompt_upsampling : undefined,
+    prompt_upsampling: supportsPromptUpsampling(model) ? s.prompt_upsampling : undefined,
   };
 }
 

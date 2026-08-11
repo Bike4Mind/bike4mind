@@ -22,7 +22,10 @@ import { createPersonaAgentMemoryStore } from '@server/memory/personaAgentMemory
 import { createUserMementoMemoryStore } from '@server/memory/userMementoMemoryStore';
 
 // The kinds this endpoint will read/delete. A deliberate subset of PrincipalKind: `lake` is
-// persistable but has no read surface until its authz is defined (#1440), so it 400s here.
+// persistable and now produced/consumed (#1440), but still has no HTTP read/delete surface here - a
+// lake is org-shared, so its authz is not the owner-scoped rule the other kinds use, and defining it
+// is deferred to a follow-up (#1501). Its retention is handled OUT of band: lake deletion crypto-shreds
+// the ledger in cleanupDeletedDataLake, so a missing read surface does not strand undeletable data.
 const READABLE_PRINCIPAL_KINDS: readonly PrincipalKind[] = ['user', 'agent', 'org', 'system'];
 
 /**

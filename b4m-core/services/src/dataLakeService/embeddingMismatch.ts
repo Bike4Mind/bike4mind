@@ -241,6 +241,20 @@ export function classifyLoadedChunk(args: {
   return null;
 }
 
+/**
+ * Classify an Atlas `$vectorSearch` hit: a reason to withhold it, or null to include it.
+ *
+ * Far shorter than classifyLoadedChunk because most of that function's job is already done by
+ * the query itself: the `filter: { embeddingModel: model }` clause means Atlas physically cannot
+ * return a chunk embedded under a different model, and a returned hit always carries a vector
+ * (there is nothing to compare a missing one against). The one thing the query CANNOT guarantee
+ * is that the file is still in the caller's current scope - `fileById` is built from an
+ * independent scope resolution, and a hit for a file that fell out of it must still be dropped.
+ */
+export function classifyAnnHit(args: { parentFile: unknown }): ChunkSkipReason | null {
+  return args.parentFile ? null : 'unknownFile';
+}
+
 export interface EmbeddingMismatchAccumulator {
   /** Record a withheld chunk. */
   skip(reason: ChunkSkipReason): void;

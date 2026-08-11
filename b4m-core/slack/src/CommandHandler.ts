@@ -10,6 +10,7 @@ export { SYSTEM_MODEL_DEFAULTS };
 import { parseCommand, selectAgent, type ParsedAgentCommand, type AgentPersona } from './agent-parser';
 import { customAgentToPersona } from './custom-agent-adapter';
 import { SlackEvent, type SlackEventData } from './SlackEvent';
+import { validateSlackFileForIngest } from './slackFileValidation';
 import { Types } from 'mongoose';
 import { updateUserSlackSettings } from './handlers/notebook-manager';
 import { getSlackDeps, getSlackDb } from './di/registry';
@@ -464,57 +465,23 @@ export class CommandHandler {
     const fileMetadata: Array<{ fabFileId: string; filename: string; mimeType: string; sizeBytes: number }> = [];
     const errors: string[] = [];
 
-    // File size limits (in bytes)
-    const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
-    const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB for images
-
-    const { SupportedFabFileMimeTypes } = await import('@bike4mind/common');
-
-    const SUPPORTED_TYPES: string[] = [
-      // Documents
-      SupportedFabFileMimeTypes.PDF,
-      SupportedFabFileMimeTypes.DOCX,
-      SupportedFabFileMimeTypes.XLS,
-      SupportedFabFileMimeTypes.XLSX,
-      SupportedFabFileMimeTypes.TXT_PLAIN,
-      SupportedFabFileMimeTypes.TXT_MARKDOWN,
-      SupportedFabFileMimeTypes.TXT_MD_LEGACY,
-
-      // Images
-      SupportedFabFileMimeTypes.PNG,
-      SupportedFabFileMimeTypes.JPG,
-      SupportedFabFileMimeTypes.WEBP,
-      SupportedFabFileMimeTypes.GIF,
-    ];
-
-    for (const file of files) {
+    for (const rawFile of files) {
       try {
-        // Slack may send partial file objects (e.g. pending/deleted files) where
-        // required fields are absent. Skip silently - this is a Slack infrastructure
-        // artifact, not a user-chosen file, so no user-facing message is needed.
-        if (!file.mimetype || !file.name || !file.url_private_download || file.size === undefined) {
-          this.logger.warn('[Slack Files] Skipping file with incomplete data', { fileId: file.id });
-          continue;
-        }
-
-        // Validate file type
-        if (!SUPPORTED_TYPES.includes(file.mimetype)) {
-          const error = `⚠️ File "${file.name}" has unsupported type ${file.mimetype}. Skipping.`;
+        const validation = validateSlackFileForIngest(rawFile);
+        if (!validation.ok) {
+          // An incomplete file object is Slack's artifact, not the user's choice, so it stays a
+          // silent log; the other rejections are about a file the user actually picked.
+          if (validation.reason === 'incomplete') {
+            this.logger.warn('[Slack Files] Skipping file with incomplete data', { fileId: rawFile.id });
+            continue;
+          }
+          // Warning sign, escaped so this source file stays ASCII.
+          const error = `\u26a0\ufe0f ${validation.message} Skipping.`;
           this.logger.warn(error);
           errors.push(error);
           continue;
         }
-
-        // Validate file size
-        const maxSize = file.mimetype.startsWith('image/') ? MAX_IMAGE_SIZE : MAX_FILE_SIZE;
-        if (file.size > maxSize) {
-          const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
-          const maxMB = (maxSize / (1024 * 1024)).toFixed(0);
-          const error = `⚠️ File "${file.name}" (${sizeMB}MB) exceeds ${maxMB}MB limit. Skipping.`;
-          this.logger.warn(error);
-          errors.push(error);
-          continue;
-        }
+        const file = validation.file;
 
         if (statusCallback) {
           await statusCallback(`Downloading file: ${file.name}...`);
@@ -562,7 +529,7 @@ export class CommandHandler {
           mimeType: file.mimetype,
         });
       } catch (error) {
-        const errorMsg = `❌ Failed to process file "${file.name}": ${
+        const errorMsg = `\u274c Failed to process file "${rawFile.name}": ${
           error instanceof Error ? error.message : 'Unknown error'
         }`;
         this.logger.error(errorMsg, error);

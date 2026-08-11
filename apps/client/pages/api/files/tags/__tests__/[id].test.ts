@@ -33,6 +33,7 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { __repo: 'fabFiles' },
   fileTagRepository: { __repo: 'fileTags' },
+  dataLakeRepository: { __repo: 'dataLakes' },
 }));
 
 import handler from '../[id]';
@@ -54,6 +55,7 @@ describe('PUT /api/files/tags/[id]', () => {
     const [, , adapters] = h.update.mock.calls[0];
     expect(adapters.db.fabFiles).toEqual({ __repo: 'fabFiles' });
     expect(adapters.db.tags).toEqual({ __repo: 'fileTags' });
+    expect(adapters.db.dataLakes).toEqual({ __repo: 'dataLakes' });
   });
 
   it('acts as the authenticated user, never a userId supplied in the body', async () => {
@@ -73,10 +75,35 @@ describe('PUT /api/files/tags/[id]', () => {
     expect(actorId).toBe('u1');
   });
 
+  it('takes the tag id from the URL, not the body', async () => {
+    const { res } = makeRes();
+
+    await call(
+      { method: 'PUT', query: { id: 'from-url' }, body: { id: 'from-body', name: 'receipts' }, user: { id: 'u1' } },
+      res
+    );
+
+    // Whole-object, not just `id`: this also pins that the body's id survives under no other key,
+    // and that the route no longer tacks on a `type` the service only strips again.
+    const [, params] = h.update.mock.calls[0];
+    expect(params).toEqual({ id: 'from-url', name: 'receipts' });
+  });
+
   it('rejects an unauthenticated request before reaching the service', async () => {
     const { res } = makeRes();
 
     await expect(call({ method: 'PUT', query: { id: 't1' }, body: {}, user: {} }, res)).rejects.toThrow('Unauthorized');
+    expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a missing or repeated id in the URL rather than passing it on', async () => {
+    const { res } = makeRes();
+
+    for (const query of [{}, { id: '' }, { id: ['a', 'b'] }]) {
+      await expect(call({ method: 'PUT', query, body: { id: 'from-body' }, user: { id: 'u1' } }, res)).rejects.toThrow(
+        'The URL must carry exactly one tag id'
+      );
+    }
     expect(h.update).not.toHaveBeenCalled();
   });
 });
@@ -92,6 +119,7 @@ describe('DELETE /api/files/tags/[id]', () => {
     const [, , adapters] = h.remove.mock.calls[0];
     expect(adapters.db.fabFiles).toEqual({ __repo: 'fabFiles' });
     expect(adapters.db.tags).toEqual({ __repo: 'fileTags' });
+    expect(adapters.db.dataLakes).toEqual({ __repo: 'dataLakes' });
   });
 
   it('takes the tag id from the query string', async () => {
@@ -109,5 +137,25 @@ describe('DELETE /api/files/tags/[id]', () => {
 
     await expect(call({ method: 'DELETE', query: { id: 't1' }, user: {} }, res)).rejects.toThrow('Unauthorized');
     expect(h.remove).not.toHaveBeenCalled();
+  });
+
+  it('rejects a missing or repeated id in the URL rather than passing it on', async () => {
+    const { res } = makeRes();
+
+    for (const query of [{}, { id: '' }, { id: ['a', 'b'] }]) {
+      await expect(call({ method: 'DELETE', query, user: { id: 'u1' } }, res)).rejects.toThrow(
+        'The URL must carry exactly one tag id'
+      );
+    }
+    expect(h.remove).not.toHaveBeenCalled();
+  });
+
+  it('passes only the id on, not the rest of the query string', async () => {
+    const { res } = makeRes();
+
+    await call({ method: 'DELETE', query: { id: 't1', userId: 'someone-else' }, user: { id: 'u1' } }, res);
+
+    const [, params] = h.remove.mock.calls[0];
+    expect(params).toEqual({ id: 't1' });
   });
 });

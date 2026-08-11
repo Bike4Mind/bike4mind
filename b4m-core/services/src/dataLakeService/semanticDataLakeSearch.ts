@@ -16,6 +16,7 @@ import {
 } from '@bike4mind/utils';
 import { filterRetrievalExcluded, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { Logger } from '@bike4mind/observability';
+import { supportsAtlasVectorSearch } from '@bike4mind/db-core';
 import {
   classifyLoadedChunk,
   createEmbeddingMismatchAccumulator,
@@ -25,6 +26,8 @@ import {
   type EmbeddingMismatchReport,
 } from './embeddingMismatch';
 import { BoundedTopK } from './boundedTopK';
+import { partitionByVectorSearchReadiness } from './vectorSearchEligibility';
+import { atlasVectorSearch, type AtlasVectorSearchAdapters } from './atlasVectorSearch';
 
 /**
  * Shared vector/semantic search over FabFile chunks in a user's accessible data lakes.
@@ -122,6 +125,16 @@ export interface SemanticSearchScanAccounting {
   chunksScanned: number;
   /** Of those, skipped because their width differs from the query's (embedding model changed). */
   chunksSkippedDimensionMismatch: number;
+  /**
+   * Files served by Atlas `$vectorSearch` instead of the brute-force scan. Additive to
+   * `filesScanned`, not a replacement for it - an ann-served file was never handed to the scan
+   * path at all, so `filesScanned + annFilesQueried` is the files actually searched by either
+   * route (still <= `filesScoped`; ineligible/not-yet-ready files may be searched by neither if
+   * a budget stopped the scan first).
+   */
+  annFilesQueried: number;
+  /** Chunk hits returned by Atlas across all ann-queried files, before minScore/scope filtering. */
+  annHits: number;
   /** Budgets in force, echoed so a caller can explain a truncation without guessing. */
   budgets: { maxFiles: number; maxChunks: number };
 }
@@ -172,13 +185,26 @@ export interface SemanticDataLakeSearchParams {
    * @bike4mind/utils/retrievalExclusion.
    */
   retrievalFilter?: RetrievalExclusionOptions;
+  /**
+   * Server-side kill-switch for the Atlas `$vectorSearch` cutover (admin setting
+   * `EnableDataLakeVectorSearch`) - the caller reads it, not this module, matching how
+   * `apiKeyTable`/`budgets` are already resolved by the caller and passed in. Off by default
+   * (undefined/false): every existing caller that omits this keeps today's scan-only behavior
+   * byte-for-byte. Even when true, the ann path only ever engages on an Atlas backend with a
+   * queryable index for `embeddingModel` - see rankChunksForFiles.
+   */
+  vectorSearchEnabled?: boolean;
   logger?: Logger;
 }
+
+/** Optional Atlas-cutover methods, on top of the scan path's required ones. Optional so every existing adapter/mock that predates the cutover keeps compiling unchanged. */
+type FabFileChunksAdapter = Pick<IFabFileChunkRepository, 'findVectorsByFabFileIds'> &
+  Partial<Pick<IFabFileChunkRepository, 'vectorSearch' | 'getAtlasIndexStatus'>>;
 
 export interface SemanticDataLakeSearchAdapters {
   db: {
     fabfiles: Pick<IFabFileRepository, 'search'>;
-    fabfilechunks: Pick<IFabFileChunkRepository, 'findVectorsByFabFileIds'>;
+    fabfilechunks: FabFileChunksAdapter;
   };
 }
 
@@ -193,6 +219,8 @@ interface RankableFile {
    */
   embeddingModel?: string | null;
   vectorizedChunkCount?: number;
+  /** Atlas-cutover readiness signal - see vectorSearchEligibility.ts. */
+  chunkEmbeddingModelStampedAt?: Date | string | null;
 }
 
 /**
@@ -241,6 +269,8 @@ export function emptyScanAccounting(budgets?: SemanticSearchBudgets): SemanticSe
     filesScanned: 0,
     chunksScanned: 0,
     chunksSkippedDimensionMismatch: 0,
+    annFilesQueried: 0,
+    annHits: 0,
     budgets: { maxFiles: resolved.maxFiles, maxChunks: resolved.maxChunks },
   };
 }
@@ -487,8 +517,9 @@ async function rankChunksForFiles(args: {
   budgets: ResolvedBudgets;
   filesMatching: number;
   fileBudgetHit: boolean;
+  vectorSearchEnabled: boolean;
   logger?: Logger;
-  fabfilechunks: Pick<IFabFileChunkRepository, 'findVectorsByFabFileIds'>;
+  fabfilechunks: FabFileChunksAdapter;
 }): Promise<SemanticDataLakeSearchResult> {
   const { query, fileIds, fileById, topK, minScore, embeddingModel, apiKeyTable, budgets, logger } = args;
 
@@ -522,6 +553,7 @@ async function rankChunksForFiles(args: {
       fileName: file?.fileName,
       embeddingModel: file?.embeddingModel,
       vectorizedChunkCount: file?.vectorizedChunkCount,
+      chunkEmbeddingModelStampedAt: file?.chunkEmbeddingModelStampedAt,
     };
   });
   const { rankable, foreign } = partitionFilesByEmbeddingModel(scopedFiles, embeddingModel);
@@ -542,8 +574,79 @@ async function rankChunksForFiles(args: {
     };
   }
 
+  // Split same-model files into Atlas-eligible and scan-only BEFORE the scan runs, so an
+  // ann-served file is never handed to scanAndRank and never spends its chunk budget - per-file
+  // subset selection, not all-or-nothing. Every gate below defaults closed: the ann path only
+  // engages when the caller opted in AND the backend/index are actually ready right now: a
+  // disabled/DocumentDB/self-host/not-yet-queryable deployment scans every rankable file exactly
+  // as it did before this cutover existed.
+  let annEligible: typeof rankable = [];
+  let scanEligible = rankable;
+  const canUseAtlas =
+    args.vectorSearchEnabled &&
+    supportsAtlasVectorSearch() &&
+    !!args.fabfilechunks.vectorSearch &&
+    !!args.fabfilechunks.getAtlasIndexStatus;
+  if (canUseAtlas) {
+    const indexStatus = await args.fabfilechunks.getAtlasIndexStatus!(embeddingModel);
+    if (indexStatus?.queryable) {
+      const split = partitionByVectorSearchReadiness(rankable, new Date());
+      annEligible = split.annReady;
+      scanEligible = split.scanOnly;
+    }
+  }
+
+  let annResult: Awaited<ReturnType<typeof atlasVectorSearch>> = {
+    results: [],
+    hitsReturned: 0,
+    hitsSkippedUnknownFile: 0,
+    filesWithHits: new Set(),
+  };
+  if (annEligible.length > 0) {
+    try {
+      annResult = await atlasVectorSearch({
+        fileIds: annEligible.map(f => f.id),
+        fileById,
+        queryVector: queryEmbedding,
+        model: embeddingModel,
+        limit: topK,
+        minScore,
+        adapters: args.fabfilechunks as AtlasVectorSearchAdapters,
+      });
+    } catch (error) {
+      // A broken Atlas index (transient mongot outage, IAM regression, quota exhaustion) must
+      // degrade to the scan path, not surface as a 500 - the whole point of the per-file split
+      // is that scanAndRank can always cover any file the ann path can't serve right now.
+      logger?.warn?.('[semanticSearch] $vectorSearch failed, falling back to scan for its files', {
+        embeddingModel,
+        fileCount: annEligible.length,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      scanEligible = [...scanEligible, ...annEligible];
+      annEligible = [];
+    }
+
+    // A queryable index does not guarantee a given file's chunks are actually IN it yet: mongot's
+    // indexing lag can exceed VECTOR_SEARCH_READY_LAG_MS during a bulk backfill, or a re-embed
+    // mid-file can label chunks under the wrong model so mongot never indexes them. Either way the
+    // file returns zero raw hits (not "nothing scored well", since Atlas ranks by similarity
+    // before minScore is applied) and, with no scan fallback, would silently contribute zero
+    // results. Rebucket per file rather than all-or-nothing, so one un-indexed file in a batch
+    // does not cost the rest their ANN path.
+    const missedFiles = annEligible.filter(f => !annResult.filesWithHits.has(f.id));
+    if (missedFiles.length > 0) {
+      logger?.warn?.('[semanticSearch] $vectorSearch returned no hits for ready files, scanning them instead', {
+        embeddingModel,
+        fileCount: missedFiles.length,
+      });
+      scanEligible = [...scanEligible, ...missedFiles];
+      annEligible = annEligible.filter(f => annResult.filesWithHits.has(f.id));
+    }
+  }
+  for (let i = 0; i < annResult.hitsSkippedUnknownFile; i++) mismatch.skip('unknownFile');
+
   const scanned = await scanAndRank({
-    fileIds: rankable.map(f => f.id),
+    fileIds: scanEligible.map(f => f.id),
     fileById,
     queryEmbedding,
     topK,
@@ -557,6 +660,13 @@ async function rankChunksForFiles(args: {
   });
   const mismatchReport = mismatch.report();
 
+  // Merge both sources into one bounded top-K - each already ranks its own subset, so this is a
+  // cheap second pass over at most 2*topK items, not a rescore of the corpus.
+  const merged = new BoundedTopK<SemanticChunkResult>(topK, compareByScore);
+  for (const result of scanned.results) merged.offer(result);
+  for (const result of annResult.results) merged.offer(result);
+  const mergedResults = merged.drain();
+
   const scan: SemanticSearchScanAccounting = {
     truncated: args.fileBudgetHit || scanned.chunkBudgetHit,
     fileBudgetHit: args.fileBudgetHit,
@@ -566,6 +676,8 @@ async function rankChunksForFiles(args: {
     filesScanned: scanned.filesScanned,
     chunksScanned: scanned.chunksScanned,
     chunksSkippedDimensionMismatch: scanned.chunksSkippedDimensionMismatch,
+    annFilesQueried: annEligible.length,
+    annHits: annResult.hitsReturned,
     budgets: { maxFiles: budgets.maxFiles, maxChunks: budgets.maxChunks },
   };
 
@@ -583,10 +695,13 @@ async function rankChunksForFiles(args: {
     );
   }
 
-  // Warn only when NOTHING could be compared. A few withheld chunks mid-revectorize are expected
-  // and must stay quiet - the same policy the truncation warning above applies, and the reason
-  // unlabeled files and budgets do not raise the flag either.
-  if (mismatchReport.partial && scanned.chunksScored === 0) {
+  // Warn only when NOTHING could be compared by EITHER path. A few withheld chunks mid-revectorize
+  // are expected and must stay quiet - the same policy the truncation warning above applies, and
+  // the reason unlabeled files and budgets do not raise the flag either. Excludes annResult.hitsReturned
+  // (not annEligible.length): a lake fully served by Atlas legitimately scores zero chunks on the
+  // scan path, and without this the warning would false-fire on every healthy all-ANN search that
+  // also happens to have an unrelated off-model file elsewhere in scope.
+  if (mismatchReport.partial && scanned.chunksScored === 0 && annResult.hitsReturned === 0) {
     logger?.warn?.('[semanticSearch] nothing could be compared in the query embedding space', {
       queryEmbeddingModel: embeddingModel,
       excludedFiles: mismatchReport.excludedFiles.count,
@@ -608,11 +723,11 @@ async function rankChunksForFiles(args: {
   }
 
   logger?.debug?.(
-    `[semanticSearch] ${fileIds.length} files (${rankable.length} rankable), ${scan.chunksScanned} chunks -> ${scanned.chunksScored} scored, ${scanned.results.length} above min ${minScore}, top score ${scanned.results[0]?.score?.toFixed(3) ?? 'n/a'}`
+    `[semanticSearch] ${fileIds.length} files (${rankable.length} rankable, ${annEligible.length} via Atlas), ${scan.chunksScanned} chunks scanned + ${scan.annHits} ann hits -> ${scanned.chunksScored} scored, ${mergedResults.length} above min ${minScore}, top score ${mergedResults[0]?.score?.toFixed(3) ?? 'n/a'}`
   );
 
   return {
-    results: scanned.results,
+    results: mergedResults,
     totalChunksSearched: scan.chunksScanned,
     filesInScope: scan.filesScoped,
     chunksScored: scanned.chunksScored,
@@ -681,6 +796,7 @@ export async function semanticDataLakeSearch(
         fileTags: f.tags?.map(t => t.name) ?? [],
         embeddingModel: f.embeddingModel,
         vectorizedChunkCount: f.vectorizedChunkCount,
+        chunkEmbeddingModelStampedAt: f.chunkEmbeddingModelStampedAt,
       },
     ])
   );
@@ -696,6 +812,7 @@ export async function semanticDataLakeSearch(
     budgets,
     filesMatching: scoped.filesMatching,
     fileBudgetHit: scoped.fileBudgetHit,
+    vectorSearchEnabled: params.vectorSearchEnabled ?? false,
     logger,
     fabfilechunks: adapters.db.fabfilechunks,
   });
@@ -716,13 +833,15 @@ export interface FileScopedSemanticSearchParams {
   apiKeyTable: SemanticDataLakeSearchParams['apiKeyTable'];
   /** Scan limits + paging tuning. Omit for the defaults. */
   budgets?: SemanticSearchBudgets;
+  /** See SemanticDataLakeSearchParams.vectorSearchEnabled - same kill-switch, same default-off contract. */
+  vectorSearchEnabled?: boolean;
   logger?: Logger;
 }
 
 export interface FileScopedSemanticSearchAdapters {
   db: {
     fabfiles: Pick<IFabFileRepository, 'getAccessibleFiles'>;
-    fabfilechunks: Pick<IFabFileChunkRepository, 'findVectorsByFabFileIds'>;
+    fabfilechunks: FabFileChunksAdapter;
   };
 }
 
@@ -761,6 +880,7 @@ export async function fileScopedSemanticSearch(
         fileTags: f.tags?.map(t => t.name) ?? [],
         embeddingModel: f.embeddingModel,
         vectorizedChunkCount: f.vectorizedChunkCount,
+        chunkEmbeddingModelStampedAt: f.chunkEmbeddingModelStampedAt,
       },
     ])
   );
@@ -776,6 +896,7 @@ export async function fileScopedSemanticSearch(
     budgets,
     filesMatching: ordered.length,
     fileBudgetHit,
+    vectorSearchEnabled: params.vectorSearchEnabled ?? false,
     logger,
     fabfilechunks: adapters.db.fabfilechunks,
   });

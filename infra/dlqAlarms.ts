@@ -33,6 +33,7 @@ import {
   questExportQueueDLQ,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
+  lakeMemoryQueueDLQ,
   videoGenerationDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
@@ -227,6 +228,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'DataLakeManagement',
     sourceQueue: 'dataLakeTaxonomyQueue',
     queue: dataLakeTaxonomyQueueDLQ,
+  },
+  {
+    label: 'lake-memory',
+    displayName: 'Lake Memory Extraction',
+    application: 'DataLakeManagement',
+    sourceQueue: 'lakeMemoryQueue',
+    queue: lakeMemoryQueueDLQ,
   },
   {
     label: 'video-generation',

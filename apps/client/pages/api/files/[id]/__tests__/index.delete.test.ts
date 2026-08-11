@@ -267,3 +267,26 @@ describe('DELETE /api/files/[id] - tag activity', () => {
     expect(h.touchLastActivityBy).toHaveBeenCalledWith({ name: 'invoices', userId: OWNER });
   });
 });
+
+// Regression: deleteFabFile's 'denied' action (file exists, caller has no access) must never
+// reach the client as-is - that would let this route be used to probe for other users' file ids,
+// the same no-enumeration convention bulk-delete.ts follows.
+describe('DELETE /api/files/[id] - denied normalization', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.userFindById.mockResolvedValue({ id: OWNER });
+    h.findAllWithKnowledgeId.mockResolvedValue([]);
+  });
+
+  it('reports a denied outcome as action "not_found", not "denied"', async () => {
+    // Exists, but the caller is neither owner nor in the share list.
+    const inaccessible = fabFile({ userId: 'someone-else', users: [] });
+    h.findById.mockResolvedValue(inaccessible);
+    h.findByIdAndUserId.mockResolvedValue(null);
+    const { res, json } = makeRes();
+
+    await run(res);
+
+    expect(json.mock.calls[0][0]).toMatchObject({ action: 'not_found' });
+  });
+});

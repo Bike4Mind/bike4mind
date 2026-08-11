@@ -56,7 +56,12 @@ describe('dataLakeTaxonomyAnalysis consumer', () => {
 
     await expect(dispatch(makeEvent(payload), {} as never, logger)).rejects.toThrow('mongo down');
 
-    expect(h.setTaxonomyStatusIfActive).toHaveBeenCalledWith('b1', ['analyzing'], 'queued');
+    // The taxonomyStartedAt refresh matters: without it, a batch waiting between ordinary SQS
+    // redeliveries (up to ~2x the queue's 6-minute visibility timeout) would read as stale
+    // against its ORIGINAL claim time once the stuck-job reconciler's staleness guard runs off
+    // this field, and could get force-failed mid-retry instead of actually getting retried.
+    const [, , , extra] = h.setTaxonomyStatusIfActive.mock.calls[0];
+    expect(extra.taxonomyStartedAt.getTime()).toBeCloseTo(Date.now(), -2);
   });
 
   it('does not attempt to release a claim that was never taken (payload failed to parse)', async () => {

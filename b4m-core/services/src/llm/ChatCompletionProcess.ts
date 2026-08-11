@@ -25,6 +25,7 @@ import {
   isExperimentalFeatureEnabled,
   isImageAttachment,
   isImageServeable,
+  isMediaModelType,
   isUnlimitedHistory,
   normalizeRequestedHistoryCount,
   resolveHistoryFetchLimit,
@@ -61,6 +62,7 @@ import {
   getLastBuildDebugInfo,
   getSettingsByNames,
   attachedContentExtractionBudget,
+  effectiveContextWindow,
   safeInputWindow,
 } from '@bike4mind/utils';
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
@@ -99,6 +101,7 @@ import { MongoAbility } from '@casl/ability';
 import { Mutex } from 'async-mutex';
 import { z } from 'zod';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
+import { resolveToolAvailability } from './toolAvailability';
 import { applyModerationHit, MODERATION_POLICY, moderationThrottleKey } from '../userService/moderationPolicy';
 import { ToolDefinition } from './tools/base/types';
 import { ServerAgentStore } from './agents/ServerAgentStore';
@@ -108,6 +111,7 @@ import {
   ChatCompletionFeature,
   ContextSummarizationFeature,
   MementoFeature,
+  LakeMemoryFeature,
   OrganizationPromptFeature,
   SessionPromptFeature,
   KnowledgeRetrievalFeature,
@@ -433,6 +437,7 @@ interface ProcessInitContext {
   embeddingModel?: string;
   queryComplexity: string;
   imageConfig?: z.infer<typeof QuestStartBodySchema>['imageConfig'];
+  audioConfig?: z.infer<typeof QuestStartBodySchema>['audioConfig'];
   deepResearchConfig?: z.infer<typeof QuestStartBodySchema>['deepResearchConfig'];
   userTimezone?: string;
 }
@@ -605,6 +610,9 @@ export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
   const survivors = tools.filter(tool => !denied.has(tool));
   let paired = addPairedTool(survivors, 'image_generation', 'edit_image');
   paired = addPairedTool(paired, 'search_knowledge_base', 'retrieve_knowledge_content');
+  // Cardinality rides along with search: a corpus you can search but not count is what made the
+  // model treat a count question as proof it had no access at all.
+  paired = addPairedTool(paired, 'search_knowledge_base', 'count_knowledge_base');
   return paired.filter(tool => !denied.has(tool));
 }
 
@@ -676,6 +684,7 @@ export class ChatCompletionProcess {
   public db: IChatCompletionServiceOptions['db'];
   public invokeCreateMemento: IChatCompletionServiceOptions['invokeCreateMemento'];
   public recallMementosV2: IChatCompletionServiceOptions['recallMementosV2'];
+  public recallLakeMemory: IChatCompletionServiceOptions['recallLakeMemory'];
   public loadSystemPromptById: IChatCompletionServiceOptions['loadSystemPromptById'];
   public logger: Logger;
   public user: IUserDocument;
@@ -740,6 +749,7 @@ export class ChatCompletionProcess {
     this.db = options.db;
     this.invokeCreateMemento = options.invokeCreateMemento;
     this.recallMementosV2 = options.recallMementosV2;
+    this.recallLakeMemory = options.recallLakeMemory;
     this.loadSystemPromptById = options.loadSystemPromptById;
     this.storage = options.storage;
     this.imageGenerateStorage = options.imageGenerateStorage;
@@ -926,6 +936,10 @@ export class ChatCompletionProcess {
       // unresolvable the semantic arm cannot run at all (the tool falls back to metadata-only keyword
       // search), so nothing is deferrable. Closes the tag-only gap; #1411 hardened the retrieval-side
       // reads this now relies on. `vectorizedChunkCount >= chunkCount` is the usable-data condition.
+      // MUST STAY IN SYNC with `isFabFileCitable` (apps/client/server/memory/lakeSourceReachability.ts),
+      // the #1440 lake-memory copy of this same "can the knowledge tool actually reach this doc"
+      // predicate (fully vectorized + same embedding model + live/not-excluded). The two live in
+      // different packages with no shared symbol; change one, change the other.
       const queryEmbeddingModel = getSettingsValue('defaultEmbeddingModel', defaultAdminSettings);
       const retrievableIds = files
         .filter(file => {
@@ -1022,6 +1036,7 @@ export class ChatCompletionProcess {
       embeddingModel,
       queryComplexity,
       imageConfig,
+      audioConfig,
       deepResearchConfig,
       timezone: userTimezone,
     } = parsedBody;
@@ -1113,6 +1128,7 @@ export class ChatCompletionProcess {
       embeddingModel,
       queryComplexity,
       imageConfig,
+      audioConfig,
       deepResearchConfig,
       userTimezone,
     };
@@ -1168,6 +1184,7 @@ export class ChatCompletionProcess {
       embeddingModel,
       queryComplexity,
       imageConfig,
+      audioConfig,
       deepResearchConfig,
       userTimezone,
     } = initContext;
@@ -1365,7 +1382,7 @@ export class ChatCompletionProcess {
         );
       };
 
-      const [session, organization, apiKeyTable] = await Promise.all([
+      const [session, organization, apiKeyTable, toolAvailability] = await Promise.all([
         timeCall('session', Promise.resolve(prefetchedSession ?? this.db.sessions.findById(sessionId))),
         timeCall(
           'organization',
@@ -1376,6 +1393,14 @@ export class ChatCompletionProcess {
               : Promise.resolve(null)
         ),
         timeCall('apiKeys', getEffectiveLLMApiKeys(this.user.id, { db: this.db, getSettingsByNames }, { logger })),
+        // Never rejects (see resolveToolAvailability's doc comment), so it's safe alongside the
+        // "essential" calls above that re-throw on failure. Fail-closed here (unlike the Tools
+        // picker UI's fail-open default): a tool this lookup couldn't confirm works should not
+        // reach the model rather than risk offering one that will throw or refuse.
+        timeCall(
+          'toolAvailability',
+          resolveToolAvailability(this.user.id, { db: this.db }, { onLookupError: 'unavailable', logger })
+        ),
       ]);
 
       if (!session) {
@@ -1594,13 +1619,13 @@ export class ChatCompletionProcess {
 
       // Dynamic history adjustment: now that we have modelInfo, adjust history count
       // based on model's actual context window
-      const contextWindow = modelInfo.contextWindow ?? 200000;
+      const contextWindow = effectiveContextWindow(modelInfo);
 
-      // Image models generate from the current prompt alone: the image backend
+      // Image and video models generate from the current prompt alone: the media backend
       // ignores conversation history. Sending history only inflates the token count
-      // and trips a false context-overflow against the image model's small context
+      // and trips a false context-overflow against the media model's small context
       // window (e.g. FLUX Pro 1.1 at 10k).
-      if (modelInfo.type === 'image') {
+      if (isMediaModelType(modelInfo.type)) {
         historyCount = 0;
       }
 
@@ -1967,7 +1992,7 @@ export class ChatCompletionProcess {
       this.sendStatusUpdate(quest, 'Gathering data sources...', { statusAt: new Date() });
       // Input-window limits, needed BEFORE building messages because the amount of
       // attached-file content we extract has to be derived from them.
-      const contextLimit = modelInfo.contextWindow ?? 200000;
+      const contextLimit = effectiveContextWindow(modelInfo);
       // safeMaxTokens is resolved once further up, where the verbatim-history window
       // needs it too. An explicit caller budget is honored as-is; only its absence is
       // sized for the model. See resolveOutputMaxTokens for why raising an explicit
@@ -2170,6 +2195,7 @@ export class ChatCompletionProcess {
           },
           image_generation: imageConfig,
           edit_image: imageConfig,
+          audio_generation: audioConfig,
         },
         model,
         organization,
@@ -2183,6 +2209,7 @@ export class ChatCompletionProcess {
         thinking: thinking ? { enabled: thinking.enabled, budget_tokens: thinking.budget_tokens ?? 16000 } : undefined,
         agentStore,
         externalTools,
+        toolAvailability,
       });
 
       // Final denylist pass on the built tool list. The enabledTools filter above
@@ -2558,6 +2585,9 @@ export class ChatCompletionProcess {
 
       const mementoMessages = featureContextMessages['mementos'] ?? [];
       let inputTokens = 0;
+      // Whether inputTokens came from the char estimator rather than the encoder. The overflow guard
+      // below reads this: an estimate is fine to bill and reserve against, but not to reject a turn on.
+      let inputTokensEstimated = false;
 
       try {
         const [totalTokens, mementoTokens, fabTokens, urlTokens, historyTokens, userPromptTokens] = await Promise.all([
@@ -2683,6 +2713,20 @@ export class ChatCompletionProcess {
         logger.info(`📊 Token breakdown by source calculated`, tokensBySource);
       } catch (tokenBreakdownError) {
         logger.warn(`📊 Failed to calculate token breakdown:`, tokenBreakdownError);
+        if (inputTokens === 0) {
+          // Zero is not a neutral "unknown" downstream: it disables the context-overflow guard and
+          // the pre-reservation eligibility check, and on backends that report no provider usage
+          // (DeepSeek, Llama-on-Bedrock streaming) settlement falls back to this figure and
+          // under-bills the turn. The estimate is pure char math with no encoder involved
+          // (estimateTokenLength), so it cannot fail the way the real count just did.
+          try {
+            inputTokens = await calculateTotalTokenLength(messages, { ...tokenCalcOptions, estimateOnly: true });
+            inputTokensEstimated = true;
+            logger.warn(`📊 Input tokens fell back to the char-based estimate: ${inputTokens}`);
+          } catch (estimateFallbackError) {
+            logger.error(`📊 Estimate fallback failed; input tokens stay 0 for this turn`, estimateFallbackError);
+          }
+        }
       }
 
       // Per-source breakdown, derived from the same tagged list the prompt was assembled
@@ -2780,8 +2824,17 @@ export class ChatCompletionProcess {
         quest.promptMeta!.context!.tokensBySource = tokensBySource;
       }
 
-      // Detect and handle context overflow with detailed breakdown
-      if (inputTokens > maxSafeInputTokens) {
+      // Detect and handle context overflow with detailed breakdown.
+      // Measured counts only: the estimator assumes 3.5 chars/token against prose that really runs
+      // ~6, so it over-counts prose by up to ~1.7x. Rejecting a turn on that figure would fail
+      // perfectly valid requests, and the recovery loop above never ran on the estimate path either.
+      if (inputTokensEstimated && inputTokens > maxSafeInputTokens) {
+        logger.warn(
+          `⚠️ Skipping the context-overflow guard: input tokens are an estimate (${inputTokens} vs ` +
+            `${maxSafeInputTokens} limit), not an encoder count. Letting the provider be the judge.`
+        );
+      }
+      if (!inputTokensEstimated && inputTokens > maxSafeInputTokens) {
         logger.error(`🚨 CRITICAL: Context overflow detected!`, {
           inputTokens,
           maxTokens: safeMaxTokens,
@@ -5185,6 +5238,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     const adminSettingsEnableMementos = getSettingsValue('EnableMementos', adminSettings);
     const adminSettingsEnableQuestMaster = getSettingsValue('EnableQuestMaster', adminSettings);
     const adminSettingsEnableAgents = getSettingsValue('EnableAgents', adminSettings);
+    const adminSettingsEnableLakeMemory = getSettingsValue('EnableLakeMemory', adminSettings);
     const adminSettingsAutoNameNotebook = getSettingsValue('AutoNameNotebook', adminSettings);
 
     // Only build features that are in the optimized list
@@ -5293,6 +5347,16 @@ When using tools that require file IDs (like edit_image), use the ID shown above
         'knowledgeRetrieval',
         new KnowledgeRetrievalFeature(this, retrievalTags, citationStyle, retrievalFilter)
       );
+
+      // Lake memory hot-card (#1440) rides the same Data-Lake toggle: a durable identity/context layer
+      // alongside the forced chunk retrieval. Gated on the SAME `EnableLakeMemory` flag as the producer,
+      // so the flag is a complete kill-switch for BOTH sides: turning it off stops new extraction AND
+      // stops injecting already-extracted beliefs (otherwise a lake extracted while it was on would keep
+      // being read forever). Also needs the host to have wired the app-layer ledger read.
+      if (adminSettingsEnableLakeMemory && this.recallLakeMemory) {
+        this.logger.log('  - Enabling LakeMemory (hot-card) feature');
+        this.features.set('lakeMemory', new LakeMemoryFeature(this, retrievalTags, retrievalFilter));
+      }
     }
 
     this.logger.log(`🛠️ Features enabled: ${Array.from(this.features.keys()).join(', ')}`);

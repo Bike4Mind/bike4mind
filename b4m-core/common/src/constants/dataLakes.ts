@@ -70,6 +70,30 @@ export const satisfiesTagPrefix = (tagNames: readonly unknown[], prefix: string)
   );
 
 /**
+ * The tag names that place a file under a lake's PREFIX ARM - the exact JS mirror of the
+ * `$regex: ^prefix` membership arm in `buildDataLakeMembershipFilter` (`@bike4mind/database`),
+ * and of the `prefixedTags` computed inline inside `removeFileFromLake`.
+ *
+ * Deliberately NOT `satisfiesTagPrefix`, which is the fallback-STAMP rule: it also requires a
+ * suffix (a bare `lk:` is not a category anyone can navigate to) and excludes meta-tags. The read
+ * arm's regex has neither restriction - a bare `lk:` tag genuinely IS membership - so a gate
+ * built on `satisfiesTagPrefix` would miss exactly the leave this predicate exists to catch.
+ *
+ * Fails closed to `[]` on an unusable or reserved-namespace prefix, matching the read arm (which
+ * drops the whole prefix clause in both cases). Case-SENSITIVE, matching the read arm's unflagged
+ * regex.
+ */
+export const prefixArmTagNames = (tagNames: readonly unknown[], fileTagPrefix: string | undefined | null): string[] => {
+  const prefix = normalizeTagPrefix(fileTagPrefix);
+  if (!prefix || isReservedTagPrefix(prefix)) return [];
+  return tagNames.filter((name): name is string => typeof name === 'string' && name.startsWith(prefix));
+};
+
+/** True when any tag names a file under a lake's prefix arm. See `prefixArmTagNames`. */
+export const matchesTagPrefixArm = (tagNames: readonly unknown[], fileTagPrefix: string | undefined | null): boolean =>
+  prefixArmTagNames(tagNames, fileTagPrefix).length > 0;
+
+/**
  * True when two `fileTagPrefix` values would match each other's tags, so two lakes carrying them
  * cannot safely coexist in one scope: they would share their prefix-tagged files, and permanently
  * deleting either would take files the other holds.

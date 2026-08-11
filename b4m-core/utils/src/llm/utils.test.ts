@@ -10,6 +10,7 @@ import {
   includeHardcodedSystemMessage,
   includeImagePromptSystemMessage,
   TOOL_RESULT_NOT_RECORDED,
+  ATTACHMENT_DELIVERED_NOTICE,
 } from './utils';
 import { ensureToolPairingIntegrity, stripAllToolBlocks } from '@bike4mind/llm-adapters';
 import { DEFAULT_HISTORY_FETCH_LIMIT, FORMAT_PROMPT_TEMPLATE, UNLIMITED_HISTORY_COUNT } from '@bike4mind/common';
@@ -453,7 +454,7 @@ describe('Context Management Tests', () => {
     });
 
     const hasFileContent = (messages: IMessage[]) =>
-      messages.some(m => typeof m.content === 'string' && m.content.startsWith('File content:'));
+      messages.some(m => typeof m.content === 'string' && m.content.includes('File content:'));
 
     it('should split the budget between files and history when no window is set', async () => {
       const { previousMessages, fabMessages } = oversubscribed();
@@ -1892,8 +1893,10 @@ describe('Token budget allocation', () => {
     content: ATTACHED_FILE_PREFIX + 'C'.repeat(totalChars - ATTACHED_FILE_PREFIX.length),
   });
 
+  // The delivered-content notice (see ATTACHMENT_DELIVERED_NOTICE) rides ahead of the file's own
+  // framing, so the message no longer starts with ATTACHED_FILE_PREFIX - it contains it.
   const findAttachedFile = (messages: IMessage[]) =>
-    messages.find(m => typeof m.content === 'string' && m.content.startsWith(ATTACHED_FILE_PREFIX));
+    messages.find(m => typeof m.content === 'string' && m.content.includes(ATTACHED_FILE_PREFIX));
   const historyLabels = (messages: IMessage[]) =>
     messages
       .filter(m => typeof m.content === 'string' && (m.content as string).startsWith('history-'))
@@ -2038,12 +2041,14 @@ describe('Token budget allocation', () => {
       );
 
       // floor = floor(6992 * 0.35) = 2447, so the file is truncated to 7708 chars (~2203 tokens)
-      // rather than dropped.
+      // rather than dropped. Offset by the delivered-content notice, which rides ahead of the file.
       const file = findAttachedFile(result);
       expect(file).toBeDefined();
       // 7708 chars of the file, plus the notice telling the model this is not where the file ends.
       expect(file!.content as string).toContain('Content truncated to fit the context window');
-      expect((file!.content as string).indexOf('\n\n[Content truncated')).toBe(7708);
+      expect((file!.content as string).indexOf('\n\n[Content truncated')).toBe(
+        7708 + ATTACHMENT_DELIVERED_NOTICE.length
+      );
 
       // History still holds the majority of the budget and keeps its newest exchange.
       const labels = historyLabels(result);
@@ -2051,8 +2056,9 @@ describe('Token budget allocation', () => {
       expect(labels).toContain('history-39');
       expect(labels).toContain('history-38');
 
-      // The primary allocation kept us in bounds, so the final safety net never had to fire.
-      expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBe(6661);
+      // The primary allocation kept us in bounds, so the final safety net never had to fire. 6661 plus
+      // the delivered-content and anti-inference notices' own real token cost (both fixed, both counted).
+      expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBe(6723);
       expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('exceeds maxInputTokens'));
 
       // The squeeze is reported, and it names the file so a support engineer can see which one lost.
@@ -2066,9 +2072,9 @@ describe('Token budget allocation', () => {
 
       const result = await buildAndSortMessages([], [attached], [], 8000, {}, 10, mockLogger as any, tokenizer);
 
-      // Byte-identical, not merely present: the squeeze check compares estimates against estimates,
-      // so an attachment that fits can never be reported as squeezed.
-      expect(findAttachedFile(result)?.content).toBe(attached.content);
+      // Byte-identical past the delivered-content notice, not merely present: the squeeze check
+      // compares estimates against estimates, so an attachment that fits can never be reported as squeezed.
+      expect(findAttachedFile(result)?.content).toBe(ATTACHMENT_DELIVERED_NOTICE + attached.content);
       expect(mockLogger.warn).not.toHaveBeenCalled();
     });
 
@@ -2127,7 +2133,7 @@ describe('Token budget allocation', () => {
         tokenizer
       );
 
-      expect(findAttachedFile(result)?.content).toBe(attached.content);
+      expect(findAttachedFile(result)?.content).toBe(ATTACHMENT_DELIVERED_NOTICE + attached.content);
       expect(historyLabels(result)).toHaveLength(172);
       expect(mockLogger.warn).not.toHaveBeenCalled();
     });
@@ -2297,6 +2303,16 @@ describe('processFabFilesServer chunk retrieval', () => {
     expect(content).toContain('chunk-0-');
     expect(content).not.toContain('chunk-1-');
   });
+
+  it("tells the model a filename's digits are not a row count on the vectorized body header", async () => {
+    const messages = await runRetrieval(makeChunks(3, 200), 4000);
+
+    const content = messages[0].content as string;
+    expect(content).toContain('Data for roster.csv:');
+    expect(content).toContain(
+      'Digits in the file name are part of the name, not a count of its rows, records, or sections.'
+    );
+  });
 });
 
 // The default mock tokenizer is ceil(len / 3.5), byte-identical to the internal estimator, so any
@@ -2367,7 +2383,7 @@ describe('final safety pass under a denser-than-estimated tokenizer', () => {
       makeHistory(60, 1000),
       [{ role: 'user', content: 'F'.repeat(30000) }],
       [{ role: 'user', content: 'Summarize the attached file' }],
-      4952,
+      5200,
       {},
       20,
       mockLogger as any,
@@ -2539,11 +2555,15 @@ describe('truncated attachments are marked', () => {
       tokenizer
     );
 
-    const file = result.find(m => typeof m.content === 'string' && (m.content as string).startsWith('row-data,'));
+    const file = result.find(m => typeof m.content === 'string' && (m.content as string).includes('row-data,'));
     expect(file).toBeDefined();
     const text = file!.content as string;
     expect(text).toContain(NOTICE);
-    expect(text.endsWith(NOTICE + '. This is NOT the end of the file - later content was not sent.]')).toBe(true);
+    expect(
+      text.endsWith(
+        'later content was not sent. Do not infer a total row, record, or section count, or a final row, from what is above.]'
+      )
+    ).toBe(true);
     // The tail the marker lives in genuinely did not survive, which is exactly why the notice matters.
     expect(text).not.toContain('FINAL_ROW_MARKER');
   });
@@ -2571,16 +2591,21 @@ describe('truncated attachments are marked', () => {
       tokenizer
     );
 
-    const delivered = result.filter(m => typeof m.content === 'string' && (m.content as string).startsWith('id,name'));
+    const delivered = result.filter(m => typeof m.content === 'string' && (m.content as string).includes('id,name'));
     expect(delivered).toHaveLength(2);
-    expect(delivered.map(m => m.content)).toEqual(expect.arrayContaining([small, large]));
+    expect(delivered.map(m => m.content)).toEqual(
+      expect.arrayContaining([ATTACHMENT_DELIVERED_NOTICE + small, ATTACHMENT_DELIVERED_NOTICE + large])
+    );
     for (const m of delivered) expect(m.content as string).not.toContain(NOTICE);
   });
 
   it('never leaves more than one truncation notice, even when the safety pass cuts twice', async () => {
     // A dense tokenizer forces the safety pass to run after the primary pass already cut and marked the
     // file. Cutting notice-carrying content again lands mid-notice, so appending another one would leave
-    // a mangled fragment followed by a whole notice.
+    // a mangled fragment followed by a whole notice. Budget nudged up from the original 4952: the fixed
+    // per-file overhead (the delivered-content and anti-inference notices) now costs more under this
+    // dense 2.0-chars/token tokenizer, and the old figure squeezed the file below the useful-content
+    // floor entirely rather than leaving it cut-but-delivered.
     const tokenizer = createDenseTokenizer(2.0);
     const body = 'row-data,'.repeat(4000) + '\nFINAL_ROW_MARKER: pineapple';
 
@@ -2588,18 +2613,22 @@ describe('truncated attachments are marked', () => {
       makeHistory(60, 1000),
       [{ role: 'user', content: body }],
       [{ role: 'user', content: 'What is FINAL_ROW_MARKER?' }],
-      4952,
+      5200,
       {},
       20,
       mockLogger as any,
       tokenizer
     );
 
-    const file = result.find(m => typeof m.content === 'string' && (m.content as string).startsWith('row-data,'));
+    const file = result.find(m => typeof m.content === 'string' && (m.content as string).includes('row-data,'));
     expect(file).toBeDefined();
     const text = file!.content as string;
     expect(text.split(NOTICE)).toHaveLength(2); // exactly one occurrence
-    expect(text.endsWith('later content was not sent.]')).toBe(true);
+    expect(
+      text.endsWith(
+        'later content was not sent. Do not infer a total row, record, or section count, or a final row, from what is above.]'
+      )
+    ).toBe(true);
     // No fragment of a notice stranded earlier in the payload.
     expect(text.slice(0, text.indexOf(NOTICE))).not.toContain('[Content truncated');
   });
@@ -2619,8 +2648,8 @@ describe('truncated attachments are marked', () => {
       tokenizer
     );
 
-    const file = result.find(m => typeof m.content === 'string' && (m.content as string).startsWith('row-data,'));
-    expect(file!.content).toBe(whole);
+    const file = result.find(m => typeof m.content === 'string' && (m.content as string).includes('row-data,'));
+    expect(file!.content).toBe(ATTACHMENT_DELIVERED_NOTICE + whole);
     expect(file!.content as string).not.toContain(NOTICE);
     expect(file!.content as string).toContain('FINAL_ROW_MARKER: apricot');
   });
@@ -2643,10 +2672,106 @@ describe('truncated attachments are marked', () => {
       tokenizer
     );
 
-    const delivered = result.find(m => typeof m.content === 'string' && (m.content as string).startsWith('row,value'));
-    expect(delivered!.content).toBe(file);
+    const delivered = result.find(m => typeof m.content === 'string' && (m.content as string).includes('row,value'));
+    expect(delivered!.content).toBe(ATTACHMENT_DELIVERED_NOTICE + file);
     expect(delivered!.content as string).toContain('FINAL_ROW_MARKER: apricot');
     expect(delivered!.content as string).not.toContain(NOTICE);
+  });
+});
+
+// A model handed real content still opens some replies by denying it can read attachments. The notice
+// must ride on content that genuinely survived to the final payload, never on a message that says
+// content was dropped - that exact false claim is why an earlier, differently-placed attempt at this
+// was reverted.
+describe('attachment access notice', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('marks a delivered attachment as readable', async () => {
+    const result = await buildAndSortMessages(
+      [],
+      [{ role: 'user', content: 'id,fruit\nr,apple\n' }],
+      [{ role: 'user', content: 'summarize' }],
+      8000,
+      {},
+      10,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    const delivered = result.find(m => typeof m.content === 'string' && (m.content as string).includes('id,fruit'));
+    expect(delivered!.content as string).toMatch(
+      new RegExp(`^${ATTACHMENT_DELIVERED_NOTICE.replace(/[[\]().]/g, '\\$&')}`)
+    );
+  });
+
+  it('never marks the note that says content could not be delivered', async () => {
+    const tokenizer: ITokenizer = {
+      countTokens: vi.fn(async (text: string) => Math.ceil(text.length / 3.5)),
+      encodeTokens: vi.fn(async (text: string) => Array(Math.ceil(text.length / 3.5)).fill(1)),
+      clearCache: vi.fn(),
+      getCacheStats: vi.fn(() => ({ size: 0, keys: [] })),
+      warmUpCache: vi.fn(async () => {}),
+    };
+    const history = Array.from({ length: 40 }, (_, i) => ({
+      role: i % 2 === 0 ? ('user' as const) : ('assistant' as const),
+      content: `history-${i}-` + 'h'.repeat(240),
+    }));
+
+    const result = await buildAndSortMessages(
+      history,
+      [
+        { role: 'system', content: 'S'.repeat(1500 * 3.5) },
+        { role: 'user', content: 'alpha,col\n' + 'r,1\n'.repeat(3000) },
+        { role: 'user', content: 'bravo,col\n' + 'r,1\n'.repeat(3000) },
+      ],
+      [{ role: 'user', content: 'What do the attached files contain?' }],
+      2200,
+      {},
+      20,
+      mockLogger as any,
+      tokenizer
+    );
+
+    const note = result.find(
+      m => typeof m.content === 'string' && (m.content as string).includes('could not be included')
+    );
+    expect(note).toBeDefined();
+    expect(note!.content as string).not.toContain(ATTACHMENT_DELIVERED_NOTICE.trim());
+  });
+
+  it('marks one delivered file while its dropped sibling is only named in the undelivered note', async () => {
+    const tokenizer: ITokenizer = {
+      countTokens: vi.fn(async (text: string) => Math.ceil(text.length / 3.5)),
+      encodeTokens: vi.fn(async (text: string) => Array(Math.ceil(text.length / 3.5)).fill(1)),
+      clearCache: vi.fn(),
+      getCacheStats: vi.fn(() => ({ size: 0, keys: [] })),
+      warmUpCache: vi.fn(async () => {}),
+    };
+
+    const result = await buildAndSortMessages(
+      [],
+      [
+        { role: 'user', content: 'small,file\nrow,1\n' },
+        { role: 'system', content: 'S'.repeat(1500 * 3.5) },
+        { role: 'user', content: 'big,file\n' + 'row,1\n'.repeat(3000) },
+      ],
+      [{ role: 'user', content: 'summarize both' }],
+      2200,
+      {},
+      20,
+      mockLogger as any,
+      tokenizer
+    );
+
+    const small = result.find(m => typeof m.content === 'string' && (m.content as string).includes('small,file'));
+    const note = result.find(
+      m => typeof m.content === 'string' && (m.content as string).includes('could not be included')
+    );
+    expect(small!.content as string).toContain(ATTACHMENT_DELIVERED_NOTICE.trim());
+    expect(note).toBeDefined();
+    expect(result.some(m => typeof m.content === 'string' && (m.content as string).includes('big,file'))).toBe(false);
   });
 });
 
@@ -2700,9 +2825,9 @@ describe('allocation under a production-shaped system-prompt load', () => {
     );
 
     const delivered = result.find(
-      m => typeof m.content === 'string' && (m.content as string).startsWith('id,fruit,color')
+      m => typeof m.content === 'string' && (m.content as string).includes('id,fruit,color')
     );
-    expect(delivered!.content).toBe(file.content);
+    expect(delivered!.content).toBe(ATTACHMENT_DELIVERED_NOTICE + file.content);
     expect(delivered!.content as string).toContain('FINAL_ROW_MARKER: apricot');
     expect(delivered!.content as string).not.toContain(NOTICE);
     expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(
@@ -2729,7 +2854,7 @@ describe('allocation under a production-shaped system-prompt load', () => {
     );
 
     const delivered = result.find(
-      m => typeof m.content === 'string' && (m.content as string).startsWith('id,fruit,color')
+      m => typeof m.content === 'string' && (m.content as string).includes('id,fruit,color')
     );
     expect(delivered).toBeDefined();
     const text = delivered!.content as string;
@@ -2763,7 +2888,7 @@ describe('allocation under a production-shaped system-prompt load', () => {
     );
 
     const delivered = result.find(
-      m => typeof m.content === 'string' && (m.content as string).startsWith('id,fruit,color')
+      m => typeof m.content === 'string' && (m.content as string).includes('id,fruit,color')
     );
     expect(delivered).toBeDefined();
     // Cut, and said so - a silent cut is the failure this area exists to prevent.
@@ -2895,7 +3020,7 @@ describe('system-message retention under a capped budget', () => {
     expect(result.some(m => m.role === 'system')).toBe(false);
     expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('No system instructions fit the budget'));
     // And the attachment keeps its budget rather than paying for an unmeasured block.
-    const delivered = result.find(m => typeof m.content === 'string' && m.content.startsWith('id,fruit,color'));
+    const delivered = result.find(m => typeof m.content === 'string' && m.content.includes('id,fruit,color'));
     expect(delivered?.content as string).toContain(marker);
   });
 
@@ -2932,7 +3057,7 @@ describe('system-message retention under a capped budget', () => {
     );
 
     const delivered = result.find(
-      m => typeof m.content === 'string' && (m.content as string).startsWith('id,fruit,color')
+      m => typeof m.content === 'string' && (m.content as string).includes('id,fruit,color')
     );
     expect(delivered).toBeDefined();
     expect(delivered!.content as string).toContain('FINAL_ROW_MARKER: apricot');

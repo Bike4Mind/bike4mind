@@ -1052,6 +1052,9 @@ importers:
       '@bike4mind/common':
         specifier: workspace:*
         version: link:../common
+      '@bike4mind/db-core':
+        specifier: workspace:*
+        version: link:../db-core
       '@bike4mind/observability':
         specifier: workspace:*
         version: link:../observability
@@ -1101,6 +1104,9 @@ importers:
       '@types/mime-types':
         specifier: ^3.0.1
         version: 3.0.1
+      mongoose:
+        specifier: ^8.24.1
+        version: 8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
       tsdown:
         specifier: ^0.22.3
         version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
@@ -1287,6 +1293,9 @@ importers:
       '@bike4mind/common':
         specifier: workspace:*
         version: link:../common
+      '@bike4mind/db-core':
+        specifier: workspace:*
+        version: link:../db-core
       '@bike4mind/fab-pipeline':
         specifier: workspace:*
         version: link:../fab-pipeline
@@ -1957,6 +1966,9 @@ importers:
       '@bike4mind/db-core':
         specifier: workspace:*
         version: link:../../b4m-core/db-core
+      '@bike4mind/fab-pipeline':
+        specifier: workspace:*
+        version: link:../../b4m-core/fab-pipeline
       '@bike4mind/hearth':
         specifier: workspace:*
         version: link:../../b4m-core/hearth

@@ -587,8 +587,14 @@ function uniqueSlugDiscriminator(): string {
   return `${time}${rand}`;
 }
 
-/** Render an artifact to a single static index.html based on its type. */
-function buildArtifactIndexHtml(type: string, content: string, title: string): string {
+/**
+ * Render an artifact to a single static index.html based on its type.
+ *
+ * Exported so the server renderer's byte-parity tests can pin their output to this
+ * (`apps/client/server/services/publish/renderArtifactHtml.ts`). The server copy is the
+ * permanent home; this client pre-render is removed once the raw-upload switch lands (#1492).
+ */
+export function buildArtifactIndexHtml(type: string, content: string, title: string): string {
   const t = escapeHtml(title || 'Shared artifact');
   // Full HTML doc -> serve as-is, but still inject the lead-gen footer before
   // </body> (fall back to appending) so every published page is branded.

@@ -38,6 +38,7 @@ import {
   b4mLLMTools,
   ResearchModeParamsSchema,
   GenerateImageToolCallSchema,
+  AudioGenerationToolCallSchema,
   ILatticeModel,
   IDataLakeRepository,
   CitableSource,
@@ -47,6 +48,7 @@ import {
   isSupportedEmbeddingModel,
   resolveHistoryFetchLimit,
   buildMemoryContext,
+  buildLakeMemoryContext,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
@@ -167,6 +169,7 @@ export type featureNames =
   | 'organizationPrompt'
   | 'sessionPrompt'
   | 'knowledgeRetrieval'
+  | 'lakeMemory'
   | 'contextSummarization'
   | 'skills';
 export interface IChatCompletionServiceOptions {
@@ -206,6 +209,19 @@ export interface IChatCompletionServiceOptions {
     query: string,
     opts?: { enabled?: boolean }
   ) => Promise<{ fact: string; relevance: number }[] | null>;
+  /**
+   * Read the lake memory hot-card for a Data-Lake-mode turn (#1440): fold each of the user's entitled
+   * lakes' ledgers, keep beliefs whose source doc is still citable, and recall the top ones for the
+   * query. Distinct from `recallMementosV2` (the USER's own memory) - this reads the `lake` principal,
+   * gated on `session.forceKnowledgeRetrieval`. Injected so the core takes no dependency on the
+   * app-layer ledger/data-lake repositories. Returns [] when nothing qualifies.
+   */
+  recallLakeMemory?: (input: {
+    userId: string;
+    query: string;
+    dataLakeTags: string[];
+    retrievalFilter?: RetrievalExclusionOptions;
+  }) => Promise<{ fact: string; relevance: number; sources: string[] }[]>;
   /**
    * Resolve a session-activatable registry prompt's CURRENT content by id (e.g. 'triage_router').
    * Injected so the core takes no dependency on the app-layer prompt registry; the injector also
@@ -319,6 +335,7 @@ export const QuestStartBodySchema = z.object({
   embeddingModel: z.string().optional(),
   queryComplexity: z.string(),
   imageConfig: GenerateImageToolCallSchema.optional(),
+  audioConfig: AudioGenerationToolCallSchema.optional(),
   deepResearchConfig: z
     .object({
       maxDepth: z.number().optional(),
@@ -353,6 +370,7 @@ export type ChatCompletionContext = Pick<
   | 'autoNameSession'
   | 'invokeCreateMemento'
   | 'recallMementosV2'
+  | 'recallLakeMemory'
   | 'logEvent'
   | 'db'
   | 'sessionId'
@@ -536,6 +554,102 @@ export class MementoFeature implements ChatCompletionFeature {
       enableMementos: this.writeV1,
       enableMementosV2: this.writeV2,
     });
+  }
+}
+
+/**
+ * Lake memory hot-card (#1440): on a Data-Lake-mode turn (`session.forceKnowledgeRetrieval`), inject a
+ * durable, curated summary of the user's accessible data lakes - the identity/context layer that sits
+ * ALONGSIDE the forced chunk retrieval (KnowledgeRetrievalFeature). Where forced retrieval answers THIS
+ * question from the corpus, the card carries the lake's stable, top-of-mind facts so the model is
+ * grounded before it reads a chunk.
+ *
+ * Constructed only when the session forces retrieval AND the host wired `recallLakeMemory` (the
+ * app-layer ledger read), so it is inert on deployments that have populated no lake profile. The recall
+ * is fail-open: a fault degrades to no card, never a failed turn - memory enriches an answer, it does
+ * not gate one.
+ */
+export class LakeMemoryFeature implements ChatCompletionFeature {
+  private chatCompletion: ChatCompletionContext;
+  private logger: Logger;
+  private user: IUserDocument;
+  private retrievalFilter: RetrievalExclusionOptions;
+  /** Session's lake allowlist. When non-empty, scope the card to these tags (mirrors forced retrieval). */
+  private retrievalTags: string[];
+
+  constructor(
+    chatCompletion: ChatCompletionContext,
+    retrievalTags?: string[],
+    retrievalFilter?: RetrievalExclusionOptions
+  ) {
+    this.chatCompletion = chatCompletion;
+    this.logger = chatCompletion.logger;
+    this.user = chatCompletion.user;
+    this.retrievalTags = Array.isArray(retrievalTags) ? retrievalTags : [];
+    this.retrievalFilter = retrievalFilter ?? {};
+  }
+
+  async beforeDataGathering(): Promise<{ shouldContinue: boolean }> {
+    return { shouldContinue: true };
+  }
+
+  // Read-only feature: the hot-card is injected at context-build time and there is nothing to persist
+  // or reconcile once the turn completes (unlike MementoFeature, which WRITES back on completion).
+  async onComplete(): Promise<void> {}
+
+  async getContextMessages(
+    quest: IChatHistoryItemDocument,
+    _embeddingFactory: EmbeddingFactory,
+    message: string
+  ): Promise<IMessage[]> {
+    const query = message?.trim();
+    if (!query || !this.chatCompletion.recallLakeMemory) return [];
+
+    try {
+      // The SAME entitlement-aware resolver forced retrieval and the knowledge tools use, so the card
+      // spans exactly the lakes this user may read - the offer and the read can't disagree.
+      const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
+      const { dataLakeTags: entitledTags } = await getDynamicDataLakeAccess({
+        db: this.chatCompletion.db,
+        user: this.user,
+        entitlementKeys,
+      });
+      // SCOPE to the session's selected lakes, mirroring KnowledgeRetrievalFeature (which narrows by
+      // `retrievalTags`). Without this the card would inject EVERY entitled lake's beliefs into every
+      // turn regardless of which lake the session is about - the always-on injection #1108 removed for
+      // lake prompts. Empty `retrievalTags` means "no per-lake scoping" (the session picker sets none
+      // today), so it falls back to the full entitled set, same as forced retrieval.
+      const dataLakeTags =
+        this.retrievalTags.length > 0 ? entitledTags.filter(tag => this.retrievalTags.includes(tag)) : entitledTags;
+      if (dataLakeTags.length === 0) return [];
+
+      const beliefs = await this.chatCompletion.recallLakeMemory({
+        userId: this.user.id,
+        query,
+        dataLakeTags,
+        retrievalFilter: this.retrievalFilter,
+      });
+      if (beliefs.length === 0) return [];
+
+      // Telemetry: record that the card fired and from which lakes, so an eval row shows lake grounding
+      // independent of whether the model then also called the knowledge tools.
+      quest.promptMeta = quest.promptMeta ?? {};
+      quest.promptMeta.context = quest.promptMeta.context ?? {};
+      quest.promptMeta.context.lakeMemory = { beliefCount: beliefs.length, dataLakeTags };
+
+      this.logger.log(`🌊 Lake memory: injecting ${beliefs.length} belief(s) from ${dataLakeTags.length} lake(s)`);
+      // Lake-specific framing (buildLakeMemoryContext): reference material, NOT personal memory, and it
+      // sanitizes + length-bounds each fact (uploaded-doc content is untrusted). Distinct from the
+      // memento framing used above.
+      const context = buildLakeMemoryContext(beliefs.map(b => b.fact));
+      return context ? [{ role: 'system' as const, content: context }] : [];
+    } catch (error) {
+      this.logger.warn(
+        '🌊 Lake memory: recall failed; proceeding without the hot card for this turn: ' +
+          (error instanceof Error ? `${error.name}: ${error.message}` : String(error))
+      );
+      return [];
+    }
   }
 }
 
@@ -1866,6 +1980,25 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           'incomplete - do not state or imply the library was searched exhaustively, and say so if the question ' +
           'calls for a comprehensive survey.\n\n'
         : '';
+      // Names the collection the way the product does, and states the one thing this path cannot
+      // do. Without that lexical bridge, a model asked something it cannot satisfy stops treating
+      // "data lake" as this corpus at all and answers about generic cloud infrastructure - offering
+      // SQL, storage consoles, recursive object counts. Cardinality is what triggers it, because
+      // retrieval returns ranked passages and never a total, and the coverage note below pushes
+      // toward refusal on any comprehensive-survey question. So name the limit explicitly rather
+      // than leaving the model to infer "no access" and improvise from there.
+      //
+      // Worded to hold whether or not the turn also carries tools: count_knowledge_base is paired
+      // with knowledge-base SEARCH, not with forced retrieval, so this path cannot know whether it
+      // was sent - and a flat "you cannot count" would talk a tool-carrying turn out of using it.
+      const capabilityNote =
+        'About this library: it is the curated library, shown in the product as the knowledge base or Data Lake. ' +
+        'The retrieved content above is your only view of it, and it is ranked passages - never a total - so it ' +
+        'cannot tell you how many documents the library holds. You have no database, SQL or storage-console access ' +
+        'to it. If asked how many documents it holds or for a full inventory: use a knowledge-base counting tool if ' +
+        'one is available to you, and otherwise say plainly that you can search this library but cannot count it, ' +
+        'and that the total is shown on its page in the product. Never guess a number, and never suggest queries, ' +
+        'consoles or other infrastructure steps for counting it.\n\n';
       const header =
         this.citationStyle === 'indexed'
           ? '[Knowledge Base — Retrieved Context]\n' +
@@ -1879,7 +2012,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             'cite documents by name. If it does not address the question, say so rather than relying on outside knowledge.\n\n';
       const retrievedContext: IMessage = {
         role: 'system' as const,
-        content: header + coverageNote + sections.join('\n\n---\n\n'),
+        content: header + capabilityNote + coverageNote + sections.join('\n\n---\n\n'),
       };
 
       // Retrieval-scoped lake-prompt injection (#1108): attach the operating instructions of ONLY

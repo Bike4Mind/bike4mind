@@ -38,6 +38,7 @@ const handler = baseApi()
     const results = {
       deleted: [] as string[],
       unshared: [] as string[],
+      notFound: [] as string[],
       failed: [] as { id: string; error: string }[],
     };
 
@@ -106,8 +107,9 @@ const handler = baseApi()
               { ability: req.ability, session }
             );
             results.unshared.push(fileId);
+          } else if (fabFilesService.toPublicDeleteAction(result.action) === 'not_found') {
+            results.notFound.push(fileId);
           }
-          // 'not_found' is silently ignored (idempotent)
         });
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -145,8 +147,11 @@ const handler = baseApi()
     const parts: string[] = [];
     if (results.deleted.length > 0) parts.push(`Deleted ${results.deleted.length} file(s)`);
     if (results.unshared.length > 0) parts.push(`Removed ${results.unshared.length} shared file(s) from your library`);
+    if (results.notFound.length > 0) parts.push(`${results.notFound.length} file(s) not found`);
     if (results.failed.length > 0) parts.push(`Failed to process ${results.failed.length} file(s)`);
-    const message = parts.join(', ') || 'No files processed';
+    // Every id lands in exactly one bucket above and the schema requires at least one id, so
+    // `parts` is never empty.
+    const message = parts.join(', ');
 
     return res.json({
       message,

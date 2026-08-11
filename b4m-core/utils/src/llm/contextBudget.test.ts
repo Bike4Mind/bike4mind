@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_UNKNOWN_CONTEXT_WINDOW } from '@bike4mind/common';
 import {
   ATTACHED_CONTENT_EXTRACTION_SHARE,
   attachedContentAssemblyFloor,
   attachedContentBudgetsAgree,
   attachedContentExtractionBudget,
+  effectiveContextWindow,
   EXTRACTION_SYSTEM_RESERVE_MAX_SHARE,
   MIN_ATTACHED_CONTENT_EXTRACTION_SHARE,
   safeInputWindow,
@@ -22,6 +24,24 @@ const CLAUDE_200K = { contextWindow: 200_000, max_tokens: 8192, type: 'text' as 
 
 const CHARS_PER_TOKEN = 3.5;
 
+describe('effectiveContextWindow', () => {
+  it('returns the catalog figure unchanged for a healthy media row', () => {
+    expect(effectiveContextWindow({ contextWindow: 10_000, type: 'image' })).toBe(10_000);
+  });
+
+  it('falls back like an absent value for a media row whose window arrives as 0', () => {
+    expect(effectiveContextWindow({ contextWindow: 0, type: 'video' })).toBe(DEFAULT_UNKNOWN_CONTEXT_WINDOW);
+  });
+
+  it('keeps 0 literal for a text row', () => {
+    expect(effectiveContextWindow({ contextWindow: 0, type: 'text' })).toBe(0);
+  });
+
+  it('returns the catalog figure unchanged for a healthy text row', () => {
+    expect(effectiveContextWindow({ contextWindow: 128_000, type: 'text' })).toBe(128_000);
+  });
+});
+
 describe('safeInputWindow', () => {
   it('reserves the requested output and the safety buffer', () => {
     expect(safeInputWindow(LLAMA_8K, 2048)).toBe(8000 - 2048 - 1000);
@@ -29,6 +49,20 @@ describe('safeInputWindow', () => {
 
   it('reserves no output for a media model, whose max_tokens is a prompt-length limit', () => {
     expect(safeInputWindow({ contextWindow: 10_000, max_tokens: 10_000, type: 'image' }, 10_000)).toBe(9000);
+  });
+
+  // A media row's contextWindow arriving as the literal 0 means "not applicable" (two provider
+  // feeds report it that way on purpose), not a real zero-token budget. Before the fix this went
+  // negative and the caller's empty-prompt guard threw on every image/video request once a
+  // discovery run wrote that shape over an existing row.
+  it('falls back like an absent value when a media row reports its window as 0', () => {
+    expect(safeInputWindow({ contextWindow: 0, max_tokens: 10_000, type: 'image' }, 10_000)).toBe(
+      DEFAULT_UNKNOWN_CONTEXT_WINDOW - 1000
+    );
+  });
+
+  it('still goes negative on a TEXT row whose window arrives as 0, preserving the misconfiguration guard', () => {
+    expect(safeInputWindow({ contextWindow: 0, max_tokens: 4096, type: 'text' }, 4096)).toBeLessThan(0);
   });
 
   it('caps the reservation at what the model can actually emit', () => {
