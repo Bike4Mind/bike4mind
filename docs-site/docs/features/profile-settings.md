@@ -146,11 +146,11 @@ Found in the **Security** area of your settings, this lists every device current
 
 - **See your devices** - each entry shows the browser and operating system, its last-active time, and its IP address. The device you're using is marked **This device**.
 - **Sign out one device** - click **Sign out** next to any other device to end just that session (for example, a public computer you forgot to log out of). Your other devices stay signed in.
-- **Log out all devices** - the button at the bottom signs you out **everywhere, including this device**. Use it if you think someone else has access to your account; you'll be returned to the login screen and will need to sign in again.
+- **Log out of all other devices** - the button at the bottom signs out every device **except the one you're on**. Use it if you think someone else has access to your account; you stay signed in here, and it only appears when another device is actually signed in.
 
 Signing out of the current device (the normal **Log out** in the profile menu) now ends only that session - your phone stays signed in when you log out on your laptop, and vice versa.
 
-**Troubleshooting:** when you sign out a *different* device, that device can stay active for up to a few minutes (one access-token lifetime) before it's fully locked out, though it can no longer stay signed in past that window. If you need every device cut off immediately, use **Log out all devices**, which takes effect right away.
+**Troubleshooting:** when you sign out another device (individually or via **Log out of all other devices**), that device can stay active for up to a few minutes (one access-token lifetime) before it's fully locked out, though it can no longer stay signed in past that window.
 
 ### Blocked IPs
 

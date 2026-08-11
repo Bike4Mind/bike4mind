@@ -309,25 +309,23 @@ export function useRevokeSession() {
 }
 
 /**
- * "Log out all devices" - hits the global panic endpoint (bumps tokenVersion + revokes every
- * session, so all devices stop working immediately), then runs the same client teardown as a
- * normal logout since this device is signed out too.
+ * "Log out of all other devices" - revoke every session EXCEPT the current one (GitHub/Google/Slack
+ * model). The current device stays signed in, so there is no teardown/redirect; just refresh the
+ * list so the now-revoked devices drop off.
  */
-export function useLogoutAllDevices() {
-  const { setCurrentUser } = useUser();
-  const resetTokens = useAccessToken(s => s.resetTokens);
+export function useRevokeOtherSessions() {
   const queryClient = useQueryClient();
-
   return useMutation({
     mutationFn: async () => {
-      try {
-        await api.post('/api/users/me/sessions/logout-all');
-      } catch (error) {
-        if (!isAxiosError(error) || error.response?.status !== 401) {
-          throw error;
-        }
-      }
-      await tearDownClientSession({ setCurrentUser, resetTokens, queryClient });
+      await api.post('/api/users/me/sessions/revoke-others');
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ACTIVE_SESSIONS_KEY });
+      toast.success('Signed out of all other devices');
+    },
+    onError: error => {
+      const data = isAxiosError(error) ? (error.response?.data as ErrorResponse | undefined) : undefined;
+      toast.error(data?.error ?? 'Failed to sign out other devices');
     },
   });
 }

@@ -135,24 +135,27 @@ test.describe('Authentication', () => {
     expect(refreshA.status()).toBe(401);
   });
 
-  test('log out all devices revokes every session (#1194)', async ({ request }) => {
-    // The panic lever: after POST /api/users/me/sessions/logout-all, BOTH sessions must be dead.
-    const user = await createLogoutUser(request, 'logoutall');
+  test('log out of all other devices keeps the current one, revokes the rest (#1194)', async ({ request }) => {
+    // "Log out other devices" (GitHub/Google model): keep the calling session, revoke every other.
+    const user = await createLogoutUser(request, 'logoutothers');
     const sessionA = { accessToken: user.accessToken, refreshToken: user.refreshToken };
     const sessionB = await apiLoginViaOtc(request, user.email);
 
-    const res = await request.post('/api/users/me/sessions/logout-all', {
+    // Authenticated as session A -> A is kept, B is revoked. No tokenVersion bump.
+    const res = await request.post('/api/users/me/sessions/revoke-others', {
       headers: { Authorization: `Bearer ${sessionA.accessToken}` },
     });
     expect(res.status()).toBe(200);
 
-    // tokenVersion was bumped, so even a still-unexpired access token is rejected immediately.
-    const identifyB = await request.get('/api/identify', {
-      headers: { Authorization: `Bearer ${sessionB.accessToken}` },
+    // Current session A stays fully alive (still authenticates and can still refresh).
+    const identifyA = await request.get('/api/identify', {
+      headers: { Authorization: `Bearer ${sessionA.accessToken}` },
     });
-    expect(identifyB.status()).toBe(401);
+    expect(identifyA.status()).toBe(200);
+    const refreshA = await request.post('/api/auth/refreshToken', { data: { token: sessionA.refreshToken } });
+    expect(refreshA.status()).toBe(200);
 
-    // And neither session's refresh token can mint a new one.
+    // The other device's session is revoked - its refresh token can no longer mint tokens.
     const refreshB = await request.post('/api/auth/refreshToken', { data: { token: sessionB.refreshToken } });
     expect(refreshB.status()).toBe(401);
   });

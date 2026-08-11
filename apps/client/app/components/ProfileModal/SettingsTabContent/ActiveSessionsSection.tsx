@@ -9,7 +9,7 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 import { cardSurfaceSx } from '@client/app/components/ProfileModal/settingsStyles';
 import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
-import { useGetActiveSessions, useLogoutAllDevices, useRevokeSession } from '@client/app/hooks/data/user';
+import { useGetActiveSessions, useRevokeOtherSessions, useRevokeSession } from '@client/app/hooks/data/user';
 import { describeUserAgent } from '@client/app/utils/describeUserAgent';
 
 // fromNow() needs the relativeTime plugin; extend is idempotent so this is safe even if another
@@ -21,12 +21,13 @@ const isMobileOs = (os: string): boolean => os === 'iPhone' || os === 'iPad' || 
 const ActiveSessionsSection: React.FC = () => {
   const { data: sessions, isLoading, isError } = useGetActiveSessions();
   const revokeSession = useRevokeSession();
-  const logoutAll = useLogoutAllDevices();
-  // Mirror the ProfileMenu logout guard: while impersonating, the "all devices" panic lever bumps
-  // the real customer's tokenVersion, so the server refuses it (403) and we hide it here too.
+  const revokeOthers = useRevokeOtherSessions();
+  // While impersonating we'd be acting on the real customer's sessions, so the server refuses it
+  // (403) and we hide the control here too (mirrors the ProfileMenu logout guard).
   const impersonating = useAccessToken(s => s.impersonating);
 
-  const [confirmAllOpen, setConfirmAllOpen] = useState(false);
+  const [confirmOthersOpen, setConfirmOthersOpen] = useState(false);
+  const otherCount = (sessions ?? []).filter(s => !s.current).length;
 
   return (
     <Box
@@ -126,32 +127,34 @@ const ActiveSessionsSection: React.FC = () => {
         </Stack>
       )}
 
-      {!impersonating && (
+      {!impersonating && otherCount > 0 && (
         <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
           <Button
             size="sm"
             variant="soft"
             color="danger"
             startDecorator={<LogoutIcon />}
-            data-testid="logout-all-devices-btn"
-            loading={logoutAll.isPending}
-            onClick={() => setConfirmAllOpen(true)}
+            data-testid="logout-other-devices-btn"
+            loading={revokeOthers.isPending}
+            onClick={() => setConfirmOthersOpen(true)}
           >
-            Log out all devices
+            Log out of all other devices
           </Button>
         </Box>
       )}
 
-      {confirmAllOpen && (
+      {confirmOthersOpen && (
         <ConfirmActionModal
-          data-testid="logout-all-confirm-modal"
-          title="Log out all devices?"
-          description="This signs you out everywhere, including this device. You'll need to sign in again. Use this if you think someone else has access to your account."
-          forwardButtonText="Log out everywhere"
+          data-testid="logout-others-confirm-modal"
+          title="Log out of all other devices?"
+          description="Every device except this one will be signed out. You'll stay signed in here. Use this if you think someone else has access to your account."
+          forwardButtonText="Log out other devices"
           backwardButtonText="Cancel"
-          loading={logoutAll.isPending}
-          onGoBackward={() => setConfirmAllOpen(false)}
-          onGoForward={() => logoutAll.mutate()}
+          loading={revokeOthers.isPending}
+          onGoBackward={() => setConfirmOthersOpen(false)}
+          onGoForward={() => {
+            revokeOthers.mutate(undefined, { onSettled: () => setConfirmOthersOpen(false) });
+          }}
         />
       )}
     </Box>
