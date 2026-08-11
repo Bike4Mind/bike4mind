@@ -5,7 +5,6 @@ import { S3Storage } from '@bike4mind/fab-pipeline';
 import {
   inboxRepository,
   sessionRepository,
-  questRepository,
   Quest,
   FabFile,
   Artifact,
@@ -24,6 +23,22 @@ import { v4 as uuidv4 } from 'uuid';
 import { updateImportProgress, markImportComplete, markImportFailed } from '@server/utils/importHistoryProgress';
 
 const { NotebookImportService } = notebookImportService;
+
+/**
+ * The notebook-metadata writes an import performs. Exported for the same reason as the message
+ * writes below: a test that re-implements these cannot catch them regressing.
+ *
+ * No `ctx` is assigned on the repository: transactionAsyncLocalStorage already carries the session
+ * into these queries, and assigning it would strand a finished session on the shared instance -
+ * the next caller to read it fails with "Use of expired sessions".
+ */
+export const createSessionWrites = () => ({
+  create: async (data: any) => sessionRepository.create(data),
+  find: async (query: any) => sessionRepository.find(query),
+  // `update` identifies the row by `id` and throws without it - `_id` here silently made every
+  // overwrite and merge import fail.
+  updateById: async (id: string, data: any) => sessionRepository.update({ id, ...data }),
+});
 
 /**
  * The message writes an import performs. Exported so the invariant below is testable against a
@@ -89,19 +104,8 @@ const processNotebookImport = async (
         // No `ctx` here: transactionAsyncLocalStorage already carries the session into these
         // queries, and assigning it would strand a finished session on the shared repository
         // instance - the next caller to read it fails with "Use of expired sessions".
-        sessionRepository: {
-          ...sessionRepository,
-          create: async (data: any) => sessionRepository.create(data),
-          find: async (query: any) => sessionRepository.find(query),
-          // `update` identifies the row by `id` and throws without it - `_id` here silently made
-          // every overwrite and merge import fail.
-          updateById: async (id: string, data: any) => sessionRepository.update({ id, ...data }),
-        },
-        chatHistoryRepository: {
-          ...questRepository,
-          ctx: session,
-          ...createChatHistoryWrites(session),
-        },
+        sessionRepository: createSessionWrites(),
+        chatHistoryRepository: createChatHistoryWrites(session),
         knowledgeRepository: {
           create: async (data: any) => {
             // Use model directly with session for transaction support
