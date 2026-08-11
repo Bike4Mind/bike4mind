@@ -40,25 +40,17 @@ interface MetadataFilterState {
 }
 
 const FilterRow: React.FC<FilterRowProps> = ({ filter, onChange, onDelete, metadataFields }) => {
-  const [isCustomField, setIsCustomField] = useState(
-    filter.field === 'custom' || !metadataFields.includes(filter.field)
-  );
-  const [customField, setCustomField] = useState(filter.field === 'custom' ? '' : filter.field);
+  // Derived from filter.field alone (no local state): the row is keyed by array index, so any
+  // state seeded at mount would go stale when a row above it is deleted and React reuses the
+  // instance for the next filter.
+  const isCustomField = !metadataFields.includes(filter.field);
 
   const handleFieldChange = (value: string) => {
-    if (value === 'custom') {
-      setIsCustomField(true);
-      onChange({ ...filter, field: '' });
-    } else {
-      setIsCustomField(false);
-      onChange({ ...filter, field: value });
-    }
+    onChange({ ...filter, field: value === 'custom' ? '' : value });
   };
 
   const handleCustomFieldChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value;
-    setCustomField(value);
-    onChange({ ...filter, field: value });
+    onChange({ ...filter, field: e.target.value });
   };
 
   const fieldIsValid = isFieldValid(filter.field);
@@ -85,7 +77,7 @@ const FilterRow: React.FC<FilterRowProps> = ({ filter, onChange, onDelete, metad
         </FormControl>
         {isCustomField && (
           <FormControl size="sm" error={!fieldIsValid} sx={{ flex: 1 }}>
-            <Input value={customField} onChange={handleCustomFieldChange} placeholder="Enter field name" size="sm" />
+            <Input value={filter.field} onChange={handleCustomFieldChange} placeholder="Enter field name" size="sm" />
             {!fieldIsValid && (
               <FormHelperText data-testid="metadata-filter-field-error">{FIELD_ERROR_MESSAGE}</FormHelperText>
             )}
@@ -106,7 +98,7 @@ const FilterRow: React.FC<FilterRowProps> = ({ filter, onChange, onDelete, metad
       </Stack>
 
       {filter.operator === 'contains' && (
-        <Typography level="body-xs" color="neutral" data-testid="metadata-filter-contains-hint">
+        <Typography level="body-xs" color="warning" data-testid="metadata-filter-contains-hint">
           Contains matches text values only. Use Equals to match a number.
         </Typography>
       )}
@@ -121,7 +113,7 @@ const FilterRow: React.FC<FilterRowProps> = ({ filter, onChange, onDelete, metad
             disabled={filter.operator === 'exists' || filter.operator === 'not_exists'}
           />
         </FormControl>
-        <IconButton size="sm" color="neutral" onClick={onDelete}>
+        <IconButton size="sm" color="neutral" onClick={onDelete} data-testid="metadata-filter-delete-row">
           <DeleteIcon />
         </IconButton>
       </Stack>
@@ -189,6 +181,7 @@ export const MetadataFilterPanel: React.FC<MetadataFilterPanelProps> = ({
 
   const hasInvalidField = tempFilters.some(filter => !isFieldValid(filter.field));
   const hasBlankField = tempFilters.some(filter => filter.field.trim() === '');
+  const activeFilterChips = filterState.filters.filter(filter => isFieldApplicable(filter.field));
 
   return (
     <Card variant="outlined" sx={{ p: 2, mb: 2 }}>
@@ -213,9 +206,9 @@ export const MetadataFilterPanel: React.FC<MetadataFilterPanelProps> = ({
         ))}
 
         <Stack direction="row" spacing={2} justifyContent="flex-end" alignItems="center">
-          {hasInvalidField && (
+          {(hasInvalidField || hasBlankField) && (
             <Typography level="body-xs" color="danger" data-testid="metadata-filter-apply-blocked">
-              Fix the highlighted field name to apply.
+              {hasInvalidField ? 'Fix the highlighted field name to apply.' : 'Fill in the field name to apply.'}
             </Typography>
           )}
           <Button variant="outlined" color="neutral" onClick={handleReset} disabled={!filterState.isDirty}>
@@ -226,19 +219,17 @@ export const MetadataFilterPanel: React.FC<MetadataFilterPanelProps> = ({
           </Button>
         </Stack>
 
-        {filterState.filters.length > 0 && (
+        {activeFilterChips.length > 0 && (
           <Box sx={{ mt: 2 }}>
             <Typography level="body-sm" sx={{ mb: 1 }}>
               Active Filters:
             </Typography>
             <Stack direction="row" spacing={1} flexWrap="wrap">
-              {filterState.filters
-                .filter(filter => isFieldApplicable(filter.field))
-                .map((filter, index) => (
-                  <Chip key={index} variant="soft" color="primary" component="div">
-                    {`${filter.field} ${filter.operator} ${filter.value || 'any'}`}
-                  </Chip>
-                ))}
+              {activeFilterChips.map((filter, index) => (
+                <Chip key={index} variant="soft" color="primary" component="div">
+                  {`${filter.field} ${filter.operator} ${filter.value || 'any'}`}
+                </Chip>
+              ))}
             </Stack>
           </Box>
         )}

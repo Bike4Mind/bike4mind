@@ -75,4 +75,34 @@ describe('MetadataFilterPanel - field allowlist', () => {
     expect(screen.getByTestId('metadata-filter-field-error')).toBeTruthy();
     expect(screen.getByText('Apply Filters').closest('button')).toBeDisabled();
   });
+
+  it('blocks Apply with a distinct message when a filter row has no field name yet', () => {
+    renderPanel();
+    fireEvent.click(screen.getByText('Add Filter'));
+
+    expect(screen.getByTestId('metadata-filter-apply-blocked')).toHaveTextContent('Fill in the field name to apply.');
+    expect(screen.queryByTestId('metadata-filter-field-error')).toBeNull();
+    expect(screen.getByText('Apply Filters').closest('button')).toBeDisabled();
+  });
+});
+
+describe('MetadataFilterPanel - row identity', () => {
+  it('keeps the surviving row showing its own field name after an earlier row is deleted', () => {
+    renderPanel({
+      initialFilters: [
+        { field: 'a b', operator: 'equals', value: '' },
+        { field: 'model.name', operator: 'equals', value: '2' },
+      ],
+    });
+
+    // Both rows start as custom-field inputs (neither name is in metadataFields).
+    const fieldInputs = () =>
+      screen.getAllByPlaceholderText('Enter field name').map(i => (i as HTMLInputElement).value);
+    expect(fieldInputs()).toEqual(['a b', 'model.name']);
+
+    fireEvent.click(screen.getAllByTestId('metadata-filter-delete-row')[0]);
+
+    expect(fieldInputs()).toEqual(['model.name']);
+    expect(screen.queryByTestId('metadata-filter-field-error')).toBeNull();
+  });
 });
