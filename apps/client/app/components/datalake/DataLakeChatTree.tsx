@@ -119,11 +119,22 @@ const RowMenuItem = ({
   </MenuItem>
 );
 
-/** Compact 22px hover-action buttons so three of them fit a 260px rail row. */
+/**
+ * The row's three-dots trigger: compact for a 260px rail, and frameless like the tree header's
+ * own icon buttons (HEADER_ICON_BUTTON_SX) - only the icon brightens, no ground appears under
+ * it. The variant vars are zeroed because Joy paints hover/active fills from them, and a filled
+ * square inside an already-highlighted row reads as a second, competing surface.
+ */
 const ROW_ACTION_SX = {
   '--IconButton-size': '22px',
+  '--Icon-color': 'currentColor',
+  '--variant-plainHoverBg': 'transparent',
+  '--variant-plainActiveBg': 'transparent',
   minWidth: '22px',
   minHeight: '22px',
+  color: 'text.tertiary',
+  transition: 'color 0.3s',
+  '&:hover': { backgroundColor: 'transparent', color: 'text.primary' },
 } as const;
 
 /**
@@ -334,15 +345,18 @@ export default function DataLakeChatTree({
         <Box
           data-testid={`datalake-file-${file.id}`}
           sx={{
+            // Same row recipe as the folder rows above, plus the box a Joy ListItemButton makes
+            // for itself: the 1px transparent border and the padding read off Joy's own
+            // --ListItem vars. Without both, a file row's icon sits a pixel left of a folder
+            // row's and the two lists visibly fail to line up.
+            ...treeRowSx(theme.palette.notebooklist.hoverBg),
             display: 'flex',
             alignItems: 'center',
-            gap: '8px',
             width: '100%',
             minWidth: 0,
-            minHeight: '28px',
-            borderRadius: '8px',
-            px: '8px',
-            transition: 'background 0.15s',
+            border: '1px solid transparent',
+            paddingBlock: 'var(--ListItem-paddingY)',
+            paddingInline: 'var(--ListItem-paddingX)',
             backgroundColor: selected ? theme.palette.notebooklist.hoverBg : undefined,
             '&:hover': { backgroundColor: theme.palette.notebooklist.hoverBg },
             '@media (hover: hover)': { '& .dl-row-actions': { opacity: 0 } },
@@ -364,13 +378,16 @@ export default function DataLakeChatTree({
             sx={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0, transition: 'opacity 0.15s' }}
           >
             <Dropdown>
+              {/* variant/color go on the MenuButton itself, not only on the IconButton slot:
+                  MenuButton emits its OWN variant class, and its 'outlined' default would
+                  paint a border and a hover fill over the plain slot underneath. */}
               <MenuButton
+                variant="plain"
+                color="neutral"
+                size="sm"
                 slots={{ root: IconButton }}
                 slotProps={{
                   root: {
-                    size: 'sm',
-                    variant: 'plain',
-                    color: 'neutral',
                     'aria-label': 'File actions',
                     'data-testid': `datalake-row-menu-btn-${file.id}`,
                     sx: ROW_ACTION_SX,

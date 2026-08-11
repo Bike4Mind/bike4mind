@@ -54,6 +54,16 @@ describe('DataLakeChatTree file-row actions', () => {
     expect(screen.queryByTestId('datalake-delete-btn-f1')).toBeNull();
   });
 
+  it('the menu trigger is frameless, not Joy MenuButton default outlined', () => {
+    renderTree();
+    // Joy's variant modifier classes are a stable public API (unlike its emotion hashes).
+    // MenuButton emits its own variant class, so its outlined default would paint a border and
+    // a hover fill on top of the plain IconButton slot.
+    const trigger = screen.getByTestId('datalake-row-menu-btn-f1');
+    expect(trigger.className).toMatch(/MuiMenuButton-variantPlain/);
+    expect(trigger.className).not.toMatch(/variantOutlined/);
+  });
+
   it('Add to chat lives in the row menu and calls onAttachFile', () => {
     const onAttachFile = vi.fn();
     renderTree({ onAttachFile });
