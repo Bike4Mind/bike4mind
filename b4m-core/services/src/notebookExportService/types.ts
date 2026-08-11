@@ -242,7 +242,7 @@ export class NotebookImportError extends Error {
   }
 }
 
-type Expect<T extends true> = T;
+export type Expect<T extends true> = T;
 
 /**
  * Compile-time guard: these interfaces are re-exported from the package entry point, so re-loosening

@@ -10,25 +10,53 @@ import {
   ImportResult,
   NotebookImportError,
   SUPPORTED_IMPORT_VERSIONS,
+  Expect,
 } from '../notebookExportService/types';
 import { isValidEnumValue, KnowledgeType } from '@bike4mind/common';
 import type { IChatHistoryItem } from '@bike4mind/common';
+import type { ILogger } from '@bike4mind/observability';
+
+/** A notebook the import can address: found by name, or just created. */
+interface NotebookRef {
+  id: string;
+  userId: string;
+}
+
+/**
+ * Write-only: the created document is discarded and the locally generated id recorded instead.
+ * `Record<string, unknown>` states no shape because the payloads do not currently match the
+ * schemas behind them - typing them is a behaviour fix, not a typing one.
+ */
+interface AttachmentRepository {
+  create: (data: Record<string, unknown>) => Promise<unknown>;
+}
 
 export interface NotebookImportAdapters {
-  sessionRepository: any; // SessionRepository
+  // Property syntax throughout, not method shorthand: methods are compared bivariantly, so an
+  // implementation demanding a narrower argument than the service passes would still compile.
+  sessionRepository: {
+    create: (data: Record<string, unknown>) => Promise<NotebookRef>;
+    find: (query: { userId: string; name: string }) => Promise<NotebookRef[]>;
+    updateById: (id: string, data: Record<string, unknown>) => Promise<unknown>;
+  };
   /** Typed because the caller's implementation of these two carries the insert-never-upsert rule. */
   chatHistoryRepository: {
-    bulkCreate(items: IChatHistoryItem[]): Promise<unknown>;
-    deleteMany(filter: { sessionId: string }): Promise<unknown>;
+    bulkCreate: (items: IChatHistoryItem[]) => Promise<unknown>;
+    deleteMany: (filter: { sessionId: string }) => Promise<unknown>;
   };
-  knowledgeRepository: any; // KnowledgeRepository
-  artifactRepository: any; // ArtifactRepository
-  toolRepository: any; // ToolRepository
-  agentRepository: any; // AgentRepository
-  fileStorageService: any; // FileStorageService
-  userRepository: any; // UserRepository
-  logger: any; // Logger
-  generateId: () => string; // ID generation function
+  knowledgeRepository: AttachmentRepository;
+  artifactRepository: AttachmentRepository;
+  toolRepository: AttachmentRepository;
+  agentRepository: AttachmentRepository;
+  fileStorageService: {
+    uploadFile: (path: string, content: Buffer) => Promise<unknown>;
+  };
+  /** Only checked for existence - the import never reads a field off the user. */
+  userRepository: {
+    findById: (id: string) => Promise<unknown>;
+  };
+  logger: ILogger;
+  generateId: () => string;
 }
 
 /** Unknown or absent types degrade to FILE: the store enum-validates this, so a value it does not
@@ -36,6 +64,15 @@ export interface NotebookImportAdapters {
 function toKnowledgeType(raw: string | undefined): KnowledgeType {
   return raw && isValidEnumValue(raw, KnowledgeType) ? raw : KnowledgeType.FILE;
 }
+
+/**
+ * Fails typecheck if any slot is re-loosened to `any` - every one of them used to be. Lives in
+ * src, not a test: tsconfig excludes *.test.ts, so only `turbo:typecheck` enforces it. Sibling
+ * guard: notebookExportService's NotebookExportTypesStayNarrowed.
+ */
+export type NotebookImportAdaptersStayNarrowed = Expect<
+  0 extends 1 & NotebookImportAdapters[keyof NotebookImportAdapters] ? false : true
+>;
 
 export class NotebookImportService {
   constructor(private adapters: NotebookImportAdapters) {}
@@ -213,7 +250,7 @@ export class NotebookImportService {
     notebook: ExportedNotebook,
     targetUserId: string,
     options: NotebookImportOptions
-  ): Promise<any> {
+  ): Promise<NotebookRef | null> {
     // Try to find by exact name match
     const existingSessions = await this.adapters.sessionRepository.find({
       userId: targetUserId,
@@ -224,7 +261,7 @@ export class NotebookImportService {
   }
 
   private async handleExistingSession(
-    existingSession: any,
+    existingSession: NotebookRef,
     notebook: ExportedNotebook,
     options: NotebookImportOptions
   ): Promise<string | null> {
