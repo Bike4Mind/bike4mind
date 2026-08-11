@@ -23,13 +23,14 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 vi.mock('@client/app/hooks/useCreateDataLakeSession', () => ({
   default: () => async () => ({ id: 'sess-new' }),
 }));
-// Stub the heavy explorer so the test asserts only the conditional wrapping + the
-// create-session wiring the surface hands down.
+// Stub the heavy explorer so the test asserts only the conditional wrapping, the chat-embedded
+// contract (View may own the layout only when the chat is inside), and the create-session wiring.
 vi.mock('./DataLakeExplorer', () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test stub
-  default: ({ chatSlot, createSessionForFile, onManage }: any) => (
+  default: ({ chatSlot, chatEmbedded, createSessionForFile, onManage }: any) => (
     <div
       data-testid="explorer"
+      data-chat-embedded={String(!!chatEmbedded)}
       data-can-create-session={String(typeof createSessionForFile === 'function')}
       data-can-manage={String(typeof onManage === 'function')}
       onClick={onManage}
@@ -60,6 +61,8 @@ describe('DataLakeChatSurface', () => {
     expect(explorer).toContainElement(screen.getByTestId('chat'));
     // /new attach clicks can mint the grounded session instead of dead-ending.
     expect(explorer).toHaveAttribute('data-can-create-session', 'true');
+    // The chat lives IN the explorer here, so View may drive the KnowledgeViewer layout.
+    expect(explorer).toHaveAttribute('data-chat-embedded', 'true');
   });
 
   it('hands down a bare-calling manage handler, so a click event never lands on the tab arg', () => {

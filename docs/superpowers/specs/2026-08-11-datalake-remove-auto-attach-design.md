@@ -35,11 +35,19 @@ file rows of the chat-mode trees only:
 - `[x]` Remove from lake (direct icon button, confirm dialog): reuse
   `useRemoveFileFromDataLake` and the Discover viewer's confirm copy (the file
   leaves the lake but stays in Files and existing chats).
-- `...` menu with a single item, View: swap the tree rail content to an inline
-  read-only reader (reusing the `DataLakeArticle` renderer) with a Back control
-  that restores the tree, breadcrumb intact. Viewing requires no session and
-  never touches the global session layout, so it works identically on both
-  surfaces and on `/new`.
+- View: reopens the file where it always opened. On the chat-embedded host that is
+  the KnowledgeViewer split (`setSessionLayout({ layout: 'vertical' })`), which
+  builds its tabs from the session workbench - so View attaches the file too,
+  minting the session first on `/new`. External-chat hosts (the overlay, whose
+  chat is docked outside this component and would collapse if the global layout
+  changed) fall back to an in-rail read-only reader with a Back control that
+  restores the tree, breadcrumb intact; that path needs no session and attaches
+  nothing.
+
+Revised after review of the first build, where View opened the in-rail reader on
+every surface: reading a lake file beside the chat is the behavior people already
+had, and losing it to gain attach-free viewing was the wrong trade. The bug being
+fixed is browsing mutating the chat, not viewing doing so.
 
 Out of scope: the `/data-lakes` page mode and the Discover modal tree keep
 their current behavior (neither auto-attaches). The premium overlay needs no
@@ -60,16 +68,16 @@ AND it has `canManage`. Consequences, both intended:
 
 ## Removals
 
-- The auto-attach write (`setWorkBenchFiles`) leaves the click path;
-  `openFileInViewer` becomes the attach handler behind `[+]` (rename to match,
-  drop its `setSessionLayout`/toast branching).
-- The `chatEmbedded` prop is deleted end to end: with no KnowledgeViewer split
-  to open, both of its uses (opening the split; resetting it in
-  `handleNavigate`) disappear. `DataLakeChatSurface` stops passing it; its test
-  drops the assertion. The premium guard test asserts the prop's absence, so it
-  stays green.
-- Deep-linked `?article=` ids in chat mode open the inline reader instead of
-  attaching.
+- The auto-attach write (`setWorkBenchFiles`) leaves the click path. What
+  `openFileInViewer` did splits in two: `attachFileToChat` behind `[+]` (attach
+  plus a success toast, no layout write) and `handleViewFile` behind View (the
+  old attach-plus-split, or the rail reader off-host). Both share
+  `ensureSessionId`, which owns the `/new` minting and its double-click guard.
+- `chatEmbedded` stays: it is what keeps View from switching a global layout that
+  an external-chat host has its docked chat inside. The premium guard test
+  asserts the overlay never passes it, so the overlay keeps the reader path.
+- Deep-linked `?article=` ids go through the same `handleViewFile`, so a link
+  opens what View opens.
 
 ## Testing
 

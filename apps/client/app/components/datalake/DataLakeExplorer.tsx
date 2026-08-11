@@ -26,6 +26,7 @@ import { useDataLakeSurface } from '@client/app/components/datalake/surfaceToken
 import { ManageKnowledgeButton } from '@client/app/components/datalake/manageKnowledge';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import useSetDataLakeMode from '@client/app/hooks/useSetDataLakeMode';
+import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { useNotebookLayout } from '@client/app/components/layouts/Notebook';
 import {
   useGetDataLakeArticles,
@@ -76,15 +77,25 @@ interface DataLakeExplorerProps {
   /** Chat mode: opens the Create Lake wizard from the tree footer "Create". */
   onCreateLake?: () => void;
   /**
-   * Fills the pane right of the tree and switches this component into CHAT mode. The chat may
-   * be the main app's SessionContainer (DataLakeChatSurface) or live docked OUTSIDE this
-   * component (premium overlay); either way the tree never drives the global session layout.
+   * Fills the pane right of the tree and switches this component into CHAT mode. Two host
+   * arrangements exist:
+   * - Main app (DataLakeChatSurface): the chat's SessionContainer, declared via `chatEmbedded`.
+   * - Premium overlay: the page's own (non-chat) content, with the chat DOCKED as a sibling
+   *   outside this component.
    */
   chatSlot?: React.ReactNode;
   /**
-   * Called when a file is ATTACHED with no active session (/new, where creation is deferred to
-   * the first message): must create + adopt the session and resolve its id so the attach can
-   * land in a real workbench. Omitted (overlay) -> a guidance toast instead.
+   * True when `chatSlot` holds the chat's SessionContainer (main app): the View action opens the
+   * file in the KnowledgeViewer split (layout `vertical`), and tree navigation closes that split.
+   * When omitted (overlay), the chat lives OUTSIDE this component (docked), so the global layout
+   * must never be touched - switching it would collapse the docked chat into a 0x0 branch - and
+   * View falls back to the in-rail reader.
+   */
+  chatEmbedded?: boolean;
+  /**
+   * Called when a file is ATTACHED or VIEWED with no active session (/new, where creation is
+   * deferred to the first message): must create + adopt the session and resolve its id so the
+   * file can land in a real workbench. Omitted (overlay) -> a guidance toast instead.
    */
   createSessionForFile?: () => Promise<string>;
   /**
@@ -108,6 +119,7 @@ export default function DataLakeExplorer({
   onCreate,
   onCreateLake,
   chatSlot,
+  chatEmbedded = false,
   createSessionForFile,
   showModeClose = true,
 }: DataLakeExplorerProps) {
@@ -142,43 +154,65 @@ export default function DataLakeExplorer({
   // Guards double-clicks while createSessionForFile's POST is in flight - a second click
   // would otherwise mint a second session.
   const creatingSessionRef = useRef(false);
-  // Explicit [+] action; the one place lake browsing writes into the chat. Comment at the
-  // hooks above (#836) still applies: hooks always run, page mode never calls this.
-  const attachFileToChat = useCallback(
-    async (file: IFabFileDocument) => {
-      let sessionId = currentSessionId;
-      if (!sessionId) {
-        // /new: session creation is deferred to the first message, so there is no workbench to
-        // attach to. Hosts that can mint the grounded session do so here; otherwise guide.
-        if (!createSessionForFile || creatingSessionRef.current) {
-          if (!createSessionForFile) {
-            toast.info('Start the chat with a first message - then lake files can be added to it.');
-          }
-          return;
-        }
-        creatingSessionRef.current = true;
-        try {
-          sessionId = await createSessionForFile();
-        } catch (error) {
-          console.error('Data Lake session create failed:', error);
-          toast.error("Couldn't start the chat - please try again.");
-          return;
-        } finally {
-          creatingSessionRef.current = false;
-        }
+  // The session both chat actions need. On /new creation is deferred to the first message, so
+  // hosts that can mint the grounded session do it here; the rest get guidance. Returns null
+  // when there is no session to be had (already explained to the user), so callers just bail.
+  const ensureSessionId = useCallback(async (): Promise<string | null> => {
+    if (currentSessionId) return currentSessionId;
+    if (!createSessionForFile || creatingSessionRef.current) {
+      if (!createSessionForFile) {
+        toast.info('Start the chat with a first message - then lake files can be added to it.');
       }
-      setWorkBenchFiles(sessionId, prev => (prev.some(f => f.id === file.id) ? prev : [...prev, file]));
-      toast.success(`Added "${file.fileName.replace(/\.[^/.]+$/, '')}" to the chat's files`);
-    },
-    [currentSessionId, setWorkBenchFiles, createSessionForFile]
+      return null;
+    }
+    creatingSessionRef.current = true;
+    try {
+      return await createSessionForFile();
+    } catch (error) {
+      console.error('Data Lake session create failed:', error);
+      toast.error("Couldn't start the chat - please try again.");
+      return null;
+    } finally {
+      creatingSessionRef.current = false;
+    }
+  }, [currentSessionId, createSessionForFile]);
+
+  const addToWorkBench = useCallback(
+    (sessionId: string, file: IFabFileDocument) =>
+      setWorkBenchFiles(sessionId, prev => (prev.some(f => f.id === file.id) ? prev : [...prev, file])),
+    [setWorkBenchFiles]
   );
 
+  // Explicit [+] action. Comment at the hooks above (#836) still applies: hooks always run,
+  // page mode never calls this.
+  const attachFileToChat = useCallback(
+    async (file: IFabFileDocument) => {
+      const sessionId = await ensureSessionId();
+      if (!sessionId) return;
+      addToWorkBench(sessionId, file);
+      toast.success(`Added "${file.fileName.replace(/\.[^/.]+$/, '')}" to the chat's files`);
+    },
+    [ensureSessionId, addToWorkBench]
+  );
+
+  // View. The embedded host opens the KnowledgeViewer split, which builds its tabs FROM the
+  // session workbench - so the file has to be attached for it to have a tab at all. Overlay
+  // hosts get the in-rail reader instead: their chat is docked outside this component, so
+  // switching the global layout would collapse it, and the reader needs no session.
   const handleViewFile = useCallback(
-    (file: IFabFileDocument) => {
-      setReaderFile(file);
+    async (file: IFabFileDocument) => {
+      if (!chatEmbedded) {
+        setReaderFile(file);
+        setViewerFileId(file.id);
+        return;
+      }
+      const sessionId = await ensureSessionId();
+      if (!sessionId) return;
+      addToWorkBench(sessionId, file);
+      setSessionLayout({ layout: 'vertical', selectedArtifactId: file.id });
       setViewerFileId(file.id);
     },
-    [setReaderFile, setViewerFileId]
+    [chatEmbedded, ensureSessionId, addToWorkBench, setReaderFile, setViewerFileId]
   );
 
   // Delete gating: the lake list is only needed in chat mode (page mode has no row actions).
@@ -269,24 +303,28 @@ export default function DataLakeExplorer({
   useEffect(() => {
     if (chatMode && deepLinkTarget && openedDeepLinkRef.current !== deepLinkTarget.id) {
       openedDeepLinkRef.current = deepLinkTarget.id;
-      setReaderFile(deepLinkTarget);
-      setViewerFileId(deepLinkTarget.id);
+      void handleViewFile(deepLinkTarget);
     }
-  }, [chatMode, deepLinkTarget]);
+  }, [chatMode, deepLinkTarget, handleViewFile]);
 
   const handleNavigate = useCallback(
     (newBreadcrumb: string[]) => {
       setBreadcrumb(newBreadcrumb);
       if (chatMode) {
-        // Browsing away closes the rail reader; navigation can arrive from the host's idle
-        // pane (DataLakeNavProvider) while the reader has the rail.
+        // Browsing away closes whatever View opened. Navigation can arrive from the host's idle
+        // pane (DataLakeNavProvider) while the reader has the rail. Only reset a layout WE
+        // opened ('vertical') - an unconditional 'hide' would collapse a docked/floating chat
+        // on external-chat hosts.
+        if (chatEmbedded) {
+          setSessionLayout(prev => (prev.layout === 'vertical' ? { layout: 'hide' } : {}));
+        }
         setReaderFile(null);
         setViewerFileId(null);
       } else {
         setUserSelectedFile(null);
       }
     },
-    [chatMode, setBreadcrumb, setReaderFile, setViewerFileId, setUserSelectedFile]
+    [chatMode, chatEmbedded, setBreadcrumb, setReaderFile, setViewerFileId, setUserSelectedFile]
   );
 
   // Page mode only: the chat tree's rows carry explicit actions instead of a click handler.

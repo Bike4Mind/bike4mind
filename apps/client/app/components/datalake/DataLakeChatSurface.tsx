@@ -40,6 +40,7 @@ export default function DataLakeChatSurface({ chat }: { chat: React.ReactNode })
       source="datalakes"
       rootLabel="Data Lakes"
       chatSlot={chat}
+      chatEmbedded
       onManage={onManage}
       onCreateLake={openWizard}
       createSessionForFile={createSessionForFile}

@@ -127,11 +127,13 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-// Main-app arrangement (DataLakeChatSurface): the chat fills the right pane; row actions are
-// the only way browsing reaches it (no click-to-open).
+// Main-app arrangement (DataLakeChatSurface): the chat fills the right pane, so View may drive
+// the KnowledgeViewer split. Row actions are the only way browsing reaches the chat (no
+// click-to-open). Overlay-host tests override chatEmbedded per-case.
 const baseProps = {
   source: 'datalakes' as const,
   chatSlot: <div data-testid="my-chat" />,
+  chatEmbedded: true,
 };
 
 const renderExplorer = (props: Partial<React.ComponentProps<typeof DataLakeExplorer>> = {}) =>
@@ -171,10 +173,10 @@ describe('DataLakeExplorer chat-first surface', () => {
     expect(setSessionLayout).not.toHaveBeenCalled();
   });
 
-  it('attach action adds the file to the workbench and toasts, never touching layout', () => {
+  it('attach action adds the file to the workbench and toasts, never touching layout', async () => {
     renderExplorer();
     fireEvent.click(screen.getByTestId('mock-attach'));
-    expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function));
+    await vi.waitFor(() => expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function)));
     expect(toastSuccess).toHaveBeenCalled();
     expect(setSessionLayout).not.toHaveBeenCalled();
   });
@@ -209,29 +211,59 @@ describe('DataLakeExplorer chat-first surface', () => {
     errSpy.mockRestore();
   });
 
-  it('view swaps the rail to the reader without attaching or needing a session', () => {
-    sessionState.currentSessionId = null;
+  it('view opens the KnowledgeViewer split on the embedded host', async () => {
     renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-view'));
+    // The viewer builds its tabs from the workbench, so the file must land there to have a tab.
+    await vi.waitFor(() => {
+      expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function));
+      expect(setSessionLayout).toHaveBeenCalledWith({ layout: 'vertical', selectedArtifactId: 'file-123' });
+    });
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
+    // The rail keeps the tree; the file opens beside the chat, not in place of the tree.
+    expect(screen.queryByTestId('datalake-rail-reader')).toBeNull();
+  });
+
+  it('view on /new mints the session first, then opens the split', async () => {
+    sessionState.currentSessionId = null;
+    const createSessionForFile = vi.fn().mockResolvedValue('sess-new');
+    renderExplorer({ createSessionForFile });
+    fireEvent.click(screen.getByTestId('mock-view'));
+    await vi.waitFor(() => {
+      expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-new', expect.any(Function));
+      expect(setSessionLayout).toHaveBeenCalledWith({ layout: 'vertical', selectedArtifactId: 'file-123' });
+    });
+    expect(createSessionForFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('view on an overlay host uses the rail reader, never the global layout', () => {
+    // Regression guard: switching to 'vertical' here collapsed the overlay's docked chat into
+    // the 0x0 non-docked branch with no on-surface way back. Keyed on the HOST prop, not the
+    // live layout store - that store is global and leaks across surfaces.
+    sessionState.currentSessionId = null;
+    renderExplorer({ chatEmbedded: false });
     fireEvent.click(screen.getByTestId('mock-view'));
     expect(screen.getByTestId('datalake-rail-reader')).toBeInTheDocument();
     expect(screen.queryByTestId('mock-tree')).toBeNull();
+    // No session needed and nothing attached to read a lake file there.
     expect(setWorkBenchFiles).not.toHaveBeenCalled();
     expect(setSessionLayout).not.toHaveBeenCalled();
   });
 
-  it('reader back returns to the tree with the viewed file highlighted', () => {
-    renderExplorer();
+  it('reader back returns to the tree with the viewed file highlighted (overlay host)', () => {
+    renderExplorer({ chatEmbedded: false });
     fireEvent.click(screen.getByTestId('mock-view'));
     fireEvent.click(screen.getByTestId('datalake-reader-back-btn'));
     expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
     expect(screen.queryByTestId('datalake-rail-reader')).toBeNull();
   });
 
-  it('deep-linked articleId opens the reader without attaching', () => {
+  it('deep-linked articleId opens it the same way View does', async () => {
     renderExplorer({ articleId: 'deep-1' });
-    expect(screen.getByTestId('datalake-rail-reader')).toBeInTheDocument();
-    expect(setWorkBenchFiles).not.toHaveBeenCalled();
-    expect(setSessionLayout).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function));
+      expect(setSessionLayout).toHaveBeenCalledWith({ layout: 'vertical', selectedArtifactId: 'deep-1' });
+    });
   });
 
   it('delete is offered only for a uniquely-resolved manageable lake', () => {
