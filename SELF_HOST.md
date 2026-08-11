@@ -43,7 +43,7 @@ openssl rand -hex 32   # -> SESSION_SECRET
 openssl rand -hex 32   # -> SECRET_ENCRYPTION_KEY
 ```
 
-> **Never change `SECRET_ENCRYPTION_KEY` after first boot.** It encrypts other secrets stored in the database - rotating it makes existing encrypted data unreadable.
+> **Do not rotate `SECRET_ENCRYPTION_KEY` casually.** It encrypts other secrets stored in the database, and rotation is not automated for self-host. If you must change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and leave it set permanently: reads fall back to the previous key, so old ciphertext (admin settings, per-user API keys, OAuth tokens, social connections) stays readable. Dropping the previous key makes anything still encrypted under it unrecoverable.
 
 > **Formatting:** compose reads `.env.selfhost` values verbatim - don't add comments on the same line as a value.
 
@@ -598,7 +598,7 @@ Whichever path you choose, do the checklist first.
 
 - [ ] **Use a real SMTP provider.** Mailpit is local-only, so remote friends cannot read their sign-in codes from it. Point `MAIL_*` at a real provider (port 587 STARTTLS or 465 implicit TLS).
 - [ ] **Keep sign-up invite-only and cap per-user usage.** Registration is invite-only by default (`allowOpenRegistration` is OFF; the first account created becomes admin). Leave it off and invite friends explicitly from the admin settings. Self-host also defaults credit enforcement OFF - as admin, turn on **Enforce Credits** and give each friend a finite credit budget so a runaway (or a shared key) cannot burn your LLM spend. Per-key API rate limits default to 60/min and 1000/day.
-- [ ] **Back up `SECRET_ENCRYPTION_KEY`.** It is write-once (it encrypts other secrets in the database) and cannot be rotated in place - losing it makes that data unrecoverable.
+- [ ] **Back up `SECRET_ENCRYPTION_KEY`.** It encrypts other secrets in the database and losing it makes that data unrecoverable. Rotation is not automated for self-host: if you ever change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and keep it configured permanently so existing ciphertext still decrypts.
 
 ### Path A: Tailscale tailnet (recommended for friends)
 
