@@ -72,6 +72,8 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   lastSyncAt: 'reader',
   // Teardown bookkeeping: of no use to a reader, and it reports when the owner tore the lake down.
   filesDeletedAt: 'withheld',
+  // Same rationale, archive axis.
+  filesArchivedAt: 'withheld',
   // Lake-memory producer bookkeeping (#1440): internal lease + continuation cursor. Of no use to a
   // reader, and the lease timestamp would leak when/whether extraction is running.
   lakeMemoryExtractionAt: 'withheld',

@@ -109,6 +109,32 @@ export interface IDataLake {
    */
   filesDeletedAt?: Date | null;
   /**
+   * The exact `archivedAt` stamp archive wrote on this lake's members, so restore (after a
+   * delete of an already-archived lake) can clear that batch's archive marker and nothing
+   * else's - mirrors `filesDeletedAt` but on the archive axis. Matched by EQUALITY: a
+   * prefix-sharing sibling lake's own archive of that same file (a different stamp) is never
+   * touched, provided the sibling archived first - `archiveByDataLakeTag` only ever stamps
+   * `archivedAt: null` rows, so whichever lake archives a shared file first owns its marker.
+   * Claimed set-if-unset; cleared by unarchive (so a later re-archive gets a fresh stamp, not a
+   * stale reused one) and by a restore that clears it.
+   *
+   * The key is a wall-clock `Date`, not a unique token - equality is a best-effort ownership test,
+   * not a guarantee, and two lakes claiming in the same millisecond would collide (same design as
+   * `filesDeletedAt`, not new to this field). The same-millisecond collision also has a same-lake
+   * variant: two concurrent archive calls on ONE lake that happen to generate their claim's `Date`
+   * in the same millisecond both read as "freshly minted" to the loser, so its clear-back (see
+   * archiveDataLake) could wipe the winner's just-written stamp. Narrow (needs both a same-lake
+   * race AND a same-millisecond collision), not fixed by the `wasMinted` guard, which only
+   * distinguishes minted-from-echoed, not minted-at-the-same-instant-as-a-peer.
+   *
+   * Absent on a lake archived before this field existed (or one whose members already carry an
+   * unstamped `archivedAt` for any other reason): restore leaves that archive marker exactly as
+   * it is instead of guessing at a batch it cannot prove, and archive itself skips claiming a
+   * fresh stamp in that case too (see archiveDataLake) rather than recording a mark that would
+   * name none of the pre-existing archived rows.
+   */
+  filesArchivedAt?: Date | null;
+  /**
    * Lake-memory producer (#1440) bookkeeping - server-managed, never client input.
    *
    * A concurrency LEASE, not a status: a run stamps it to claim the lake and clears it when done, so a
@@ -200,6 +226,8 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * caller sweeps unmarked and must say so, since that lake then restores unbounded.
    */
   claimFilesDeletedAt(id: string, at: Date): Promise<Date | null>;
+  /** Claim `filesArchivedAt` for an archive sweep - same set-if-unset contract as `claimFilesDeletedAt`. */
+  claimFilesArchivedAt(id: string, at: Date): Promise<Date | null>;
   /**
    * Per-lake concurrency claim for the memory producer (#1440): stamp `lakeMemoryExtractionAt = at` only
    * if no run currently holds the lease - the field is unset, OR its stamp is older than `staleBefore`
