@@ -14,6 +14,7 @@ import {
   HearthSessionParamSchema,
   resolveRequestActor,
   assertHearthWriteScope,
+  wireActorIdentity,
 } from '@server/utils/hearthWire';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { Resource } from 'sst';
@@ -103,7 +104,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.HEARTH_WRITE, ApiKeyScope
       refs: body.refs,
     });
 
-    const wireEvent = toWireHearthEvent(event, { displayName: actor.displayName, kind: actor.kind });
+    const wireEvent = toWireHearthEvent(event, wireActorIdentity(actor));
 
     // Roster projection. Best-effort for the same reason as the fanout below:
     // the event is already durable, the roster is derived state that a later

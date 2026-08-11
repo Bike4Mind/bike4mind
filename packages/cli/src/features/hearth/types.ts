@@ -7,6 +7,7 @@
  * server-side from the authenticated session, never sent by the client).
  */
 import { z } from 'zod';
+import { actorKindSchema, selfClaimedActorKindSchema } from '@bike4mind/hearth';
 
 export const HearthEventKindSchema = z.enum([
   'message',
@@ -52,7 +53,7 @@ export const HearthEventSchema = z.object({
   /** Display name resolved by the server so surfaces need no actor lookup. */
   actorName: z.string().optional(),
   /** Resolved server-side; `human` is reserved there and never self-claimed. */
-  actorKind: z.enum(['human', 'agent', 'gateway', 'device', 'system']).optional(),
+  actorKind: actorKindSchema.optional(),
   kind: HearthEventKindSchema,
   human: HearthHumanBodySchema,
   machine: HearthMachineBodySchema.optional(),
@@ -74,6 +75,13 @@ export const HearthSessionSchema = z.object({
   id: z.string().min(1).max(200),
   /** Friendly name for the session (the notebook name); display only. */
   label: z.string().max(200).optional(),
+  /**
+   * What this session IS, so the server badges it honestly. Every write the CLI
+   * makes originates in an LLM tool call, so a CLI session is an agent even
+   * though its name is derived from the human's account. Only the self-claimable
+   * kinds are accepted server-side; 'human' stays reserved there.
+   */
+  kind: selfClaimedActorKindSchema.optional(),
 });
 export type HearthSession = z.infer<typeof HearthSessionSchema>;
 

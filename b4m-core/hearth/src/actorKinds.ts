@@ -30,10 +30,22 @@ export const ACTOR_KIND_MARKERS: Record<ActorKind, string> = {
   system: 'S',
 };
 
+/**
+ * Read through a Partial view on purpose. The type is closed within one build,
+ * but the SPA bare-casts the WS payload, so a client running stale code against
+ * a server that has added a kind receives one that is absent from these maps -
+ * and a blank badge reads as "no kind stated" rather than "kind unknown", which
+ * is the opposite of what the mitigation needs to say.
+ */
+function lookup<T>(map: Record<ActorKind, T>, kind: ActorKind | undefined, fallback: T): T {
+  if (!kind) return fallback;
+  return (map as Partial<Record<ActorKind, T>>)[kind] ?? fallback;
+}
+
 export function actorKindLabel(kind: ActorKind | undefined): string {
-  return kind ? ACTOR_KIND_LABELS[kind] : 'Unknown';
+  return lookup(ACTOR_KIND_LABELS, kind, 'Unknown');
 }
 
 export function actorKindMarker(kind: ActorKind | undefined): string {
-  return kind ? ACTOR_KIND_MARKERS[kind] : '?';
+  return lookup(ACTOR_KIND_MARKERS, kind, '?');
 }

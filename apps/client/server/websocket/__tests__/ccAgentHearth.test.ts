@@ -188,7 +188,15 @@ function applyMockDefaults() {
   activeCodeAgentRepositoryMock.findByInstanceId.mockResolvedValue(ACTIVE_AGENT);
   hearthRepositoryMock.ensureChannelByName.mockResolvedValue({ _id: 'ch-default' });
   hearthRepositoryMock.getOwnedChannel.mockResolvedValue({ _id: 'ch-override' });
-  hearthRepositoryMock.ensureActor.mockResolvedValue({ _id: { toString: () => 'actor-1' } });
+  // Echoes the identity it was asked for, as the real store does: the wire event
+  // is now named from the RESOLVED actor rather than from the name the bridge
+  // composed, so a canned displayName here would hide a mismatch between what
+  // the push renders and what the same actor renders as via catchup.
+  hearthRepositoryMock.ensureActor.mockImplementation(async (_userId: string, kind: string, displayName: string) => ({
+    _id: { toString: () => 'actor-1' },
+    displayName,
+    kind,
+  }));
   // Echoes the channel and actor it was handed, as the real store does: the
   // roster row is now projected FROM the returned event, so a canned channelId
   // here would hide the very drift the shared projection exists to prevent.
@@ -291,7 +299,7 @@ describe('cc_agent_register dual-write', () => {
       'https://ws.example.com/dev',
       expect.objectContaining({
         action: 'hearth_event',
-        event: expect.objectContaining({ id: 'ev-1', kind: 'presence', actorName: SLUG }),
+        event: expect.objectContaining({ id: 'ev-1', kind: 'presence', actorName: SLUG, actorKind: 'agent' }),
       })
     );
 

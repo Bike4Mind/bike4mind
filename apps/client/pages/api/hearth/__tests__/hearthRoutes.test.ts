@@ -495,6 +495,74 @@ describe('POST /api/hearth/catchup', () => {
   });
 });
 
+// The badge a surface renders is only as trustworthy as the value the route
+// puts on the wire, so every route that names an actor is asserted to badge it
+// too - deleting `actorKind` from the wire functions otherwise left the whole
+// suite green.
+describe('actorKind reaches every response that names an actor', () => {
+  it('POST /events badges the actor it just resolved', async () => {
+    ensureActorMock.mockResolvedValue({
+      _id: { toString: () => 'actor-1' },
+      displayName: 'erik (a1b2)',
+      displayLabel: 'erik (my nb)',
+      kind: 'agent',
+    });
+    const res = makeRes();
+    await eventsRouter._routes.post(makeReq({ channelId: 'ch-1', human: { text: 'hi' } }), res);
+
+    // The friendly label, matching what catchup resolves for the same actor: the
+    // live event and the caught-up copy must not render under two names.
+    expect((res.body as { event: unknown }).event).toMatchObject({
+      actorName: 'erik (my nb)',
+      actorKind: 'agent',
+    });
+    expect(sendToClientMock).toHaveBeenCalledWith(
+      'u1',
+      'wss://test',
+      expect.objectContaining({ event: expect.objectContaining({ actorKind: 'agent' }) })
+    );
+  });
+
+  it('POST /catchup badges each event from the resolved identities', async () => {
+    actorIdentitiesByIdMock.mockResolvedValue(new Map([['actor-1', { displayName: 'agent one', kind: 'agent' }]]));
+    const res = makeRes();
+    await catchupRouter._routes.post(makeReq({ channelId: 'ch-1' }), res);
+    expect((res.body as { events: unknown[] }).events[0]).toMatchObject({
+      actorName: 'agent one',
+      actorKind: 'agent',
+    });
+  });
+
+  it('GET /presence badges each roster row', async () => {
+    presenceForChannelMock.mockResolvedValue([presenceRow('a-1', 'running', '2026-07-27T10:00:00Z')]);
+    actorIdentitiesByIdMock.mockResolvedValue(new Map([['a-1', { displayName: 'agent one', kind: 'agent' }]]));
+    const res = makeRes();
+    await presenceRouter._routes.get(makeReq({}, { channelId: 'ch-1' }), res);
+    expect((res.body as { presence: unknown[] }).presence[0]).toMatchObject({
+      actorName: 'agent one',
+      actorKind: 'agent',
+    });
+  });
+
+  // Every write the B4M CLI makes originates in an LLM tool call, so its session
+  // says so; without this the account's agent traffic badged as Human.
+  it('a session may declare a non-human kind and still gets a server-derived name', async () => {
+    await eventsRouter._routes.post(
+      makeReq({ channelId: 'ch-1', human: { text: 'hi' }, session: { id: 'sess-1', kind: 'agent' } }),
+      makeRes()
+    );
+    expect(ensureActorMock).toHaveBeenCalledWith('u1', 'agent', expect.stringMatching(/^erik \(/));
+  });
+
+  it('a session may not declare itself human, on any route', async () => {
+    const body = { channelId: 'ch-1', human: { text: 'hi' }, session: { id: 'sess-1', kind: 'human' } };
+    for (const router of [eventsRouter, catchupRouter]) {
+      await expect(router._routes.post(makeReq(body), makeRes())).rejects.toThrow();
+    }
+    expect(ensureActorMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('/api/hearth/channels', () => {
   it('POST maps a duplicate-name unique violation to a 400', async () => {
     const dup = Object.assign(new Error('E11000 duplicate key'), { code: 11000 });

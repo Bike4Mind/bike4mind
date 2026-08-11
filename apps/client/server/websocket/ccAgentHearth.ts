@@ -11,7 +11,7 @@ import {
 import { settingsMap, type ICcAgentSource, type ICcAgentStatus } from '@bike4mind/common';
 import { getSettingByName } from '@bike4mind/utils';
 import { isSettingEnabled } from '@server/middlewares/featureFlag';
-import { toPresenceProjection, toWireHearthEvent } from '@server/utils/hearthWire';
+import { toPresenceProjection, toWireHearthEvent, wireActorIdentity } from '@server/utils/hearthWire';
 import { sendToClient } from '@server/websocket/utils';
 
 /**
@@ -209,7 +209,7 @@ export async function reportCcAgentPresence(input: CcAgentPresenceInput): Promis
     try {
       await sendToClient(userId, endpoint, {
         action: 'hearth_event',
-        event: toWireHearthEvent(event, { displayName, kind: 'agent' }),
+        event: toWireHearthEvent(event, wireActorIdentity(actor)),
       });
     } catch (err) {
       logger.warn(`[CC_AGENT_HEARTH] hearth_event fanout failed for ${instanceId} (non-fatal):`, err as Error);

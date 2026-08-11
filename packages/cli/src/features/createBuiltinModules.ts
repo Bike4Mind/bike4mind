@@ -10,10 +10,17 @@ import { useCliStore } from '../store/index.js';
  * Current CLI session as Hearth's per-session identity, or undefined before one
  * exists. `label` is the notebook name, which the server renders but never uses
  * as the actor identity key - it is renameable and auto-titled.
+ *
+ * `kind: 'agent'` because every hearth_* write is an LLM tool call - there is no
+ * path by which a human types directly into the log from here - so leaving the
+ * kind to default made the account's agent traffic badge as Human, which is the
+ * one distinction a reader of a busy channel most needs. The NAME is still
+ * server-derived from the account, so this only sharpens the badge; it claims
+ * nothing about who owns the session.
  */
-function hearthSessionFromStore(): HearthSession | undefined {
+export function hearthSessionFromStore(): HearthSession | undefined {
   const session = useCliStore.getState().session;
-  return session ? { id: session.id, label: session.name } : undefined;
+  return session ? { id: session.id, label: session.name, kind: 'agent' } : undefined;
 }
 
 /**

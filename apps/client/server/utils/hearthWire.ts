@@ -4,6 +4,7 @@ import {
   humanSessionActorName,
   sanitizeSessionLabel,
   reasonForHookEvent,
+  selfClaimedActorKindSchema,
   type ActorKind,
   type HearthEvent,
 } from '@bike4mind/hearth';
@@ -54,7 +55,7 @@ export function toWireHearthEvent(event: HearthEvent, actor?: HearthActorIdentit
  */
 export const HearthActorParamSchema = z
   .object({
-    kind: z.enum(['agent', 'gateway', 'device']).prefault('agent'),
+    kind: selfClaimedActorKindSchema.prefault('agent'),
     displayName: z.string().min(1).max(200),
   })
   .optional();
@@ -76,11 +77,20 @@ export const HearthActorParamSchema = z
  * for the session (a notebook name) used for display only. Forging either can
  * at most mislabel one of the caller's OWN sessions - the authenticated
  * username is always the prefix - which is why neither needs to be trusted.
+ *
+ * `kind` exists because "the name is server-derived" and "the caller is a human"
+ * are separate facts, and only the first one is a security property. Every post
+ * the B4M CLI makes comes from an LLM tool call, so without this the account's
+ * own agent sessions persisted and badged as Human - indistinguishable from the
+ * owner typing. It only accepts the self-claimable kinds, so this stays a
+ * downgrade a caller makes about ITSELF while the name keeps the authenticated
+ * prefix; claiming 'human' remains impossible on every path.
  */
 export const HearthSessionParamSchema = z
   .object({
     id: z.string().min(1).max(200),
     label: z.string().max(200).optional(),
+    kind: selfClaimedActorKindSchema.optional(),
   })
   .optional();
 
@@ -195,9 +205,10 @@ export function toWireHearthPresence(row: IHearthPresenceDoc, actor?: HearthActo
 /**
  * Find-or-create the acting Hearth actor for this request.
  *
- * A machine that named itself takes that name. Otherwise the actor is the
- * authenticated human, named from the account - per SESSION when the caller
- * supplied one, so concurrent CLI sessions get independent cursors.
+ * A machine that named itself takes that name. Otherwise the actor is named from
+ * the authenticated account - per SESSION when the caller supplied one, so
+ * concurrent CLI sessions get independent cursors - and is a human actor unless
+ * the session declared itself one of the self-claimable kinds.
  *
  * The identity key deliberately uses the slug form (no label): see
  * humanSessionActorName for why a renameable string must not reach it.
@@ -219,11 +230,29 @@ export async function resolveRequestActor(
   // stored for this session; omitting it leaves that stored value alone.
   const safeLabel = sanitizeSessionLabel(session?.label);
   const displayLabel = safeLabel ? humanSessionActorName(base, session?.id, safeLabel) : undefined;
+  const kind = session?.kind ?? 'human';
 
   // Omit the options argument entirely when there is no label, rather than
   // passing an explicit undefined: ensureActor treats a missing label as "leave
   // whatever is stored alone", and this keeps the common call shape unchanged.
   return displayLabel
-    ? hearthRepository.ensureActor(user.id, 'human', identity, { displayLabel })
-    : hearthRepository.ensureActor(user.id, 'human', identity);
+    ? hearthRepository.ensureActor(user.id, kind, identity, { displayLabel })
+    : hearthRepository.ensureActor(user.id, kind, identity);
+}
+
+/**
+ * The identity a freshly resolved actor renders as, matching what
+ * actorIdentitiesById returns for the SAME actor read back later.
+ *
+ * Both preferences live here because they have to agree: the batch read prefers
+ * the renameable friendly label, so a route that passed displayName straight
+ * through made one event render under the slug live and under the label once it
+ * came back through catchup.
+ */
+export function wireActorIdentity(actor: {
+  displayName: string;
+  displayLabel?: string | null;
+  kind: ActorKind;
+}): HearthActorIdentity {
+  return { displayName: actor.displayLabel ?? actor.displayName, kind: actor.kind };
 }
