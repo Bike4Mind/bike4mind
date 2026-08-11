@@ -432,6 +432,7 @@ export const AgentSchema = new Schema<IAgent, IAgentModel, IAgentMethods>(
 
     // System prompt for agent behavior (generated from personality)
     systemPrompt: { type: String, default: '' },
+    lastSystemPromptGeneratedAt: { type: Date },
 
     // Orchestration fields (folded in from IAgentDefinition).
     // All optional - agent executor applies runtime defaults when absent.
