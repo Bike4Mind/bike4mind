@@ -56,13 +56,13 @@ interface DataLakeChatTreeProps {
   breadcrumb: string[];
   onNavigate: (breadcrumb: string[]) => void;
   selectedFileId: string | null;
-  /** Hover action: attach the file to the chat session. */
+  /** Menu action: attach the file to the chat session. */
   onAttachFile: (file: IFabFileDocument) => void;
-  /** Hover menu action: open the file in the rail reader. */
+  /** Open the file. Runs from the row's own click as well as the menu's View item. */
   onViewFile: (file: IFabFileDocument) => void;
-  /** Gates the per-row delete button (owning lake resolved + manageable). */
+  /** Gates the menu's Remove item (owning lake resolved + manageable). */
   canDeleteFile: (file: IFabFileDocument) => boolean;
-  /** Hover action: request removal from the owning lake (host owns the confirm). */
+  /** Menu action: request removal from the owning lake (host owns the confirm). */
   onDeleteFile: (file: IFabFileDocument) => void;
   isLoading: boolean;
   isError?: boolean;
