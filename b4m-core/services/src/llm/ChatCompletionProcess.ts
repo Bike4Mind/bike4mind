@@ -128,6 +128,7 @@ import { SkillsFeature } from './features/SkillsFeature';
 import { StatusManager } from './StatusManager';
 import { buildContextOverflowMessage } from './contextOverflowMessage';
 import {
+  ALWAYS_ON_FLOOR_SOURCES,
   buildTaggedContextMessages,
   filterByPromptMode,
   filterFeaturesByPromptMode,
@@ -137,6 +138,7 @@ import {
   toPromptDetails,
   type PromptSourceId,
 } from './systemPromptSources';
+import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
 import { buildInsufficientCreditsMessage } from './insufficientCreditsMessage';
 import { ResearchModeService } from './ResearchModeService';
 import { deductCreditsWithOrgSupport, subtractCredits } from '../creditService';
@@ -1136,6 +1138,13 @@ export class ChatCompletionProcess {
 
   /** Pipeline phase durations from the most recent process() call. Available after process() resolves. */
   public pipelinePhases: Record<string, number> | null = null;
+
+  /**
+   * The disclosed system prompt text, when the request asked for it. Deliberately exposed here
+   * rather than on the quest: unlike the promptDetails breakdown, this is the prompt itself, and
+   * persisting it would hand it to every reader of the session.
+   */
+  public systemPromptText: SystemPromptTextDisclosure | undefined;
 
   public async process({
     body,
@@ -2768,9 +2777,8 @@ export class ChatCompletionProcess {
 
       let systemPromptDetails: SystemPromptDetail[] | undefined;
       try {
-        const floorSources: PromptSourceId[] = ['artifactEmission', 'helpCenter'];
         systemPromptDetails = await toPromptDetails(
-          admittedContextMessages.filter(t => !floorSources.includes(t.source)),
+          admittedContextMessages.filter(t => !ALWAYS_ON_FLOOR_SOURCES.includes(t.source)),
           messages => calculateTotalTokenLength(messages, tokenCalcOptions),
           deliveredMessages
         );
@@ -2798,6 +2806,17 @@ export class ChatCompletionProcess {
         quest.promptMeta!.context!.systemPromptDetails = systemPromptDetails;
       } catch (detailsError) {
         logger.warn(`📊 Failed to derive system prompt details:`, detailsError);
+      }
+
+      // Opt-in only, and built from the same tagged stack the breakdown above is derived from, so
+      // the text and the metadata describing it can never disagree. Response-only: nothing here is
+      // written to the quest.
+      if (parsedBody.includeSystemPrompt) {
+        try {
+          this.systemPromptText = buildSystemPromptText(admittedContextMessages, deliveredMessages);
+        } catch (promptTextError) {
+          logger.warn(`📊 Failed to itemize the effective system prompt:`, promptTextError);
+        }
       }
 
       // Feed breakdown into telemetry builder for detailed system prompt tracking
