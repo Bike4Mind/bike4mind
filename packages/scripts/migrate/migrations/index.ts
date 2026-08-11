@@ -11,6 +11,7 @@
  */
 
 // 2. Import the file here:
+import AddMementosToUsers from './20240312000000_add_mementos_to_users';
 import DemoToPaid from './2024052201905_demo_to_paid';
 import CreateAndPopulateQuests from './20240524172716_create-and-populate-quests';
 import CreateDefaultSession from './20240723201224_create-sessions-for-users-with-no-sessions';
@@ -38,6 +39,7 @@ import MigrateOldCreditsTxnHistory from './20250917124558_migrate-old-credits-tx
 import DropRedundantIndexes from './20251002113208_drop-redundant-indexes';
 import DropRedundantIndexes2 from './20251006101839_drop-redundant-indexes';
 import DeleteDeprecatedChunks from './20251008130737_delete-deprecated-chunks';
+import AddEmailIntegrationFields from './20251009000000-add-email-integration-fields';
 import DropConflictingCounterlogIndex from './20251010091008_drop-conflicting-counterlog-index';
 import EnhanceQuestMasterPlans from './20251014000000_enhance-questmaster-plans';
 import DropUnusedProjectUniqueNameIndex from './20251022125702_drop-unused-project-unique-name-index';
@@ -67,6 +69,7 @@ import BaseEntitlementOnDefaultModels from './20260709130000_base-entitlement-on
 import NullShellAccountPasswords from './20260710120000_null-shell-account-passwords';
 import BaseEntitlementCoverDriftedSeedConfigs from './20260710160000_base-entitlement-cover-drifted-seed-configs';
 import ImageGenerationTemplateIndexes from './20260715000000_image-generation-template-indexes';
+import DropFabfileTagsNameIndex from './20260717000000_drop-fabfile-tagsname-index';
 import EnsureFabFileChunkKeysetIndex from './20260728000000_ensure-fabfilechunk-keyset-index';
 import AddOrgGroupsIndexes from './20260730000000_add-org-groups-indexes';
 import ReactivateCollateralDeactivatedApiKeys from './20260731000000_reactivate-collateral-deactivated-api-keys';
@@ -91,6 +94,7 @@ export type { MigrationFile };
 
 // 3. Reference the imported variable here:
 const coreMigrations: MigrationFile[] = [
+  AddMementosToUsers,
   DemoToPaid,
   CreateAndPopulateQuests,
   CreateDefaultSession,
@@ -118,6 +122,7 @@ const coreMigrations: MigrationFile[] = [
   DropRedundantIndexes,
   DropRedundantIndexes2,
   DeleteDeprecatedChunks,
+  AddEmailIntegrationFields,
   DropConflictingCounterlogIndex,
   EnhanceQuestMasterPlans,
   DropUnusedProjectUniqueNameIndex,
@@ -147,6 +152,7 @@ const coreMigrations: MigrationFile[] = [
   NullShellAccountPasswords,
   BaseEntitlementCoverDriftedSeedConfigs,
   ImageGenerationTemplateIndexes,
+  DropFabfileTagsNameIndex,
   EnsureFabFileChunkKeysetIndex,
   AddOrgGroupsIndexes,
   ReactivateCollateralDeactivatedApiKeys,
