@@ -202,14 +202,14 @@ describe('DataLakeManagerPanel - root view', () => {
 
     const archived = screen.getByTestId('datalake-archived-section-toggle');
     expect(archived).toHaveTextContent('Archived');
-    expect(archived).toHaveTextContent('No archived');
-    expect(screen.getByTestId('datalake-deleted-section-toggle')).toHaveTextContent('No deleted');
+    expect(archived).toHaveTextContent('No files');
+    expect(screen.getByTestId('datalake-deleted-section-toggle')).toHaveTextContent('No files');
     // Not a control: nothing to expand, so no button semantics and no chevron.
     expect(archived).not.toHaveAttribute('role', 'button');
 
     // Clicking it does nothing rather than toggling an empty body open.
     await user.click(archived);
-    expect(archived).toHaveTextContent('No archived');
+    expect(archived).toHaveTextContent('No files');
   });
 
   it('opens the public Discover catalog from the footer and returns to it via the store tab', async () => {

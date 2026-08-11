@@ -616,7 +616,7 @@ function ManagerNav({
               open={showArchived}
               onToggle={() => setShowArchived(v => !v)}
               testid="datalake-archived-section"
-              emptyLabel="No archived"
+              emptyLabel="No files"
               lakes={archivedLakes ? filterByName(archivedLakes) : undefined}
               hoverBg={hoverBg}
               renderActions={lake => (
@@ -651,11 +651,11 @@ function ManagerNav({
 
             {/* Deleted (recoverable until purged) */}
             <NavLifecycleSection
-              label="Deleted (recoverable)"
+              label="Deleted"
               open={showDeleted}
               onToggle={() => setShowDeleted(v => !v)}
               testid="datalake-deleted-section"
-              emptyLabel="No deleted"
+              emptyLabel="No files"
               lakes={deletedLakes ? filterByName(deletedLakes) : undefined}
               hoverBg={hoverBg}
               renderActions={lake => (
@@ -877,7 +877,7 @@ function NavSectionHeader({
   hoverBg: string;
   /** Persistent help affordance next to the label, e.g. explaining RAG for the Lakes section. */
   infoTooltip?: React.ReactNode;
-  /** Right-hand content replacing the chevron, e.g. "No archived" on an empty section. */
+  /** Right-hand content replacing the chevron, e.g. "No files" on an empty section. */
   trailing?: React.ReactNode;
 }) {
   const rowSx = {
@@ -953,7 +953,7 @@ function NavLifecycleSection({
   open: boolean;
   onToggle: () => void;
   testid: string;
-  /** Right-hand text on the static row when the section has nothing in it, e.g. "No archived". */
+  /** Right-hand text on the static row when the section has nothing in it, e.g. "No files". */
   emptyLabel: string;
   lakes: LifecycleSectionLake[] | undefined;
   hoverBg: string;
