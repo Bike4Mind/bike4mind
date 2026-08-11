@@ -1032,6 +1032,40 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
         '[semanticSearch] alternate-model ANN query failed',
         expect.objectContaining({ model: SMALL_3 })
       );
+      // The embed itself succeeded (only the ANN query threw), so it's still billable - this is
+      // the ticket's "bill every model actually embedded, regardless of whether its query then
+      // found anything" requirement, and the branch most likely to regress silently.
+      expect(result.alternateModelsEmbedded).toEqual([SMALL_3]);
+    });
+
+    it('skips the alternate phase ENTIRELY when the primary ANN just failed, spending no alternate embeds against the same broken backend', async () => {
+      const logger = makeLogger();
+      const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = annAdapters({
+        files: [annFile('primary'), annFile('alt', { embeddingModel: SMALL_3 })],
+        scanChunks: chunkRows('primary', 1),
+        queryableModels: ['text-embedding-ada-002', SMALL_3],
+      });
+      vectorSearch.mockImplementation((_ids: string[], _vec: number[], model: string) =>
+        model === 'text-embedding-ada-002' ? Promise.reject(new Error('backend outage')) : Promise.resolve([])
+      );
+
+      const result = await semanticDataLakeSearch(
+        { ...baseParams(), vectorSearchEnabled: true, logger: logger as never },
+        {
+          db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+        } as never
+      );
+
+      // Only the PRIMARY model's vectorSearch was ever called - the alternate never got its own
+      // embed or query attempt.
+      expect(vectorSearch).toHaveBeenCalledTimes(1);
+      expect(mockCreateEmbeddingService).toHaveBeenCalledTimes(1);
+      expect(result.alternateModelsEmbedded).toEqual([]);
+      expect(result.embeddingMismatch.excludedFiles.models).toEqual([SMALL_3]);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('skipping the alternate-model phase'),
+        expect.anything()
+      );
     });
 
     it('excludes an alternate model with no credential in the key table, without attempting to embed it', async () => {

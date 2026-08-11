@@ -760,4 +760,36 @@ describe('search_knowledge_base alternate-model billing', () => {
     expect(record).toHaveBeenCalledTimes(2);
     expect(record).toHaveBeenCalledWith(expect.objectContaining({ model: SMALL_3 }));
   });
+
+  it('still returns the search result when the organization lookup for billing throws', async () => {
+    // Regression: hoisting the organization fetch out of the per-model try/catch (so it runs
+    // once, not once per model) means an unguarded throw here would otherwise propagate up
+    // through the semantic arm's own try/catch, which falls through to keyword search on ANY
+    // error - discarding an already-successful semantic result over a billing-only failure.
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [{ chunkId: 'c1', fileId: 'f1', fileName: 'a.md', fileTags: [], chunkText: 'body', score: 0.8 }],
+    });
+    const findOrg = vi.fn().mockRejectedValue(new Error('db unavailable'));
+    const ctx = billingContext({
+      user: { id: 'u1', groups: [], organizationId: 'org1' } as never,
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }) },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+        organizations: { findById: findOrg },
+      } as never,
+    });
+
+    const out = await run(ctx);
+
+    expect(out).toContain('body');
+    expect(ctx.db.usageEvents!.record).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('failed to resolve organization'),
+      expect.any(Error)
+    );
+  });
 });

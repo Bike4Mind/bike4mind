@@ -144,21 +144,20 @@ async function resolveEmbeddingContext(context: ToolContext): Promise<{
 }
 
 /**
- * Record the query-embedding spend (the embed ran once regardless of hit count).
- * Isolated so a recording failure never discards a good search result.
+ * Bill the query-embedding spend for one model (the embed ran regardless of hit count).
+ * `organization` is resolved once by the caller and passed in, not re-fetched per model.
+ * Isolated so a recording failure never discards a good search result, and one model's failure
+ * never skips another's.
  */
-async function recordQueryEmbeddingUsage(
+async function recordEmbeddingUsage(
   context: ToolContext,
+  organization: Awaited<ReturnType<NonNullable<ToolContext['db']['organizations']>['findById']>> | null,
   query: string,
   embeddingModel: SupportedEmbeddingModel,
   provider: string
 ): Promise<void> {
   try {
     const queryTokens = await getSharedTokenizer(context.logger).countTokens(query, embeddingModel);
-    const organization =
-      context.user.organizationId && context.db.organizations
-        ? await context.db.organizations.findById(context.user.organizationId)
-        : null;
     await recordOperationalUsage(
       {
         requestId: context.sessionId ?? context.userId,
@@ -175,27 +174,49 @@ async function recordQueryEmbeddingUsage(
       { db: { usageEvents: context.db.usageEvents, adminSettings: context.db.adminSettings }, logger: context.logger }
     );
   } catch (recordErr) {
-    context.logger.warn('📚 [semantic] failed to record embedding usage:', recordErr);
+    context.logger.warn(`📚 [semantic] failed to record embedding usage for ${embeddingModel}:`, recordErr);
   }
 }
 
 /**
- * Bill every alternate model the mixed-model ANN cutover actually embedded under, on top of the
- * primary model's own recordQueryEmbeddingUsage call above - that embed ran (and was billable)
- * regardless of whether the model's ANN query then found anything. Each call is independently
- * try/caught inside recordQueryEmbeddingUsage, so one failing recording never skips the rest.
+ * Bill the primary model plus every alternate model the mixed-model ANN cutover actually embedded
+ * under - each alternate embed ran (and is billable) regardless of whether its ANN query then
+ * found anything. Resolves `organization` once (not per model) and fires every billing call
+ * concurrently; each is independently try/caught inside recordEmbeddingUsage.
+ *
+ * The organization lookup itself is also try/caught here (not left to the caller's own
+ * try/catch): both call sites wrap their entire semantic arm in a try/catch that falls through to
+ * keyword search on ANY throw, so an unguarded lookup failure here would discard an already-
+ * successful search result instead of just skipping its billing.
  */
-async function recordAlternateModelUsage(
+async function recordAllEmbeddingUsage(
   context: ToolContext,
   query: string,
+  primaryModel: SupportedEmbeddingModel,
+  primaryProvider: string,
   alternateModelsEmbedded: string[]
 ): Promise<void> {
-  for (const model of alternateModelsEmbedded) {
-    // Defensive: the planner (alternateModelAnn.ts) already only ever selects a registry-known
-    // model, so this should never actually skip anything.
-    if (!isSupportedEmbeddingModel(model)) continue;
-    await recordQueryEmbeddingUsage(context, query, model, getProviderFromModel(model));
+  let organization: Awaited<ReturnType<NonNullable<ToolContext['db']['organizations']>['findById']>> | null = null;
+  try {
+    organization =
+      context.user.organizationId && context.db.organizations
+        ? await context.db.organizations.findById(context.user.organizationId)
+        : null;
+  } catch (orgErr) {
+    context.logger.warn('📚 [semantic] failed to resolve organization for embedding usage recording:', orgErr);
+    return;
   }
+  const models: Array<{ model: SupportedEmbeddingModel; provider: string }> = [
+    { model: primaryModel, provider: primaryProvider },
+    // Defensive: the planner (alternateModelAnn.ts) already only ever selects a registry-known
+    // model, so this filter should never actually drop anything.
+    ...alternateModelsEmbedded
+      .filter(isSupportedEmbeddingModel)
+      .map(model => ({ model, provider: getProviderFromModel(model) })),
+  ];
+  await Promise.all(
+    models.map(({ model, provider }) => recordEmbeddingUsage(context, organization, query, model, provider))
+  );
 }
 
 /**
@@ -314,10 +335,9 @@ async function trySemanticKbSearch(
       }
     );
 
-    await recordQueryEmbeddingUsage(context, query, embeddingModel, provider);
-    // Real callers always set this; the fallback only guards a test double built from a
-    // partial result object.
-    await recordAlternateModelUsage(context, query, search.alternateModelsEmbedded ?? []);
+    // Real callers always set alternateModelsEmbedded; the fallback only guards a test
+    // double built from a partial result object.
+    await recordAllEmbeddingUsage(context, query, embeddingModel, provider, search.alternateModelsEmbedded ?? []);
 
     const skipNotice = describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
     // No hits: the keyword arm answers, but it has to carry the notice with it.
@@ -386,10 +406,9 @@ async function tryScopedSemanticKbSearch(
       }
     );
 
-    await recordQueryEmbeddingUsage(context, query, embeddingModel, provider);
-    // Real callers always set this; the fallback only guards a test double built from a
-    // partial result object.
-    await recordAlternateModelUsage(context, query, search.alternateModelsEmbedded ?? []);
+    // Real callers always set alternateModelsEmbedded; the fallback only guards a test
+    // double built from a partial result object.
+    await recordAllEmbeddingUsage(context, query, embeddingModel, provider, search.alternateModelsEmbedded ?? []);
 
     const skipNotice = describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
     if (search.results.length === 0) return { output: null, skipNotice, datalakeTags: [] };

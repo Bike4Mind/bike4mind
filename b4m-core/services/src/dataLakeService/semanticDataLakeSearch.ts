@@ -680,12 +680,15 @@ async function rankChunksForFiles(args: {
       // self-host cluster) must degrade to the scan path, not surface as a 500 - the whole point
       // of the per-file split is that scanAndRank can always cover any file the ann path can't
       // serve right now.
-      logger?.warn?.('[semanticSearch] ANN vector search failed, falling back to scan for its files', {
-        embeddingModel,
-        backend: canUseAtlas ? 'atlas' : 'opensearch',
-        fileCount: annEligible.length,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      logger?.warn?.(
+        '[semanticSearch] ANN vector search failed, falling back to scan for its files and skipping the alternate-model phase',
+        {
+          embeddingModel,
+          backend: canUseAtlas ? 'atlas' : 'opensearch',
+          fileCount: annEligible.length,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      );
       scanEligible = [...scanEligible, ...annEligible];
       annEligible = [];
       primaryAnnFailed = true;
@@ -729,6 +732,13 @@ async function rankChunksForFiles(args: {
     outcomes = await Promise.all(
       plan.selected.map(candidate => runAlternateModelAnn({ query, candidate, apiKeyTable, runAnn, logger }))
     );
+    // plan.skipped is the only place a cap/credential/readiness/registry skip is visible - without
+    // this it's indistinguishable in logs from "no alternate models were present at all".
+    if (plan.skipped.length > 0) {
+      logger?.debug?.('[semanticSearch] alternate-model buckets skipped', {
+        skipped: plan.skipped.map(s => ({ model: s.model, reason: s.reason, fileCount: s.files.length })),
+      });
+    }
   }
   const servedByAlternateAnn = new Set(outcomes.flatMap(o => [...o.filesWithHits]));
   // Billable regardless of whether the ANN query itself then found anything - the embed call ran.
@@ -776,9 +786,16 @@ async function rankChunksForFiles(args: {
   // their score distributions differ (see MEMENTO_MIN_SIMILARITY's documented history of exactly
   // this failure when a deployment's default model changed). Merging the primary and alternate
   // models' hits by raw cosine therefore systematically favors whichever model's scale runs
-  // higher, a rank bias rather than a correctness bug: both data-lake surfaces default minScore
-  // to 0, so this can only reorder results, never silently drop one model's hits below a floor
-  // tuned for another model's scale. See the pinned test for the accepted behavior.
+  // higher. With the data-lake surfaces' own default `minScore` of 0 this is purely a rank bias.
+  // A caller-supplied nonzero minScore is a DIFFERENT, pre-existing property this cutover does
+  // not change: the scan path already applies one floor across every chunk regardless of which
+  // embedding space it came from, and this merge inherits that same behavior for alternate models
+  // - a floor tuned for the primary model's scale can filter an entire alternate model's hits.
+  // That model still counts as "served" in `alternateModelServed` (its ANN query DID run and
+  // return raw hits, which is the file-level signal this report tracks - see `filesWithHits`),
+  // not as excluded; a caller relying on `partial`/`excludedFiles` to catch every zero-result
+  // cause under a custom minScore already has this gap for the primary model today. See the
+  // pinned test for the accepted rank-bias behavior.
   const merged = new BoundedTopK<SemanticChunkResult>(topK, compareByScore);
   for (const result of scanned.results) merged.offer(result);
   for (const result of annResult.results) merged.offer(result);

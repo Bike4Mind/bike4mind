@@ -645,6 +645,23 @@ describe('POST /api/data-lakes/semantic-search alternate-model billing', () => {
     expect(mockRecordOperationalUsage).toHaveBeenCalledTimes(1);
   });
 
+  it('still returns the search response when resolving the user for billing throws', async () => {
+    mockSemanticSearch.mockResolvedValue(EMPTY_RESULT);
+    mockFindUserById.mockRejectedValueOnce(new Error('db unavailable'));
+    const req = makeReq({ query: 'onboarding' });
+    const res = makeRes();
+
+    await handler(req, res);
+
+    expect(res.status).not.toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ results: [] }));
+    expect(mockRecordOperationalUsage).not.toHaveBeenCalled();
+    expect(req.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('failed to resolve user/organization'),
+      expect.any(Error)
+    );
+  });
+
   it('still records the alternate model when the primary recording fails first', async () => {
     mockSemanticSearch.mockResolvedValue({ ...EMPTY_RESULT, alternateModelsEmbedded: [SMALL_3] });
     // recordEmbeddingUsage awaits the primary before looping alternates, so a rejection here hits

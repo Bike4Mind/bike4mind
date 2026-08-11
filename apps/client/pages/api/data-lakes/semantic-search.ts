@@ -316,49 +316,59 @@ const handler = baseApi()
         }
       );
 
-      // Record the query-embedding spend for one model (the embed ran regardless of hit count).
-      // Best-effort and independently isolated per model: a recording failure must never fail the
-      // search response, and one model's failure must never skip recording the others.
-      const recordEmbeddingUsage = async (model: string, provider: string): Promise<void> => {
-        try {
-          const user = await userRepository.findById(req.user.id);
-          if (!user) return;
+      // Record the query-embedding spend for the primary model plus every alternate model the
+      // mixed-embeddingModel ANN cutover actually embedded under - each alternate embed ran (and
+      // is billable) regardless of whether its ANN query then found anything. `user`/`organization`
+      // are resolved ONCE, not re-fetched per model, and every recording runs concurrently.
+      // Best-effort as a whole: a recording failure (including resolving user/organization) must
+      // never fail the search response, and one model's recording failure must never skip another's.
+      try {
+        const user = await userRepository.findById(req.user.id);
+        if (user) {
           const organization = user.organizationId ? await organizationRepository.findById(user.organizationId) : null;
-          const queryTokens = await getSharedTokenizer(req.logger).countTokens(query, model);
-          await recordOperationalUsage(
-            {
-              requestId: req.user.id,
-              user,
-              organization,
-              feature: 'embedding',
-              provider,
-              model,
-              inputTokens: queryTokens,
-              costUsd: getEmbeddingModelCost(model, queryTokens),
-              source: 'api',
-            },
-            {
-              db: {
-                usageEvents: usageEventRepository,
-                adminSettings: adminSettingsRepository,
-                creditTransactions: creditTransactionRepository,
-                users: userRepository,
-                organizations: organizationRepository,
-              },
-              logger: req.logger,
+          const recordEmbeddingUsage = async (model: string, provider: string): Promise<void> => {
+            try {
+              const queryTokens = await getSharedTokenizer(req.logger).countTokens(query, model);
+              await recordOperationalUsage(
+                {
+                  requestId: req.user.id,
+                  user,
+                  organization,
+                  feature: 'embedding',
+                  provider,
+                  model,
+                  inputTokens: queryTokens,
+                  costUsd: getEmbeddingModelCost(model, queryTokens),
+                  source: 'api',
+                },
+                {
+                  db: {
+                    usageEvents: usageEventRepository,
+                    adminSettings: adminSettingsRepository,
+                    creditTransactions: creditTransactionRepository,
+                    users: userRepository,
+                    organizations: organizationRepository,
+                  },
+                  logger: req.logger,
+                }
+              );
+            } catch (recordErr) {
+              req.logger?.warn(`[semantic-search] failed to record embedding usage for ${model}`, recordErr);
             }
-          );
-        } catch (recordErr) {
-          req.logger?.warn(`[semantic-search] failed to record embedding usage for ${model}`, recordErr);
-        }
-      };
+          };
 
-      await recordEmbeddingUsage(embedding_model, embeddingProvider);
-      // Every alternate model the mixed-embeddingModel ANN cutover actually embedded under, in
-      // addition to the primary above - billable regardless of whether that model's ANN query
-      // then found anything (the embed call itself ran).
-      for (const altModel of search.alternateModelsEmbedded ?? []) {
-        await recordEmbeddingUsage(altModel, getProviderFromModel(altModel as SupportedEmbeddingModel));
+          await Promise.all([
+            recordEmbeddingUsage(embedding_model, embeddingProvider),
+            ...(search.alternateModelsEmbedded ?? []).map(altModel =>
+              recordEmbeddingUsage(altModel, getProviderFromModel(altModel as SupportedEmbeddingModel))
+            ),
+          ]);
+        }
+      } catch (recordErr) {
+        req.logger?.warn(
+          '[semantic-search] failed to resolve user/organization for embedding usage recording',
+          recordErr
+        );
       }
 
       if (isAborted()) return res.end();
