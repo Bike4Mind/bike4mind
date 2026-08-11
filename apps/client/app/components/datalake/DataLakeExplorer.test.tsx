@@ -257,7 +257,8 @@ describe('DataLakeExplorer chat-first surface', () => {
     renderExplorer({ chatEmbedded: false });
     fireEvent.click(screen.getByTestId('mock-view'));
     await vi.waitFor(() => expect(screen.getByTestId('datalake-rail-viewer')).toBeInTheDocument());
-    expect(screen.queryByTestId('mock-tree')).toBeNull();
+    // Beside the tree, not instead of it - browsing on to the next file must stay possible.
+    expect(screen.getByTestId('mock-tree')).toBeInTheDocument();
     expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function));
     expect(setSessionLayout).toHaveBeenCalledWith({ selectedArtifactId: 'file-123' });
     expect(setSessionLayout).not.toHaveBeenCalledWith(
@@ -265,13 +266,13 @@ describe('DataLakeExplorer chat-first surface', () => {
     );
   });
 
-  it('viewer back returns to the tree with the viewed file highlighted (overlay host)', async () => {
+  it('viewer back closes it and leaves the viewed file highlighted (overlay host)', async () => {
     renderExplorer({ chatEmbedded: false });
     fireEvent.click(screen.getByTestId('mock-view'));
     await vi.waitFor(() => expect(screen.getByTestId('datalake-viewer-back-btn')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('datalake-viewer-back-btn'));
-    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
     expect(screen.queryByTestId('datalake-rail-viewer')).toBeNull();
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
   });
 
   it('deep-linked articleId opens it the same way View does', async () => {

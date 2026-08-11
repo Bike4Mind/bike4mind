@@ -136,7 +136,7 @@ export default function DataLakeExplorer({
   const [userSelectedFile, setUserSelectedFile] = useState<IFabFileDocument | null>(null);
   // Chat mode: id of the file most recently viewed, kept to highlight it in the tree.
   const [viewerFileId, setViewerFileId] = useState<string | null>(articleId ?? null);
-  // External-chat hosts only: the KnowledgeViewer takes the rail (View action) until Back.
+  // External-chat hosts only: our own KnowledgeViewer is open beside the tree (View action).
   const [railViewerOpen, setRailViewerOpen] = useState(false);
   // Chat mode: pending remove-from-lake confirmation.
   const [deleteTarget, setDeleteTarget] = useState<{ file: IFabFileDocument; lake: ManageableDataLakeConfig } | null>(
@@ -542,27 +542,26 @@ export default function DataLakeExplorer({
             transition: 'padding-left 0.2s ease',
           }}
         >
-          {railViewerOpen ? (
-            <DataLakeRailViewer onBack={() => setRailViewerOpen(false)} />
-          ) : (
-            <DataLakeChatTree
-              tree={tree}
-              articles={leafArticles}
-              breadcrumb={breadcrumb}
-              onNavigate={handleNavigate}
-              selectedFileId={viewerFileId}
-              onAttachFile={attachFileToChat}
-              onViewFile={handleViewFile}
-              canDeleteFile={canDeleteFile}
-              onDeleteFile={handleDeleteFile}
-              isLoading={tagCountsLoading || (!!leafTag && leafLoading)}
-              isError={tagCountsError}
-              title={rootLabel ?? copy.rootLabel}
-              onManage={onManage}
-              onCreateLake={onCreateLake}
-              onClose={showModeClose ? () => setDataLakeMode(false) : undefined}
-            />
-          )}
+          <DataLakeChatTree
+            tree={tree}
+            articles={leafArticles}
+            breadcrumb={breadcrumb}
+            onNavigate={handleNavigate}
+            selectedFileId={viewerFileId}
+            onAttachFile={attachFileToChat}
+            onViewFile={handleViewFile}
+            canDeleteFile={canDeleteFile}
+            onDeleteFile={handleDeleteFile}
+            isLoading={tagCountsLoading || (!!leafTag && leafLoading)}
+            isError={tagCountsError}
+            title={rootLabel ?? copy.rootLabel}
+            onManage={onManage}
+            onCreateLake={onCreateLake}
+            onClose={showModeClose ? () => setDataLakeMode(false) : undefined}
+          />
+          {/* Opens BESIDE the tree, never in place of it - the embedded host keeps its tree too
+              when the split opens, and browsing on to the next file is the common next move. */}
+          {railViewerOpen && <DataLakeRailViewer onBack={() => setRailViewerOpen(false)} />}
           <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
             <DataLakeNavProvider value={nav}>{chatSlot}</DataLakeNavProvider>
           </Box>

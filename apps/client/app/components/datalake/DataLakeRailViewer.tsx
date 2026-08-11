@@ -8,7 +8,7 @@ interface DataLakeRailViewerProps {
 }
 
 /**
- * The KnowledgeViewer, mounted in the Data Lake rail for hosts whose chat is docked OUTSIDE the
+ * The KnowledgeViewer, mounted beside the tree for hosts whose chat is docked OUTSIDE the
  * explorer (the premium overlay). Those hosts run the `dockRight` layout, in which the chat's own
  * SessionContainer renders no viewer at all, and the layout cannot be switched to get one - the
  * host force-redocks anything else, and `vertical` collapses the dock. Mounting our own instance
