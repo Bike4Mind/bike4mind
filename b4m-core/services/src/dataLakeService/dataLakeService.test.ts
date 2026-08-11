@@ -1498,8 +1498,11 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
       },
       batches: { find: vi.fn().mockResolvedValue([{ id: 'b1' }]), delete: vi.fn().mockResolvedValue(undefined) },
       fabFiles: {
-        findIdsByDataLakeTag: vi.fn().mockResolvedValue(['f1', 'f2']),
+        // Second call is the post-purge survivor resolve: nothing joined mid-sweep by default.
+        findIdsByDataLakeTag: vi.fn().mockResolvedValueOnce(['f1', 'f2']).mockResolvedValue([]),
         hardDeleteByIds: vi.fn().mockResolvedValue(['f1', 'f2']),
+        findById: vi.fn().mockResolvedValue(null),
+        pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
       },
       fabFileChunks: { deleteManyByFabFileId: vi.fn().mockResolvedValue(undefined) },
     },
@@ -1532,7 +1535,7 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
 
   it('hands the index the whole membership scope and every member id, before it destroys any of them', async () => {
     const adapters = makeAdapters('deleted');
-    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValue(memberIds);
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValueOnce(memberIds).mockResolvedValue([]);
     const retrievalIndex = indexPort();
 
     await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex });
@@ -1549,7 +1552,7 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
 
   it('purges exactly the ids it announced, so a mid-sweep joiner is not destroyed unaccounted for', async () => {
     const adapters = makeAdapters('deleted');
-    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValue(memberIds);
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValueOnce(memberIds).mockResolvedValue([]);
     const retrievalIndex = indexPort();
 
     await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, retrievalIndex });
@@ -1558,9 +1561,40 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     // would otherwise be hard-deleted with its chunks intact and the index never told.
     expect(adapters.db.fabFiles.hardDeleteByIds).toHaveBeenCalledWith(memberIds);
     expect(removalInput(retrievalIndex).fabFileIds).toEqual(memberIds);
-    // Resolved once and reused. Re-resolving before the purge would pass the assertions above
-    // while reopening the window they exist to close.
-    expect(adapters.db.fabFiles.findIdsByDataLakeTag).toHaveBeenCalledTimes(1);
+    // Resolved once for the purge and reused. Re-resolving BEFORE the hard delete would pass the
+    // assertions above while reopening the window they exist to close; the only other resolve is
+    // the survivor sweep, which runs after.
+    const resolves = adapters.db.fabFiles.findIdsByDataLakeTag.mock.invocationCallOrder;
+    const hardDelete = adapters.db.fabFiles.hardDeleteByIds.mock.invocationCallOrder[0];
+    expect(resolves.filter(order => order < hardDelete)).toHaveLength(1);
+  });
+
+  it('strips its own membership signals off a mid-sweep joiner, so no tag outlives the lake', async () => {
+    const adapters = makeAdapters('deleted');
+    const joiner = { id: 'joiner', userId: 'owner', tags: [{ name: 'lk:late' }, { name: 'unrelated' }] };
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValueOnce(memberIds).mockResolvedValue(['joiner']);
+    adapters.db.fabFiles.findById = vi.fn().mockResolvedValue(joiner);
+
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+
+    // The survivor keeps its bytes but stops matching a lake that no longer exists, so a later
+    // lake claiming 'lk:' cannot adopt it - the create-time guard only sees surviving lakes.
+    expect(adapters.db.fabFiles.hardDeleteByIds).toHaveBeenCalledWith(memberIds);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('joiner', [lake().datalakeTag, 'lk:late']);
+    const pull = adapters.db.fabFiles.pullTagsByFabFileId.mock.invocationCallOrder[0];
+    expect(pull).toBeLessThan(adapters.db.dataLakes.delete.mock.invocationCallOrder[0]);
+  });
+
+  it('leaves a stranger-owned same-prefix file alone: the prefix arm never admitted it', async () => {
+    const adapters = makeAdapters('deleted');
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValueOnce(memberIds).mockResolvedValue(['theirs']);
+    adapters.db.fabFiles.findById = vi
+      .fn()
+      .mockResolvedValue({ id: 'theirs', userId: 'someone-else', tags: [{ name: 'lk:theirs' }] });
+
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
   });
 
   it('aborts the purge with nothing destroyed when the index removal fails', async () => {
@@ -1583,7 +1617,7 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
 
   it('chunks the fan-outs yet processes every item and preserves step ordering', async () => {
     const adapters = makeAdapters('deleted');
-    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValue(['f1', 'f2', 'f3']);
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValueOnce(['f1', 'f2', 'f3']).mockResolvedValue([]);
     adapters.db.batches.find = vi.fn().mockResolvedValue([{ id: 'b1' }, { id: 'b2' }, { id: 'b3' }]);
 
     await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, chunkSize: 2 });

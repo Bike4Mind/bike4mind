@@ -20,7 +20,9 @@ import type { RetrievalIndexPort, RetrievalIndexRemoval } from '@bike4mind/servi
  * cleanupDeletedDataLake service function through the REAL FabFile/DataLake repositories against
  * createMongoServer: seed a lake with a meta-tagged file and a prefix-only member (both owned by
  * the creator) plus a same-prefix stranger's file, purge it, and check what the retrieval-index
- * port was actually told to remove against what really left Mongo. Every unit layer here mocks its
+ * port was actually told to remove against what really left Mongo - and, for a file that joins the
+ * lake mid-sweep, that the tag sparing it leaves behind does not outlive the lake it names.
+ * Every unit layer here mocks its
  * neighbor, so only this test proves the ids the port receives are the SAME set the hard-delete
  * destroys - a mock can assert a contract the real membership scope doesn't deliver. Lives in
  * apps/client because it is the only package with both @bike4mind/services and @bike4mind/database
@@ -148,36 +150,91 @@ describe('data lake purge index-removal scope (real repos + Mongo)', () => {
     expect(await fabFileChunkRepository.findByFabFileId(strangerFile._id.toString())).toHaveLength(1);
   });
 
-  it('spares a file that became a member after the sweep resolved its ids', async () => {
-    const { lake, prefixOwned } = await seedLake();
+  /**
+   * Purges the lake with a port that tags a fresh file into it mid-sweep - the real window between
+   * the id resolve and the hard delete - and returns the joiner plus what the port was told.
+   */
+  async function purgeWithMidSweepJoiner(lake: Awaited<ReturnType<typeof seedLake>>['lake']) {
     let received: RetrievalIndexRemoval | undefined;
     let joiner: Awaited<ReturnType<typeof makeFile>> | undefined;
     const port: RetrievalIndexPort = {
       async removeForDataLake(input) {
         received = input;
-        // The port runs after the sweep resolved its ids and before it destroys anything, so this
-        // is the real mid-sweep window: the creator tags another of their files into the lake.
-        joiner = await makeFile({ fileName: 'joined-mid-sweep.txt', userId: CREATOR, tags: [{ name: 'acme:late' }] });
+        joiner = await makeFile({
+          fileName: 'joined-mid-sweep.txt',
+          userId: CREATOR,
+          tags: [{ name: 'acme:late' }, { name: 'quarterly' }],
+        });
       },
     };
 
     await runCleanup(lake._id.toString(), port);
+    return { joiner: joiner!, received };
+  }
 
-    const joinerId = joiner!._id.toString();
-    // Not vacuous: the joiner really does satisfy the membership predicate, so a purge that
-    // re-resolved membership at delete time WOULD have taken it.
-    const membersNow = await fabFileRepository.findIdsByDataLakeTag({
-      datalakeTag: lake.datalakeTag,
-      fileTagPrefix: lake.fileTagPrefix,
-      creatorUserId: lake.createdByUserId,
-    });
-    expect(membersNow).toContain(joinerId);
+  it('spares a file that became a member after the sweep resolved its ids', async () => {
+    const { lake, prefixOwned } = await seedLake();
 
+    const { joiner, received } = await purgeWithMidSweepJoiner(lake);
+
+    const joinerId = joiner._id.toString();
     // It was never announced to the index, so destroying it would orphan its chunks and its entry.
     expect(received?.fabFileIds).not.toContain(joinerId);
     expect(await fileExists(joinerId)).toBe(true);
     // The members that WERE announced are gone, so this is not just a purge that did nothing.
     expect(await fileExists(prefixOwned._id.toString())).toBe(false);
+  });
+
+  it('strips the dead lake prefix off the survivor, leaving its other tags alone', async () => {
+    const { lake } = await seedLake();
+    const scope = {
+      datalakeTag: lake.datalakeTag,
+      fileTagPrefix: lake.fileTagPrefix,
+      creatorUserId: lake.createdByUserId,
+    };
+
+    const { joiner } = await purgeWithMidSweepJoiner(lake);
+
+    const tagsNow = (await FabFile.findById(joiner._id))?.tags?.map(t => t.name) ?? [];
+    expect(tagsNow).not.toContain('acme:late');
+    // Only this lake's signals go. The file itself is untouched everywhere else it is used.
+    expect(tagsNow).toContain('quarterly');
+
+    // Not vacuous: the predicate still selects exactly this shape of file, so the joiner dropping
+    // out of it is the strip, not a predicate that never matched it in the first place.
+    const control = await makeFile({ fileName: 'control.txt', userId: CREATOR, tags: [{ name: 'acme:control' }] });
+    expect(await fabFileRepository.findIdsByDataLakeTag(scope)).toEqual([control._id.toString()]);
+  });
+
+  it('a later lake claiming the purged prefix does not adopt the survivor', async () => {
+    const { lake } = await seedLake();
+
+    const { joiner } = await purgeWithMidSweepJoiner(lake);
+
+    // The create-time guard cannot help here: it only compares against lakes that still exist, and
+    // the purged one is gone, so 'acme:' is free to claim again.
+    expect(
+      await dataLakeService.findCollidingPrefixLakes({ dataLakes: dataLakeRepository }, 'acme:', {
+        createdByUserId: CREATOR,
+      })
+    ).toEqual([]);
+
+    const successor = await DataLakeModel.create({
+      name: 'Acme Docs II',
+      slug: `acme-docs-ii-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      fileTagPrefix: 'acme:',
+      datalakeTag: `datalake:acme-docs-ii-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      createdByUserId: CREATOR,
+      status: 'active',
+    });
+
+    const members = await fabFileRepository.findIdsByDataLakeTag({
+      datalakeTag: successor.datalakeTag,
+      fileTagPrefix: successor.fileTagPrefix,
+      creatorUserId: successor.createdByUserId,
+    });
+    expect(members).not.toContain(joiner._id.toString());
+    expect(members).toEqual([]);
   });
 
   it('a failing index aborts the purge before anything is destroyed', async () => {

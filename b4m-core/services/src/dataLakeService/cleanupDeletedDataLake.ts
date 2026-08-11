@@ -6,6 +6,7 @@ import type {
 } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { lakeMembershipScope } from './lakeMembershipScope';
+import { lakeMembershipSignals } from './lakeMembership';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
 import { strictIndexRemove, type RetrievalIndexPort } from './ports';
 
@@ -13,7 +14,7 @@ interface CleanupDeletedDataLakeAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'delete' | 'find'>;
     batches: Pick<IDataLakeBatchRepository, 'find' | 'delete'>;
-    fabFiles: Pick<IFabFileRepository, 'findIdsByDataLakeTag' | 'hardDeleteByIds'>;
+    fabFiles: Pick<IFabFileRepository, 'findIdsByDataLakeTag' | 'hardDeleteByIds' | 'findById' | 'pullTagsByFabFileId'>;
     fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId'>;
   };
   retrievalIndex?: RetrievalIndexPort;
@@ -96,11 +97,24 @@ export const cleanupDeletedDataLake = async (
   // Re-resolving would also destroy anything that became a member since - a file the creator
   // tagged mid-sweep - leaving its chunks behind and its index entry unrequested. It survives
   // this run instead, which is the recoverable direction.
-  //
-  // The survivor is left carrying a prefix tag whose lake step 5 then deletes, and nothing
-  // reconciles that: a later lake claiming the same prefix would silently adopt it, since the
-  // create-time collision guard only compares against lakes that still exist.
   await db.fabFiles.hardDeleteByIds(fileIds);
+
+  // 3b. Whatever the predicate STILL names is exactly that spared mid-sweep joiner, and sparing it
+  // is only half a decision: step 5 deletes the lake, so its prefix tag would outlive the lake it
+  // points at. A later lake claiming the same prefix then adopts it silently, because the
+  // create-time collision guard (`findCollidingPrefixLakes`) only compares against lakes that
+  // still exist. Clearing this lake's signals off the survivor is what makes the sparing durable:
+  // the file keeps its bytes and its chunks, and stops being a member of a lake that is gone.
+  //
+  // Runs BEFORE the lake record goes, so a throw here aborts with the lake still in 'deleted' and
+  // a DLQ retry re-runs the whole sweep - by then the survivor is an ordinary member, resolved up
+  // front and torn down with its chunks and index entry like any other.
+  const survivors = await db.fabFiles.findIdsByDataLakeTag(scope);
+  await inChunks(survivors, chunkSize, async id => {
+    const file = await db.fabFiles.findById(id);
+    const { inLake, tagsToPull } = lakeMembershipSignals(existing, file);
+    if (file && inLake) await db.fabFiles.pullTagsByFabFileId(file.id, tagsToPull);
+  });
 
   // 4. Delete the lake's batches (chunked, same rationale as the chunk sweep above).
   const batches = await db.batches.find({ dataLakeId });
