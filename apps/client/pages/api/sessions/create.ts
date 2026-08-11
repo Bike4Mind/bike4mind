@@ -1,7 +1,8 @@
-import { sessionService } from '@bike4mind/services';
+import { sessionService, dataLakeService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
+  dataLakeRepository,
   fabFileRepository,
   projectRepository,
   sessionRepository,
@@ -12,6 +13,7 @@ import {
 import { logEvent } from '@server/utils/analyticsLog';
 import { SessionEvents, ProjectEvents, redactSessionForClient } from '@bike4mind/common';
 import { projectService } from '@bike4mind/services';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { ActivityType } from '@client/config/activities';
 import { CreateSessionRequestBody } from '../../../types/api';
 
@@ -23,8 +25,26 @@ interface CreateSessionBody {
 const handler = baseApi().post(
   asyncHandler(async (req, res) => {
     const userId = req.user.id;
-    const { projectId } = req.body as CreateSessionBody;
-    const newSession = await sessionService.createSession(req.user, req.body as CreateSessionRequestBody, {
+    const body = req.body as CreateSessionBody;
+    const { projectId } = body;
+
+    // "Start chat with this lake": when the request names a lake, seed the session's
+    // lake-derived defaults (forced retrieval scoped to the lake + its preferred prompt id) from
+    // the ONE reusable resolver. Gated on `dataLakeId` so ordinary session creation does zero
+    // extra work and stays byte-identical. The lake is access-gated first (assertLakeAccess) so a
+    // caller can never arm a lake's prompt for a lake they cannot reach; explicit request values
+    // win over the lake defaults, so a hand-set systemPromptId/retrievalTags always beats the lake.
+    let createParams: CreateSessionRequestBody = body as CreateSessionRequestBody;
+    if (body.dataLakeId) {
+      const ctx = await toAccessContext(req);
+      const lake = await dataLakeService.assertLakeAccess(String(body.dataLakeId), ctx, {
+        db: { dataLakes: dataLakeRepository },
+      });
+      const lakeDefaults = sessionService.resolveLakeSessionDefaults(lake);
+      createParams = { ...lakeDefaults, ...body } as CreateSessionRequestBody;
+    }
+
+    const newSession = await sessionService.createSession(req.user, createParams, {
       db: {
         sessions: sessionRepository,
         projects: projectRepository,

@@ -2,9 +2,12 @@ import type { z } from 'zod';
 import { registry } from './registry';
 import { SECURITY_REQUIREMENT, JWT_SECURITY_REQUIREMENT } from './security';
 import { ErrorResponse } from './schemas';
+// Specific file, not the barrel (`../schemas`): the barrel re-exports actions.ts,
+// which imports @bike4mind/hearth - absent in the install-only CI openapi job.
+import { ApiErrorSchema } from '../schemas/chat';
 import type { EndpointContract } from '../api-contract';
 
-type JsonResponse = { description: string; content: { 'application/json': { schema: z.ZodTypeAny } } };
+type ContractResponse = { description: string; content: Record<string, { schema: z.ZodTypeAny }> };
 
 /**
  * Register a transport-agnostic {@link EndpointContract} as an OpenAPI operation.
@@ -22,23 +25,28 @@ export function registerContract(contract: EndpointContract): void {
         ? undefined
         : SECURITY_REQUIREMENT;
 
-  const responses: Record<string, JsonResponse> = {};
+  const responses: Record<string, ContractResponse> = {};
   for (const [status, spec] of Object.entries(contract.responses)) {
-    responses[status] = {
-      description: spec.description,
-      content: {
-        'application/json': {
-          schema: spec.schema.openapi(`${contract.operationId}Response${status}`),
-        },
-      },
-    };
+    const contentType = spec.contentType ?? 'application/json';
+    // Error bodies reuse the single shared ErrorResponse component ($ref) instead
+    // of minting an identical per-operation copy; other schemas get an
+    // operation-scoped component so their examples/shape stay endpoint-specific.
+    const schema =
+      spec.schema === ApiErrorSchema
+        ? ErrorResponse
+        : spec.schema.openapi(`${contract.operationId}Response${status}`, {
+            ...(spec.example !== undefined && { example: spec.example }),
+          });
+    responses[status] = { description: spec.description, content: { [contentType]: { schema } } };
   }
 
-  // Any contract with a request body returns 422 on validation failure - both
-  // adapters guarantee it (Next: ZodError -> errorHandler -> UnprocessableEntity;
-  // Lambda: safeParse -> 422). Auto-document it (unless the contract declares its
-  // own 422) so no author forgets and generated SDKs know the shape.
-  if (contract.request && !responses['422']) {
+  // Any NON-streaming contract with a request body returns 422 on validation
+  // failure - both adapters guarantee it (Next: ZodError -> errorHandler ->
+  // UnprocessableEntity; Lambda: safeParse -> 422). Auto-document it (unless the
+  // contract declares its own 422). Streaming endpoints are excluded: they open
+  // the stream first, so a bad body arrives as an in-band SSE `error` event, not
+  // a 422 JSON body.
+  if (contract.request && !contract.streaming && !responses['422']) {
     responses['422'] = {
       description: 'Request body failed validation.',
       content: { 'application/json': { schema: ErrorResponse } },
@@ -48,8 +56,11 @@ export function registerContract(contract: EndpointContract): void {
   // Same reasoning for the auth failures every authenticated route can return:
   // apiKeyAuth 401s a missing/invalid credential and 403s an under-scoped key.
   // Documenting them centrally keeps generated SDKs honest without every author
-  // remembering to declare them. A contract may still override either.
-  if (contract.auth !== 'public') {
+  // remembering to declare them. Streaming endpoints are excluded: once the
+  // stream opens the status stays 200 and auth/scope failures arrive as an
+  // in-band SSE `error` event, not an HTTP 401/403. A contract may still
+  // override either.
+  if (contract.auth !== 'public' && !contract.streaming) {
     if (!responses['401']) {
       responses['401'] = {
         description: 'Missing or invalid credentials.',

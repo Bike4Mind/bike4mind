@@ -36,6 +36,9 @@ const toManageableConfig = (dl: IDataLakeDocument, manageable: boolean): Managea
   ...toConfig(dl),
   canManage: manageable,
   ...(manageable && dl.systemPrompt?.trim() ? { systemPrompt: dl.systemPrompt.trim() } : {}),
+  // Editor-only, same gate as systemPrompt. An empty stored value means "no preferred prompt",
+  // so it is reported as absent (never '') - the picker then shows "None".
+  ...(manageable && dl.preferredSystemPromptId ? { preferredSystemPromptId: dl.preferredSystemPromptId } : {}),
 });
 
 /**

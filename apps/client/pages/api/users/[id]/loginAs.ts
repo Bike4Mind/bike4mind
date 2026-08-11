@@ -50,10 +50,12 @@ const handler = baseApi().post(
     // the first 401-triggered refresh would mint an admin access token and silently flip the
     // session back to the admin mid-impersonation.
     //
-    // Stamp an impersonatedBy claim so downstream can tell a real customer session
-    // from an admin-driven one: /api/logout skips the tokenVersion revoke for these,
-    // otherwise an admin clicking "Log Out" mid-impersonation would force-log-out the
-    // real customer on every device.
+    // Stamp an impersonatedBy claim so downstream can tell a real customer session from an
+    // admin-driven one. Per-device /api/logout now revokes only this session's own `sid` (never a
+    // tokenVersion bump), so logging out mid-impersonation kills just the impersonation session and
+    // leaves the real customer's devices untouched; and the session-management endpoints
+    // (revoke-others / the admin force-logout) refuse to run while this claim is present, so an
+    // admin can't sign the customer's other devices out from an impersonated session.
     const { accessToken } = await issueBrowserSession(req, res, targetUser.id, {
       createdVia: 'impersonation',
       tokenVersion: targetUser.tokenVersion ?? 0,

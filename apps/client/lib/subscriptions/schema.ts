@@ -1,4 +1,7 @@
-import { ORGANIZATION_SUBSCRIPTION_MIN_SEATS } from '@client/lib/subscriptions/constants';
+import {
+  ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
+  ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
+} from '@client/lib/subscriptions/constants';
 import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import { z } from 'zod';
 
@@ -33,9 +36,12 @@ export const OrgSubscriptionSubscribeSchema = z
     priceId: z.string(),
 
     /**
-     * Number of seats to subscribe to. Minimum enforced by ORGANIZATION_SUBSCRIPTION_MIN_SEATS.
+     * Number of seats to subscribe to. Whole seats only, bounded by the platform
+     * min/max - this value flows into Stripe checkout line_items and into
+     * organization.seats at creation, so a non-integer or over-cap value must be
+     * rejected here rather than relying on Stripe to bounce it.
      */
-    quantity: z.number().min(ORGANIZATION_SUBSCRIPTION_MIN_SEATS),
+    quantity: z.number().int().min(ORGANIZATION_SUBSCRIPTION_MIN_SEATS).max(ORGANIZATION_SUBSCRIPTION_MAX_SEATS),
 
     /**
      * The organization that is subscribing. If not provided, a new organization will be created.

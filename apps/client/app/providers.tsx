@@ -23,6 +23,7 @@ import { CookieConsentBanner } from '@client/app/components/CookieConsentBanner'
 import { TranslationProvider } from '@client/app/contexts/TranslationProvider';
 import { QuestPreparationOverlay } from '@client/app/components/QuestPreparationOverlay';
 import { runLocalStorageCleanup } from '@client/app/utils/localStorageCleanup';
+import { revalidateSessionOnFocus } from '@client/app/utils/sessionBootstrap';
 
 // Lazy load DevTools only when needed (development only)
 const ReactQueryDevtools = lazy(() =>
@@ -149,6 +150,22 @@ export function ClientProviders({ children }: { children: ReactNode }) {
     };
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
+
+  // A reload runs the bootstrap refresh on load, but nothing ran its equivalent on tab
+  // refocus - see revalidateSessionOnFocus's own doc comment for why an idle tab's expired
+  // token could otherwise sit unrefreshed. Both events are listened for since a tab-switch
+  // fires visibilitychange while an OS-level app-switch back to the same foreground tab
+  // only fires focus; the shared probeIdentity single-flight collapses a double-fire (and
+  // a WebsocketContext close-probe landing at the same time) into one round trip.
+  useEffect(() => {
+    const handleVisibility = () => revalidateSessionOnFocus(queryClient);
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleVisibility);
+    };
   }, []);
 
   return (
