@@ -101,7 +101,6 @@ vi.mock('./DataLakeChatTree', () => ({
         data-testid="mock-tree"
         data-selected={props.selectedFileId ?? ''}
         data-can-delete={String(props.canDeleteFile(file))}
-        data-has-row-click={String('onSelectFile' in props)}
       >
         <button data-testid="mock-attach" onClick={() => props.onAttachFile(file)}>
           attach
@@ -166,9 +165,10 @@ describe('DataLakeExplorer chat-first surface', () => {
     expect(screen.queryByTestId('mock-close')).toBeNull();
   });
 
-  it('gives the tree no row-click handler: browsing must not mutate the chat', () => {
+  it('touches neither the workbench nor the layout until an action runs', () => {
+    // Browsing (mounting, navigating) stays inert; only the row actions below reach the chat.
+    // Which gesture triggers which action is the tree's contract - see DataLakeChatTree.test.
     renderExplorer();
-    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-has-row-click', 'false');
     expect(setWorkBenchFiles).not.toHaveBeenCalled();
     expect(setSessionLayout).not.toHaveBeenCalled();
   });

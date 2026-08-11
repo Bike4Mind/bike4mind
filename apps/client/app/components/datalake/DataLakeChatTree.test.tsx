@@ -35,15 +35,23 @@ const renderTree = (props: Partial<React.ComponentProps<typeof DataLakeChatTree>
   );
 
 describe('DataLakeChatTree file-row actions', () => {
-  it('file rows are not buttons: clicking the row triggers no action', () => {
+  it('clicking a file row runs the View action and nothing else', () => {
     const onAttachFile = vi.fn();
     const onViewFile = vi.fn();
-    renderTree({ onAttachFile, onViewFile });
+    const onDeleteFile = vi.fn();
+    renderTree({ onAttachFile, onViewFile, onDeleteFile });
     fireEvent.click(screen.getByTestId('datalake-file-f1'));
+    expect(onViewFile).toHaveBeenCalledWith(expect.objectContaining({ id: 'f1' }));
     expect(onAttachFile).not.toHaveBeenCalled();
+    expect(onDeleteFile).not.toHaveBeenCalled();
+  });
+
+  it('opening the actions menu does not also run the row View', () => {
+    const onViewFile = vi.fn();
+    renderTree({ onViewFile });
+    fireEvent.click(screen.getByTestId('datalake-row-menu-btn-f1'));
+    // The trigger sits inside the row, so without stopPropagation this would open the file too.
     expect(onViewFile).not.toHaveBeenCalled();
-    // No ListItemButton semantics on the row itself.
-    expect(screen.getByTestId('datalake-file-f1').closest('[role="button"]')).toBeNull();
   });
 
   it('the three-dots menu is the only direct row control', () => {

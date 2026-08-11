@@ -22,19 +22,17 @@ the whole interaction.
 
 ## Decision
 
-File click does nothing. All row interactions move to explicit,
-hover-revealed controls (also revealed on focus-within for keyboard users) on
-file rows of the chat-mode trees only:
+Every row interaction is explicit and named. A file row carries one
+hover-revealed `...` trigger (also revealed on focus-within, always visible on
+touch) holding the actions below, and clicking the row itself runs View.
 
-- `[+]` Add to chat (direct icon button): attach the file to the session
-  workbench, same behavior on both chat surfaces - `setWorkBenchFiles` plus a
-  success toast. On `/new` in the embedded surface, mint the session first via
-  `createSessionForFile` (existing double-click guard stays). With no session
-  and no minting callback (external-chat hosts), keep the existing guidance
-  toast.
-- `[x]` Remove from lake (direct icon button, confirm dialog): reuse
-  `useRemoveFileFromDataLake` and the Discover viewer's confirm copy (the file
-  leaves the lake but stays in Files and existing chats).
+- Add to chat: attach the file to the session workbench, same behavior on both
+  chat surfaces - `setWorkBenchFiles` plus a success toast. On `/new` in the
+  embedded surface, mint the session first via `createSessionForFile` (existing
+  double-click guard stays). With no session and no minting callback
+  (external-chat hosts), keep the existing guidance toast.
+- Remove: confirm dialog, then `useRemoveFileFromDataLake`, with the Discover
+  viewer's copy (the file leaves the lake but stays in Files and existing chats).
 - View: reopens the file where it always opened. On the chat-embedded host that is
   the KnowledgeViewer split (`setSessionLayout({ layout: 'vertical' })`), which
   builds its tabs from the session workbench - so View attaches the file too,
@@ -48,6 +46,17 @@ Revised after review of the first build, where View opened the in-rail reader on
 every surface: reading a lake file beside the chat is the behavior people already
 had, and losing it to gain attach-free viewing was the wrong trade. The bug being
 fixed is browsing mutating the chat, not viewing doing so.
+
+## Known tension
+
+Row click was dead in the first build, then wired to View, so on the embedded
+host a click attaches again - the very effect this change set out to remove. What
+survives is that nothing happens *silently*: the file opens in the viewer where
+the user can see it, instead of quietly joining the chat's files as it used to on
+the overlay. Closing the gap properly means teaching KnowledgeViewer to render a
+file that is not in the workbench (a preview tab), after which View - and so the
+row click - costs no attachment. Until then, Add to chat and View both write to
+the workbench and only Remove is side-effect-free.
 
 Out of scope: the `/data-lakes` page mode and the Discover modal tree keep
 their current behavior (neither auto-attaches). The premium overlay needs no

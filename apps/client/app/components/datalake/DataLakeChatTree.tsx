@@ -130,8 +130,14 @@ const ROW_ACTION_SX = {
   '--Icon-color': 'currentColor',
   '--variant-plainHoverBg': 'transparent',
   '--variant-plainActiveBg': 'transparent',
+  // Joy sizes an IconButton with min-width/min-height plus its own paddingInline, so the box
+  // grows past those minimums to fit the glyph. Pin the dimensions and drop the padding to get
+  // an exactly 20px square.
+  width: '20px',
+  height: '20px',
   minWidth: '20px',
   minHeight: '20px',
+  paddingInline: 0,
   color: 'text.tertiary',
   transition: 'color 0.3s',
   '&:hover': { backgroundColor: 'transparent', color: 'text.primary' },
@@ -337,33 +343,19 @@ export default function DataLakeChatTree({
       );
     },
     renderFileRow: (file, selected) => (
-      // The row Box owns the padding. Joy's ListItem always pads itself and relies on a
-      // ListItemButton child cancelling it with negative margins (--ListItemButton-marginInline);
-      // a plain Box has no such margin, so leaving this padding in place indents file rows twice
-      // as far as the folder rows above. The 4px right inset keeps the actions trigger off the
-      // rail's edge.
-      <ListItem key={file.id} sx={{ p: 0, pr: '4px' }}>
-        {/* Plain row, not a ListItemButton: row clicks are dead by design (auto-attach removal);
-            every action lives in the row's three-dots menu. The trigger reveals on hover/focus,
-            stays visible on touch (no-hover) devices, and pins while its menu is open (:has on
-            aria-expanded) so the anchor cannot fade under an open menu. */}
-        <Box
+      <ListItem key={file.id}>
+        {/* Clicking the row runs the View action - the same ListItemButton the folder rows use,
+            so the two lists share their geometry and hover treatment. The actions trigger
+            reveals on hover/focus, stays visible on touch (no-hover) devices, and pins while its
+            menu is open (:has on aria-expanded) so the anchor cannot fade under an open menu. */}
+        <ListItemButton
+          selected={selected}
+          onClick={() => onViewFile(file)}
           data-testid={`datalake-file-${file.id}`}
           sx={{
-            // Same row recipe as the folder rows above, plus the box a Joy ListItemButton makes
-            // for itself: the 1px transparent border and the padding read off Joy's own
-            // --ListItem vars. Without both, a file row's icon sits a pixel left of a folder
-            // row's and the two lists visibly fail to line up.
             ...treeRowSx(theme.palette.notebooklist.hoverBg),
-            display: 'flex',
-            alignItems: 'center',
-            width: '100%',
-            minWidth: 0,
-            border: '1px solid transparent',
-            paddingBlock: 'var(--ListItem-paddingY)',
-            paddingInline: 'var(--ListItem-paddingX)',
-            backgroundColor: selected ? theme.palette.notebooklist.hoverBg : undefined,
-            '&:hover': { backgroundColor: theme.palette.notebooklist.hoverBg },
+            // Tighter than the folder rows' 8px so the actions trigger sits closer to the edge.
+            paddingInlineEnd: '4px',
             '@media (hover: hover)': { '& .dl-row-actions': { opacity: 0 } },
             '&:hover .dl-row-actions, &:focus-within .dl-row-actions': { opacity: 1 },
             '&:has([aria-expanded="true"]) .dl-row-actions': { opacity: 1 },
@@ -372,14 +364,16 @@ export default function DataLakeChatTree({
           <ArticleOutlinedIcon
             sx={{ fontSize: 16, color: selected ? inkFor(HUES.cyan, isDark) : 'text.tertiary', flexShrink: 0 }}
           />
-          <Typography
-            noWrap
-            sx={{ flex: 1, minWidth: 0, fontSize: '14px', fontWeight: selected ? 'lg' : 400, color: 'text.primary' }}
-          >
-            {file.fileName.replace(/\.[^/.]+$/, '')}
-          </Typography>
+          <ListItemContent>
+            <Typography noWrap sx={{ fontSize: '14px', fontWeight: selected ? 'lg' : 400, color: 'text.primary' }}>
+              {file.fileName.replace(/\.[^/.]+$/, '')}
+            </Typography>
+          </ListItemContent>
+          {/* The row itself is the View action, so an actions click must not also fire it.
+              Caught here rather than on the trigger: MenuButton owns its own onClick. */}
           <Box
             className="dl-row-actions"
+            onClick={e => e.stopPropagation()}
             sx={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0, transition: 'opacity 0.15s' }}
           >
             <Dropdown>
@@ -442,7 +436,7 @@ export default function DataLakeChatTree({
               </Menu>
             </Dropdown>
           </Box>
-        </Box>
+        </ListItemButton>
       </ListItem>
     ),
     humanize: humanizeSegment,
@@ -452,8 +446,8 @@ export default function DataLakeChatTree({
   };
 
   return (
-    // Chat rows carry explicit actions instead of a click handler; TreeView still requires the
-    // callback for the page tree's sake, so it gets a no-op.
+    // The chrome's file rows wire their own onClick straight to onViewFile, so TreeView's
+    // per-row callback is unused here (it exists for the page tree) and gets a no-op.
     <DataLakeTreeView
       tree={tree}
       articles={articles}
