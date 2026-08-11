@@ -147,17 +147,26 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
   /** All connections for an org regardless of enabled status (admin/management views). */
   findByOrganizationIdAny(organizationId: string): Promise<IOrgGoogleDriveConnectionDocument[]>;
 
-  /** The enabled connection feeding a given lake, if any (excludes credentials). */
-  findByDataLakeId(targetDataLakeId: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
+  /**
+   * The enabled connection feeding a given lake in a given org, if any (excludes credentials).
+   * organizationId is REQUIRED so a missing tenant scope is a compile error, not a review catch.
+   */
+  findByDataLakeId(targetDataLakeId: string, organizationId: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
-  /** The connection that has claimed a given Drive folder, if any (for claim checks; excludes credentials). */
+  /**
+   * The connection that has claimed a given Drive folder, if any. Deliberately GLOBAL (no org
+   * filter) - it answers "is this folder already claimed by ANY org", which is the whole point of
+   * the global-unique index. SECURITY: server-side claim check only; the returned document (which
+   * excludes the credential) must never be handed to a cross-org caller.
+   */
   findByDriveFolderId(driveFolderId: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
   /**
-   * Load a connection WITH its encrypted credential.
+   * Load a connection WITH its encrypted credential, scoped to an org.
+   * organizationId is REQUIRED so this accessor cannot hand one org's Google credential to another.
    * SECURITY: server-side only; decrypt before use; never expose in a response.
    */
-  findByIdWithCredentials(id: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
+  findByIdWithCredentials(id: string, organizationId: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
   /** Update health state; clears `lastError` on a healthy update. */
   updateHealth(

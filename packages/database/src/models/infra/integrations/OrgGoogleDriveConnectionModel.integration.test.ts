@@ -43,8 +43,11 @@ describe('OrgGoogleDriveConnectionModel - credential handling', () => {
     expect(defaultRead).not.toBeNull();
     expect(defaultRead?.oauthRefreshToken).toBeUndefined();
 
-    const withCreds = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(created.id);
+    const withCreds = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(created.id, 'org-1');
     expect(withCreds?.oauthRefreshToken).toBe('enc-token');
+
+    // org-scoped: another org cannot load this connection's credential by id alone.
+    expect(await orgGoogleDriveConnectionRepository.findByIdWithCredentials(created.id, 'org-2')).toBeFalsy();
   });
 });
 
@@ -105,14 +108,16 @@ describe('OrgGoogleDriveConnectionModel - accessors', () => {
 
   it('findByDataLakeId and findByDriveFolderId resolve the connection', async () => {
     const created = await OrgGoogleDriveConnection.create(base);
-    expect((await orgGoogleDriveConnectionRepository.findByDataLakeId('lake-1'))?.id).toBe(created.id);
+    expect((await orgGoogleDriveConnectionRepository.findByDataLakeId('lake-1', 'org-1'))?.id).toBe(created.id);
     expect((await orgGoogleDriveConnectionRepository.findByDriveFolderId('folder-1'))?.id).toBe(created.id);
+    // org-scoped: a different org sees no connection for this lake.
+    expect(await orgGoogleDriveConnectionRepository.findByDataLakeId('lake-1', 'org-2')).toBeFalsy();
   });
 
   it('findByDataLakeId excludes a disabled connection', async () => {
     await OrgGoogleDriveConnection.create({ ...base, enabled: false });
     // BaseRepository.findOne resolves to undefined (not null) on no match - matches the sibling repos.
-    expect(await orgGoogleDriveConnectionRepository.findByDataLakeId('lake-1')).toBeFalsy();
+    expect(await orgGoogleDriveConnectionRepository.findByDataLakeId('lake-1', 'org-1')).toBeFalsy();
   });
 });
 
@@ -133,6 +138,18 @@ describe('OrgGoogleDriveConnectionModel - health + sync cursor', () => {
     });
     expect(recovered?.status).toBe('connected');
     expect(recovered?.lastError ?? null).toBeNull();
+  });
+
+  it('updateHealth redacts token-shaped fragments and truncates lastError', async () => {
+    const created = await OrgGoogleDriveConnection.create(base);
+    const raw = 'GET https://oauth2.googleapis.com/token?access_token=ya29.A0ARrdaM9longtokenfragmentxyz123 failed';
+    const updated = await orgGoogleDriveConnectionRepository.updateHealth(created.id, {
+      status: 'credential_error',
+      lastError: raw,
+    });
+    expect(updated?.lastError).toContain('[redacted]');
+    expect(updated?.lastError).not.toContain('ya29.A0ARrdaM9longtokenfragmentxyz123');
+    expect((updated?.lastError || '').length).toBeLessThanOrEqual(520);
   });
 
   it('updateSyncCursor advances the cursor and stamps lastPolledAt', async () => {

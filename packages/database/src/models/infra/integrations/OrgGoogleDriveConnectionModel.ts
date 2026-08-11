@@ -7,6 +7,19 @@ import {
 import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 
+const MAX_LAST_ERROR_LEN = 500;
+
+/**
+ * lastError is client-visible (a response-DTO member, no select:false) and its predictable writer is
+ * `lastError: err.message` from a provider (Gaxios) failure, which can carry URLs, query strings, or
+ * token fragments. Strip token-shaped runs and cap the length in this one writer so raw provider
+ * output can't leak into an admin-visible field.
+ */
+function redactLastError(message: string): string {
+  const redacted = message.replace(/[A-Za-z0-9._~+/=-]{24,}/g, '[redacted]');
+  return redacted.length > MAX_LAST_ERROR_LEN ? `${redacted.slice(0, MAX_LAST_ERROR_LEN)}...` : redacted;
+}
+
 /**
  * Organization-level Google Drive connection: binds one Drive folder to one data lake as an
  * ingest source. Org-owned credential (not the per-user User.googleDrive), following the
@@ -93,14 +106,20 @@ class OrgGoogleDriveConnectionRepository
     return this.find({ organizationId });
   }
 
-  /** The enabled connection feeding a given lake, if any. */
+  /** The enabled connection feeding a given lake in a given org, if any. */
   async findByDataLakeId(
-    targetDataLakeId: string
+    targetDataLakeId: string,
+    organizationId: string
   ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
-    return this.findOne({ targetDataLakeId, enabled: true });
+    return this.findOne({ targetDataLakeId, organizationId, enabled: true });
   }
 
-  /** The connection that has claimed a given Drive folder, if any (claim checks). */
+  /**
+   * The connection that has claimed a given Drive folder, if any. Deliberately GLOBAL - it answers
+   * "is this folder claimed by ANY org" (the point of the global-unique index). SECURITY: the
+   * returned document (which excludes the credential) is a server-side claim check; never hand it to
+   * a cross-org caller.
+   */
   async findByDriveFolderId(
     driveFolderId: string
   ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
@@ -108,11 +127,15 @@ class OrgGoogleDriveConnectionRepository
   }
 
   /**
-   * Load a connection WITH its encrypted credential.
-   * SECURITY: returns the encrypted `oauthRefreshToken`. Decrypt server-side only; never expose it.
+   * Load a connection WITH its encrypted credential, scoped to an org.
+   * SECURITY: org-scoped so it cannot hand one org's `oauthRefreshToken` to another. Decrypt
+   * server-side only; never expose it.
    */
-  async findByIdWithCredentials(id: string): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
-    const result = await this.model.findById(id).select('+oauthRefreshToken');
+  async findByIdWithCredentials(
+    id: string,
+    organizationId: string
+  ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
+    const result = await this.model.findOne({ _id: id, organizationId }).select('+oauthRefreshToken');
     return result?.toJSON() || null;
   }
 
@@ -124,8 +147,9 @@ class OrgGoogleDriveConnectionRepository
     const set: Record<string, unknown> = { status: update.status };
     if (update.lastUsedAt !== undefined) set.lastUsedAt = update.lastUsedAt;
     if (update.lastPolledAt !== undefined) set.lastPolledAt = update.lastPolledAt;
-    // Explicitly clear the error when none is supplied so a recovered connection doesn't keep a stale message.
-    set.lastError = update.lastError ?? null;
+    // Clear the error on a healthy update; redact + truncate otherwise (lastError is client-visible
+    // and its predictable caller is a raw provider err.message - see redactLastError).
+    set.lastError = update.lastError ? redactLastError(update.lastError) : null;
     return this.model.findByIdAndUpdate(id, { $set: set }, { new: true });
   }
 

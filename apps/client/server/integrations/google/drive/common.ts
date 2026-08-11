@@ -66,23 +66,35 @@ export async function getValidUserDriveAccessToken(userId: string): Promise<stri
   const isExpired = !expiresAt || dayjs().isAfter(dayjs(expiresAt));
   if (!isExpired && accessToken) return accessToken;
 
-  const refreshToken = decryptToken(rawRefresh);
-  if (!refreshToken) throw new BadRequestError('Google Drive refresh token missing - reconnect required');
+  // Same corrupt-credential shape as the cached access token: an undecryptable refresh token
+  // (post key-rotation / partial restore) must be a reconnect (400), not a bare Error -> 500.
+  let refreshToken: string | null = null;
+  try {
+    refreshToken = decryptToken(rawRefresh);
+  } catch {
+    refreshToken = null;
+  }
+  if (!refreshToken) throw new BadRequestError('Google Drive refresh token unreadable - reconnect required');
 
   const credentials = await refreshAccessToken(refreshToken);
   if (!credentials.access_token) throw new BadRequestError('Google Drive token refresh returned no access token');
 
-  await User.updateOne(
-    { _id: userId },
-    {
+  const update: { $set: Record<string, unknown>; $unset?: Record<string, 1> } = {
+    $set: {
       'googleDrive.accessToken': encryptToken(credentials.access_token)!,
       'googleDrive.refreshToken': credentials.refresh_token ? encryptToken(credentials.refresh_token)! : rawRefresh,
-      // null, not undefined: Mongoose strips undefined from $set, which would leave a stale
-      // (already-expired) expiresAt and force a re-refresh every call. null reads as "unknown" ->
-      // expired -> one refresh next time.
-      'googleDrive.expiresAt': credentials.expiry_date ? new Date(credentials.expiry_date) : null,
-    }
-  );
+    },
+  };
+  // expiresAt is `required` in the schema, so persisting null makes the whole googleDrive subdoc
+  // invalid and fails the NEXT user.save() anywhere (e.g. the websocket connect handler) - not here.
+  // $unset instead: an absent value reads as expired via the `!expiresAt` check above, preserving
+  // the "unknown -> refresh" intent without writing an invalid value.
+  if (credentials.expiry_date) {
+    update.$set['googleDrive.expiresAt'] = new Date(credentials.expiry_date);
+  } else {
+    update.$unset = { 'googleDrive.expiresAt': 1 };
+  }
+  await User.updateOne({ _id: userId }, update);
 
   return credentials.access_token;
 }

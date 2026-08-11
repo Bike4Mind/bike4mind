@@ -17,8 +17,9 @@ export function isValidDriveFolderId(id: unknown): id is string {
   return typeof id === 'string' && DRIVE_FOLDER_ID_PATTERN.test(id);
 }
 
-// Defensive cap: a folder shouldn't exceed this many pages of children, and an unbounded loop on a
-// pathological/looping pageToken would issue unlimited outbound Drive calls. 100 x pageSize(1000).
+// Page cap: bounds outbound Drive calls against a pathological/looping pageToken. Exceeding it
+// THROWS in listFolderChildren rather than truncating - a partial listing under a "the folder's
+// children" contract would silently drop files. 100 x pageSize(1000) = 100k children.
 const MAX_LIST_PAGES = 100;
 
 /**
@@ -72,7 +73,13 @@ export async function listFolderChildren(drive: drive_v3.Drive, folderId: string
 
     pageToken = res.data.nextPageToken ?? undefined;
     pages++;
-  } while (pageToken && pages < MAX_LIST_PAGES);
+    // Fail loudly rather than silently truncate: a partial answer under "the folder's children"
+    // would let ingest drop files while reporting success. Throwing forces the incremental design
+    // at the point it belongs (issue C).
+    if (pageToken && pages >= MAX_LIST_PAGES) {
+      throw new Error(`Drive folder ${folderId} exceeded ${MAX_LIST_PAGES} pages; listing is not exhaustive`);
+    }
+  } while (pageToken);
 
   return files;
 }
