@@ -222,6 +222,51 @@ describe('fetchOpenAISpend', () => {
     await expect(fetchOpenAISpend('bad-key', '2026-07')).rejects.toThrow('OpenAI API 403');
   });
 
+  it('paginates by advancing start_time past last bucket end_time', async () => {
+    mockFetch.mockReset();
+    const julyStart = Math.floor(new Date(Date.UTC(2026, 6, 1)).getTime() / 1000);
+    // Page 1: 31 buckets (hits the limit), end_time advances the cursor.
+    const page1Buckets = Array.from({ length: 31 }, (_, i) => ({
+      object: 'bucket',
+      start_time: julyStart + i * 86400,
+      end_time: julyStart + (i + 1) * 86400,
+      results: [{ amount: { value: 1.0, currency: 'usd' }, line_item: 'gpt-4o' }],
+    }));
+    // Page 2: fewer than 31 buckets, terminates.
+    const page2Buckets = [
+      {
+        object: 'bucket',
+        start_time: julyStart + 31 * 86400,
+        end_time: julyStart + 32 * 86400,
+        results: [{ amount: { value: 2.0, currency: 'usd' }, line_item: 'gpt-4o' }],
+      },
+    ];
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ data: page1Buckets }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ data: page2Buckets }) });
+
+    const result = await fetchOpenAISpend('sk-admin-test', '2026-07');
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    // Second call should have advanced start_time past last bucket of page 1.
+    const secondUrl = mockFetch.mock.calls[1][0] as string;
+    const lastPage1End = julyStart + 31 * 86400;
+    expect(secondUrl).toContain(`start_time=${lastPage1End}`);
+    // 31 * $1 + 1 * $2 = $33
+    expect(result!.providerUsd).toBeCloseTo(33);
+  });
+
+  it('throws when page limit is exceeded (missing end_time guard)', async () => {
+    mockFetch.mockReset();
+    // 31 buckets with no end_time would loop forever without the guard.
+    const stuckBuckets = Array.from({ length: 31 }, () => ({
+      results: [{ amount: { value: 0.01, currency: 'usd' }, line_item: 'test' }],
+    }));
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ data: stuckBuckets }) });
+
+    await expect(fetchOpenAISpend('sk-admin-test', '2026-07')).rejects.toThrow('exceeded');
+  });
+
   it('passes correct params including limit and bucket_width', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
@@ -233,7 +278,8 @@ describe('fetchOpenAISpend', () => {
     const lastCall = mockFetch.mock.calls[mockFetch.mock.calls.length - 1];
     const [url, opts] = lastCall;
     const expectedStart = Math.floor(new Date(Date.UTC(2026, 6, 1)).getTime() / 1000);
-    const expectedEnd = Math.floor(new Date(Date.UTC(2026, 7, 1)).getTime() / 1000);
+    // +1 second to include the final daily bucket (see monthToTimestampRange).
+    const expectedEnd = Math.floor(new Date(Date.UTC(2026, 7, 1)).getTime() / 1000) + 1;
     expect(url).toContain(`start_time=${expectedStart}`);
     expect(url).toContain(`end_time=${expectedEnd}`);
     expect(url).toContain('limit=31');

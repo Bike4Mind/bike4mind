@@ -3,8 +3,8 @@
  *
  * Each fetcher returns a total USD amount for the given month and an optional
  * per-key/per-model breakdown. When a provider's admin key is not configured
- * the fetcher returns null (skip, not error). A non-ok HTTP response also
- * returns null so the cron can distinguish "no data" from "provider says $X".
+ * the fetcher returns null (skip, not error). A non-ok HTTP response throws
+ * so the cron can skip the month without persisting a false $0 snapshot.
  */
 
 /** Per-request timeout for provider API calls (ms). */
@@ -115,8 +115,13 @@ export async function fetchOpenAISpend(adminApiKey: string, month: string): Prom
 
   // OpenAI only supports bucket_width=1d and limit defaults to 7. A month
   // has up to 31 days, so we paginate by advancing start_time past the last
-  // bucket we received.
+  // bucket we received. Guard against infinite loops from missing end_time.
+  const MAX_OPENAI_PAGES = 40;
+  let pages = 0;
   while (afterTs < endTs) {
+    if (++pages > MAX_OPENAI_PAGES) {
+      throw new Error(`OpenAI costs: exceeded ${MAX_OPENAI_PAGES} page limit (stuck cursor?)`);
+    }
     const url = new URL('https://api.openai.com/v1/organization/costs');
     url.searchParams.set('start_time', String(afterTs));
     url.searchParams.set('end_time', String(endTs));
@@ -177,7 +182,10 @@ interface OpenAICostsResponse {
 function monthToIsoRange(month: string): { startIso: string; endIso: string } {
   const [year, mo] = month.split('-').map(Number);
   const start = new Date(Date.UTC(year, mo - 1, 1));
-  const end = new Date(Date.UTC(year, mo, 1));
+  // Anthropic docs: "Time buckets that end before this timestamp will be returned."
+  // A daily bucket for the last day ends exactly at 00:00Z of the next month.
+  // Adding 1 second makes the boundary inclusive of that final bucket.
+  const end = new Date(Date.UTC(year, mo, 1, 0, 0, 1));
   return {
     startIso: start.toISOString(),
     endIso: end.toISOString(),
@@ -187,7 +195,9 @@ function monthToIsoRange(month: string): { startIso: string; endIso: string } {
 function monthToTimestampRange(month: string): { startTs: number; endTs: number } {
   const [year, mo] = month.split('-').map(Number);
   const startTs = Math.floor(new Date(Date.UTC(year, mo - 1, 1)).getTime() / 1000);
-  const endTs = Math.floor(new Date(Date.UTC(year, mo, 1)).getTime() / 1000);
+  // Same boundary reasoning as monthToIsoRange: +1 second to include the
+  // final daily bucket whose end_time equals midnight of the next month.
+  const endTs = Math.floor(new Date(Date.UTC(year, mo, 1)).getTime() / 1000) + 1;
   return { startTs, endTs };
 }
 

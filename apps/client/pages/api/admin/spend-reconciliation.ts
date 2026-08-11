@@ -6,7 +6,8 @@ import { ForbiddenError } from '@server/utils/errors';
  * Admin surface for provider spend reconciliation snapshots.
  *
  * GET ?view=latest  -> latest reconciliation per provider (banner data)
- * GET ?view=history -> all reconciliation snapshots (full table)
+ * GET ?view=summary -> newest row per (month, provider)
+ * GET ?view=history -> all snapshots, newest first (audit trail / drift)
  * GET (default)     -> latest per provider
  */
 const handler = baseApi().get(async (req, res) => {
@@ -15,6 +16,11 @@ const handler = baseApi().get(async (req, res) => {
   const view = req.query.view as string | undefined;
 
   if (view === 'history') {
+    const rows = await spendReconciliationRepository.fullHistory();
+    return res.json({ reconciliations: rows });
+  }
+
+  if (view === 'summary') {
     const rows = await spendReconciliationRepository.newestPerMonthProvider();
     return res.json({ reconciliations: rows });
   }

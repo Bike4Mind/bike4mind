@@ -64,6 +64,14 @@ export class SpendReconciliationRepository
     ]);
   }
 
+  async fullHistory(limit = 200): Promise<ISpendReconciliation[]> {
+    return this.model
+      .find({})
+      .sort({ month: -1, provider: 1, createdAt: -1 })
+      .limit(limit)
+      .lean<ISpendReconciliation[]>();
+  }
+
   async latestByProvider(): Promise<ISpendReconciliation[]> {
     // Newest single row per provider across all months.
     return this.model.aggregate<ISpendReconciliation>([

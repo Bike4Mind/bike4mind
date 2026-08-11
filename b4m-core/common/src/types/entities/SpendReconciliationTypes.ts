@@ -50,4 +50,7 @@ export interface ISpendReconciliationRepository extends IBaseRepository<ISpendRe
 
   /** Latest reconciliation per provider (most recent month only). */
   latestByProvider(): Promise<ISpendReconciliation[]>;
+
+  /** All snapshots, newest first. For audit trail / drift-over-time views. */
+  fullHistory(limit?: number): Promise<ISpendReconciliation[]>;
 }
