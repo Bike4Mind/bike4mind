@@ -581,11 +581,11 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
 
       // Session switch completed - files will be restored via useEffect
 
-      // Persist the newly opened notebook, fire-and-forget on purpose: it only feeds API chat
-      // routing (getSessionId in pages/api/chat.ts) and session resumption, the server rewrites
-      // it on the next message, and awaiting it would hold up the switch - so a failure logs
-      // rather than toasting on a path the user is actively navigating. The catch is
-      // load-bearing: updateUserToServer rejects on any non-2xx and the log is the only signal.
+      // Fire-and-forget on purpose: lastNotebookId feeds API chat routing (getSessionId in
+      // pages/api/chat.ts), session resumption, and Slack notebook resolution (notebook-manager
+      // in b4m-core/slack, which only ever reads it - a lost write is repaired by the next
+      // web-app message, never by a Slack one). Awaiting would hold up the switch, and a toast
+      // would interrupt a path the user is actively navigating.
       if (sessionId && currentUser.lastNotebookId !== sessionId) {
         updateUserToServer(currentUser.id, { lastNotebookId: sessionId }).catch(error => {
           console.error('[SessionsContext] Failed to persist lastNotebookId to server', error);
