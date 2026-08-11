@@ -75,7 +75,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ metrics, chartData }) 
                     cx="50%"
                     cy="50%"
                     outerRadius={100}
-                    label={entry => {
+                    label={(entry: PieLabelRenderProps) => {
                       const { category, count } = entry as PieLabelRenderProps & {
                         category: string;
                         count: number;

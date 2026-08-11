@@ -90,7 +90,7 @@ export const UsageBySourceCard: React.FC = () => {
                     cx="50%"
                     cy="50%"
                     outerRadius={90}
-                    label={entry => {
+                    label={(entry: PieLabelRenderProps) => {
                       const { source, uniqueUsers } = entry as PieLabelRenderProps & {
                         source: string;
                         uniqueUsers: number;

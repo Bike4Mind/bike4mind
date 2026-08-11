@@ -26,6 +26,7 @@ import {
   CartesianGrid,
   Tooltip,
   Legend,
+  type LegendProps,
   ResponsiveContainer,
   Cell,
 } from 'recharts';
@@ -239,7 +240,7 @@ const RechartsChart: React.FC<RechartsChartProps> = ({ config, title, descriptio
               {tooltip && <Tooltip />}
               {legend && (
                 <Legend
-                  content={({ payload }) => (
+                  content={({ payload }: LegendProps) => (
                     <div
                       style={{
                         display: 'flex',

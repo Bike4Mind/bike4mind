@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 
 import { FilePond, registerPlugin } from 'react-filepond';
+import type { ProcessServerConfigFunction } from 'filepond';
 
 import FilePondPluginFileValidateSize from 'filepond-plugin-file-validate-size';
 import 'filepond/dist/filepond.min.css';
@@ -86,31 +87,33 @@ const FilePondModal: React.FC<FilePondModalProps> = ({ onFileProcessComplete }) 
         '.xlsx',
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       ]}
-      server={{
-        process: (fieldName, file, metadata, load, error, progress, abort) => {
-          const reader = new FileReader();
-          reader.onload = async () => {
-            const data = {
-              type: KnowledgeType.FILE,
-              fileName: file.name,
-              mimeType: file.type,
-              fileSize: file.size,
-            };
+      server={
+        {
+          process: (fieldName, file, metadata, load, error, progress, abort) => {
+            const reader = new FileReader();
+            reader.onload = async () => {
+              const data = {
+                type: KnowledgeType.FILE,
+                fileName: file.name,
+                mimeType: file.type,
+                fileSize: file.size,
+              };
 
-            createFabFileOnServerWithUpload(data, file)
-              .then(async fabFile => {
-                onFileProcessComplete(fabFile);
-                load(fabFile.id);
-                toast.success('File uploaded successfully');
-              })
-              .catch(e => {
-                console.error(e);
-                error('Failed to upload file');
-              });
-          };
-          reader.readAsArrayBuffer(file);
-        },
-      }}
+              createFabFileOnServerWithUpload(data, file)
+                .then(async fabFile => {
+                  onFileProcessComplete(fabFile);
+                  load(fabFile.id);
+                  toast.success('File uploaded successfully');
+                })
+                .catch(e => {
+                  console.error(e);
+                  error('Failed to upload file');
+                });
+            };
+            reader.readAsArrayBuffer(file);
+          },
+        } as { process: ProcessServerConfigFunction }
+      }
       name="content"
       oninit={handleInit}
     />
