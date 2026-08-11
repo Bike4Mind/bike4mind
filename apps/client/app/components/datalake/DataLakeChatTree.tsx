@@ -337,7 +337,11 @@ export default function DataLakeChatTree({
       );
     },
     renderFileRow: (file, selected) => (
-      <ListItem key={file.id}>
+      // The row Box owns all of the padding. Joy's ListItem always pads itself and relies on a
+      // ListItemButton child cancelling it with negative margins (--ListItemButton-marginInline);
+      // a plain Box has no such margin, so leaving this padding in place indents file rows twice
+      // as far as the folder rows above.
+      <ListItem key={file.id} sx={{ p: 0 }}>
         {/* Plain row, not a ListItemButton: row clicks are dead by design (auto-attach removal);
             every action lives in the row's three-dots menu. The trigger reveals on hover/focus,
             stays visible on touch (no-hover) devices, and pins while its menu is open (:has on
