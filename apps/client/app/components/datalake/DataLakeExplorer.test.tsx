@@ -5,8 +5,9 @@ import { toast } from 'sonner';
 import { getThemeConfig } from '@client/app/utils/themes';
 import DataLakeExplorer from './DataLakeExplorer';
 
-// Chat-first mode opens a clicked file INLINE in the KnowledgeViewer by adding it to the
-// session workbench and switching layout to `vertical`. Spy on those two seams.
+// Browsing the tree must never mutate the chat: attach happens only via the explicit [+]
+// action, and nothing may touch the session layout. setSessionLayout is spied purely as a
+// regression guard - the suite asserts it is never called.
 const { setWorkBenchFiles, setSessionLayout, sessionState, removeFileMutate, lakesState } = vi.hoisted(() => ({
   setWorkBenchFiles: vi.fn(),
   setSessionLayout: vi.fn(),
@@ -174,7 +175,7 @@ describe('DataLakeExplorer chat-first surface', () => {
     renderExplorer();
     fireEvent.click(screen.getByTestId('mock-attach'));
     expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function));
-    expect(toastInfo).toHaveBeenCalled();
+    expect(toastSuccess).toHaveBeenCalled();
     expect(setSessionLayout).not.toHaveBeenCalled();
   });
 

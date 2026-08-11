@@ -168,7 +168,7 @@ export default function DataLakeExplorer({
         }
       }
       setWorkBenchFiles(sessionId, prev => (prev.some(f => f.id === file.id) ? prev : [...prev, file]));
-      toast.info(`Added "${file.fileName.replace(/\.[^/.]+$/, '')}" to the chat's files`);
+      toast.success(`Added "${file.fileName.replace(/\.[^/.]+$/, '')}" to the chat's files`);
     },
     [currentSessionId, setWorkBenchFiles, createSessionForFile]
   );
