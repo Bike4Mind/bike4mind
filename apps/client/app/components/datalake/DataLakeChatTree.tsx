@@ -100,6 +100,16 @@ const RowMenuItem = ({
     sx={itemTheme => ({
       ...menuRowSx(itemTheme, danger),
       '--variant-plainHoverBg': itemTheme.palette.notebooklist.hoverBg,
+      // Tighter than the profile menu's 40px: these rows sit in a 260px rail, not a full panel.
+      height: '36px',
+      // Joy drives row geometry from these vars, so pin them to the values above rather than
+      // relying on sx winning the cascade against Joy's own rule.
+      '--ListItem-paddingLeft': '10px',
+      '--ListItem-paddingRight': '10px',
+      '--ListItem-paddingY': '0px',
+      '--ListItem-minHeight': '36px',
+      '--ListItem-radius': '8px',
+      '--ListItem-gap': '12px',
     })}
   >
     <Box sx={MENU_ROW_ICON_SX}>{icon}</Box>
@@ -373,7 +383,17 @@ export default function DataLakeChatTree({
               <Menu
                 size="sm"
                 placement="bottom-end"
-                sx={menuTheme => ({ ...menuSurfaceSx(menuTheme), borderRadius: '8px', minWidth: 200, gap: '2px' })}
+                sx={menuTheme => ({
+                  ...menuSurfaceSx(menuTheme),
+                  borderRadius: '8px',
+                  minWidth: 200,
+                  // Joy's List vars, pinned for the same reason as the row's below: p:1 from the
+                  // shared recipe would otherwise fight --List-padding.
+                  '--List-padding': '8px',
+                  '--List-radius': '8px',
+                  '--List-gap': '2px',
+                  '--ListDivider-gap': '8px',
+                })}
               >
                 <RowMenuItem
                   testId={`datalake-attach-item-${file.id}`}
@@ -387,12 +407,12 @@ export default function DataLakeChatTree({
                   label="View"
                   onClick={() => onViewFile(file)}
                 />
-                {canDeleteFile(file) && <ListDivider sx={{ my: 1 }} />}
+                {canDeleteFile(file) && <ListDivider />}
                 {canDeleteFile(file) && (
                   <RowMenuItem
                     testId={`datalake-delete-item-${file.id}`}
                     icon={<DeleteOutlineIcon sx={{ fontSize: 18 }} />}
-                    label="Remove from lake"
+                    label="Remove"
                     onClick={() => onDeleteFile(file)}
                     danger
                   />

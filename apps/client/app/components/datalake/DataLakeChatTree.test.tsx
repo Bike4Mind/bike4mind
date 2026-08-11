@@ -62,7 +62,7 @@ describe('DataLakeChatTree file-row actions', () => {
     expect(onAttachFile).toHaveBeenCalledWith(expect.objectContaining({ id: 'f1' }));
   });
 
-  it('Remove from lake shows in the menu only when canDeleteFile allows, and calls onDeleteFile', () => {
+  it('Remove shows in the menu only when canDeleteFile allows, and calls onDeleteFile', () => {
     const onDeleteFile = vi.fn();
     renderTree({ onDeleteFile });
     fireEvent.click(screen.getByTestId('datalake-row-menu-btn-f1'));
@@ -70,7 +70,7 @@ describe('DataLakeChatTree file-row actions', () => {
     expect(onDeleteFile).toHaveBeenCalledWith(expect.objectContaining({ id: 'f1' }));
   });
 
-  it('hides the Remove from lake item when canDeleteFile returns false', () => {
+  it('hides the Remove item when canDeleteFile returns false', () => {
     renderTree({ canDeleteFile: () => false });
     fireEvent.click(screen.getByTestId('datalake-row-menu-btn-f1'));
     expect(screen.queryByTestId('datalake-delete-item-f1')).toBeNull();
