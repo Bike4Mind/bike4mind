@@ -195,7 +195,7 @@ export default function DataLakeChatTree({
         borderColor: isDark ? gray[800] : gray[200],
       }}
     >
-      <Box sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+      <Box sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '2px' }}>
         <Typography noWrap sx={{ fontSize: '14px', fontWeight: 300, color: 'text.primary' }}>
           {title}
         </Typography>
