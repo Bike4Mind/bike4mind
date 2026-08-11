@@ -183,7 +183,6 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
 
   const toggleLakeMembership = async (file: IFabFileDocument, tag: string): Promise<void> => {
     const lake = await resolveLake(tag);
-    touchedLakes.set(lake.id, lake);
     // Direction is decided on an EXACT match of the lake's canonical meta-tag - the same test
     // removeFileFromLake applies, so the two cannot disagree about which way to go. Two
     // consequences, both deliberate: a file carrying only the lake's prefixed tag gains the
@@ -192,16 +191,27 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
     // stamped.
     const isMember = storedTagNames(file).includes(lake.datalakeTag);
     if (!isMember) {
+      // Touched only once the write actually lands: addFileToLake's manage-rights gate throws
+      // before any write, and a rejected join must not still trigger recomputeLakeStats's
+      // activateIfDraft side effect on a lake this actor cannot manage - the same treatment the
+      // prefix-arm join below already gets.
       await addFileToLake(actor, lake, file.id, { db });
+      touchedLakes.set(lake.id, lake);
       return;
     }
     try {
       await removeFileFromLake(actor, lake, file.id, { db });
     } catch (error) {
       // A concurrent removal landing between the read above and this write leaves nothing to
-      // remove, which is the state the caller asked for anyway.
-      if (!(error instanceof NotFoundError)) throw error;
+      // remove, which is the state the caller asked for anyway - still worth a recompute, unlike
+      // an actual gate rejection, which throws below without ever reaching this line.
+      if (error instanceof NotFoundError) {
+        touchedLakes.set(lake.id, lake);
+        return;
+      }
+      throw error;
     }
+    touchedLakes.set(lake.id, lake);
   };
 
   const toggleOrdinaryTag = async (file: IFabFileDocument, tag: string): Promise<void> => {

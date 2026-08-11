@@ -253,6 +253,21 @@ describe('toggleTags - data lake meta-tags', () => {
 
     await expect(run(adapters, { ids: ['f1'], tags: ['datalake:lake'] })).rejects.toThrow(/only the creator/i);
     expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
+    // A rejected join must not still trigger recomputeLakeStats - that would let a mere file-share
+    // recipient force-publish a draft lake they have no relationship to via activateIfDraft.
+    expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+    expect(adapters.db.dataLakes.activateIfDraft).not.toHaveBeenCalled();
+  });
+
+  it('refuses to leave a lake the caller cannot manage, without recomputing stats', async () => {
+    const adapters = makeAdapters(
+      [file('f1', [{ name: 'datalake:lake', strength: 1 }])],
+      lake({ createdByUserId: 'someone-else' })
+    );
+
+    await expect(run(adapters, { ids: ['f1'], tags: ['datalake:lake'] })).rejects.toThrow(/only the creator/i);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+    expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
   });
 
   it('treats a concurrent removal as the outcome the caller asked for', async () => {
