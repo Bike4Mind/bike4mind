@@ -2,14 +2,10 @@ import {
   Box,
   Button,
   Chip,
-  Dropdown,
   IconButton,
   ListItem,
   ListItemButton,
   ListItemContent,
-  Menu,
-  MenuButton,
-  MenuItem,
   Tooltip,
   Typography,
   useTheme,
@@ -21,17 +17,12 @@ import AttachFileIcon from '@mui/icons-material/AttachFile';
 import CloseIcon from '@mui/icons-material/Close';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
-import MoreVertIcon from '@mui/icons-material/MoreVert';
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import { HEADER_ICON_BUTTON_SX } from '@client/app/components/Session/AISettings/headerIconButtonSx';
-import {
-  MENU_ROW_ICON_SX,
-  menuRowSx,
-  menuSurfaceSx,
-} from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 import type { TagNode } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import DataLakeTreeView, { type DataLakeTreeChrome } from './DataLakeTreeView';
 import TreeRowLabel from './TreeRowLabel';
+import { RowActionsMenu, RowMenuItem } from './rowActionsMenu';
 import { inkFor } from '@client/app/components/datalake/deckChrome';
 import {
   COUNT_CHIP_SX,
@@ -75,86 +66,6 @@ interface DataLakeChatTreeProps {
   /** Header close (X) button - turns Data Lake mode off for this chat. */
   onClose?: () => void;
 }
-
-/** Icon frame for this menu's rows - tighter than the profile menu's 22px to suit 28px rows. */
-const MENU_ICON_FRAME_SX = { ...MENU_ROW_ICON_SX, width: 20, height: 20 } as const;
-
-/**
- * One item in a file row's action menu, styled like the profile menu's rows. Joy MenuItem
- * needs --variant-plainHoverBg pointed at the hover colour too, or its own variant rule wins
- * over the shared recipe's `&:hover`.
- */
-const RowMenuItem = ({
-  testId,
-  icon,
-  label,
-  onClick,
-  danger,
-}: {
-  testId: string;
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-  danger?: boolean;
-}) => (
-  <MenuItem
-    // Joy's own danger palette, so the destructive row picks up its text, icon and hover tint
-    // rather than only the shared recipe's colour.
-    color={danger ? 'danger' : 'neutral'}
-    data-testid={testId}
-    onClick={onClick}
-    sx={itemTheme => ({
-      ...menuRowSx(itemTheme, danger),
-      // Take the destructive colour from Joy's danger plain variant, exactly as the sidebar's
-      // session Delete item does - the shared recipe's hardcoded danger[500] is a different red.
-      ...(danger && { color: itemTheme.palette.danger.plainColor, '--Icon-color': 'currentColor' }),
-      '--variant-plainHoverBg': danger ? itemTheme.palette.danger.plainHoverBg : itemTheme.palette.notebooklist.hoverBg,
-      // Tighter than the profile menu's 40px/10px: this menu hangs off a row in a 260px rail.
-      // Both of these override a direct declaration in the shared recipe, so they must be set
-      // here as declarations too - the Joy vars below alone would lose to it.
-      height: '32px',
-      px: '4px',
-      gap: '8px',
-      // Joy drives row geometry from these vars, so pin them to the values above rather than
-      // relying on sx winning the cascade against Joy's own rule.
-      '--ListItem-paddingLeft': '4px',
-      '--ListItem-paddingRight': '4px',
-      '--ListItem-paddingY': '0px',
-      '--ListItem-minHeight': '32px',
-      '--ListItem-radius': '8px',
-      '--ListItem-gap': '8px',
-    })}
-  >
-    <Box sx={MENU_ICON_FRAME_SX}>{icon}</Box>
-    <Typography level="body-sm" noWrap sx={{ flex: 1, color: 'inherit', fontSize: '14px', fontWeight: 400 }}>
-      {label}
-    </Typography>
-  </MenuItem>
-);
-
-/**
- * The row's three-dots trigger: compact for a 260px rail, and frameless like the tree header's
- * own icon buttons (HEADER_ICON_BUTTON_SX) - only the icon brightens, no ground appears under
- * it. The variant vars are zeroed because Joy paints hover/active fills from them, and a filled
- * square inside an already-highlighted row reads as a second, competing surface.
- */
-const ROW_ACTION_SX = {
-  '--IconButton-size': '20px',
-  '--Icon-color': 'currentColor',
-  '--variant-plainHoverBg': 'transparent',
-  '--variant-plainActiveBg': 'transparent',
-  // Joy sizes an IconButton with min-width/min-height plus its own paddingInline, so the box
-  // grows past those minimums to fit the glyph. Pin the dimensions and drop the padding to get
-  // an exactly 20px square.
-  width: '20px',
-  height: '20px',
-  minWidth: '20px',
-  minHeight: '20px',
-  paddingInline: 0,
-  color: 'text.tertiary',
-  transition: 'color 0.3s',
-  '&:hover': { backgroundColor: 'transparent', color: 'text.primary' },
-} as const;
 
 /**
  * Chat-embedded Data Lake tree: a rounded sidenav-style card with its own header (title + info +
@@ -406,63 +317,29 @@ export default function DataLakeChatTree({
             onClick={e => e.stopPropagation()}
             sx={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0, transition: 'opacity 0.15s' }}
           >
-            <Dropdown>
-              {/* variant/color go on the MenuButton itself, not only on the IconButton slot:
-                  MenuButton emits its OWN variant class, and its 'outlined' default would
-                  paint a border and a hover fill over the plain slot underneath. */}
-              <MenuButton
-                variant="plain"
-                color="neutral"
-                size="sm"
-                slots={{ root: IconButton }}
-                slotProps={{
-                  root: {
-                    'aria-label': 'File actions',
-                    'data-testid': `datalake-row-menu-btn-${file.id}`,
-                    sx: ROW_ACTION_SX,
-                  },
-                }}
-              >
-                <MoreVertIcon sx={{ fontSize: 16 }} />
-              </MenuButton>
-              {/* Same floating-surface + row recipe as the profile menu (menuSurfaceSx). */}
-              <Menu
-                size="sm"
-                placement="bottom-end"
-                sx={menuTheme => ({
-                  ...menuSurfaceSx(menuTheme),
-                  borderRadius: '8px',
-                  minWidth: 180,
-                  // Joy's List vars, pinned for the same reason as the row's below: p:1 from the
-                  // shared recipe would otherwise fight --List-padding.
-                  '--List-padding': '8px',
-                  '--List-radius': '8px',
-                  '--List-gap': '2px',
-                })}
-              >
+            <RowActionsMenu testId={`datalake-row-menu-btn-${file.id}`} ariaLabel="File actions">
+              <RowMenuItem
+                testId={`datalake-attach-item-${file.id}`}
+                icon={<AttachFileIcon sx={{ fontSize: 16 }} />}
+                label="Attach to chat"
+                onClick={() => onAttachFile(file)}
+              />
+              <RowMenuItem
+                testId={`datalake-view-item-${file.id}`}
+                icon={<VisibilityOutlinedIcon sx={{ fontSize: 16 }} />}
+                label="View"
+                onClick={() => onViewFile(file)}
+              />
+              {canDeleteFile(file) && (
                 <RowMenuItem
-                  testId={`datalake-attach-item-${file.id}`}
-                  icon={<AttachFileIcon sx={{ fontSize: 16 }} />}
-                  label="Attach to chat"
-                  onClick={() => onAttachFile(file)}
+                  testId={`datalake-delete-item-${file.id}`}
+                  icon={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
+                  label="Remove"
+                  onClick={() => onDeleteFile(file)}
+                  danger
                 />
-                <RowMenuItem
-                  testId={`datalake-view-item-${file.id}`}
-                  icon={<VisibilityOutlinedIcon sx={{ fontSize: 16 }} />}
-                  label="View"
-                  onClick={() => onViewFile(file)}
-                />
-                {canDeleteFile(file) && (
-                  <RowMenuItem
-                    testId={`datalake-delete-item-${file.id}`}
-                    icon={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
-                    label="Remove"
-                    onClick={() => onDeleteFile(file)}
-                    danger
-                  />
-                )}
-              </Menu>
-            </Dropdown>
+              )}
+            </RowActionsMenu>
           </Box>
         </ListItemButton>
       </ListItem>

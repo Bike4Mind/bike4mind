@@ -68,6 +68,7 @@ import {
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import DataLakeEmptyState from '@client/app/components/datalake/DataLakeEmptyState';
+import { RowActionsMenu, RowMenuItem } from '@client/app/components/datalake/rowActionsMenu';
 import DataLakeArticlePanel from './DataLakeArticlePanel';
 import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
 import { DataLakeSettingsModal } from './DataLakeSettingsModal';
@@ -621,30 +622,19 @@ function ManagerNav({
               hoverBg={hoverBg}
               renderActions={lake => (
                 <>
-                  <Tooltip title="Restore" size="sm">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="success"
-                      data-testid={`datalake-restore-btn-${lake.id}`}
-                      onClick={() => unarchiveLake.mutate(lake.id)}
-                      sx={{ '--IconButton-size': '24px' }}
-                    >
-                      <UnarchiveOutlinedIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title="Delete (recoverable)" size="sm">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="danger"
-                      data-testid={`datalake-delete-btn-${lake.id}`}
-                      onClick={() => deleteLake.mutate(lake.id)}
-                      sx={{ '--IconButton-size': '24px' }}
-                    >
-                      <DeleteOutlineIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
+                  <RowMenuItem
+                    testId={`datalake-restore-btn-${lake.id}`}
+                    icon={<UnarchiveOutlinedIcon sx={{ fontSize: 16 }} />}
+                    label="Restore"
+                    onClick={() => unarchiveLake.mutate(lake.id)}
+                  />
+                  <RowMenuItem
+                    testId={`datalake-delete-btn-${lake.id}`}
+                    icon={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
+                    label="Delete"
+                    onClick={() => deleteLake.mutate(lake.id)}
+                    danger
+                  />
                 </>
               )}
             />
@@ -660,30 +650,19 @@ function ManagerNav({
               hoverBg={hoverBg}
               renderActions={lake => (
                 <>
-                  <Tooltip title="Restore" size="sm">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="success"
-                      data-testid={`datalake-restore-deleted-btn-${lake.id}`}
-                      onClick={() => restoreDeletedLake.mutate(lake.id)}
-                      sx={{ '--IconButton-size': '24px' }}
-                    >
-                      <RestoreIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title="Purge permanently" size="sm">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="danger"
-                      data-testid={`datalake-purge-btn-${lake.id}`}
-                      onClick={() => setPurgeTarget({ id: lake.id, name: lake.name })}
-                      sx={{ '--IconButton-size': '24px' }}
-                    >
-                      <DeleteForeverIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
+                  <RowMenuItem
+                    testId={`datalake-restore-deleted-btn-${lake.id}`}
+                    icon={<RestoreIcon sx={{ fontSize: 16 }} />}
+                    label="Restore"
+                    onClick={() => restoreDeletedLake.mutate(lake.id)}
+                  />
+                  <RowMenuItem
+                    testId={`datalake-purge-btn-${lake.id}`}
+                    icon={<DeleteForeverIcon sx={{ fontSize: 16 }} />}
+                    label="Purge permanently"
+                    onClick={() => setPurgeTarget({ id: lake.id, name: lake.name })}
+                    danger
+                  />
                 </>
               )}
             />
@@ -994,7 +973,6 @@ function NavLifecycleSection({
                     display: 'flex',
                     alignItems: 'center',
                     gap: '8px',
-                    px: '8px',
                     minHeight: '28px',
                     width: '100%',
                   }}
@@ -1006,7 +984,11 @@ function NavLifecycleSection({
                   >
                     {lake.name}
                   </Typography>
-                  {renderActions(lake)}
+                  {/* Folded behind one trigger, sharing the tree's row-menu recipe, so a lifecycle
+                      row reads the same as a file row instead of exposing two coloured buttons. */}
+                  <RowActionsMenu testId={`${testid}-menu-btn-${lake.id}`} ariaLabel={`${label} lake actions`}>
+                    {renderActions(lake)}
+                  </RowActionsMenu>
                 </Box>
               </ListItem>
             ))}
