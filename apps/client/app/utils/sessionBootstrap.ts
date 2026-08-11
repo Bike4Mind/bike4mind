@@ -99,6 +99,12 @@ export function shouldRevalidateOnFocus(params: {
  *  coincides with a WebsocketContext close-probe fires one authed round trip, not two. */
 let probeInFlight = false;
 
+/** Drop a stuck in-flight flag (a test left its promise unsettled). Mirrors resetRefreshPromise
+ *  in ApiContext.tsx for the same guard shape. */
+export function resetProbeGuardForTests(): void {
+  probeInFlight = false;
+}
+
 /**
  * Liveness probe shared by revalidateSessionOnFocus (below) and WebsocketContext's
  * close-probe. Refetches the `['identify']` query directly - rather than a bare

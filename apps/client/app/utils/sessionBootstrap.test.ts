@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { QueryClient } from '@tanstack/react-query';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
-import { shouldRevalidateOnFocus, revalidateSessionOnFocus, probeIdentity } from './sessionBootstrap';
+import {
+  shouldRevalidateOnFocus,
+  revalidateSessionOnFocus,
+  probeIdentity,
+  resetProbeGuardForTests,
+} from './sessionBootstrap';
 
 /** A macrotask flush - long enough for a settled promise's .catch().finally() chain to run. */
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -44,6 +49,10 @@ describe('shouldRevalidateOnFocus - refocus liveness-check gate', () => {
 });
 
 describe('probeIdentity - shared single-flight liveness probe', () => {
+  beforeEach(() => {
+    resetProbeGuardForTests();
+  });
+
   it('refetches the identify query through the shared query client', async () => {
     const refetchQueries = vi.fn().mockResolvedValue(undefined);
 
@@ -80,6 +89,7 @@ describe('probeIdentity - shared single-flight liveness probe', () => {
 
 describe('revalidateSessionOnFocus - guard gating the shared probe', () => {
   beforeEach(() => {
+    resetProbeGuardForTests();
     useAccessToken.setState({
       accessToken: 'tok',
       refreshToken: 'refresh',
