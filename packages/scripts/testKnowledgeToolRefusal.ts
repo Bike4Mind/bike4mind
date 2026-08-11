@@ -5,19 +5,26 @@
  * Uploads a small file with a unique canary fact, attaches it to a BRAND-NEW session
  * (mirroring session.knowledgeIds, the field the auto-offer gate reads), and asks about it
  * in the same request before the file has finished chunking. Before the fix, a tool-eager
- * model (GPT-4) would call search_knowledge_base/retrieve_knowledge_content, get a
- * zero-content reply, and refuse - discarding the file's raw content that was already
- * inlined into the same prompt. Llama-on-Bedrock cannot call tools at all
- * (LlamaBedrockBackend.formatTools throws), so it is a CONTROL arm proving inline delivery
- * still works, NOT evidence the gating fix works - do not read a green Llama column as proof.
+ * model would call search_knowledge_base/retrieve_knowledge_content, get a zero-content
+ * reply, and refuse - discarding the file's raw content that was already inlined into the
+ * same prompt. Llama-on-Bedrock cannot call tools at all (LlamaBedrockBackend.formatTools
+ * throws), so it is a CONTROL arm proving inline delivery still works, NOT evidence the
+ * gating fix works - do not read a green Llama column as proof.
  *
  * Deterministic proof, independent of any model's mood: GET /api/quests/{id} afterward and
  * assert promptMeta.offeredTools does NOT contain search_knowledge_base while the file was
  * still unvectorized. That is the live-HTTP signal the gating fix actually landed.
  *
+ * The treatment arm must be a model whose CURRENT catalog entry on the target stage has
+ * supportsTools: true, or the request never reaches the tool-offer code at all and the run
+ * proves nothing - GET /api/models (with a valid token) to check. The catalog moves: a bare
+ * "gpt-4" id can flip to supportsTools:false on a stage as newer variants (e.g. gpt-4o)
+ * become the tool-capable default. Verify the id on the target stage before trusting the
+ * default below.
+ *
  * Usage:
  *   pnpm --filter @bike4mind/scripts test:kb-refusal \
- *     -- --base-url=https://app.pr<N>.preview.bike4mind.com --trials=10 --arms=gpt-4,meta.llama3-70b-instruct-v1:0
+ *     -- --base-url=https://app.pr<N>.preview.bike4mind.com --trials=10 --arms=gpt-4o,meta.llama3-70b-instruct-v1:0
  *
  * Add --search-my-files to also run one "search my files for..." phrased trial per arm,
  * exercising the tool-recommender bypass path (a caller-requested tool survives the
@@ -25,7 +32,10 @@
  *
  * Auth: mints a throwaway test user via /api/test/create-user by default - set E2E_CLEANUP_SECRET
  * for the target env. Pass --auth=otc on a PR preview instead: /api/test/create-user 500s there
- * (a stage-config fault), so that mode logs in as the pre-seeded qa-admin-e2e@test.com via OTC.
+ * (a stage-config fault), so that mode logs in as the pre-seeded qa-admin-e2e@test.com via OTC,
+ * caching that one login across every trial in the run - /api/otc/verify is rate-limited to 10
+ * calls per 15 minutes per IP, shared with any other otc/verify traffic from the same egress IP
+ * (including manual debugging), so a fresh OTC login per trial exhausts it almost immediately.
  * Prerequisites (verify on the target stage, do not assume):
  *   - the `openaiDemoKey` admin setting is populated - OPENAI_API_KEY env is ignored unless
  *     B4M_SELF_HOST=true, so a plain env var is a no-op on any hosted SST stage.
@@ -59,7 +69,7 @@ function parseArgs(): CliArgs {
   }
   const baseUrl = (flags['base-url'] ?? process.env.BASE_URL ?? '').replace(/\/$/, '');
   if (!baseUrl) throw new Error('--base-url=<url> or BASE_URL env is required');
-  const arms = (flags.arms ?? process.env.ARMS ?? 'gpt-4,meta.llama3-70b-instruct-v1:0')
+  const arms = (flags.arms ?? process.env.ARMS ?? 'gpt-4o,meta.llama3-70b-instruct-v1:0')
     .split(',')
     .map(s => s.trim())
     .filter(Boolean);
@@ -151,8 +161,17 @@ async function loginViaOtc(baseUrl: string, email = 'qa-admin-e2e@test.com'): Pr
   return { token: verifyResponse.accessToken };
 }
 
+// OTC logs in as the one pre-seeded qa-admin account (create-user mode mints a fresh user per
+// call instead), and /api/otc/send is rate-limited per account - minting a fresh OTC login per
+// trial exhausts it after roughly ten calls. Cache and reuse the one OTC token across the whole
+// run; each trial still gets its own fresh file and session, which is what "brand-new notebook"
+// actually requires.
+let cachedOtcToken: string | undefined;
+
 async function login(baseUrl: string, label: string, auth: 'create-user' | 'otc'): Promise<{ token: string }> {
-  return auth === 'otc' ? loginViaOtc(baseUrl) : loginViaCreateUser(baseUrl, label);
+  if (auth === 'create-user') return loginViaCreateUser(baseUrl, label);
+  if (!cachedOtcToken) cachedOtcToken = (await loginViaOtc(baseUrl)).token;
+  return { token: cachedOtcToken };
 }
 
 // Normalizes to NFKC and strips invisible Unicode chars before matching - innerText/model
@@ -176,10 +195,19 @@ interface FileResult {
   canary: string;
 }
 
+// A one-line fixture chunks and vectorizes fast enough on a low-traffic preview to often finish
+// inside this script's own upload-to-ask round trip, closing the very race this test exists to
+// exercise. Padding to multiple chunks' worth of filler text buys enough embedding time that the
+// precondition/post-check reliably observes the file still unvectorized.
+const FILLER_PARAGRAPH =
+  'This section of the calibration manual is boilerplate padding included only to extend ' +
+  'document length for internal processing benchmarks and carries no operational meaning. ';
+
 async function createUnvectorizedFile(baseUrl: string, token: string, runId: string, n: number): Promise<FileResult> {
   const canaryValue = Math.floor(1000 + Math.random() * 9000);
   const canary = `${canaryValue}`;
-  const content = `Zephyr Protocol - internal calibration record.\nThe calibration constant for unit QX-9 is ${canary}.\n`;
+  const filler = FILLER_PARAGRAPH.repeat(400);
+  const content = `Zephyr Protocol - internal calibration record.\nThe calibration constant for unit QX-9 is ${canary}.\n${filler}\n`;
   const body = await httpJson<{ id?: string; _id?: string }>(baseUrl, '/api/files/createFabFile', {
     method: 'POST',
     token,
@@ -197,9 +225,13 @@ async function createUnvectorizedFile(baseUrl: string, token: string, runId: str
 }
 
 async function isFileVectorized(baseUrl: string, token: string, fileId: string): Promise<boolean> {
+  // The real frontend serializes array query params via qs.stringify(params, { arrayFormat:
+  // 'brackets' }) (see ApiContext.tsx), which percent-encodes the key to ids%5B%5D=<id>. A
+  // literal, unencoded ids[]=<id> is rejected upstream of the route handler (no application log
+  // line at all) - percent-encode the key, not just the value.
   const results = await httpJson<Array<{ id?: string; _id?: string; vectorized?: boolean }>>(
     baseUrl,
-    `/api/files/byIds?ids[]=${encodeURIComponent(fileId)}`,
+    `/api/files/byIds?${encodeURIComponent('ids[]')}=${encodeURIComponent(fileId)}`,
     { token }
   );
   const file = results.find(f => (f.id ?? f._id) === fileId);
@@ -235,19 +267,34 @@ async function askInSameRequest(
   message: string,
   timeoutMs: number
 ): Promise<ChatResult> {
-  const body = await httpJson<{ id?: string; response?: string; tracking_info?: { quest_id?: string } }>(
-    baseUrl,
-    '/api/chat',
-    {
-      method: 'POST',
-      token,
-      body: JSON.stringify({ sessionId, model, message, wait: true, enableTools: true }),
-      signal: AbortSignal.timeout(timeoutMs),
-    }
-  );
+  const body = await httpJson<{
+    id?: string;
+    response?: string | null;
+    responses?: string[];
+    tracking_info?: { quest_id?: string };
+  }>(baseUrl, '/api/chat', {
+    method: 'POST',
+    token,
+    // QuestMaster (enabled by default on this route) turns a plain factual question into a
+    // multi-step plan document instead of answering it directly - unrelated to the knowledge
+    // tool this script tests, and it swallows the reply entirely (quest completes with
+    // response: null). Disable it so the request exercises a normal chat turn.
+    body: JSON.stringify({
+      sessionId,
+      model,
+      message,
+      wait: true,
+      enableTools: true,
+      enableQuestMaster: false,
+    }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
   const questId = body.tracking_info?.quest_id ?? body.id;
   if (!questId) throw new Error('chat response missing quest id');
-  return { questId, response: body.response ?? '' };
+  // The singular `response` field can be null even when the turn produced real content - the
+  // plural `responses` array is the reliable source; fall back to joining it.
+  const response = body.response ?? body.responses?.join('\n') ?? '';
+  return { questId, response };
 }
 
 async function getOfferedTools(baseUrl: string, token: string, questId: string): Promise<string[]> {
@@ -307,6 +354,28 @@ async function runTrial(
 
   const { questId, response } = await askInSameRequest(args.baseUrl, token, sessionId, model, message, args.timeoutMs);
   const offeredTools = await getOfferedTools(args.baseUrl, token, questId);
+
+  // The offer is evaluated live inside the chat request, which is one HTTP round trip (plus
+  // session creation) after the precondition check above - long enough for a tiny fixture file
+  // to finish chunking in the interim. If that happened, offering search_knowledge_base is the
+  // CORRECT behavior (the file really is indexed by then), not a gate violation - re-check and
+  // reclassify as INVALID rather than let a benign race masquerade as a gating bug.
+  if (
+    phrasing === 'plain' &&
+    offeredTools.includes('search_knowledge_base') &&
+    (await isFileVectorized(args.baseUrl, token, file.fileId))
+  ) {
+    return {
+      n,
+      model,
+      phrasing,
+      offeredTools,
+      refusalMatched: false,
+      canaryFound: false,
+      verdict: 'INVALID',
+      note: 'file finished vectorizing during the request (race, not a gate violation)',
+    };
+  }
 
   const normalized = normalizeForMatch(response);
   const refusalMatched = REFUSAL_PATTERN.test(normalized);
@@ -370,9 +439,13 @@ async function main(): Promise<void> {
     armResults[model] = trials;
   }
 
-  // Deterministic pass criterion, independent of any model's mood: zero trials show
-  // search_knowledge_base offered while the file was genuinely unvectorized (INVALID trials
-  // are excluded - the precondition already failed there, so the gate was never exercised).
+  // Deterministic pass criterion, independent of any model's mood: zero PLAIN trials show
+  // search_knowledge_base offered while the file was genuinely unvectorized (INVALID trials are
+  // excluded - the precondition already failed there, or the file finished vectorizing mid-
+  // request, so the gate was never meaningfully exercised). The search-my-files phrasing is
+  // excluded from this count on purpose: the tool-recommender bypass means an explicit request
+  // legitimately survives the auto-offer gate (Milestone 2 covers that path with wording, not
+  // withholding), so an offer there is expected, not a violation.
   let anyGateViolation = false;
   const summary: Array<{ model: string; pass: number; fail: number; invalid: number; gateViolations: number }> = [];
   for (const [model, trials] of Object.entries(armResults)) {
@@ -380,7 +453,9 @@ async function main(): Promise<void> {
     const pass = valid.filter(t => t.verdict === 'PASS').length;
     const fail = valid.filter(t => t.verdict === 'FAIL').length;
     const invalid = trials.length - valid.length;
-    const gateViolations = valid.filter(t => t.offeredTools.includes('search_knowledge_base')).length;
+    const gateViolations = valid.filter(
+      t => t.phrasing === 'plain' && t.offeredTools.includes('search_knowledge_base')
+    ).length;
     if (gateViolations > 0) anyGateViolation = true;
     summary.push({ model, pass, fail, invalid, gateViolations });
   }
@@ -391,7 +466,7 @@ async function main(): Promise<void> {
     console.error('FAIL: search_knowledge_base was offered on at least one trial while the file was unvectorized.');
   }
   for (const row of summary) {
-    if (row.invalid >= 3) {
+    if (row.invalid >= 3 && !row.model.toLowerCase().includes('llama')) {
       console.error(`FAIL: ${row.model} had ${row.invalid} invalid trials (>= 3) - run is inconclusive, not green.`);
     }
   }
@@ -405,9 +480,12 @@ async function main(): Promise<void> {
   // the moment --trials is anything other than 10.
   const hardFail =
     anyGateViolation ||
-    summary.some(r => r.invalid / Math.max(1, r.pass + r.fail + r.invalid) >= 0.3) ||
-    // Llama arms are a control (cannot call tools) - do not gate exit status on their pass
-    // rate; only fail on a tool-capable arm's pass rate.
+    // Llama arms are a control (cannot call tools) - they only prove raw-content delivery still
+    // works, not the auto-offer gate, so neither their pass rate nor their invalid rate (a
+    // vectorization race that never touches the gate either way) should fail the run.
+    summary.some(
+      r => !r.model.toLowerCase().includes('llama') && r.invalid / Math.max(1, r.pass + r.fail + r.invalid) >= 0.3
+    ) ||
     summary.some(
       r => !r.model.toLowerCase().includes('llama') && r.pass + r.fail > 0 && r.pass / (r.pass + r.fail) < 0.8
     );

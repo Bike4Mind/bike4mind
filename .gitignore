@@ -173,3 +173,6 @@ craftpix-zips/
 # Local open-core scratch/deliverables — never commit (a tracked scratchpad file
 # would ship in the git-archive snapshot; see opencore-secret-scan.sh PRUNE_RE note).
 /scratchpad/
+
+# Output from local one-off scripts (e.g. packages/scripts/testKnowledgeToolRefusal.ts)
+packages/scripts/out/
