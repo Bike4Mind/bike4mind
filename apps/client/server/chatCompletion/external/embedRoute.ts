@@ -222,8 +222,10 @@ async function buildEmbedServerTools(args: {
 
   let kbFileIds: string[] = [];
   if (project && !project.deletedAt) {
+    // Defensive on an authorization compare: never let an empty/absent id match, even
+    // though the real IUserShare.userId is a required string (the local type widens it).
     const isOrgMember = (userId: string): boolean =>
-      !!ownerOrg && (ownerOrg.userId === userId || (ownerOrg.users ?? []).some(u => u.userId === userId));
+      !!ownerOrg && (ownerOrg.userId === userId || (ownerOrg.users ?? []).some(u => !!u.userId && u.userId === userId));
     // Authorized when the key owner owns the project, or - for an org agent - any org
     // member does. Anything else fails closed to an empty scope (never owner-wide).
     if (project.userId === ctx.userId || isOrgMember(project.userId)) {

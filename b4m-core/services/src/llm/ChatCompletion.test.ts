@@ -1085,6 +1085,90 @@ describe('ChatCompletionProcess', () => {
       expect(tokenUsage.settledBasis).toBe('provider');
     });
 
+    // Guards the headline fix: the per-member cap is enforced at the reservation
+    // pre-flight, before the org pool is debited or a reply streams. An over-cap
+    // request is not thrown to the caller - it is caught and written to the quest as
+    // an error reply carrying the insufficient_credits code (the client's inline "Add
+    // Credits" CTA), then process() returns. Without this, deleting or inverting the
+    // reservation guard would pass CI untouched. Mirrors cliCompletions.orgBilling.test.ts.
+    const capOrgSetup = () => {
+      const complete = vi.fn();
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+      mockedGetLlmByModel.mockReturnValue({
+        complete,
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          can_stream: false,
+          pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+      // enforceCredits gates the whole reservation block; leave every other setting off.
+      vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation((key: string) => key === 'enforceCredits');
+      return { complete };
+    };
+
+    it('blocks an over-cap org member at reservation, before debiting the pool or streaming', async () => {
+      const { complete } = capOrgSetup();
+      // Member has spent 50 against a cap of 1: already over, so any charge trips it.
+      mockDb.organizations.findById.mockResolvedValue({
+        id: 'org1',
+        name: 'Cap Org',
+        currentCredits: 100_000,
+        maxCreditsPerMember: 1,
+        userDetails: [{ id: 'user1', usedCredits: 50 }],
+      });
+      mockDb.organizations.incrementCredits = vi.fn();
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: 'org1' };
+      await service.process({ body, logger: mockLogger });
+
+      // Recorded on the quest as an insufficient-credits error, not thrown to the caller.
+      expect(mockQuest.type).toBe('error');
+      expect(mockQuest.errorCode).toBe('insufficient_credits');
+      expect(mockQuest.reply).toMatch(/per-member credit limit/);
+      // Blocked at pre-flight: the org pool is never touched and the model never runs.
+      expect(mockDb.organizations.incrementCredits).not.toHaveBeenCalled();
+      expect(complete).not.toHaveBeenCalled();
+    });
+
+    it('lets an in-cap org member through the cap guard to the org-pool debit', async () => {
+      capOrgSetup();
+      // Well under a large cap, so the cap guard must pass. Force the org pool to read
+      // empty at the debit so the request is blocked by the ORG-POOL guard instead - a
+      // distinct message proving control reached the debit (the cap did not block).
+      mockDb.organizations.findById.mockResolvedValue({
+        id: 'org1',
+        name: 'Cap Org',
+        currentCredits: 100_000,
+        maxCreditsPerMember: 1_000_000,
+        userDetails: [{ id: 'user1', usedCredits: 0 }],
+      });
+      mockDb.organizations.incrementCredits = vi.fn().mockResolvedValue({ id: 'org1', currentCredits: -1 });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: 'org1' };
+      await service.process({ body, logger: mockLogger });
+
+      expect(mockQuest.type).toBe('error');
+      expect(mockQuest.reply).toMatch(/is out of credits/);
+      expect(mockQuest.reply).not.toMatch(/per-member credit limit/);
+      expect(mockDb.organizations.incrementCredits).toHaveBeenCalled();
+    });
+
     // Idempotency guard for a cross-model failover: the failed primary
     // attempt streamed partial output AND provider usage before erroring. The loop must
     // settle on ONLY the successful fallback attempt's usage (the per-attempt reset at

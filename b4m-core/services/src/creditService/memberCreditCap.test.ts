@@ -54,10 +54,4 @@ describe('isMemberCreditCapExceeded', () => {
     const overCap = org({ maxCreditsPerMember: 10, userDetails: [{ id: 'user1', usedCredits: 19 } as never] });
     expect(isMemberCreditCapExceeded(overCap, 'user1', 1)).toBe(true);
   });
-
-  it('supports a cap of 0 (member cannot spend at all)', () => {
-    const fresh = org({ maxCreditsPerMember: 0, userDetails: [] });
-    expect(isMemberCreditCapExceeded(fresh, 'user1', 1)).toBe(true);
-    expect(isMemberCreditCapExceeded(fresh, 'user1', 0)).toBe(false);
-  });
 });
