@@ -14,7 +14,7 @@
 
 - Repo: run everything from the worktree root `/Users/victor/coding.victor/bike4mind/.claude/worktrees/fix+datalake-remove-auto-attach`.
 - Node 24 is required but not on the default PATH. Prefix every pnpm/node command with `PATH="$HOME/.nvm/versions/node/v24.16.0/bin:$PATH"`.
-- Test command: `PATH=... pnpm --filter @bike4mind/client test -- run <relative-paths>` (vitest; pass file paths relative to `apps/client`). Set `VITEST_MAX_WORKERS=2`.
+- Test command: `PATH=... pnpm --filter @bike4mind/client test <relative-paths>` (the script is `vitest run`, so paths append directly; do NOT insert `-- run`, which breaks the filter and runs the whole 909-file suite). Paths are relative to `apps/client`. Set `VITEST_MAX_WORKERS=2`.
 - ASCII only in `.ts`/`.tsx` (no smart punctuation; write typographic chars as `—`-style escapes or HTML entities in JSX).
 - MUI Joy tests need the theme wrapper (custom tokens like `palette.notebooklist.hoverBg` break without it):
   ```tsx
@@ -102,7 +102,7 @@ describe('resolveManageableLake', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `PATH="$HOME/.nvm/versions/node/v24.16.0/bin:$PATH" VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test -- run app/components/datalake/resolveManageableLake.test.ts`
+Run: `PATH="$HOME/.nvm/versions/node/v24.16.0/bin:$PATH" VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test app/components/datalake/resolveManageableLake.test.ts`
 Expected: FAIL - cannot resolve `./resolveManageableLake`.
 
 - [ ] **Step 3: Write the implementation**
@@ -225,7 +225,7 @@ describe('DataLakeRailReader', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `PATH="$HOME/.nvm/versions/node/v24.16.0/bin:$PATH" VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test -- run app/components/datalake/DataLakeRailReader.test.tsx`
+Run: `PATH="$HOME/.nvm/versions/node/v24.16.0/bin:$PATH" VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test app/components/datalake/DataLakeRailReader.test.tsx`
 Expected: FAIL - cannot resolve `./DataLakeRailReader`.
 
 - [ ] **Step 3: Write the implementation**
@@ -432,7 +432,7 @@ describe('DataLakeChatTree file-row actions', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `PATH="$HOME/.nvm/versions/node/v24.16.0/bin:$PATH" VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test -- run app/components/datalake/DataLakeChatTree.test.tsx`
+Run: `PATH="$HOME/.nvm/versions/node/v24.16.0/bin:$PATH" VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test app/components/datalake/DataLakeChatTree.test.tsx`
 Expected: FAIL - unknown props / missing test ids (`datalake-attach-btn-f1` not found).
 
 - [ ] **Step 3: Implement the row actions**
@@ -585,7 +585,7 @@ const ROW_ACTION_SX = {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `PATH="$HOME/.nvm/versions/node/v24.16.0/bin:$PATH" VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test -- run app/components/datalake/DataLakeChatTree.test.tsx app/components/datalake/DataLakeTreeView.test.tsx`
+Run: `PATH="$HOME/.nvm/versions/node/v24.16.0/bin:$PATH" VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test app/components/datalake/DataLakeChatTree.test.tsx app/components/datalake/DataLakeTreeView.test.tsx`
 Expected: both PASS. `DataLakeTreeView.test.tsx` builds its own test chrome (it never imports `DataLakeChatTree`), so it must stay green untouched; a failure there means the TreeView engine was changed, which this task must not do.
 
 - [ ] **Step 5: Commit**
@@ -784,7 +784,7 @@ Keep the `renders chatSlot`, close (X), and `showModeClose` tests as they are.
 
 - [ ] **Step 2: Run the explorer tests to verify the new ones fail**
 
-Run: `PATH="$HOME/.nvm/versions/node/v24.16.0/bin:$PATH" VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test -- run app/components/datalake/DataLakeExplorer.test.tsx`
+Run: `PATH="$HOME/.nvm/versions/node/v24.16.0/bin:$PATH" VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test app/components/datalake/DataLakeExplorer.test.tsx`
 Expected: FAIL - `mock-attach` etc. not rendered (explorer passes no `onAttachFile`), `data-has-row-click` is `'true'`.
 
 - [ ] **Step 3: Rewire `DataLakeExplorer.tsx`**
@@ -1021,7 +1021,7 @@ If its `./DataLakeChatTree` stub destructures `onSelectFile`, leave the stub alo
 
 - [ ] **Step 6: Run the affected tests**
 
-Run: `PATH="$HOME/.nvm/versions/node/v24.16.0/bin:$PATH" VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test -- run app/components/datalake`
+Run: `PATH="$HOME/.nvm/versions/node/v24.16.0/bin:$PATH" VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test app/components/datalake`
 Expected: PASS across the whole directory (explorer, nav, chat surface, chat tree, tree view, article, rail reader).
 
 - [ ] **Step 7: Typecheck**
