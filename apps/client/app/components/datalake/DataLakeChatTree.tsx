@@ -32,7 +32,7 @@ import {
 } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 import type { TagNode } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import DataLakeTreeView, { type DataLakeTreeChrome } from './DataLakeTreeView';
-import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
+import { inkFor } from '@client/app/components/datalake/deckChrome';
 import {
   COUNT_CHIP_SX,
   FOOTER_BTN_SX,
@@ -356,16 +356,35 @@ export default function DataLakeChatTree({
             ...treeRowSx(theme.palette.notebooklist.hoverBg),
             // Tighter than the folder rows' 8px so the actions trigger sits closer to the edge.
             paddingInlineEnd: '4px',
-            '@media (hover: hover)': { '& .dl-row-actions': { opacity: 0 } },
+            // Selected state mirrors the sidebar's active chat row (Session/SidenavItem): the
+            // focused ground plus a 2px primary bar at the left edge, hover leaves it alone, and
+            // the row's actions stay revealed. Keep the two in sync if either changes.
+            position: 'relative',
+            backgroundColor: selected ? theme.palette.notebooklist.focusedBackground : undefined,
+            '&::before': selected
+              ? {
+                  content: '""',
+                  position: 'absolute',
+                  left: 0,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  width: '2px',
+                  height: '80%',
+                  backgroundColor: theme.palette.primary[500],
+                  borderRadius: '1px',
+                }
+              : undefined,
+            '&:hover': selected ? { backgroundColor: theme.palette.notebooklist.focusedBackground } : undefined,
+            '@media (hover: hover)': { '& .dl-row-actions': { opacity: selected ? 1 : 0 } },
             '&:hover .dl-row-actions, &:focus-within .dl-row-actions': { opacity: 1 },
             '&:has([aria-expanded="true"]) .dl-row-actions': { opacity: 1 },
           }}
         >
-          <ArticleOutlinedIcon
-            sx={{ fontSize: 16, color: selected ? inkFor(HUES.cyan, isDark) : 'text.tertiary', flexShrink: 0 }}
-          />
+          {/* Icon and label stay constant across selection, as in the sidebar - the ground and
+              the left bar carry the state on their own. */}
+          <ArticleOutlinedIcon sx={{ fontSize: 16, color: 'text.tertiary', flexShrink: 0 }} />
           <ListItemContent>
-            <Typography noWrap sx={{ fontSize: '14px', fontWeight: selected ? 'lg' : 400, color: 'text.primary' }}>
+            <Typography noWrap sx={{ fontSize: '14px', fontWeight: 400, color: 'text.primary' }}>
               {file.fileName.replace(/\.[^/.]+$/, '')}
             </Typography>
           </ListItemContent>
