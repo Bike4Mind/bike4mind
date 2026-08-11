@@ -271,7 +271,11 @@ const estimateTokenLength = (text: string): number => {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
 };
 
-const isImageBlock = (obj: { type?: string }): boolean => obj.type === 'image' || obj.type === 'image_url';
+// Array content is caller-controlled (extraContextMessages accepts z.array(z.any())), so a block can
+// be null/undefined/not-an-object at runtime despite the static type; every caller here iterates raw
+// message.content, so the null-safety has to live in this one shared helper rather than at each call site.
+const isImageBlock = (obj: { type?: string } | null | undefined): boolean =>
+  obj?.type === 'image' || obj?.type === 'image_url';
 
 /**
  * Flattens a message's content to its text, skipping image blocks - their base64 payload is not text

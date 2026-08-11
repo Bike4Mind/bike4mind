@@ -2677,6 +2677,16 @@ describe('array-content fabMessages that carry no image block', () => {
     expect(warnings()).toContain('untyped');
     expect(warnings()).toContain('Dropped 1');
   });
+
+  it('does not throw on a null content block', async () => {
+    const fab: IMessage[] = [{ role: 'user', content: [null] as any }];
+
+    await expect(
+      buildAndSortMessages([], fab, [], 10000, {}, 5, mockLogger as any, createMockTokenizer())
+    ).resolves.toBeDefined();
+    expect(warnings()).toContain('untyped');
+    expect(warnings()).toContain('Dropped 1');
+  });
 });
 
 // A file cut to fit must say so. Without this the model treats the last surviving row as the end of
