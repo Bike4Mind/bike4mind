@@ -96,3 +96,4 @@ export * from './AudienceVariantTypes';
 export * from './UserComplianceTypes';
 export * from './AdminSupportAccessTypes';
 export * from './AuthSessionTypes';
+export * from './WorkItemTypes';
