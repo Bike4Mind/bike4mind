@@ -123,8 +123,8 @@ describe('recompute-stale-datalake-stats', () => {
   });
 
   it('hands recomputeLakeStats the whole lake document, not a narrowed shape', async () => {
-    // A partial shape silently counts the meta-tag membership arm alone, undercounting (or, for
-    // a missing createdByUserId, zeroing out) a prefix-arm-only lake's membership.
+    // A partial shape silently counts the meta-tag membership arm alone, undercounting a
+    // prefix-arm-only lake's membership.
     const lake = {
       id: 'l1',
       name: 'Filled',

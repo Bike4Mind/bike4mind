@@ -155,6 +155,13 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
   const touchedTags = new Set<string>();
   const lakesByTag = new Map<string, Promise<MembershipLake>>();
   const touchedLakes = new Map<string, MembershipLake>();
+  // Membership via a prefix-arm join is automatic (the read-side predicate grants it purely on
+  // the tag, no permission check), but recomputeLakeStats's activation side effect is gated - see
+  // finalizePrefixArmLeaves. An unmanaged join lands here instead of touchedLakes, so its stats
+  // still get corrected (skipping activation) rather than drifting forever. Checked against
+  // touchedLakes before recomputing, so a lake this actor DOES manage elsewhere in the same
+  // batch isn't redundantly recomputed a second time with activation suppressed.
+  const statsOnlyLakes = new Map<string, MembershipLake>();
   // One tagger for the whole request: it memoizes the lake lookup per meta-tag, so a bulk toggle
   // into one lake costs a single extra read, not one per file.
   const applyFallbackTags = createDataLakeFallbackTagger({ db, logger });
@@ -250,13 +257,15 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
       }
     }
     // MEMBERSHIP needs no gate here (the read-side predicate grants it purely on the tag), but
-    // recomputeLakeStats's side effect is stronger: it also flips a draft lake to active
-    // (activateIfDraft), a one-way, publication-visibility change. `file.userId` is the file's
-    // OWNER, not necessarily this actor - `findAllAccessibleByIds` admits a read/write share, so
-    // an unrelated sharee could otherwise force-publish a lake they have no relationship to.
-    // Gated on canManageLake; an unmanaged join just leaves the recompute for later.
+    // recomputeLakeStats's activation side effect is stronger: it also flips a draft lake to
+    // active (activateIfDraft), a one-way, publication-visibility change. `file.userId` is the
+    // file's OWNER, not necessarily this actor - `findAllAccessibleByIds` admits a read/write
+    // share, so an unrelated sharee could otherwise force-publish a lake they have no
+    // relationship to. Gated on canManageLake; an unmanaged join still gets its stats corrected
+    // via statsOnlyLakes, just never the activation.
     for (const { lake } of prefixJoinsByFile.get(file.id) ?? []) {
       if (canManageLake(lake, actor)) touchedLakes.set(lake.id, lake);
+      else statsOnlyLakes.set(lake.id, lake);
     }
   };
 
@@ -322,6 +331,9 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
 
   for (const lake of touchedLakes.values()) {
     await recomputeLakeStats(lake, { db });
+  }
+  for (const lake of statsOnlyLakes.values()) {
+    if (!touchedLakes.has(lake.id)) await recomputeLakeStats(lake, { db }, { skipActivation: true });
   }
 
   // Lake meta-tags are deliberately absent from this set: they are lake membership, not entries in

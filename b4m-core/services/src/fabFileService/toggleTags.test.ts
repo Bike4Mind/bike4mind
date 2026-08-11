@@ -451,18 +451,20 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
   });
 
   // MEMBERSHIP needs no gate (the read-side predicate grants it purely on the tag), but the
-  // stats recompute also flips a draft lake to active (recomputeLakeStats -> activateIfDraft) - a
-  // one-way publication change a mere file-share recipient must not be able to force onto a lake
-  // they do not manage.
-  it('does not recompute stats on a prefix-arm join by an actor who cannot manage the lake', async () => {
-    const adapters = makeAdapters([{ id: 'f1', userId: 'owner', tags: [] }]);
-    adapters.db.dataLakes.find = vi.fn().mockResolvedValue([lake({ createdByUserId: 'owner' })]);
+  // stats recompute's activation side effect also flips a draft lake to active - a one-way
+  // publication change a mere file-share recipient must not be able to force onto a lake they do
+  // not manage. Stats still get corrected (so they don't drift forever), just never the
+  // activation.
+  it('corrects stats but never activates on a prefix-arm join by an actor who cannot manage the lake', async () => {
+    const adapters = makeAdapters([{ id: 'f1', userId: 'owner', tags: [] }], lake({ status: 'draft' }));
+    adapters.db.dataLakes.find = vi.fn().mockResolvedValue([lake({ createdByUserId: 'owner', status: 'draft' })]);
     adapters.db.users.findById = vi.fn().mockResolvedValue({ id: 'editor', isAdmin: false });
 
     const runAs = (userId: string, params: unknown) => toggleTags(userId, params, adapters as any);
     await runAs('editor', { ids: ['f1'], tags: ['lk:invoices'] });
 
-    expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 3, totalSizeBytes: 99 });
+    expect(adapters.db.dataLakes.activateIfDraft).not.toHaveBeenCalled();
   });
 
   it('recomputes a shared lake once for a batch where every file leaves it', async () => {
