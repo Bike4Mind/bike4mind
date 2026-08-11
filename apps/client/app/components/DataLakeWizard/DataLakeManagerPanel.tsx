@@ -904,11 +904,19 @@ function NavSectionHeader({
         '--variant-plainHoverBg': hoverBg,
       }}
     >
-      <Typography noWrap sx={{ flex: 1, minWidth: 0, fontSize: '14px', fontWeight: 400, color: 'text.primary' }}>
-        {label}
-      </Typography>
-      {/* Not part of the toggle - stop the click from also collapsing/expanding the section. */}
-      {infoTooltip && <Box onClick={e => e.stopPropagation()}>{infoTooltip}</Box>}
+      {/* Label and help sit as one group, so the icon stays beside the text instead of being
+          pushed across to the chevron by a stretching label. Same pairing as the tree header. */}
+      <Box sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '2px' }}>
+        <Typography noWrap sx={{ minWidth: 0, fontSize: '14px', fontWeight: 400, color: 'text.primary' }}>
+          {label}
+        </Typography>
+        {/* Not part of the toggle - stop the click from also collapsing/expanding the section. */}
+        {infoTooltip && (
+          <Box onClick={e => e.stopPropagation()} sx={{ display: 'flex', flexShrink: 0 }}>
+            {infoTooltip}
+          </Box>
+        )}
+      </Box>
       {open ? (
         <ExpandLessIcon sx={{ fontSize: 18, color: 'text.tertiary', flexShrink: 0 }} />
       ) : (
