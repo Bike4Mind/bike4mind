@@ -10,6 +10,10 @@ import DataLakeManagerPanel from './DataLakeManagerPanel';
 // Archive resolves synchronously so the onSuccess (exit-to-root) wiring is exercised.
 const archiveMutate = vi.fn((_id: string, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
 const useActiveDataLakeBatches = vi.fn(() => ({ data: [] as unknown[] }));
+// Lifecycle lists default to in-flight (undefined); a test can resolve them to drive the
+// empty-section rendering.
+const useGetArchivedDataLakes = vi.fn(() => ({ data: undefined as unknown[] | undefined }));
+const useGetDeletedDataLakes = vi.fn(() => ({ data: undefined as unknown[] | undefined }));
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });
   return {
@@ -18,8 +22,8 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     useRestoreDeletedDataLake: mutation,
     usePermanentDeleteDataLake: mutation,
     useCleanupDataLake: mutation,
-    useGetArchivedDataLakes: () => ({ data: undefined }),
-    useGetDeletedDataLakes: () => ({ data: undefined }),
+    useGetArchivedDataLakes: () => useGetArchivedDataLakes(),
+    useGetDeletedDataLakes: () => useGetDeletedDataLakes(),
     useActiveDataLakeBatches: () => useActiveDataLakeBatches(),
     useGetDataLakes: () => useGetDataLakes(),
     // Per-lake files: only the selected lake queries (id != null).
@@ -148,6 +152,10 @@ beforeEach(() => {
   archiveMutate.mockClear();
   useActiveDataLakeBatches.mockReset();
   useActiveDataLakeBatches.mockReturnValue({ data: [] });
+  useGetArchivedDataLakes.mockReset();
+  useGetArchivedDataLakes.mockReturnValue({ data: undefined });
+  useGetDeletedDataLakes.mockReset();
+  useGetDeletedDataLakes.mockReturnValue({ data: undefined });
   // managerTab is module state in the real store, so a test left in Discover would otherwise
   // decide what the next one renders.
   useDataLakeWizardStore.setState({ managerTab: 'mine' });
@@ -184,6 +192,24 @@ describe('DataLakeManagerPanel - root view', () => {
     expect(screen.getByTestId('datalake-deleted-section')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-manager-create-btn')).toBeInTheDocument();
+  });
+
+  it('states an empty lifecycle section on its header instead of offering an accordion', async () => {
+    const user = userEvent.setup();
+    useGetArchivedDataLakes.mockReturnValue({ data: [] });
+    useGetDeletedDataLakes.mockReturnValue({ data: [] });
+    renderPanel();
+
+    const archived = screen.getByTestId('datalake-archived-section-toggle');
+    expect(archived).toHaveTextContent('Archived');
+    expect(archived).toHaveTextContent('No archived');
+    expect(screen.getByTestId('datalake-deleted-section-toggle')).toHaveTextContent('No deleted');
+    // Not a control: nothing to expand, so no button semantics and no chevron.
+    expect(archived).not.toHaveAttribute('role', 'button');
+
+    // Clicking it does nothing rather than toggling an empty body open.
+    await user.click(archived);
+    expect(archived).toHaveTextContent('No archived');
   });
 
   it('opens the public Discover catalog from the footer and returns to it via the store tab', async () => {

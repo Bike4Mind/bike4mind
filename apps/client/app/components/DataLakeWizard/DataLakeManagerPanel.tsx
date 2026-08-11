@@ -329,8 +329,10 @@ function ManagerNav({
   const restoreDeletedLake = useRestoreDeletedDataLake();
   const deleteLake = usePermanentDeleteDataLake();
   const cleanupLake = useCleanupDataLake();
-  const { data: archivedLakes } = useGetArchivedDataLakes(showArchived);
-  const { data: deletedLakes } = useGetDeletedDataLakes(showDeleted);
+  // Fetched up front rather than on first expand: an empty section renders as a single "No
+  // archived" row instead of an accordion, and that needs the count before anyone clicks.
+  const { data: archivedLakes } = useGetArchivedDataLakes();
+  const { data: deletedLakes } = useGetDeletedDataLakes();
 
   const { data: filesResult, isLoading: filesLoading, isError: filesError } = useDataLakeFiles(activeLake?.id ?? null);
   const articles = useMemo(() => filesResult?.data ?? [], [filesResult]);
@@ -614,8 +616,8 @@ function ManagerNav({
               open={showArchived}
               onToggle={() => setShowArchived(v => !v)}
               testid="datalake-archived-section"
-              emptyText="No archived data lakes."
-              lakes={showArchived ? filterByName(archivedLakes) : undefined}
+              emptyLabel="No archived"
+              lakes={archivedLakes ? filterByName(archivedLakes) : undefined}
               hoverBg={hoverBg}
               renderActions={lake => (
                 <>
@@ -653,8 +655,8 @@ function ManagerNav({
               open={showDeleted}
               onToggle={() => setShowDeleted(v => !v)}
               testid="datalake-deleted-section"
-              emptyText="No deleted data lakes."
-              lakes={showDeleted ? filterByName(deletedLakes) : undefined}
+              emptyLabel="No deleted"
+              lakes={deletedLakes ? filterByName(deletedLakes) : undefined}
               hoverBg={hoverBg}
               renderActions={lake => (
                 <>
@@ -867,30 +869,31 @@ function NavSectionHeader({
   infoTooltip,
 }: {
   label: string;
-  open: boolean;
-  onToggle: () => void;
+  open?: boolean;
+  /** Omit to render a static row: no collapse, no chevron - for a section with nothing to open. */
+  onToggle?: () => void;
   testid: string;
   hoverBg: string;
   /** Persistent help affordance next to the label, e.g. explaining RAG for the Lakes section. */
   infoTooltip?: React.ReactNode;
+  /** Right-hand content replacing the chevron, e.g. "No archived" on an empty section. */
+  trailing?: React.ReactNode;
 }) {
-  return (
-    <ListItemButton
-      onClick={onToggle}
-      data-testid={testid}
-      sx={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '8px',
-        px: '8px',
-        mb: '4px',
-        height: '32px',
-        minHeight: '32px',
-        borderRadius: '8px',
-        transition: 'background 0.15s',
-        '--variant-plainHoverBg': hoverBg,
-      }}
-    >
+  const rowSx = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    px: '8px',
+    mb: '4px',
+    height: '32px',
+    minHeight: '32px',
+    borderRadius: '8px',
+    transition: 'background 0.15s',
+    '--variant-plainHoverBg': hoverBg,
+  } as const;
+
+  const content = (
+    <>
       {/* Label and help sit as one group, so the icon stays beside the text instead of being
           pushed across to the chevron by a stretching label. Same pairing as the tree header. */}
       <Box sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -904,12 +907,25 @@ function NavSectionHeader({
           </Box>
         )}
       </Box>
-      {open ? (
-        <ExpandLessIcon sx={{ fontSize: 18, color: 'text.tertiary', flexShrink: 0 }} />
-      ) : (
-        <ExpandMoreIcon sx={{ fontSize: 18, color: 'text.tertiary', flexShrink: 0 }} />
-      )}
+      {trailing ??
+        (open ? (
+          <ExpandLessIcon sx={{ fontSize: 18, color: 'text.tertiary', flexShrink: 0 }} />
+        ) : (
+          <ExpandMoreIcon sx={{ fontSize: 18, color: 'text.tertiary', flexShrink: 0 }} />
+        ))}
+    </>
+  );
+
+  // Nothing to expand means nothing to click: render the row as a statement rather than a
+  // control, so it neither highlights on hover nor offers a chevron that would do nothing.
+  return onToggle ? (
+    <ListItemButton onClick={onToggle} data-testid={testid} sx={rowSx}>
+      {content}
     </ListItemButton>
+  ) : (
+    <Box data-testid={testid} sx={rowSx}>
+      {content}
+    </Box>
   );
 }
 
@@ -920,13 +936,14 @@ interface LifecycleSectionLake {
 }
 
 /** Sidebar accordion for archived/deleted lakes: tree-style rows with restore/delete actions.
- *  `lakes` undefined -> loading skeleton (the query fires only once the section is expanded). */
+ *  `lakes` undefined -> still loading (header shows a chevron, body a skeleton). An empty list
+ *  collapses to a single static row stating so, since there is nothing to open. */
 function NavLifecycleSection({
   label,
   open,
   onToggle,
   testid,
-  emptyText,
+  emptyLabel,
   lakes,
   hoverBg,
   renderActions,
@@ -935,11 +952,29 @@ function NavLifecycleSection({
   open: boolean;
   onToggle: () => void;
   testid: string;
-  emptyText: string;
+  /** Right-hand text on the static row when the section has nothing in it, e.g. "No archived". */
+  emptyLabel: string;
   lakes: LifecycleSectionLake[] | undefined;
   hoverBg: string;
   renderActions: (lake: LifecycleSectionLake) => React.ReactNode;
 }) {
+  if (lakes?.length === 0) {
+    return (
+      <Box data-testid={testid} sx={{ mt: '8px' }}>
+        <NavSectionHeader
+          label={label}
+          testid={`${testid}-toggle`}
+          hoverBg={hoverBg}
+          trailing={
+            <Typography level="body-xs" noWrap sx={{ color: 'text.tertiary', flexShrink: 0 }}>
+              {emptyLabel}
+            </Typography>
+          }
+        />
+      </Box>
+    );
+  }
+
   return (
     <Box data-testid={testid} sx={{ mt: '8px' }}>
       <NavSectionHeader label={label} open={open} onToggle={onToggle} testid={`${testid}-toggle`} hoverBg={hoverBg} />
@@ -948,10 +983,6 @@ function NavLifecycleSection({
           <Box sx={{ px: '8px', pb: 1 }}>
             <Skeleton variant="rectangular" height={28} sx={{ borderRadius: 'sm' }} />
           </Box>
-        ) : lakes.length === 0 ? (
-          <Typography level="body-xs" sx={{ color: 'text.tertiary', px: '8px', pb: 1 }}>
-            {emptyText}
-          </Typography>
         ) : (
           <List size="sm" sx={TREE_LIST_SX}>
             {lakes.map(lake => (
