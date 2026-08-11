@@ -236,6 +236,9 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
    */
   const finalizePrefixArmLeaves = async (file: IFabFileDocument): Promise<void> => {
     for (const { lake } of prefixLeavesByFile.get(file.id) ?? []) {
+      // Touched before the write, unlike toggleLakeMembership's meta-tag leave above - safe here
+      // only because every prefix-arm leave's canManageLake gate already ran for the WHOLE batch
+      // up front (see the loop above resolving prefixLeavesByFile), before this ever runs.
       touchedLakes.set(lake.id, lake);
       try {
         await removeFileFromLake(actor, lake, file.id, { db });

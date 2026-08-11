@@ -14,8 +14,14 @@ import { type MigrationFile } from './index';
  * Recomputes every lake unconditionally rather than trying to detect which ones are stale -
  * there is no persisted signal for "this lake lost a prefix-arm member before the gate closed,"
  * so the honest fix is to true up the whole collection once. `recomputeLakeStats` is cheap per
- * lake (one aggregate + one write) and fully idempotent, so an already-correct lake costs a
- * no-op write, not a wrong one.
+ * lake (one aggregate + one write), but NOT a plain no-op on an already-correct lake: it also
+ * flips a draft lake to active (`activateIfDraft`) whenever the recomputed fileCount is nonzero,
+ * a one-way publication change - logged separately below, since the stats-delta check alone
+ * would miss a lake whose counts were already right but whose activation had been skipped.
+ *
+ * Excludes 'deleting'/'deleted' lakes: `deleteDataLake`'s phase 1 deliberately leaves their stats
+ * untouched (unlike archive, which recomputes to 0 itself) so a recoverable deleted lake still
+ * shows its pre-delete counts - recomputing here would zero them out as a false "correction".
  */
 
 const LOG = '[recompute-stale-datalake-stats]';
@@ -27,14 +33,17 @@ const migration: MigrationFile = {
   up: async () => {
     let scanned = 0;
     let corrected = 0;
+    let activated = 0;
     const failed: string[] = [];
 
     // A cursor rather than `.find()` materializing the whole result: this scans every lake ever
-    // created, with no natural bound to size an array for.
-    const cursor = DataLakeModel.find({}).cursor();
+    // created (short of the deliberately-frozen deleted/deleting ones), with no natural bound to
+    // size an array for.
+    const cursor = DataLakeModel.find({ status: { $nin: ['deleting', 'deleted'] } }).cursor();
     for await (const lake of cursor) {
       scanned++;
       try {
+        const wasDraft = lake.status === 'draft' || !lake.status;
         const before = { fileCount: lake.fileCount ?? 0, totalSizeBytes: lake.totalSizeBytes ?? 0 };
         // The lake DOCUMENT: recomputeLakeStats derives the two-signal membership scope from it,
         // and a partial one silently counts the meta-tag arm alone.
@@ -48,6 +57,12 @@ const migration: MigrationFile = {
               `totalSizeBytes ${before.totalSizeBytes} -> ${after.totalSizeBytes}`
           );
         }
+        // Reported independently of the stats delta above: a lake whose counts were already
+        // correct but whose activation had been skipped shows no delta there at all.
+        if (wasDraft && after.fileCount > 0) {
+          activated++;
+          console.log(`${LOG} activated "${lake.name}" (${after.fileCount} file(s))`);
+        }
       } catch (error) {
         // Per lake: one unreadable lake must not strand the rest, and a migration that threw here
         // would block the whole deploy over a stats-cache rebuild.
@@ -60,7 +75,10 @@ const migration: MigrationFile = {
       return;
     }
 
-    console.log(`${LOG} corrected ${corrected} lake(s); ${failed.length} failed, ${scanned} scanned`);
+    console.log(
+      `${LOG} corrected ${corrected} lake(s), activated ${activated} lake(s); ` +
+        `${failed.length} failed, ${scanned} scanned`
+    );
     if (failed.length > 0) {
       console.log(`${LOG} ${failed.length} lake(s) failed and stay as-is until a door touches them:`);
       for (const line of failed) console.log(`  ${line}`);
