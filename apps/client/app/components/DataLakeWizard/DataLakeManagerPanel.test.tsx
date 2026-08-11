@@ -420,7 +420,7 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     expect(chip).toHaveTextContent('Owner: Ada Owner');
   });
 
-  it('shows no owner marker on the caller’s own lake', async () => {
+  it("shows no owner marker on the caller's own lake", async () => {
     const user = userEvent.setup();
     renderPanel();
 
