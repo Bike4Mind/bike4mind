@@ -7,6 +7,9 @@ export interface JwtPayloadClaims {
   mfaPending?: boolean;
   impersonatedBy?: string;
   typ?: string;
+  /** AuthSession id this token belongs to (present on session-store tokens; absent on legacy
+   *  and mfaPending tokens). Surfaced on req.user so per-device logout can revoke THIS session. */
+  sid?: string;
 }
 
 /**
@@ -43,6 +46,9 @@ export async function verifyJwtPayload(
       // Propagate the impersonation marker (set by loginAs) so request handlers
       // can distinguish an admin-driven session from the real customer's - see logout.ts.
       (user as any).impersonatedBy = jwt_payload.impersonatedBy;
+      // Surface the session id so per-device logout can revoke exactly THIS session
+      // (see logout.ts + users/me/sessions.ts) without re-decoding the token.
+      (user as any).sid = jwt_payload.sid;
       return done(null, user);
     } else {
       return done(null, false);

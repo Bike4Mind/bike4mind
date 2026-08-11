@@ -1,6 +1,7 @@
 export * from './actions';
 export * from './chat';
 export * from './cliCompletions';
+export * from './tools';
 export * from './decisionMaker';
 export * from './file';
 export * from './openai';

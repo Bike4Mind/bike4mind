@@ -117,15 +117,39 @@ export const tagPrefixesOverlap = (a: string | undefined | null, b: string | und
   return left === right || left.startsWith(right) || right.startsWith(left);
 };
 
+// Codepoints that render blank despite carrying an "ink" Unicode category (Hangul and
+// halfwidth fillers are Lo, braille blank is So, Khmer inherent vowels are Mn) - stripped
+// before the ink test in hasBlankTagPrefixSegment.
+const INVISIBLE_INK = /\u115F|\u1160|\u17B4|\u17B5|\u2800|\u3164|\uFFA0/g;
+
+/**
+ * True when any ":"-separated segment of the prefix (ignoring the trailing colon) has no
+ * character that renders ink. A negated-whitespace test is not enough: format characters
+ * (U+200B/U+2060, category Cf) survive `trim()`, and a handful of letter/symbol codepoints
+ * (INVISIBLE_INK above) render blank too - all producing the same blank tree node. So
+ * require a letter, number, punctuation, symbol, or mark after stripping the known blanks.
+ * Shared by CreateDataLakeRequestInput's schema refine and the wizard mirror below so the
+ * server and client rules cannot drift.
+ */
+export const hasBlankTagPrefixSegment = (prefix: string): boolean => {
+  const body = prefix.endsWith(':') ? prefix.slice(0, -1) : prefix;
+  return body.split(':').some(part => !/[\p{L}\p{N}\p{P}\p{S}\p{M}]/u.test(part.replace(INVISIBLE_INK, '')));
+};
+
 /**
  * The reason a `fileTagPrefix` is unusable, as user-facing copy, or null when it is fine. Shared
  * by the wizard steps that can both edit a prefix so their wording cannot drift apart; the server
- * rejects both cases at create.
+ * rejects all three cases at create.
  */
 export const tagPrefixIssue = (
   prefix: string | undefined | null,
   overlapping?: { name: string; fileTagPrefix: string } | null
 ): string | null => {
+  // Blank-segment before reserved, matching the schema's refine order, so both surfaces
+  // name the same culprit for an input like "datalake::".
+  if (prefix && hasBlankTagPrefixSegment(prefix)) {
+    return 'Every ":" segment of the prefix needs a visible character (e.g. legal: or legal:contracts:).';
+  }
   if (isReservedTagPrefix(prefix)) {
     return `"${DATALAKE_TAG_PREFIX}" is reserved for lake membership. Pick another prefix, such as legal:`;
   }
@@ -194,6 +218,13 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * so "not yours to see" and "set to blank" stay distinguishable).
    */
   systemPrompt?: string;
+  /**
+   * Preferred registry system-prompt id (see IDataLake.preferredSystemPromptId). EDITOR-ONLY,
+   * like `systemPrompt`: surfaced only when the caller can manage the lake, so the settings
+   * picker can seed its current selection. Absent (never an empty-string stand-in) otherwise,
+   * so "not yours to see" and "no preferred prompt" stay distinguishable.
+   */
+  preferredSystemPromptId?: string;
 }
 
 /**

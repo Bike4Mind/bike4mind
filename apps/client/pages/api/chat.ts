@@ -25,18 +25,16 @@ import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 
 // Auth mode, required scopes, and request validation all come from chatContract
 // (the single source of truth also driving the OpenAPI spec). `req.validated` is
-// the parsed, typed body. The adapter binds validation to the method registration,
-// so this `.use()` runs ahead of it - a malformed body still counts against the limiter.
-const route = nextRouteForContract(chatContract).use(
+// the parsed, typed body. Rate limit is passed as an option so the adapter orders
+// it before validation (a malformed body still counts against the limiter).
+const handler = nextRouteForContract(chatContract, {
   // Per-user request rate limit, tunable per subscription tier. Keyed on userId
   // (IP-independent); admins/developers and the dev server bypass.
-  rateLimit({
+  rateLimit: rateLimit({
     limit: req => resolveUserRateLimitPerMin(req.user),
     windowMs: 60 * 1000,
-  })
-);
-
-const handler = route.post(async (req, res) => {
+  }),
+}).post(async (req, res) => {
   const apiTimer = new PipelineTimer();
   apiTimer.phase('settings');
 

@@ -1,5 +1,5 @@
 import z from 'zod';
-import { DATALAKE_TAG_PREFIX, isReservedTagPrefix } from '../constants/dataLakes';
+import { DATALAKE_TAG_PREFIX, hasBlankTagPrefixSegment, isReservedTagPrefix } from '../constants/dataLakes';
 
 // Slug validation
 
@@ -18,9 +18,18 @@ export const CreateDataLakeRequestInput = z.object({
   description: z.string().max(2000).optional(),
   fileTagPrefix: z
     .string()
+    // Edge whitespace is stripped so the stored prefix equals its normalizeTagPrefix form -
+    // consumers split between raw reads (tree roots) and normalized reads (tag stamping),
+    // and " acme:" stored raw would desynchronize them.
+    .trim()
     .min(2)
     .max(30)
     .refine(s => s.endsWith(':'), 'Tag prefix must end with ":" (e.g. "acme:")')
+    // A prefix with a blank segment ("::", "a::", ":a:", "a: :", or zero-width characters)
+    // gives every derived tag a blank tree segment, which the tag-tree UIs can only paper
+    // over (empty node labels, orphaned back rows). Reject it at the source; the wizard
+    // mirrors this via tagPrefixIssue / hasBlankTagPrefixSegment so the rules cannot drift.
+    .refine(s => !hasBlankTagPrefixSegment(s), 'Tag prefix segments must be non-empty (e.g. "acme:" or "acme:legal:")')
     .refine(s => !isReservedTagPrefix(s), `Tag prefix cannot use the reserved "${DATALAKE_TAG_PREFIX}" namespace`),
   requiredUserTag: z.string().min(1).max(100).optional(),
   // Entitlement keys are namespaced (must contain ":") so a bare user-tag value can never
@@ -49,6 +58,11 @@ export const UpdateDataLakeRequestInput = z.object({
   // Per-lake system prompt (see IDataLake.systemPrompt). Uncapped, matching the other system
   // prompts in the codebase. Edit is gated to creator/admin by updateDataLake (canManageLake).
   systemPrompt: z.string().optional(),
+  // Preferred registry system-prompt id bound to the lake (see IDataLake.preferredSystemPromptId).
+  // Empty string clears it, mirroring the requiredUserTag sentinel below. The session-activatable
+  // ALLOWLIST check is enforced at the write route (apps/client), which owns the allowlist - core
+  // cannot import it. This bound is a crafted-body cap only, not the real constraint.
+  preferredSystemPromptId: z.union([z.literal(''), z.string().min(1).max(200)]).optional(),
   // Empty string is the explicit "remove this gate" sentinel, accepted on UPDATE only (a
   // create has no gate to clear). It is stored as-is rather than unset: every read path
   // already treats '' as ungated - the access queries in DataLakeModel carry explicit

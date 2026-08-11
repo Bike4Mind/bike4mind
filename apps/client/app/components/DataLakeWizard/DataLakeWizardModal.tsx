@@ -5,7 +5,7 @@ import { useDataLakeWizardStore, type OptionalSteps } from '@client/app/stores/u
 import type { WizardStep } from '@client/app/stores/useDataLakeWizardStore';
 import { useBatchUpload, OFFLINE_MESSAGE } from '@client/app/hooks/data/dataLakeWizard';
 import { isValidDataLakeSlug } from '@client/app/hooks/data/dataLakeSlug';
-import { isReservedTagPrefix } from '@bike4mind/common';
+import { hasBlankTagPrefixSegment, isReservedTagPrefix } from '@bike4mind/common';
 import WizardStepIndicator from './WizardStepIndicator';
 import SourceSelectionStep from './steps/SourceSelectionStep';
 import PreviewStep from './steps/PreviewStep';
@@ -66,11 +66,14 @@ export default function DataLakeWizardModal() {
         // The prefix has to clear the server's reserved-namespace rule here too, or the whole
         // upload fails at the final step.
         // An overlapping prefix is refused by the server, so block here rather than failing the
-        // whole upload at the last step.
+        // whole upload at the last step. Same for a blank ":" segment (schema refine) - but only
+        // in create mode: append inherits a stored prefix the user cannot edit here, and a
+        // legacy lake predating the blank-segment rule must not be locked out of uploads.
         return (
           (!!targetLake || isValidDataLakeSlug(config.name)) &&
           config.tagPrefix.trim().length >= 2 &&
           !isReservedTagPrefix(config.tagPrefix) &&
+          (!!targetLake || !hasBlankTagPrefixSegment(config.tagPrefix)) &&
           !duplicatePrefixLake
         );
       case 'upload':
