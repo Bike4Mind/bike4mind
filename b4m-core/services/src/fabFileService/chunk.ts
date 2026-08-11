@@ -24,7 +24,18 @@ const chunkFileSchema = z.object({
   passageTokenTarget: z.number().int().positive().optional(),
 });
 
-type ChunkFileParameters = z.infer<typeof chunkFileSchema>;
+/**
+ * `embeddingModel` is deliberately kept as `string` here rather than inheriting the schema's
+ * narrowed `SupportedEmbeddingModel`. `chunkFabfile` is exported from the published
+ * `@bike4mind/services`, so narrowing an argument type would be a breaking change for any external
+ * caller holding a plain `string` - the same reason the chunk-stamp seams in `@bike4mind/common`
+ * were left alone. The enum is still enforced, at runtime, by `secureParameters` below; a wide input
+ * type is exactly the case that guard exists for, and narrowing it here would invite a reader to
+ * assume the runtime check is redundant.
+ */
+type ChunkFileParameters = Omit<z.infer<typeof chunkFileSchema>, 'embeddingModel'> & {
+  embeddingModel: string;
+};
 
 interface ChunkFileAdapters {
   db: {
