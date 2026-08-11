@@ -98,11 +98,17 @@ const RowMenuItem = ({
   danger?: boolean;
 }) => (
   <MenuItem
+    // Joy's own danger palette, so the destructive row picks up its text, icon and hover tint
+    // rather than only the shared recipe's colour.
+    color={danger ? 'danger' : 'neutral'}
     data-testid={testId}
     onClick={onClick}
     sx={itemTheme => ({
       ...menuRowSx(itemTheme, danger),
-      '--variant-plainHoverBg': itemTheme.palette.notebooklist.hoverBg,
+      // Take the destructive colour from Joy's danger plain variant, exactly as the sidebar's
+      // session Delete item does - the shared recipe's hardcoded danger[500] is a different red.
+      ...(danger && { color: itemTheme.palette.danger.plainColor, '--Icon-color': 'currentColor' }),
+      '--variant-plainHoverBg': danger ? itemTheme.palette.danger.plainHoverBg : itemTheme.palette.notebooklist.hoverBg,
       // Tighter than the profile menu's 40px/10px: this menu hangs off a row in a 260px rail.
       // Both of these override a direct declaration in the shared recipe, so they must be set
       // here as declarations too - the Joy vars below alone would lose to it.
@@ -426,7 +432,7 @@ export default function DataLakeChatTree({
                 sx={menuTheme => ({
                   ...menuSurfaceSx(menuTheme),
                   borderRadius: '8px',
-                  minWidth: 200,
+                  minWidth: 180,
                   // Joy's List vars, pinned for the same reason as the row's below: p:1 from the
                   // shared recipe would otherwise fight --List-padding.
                   '--List-padding': '8px',
