@@ -90,6 +90,12 @@ export type QuestErrorCode = (typeof QUEST_ERROR_CODES)[number];
 export interface IChatHistoryItem {
   id?: string;
   sessionId: string;
+  /**
+   * Who submitted this quest. Required by the Mongoose schema; optional here because older
+   * call sites construct the shape without it. Read paths that gate on ownership must treat
+   * an absent value as "not the owner".
+   */
+  userId?: string;
   conversationItemId?: string;
   openaiMessageId?: string;
   claudeMessageId?: string;

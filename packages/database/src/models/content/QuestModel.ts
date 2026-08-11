@@ -42,6 +42,27 @@ const SystemPromptSourceSchema = subSchema({
   enabled: { type: Boolean, required: false },
 });
 
+// `blocks[].text` is deliberately absent, for the same reason as `content` above: the
+// disclosed prompt text is returned on the response of the request that asked for it and
+// nowhere else. Strict mode dropping it here is the backstop behind stripDisclosureText.
+const SystemPromptDisclosureSchema = subSchema({
+  blocks: {
+    type: [
+      subSchema({
+        source: { type: String, required: false },
+        name: { type: String, required: false },
+        tokenCount: { type: Number, required: false },
+        wasIncluded: { type: Boolean, required: false },
+        redacted: { type: Boolean, required: false },
+      }),
+    ],
+    required: false,
+    default: undefined,
+  },
+  totalTokens: { type: Number, required: false },
+  sizeCapped: { type: Boolean, required: false },
+});
+
 const ArtifactSchema = subSchema({
   // No enum: writers emit internal artifact types and can fall back to a raw MIME string.
   // Kept in sync with PromptMetaArtifactSchema, which is deliberately open for the same reason.
@@ -191,6 +212,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       mementoCount: { type: Number, required: false },
       mementoIds: [{ type: String, required: false }],
       systemPromptSources: { type: [SystemPromptSourceSchema], required: false, default: undefined },
+      systemPromptDisclosure: { type: SystemPromptDisclosureSchema, required: false, default: undefined },
       dedupedSystemPrompts: { type: [String], required: false, default: undefined },
       totalSystemPromptCount: { type: Number, required: false },
       duplicateSystemPromptCount: { type: Number, required: false },

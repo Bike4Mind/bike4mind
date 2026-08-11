@@ -93,6 +93,41 @@ const SystemPromptSourceSchema = z.object({
   content: z.string().optional(),
 });
 
+/**
+ * One named block of the system prompt a completion was actually assembled with.
+ *
+ * Distinct from `contextTelemetry.systemPrompts`, which is anonymized, admin-only, and
+ * deliberately stores no content. This is the caller-facing disclosure: same itemization,
+ * plus the text, scoped to the caller's own completion.
+ */
+const SystemPromptBlockSchema = z.object({
+  source: z.enum(['hardcoded', 'admin', 'user', 'project', 'session', 'org']),
+  /** Stable identifier for the assembly site, e.g. "tool_guidance", "organization_prompt". */
+  name: z.string(),
+  tokenCount: z.number(),
+  /** False when the block was assembled but dropped before the request (token budget). */
+  wasIncluded: z.boolean(),
+  /**
+   * Text withheld. Either the block is server-owned proprietary prompt content (same class
+   * as `systemPromptText`, see sessionRedaction) or the disclosure hit its size cap. The
+   * block's presence, source, and token cost are still reported.
+   */
+  redacted: z.boolean(),
+  text: z.string().optional(),
+});
+
+/**
+ * Caller-facing record of the effective system prompt, populated only when the request
+ * opts in via `includeSystemPrompt`. Readable by the quest's owner alone - a session
+ * shared with another user must not hand them the operator prompts it runs under.
+ */
+export const SystemPromptDisclosureSchema = z.object({
+  blocks: z.array(SystemPromptBlockSchema),
+  totalTokens: z.number(),
+  /** True when at least one block's text was withheld for size rather than ownership. */
+  sizeCapped: z.boolean(),
+});
+
 // Token breakdown by source (shared with contextTelemetry but also stored directly for overflow diagnostics)
 const PromptMetaTokensBySourceSchema = z.object({
   systemPrompts: z.number(),
@@ -135,6 +170,7 @@ const PromptMetaContextSchema = z.object({
     )
     .optional(),
   systemPromptSources: z.array(SystemPromptSourceSchema).optional(),
+  systemPromptDisclosure: SystemPromptDisclosureSchema.optional(),
   dedupedSystemPrompts: z.array(z.string()).optional(),
   totalSystemPromptCount: z.number().optional(),
   duplicateSystemPromptCount: z.number().optional(),

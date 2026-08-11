@@ -51,6 +51,9 @@ const SimplifiedChatRequestSchema = z.object({
   enableQuestMaster: z.boolean().optional(),
   enableMementos: z.boolean().optional(),
   enableAgents: z.boolean().optional(),
+  // Itemize the effective system prompt for this completion. Metadata comes back on the
+  // quest for either path; the prompt TEXT is only returned inline, so it needs wait=true.
+  includeSystemPrompt: z.boolean().prefault(false),
 });
 
 type SimplifiedChatRequest = z.infer<typeof SimplifiedChatRequestSchema>;
@@ -215,6 +218,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_G
         responses: completedQuest.replies,
         createdAt: completedQuest.createdAt,
         ...(toolMeta && { tools: toolMeta }),
+        ...(processService.systemPromptDisclosure && { system_prompt: processService.systemPromptDisclosure }),
         performance,
         tracking_info: {
           quest_id: completedQuest.id,
@@ -317,6 +321,7 @@ function transformToInternalFormat(
       },
     },
     enableArtifacts: false,
+    includeSystemPrompt: request.includeSystemPrompt,
     ...(isToolsEnabled
       ? {
           // Legacy enableTools=true callers expect full capabilities by default.

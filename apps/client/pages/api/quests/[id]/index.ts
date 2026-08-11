@@ -46,6 +46,17 @@ const handler = baseApi({
   const images = quest.images ?? [];
   const files = toGeneratedFiles(images);
 
+  // The system-prompt itemization is for whoever made the completion. Session access here
+  // also covers users the session was shared with, and the org/project/admin prompts a
+  // completion runs under are operator detail they were never granted.
+  const promptMeta =
+    quest.userId === userId || !quest.promptMeta?.context?.systemPromptDisclosure
+      ? quest.promptMeta
+      : {
+          ...quest.promptMeta,
+          context: { ...quest.promptMeta.context, systemPromptDisclosure: undefined },
+        };
+
   return res.json({
     id: quest.id,
     status: quest.status,
@@ -56,7 +67,7 @@ const handler = baseApi({
     files,
     createdAt: quest.createdAt,
     updatedAt: quest.updatedAt,
-    promptMeta: quest.promptMeta,
+    promptMeta,
     executionTracking: quest.promptMeta?.executionTracking,
   });
 });

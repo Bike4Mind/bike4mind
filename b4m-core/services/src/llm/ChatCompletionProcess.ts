@@ -116,6 +116,12 @@ import { AgentDetectionFeature } from './features/AgentDetectionFeature';
 import { SkillsFeature } from './features/SkillsFeature';
 import { StatusManager } from './StatusManager';
 import { buildContextOverflowMessage } from './contextOverflowMessage';
+import {
+  buildSystemPromptDisclosure,
+  stripDisclosureText,
+  type SystemPromptBlockSpec,
+  type SystemPromptDisclosure,
+} from './systemPromptDisclosure';
 import { buildInsufficientCreditsMessage } from './insufficientCreditsMessage';
 import { ResearchModeService } from './ResearchModeService';
 import { deductCreditsWithOrgSupport, subtractCredits } from '../creditService';
@@ -419,6 +425,7 @@ interface ProcessInitContext {
   imageConfig?: z.infer<typeof QuestStartBodySchema>['imageConfig'];
   deepResearchConfig?: z.infer<typeof QuestStartBodySchema>['deepResearchConfig'];
   userTimezone?: string;
+  includeSystemPrompt: boolean;
 }
 
 export class InsufficientCreditsError extends Error {
@@ -717,6 +724,7 @@ export class ChatCompletionProcess {
       imageConfig,
       deepResearchConfig,
       timezone: userTimezone,
+      includeSystemPrompt = false,
     } = parsedBody;
 
     // Pair tools that are useless without their companion. The UI exposes single toggles
@@ -800,11 +808,20 @@ export class ChatCompletionProcess {
       imageConfig,
       deepResearchConfig,
       userTimezone,
+      includeSystemPrompt,
     };
   }
 
   /** Pipeline phase durations from the most recent process() call. Available after process() resolves. */
   public pipelinePhases: Record<string, number> | null = null;
+
+  /**
+   * Effective system prompt from the most recent process() call, WITH text, populated only
+   * when the request set `includeSystemPrompt`. Deliberately not on the quest: prompt text
+   * must not persist or reach a session sharee (see the note on PromptMetaSchema.context),
+   * so the only way out is the direct response to the request that asked for it.
+   */
+  public systemPromptDisclosure: SystemPromptDisclosure | null = null;
 
   public async process({
     body,
@@ -855,6 +872,7 @@ export class ChatCompletionProcess {
       imageConfig,
       deepResearchConfig,
       userTimezone,
+      includeSystemPrompt,
     } = initContext;
     let historyCount = initialHistoryCount;
     let enableQuestMaster = initialEnableQuestMaster;
@@ -1937,106 +1955,148 @@ export class ChatCompletionProcess {
         });
       }
 
+      // The system/context block, itemized. Order is load-bearing, so the flattened array
+      // below - not this list - is what the model sees; the labels exist so the effective
+      // prompt can be itemized for telemetry and for the caller-facing disclosure without a
+      // second, drift-prone copy of these conditionals.
+      const systemPromptBlockSpecs: SystemPromptBlockSpec[] = [
+        { source: 'hardcoded', name: 'date_time_context', messages: [dateTimeContext] },
+        // External-source context. Legacy product-surface sessions put a server-owned
+        // proprietary prompt here, so its text is never disclosed.
+        { source: 'session', name: 'extra_context', messages: extraContextMessages, serverOwned: true },
+        {
+          source: 'admin',
+          name: 'artifact_emission',
+          // Artifact emission guidance. Without this, correct <artifact> usage
+          // is left to the model's defaults and large HTML/code can leak into the chat
+          // body as raw markup. Gated on the same EnableArtifacts flag as extraction.
+          messages: getSettingsValue('EnableArtifacts', defaultAdminSettings)
+            ? [
+                {
+                  role: 'system' as const,
+                  // Admin-editable via the `ArtifactEmissionPrompt` setting (general AI settings);
+                  // falls back to the built-in ARTIFACT_EMISSION_PROMPT default when unset/cleared,
+                  // so a blank value can never strip artifact guidance from completions.
+                  content: getSettingsValue('ArtifactEmissionPrompt', defaultAdminSettings, ARTIFACT_EMISSION_PROMPT),
+                },
+              ]
+            : [],
+        },
+        {
+          source: 'admin',
+          name: 'help_center',
+          // Help-center awareness. Makes the model aware of the in-app
+          // Help Center so a user who types a how-to question ("how do I add to my data lake?")
+          // gets pointed to it instead of an ungrounded guess. Admin-editable via the
+          // `HelpCenterPrompt` setting; a blank value falls back to the built-in default so the
+          // nudge can never be silently stripped. Skipped for local models (lean prompt).
+          messages: isLocalModel
+            ? []
+            : [
+                {
+                  role: 'system' as const,
+                  content: getSettingsValue('HelpCenterPrompt', defaultAdminSettings, HELP_CENTER_PROMPT),
+                },
+              ],
+        },
+        {
+          source: 'hardcoded',
+          name: 'view_registry',
+          messages: enabledTools.includes('navigate_view')
+            ? [
+                {
+                  role: 'system' as const,
+                  content: (() => {
+                    // Extract current path from extraContextMessages for context-aware prompting
+                    const viewCtx = extraContextMessages.find(
+                      m => typeof m.content === 'string' && m.content.includes('[Current View Context]')
+                    );
+                    const ctxStr = typeof viewCtx?.content === 'string' ? viewCtx.content : '';
+                    const currentPath = ctxStr.match(/Path:\s*(\S+)/)?.[1] || '';
+                    let summary = getViewSummaryForLLM({ isAdmin: this.user?.isAdmin });
+                    // Add path-specific emphasis
+                    if (currentPath.startsWith('/admin')) {
+                      summary +=
+                        '\n\nThe user is currently on the Admin page. When they ask about any admin feature, you MUST call navigate_view with the matching admin.* tab.';
+                    }
+                    return summary;
+                  })(),
+                },
+              ]
+            : [],
+        },
+        // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
+        { source: 'admin', name: 'tool_guidance', messages: toolPromptMessage ? [toolPromptMessage] : [] },
+        { source: 'hardcoded', name: 'agent_detection', messages: featureContextMessages['agentDetection'] ?? [] },
+        { source: 'session', name: 'quest_master', messages: featureContextMessages['questMaster'] ?? [] },
+        { source: 'org', name: 'organization_prompt', messages: featureContextMessages['organizationPrompt'] ?? [] },
+        // Per-lake system prompts (defer to the org block above)
+        { source: 'org', name: 'data_lake_prompt', messages: featureContextMessages['dataLakePrompt'] ?? [] },
+        // Per-session system prompt (product surfaces): the generic `systemPromptText`
+        // capability, server-owned by the same argument as sessionRedaction.
+        {
+          source: 'session',
+          name: 'session_prompt',
+          messages: featureContextMessages['sessionPrompt'] ?? [],
+          serverOwned: true,
+        },
+        // Forced data-lake retrieval (grounding + citations)
+        {
+          source: 'session',
+          name: 'knowledge_retrieval',
+          messages: featureContextMessages['knowledgeRetrieval'] ?? [],
+        },
+        {
+          source: 'session',
+          name: 'context_summary',
+          // LLM-optimized summary of the messages before the verbatim window
+          messages: session.contextSummary
+            ? [
+                {
+                  role: 'system' as const,
+                  content: `[Context from earlier in this conversation]\n${session.contextSummary}`,
+                },
+              ]
+            : [],
+        },
+        { source: 'user', name: 'mementos', messages: featureContextMessages['mementos'] ?? [] },
+        { source: 'project', name: 'project_context', messages: featureContextMessages['project'] ?? [] },
+        {
+          source: 'hardcoded',
+          name: 'generated_images',
+          // Recently generated images - gives the model a handle to edit a prior
+          // generated image ("make it cartoonish"). Generated images persist as
+          // bare storage keys in quest.images with no fabFile record, so without
+          // this note the model can't reference them and either declines or (worse)
+          // claims success without calling a tool. Gated on edit_image being
+          // available (paired with image_generation).
+          messages:
+            enabledTools.includes('edit_image') && (cacheInfo.recentGeneratedImages?.length ?? 0) > 0
+              ? [
+                  {
+                    role: 'system' as const,
+                    content: [
+                      '# Recently generated images',
+                      '',
+                      'You generated these image(s) earlier in this conversation. To modify one (change style, angle, colors, etc.), call edit_image with `image` set to the EXACT id shown (for a previously generated image, that bare key is the handle to use):',
+                      '',
+                      ...cacheInfo.recentGeneratedImages!.map(
+                        img => `- ${img.key}${img.prompt ? ` - from: "${img.prompt}"` : ''}`
+                      ),
+                      '',
+                      'Never claim you created or edited an image unless image_generation or edit_image actually returned successfully in this turn.',
+                    ].join('\n'),
+                  },
+                ]
+              : [],
+        },
+        { source: 'user', name: 'url_content', messages: urlMessages },
+        { source: 'user', name: 'attached_files', messages: fabMessages },
+      ];
+
       // Extracted so the overflow-guard safety net below can rebuild with a trimmed
       // history without duplicating this (long, order-sensitive) system/context block.
-      const contextAndSystemMessages: IMessage[] = [
-        dateTimeContext, // Always provide current date/time awareness
-        ...extraContextMessages, // Add extra context messages from external sources at the top
-        // Artifact emission guidance. Without this, correct <artifact> usage
-        // is left to the model's defaults and large HTML/code can leak into the chat
-        // body as raw markup. Gated on the same EnableArtifacts flag as extraction.
-        ...(getSettingsValue('EnableArtifacts', defaultAdminSettings)
-          ? [
-              {
-                role: 'system' as const,
-                // Admin-editable via the `ArtifactEmissionPrompt` setting (general AI settings);
-                // falls back to the built-in ARTIFACT_EMISSION_PROMPT default when unset/cleared,
-                // so a blank value can never strip artifact guidance from completions.
-                content: getSettingsValue('ArtifactEmissionPrompt', defaultAdminSettings, ARTIFACT_EMISSION_PROMPT),
-              },
-            ]
-          : []),
-        // Help-center awareness. Makes the model aware of the in-app
-        // Help Center so a user who types a how-to question ("how do I add to my data lake?")
-        // gets pointed to it instead of an ungrounded guess. Admin-editable via the
-        // `HelpCenterPrompt` setting; a blank value falls back to the built-in default so the
-        // nudge can never be silently stripped. Skipped for local models (lean prompt).
-        ...(isLocalModel
-          ? []
-          : [
-              {
-                role: 'system' as const,
-                content: getSettingsValue('HelpCenterPrompt', defaultAdminSettings, HELP_CENTER_PROMPT),
-              },
-            ]),
-        // Inject view registry summary when navigate_view tool is enabled
-        ...(enabledTools.includes('navigate_view')
-          ? [
-              {
-                role: 'system' as const,
-                content: (() => {
-                  // Extract current path from extraContextMessages for context-aware prompting
-                  const viewCtx = extraContextMessages.find(
-                    m => typeof m.content === 'string' && m.content.includes('[Current View Context]')
-                  );
-                  const ctxStr = typeof viewCtx?.content === 'string' ? viewCtx.content : '';
-                  const currentPath = ctxStr.match(/Path:\s*(\S+)/)?.[1] || '';
-                  let summary = getViewSummaryForLLM({ isAdmin: this.user?.isAdmin });
-                  // Add path-specific emphasis
-                  if (currentPath.startsWith('/admin')) {
-                    summary +=
-                      '\n\nThe user is currently on the Admin page. When they ask about any admin feature, you MUST call navigate_view with the matching admin.* tab.';
-                  }
-                  return summary;
-                })(),
-              },
-            ]
-          : []),
-        ...(toolPromptMessage ? [toolPromptMessage] : []), // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
-        ...(featureContextMessages['agentDetection'] ?? []), // Add agent system prompts
-        ...(featureContextMessages['questMaster'] ?? []),
-        ...(featureContextMessages['organizationPrompt'] ?? []), // Add team-wide system prompt
-        ...(featureContextMessages['dataLakePrompt'] ?? []), // Per-lake system prompts (defer to the org block above)
-        ...(featureContextMessages['sessionPrompt'] ?? []), // Per-session system prompt (product surfaces)
-        ...(featureContextMessages['knowledgeRetrieval'] ?? []), // Forced data-lake retrieval (grounding + citations)
-        // Add LLM-optimized context summary if available (covers messages before verbatim window)
-        ...(session.contextSummary
-          ? [
-              {
-                role: 'system' as const,
-                content: `[Context from earlier in this conversation]\n${session.contextSummary}`,
-              },
-            ]
-          : []),
-        ...(featureContextMessages['mementos'] ?? []),
-        ...(featureContextMessages['project'] ?? []),
-        // Recently generated images - gives the model a handle to edit a prior
-        // generated image ("make it cartoonish"). Generated images persist as
-        // bare storage keys in quest.images with no fabFile record, so without
-        // this note the model can't reference them and either declines or (worse)
-        // claims success without calling a tool. Gated on edit_image being
-        // available (paired with image_generation).
-        ...(enabledTools.includes('edit_image') && (cacheInfo.recentGeneratedImages?.length ?? 0) > 0
-          ? [
-              {
-                role: 'system' as const,
-                content: [
-                  '# Recently generated images',
-                  '',
-                  'You generated these image(s) earlier in this conversation. To modify one (change style, angle, colors, etc.), call edit_image with `image` set to the EXACT id shown (for a previously generated image, that bare key is the handle to use):',
-                  '',
-                  ...cacheInfo.recentGeneratedImages!.map(
-                    img => `- ${img.key}${img.prompt ? ` - from: "${img.prompt}"` : ''}`
-                  ),
-                  '',
-                  'Never claim you created or edited an image unless image_generation or edit_image actually returned successfully in this turn.',
-                ].join('\n'),
-              },
-            ]
-          : []),
-        ...urlMessages,
-        ...fabMessages,
-      ];
+      const contextAndSystemMessages: IMessage[] = systemPromptBlockSpecs.flatMap(spec => spec.messages);
       const currentUserPromptMessages = [{ role: 'user' as const, content: effectiveUserPrompt }];
       let messages = await buildAndSortMessages(
         previousMessages,
@@ -2234,110 +2294,42 @@ export class ChatCompletionProcess {
         logger.warn(`📊 Failed to calculate token breakdown:`, tokenBreakdownError);
       }
 
-      // Feed breakdown into telemetry builder for detailed system prompt tracking
+      // Itemize the effective system prompt from the same labeled specs the messages were
+      // flattened from. Telemetry takes the metadata; a caller who opted in also gets the text
+      // back on the response (never on the quest - see the disclosure assignment below).
+      let systemPromptDisclosure: SystemPromptDisclosure | undefined;
+      try {
+        const disclosure = await buildSystemPromptDisclosure({
+          specs: systemPromptBlockSpecs,
+          sentMessages: messages,
+          countTokens: msgs => calculateTotalTokenLength(msgs, tokenCalcOptions),
+          withText: includeSystemPrompt,
+        });
+        systemPromptDisclosure = disclosure;
+        if (includeSystemPrompt) {
+          this.systemPromptDisclosure = disclosure;
+          // The quest serializes to the client on many read paths, including to a user the
+          // session was merely shared with, so only the text-free form is ever attached to it.
+          quest.promptMeta!.context!.systemPromptDisclosure = stripDisclosureText(disclosure);
+        }
+      } catch (disclosureError) {
+        logger.warn(`📊 Failed to itemize the effective system prompt:`, disclosureError);
+      }
+
       if (telemetryBuilder) {
         try {
-          // Build system prompt details for telemetry
-          type SystemPromptDetail = {
-            source: 'hardcoded' | 'admin' | 'user' | 'project' | 'session' | 'org';
-            name: string;
-            tokenCount: number;
-            wasIncluded: boolean;
-          };
-          const systemPromptDetails: SystemPromptDetail[] = [];
-
-          // Date/time context (hardcoded)
-          if (dateTimeContext) {
-            const dtTokens = await calculateTotalTokenLength([dateTimeContext], tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'hardcoded',
-              name: 'date_time_context',
-              tokenCount: dtTokens,
-              wasIncluded: true,
+          if (systemPromptDisclosure) {
+            telemetryBuilder.setSystemPrompts({
+              prompts: systemPromptDisclosure.blocks.map(({ source, name, tokenCount, wasIncluded }) => ({
+                source,
+                name,
+                tokenCount,
+                wasIncluded,
+              })),
+              totalTokens: systemPromptDisclosure.totalTokens,
+              duplicateCount: quest.promptMeta?.context?.duplicateSystemPromptCount ?? 0,
             });
           }
-
-          // Tool prompt (admin/hardcoded)
-          if (toolPromptMessage) {
-            const toolTokens = await calculateTotalTokenLength([toolPromptMessage], tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'admin',
-              name: 'tool_guidance',
-              tokenCount: toolTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Agent detection prompts
-          const agentMessages = featureContextMessages['agentDetection'] ?? [];
-          if (agentMessages.length > 0) {
-            const agentTokens = await calculateTotalTokenLength(agentMessages, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'hardcoded',
-              name: 'agent_detection',
-              tokenCount: agentTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Quest master prompts
-          const qmMessages = featureContextMessages['questMaster'] ?? [];
-          if (qmMessages.length > 0) {
-            const qmTokens = await calculateTotalTokenLength(qmMessages, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'session',
-              name: 'quest_master',
-              tokenCount: qmTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Organization prompts
-          const orgMessages = featureContextMessages['organizationPrompt'] ?? [];
-          if (orgMessages.length > 0) {
-            const orgTokens = await calculateTotalTokenLength(orgMessages, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'org',
-              name: 'organization_prompt',
-              tokenCount: orgTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Session summary
-          if (session.summary) {
-            const summaryMsg = [
-              { role: 'system' as const, content: `Previous conversation summary:\n${session.summary}` },
-            ];
-            const summaryTokens = await calculateTotalTokenLength(summaryMsg, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'session',
-              name: 'session_summary',
-              tokenCount: summaryTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Project prompts
-          const projectMessages = featureContextMessages['project'] ?? [];
-          if (projectMessages.length > 0) {
-            const projectTokens = await calculateTotalTokenLength(projectMessages, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'project',
-              name: 'project_context',
-              tokenCount: projectTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Calculate total system prompt tokens
-          const systemPromptTokensTotal = systemPromptDetails.reduce((sum, p) => sum + p.tokenCount, 0);
-
-          telemetryBuilder.setSystemPrompts({
-            prompts: systemPromptDetails,
-            totalTokens: systemPromptTokensTotal,
-            duplicateCount: quest.promptMeta?.context?.duplicateSystemPromptCount ?? 0,
-          });
 
           if (tokensBySource) {
             telemetryBuilder.setTokensBySource(tokensBySource);
