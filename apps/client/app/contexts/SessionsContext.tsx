@@ -581,9 +581,15 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
 
       // Session switch completed - files will be restored via useEffect
 
-      // Update the user's last notebook ID if it's a different session
+      // Persist the newly opened notebook, fire-and-forget on purpose: it only feeds API chat
+      // routing (getSessionId in pages/api/chat.ts) and session resumption, the server rewrites
+      // it on the next message, and awaiting it would hold up the switch - so a failure logs
+      // rather than toasting on a path the user is actively navigating. The catch is
+      // load-bearing: updateUserToServer rejects on any non-2xx and the log is the only signal.
       if (sessionId && currentUser.lastNotebookId !== sessionId) {
-        updateUserToServer(currentUser.id, { lastNotebookId: sessionId });
+        updateUserToServer(currentUser.id, { lastNotebookId: sessionId }).catch(error => {
+          console.error('[SessionsContext] Failed to persist lastNotebookId to server', error);
+        });
         queryClient.invalidateQueries({ queryKey: ['sessions', sessionId] });
       }
     },
