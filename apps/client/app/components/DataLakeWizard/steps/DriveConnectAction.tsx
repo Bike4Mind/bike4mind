@@ -21,6 +21,18 @@ const STATUS_LABEL: Record<LakeDriveConnection['status'], { label: string; color
     credential_error: { label: 'Credential error', color: 'danger' },
   };
 
+// The Google Picker attaches to <body> at z-index ~1001, BELOW the MUI wizard modal (1300), so
+// without this lift it opens hidden BEHIND the wizard (verified on preview). AttachFileButton never
+// hit this - it opens the picker outside any modal. 1400 matches the wizard's own above-modal menus.
+const PICKER_ZINDEX_STYLE_ID = 'drive-picker-zindex-fix';
+function ensurePickerAboveModal() {
+  if (typeof document === 'undefined' || document.getElementById(PICKER_ZINDEX_STYLE_ID)) return;
+  const style = document.createElement('style');
+  style.id = PICKER_ZINDEX_STYLE_ID;
+  style.textContent = '.picker-dialog-bg{z-index:1399!important}.picker-dialog{z-index:1400!important}';
+  document.head.appendChild(style);
+}
+
 /**
  * Connect a Google Drive FOLDER to an existing data lake. Reuses the same OAuth-token flow the
  * chat attach button uses (redirect to consent when not yet connected, else open the Google Picker),
@@ -64,6 +76,7 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } | nu
         toast.error('Google Drive is unavailable right now. Please try again.');
         return;
       }
+      ensurePickerAboveModal(); // the picker opens from inside the wizard modal - keep it on top
       openPicker({
         clientId: googleClientId,
         developerKey: '',
