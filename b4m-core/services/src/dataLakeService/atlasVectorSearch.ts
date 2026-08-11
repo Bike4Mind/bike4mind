@@ -30,5 +30,11 @@ export async function atlasVectorSearch(args: {
   adapters: AtlasVectorSearchAdapters;
 }): Promise<AtlasVectorSearchResult> {
   const { adapters, ...rest } = args;
-  return annVectorSearch({ ...rest, adapter: { knnSearch: adapters.vectorSearch } });
+  // A bare `{ knnSearch: adapters.vectorSearch }` strips `this` - the real adapter is a
+  // repository instance whose method reads `this.fabFileChunkModel`, so calling it unbound
+  // throws. The wrapper closure keeps the call bound to `adapters`.
+  return annVectorSearch({
+    ...rest,
+    adapter: { knnSearch: (...callArgs) => adapters.vectorSearch(...callArgs) },
+  });
 }

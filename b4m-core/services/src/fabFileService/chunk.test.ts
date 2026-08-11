@@ -20,7 +20,12 @@ describe('chunkFabfile', () => {
   let mockAdapter: {
     db: {
       fabFiles: { shareable: { findAccessibleById: Mock }; update: Mock };
-      fabFileChunks: { deleteManyByFabFileId: Mock; bulkInsert: Mock; update: Mock };
+      fabFileChunks: {
+        deleteManyByFabFileId: Mock;
+        bulkInsert: Mock;
+        update: Mock;
+        distinctEmbeddingModelsByFabFileIds: Mock;
+      };
       users: { findById: Mock };
     };
     storage: { getContentAsBuffer: Mock };
@@ -47,6 +52,7 @@ describe('chunkFabfile', () => {
           deleteManyByFabFileId: vi.fn(),
           bulkInsert: vi.fn().mockResolvedValue([]),
           update: vi.fn(),
+          distinctEmbeddingModelsByFabFileIds: vi.fn().mockResolvedValue([]),
         },
         users: { findById: vi.fn() },
       },
@@ -55,7 +61,13 @@ describe('chunkFabfile', () => {
     };
   });
 
-  it('deletes the OLD model index entries, not the new one being written', async () => {
+  it('deletes every OLD model the chunk store actually used, not just FabFile.embeddingModel, and not the new one being written', async () => {
+    // A file re-embedded more than once can have chunks under more than one prior model (see
+    // IFabFileChunk.embeddingModel) - fabFile.embeddingModel alone is only the CURRENT one.
+    mockAdapter.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds.mockResolvedValue([
+      'text-embedding-ada-002',
+      'text-embedding-3-small-old',
+    ]);
     mockAdapter.searchIndex = { deleteByFabFileId: vi.fn().mockResolvedValue(undefined) };
 
     await chunkFabfile(
@@ -64,14 +76,14 @@ describe('chunkFabfile', () => {
       mockAdapter as never
     );
 
+    expect(mockAdapter.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds).toHaveBeenCalledWith(['file-1']);
+    expect(mockAdapter.searchIndex.deleteByFabFileId).toHaveBeenCalledTimes(2);
     expect(mockAdapter.searchIndex.deleteByFabFileId).toHaveBeenCalledWith('file-1', 'text-embedding-ada-002');
+    expect(mockAdapter.searchIndex.deleteByFabFileId).toHaveBeenCalledWith('file-1', 'text-embedding-3-small-old');
   });
 
-  it('skips the call when the file had no previous embeddingModel', async () => {
-    mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({
-      ...mockFabFile,
-      embeddingModel: undefined,
-    });
+  it('skips the delete calls when the chunk store has no prior models for this file', async () => {
+    mockAdapter.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds.mockResolvedValue([]);
     mockAdapter.searchIndex = { deleteByFabFileId: vi.fn() };
 
     await chunkFabfile(
@@ -83,13 +95,14 @@ describe('chunkFabfile', () => {
     expect(mockAdapter.searchIndex.deleteByFabFileId).not.toHaveBeenCalled();
   });
 
-  it('is a no-op when searchIndex is not provided (non-self-host)', async () => {
+  it('is a no-op when searchIndex is not provided (non-self-host) - never even queries the chunk store', async () => {
     const result = await chunkFabfile(
       mockUser,
       { fabFileId: 'file-1', embeddingModel: 'text-embedding-3-small' },
       mockAdapter as never
     );
     expect(mockAdapter.db.fabFileChunks.bulkInsert).toHaveBeenCalled();
+    expect(mockAdapter.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds).not.toHaveBeenCalled();
     expect(result).toEqual([]);
   });
 });

@@ -40,7 +40,7 @@ export interface DeleteFabFileAdapter {
       IFabFileRepository,
       'findByIdAndUserId' | 'findById' | 'findAllInIds' | 'update' | 'deleteManyInIds'
     >;
-    fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId'>;
+    fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId' | 'distinctEmbeddingModelsByFabFileIds'>;
     users: Pick<IUserRepository, 'findById' | 'update'>;
     sessions: Pick<ISessionRepository, 'findAllWithKnowledgeId' | 'update'>;
   };
@@ -86,10 +86,18 @@ export const deleteFabFile = async (
       }
     }
 
+    // Resolve BEFORE the Mongo chunks are deleted below - their per-chunk embeddingModel is the
+    // only place this survives once they're gone. A re-embedded file's chunks can span more
+    // than one model (see IFabFileChunk.embeddingModel), so ownedFile.embeddingModel alone - the
+    // file's CURRENT model only - would miss an OpenSearch index left by an earlier embed.
+    const chunkEmbeddingModels = searchIndex
+      ? await db.fabFileChunks.distinctEmbeddingModelsByFabFileIds([ownedFile.id])
+      : [];
+
     // Handle deletion of new FabFileChunks
     await db.fabFileChunks.deleteManyByFabFileId(ownedFile.id);
-    if (searchIndex && ownedFile.embeddingModel) {
-      await searchIndex.deleteByFabFileId(ownedFile.id, ownedFile.embeddingModel);
+    if (searchIndex) {
+      await Promise.all(chunkEmbeddingModels.map(model => searchIndex.deleteByFabFileId(ownedFile.id, model)));
     }
 
     // Unlink the deleted fabFile from all associated sessions

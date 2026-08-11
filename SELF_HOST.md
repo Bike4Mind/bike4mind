@@ -516,7 +516,7 @@ By default, self-host Data Lake search ranks every chunk with a bounded brute-fo
 Known limitations:
 
 - **No backfill.** Only chunks vectorized AFTER both variables are set get indexed into OpenSearch. Chunks from before that point keep working (still retrievable) but stay on the brute-force scan path until a future re-embed. This is a correctness-neutral gap: retrieval always re-derives which files you can currently access from live data, so a chunk that isn't in OpenSearch yet just gets scanned instead of returning nothing.
-- **Re-embedding a file** under a different embedding model leaves its old vectors behind in that model's OpenSearch index - harmless (never returned; a query only searches the current model's index for files it can currently access), just a small amount of unreclaimed disk on the OpenSearch container.
+- **A chunk lost to a transient indexing failure has no automatic repair.** If an OpenSearch write fails mid-vectorize (a transient cluster outage), that chunk's content is missing from OpenSearch results until a future re-embed re-processes the file - the same shape as the no-backfill gap above, and equally correctness-neutral (the scan path still sees it in Mongo). The compensating cleanup that makes this safe is itself best-effort: it only ever touches the chunks from the batch that failed (never a sibling batch for the same file, so it cannot destroy already-good data), and if the cleanup delete itself fails - most likely from the same outage that failed the write - it logs and moves on rather than retrying.
 - Disable it again by unsetting `B4M_SELF_HOST_OPENSEARCH` - search falls back to the scan path immediately, no data loss.
 
 ## Background worker
@@ -584,7 +584,7 @@ Discovery uses the provider keys already in `.env.selfhost` (or a user's own key
 
 ## Security notes
 
-The stack is configured for **local, single-host use**: the backing services (Mongo, MinIO, ElasticMQ, Mailpit) run without authentication and bind to `127.0.0.1` only. Before running on a public-facing server you must enable Mongo auth, change the MinIO credentials, use a real SMTP provider, and put the app behind a reverse proxy with TLS. See the header of `compose.selfhost.yaml`.
+The stack is configured for **local, single-host use**: the backing services (Mongo, MinIO, ElasticMQ, Mailpit, and OpenSearch if the optional `opensearch` profile is enabled) run without authentication and bind to `127.0.0.1` only. Before running on a public-facing server you must enable Mongo auth, change the MinIO credentials, use a real SMTP provider, and put the app behind a reverse proxy with TLS. See the header of `compose.selfhost.yaml`.
 
 When you put the app behind a reverse proxy, forward the original `Host` header and set `X-Forwarded-Proto` (e.g. `https` once TLS is terminated at the proxy). The published-artifact viewer derives each page's Content-Security-Policy origin and scheme from those headers, so getting them right is what lets published artifact bundles load their assets over your real origin.
 
@@ -606,10 +606,11 @@ Whichever path you choose, do the checklist first.
 ### Before you expose anything
 
 - [ ] **Change the MinIO credentials off the dev default.** `.env.selfhost.example` ships `minioadmin` / `minioadmin`. The app's S3 client authenticates to MinIO with the `AWS_*` keys, so set `MINIO_ROOT_USER` = `AWS_ACCESS_KEY_ID` and `MINIO_ROOT_PASSWORD` = `AWS_SECRET_ACCESS_KEY` to the same fresh values (generate the secret with `openssl rand -hex 24`).
-- [ ] **Keep the backing services on loopback, and know the Docker/ufw footgun.** Mongo (27017), MinIO (9000/9001), ElasticMQ (9324/9325), and Mailpit (8025) have **no authentication** and are already bound to `127.0.0.1` in `compose.selfhost.yaml` - never publish them. Be aware that on Linux, **Docker's published ports bypass `ufw`/`firewalld`**: Docker DNATs published ports through its own iptables chain before the filter table, so a "deny incoming" ufw policy does **not** block `3000`/`3001`/`8788`. Fixes: bind to `127.0.0.1` in compose (Path B's override does this for you), add `DOCKER-USER` iptables rules, use the `ufw-docker` helper, or - cleanest on a cloud VM - a provider security group that allows only inbound `80`/`443`. **Verify from a SECOND machine** (localhost always sees them), for example:
+- [ ] **Keep the backing services on loopback, and know the Docker/ufw footgun.** Mongo (27017), MinIO (9000/9001), ElasticMQ (9324/9325), Mailpit (8025), and OpenSearch (9200, if the optional `opensearch` profile is enabled) have **no authentication** and are already bound to `127.0.0.1` in `compose.selfhost.yaml` - never publish them. Be aware that on Linux, **Docker's published ports bypass `ufw`/`firewalld`**: Docker DNATs published ports through its own iptables chain before the filter table, so a "deny incoming" ufw policy does **not** block `3000`/`3001`/`8788`. Fixes: bind to `127.0.0.1` in compose (Path B's override does this for you), add `DOCKER-USER` iptables rules, use the `ufw-docker` helper, or - cleanest on a cloud VM - a provider security group that allows only inbound `80`/`443`. **Verify from a SECOND machine** (localhost always sees them), for example:
 
   ```bash
   # Run this from a DIFFERENT computer, against your host's public IP.
+  # Add 9200 if you enabled the opensearch profile.
   nmap -Pn -p 22,80,443,3000,3001,8788,27017,9000,9324,8025 <your-host-public-ip>
   # Path B expectation: only 22 (if you use SSH), 80, and 443 open; everything
   # else closed/filtered. Tailscale-only expectation: none of these open publicly.

@@ -12,13 +12,14 @@
 # untouched; this file is the self-host stack.
 #
 # SECURITY — this stack is for LOCAL / single-host use. The backing services
-# (Mongo, MinIO, ElasticMQ, Mailpit) run without authentication and are bound
-# to 127.0.0.1 so they are NOT reachable off the host. Before running on a
-# public-facing server you MUST: enable Mongo auth (--auth + a user), set
-# strong MINIO_ROOT_USER/MINIO_ROOT_PASSWORD (do not ship the dev defaults),
-# point MAIL_* at a real SMTP provider, put the app behind a reverse proxy
-# with TLS, and keep the backing ports unpublished. Do not expose
-# 27017/9000/9324/8025 to the internet.
+# (Mongo, MinIO, ElasticMQ, Mailpit, and OpenSearch if the optional opensearch
+# profile is enabled) run without authentication and are bound to 127.0.0.1 so
+# they are NOT reachable off the host. Before running on a public-facing
+# server you MUST: enable Mongo auth (--auth + a user), set strong
+# MINIO_ROOT_USER/MINIO_ROOT_PASSWORD (do not ship the dev defaults), point
+# MAIL_* at a real SMTP provider, put the app behind a reverse proxy with
+# TLS, and keep the backing ports unpublished. Do not expose
+# 27017/9000/9324/8025/9200 to the internet.
 #
 # Realtime: the `ws` gateway + `subscriber-fanout` services provide live
 # streaming updates (chat, notebooks, sync) without AWS API Gateway. See the

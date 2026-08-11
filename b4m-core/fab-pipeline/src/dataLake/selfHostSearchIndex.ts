@@ -114,26 +114,33 @@ export class FabFileChunkSearchIndex extends BaseSearchIndex {
 
     if (failedChunks.length === 0) return;
 
-    // Fail CLOSED per file: at query time a file with ANY hit is treated as fully indexed (only
-    // a file with ZERO hits gets rebucketed onto the scan path - see semanticDataLakeSearch.ts),
-    // so a file left partially indexed by this failure would be silently, permanently missing
-    // its other chunks from every future search. Dropping what DID get written forces it back
-    // onto the scan path instead, which searches the real (complete) chunk set in Mongo.
-    const failedByFile = new Map<string, Set<string>>();
-    for (const chunk of failedChunks) {
+    // Fail CLOSED per BATCH, never per file: `indexChunks` runs once per vectorize MESSAGE
+    // (fabFileVectorize.ts), and a file can span several messages. Deleting by fabFileId alone
+    // would also destroy an EARLIER or LATER batch's correctly-indexed chunks for the same file -
+    // a real regression a fix here once shipped. Scoping to only THIS call's own chunk ids means
+    // a failure here can only ever undo what this same call wrote; it can never reach a sibling
+    // batch's docs. The failed chunk's content itself becomes the same accepted "no backfill" gap
+    // SELF_HOST.md already documents, not a destroyed-good-data regression.
+    const failedKeys = new Set(
+      failedChunks.filter(c => c.fabFileId && c.embeddingModel).map(c => `${c.fabFileId} ${c.embeddingModel}`)
+    );
+    const idsByFileModel = new Map<string, { fabFileId: string; embeddingModel: string; ids: string[] }>();
+    for (const chunk of chunks) {
       if (!chunk.fabFileId || !chunk.embeddingModel) continue;
-      if (!failedByFile.has(chunk.fabFileId)) failedByFile.set(chunk.fabFileId, new Set());
-      failedByFile.get(chunk.fabFileId)!.add(chunk.embeddingModel);
+      const key = `${chunk.fabFileId} ${chunk.embeddingModel}`;
+      if (!failedKeys.has(key)) continue;
+      if (!idsByFileModel.has(key)) {
+        idsByFileModel.set(key, { fabFileId: chunk.fabFileId, embeddingModel: chunk.embeddingModel, ids: [] });
+      }
+      idsByFileModel.get(key)!.ids.push(chunk.id);
     }
     await Promise.all(
-      [...failedByFile.entries()].flatMap(([fabFileId, models]) =>
-        [...models].map(model => {
-          Logger.globalInstance.warn(
-            `Chunk indexing failed for FabFile ${fabFileId} (model ${model}) - removing its partial OpenSearch state so it falls back to scan`
-          );
-          return FabFileChunkSearchIndex.deleteByFabFileId(fabFileId, model);
-        })
-      )
+      [...idsByFileModel.values()].map(({ fabFileId, embeddingModel, ids }) => {
+        Logger.globalInstance.warn(
+          `Chunk indexing failed for FabFile ${fabFileId} (model ${embeddingModel}) - removing this batch's own OpenSearch docs (not the whole file) so its content falls back to scan`
+        );
+        return FabFileChunkSearchIndex.deleteByChunkIds(embeddingModel, ids);
+      })
     );
   }
 
@@ -148,6 +155,28 @@ export class FabFileChunkSearchIndex extends BaseSearchIndex {
       });
     } catch (error) {
       Logger.globalInstance.warn(`Failed to delete self-host OpenSearch vectors for FabFile ${fabFileId}:`, error);
+    }
+  }
+
+  /**
+   * Remove specific chunk docs by id (id === chunk id, see mapDocument) from a single model's
+   * index. Called from `indexChunks` to clean up a failed batch's own docs.
+   *
+   * Fail-open, matching `deleteByFabFileId`, and left that way deliberately - but note the
+   * residual: the most likely cause of THIS delete failing is the same cluster outage that
+   * failed the original write, so exactly when the cleanup matters most, it is least likely to
+   * run. There is no retry here; a later `reindex()`/backfill job is the only repair path once
+   * one exists (see the note at the bottom of this file).
+   */
+  static async deleteByChunkIds(embeddingModel: string, chunkIds: string[]): Promise<void> {
+    if (chunkIds.length === 0) return;
+    const indexName = selfHostVectorIndexName(embeddingModel);
+    if (!indexName) return;
+    const osClient = await this.loadSearchIndexClient();
+    try {
+      await osClient.deleteDocumentByQuery(indexName, { query: { ids: { values: chunkIds } } });
+    } catch (error) {
+      Logger.globalInstance.warn(`Failed to delete self-host OpenSearch chunk docs ${chunkIds.join(', ')}:`, error);
     }
   }
 

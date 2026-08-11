@@ -202,7 +202,7 @@ describe('FabFileChunkSearchIndex.indexChunks', () => {
     expect(mockOsClient.deleteDocumentByQuery).not.toHaveBeenCalled();
   });
 
-  it('fails a file CLOSED (deletes its docs) when any of its chunks fail to index, but leaves an unrelated file alone', async () => {
+  it('fails THIS BATCH closed (deletes only its own chunk ids) when any of its chunks fail to index, but leaves an unrelated file alone', async () => {
     mockOsClient.indexDocument.mockImplementation((_index: string, doc: { metadata: { fabFileId: string } }) =>
       doc.metadata.fabFileId === 'file-1' ? Promise.reject(new Error('cluster unreachable')) : Promise.resolve()
     );
@@ -216,8 +216,29 @@ describe('FabFileChunkSearchIndex.indexChunks', () => {
 
     expect(mockOsClient.deleteDocumentByQuery).toHaveBeenCalledTimes(1);
     expect(mockOsClient.deleteDocumentByQuery).toHaveBeenCalledWith(selfHostVectorIndexName(MODEL), {
-      query: { term: { 'metadata.fabFileId': 'file-1' } },
+      query: { ids: { values: ['c1', 'c2'] } },
     });
+  });
+
+  it("does NOT touch an earlier batch's already-indexed docs for the same file when a later batch fails", async () => {
+    // fabFileVectorize.ts calls indexChunks once per vectorize MESSAGE, not once per file - a
+    // large file spans several calls. The fix for a partial-index failure must never reach
+    // outside its own call's chunk ids, or it would destroy a sibling batch's good data.
+    mockOsClient.indexDocument.mockResolvedValueOnce(undefined); // batch A: c1 succeeds
+    await FabFileChunkSearchIndex.indexChunks([chunk({ id: 'c1', fabFileId: 'file-1' })]);
+    expect(mockOsClient.deleteDocumentByQuery).not.toHaveBeenCalled();
+
+    mockOsClient.indexDocument.mockRejectedValueOnce(new Error('cluster unreachable')); // batch B: c2 fails
+    await FabFileChunkSearchIndex.indexChunks([chunk({ id: 'c2', fabFileId: 'file-1' })]);
+
+    expect(mockOsClient.deleteDocumentByQuery).toHaveBeenCalledTimes(1);
+    expect(mockOsClient.deleteDocumentByQuery).toHaveBeenCalledWith(selfHostVectorIndexName(MODEL), {
+      query: { ids: { values: ['c2'] } },
+    });
+    // c1 (batch A's own chunk id) must never appear in a delete call.
+    for (const call of mockOsClient.deleteDocumentByQuery.mock.calls) {
+      expect(call[1].query.ids.values).not.toContain('c1');
+    }
   });
 });
 
@@ -245,6 +266,39 @@ describe('FabFileChunkSearchIndex.deleteByFabFileId', () => {
 
   it('no-ops for an unregistered model', async () => {
     await FabFileChunkSearchIndex.deleteByFabFileId('file-1', 'not-a-real-model');
+    expect(mockOsClient.deleteDocumentByQuery).not.toHaveBeenCalled();
+  });
+});
+
+describe('FabFileChunkSearchIndex.deleteByChunkIds', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.OPENSEARCH_ENDPOINT = 'localhost:9200';
+    FabFileChunkSearchIndex['ensuredModels'].clear();
+  });
+
+  it('deletes by an ids query on the model-specific index', async () => {
+    mockOsClient.deleteDocumentByQuery.mockResolvedValueOnce(undefined);
+
+    await FabFileChunkSearchIndex.deleteByChunkIds(MODEL, ['c1', 'c2']);
+
+    expect(mockOsClient.deleteDocumentByQuery).toHaveBeenCalledWith(selfHostVectorIndexName(MODEL), {
+      query: { ids: { values: ['c1', 'c2'] } },
+    });
+  });
+
+  it('no-ops on an empty id list', async () => {
+    await FabFileChunkSearchIndex.deleteByChunkIds(MODEL, []);
+    expect(mockOsClient.deleteDocumentByQuery).not.toHaveBeenCalled();
+  });
+
+  it('swallows a delete failure rather than throwing (fail-open)', async () => {
+    mockOsClient.deleteDocumentByQuery.mockRejectedValueOnce(new Error('cluster unreachable'));
+    await expect(FabFileChunkSearchIndex.deleteByChunkIds(MODEL, ['c1'])).resolves.toBeUndefined();
+  });
+
+  it('no-ops for an unregistered model', async () => {
+    await FabFileChunkSearchIndex.deleteByChunkIds('not-a-real-model', ['c1']);
     expect(mockOsClient.deleteDocumentByQuery).not.toHaveBeenCalled();
   });
 });
