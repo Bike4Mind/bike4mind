@@ -101,10 +101,14 @@ export async function getValidUserDriveAccessToken(userId: string): Promise<stri
  * Prefers the connection's own org-owned refresh token; until the org-owned connect flow (issue D)
  * populates it, falls back to the connecting user's personal Drive credential (`connectedBy`). On a
  * credential failure it marks the connection `credential_error` so the failure is observable rather
- * than silent. Loads the encrypted token via the credential-scoped accessor, never a default read.
+ * than silent. Loads the encrypted token via the org-scoped credential accessor (the caller passes
+ * the connection's organizationId), never a default read.
  */
-export async function getValidConnectionDriveAccessToken(connectionId: string): Promise<string> {
-  const connection = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(connectionId);
+export async function getValidConnectionDriveAccessToken(
+  connectionId: string,
+  organizationId: string
+): Promise<string> {
+  const connection = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(connectionId, organizationId);
   if (!connection) throw new Error('Google Drive connection not found');
 
   if (connection.oauthRefreshToken) {

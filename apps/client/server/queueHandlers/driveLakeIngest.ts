@@ -60,7 +60,7 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
 
     // Prefer the connection's own token; falls back to the connecting user's (D not built yet).
     // A credential failure marks the connection credential_error and throws so SQS retries -> DLQ.
-    const accessToken = await getValidConnectionDriveAccessToken(connectionId);
+    const accessToken = await getValidConnectionDriveAccessToken(connectionId, connection.organizationId);
     const drive = createDriveClient(accessToken);
 
     // 1) Walk the folder tree (one level per Drive call, recursed).
