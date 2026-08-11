@@ -106,7 +106,8 @@ const Register: React.FC = () => {
     control,
     formState: { errors, isValid },
   } = useForm<RegisterFormData>({
-    resolver: zodResolver(registerSchema),
+    // any: Zod v4 schema type is incompatible with @hookform/resolvers v5 Zod v3 overload signature
+    resolver: zodResolver(registerSchema as any),
     mode: 'onChange',
   });
 
