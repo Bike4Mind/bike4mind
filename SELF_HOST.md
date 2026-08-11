@@ -255,6 +255,8 @@ free -g | awk '/^Mem:/ {print $2, "GB RAM"}'                  # Linux
 sysctl -n hw.memsize | awk '{print $1/1073741824, "GB RAM"}'  # macOS
 ```
 
+**On Docker Desktop, match the row against the memory ALLOCATED TO DOCKER (Settings > Resources), not host RAM.** The VM defaults to a fraction of host RAM (commonly 8 GB) regardless of how much the host has, so a host with 24 GB does not mean the container gets 24 GB. Picking the "24 GB" row without raising the Docker VM allocation first makes chat silently fall back to the embedding model with a "Fallback Model Used" badge (the chat model failed to load, so the picker served the only other one available). Not an issue on Linux, where the daemon runs directly on the host.
+
 | System RAM | Set `OLLAMA_PULL_MODELS` to | Download | MoE override |
 |------------|-----------------------------|---------:|--------------|
 | **32 GB or more** | `qwen3.6:35b-a3b-q4_K_M qwen3-embedding:0.6b` | ~25 GB | required |
