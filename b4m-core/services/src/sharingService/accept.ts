@@ -70,6 +70,14 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
     throw new UnprocessableEntityError('Invite has no remaining users');
   }
 
+  // Checked before the pending-membership gate below: a user who already accepted has moved
+  // out of `pending` into `accepted`, so on a multi-recipient invite where others are still
+  // pending, checking membership first would misreport a re-accept as "not sent to your
+  // account" instead of "already accepted".
+  if ((invite.recipients?.accepted || []).includes(user.email)) {
+    throw new UnprocessableEntityError('User has already accepted the invite');
+  }
+
   // A By-Users invite names specific recipients in `pending`; only they may consume a slot,
   // or `remaining` (now sized to the recipient count, not a flat 1) lets an unintended
   // accepter claim a share meant for someone else while a named recipient still hasn't
@@ -78,10 +86,6 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
   // above already blocks further accepts regardless of who is asking.
   if ((invite.recipients?.pending?.length ?? 0) > 0 && !invite.recipients?.pending?.includes(user.email)) {
     throw new ForbiddenError('This invite was not sent to your account');
-  }
-
-  if ((invite.recipients?.accepted || []).includes(user.email)) {
-    throw new UnprocessableEntityError('User has already accepted the invite');
   }
 
   if (invite.recipients) {

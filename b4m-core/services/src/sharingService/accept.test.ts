@@ -365,4 +365,19 @@ describe('sharingService - acceptInvite (FabFile recipient membership)', () => {
 
     expect(adapters.db.invites.update).toHaveBeenCalled();
   });
+
+  it('reports "already accepted" for a re-accept, not "not sent to your account", when other recipients are still pending', async () => {
+    const adapters = makeAdapters();
+    adapters.db.users.findById.mockResolvedValue(makeUser('a@x.com'));
+    // a@x.com already accepted and moved out of pending; b@x.com is still pending.
+    adapters.db.invites.findById.mockResolvedValue({
+      ...makeInvite(['b@x.com'], 1),
+      recipients: { pending: ['b@x.com'], refused: [], accepted: ['a@x.com'] },
+    });
+
+    await expect(acceptInvite(userId, { id: inviteId }, adapters as any)).rejects.toThrow(
+      'User has already accepted the invite'
+    );
+    expect(adapters.db.invites.update).not.toHaveBeenCalled();
+  });
 });
