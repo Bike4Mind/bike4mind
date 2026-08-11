@@ -108,7 +108,7 @@ const RowMenuItem = ({
       // here as declarations too - the Joy vars below alone would lose to it.
       height: '32px',
       px: '4px',
-      gap: '4px',
+      gap: '8px',
       // Joy drives row geometry from these vars, so pin them to the values above rather than
       // relying on sx winning the cascade against Joy's own rule.
       '--ListItem-paddingLeft': '4px',
@@ -116,7 +116,7 @@ const RowMenuItem = ({
       '--ListItem-paddingY': '0px',
       '--ListItem-minHeight': '32px',
       '--ListItem-radius': '8px',
-      '--ListItem-gap': '4px',
+      '--ListItem-gap': '8px',
     })}
   >
     <Box sx={MENU_ICON_FRAME_SX}>{icon}</Box>
