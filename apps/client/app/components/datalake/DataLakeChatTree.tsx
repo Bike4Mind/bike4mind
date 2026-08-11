@@ -4,7 +4,6 @@ import {
   Chip,
   Dropdown,
   IconButton,
-  ListDivider,
   ListItem,
   ListItemButton,
   ListItemContent,
@@ -104,14 +103,17 @@ const RowMenuItem = ({
     sx={itemTheme => ({
       ...menuRowSx(itemTheme, danger),
       '--variant-plainHoverBg': itemTheme.palette.notebooklist.hoverBg,
-      // Tighter than the profile menu's 40px: this menu hangs off a row in a 260px rail.
-      height: '28px',
+      // Tighter than the profile menu's 40px/10px: this menu hangs off a row in a 260px rail.
+      // Both of these override a direct declaration in the shared recipe, so they must be set
+      // here as declarations too - the Joy vars below alone would lose to it.
+      height: '32px',
+      px: '4px',
       // Joy drives row geometry from these vars, so pin them to the values above rather than
       // relying on sx winning the cascade against Joy's own rule.
       '--ListItem-paddingLeft': '4px',
       '--ListItem-paddingRight': '4px',
       '--ListItem-paddingY': '0px',
-      '--ListItem-minHeight': '28px',
+      '--ListItem-minHeight': '32px',
       '--ListItem-radius': '8px',
       '--ListItem-gap': '12px',
     })}
@@ -429,7 +431,6 @@ export default function DataLakeChatTree({
                   '--List-padding': '8px',
                   '--List-radius': '8px',
                   '--List-gap': '2px',
-                  '--ListDivider-gap': '8px',
                 })}
               >
                 <RowMenuItem
@@ -444,7 +445,6 @@ export default function DataLakeChatTree({
                   label="View"
                   onClick={() => onViewFile(file)}
                 />
-                {canDeleteFile(file) && <ListDivider />}
                 {canDeleteFile(file) && (
                   <RowMenuItem
                     testId={`datalake-delete-item-${file.id}`}
