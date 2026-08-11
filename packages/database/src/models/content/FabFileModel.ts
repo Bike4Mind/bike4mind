@@ -862,16 +862,26 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   async findByDriveFileIdsInDataLake(driveFileIds: string[], datalakeTag: string): Promise<IFabFileDocument[]> {
-    const result = await this.fabFileModel.find({
-      driveFileId: { $in: driveFileIds },
-      deletedAt: null,
-      archivedAt: null,
-      tags: { $elemMatch: { name: datalakeTag } },
-      // Same orphan-pending exclusion as findByContentHashesInDataLake: a failed prior ingest
-      // left 'pending' must not block a legit re-ingest of the same Drive file.
-      status: { $ne: 'pending' },
-    });
-    return result.map(d => d.toJSON());
+    if (driveFileIds.length === 0) return [];
+    // The recursive Drive walk can surface up to 100k children PER folder, so an unchunked $in
+    // would risk Mongo's 16 MB BSON query ceiling and a degraded plan long before it. Query in
+    // id-chunks and concatenate.
+    const CHUNK_SIZE = 5000;
+    const results: IFabFileDocument[] = [];
+    for (let i = 0; i < driveFileIds.length; i += CHUNK_SIZE) {
+      const chunk = driveFileIds.slice(i, i + CHUNK_SIZE);
+      const docs = await this.fabFileModel.find({
+        driveFileId: { $in: chunk },
+        deletedAt: null,
+        archivedAt: null,
+        tags: { $elemMatch: { name: datalakeTag } },
+        // Same orphan-pending exclusion as findByContentHashesInDataLake: a failed prior ingest
+        // left 'pending' must not block a legit re-ingest of the same Drive file.
+        status: { $ne: 'pending' },
+      });
+      results.push(...docs.map(d => d.toJSON()));
+    }
+    return results;
   }
 
   // Data lake lifecycle. Membership is the two-signal rule in buildDataLakeMembershipFilter

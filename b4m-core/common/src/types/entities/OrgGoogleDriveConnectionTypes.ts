@@ -10,11 +10,13 @@ export type GoogleDriveConnectionAuthMode = 'oauth' | 'service_account';
 
 /**
  * Health/lifecycle state of the connection.
- * - connected: syncing normally
+ * - connected: idle, healthy
+ * - syncing: an ingest is in flight; a guarded per-connection claim so two concurrent runs
+ *   (a double-clicked connect, a retried request) can't both walk and duplicate every file
  * - needs_reconnect: the folder is no longer reachable (un-shared / trashed: 403/404 on the folder)
  * - credential_error: the stored credential failed (e.g. invalid_grant) - operator/admin attention
  */
-export type GoogleDriveConnectionStatus = 'connected' | 'needs_reconnect' | 'credential_error';
+export type GoogleDriveConnectionStatus = 'connected' | 'syncing' | 'needs_reconnect' | 'credential_error';
 
 /**
  * Organization-level Google Drive connection: binds a single Drive folder to a single
@@ -176,4 +178,18 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
 
   /** Advance the incremental-sync cursor after a sync batch is durably created. */
   updateSyncCursor(id: string, syncCursor: string, polledAt: Date): Promise<IOrgGoogleDriveConnectionDocument | null>;
+
+  /**
+   * Guarded per-connection ingest lock. Atomically flips `status` to 'syncing' iff it is NOT
+   * already 'syncing'; returns true only if THIS caller won the claim. Serializes concurrent
+   * ingests (double-clicked connect, retried POST) so exactly one run walks + creates FabFiles.
+   */
+  claimForSync(id: string): Promise<boolean>;
+
+  /**
+   * Release a 'syncing' claim on a failure path, guarded so it only moves 'syncing' -> 'connected'
+   * and can never clobber a terminal status (e.g. credential_error) set underneath it. The success
+   * path releases via `updateHealth({ status: 'connected' })` instead.
+   */
+  releaseSyncClaim(id: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
 }

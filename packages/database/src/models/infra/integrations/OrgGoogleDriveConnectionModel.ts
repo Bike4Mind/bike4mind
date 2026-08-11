@@ -53,7 +53,7 @@ const OrgGoogleDriveConnectionSchema = new Schema<IOrgGoogleDriveConnectionDocum
     // Health tracking
     status: {
       type: String,
-      enum: ['connected', 'needs_reconnect', 'credential_error'],
+      enum: ['connected', 'syncing', 'needs_reconnect', 'credential_error'],
       default: 'connected',
     },
     lastError: { type: String },
@@ -160,6 +160,28 @@ class OrgGoogleDriveConnectionRepository
     polledAt: Date
   ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
     return this.model.findByIdAndUpdate(id, { $set: { syncCursor, lastPolledAt: polledAt } }, { new: true });
+  }
+
+  /**
+   * Guarded ingest lock: flip status to 'syncing' only if it is not already 'syncing'. The `$ne`
+   * conjunct makes this a single atomic compare-and-set - a losing concurrent caller matches
+   * nothing and gets `null`, so exactly one run proceeds. Returns whether THIS caller claimed it.
+   */
+  async claimForSync(id: string): Promise<boolean> {
+    const claimed = await this.model.findOneAndUpdate(
+      { _id: id, status: { $ne: 'syncing' } },
+      { $set: { status: 'syncing' } }
+    );
+    return claimed !== null;
+  }
+
+  /**
+   * Guarded release for the failure path: 'syncing' -> 'connected' only. The `status: 'syncing'`
+   * conjunct means it no-ops if a terminal status (e.g. credential_error) was set underneath, so a
+   * failed run never overwrites a real error state.
+   */
+  async releaseSyncClaim(id: string): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
+    return this.model.findOneAndUpdate({ _id: id, status: 'syncing' }, { $set: { status: 'connected' } }, { new: true });
   }
 }
 
