@@ -460,7 +460,11 @@ function attachmentInlineNotice(context: ToolContext, rankedResults: Array<{ id:
     return `\n\nNOTE: ${parts.join(' ')}`;
   }
 
-  const inlinedHits = rankedResults.filter(f => inlined.includes(f.id));
+  // Deduped by id: the semantic arm's rankedResults is per-PASSAGE, so a top-K result can carry
+  // several chunks from the same inlined file and would otherwise repeat its name in the notice.
+  const inlinedHits = Array.from(
+    new Map(rankedResults.filter(f => inlined.includes(f.id)).map(f => [f.id, f])).values()
+  );
   if (inlinedHits.length === 0) return '';
 
   const fullHits = inlinedHits.filter(f => fullyInlined.has(f.id));

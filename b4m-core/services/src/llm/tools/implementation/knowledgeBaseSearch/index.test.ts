@@ -545,6 +545,20 @@ describe('search_knowledge_base scoped lake-prompt injection (#1108)', () => {
     expect(out).toContain('already included above');
   });
 
+  it('#1163 (bot round 4 nit): names an inlined file once even when multiple ranked passages come from it', async () => {
+    // rankedResults is per-PASSAGE, so a top-K hit can carry several chunks from the same file -
+    // the notice must not repeat that file's name once per passage.
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [
+        lakeHit(['datalake:x']),
+        { ...lakeHit(['datalake:x']), chunkId: 'c2', chunkText: 'sick leave accrues separately' },
+      ],
+      scan,
+    });
+    const out = await run(semCtx([makeLake()], { inlinedAttachmentIds: ['f1'] }));
+    expect(out.split('"Handbook.pdf"').length - 1).toBe(1);
+  });
+
   it('injects nothing when the grounded files carry no lake tag', async () => {
     semanticDataLakeSearchMock.mockResolvedValue({ results: [lakeHit([])], scan });
     const out = await run(semCtx([makeLake()]));
