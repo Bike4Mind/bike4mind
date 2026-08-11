@@ -199,10 +199,14 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * per request. The manager list is "lakes I can reach", not "lakes I own": it also surfaces org
    * lakes, strangers' public lakes, and - for a global admin - every tenant's lakes. So the UI
    * marks a not-own lake to keep an admin from mistaking someone else's (even private) lake for
-   * their own and managing it by accident. Absent on actor-less projections; built-in fallback
-   * lakes have no owner, so `false`.
+   * their own and managing it by accident. Built-in fallback lakes have no owner, so `false`.
+   *
+   * REQUIRED, not optional: both producers (toManageableConfig, toFallbackConfig) set it
+   * unconditionally, and the UI safety-gates on `isOwn === false` - an absent field would render
+   * no warning, so a future projection that forgot it would silently reintroduce the bug with a
+   * green typecheck. Required makes that a compile error instead.
    */
-  isOwn?: boolean;
+  isOwn: boolean;
   /**
    * Display name (name || username, never email) of the lake's creator. Populated ONLY for lakes
    * the caller does NOT own, and ONLY when the list projection was given a user lookup (the

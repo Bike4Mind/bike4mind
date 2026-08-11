@@ -428,6 +428,42 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
 
     expect(screen.queryByTestId('datalake-manager-owner-chip-mine')).toBeNull();
   });
+
+  it('marks not-own lakes in the sidebar list itself, but not own ones (no need to open each)', () => {
+    renderPanel();
+
+    // The confusion the issue reports starts in the list ("both appeared in the admin's My
+    // lakes tab"), so the owner cue must live on the row, before anything is opened.
+    expect(screen.getByTestId('datalake-manager-owner-icon-theirs')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-manager-owner-icon-mine')).toBeNull();
+  });
+
+  it('keeps the owner chip AND the management buttons on an admin-managed lake owned by someone else', async () => {
+    // The case the feature exists for: a global admin on another tenant's lake, where canManage
+    // is true (Add files / Settings / Archive are live) AND isOwn is false. The marker must
+    // coexist with the controls - a chip that vanished whenever canManage held would leave
+    // exactly the QA scenario unmarked, and nothing here would fail.
+    const adminView = {
+      ...theirsLake,
+      id: 'adminview',
+      name: 'Admin View',
+      slug: 'adminview',
+      datalakeTag: 'datalake:adminview',
+      canManage: true,
+      isOwn: false,
+      ownerDisplayName: 'Ada Owner',
+    };
+    useGetDataLakes.mockReturnValue({ data: [adminView], isLoading: false });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-adminview'));
+
+    expect(screen.getByTestId('datalake-manager-owner-chip-adminview')).toHaveTextContent('Owner: Ada Owner');
+    expect(screen.getByTestId('datalake-addfiles-btn-adminview')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-settings-btn-adminview')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-archive-btn-adminview')).toBeInTheDocument();
+  });
 });
 
 /**

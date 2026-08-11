@@ -556,6 +556,26 @@ function ManagerNav({
                                   {lake.name}
                                 </Typography>
                               </ListItemContent>
+                              {/* Owner marker in the LIST itself, not just the detail pane: the
+                                  row otherwise shows only a name, so an admin (who sees every
+                                  tenant's lakes, even private) can't tell whose is whose without
+                                  opening each one. The owner name is already on the row, so this
+                                  costs no extra request. */}
+                              {lake.isOwn === false && (
+                                <Tooltip
+                                  title={
+                                    lake.ownerDisplayName
+                                      ? `Owned by ${lake.ownerDisplayName}`
+                                      : 'Owned by another user'
+                                  }
+                                  size="sm"
+                                >
+                                  <PersonOutlineIcon
+                                    data-testid={`datalake-manager-owner-icon-${lake.id}`}
+                                    sx={{ fontSize: 14, color: 'warning.400', flexShrink: 0 }}
+                                  />
+                                </Tooltip>
+                              )}
                               {/* Background AI-tag suggestion indicator - an independent clock
                                   from ingest, so this can appear well after the lake's files
                                   are already fully uploaded/searchable. */}

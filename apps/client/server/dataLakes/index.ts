@@ -22,7 +22,7 @@ import {
   isImageServeable,
   normalizeTagPrefix,
 } from '@bike4mind/common';
-import type { DataLakeConfig, IFabFileDocument, ManageableDataLakeConfig } from '@bike4mind/common';
+import type { DataLakeConfig, IFabFileDocument } from '@bike4mind/common';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import {
   adminSettingsRepository,
@@ -46,8 +46,14 @@ import { toAccessContext } from './toAccessContext';
  * happen not to carry. Static lakes (no owner concept) still go through that filter.
  * The retrieval resolver does run that filter and compensates with its own owner re-check
  * (see getDynamicDataLakeAccess) - so if the two are ever unified, ownership must survive.
+ *
+ * Returns `DataLakeConfig[]`, not the manageable projection: the dynamic half carries the
+ * `canManage`/`isOwn` labels but the static half does not, and every caller here (article,
+ * tag-count, and answer scoping) reads only id/tag/prefix - never a manage field. Typing the
+ * mixed result as the narrower shared shape keeps the manager-only labels off a path that has
+ * no use for them.
  */
-export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<ManageableDataLakeConfig[]> {
+export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<DataLakeConfig[]> {
   // toAccessContext, not a local literal: it is the one place this shape is built, and it is
   // what resolves entitlementKeys. Building it inline here silently dropped them, so
   // findAccessible saw no entitlement arm and browse lost a lake gated by requiredEntitlement
