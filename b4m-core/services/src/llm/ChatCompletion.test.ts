@@ -771,6 +771,33 @@ describe('ChatCompletionProcess', () => {
         expect(service.systemPromptText?.blocks.map(b => b.name)).toContain('date_time_context');
       });
 
+      // The two lists are documented as joinable on `name`, and the always-on floor is where that
+      // is easiest to break: a gate-excluded floor source contributes no message to the stack, yet
+      // buildAlwaysOnFloorDetails still inventories it.
+      it('emits a prompt-text row for every breakdown row even when a floor source is gated off', async () => {
+        mockTextModel();
+        const body = {
+          ...startQuestParams,
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+          enableArtifacts: false,
+          includeSystemPrompt: true,
+        };
+
+        await service.process({ body, logger: mockLogger });
+
+        const savedQuest = vi.mocked(mockDb.quests.update).mock.calls.at(-1)?.[0] as {
+          promptMeta?: { context?: { systemPromptDetails?: { name: string; wasIncluded: boolean }[] } };
+        };
+        const details = savedQuest.promptMeta?.context?.systemPromptDetails ?? [];
+        expect(details.find(d => d.name === 'artifact_emission')?.wasIncluded).toBe(false);
+
+        const disclosedNames = service.systemPromptText?.blocks.map(b => b.name) ?? [];
+        expect(disclosedNames).toContain('artifact_emission');
+        expect(details.map(d => d.name).filter(name => !disclosedNames.includes(name))).toEqual([]);
+      });
+
       it('builds no prompt text unless the caller asked, so the default response carries none', async () => {
         mockTextModel();
         const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };

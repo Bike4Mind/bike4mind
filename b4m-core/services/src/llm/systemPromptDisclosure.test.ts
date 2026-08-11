@@ -9,6 +9,9 @@ const user = (content: string): IMessage => ({ role: 'user' as const, content })
 const blockNamed = (disclosure: ReturnType<typeof buildSystemPromptText>, name: string) =>
   disclosure.blocks.find(b => b.name === name);
 
+/** Inventoried on every disclosure whether they contributed or not - see ALWAYS_ON_FLOOR_SOURCES. */
+const FLOOR_NAMES = ['artifact_emission', 'help_center'];
+
 describe('buildSystemPromptText', () => {
   it('returns the text of each contributing source, tagged with that source name and origin', () => {
     const tagged = buildTaggedContextMessages({
@@ -20,6 +23,7 @@ describe('buildSystemPromptText', () => {
 
     expect(blocks).toEqual([
       { source: 'hardcoded', name: 'date_time_context', text: 'today is tuesday', redacted: false },
+      { source: 'admin', name: 'artifact_emission', redacted: false },
       { source: 'admin', name: 'help_center', text: 'the help center exists', redacted: false },
     ]);
   });
@@ -30,7 +34,11 @@ describe('buildSystemPromptText', () => {
       dateContext: [sys('today')],
     });
 
-    expect(buildSystemPromptText(tagged).blocks.map(b => b.name)).toEqual(['date_time_context', 'attached_files']);
+    expect(buildSystemPromptText(tagged).blocks.map(b => b.name)).toEqual([
+      'date_time_context',
+      ...FLOOR_NAMES,
+      'attached_files',
+    ]);
   });
 
   it('joins the messages a single source contributed into one block', () => {
@@ -39,10 +47,31 @@ describe('buildSystemPromptText', () => {
     expect(blockNamed(buildSystemPromptText(tagged), 'mementos')?.text).toBe('first\n\nsecond');
   });
 
-  it('reports nothing for a source that contributed no messages', () => {
+  it('reports nothing for a non-floor source that contributed no messages', () => {
     const tagged = buildTaggedContextMessages({ dateContext: [sys('today')], mementos: [] });
 
-    expect(buildSystemPromptText(tagged).blocks.map(b => b.name)).toEqual(['date_time_context']);
+    expect(buildSystemPromptText(tagged).blocks.map(b => b.name)).toEqual(['date_time_context', ...FLOOR_NAMES]);
+  });
+
+  it('keeps a row for a gate-excluded floor source, which the breakdown inventories regardless', () => {
+    // artifactsEnabled false / isLocalModel true tag these two with an empty array, so they never
+    // enter the stack at all - yet buildAlwaysOnFloorDetails still emits a row for each, and the
+    // two lists are documented as joinable on name.
+    const tagged = buildTaggedContextMessages({ dateContext: [sys('today')] });
+
+    const { blocks } = buildSystemPromptText(tagged);
+
+    expect(blocks.map(b => b.name)).toEqual(['date_time_context', ...FLOOR_NAMES]);
+    expect(blockNamed({ blocks, sizeCapped: false }, 'artifact_emission')).toEqual({
+      source: 'admin',
+      name: 'artifact_emission',
+      redacted: false,
+    });
+    expect(blockNamed({ blocks, sizeCapped: false }, 'help_center')).toEqual({
+      source: 'admin',
+      name: 'help_center',
+      redacted: false,
+    });
   });
 
   it('withholds the text of the server-owned session prompt while still reporting it', () => {
@@ -70,7 +99,7 @@ describe('buildSystemPromptText', () => {
     const { blocks } = buildSystemPromptText(tagged, new Set([kept]));
 
     // The row survives so the payload still joins to the breakdown, which is where wasIncluded lives.
-    expect(blocks.map(b => b.name)).toEqual(['date_time_context', 'mementos']);
+    expect(blocks.map(b => b.name)).toEqual(['date_time_context', ...FLOOR_NAMES, 'mementos']);
     expect(blockNamed({ blocks, sizeCapped: false }, 'mementos')).toEqual({
       source: 'user',
       name: 'mementos',
@@ -98,11 +127,18 @@ describe('buildSystemPromptText', () => {
   it('treats every contributing source as delivered when no payload is supplied', () => {
     const tagged = buildTaggedContextMessages({ dateContext: [sys('today')], mementos: [sys('memory')] });
 
-    expect(buildSystemPromptText(tagged).blocks.map(b => b.name)).toEqual(['date_time_context', 'mementos']);
+    expect(buildSystemPromptText(tagged).blocks.map(b => b.name)).toEqual([
+      'date_time_context',
+      ...FLOOR_NAMES,
+      'mementos',
+    ]);
   });
 
   it('reports a multimodal-only source as unredacted, since no text is being withheld', () => {
-    const image: IMessage = { role: 'user' as const, content: [{ type: 'image_url', image_url: { url: 'x' } }] as never };
+    const image: IMessage = {
+      role: 'user' as const,
+      content: [{ type: 'image_url', image_url: { url: 'x' } }] as never,
+    };
     const tagged = buildTaggedContextMessages({ recentImages: [image] });
 
     expect(blockNamed(buildSystemPromptText(tagged), 'recent_images')).toEqual({

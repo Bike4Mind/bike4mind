@@ -128,6 +128,7 @@ import { SkillsFeature } from './features/SkillsFeature';
 import { StatusManager } from './StatusManager';
 import { buildContextOverflowMessage } from './contextOverflowMessage';
 import {
+  ALWAYS_ON_FLOOR_SOURCES,
   buildTaggedContextMessages,
   filterByPromptMode,
   filterFeaturesByPromptMode,
@@ -2776,9 +2777,8 @@ export class ChatCompletionProcess {
 
       let systemPromptDetails: SystemPromptDetail[] | undefined;
       try {
-        const floorSources: PromptSourceId[] = ['artifactEmission', 'helpCenter'];
         systemPromptDetails = await toPromptDetails(
-          admittedContextMessages.filter(t => !floorSources.includes(t.source)),
+          admittedContextMessages.filter(t => !ALWAYS_ON_FLOOR_SOURCES.includes(t.source)),
           messages => calculateTotalTokenLength(messages, tokenCalcOptions),
           deliveredMessages
         );

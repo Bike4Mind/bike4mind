@@ -1,5 +1,6 @@
 import type { IMessage } from '@bike4mind/common';
 import {
+  ALWAYS_ON_FLOOR_SOURCES,
   PROMPT_SOURCE_METADATA,
   PROMPT_SOURCE_ORDER,
   type PromptSourceId,
@@ -79,12 +80,20 @@ export function buildSystemPromptText(
 
   for (const source of PROMPT_SOURCE_ORDER) {
     const messages = tagged.filter(t => t.source === source).map(t => t.message);
-    if (messages.length === 0) continue;
-
     const { origin, name } = PROMPT_SOURCE_METADATA[source];
+
     // One row per contributing source, matching the breakdown row-for-row so the two can be
     // joined on `name`. A source the budget dropped keeps its row with no text: the breakdown's
     // wasIncluded is what says why, and inventing a second way to say it would let them disagree.
+    // The always-on floor sources keep their row even when a gate excluded them outright and they
+    // contributed no message, because the breakdown inventories them unconditionally.
+    if (messages.length === 0) {
+      if (ALWAYS_ON_FLOOR_SOURCES.includes(source)) {
+        blocks.push({ source: origin, name, redacted: false });
+      }
+      continue;
+    }
+
     const delivered = messages.filter(message => wasDelivered(message, includedMessages));
     if (delivered.length === 0) {
       blocks.push({ source: origin, name, redacted: false });
