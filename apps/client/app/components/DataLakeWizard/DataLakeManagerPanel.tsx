@@ -867,6 +867,7 @@ function NavSectionHeader({
   testid,
   hoverBg,
   infoTooltip,
+  trailing,
 }: {
   label: string;
   open?: boolean;
