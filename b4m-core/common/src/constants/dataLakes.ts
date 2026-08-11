@@ -194,6 +194,24 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * so "not yours to see" and "set to blank" stay distinguishable).
    */
   systemPrompt?: string;
+  /**
+   * Whether the requesting caller CREATED this lake (createdByUserId === caller). Server-computed
+   * per request. The manager list is "lakes I can reach", not "lakes I own": it also surfaces org
+   * lakes, strangers' public lakes, and - for a global admin - every tenant's lakes. So the UI
+   * marks a not-own lake to keep an admin from mistaking someone else's (even private) lake for
+   * their own and managing it by accident. Absent on actor-less projections; built-in fallback
+   * lakes have no owner, so `false`.
+   */
+  isOwn?: boolean;
+  /**
+   * Display name (name || username, never email) of the lake's creator. Populated ONLY for lakes
+   * the caller does NOT own, and ONLY when the list projection was given a user lookup (the
+   * manager list route) - the content-scope resolver and Slack omit it and pay for no extra
+   * query. Mirrors the discover catalog's owner rule: never the owner's email, so a cross-org or
+   * admin view can't leak an address. Undefined when the owner can't be resolved (deleted
+   * account), or for own/fallback lakes.
+   */
+  ownerDisplayName?: string;
 }
 
 /**

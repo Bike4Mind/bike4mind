@@ -113,6 +113,7 @@ const mineLake = {
   datalakeTag: 'datalake:mine',
   description: 'my lake',
   canManage: true,
+  isOwn: true,
 };
 
 const theirsLake = {
@@ -124,6 +125,8 @@ const theirsLake = {
   fileCount: 1,
   isPublic: true,
   canManage: false,
+  isOwn: false,
+  ownerDisplayName: 'Ada Owner',
 };
 
 const renderPanel = () =>
@@ -405,6 +408,25 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     await user.click(screen.getByTestId('datalake-settings-btn-mine'));
 
     expect(screen.getByTestId('mock-settings')).toHaveTextContent('Mine');
+  });
+
+  it("flags a lake the caller does not own with the creator's name, so it can't be mistaken for their own", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-theirs'));
+
+    const chip = screen.getByTestId('datalake-manager-owner-chip-theirs');
+    expect(chip).toHaveTextContent('Owner: Ada Owner');
+  });
+
+  it('shows no owner marker on the caller’s own lake', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+
+    expect(screen.queryByTestId('datalake-manager-owner-chip-mine')).toBeNull();
   });
 });
 

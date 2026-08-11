@@ -57,8 +57,10 @@ export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<M
   // it to stop the two halves of the merge disagreeing about what the caller holds.
   const ctx = await toAccessContext(req);
 
+  // No `users` adapter: this is the content-scope path (article/tag-count/answer gating), which
+  // never renders an owner, so it must not pay for the owner-name lookup the manager list does.
   const dynamic = ctx.isAdmin
-    ? await dataLakeService.listAllDataLakes({ db: { dataLakes: dataLakeRepository } })
+    ? await dataLakeService.listAllDataLakes(ctx, { db: { dataLakes: dataLakeRepository } })
     : await dataLakeService.listDataLakes(ctx, { db: { dataLakes: dataLakeRepository } });
 
   // Admin/developer see every static lake; everyone else is scoped by the any-of

@@ -35,6 +35,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
 import {
@@ -1079,6 +1080,22 @@ function LakeInfoPanel({
           )}
         </Box>
         <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+          {/* Not-your-lake marker: the sidebar lists lakes the caller can REACH, not only ones
+              they own (org lakes, others' public lakes, and - for an admin - every tenant's, even
+              private). Flagged here, next to Add files / Settings / Archive, so someone else's
+              lake can't be mistaken for your own and managed by accident. */}
+          {lake.isOwn === false && (
+            <Chip
+              size="sm"
+              variant="soft"
+              color="warning"
+              startDecorator={<PersonOutlineIcon sx={{ fontSize: 12 }} />}
+              sx={{ fontSize: '11px' }}
+              data-testid={`datalake-manager-owner-chip-${lake.id}`}
+            >
+              {lake.ownerDisplayName ? `Owner: ${lake.ownerDisplayName}` : 'Owned by another user'}
+            </Chip>
+          )}
           <Chip size="sm" variant="soft" color="neutral" sx={{ fontSize: '11px' }}>
             {lake.fileTagPrefix}
           </Chip>

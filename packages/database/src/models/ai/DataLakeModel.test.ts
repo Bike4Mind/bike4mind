@@ -433,6 +433,38 @@ describe('DataLakeRepository.findPublicLakes — public discover catalog', () =>
     const { lakes } = await dataLakeRepository.findPublicLakes({ search: 'a.b' });
     expect(lakes.map(l => l.slug)).toEqual(['dotstar']);
   });
+
+  it('exposes the Load more boundary end to end at the real page size (>24 public lakes)', async () => {
+    // The QA gap this closes (issue #989 item 3): preview had only 2 public lakes, so the 24-item
+    // page threshold (the client's PUBLIC_LAKES_PAGE_SIZE, mirrored by this repo's default limit)
+    // never tripped and Load more could not be exercised. Seed just past it and drive the two
+    // pages the UI would, asserting every observable the button's presence keys off.
+    const PAGE = 24;
+    const TOTAL = PAGE + 1; // one past a full page, so page two holds exactly the remainder.
+    for (let i = 0; i < TOTAL; i++) {
+      const n = String(i).padStart(2, '0'); // zero-padded so name-sort matches seed order
+      await dataLakeRepository.create(baseLake({ slug: `lake-${n}`, name: `Lake ${n}`, isPublic: true }));
+    }
+
+    // Page 1 uses the repo default limit (24) - the same fixed size the client requests.
+    const page1 = await dataLakeRepository.findPublicLakes();
+    expect(page1.lakes).toHaveLength(PAGE);
+    expect(page1.total).toBe(TOTAL);
+    // loaded (24) < total (25) -> the client renders Load more.
+    expect(page1.lakes.length).toBeLessThan(page1.total);
+
+    // Page 2 at offset = how many are already loaded (what getNextPageParam feeds back).
+    const page2 = await dataLakeRepository.findPublicLakes({ offset: page1.lakes.length });
+    expect(page2.lakes).toHaveLength(TOTAL - PAGE); // the single remainder
+    expect(page2.total).toBe(TOTAL); // "Showing X of Y" - Y stays the full count across pages
+    // loaded (25) == total (25) -> Load more disappears.
+    expect(page1.lakes.length + page2.lakes.length).toBe(TOTAL);
+
+    // The two pages together cover every lake exactly once - nothing duplicated or skipped across
+    // the page boundary (the name+_id total order is what guarantees this).
+    const seen = [...page1.lakes, ...page2.lakes].map(l => l.slug);
+    expect(new Set(seen).size).toBe(TOTAL);
+  });
 });
 
 describe('DataLakeRepository — slug is unique per org', () => {

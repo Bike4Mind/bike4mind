@@ -454,7 +454,7 @@ describe('listAllDataLakes - the admin list still gates the prompt on canManage'
     const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', systemPrompt: 'Cite sources.' });
     const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([theirs]) } };
 
-    const result = await listAllDataLakes({ db });
+    const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
 
     // Pins the manage flag AND the disclosure it now gates: flipping this projection to
     // canManage:false would silently strip prompts from every admin and break the admin editor.
@@ -465,7 +465,7 @@ describe('listAllDataLakes - the admin list still gates the prompt on canManage'
   it('never carries a prompt on a built-in fallback lake, whatever the registry holds', async () => {
     const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) } };
 
-    const result = await listAllDataLakes({ db });
+    const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
     const fallback = result.find(l => l.id === 'opti-knowledge');
 
     // The registry is JSON.parse'd from env and keeps unknown keys, so an overlay entry could
@@ -473,6 +473,88 @@ describe('listAllDataLakes - the admin list still gates the prompt on canManage'
     expect(fallback).toBeDefined();
     expect(fallback?.canManage).toBe(false);
     expect(fallback && 'systemPrompt' in fallback).toBe(false);
+  });
+});
+
+// The manager list is "lakes I can REACH", not "lakes I own": org lakes, strangers' public
+// lakes, and - for a global admin - every tenant's (even private) lakes surface here. isOwn +
+// ownerDisplayName are what let the UI flag a not-own lake so it can't be managed by mistake.
+describe('listDataLakes / listAllDataLakes - owner labelling (isOwn + ownerDisplayName)', () => {
+  const usersPort = (owners: { id: string; name?: string; username?: string; email?: string }[]) => ({
+    findByIds: vi.fn().mockResolvedValue(owners),
+  });
+
+  it("marks the caller's own lakes isOwn:true and others isOwn:false", async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine, theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.isOwn).toBe(true);
+    expect(result.find(l => l.id === 'theirs')?.isOwn).toBe(false);
+  });
+
+  it('labels a not-own lake with the creator name (name || username, never email) when a user lookup is supplied', async () => {
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const users = usersPort([{ id: 'other', name: 'Ada Owner', email: 'ada@example.com' }]);
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs, mine]), find: vi.fn() }, users };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    // Own lake is excluded from the owner lookup (it renders as "you"), never labelled.
+    expect(users.findByIds).toHaveBeenCalledWith(['other']);
+    const theirsResult = result.find(l => l.id === 'theirs');
+    expect(theirsResult?.ownerDisplayName).toBe('Ada Owner');
+    // The address never leaves the service, even though findByIds' projection carries it.
+    expect(JSON.stringify(theirsResult)).not.toContain('ada@example.com');
+    expect(result.find(l => l.id === 'mine')?.ownerDisplayName).toBeUndefined();
+  });
+
+  it('falls back to username when the owner has no name', async () => {
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
+    const users = usersPort([{ id: 'other', username: 'ada99' }]);
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() }, users };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'theirs')?.ownerDisplayName).toBe('ada99');
+  });
+
+  it('omits ownerDisplayName entirely when NO user lookup is supplied (the content-scope path pays nothing)', async () => {
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+    const theirsResult = result.find(l => l.id === 'theirs');
+
+    expect(theirsResult?.isOwn).toBe(false);
+    expect(theirsResult && 'ownerDisplayName' in theirsResult).toBe(false);
+  });
+
+  it("listAllDataLakes marks the admin's own vs others and labels the others when a lookup is supplied", async () => {
+    const adminOwn = lake({ id: 'adminOwn', slug: 'adminOwn', createdByUserId: 'admin' });
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other' });
+    const users = usersPort([{ id: 'other', name: 'Ada Owner' }]);
+    const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([adminOwn, theirs]) }, users };
+
+    const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
+
+    expect(result.find(l => l.id === 'adminOwn')?.isOwn).toBe(true);
+    expect(result.find(l => l.id === 'adminOwn')?.ownerDisplayName).toBeUndefined();
+    expect(result.find(l => l.id === 'theirs')?.isOwn).toBe(false);
+    expect(result.find(l => l.id === 'theirs')?.ownerDisplayName).toBe('Ada Owner');
+  });
+
+  it('a built-in fallback lake is never own and carries no owner label', async () => {
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me', userTags: ['Opti'] }), { db });
+    const fallback = result.find(l => l.id === 'opti-knowledge');
+
+    expect(fallback?.isOwn).toBe(false);
+    expect(fallback && 'ownerDisplayName' in fallback).toBe(false);
   });
 });
 
