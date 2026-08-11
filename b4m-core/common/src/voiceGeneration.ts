@@ -43,6 +43,18 @@ export const TTS_MAX_INPUT_CHARS: Record<VoiceGenerationVendor, number> = {
 // accepts. The exact per-provider limit is enforced downstream in each service.
 export const TTS_ABSOLUTE_MAX_INPUT_CHARS = Math.max(...Object.values(TTS_MAX_INPUT_CHARS));
 
+// ElevenLabs documents language_code as ISO 639-1, so anything that is not two
+// lowercase letters ("english", "en-US") is rejected at the request boundary
+// instead of costing a provider round-trip. Deliberately a shape check rather
+// than the full 639-1 registry: it catches every realistic caller mistake
+// without a list that would reject a code a provider later starts accepting.
+// If a provider ever needs a longer tag (e.g. a 639-2 code), widen this.
+export const TTS_LANGUAGE_CODE_PATTERN = /^[a-z]{2}$/;
+
+export const ttsLanguageCodeSchema = z
+  .string()
+  .regex(TTS_LANGUAGE_CODE_PATTERN, 'languageCode must be a lowercase ISO 639-1 code, e.g. "en" or "ja"');
+
 export const ttsRequestSchema = z.object({
   text: z.string().min(1).max(TTS_ABSOLUTE_MAX_INPUT_CHARS),
   provider: supportedVoiceGenerationVendor.optional(),
@@ -57,7 +69,7 @@ export const ttsRequestSchema = z.object({
   // language on models that support it (v2.5+/v3), removing the auto-detection
   // that mispronounces short, isolated tokens (a bare "2", acronyms, names).
   // Best-effort: ignored by providers/models that don't support it.
-  languageCode: z.string().optional(),
+  languageCode: ttsLanguageCodeSchema.optional(),
   // When true, the result is a throwaway audition (e.g. the Settings voice
   // preview) and is never saved to the File Browser, regardless of the user's
   // saveGeneratedAudio preference.
