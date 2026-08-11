@@ -4,6 +4,7 @@ import {
   Chip,
   Dropdown,
   IconButton,
+  ListDivider,
   ListItem,
   ListItemButton,
   ListItemContent,
@@ -279,8 +280,9 @@ export default function DataLakeChatTree({
     renderFileRow: (file, selected) => (
       <ListItem key={file.id}>
         {/* Plain row, not a ListItemButton: row clicks are dead by design (auto-attach removal);
-            every action is an explicit control. Actions reveal on hover/focus and stay visible
-            on touch (no-hover) devices. */}
+            every action lives in the row's three-dots menu. The trigger reveals on hover/focus,
+            stays visible on touch (no-hover) devices, and pins while its menu is open (:has on
+            aria-expanded) so the anchor cannot fade under an open menu. */}
         <Box
           data-testid={`datalake-file-${file.id}`}
           sx={{
@@ -297,6 +299,7 @@ export default function DataLakeChatTree({
             '&:hover': { backgroundColor: theme.palette.notebooklist.hoverBg },
             '@media (hover: hover)': { '& .dl-row-actions': { opacity: 0 } },
             '&:hover .dl-row-actions, &:focus-within .dl-row-actions': { opacity: 1 },
+            '&:has([aria-expanded="true"]) .dl-row-actions': { opacity: 1 },
           }}
         >
           <ArticleOutlinedIcon
@@ -312,34 +315,6 @@ export default function DataLakeChatTree({
             className="dl-row-actions"
             sx={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0, transition: 'opacity 0.15s' }}
           >
-            <Tooltip title="Add to chat" size="sm">
-              <IconButton
-                size="sm"
-                variant="plain"
-                color="neutral"
-                aria-label="Add to chat"
-                data-testid={`datalake-attach-btn-${file.id}`}
-                onClick={() => onAttachFile(file)}
-                sx={ROW_ACTION_SX}
-              >
-                <AddIcon sx={{ fontSize: 16 }} />
-              </IconButton>
-            </Tooltip>
-            {canDeleteFile(file) && (
-              <Tooltip title="Remove from lake" size="sm">
-                <IconButton
-                  size="sm"
-                  variant="plain"
-                  color="neutral"
-                  aria-label="Remove from lake"
-                  data-testid={`datalake-delete-btn-${file.id}`}
-                  onClick={() => onDeleteFile(file)}
-                  sx={ROW_ACTION_SX}
-                >
-                  <DeleteOutlineIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Tooltip>
-            )}
             <Dropdown>
               <MenuButton
                 slots={{ root: IconButton }}
@@ -348,7 +323,7 @@ export default function DataLakeChatTree({
                     size: 'sm',
                     variant: 'plain',
                     color: 'neutral',
-                    'aria-label': 'More actions',
+                    'aria-label': 'File actions',
                     'data-testid': `datalake-row-menu-btn-${file.id}`,
                     sx: ROW_ACTION_SX,
                   },
@@ -357,10 +332,25 @@ export default function DataLakeChatTree({
                 <MoreVertIcon sx={{ fontSize: 16 }} />
               </MenuButton>
               <Menu size="sm" placement="bottom-end">
+                <MenuItem data-testid={`datalake-attach-item-${file.id}`} onClick={() => onAttachFile(file)}>
+                  <AddIcon sx={{ fontSize: 16 }} />
+                  Add to chat
+                </MenuItem>
                 <MenuItem data-testid={`datalake-view-item-${file.id}`} onClick={() => onViewFile(file)}>
                   <VisibilityOutlinedIcon sx={{ fontSize: 16 }} />
                   View
                 </MenuItem>
+                {canDeleteFile(file) && <ListDivider />}
+                {canDeleteFile(file) && (
+                  <MenuItem
+                    color="danger"
+                    data-testid={`datalake-delete-item-${file.id}`}
+                    onClick={() => onDeleteFile(file)}
+                  >
+                    <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+                    Remove from lake
+                  </MenuItem>
+                )}
               </Menu>
             </Dropdown>
           </Box>

@@ -46,25 +46,37 @@ describe('DataLakeChatTree file-row actions', () => {
     expect(screen.getByTestId('datalake-file-f1').closest('[role="button"]')).toBeNull();
   });
 
-  it('attach button calls onAttachFile with the file', () => {
+  it('the three-dots menu is the only direct row control', () => {
+    renderTree();
+    expect(screen.getByTestId('datalake-row-menu-btn-f1')).toBeInTheDocument();
+    // No standalone action buttons outside the menu.
+    expect(screen.queryByTestId('datalake-attach-btn-f1')).toBeNull();
+    expect(screen.queryByTestId('datalake-delete-btn-f1')).toBeNull();
+  });
+
+  it('Add to chat lives in the row menu and calls onAttachFile', () => {
     const onAttachFile = vi.fn();
     renderTree({ onAttachFile });
-    fireEvent.click(screen.getByTestId('datalake-attach-btn-f1'));
+    fireEvent.click(screen.getByTestId('datalake-row-menu-btn-f1'));
+    fireEvent.click(screen.getByTestId('datalake-attach-item-f1'));
     expect(onAttachFile).toHaveBeenCalledWith(expect.objectContaining({ id: 'f1' }));
   });
 
-  it('delete button shows only when canDeleteFile allows, and calls onDeleteFile', () => {
+  it('Remove from lake shows in the menu only when canDeleteFile allows, and calls onDeleteFile', () => {
     const onDeleteFile = vi.fn();
     renderTree({ onDeleteFile });
-    fireEvent.click(screen.getByTestId('datalake-delete-btn-f1'));
+    fireEvent.click(screen.getByTestId('datalake-row-menu-btn-f1'));
+    fireEvent.click(screen.getByTestId('datalake-delete-item-f1'));
     expect(onDeleteFile).toHaveBeenCalledWith(expect.objectContaining({ id: 'f1' }));
   });
 
-  it('hides the delete button when canDeleteFile returns false', () => {
+  it('hides the Remove from lake item when canDeleteFile returns false', () => {
     renderTree({ canDeleteFile: () => false });
-    expect(screen.queryByTestId('datalake-delete-btn-f1')).toBeNull();
-    // The other actions stay.
-    expect(screen.getByTestId('datalake-attach-btn-f1')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('datalake-row-menu-btn-f1'));
+    expect(screen.queryByTestId('datalake-delete-item-f1')).toBeNull();
+    // The other menu items stay.
+    expect(screen.getByTestId('datalake-attach-item-f1')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-view-item-f1')).toBeInTheDocument();
   });
 
   it('View lives in the row menu and calls onViewFile', () => {
