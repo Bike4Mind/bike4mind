@@ -38,6 +38,22 @@ const URL_PATH_TO_INVITE_TYPE = {
   tools: InviteType.Tool,
 };
 
+/**
+ * The :type segment historically meant different things per verb here: GET/POST were called with
+ * the lowercase alias (`/api/projects/...`) while DELETE was called with the InviteType value
+ * itself (`/api/Project/...`). Both forms are accepted on every verb so the same document has one
+ * address regardless of the method; existing callers of either shape keep working. Returns
+ * undefined for anything that is neither, which each handler turns into a 400.
+ */
+const resolveInviteType = (segment: string | undefined): InviteType | undefined => {
+  if (!segment) return undefined;
+  // hasOwn, or a segment like 'constructor' resolves to an inherited value instead of undefined.
+  if (Object.hasOwn(URL_PATH_TO_INVITE_TYPE, segment)) {
+    return URL_PATH_TO_INVITE_TYPE[segment as keyof typeof URL_PATH_TO_INVITE_TYPE];
+  }
+  return Object.values(InviteType).find(value => value === segment);
+};
+
 // Used only for type inference via z.infer<typeof ...>
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const CreateInviteRequestSchema = z.object({
@@ -61,8 +77,7 @@ const handler = baseApi()
         return res.status(400).json({ message: 'Invalid get invite request' });
       }
 
-      // Map URL path type to InviteType enum value for consistency
-      const inviteType = URL_PATH_TO_INVITE_TYPE[type as keyof typeof URL_PATH_TO_INVITE_TYPE];
+      const inviteType = resolveInviteType(type);
       if (!inviteType) {
         return res.status(400).json({ message: 'Invalid type' });
       }
@@ -98,8 +113,7 @@ const handler = baseApi()
         return res.status(400).json({ message: 'Invalid invite request' });
       }
 
-      // Map URL path type to InviteType enum value
-      const inviteType = URL_PATH_TO_INVITE_TYPE[urlPathType as keyof typeof URL_PATH_TO_INVITE_TYPE];
+      const inviteType = resolveInviteType(urlPathType);
       if (!inviteType) throw new BadRequestError('Invalid type');
 
       const created = await withTransaction(() => {
@@ -209,17 +223,17 @@ const handler = baseApi()
     asyncHandler<{}, unknown, unknown, IParams>(async (req, res) => {
       // Take the document identity from the path and only `email` from the body. Spreading the
       // whole body last let a caller override type and id, so the request's target was not the
-      // one in the URL. Note this route's :type segment carries the InviteType value itself
-      // (useCancelInvite posts `/api/${InviteType}/...`), NOT the .post/.get path aliases -
-      // do not map it through URL_PATH_TO_INVITE_TYPE. secureParameters' z.enum(InviteType)
-      // rejects anything that is not a real type.
+      // one in the URL. Callers of this verb have historically sent the InviteType value itself
+      // (`/api/${InviteType}/...`); resolveInviteType keeps that working alongside the alias.
       const { type, id } = req.query;
-      if (!type || !id) throw new BadRequestError('Invalid cancel invite request');
+      if (!id) throw new BadRequestError('Invalid cancel invite request');
+      const inviteType = resolveInviteType(type);
+      if (!inviteType) throw new BadRequestError('Invalid cancel invite request');
       const { email } = (req.body ?? {}) as { email?: string };
 
       const invites = await sharingService.cancelInvite(
         req.user,
-        { type: type as InviteType, id, email },
+        { type: inviteType, id, email },
         {
           db: {
             invites: inviteRepository,
