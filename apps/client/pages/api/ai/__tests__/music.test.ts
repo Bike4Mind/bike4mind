@@ -78,7 +78,18 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveApiKey: (...a: unknown[]) => getEffectiveApiKey(...a) },
-  creditService: { deductCreditsWithOrgSupport: (...a: unknown[]) => deductCredits(...a) },
+  creditService: {
+    deductCreditsWithOrgSupport: (...a: unknown[]) => deductCredits(...a),
+    // Faithful reimplementation of the real pure helper so org-billed tests
+    // exercise the cap decision the handler now depends on.
+    isMemberCreditCapExceeded: (
+      org: { maxCreditsPerMember?: number | null; userDetails?: { id: string; usedCredits?: number }[] },
+      userId: string,
+      credits: number
+    ) =>
+      org.maxCreditsPerMember != null &&
+      (org.userDetails?.find(u => u.id === userId)?.usedCredits ?? 0) + credits > org.maxCreditsPerMember,
+  },
   estimateMusicCredits: (...a: unknown[]) => estimateMusicCredits(...a),
 }));
 vi.mock('@bike4mind/utils', () => ({
