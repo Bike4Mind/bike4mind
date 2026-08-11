@@ -17,7 +17,7 @@ import {
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import ArticleOutlinedIcon from '@mui/icons-material/ArticleOutlined';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import AddIcon from '@mui/icons-material/Add';
+import AttachFileIcon from '@mui/icons-material/AttachFile';
 import CloseIcon from '@mui/icons-material/Close';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
@@ -442,8 +442,8 @@ export default function DataLakeChatTree({
               >
                 <RowMenuItem
                   testId={`datalake-attach-item-${file.id}`}
-                  icon={<AddIcon sx={{ fontSize: 16 }} />}
-                  label="Add to chat"
+                  icon={<AttachFileIcon sx={{ fontSize: 16 }} />}
+                  label="Attach to chat"
                   onClick={() => onAttachFile(file)}
                 />
                 <RowMenuItem
