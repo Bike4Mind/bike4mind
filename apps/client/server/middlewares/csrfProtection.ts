@@ -64,9 +64,7 @@ export const csrfProtection = (): RequestHandler => {
     // Build allowed origins from environment variable and localhost for development
     const allowedOrigins: string[] = [];
 
-    if (process.env.APP_URL) {
-      allowedOrigins.push(process.env.APP_URL);
-    } else {
+    if (!process.env.APP_URL) {
       // Fail closed: an unset APP_URL previously produced an empty allow-list
       // that would reject all requests, but made misconfiguration silent.
       // Failing loudly here surfaces the missing env var on the first
@@ -74,8 +72,36 @@ export const csrfProtection = (): RequestHandler => {
       throw new ForbiddenError('CSRF: APP_URL is not configured on this deployment.');
     }
 
-    // In dev, allow any localhost origin (Next.js may start on any available port)
-    if (process.env.APP_URL?.includes('localhost')) {
+    // Normalize to an origin before comparing. The check below tests against
+    // `new URL(header).origin`, which is always scheme + host + optional port with
+    // no trailing slash and a lowercased host. Pushing the raw env value made the
+    // comparison sensitive to how APP_URL happens to be written: a single trailing
+    // slash produced an allow-list entry no request could ever match, so EVERY
+    // state-changing request on the deployment returned 403 while reads kept working.
+    // That presents as "nothing saves anywhere" rather than as a fault in any one
+    // route, which sends the reader looking at auth instead of at configuration.
+    //
+    // A malformed APP_URL now fails the same way an unset one does - loudly, naming
+    // the variable - rather than being buried under origin-rejection 403s.
+    let appOrigin: string;
+    try {
+      appOrigin = new URL(process.env.APP_URL).origin;
+    } catch {
+      throw new ForbiddenError('CSRF: APP_URL is not a valid absolute URL on this deployment.');
+    }
+    if (appOrigin === 'null') {
+      // `new URL()` accepts some non-http schemes whose origin serializes to the
+      // string "null" (e.g. `file:`). Treat that as misconfiguration too: it would
+      // otherwise sit in the allow-list matching nothing, which is the exact silent
+      // failure this normalization exists to remove.
+      throw new ForbiddenError('CSRF: APP_URL does not resolve to a usable origin on this deployment.');
+    }
+    allowedOrigins.push(appOrigin);
+
+    // In dev, allow any localhost origin (Next.js may start on any available port).
+    // Reads the normalized origin, not the raw env value, so this branch cannot
+    // disagree with the allow-list entry above about what APP_URL points at.
+    if (new URL(appOrigin).hostname === 'localhost') {
       if (origin) {
         try {
           const url = new URL(origin);
@@ -114,7 +140,13 @@ export const csrfProtection = (): RequestHandler => {
     const hasValidReferer = isValidOriginOrReferer(referer);
 
     if (!hasValidOrigin && !hasValidReferer) {
-      throw new ForbiddenError('Invalid request origin. CSRF protection triggered.');
+      // Names the allowed origin. Without it this message describes only the caller,
+      // so a deployment whose APP_URL points somewhere users never arrive from reads
+      // as an attack on every request instead of as a configuration mismatch - and
+      // the two have completely different remedies. The value is our own configured
+      // origin, not anything caller-supplied, so echoing it discloses nothing the
+      // client did not already connect to.
+      throw new ForbiddenError(`Invalid request origin. CSRF protection triggered (expected ${appOrigin}).`);
     }
 
     next();
