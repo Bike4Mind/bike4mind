@@ -120,7 +120,12 @@ export interface IDataLake {
    *
    * The key is a wall-clock `Date`, not a unique token - equality is a best-effort ownership test,
    * not a guarantee, and two lakes claiming in the same millisecond would collide (same design as
-   * `filesDeletedAt`, not new to this field).
+   * `filesDeletedAt`, not new to this field). The same-millisecond collision also has a same-lake
+   * variant: two concurrent archive calls on ONE lake that happen to generate their claim's `Date`
+   * in the same millisecond both read as "freshly minted" to the loser, so its clear-back (see
+   * archiveDataLake) could wipe the winner's just-written stamp. Narrow (needs both a same-lake
+   * race AND a same-millisecond collision), not fixed by the `wasMinted` guard, which only
+   * distinguishes minted-from-echoed, not minted-at-the-same-instant-as-a-peer.
    *
    * Absent on a lake archived before this field existed (or one whose members already carry an
    * unstamped `archivedAt` for any other reason): restore leaves that archive marker exactly as

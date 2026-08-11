@@ -104,7 +104,12 @@ export const archiveDataLake = async (
   // browse (they filter archivedAt: null) - and unarchiving either lake brings back BOTH lakes'
   // archived files, since the flip matches on archivedAt alone.
   await warnOnPrefixCollision(db, existing, logger);
-  const swept = await db.fabFiles.archiveByDataLakeTag(scope, stamp);
+  // Generated here rather than left to archiveByDataLakeTag's default: when `stamp` is undefined,
+  // this row-level timestamp is orphaned (no lake will ever name it) even though it is a real
+  // Date, and that decision should be visible at the call site rather than buried in the repo
+  // method's fallback.
+  const sweepStamp = stamp ?? new Date();
+  const swept = await db.fabFiles.archiveByDataLakeTag(scope, sweepStamp);
   // The probe-then-claim window above has no lock, so a concurrent archive - on a prefix-colliding
   // sibling lake stamping a shared file, or on this SAME lake via a duplicate request - can leave
   // this sweep matching nothing despite a stamp in hand. `wasMinted` is what makes clearing safe:
@@ -126,6 +131,9 @@ export const archiveDataLake = async (
   if (!updated) {
     throw new NotFoundError('Data lake not found after archive');
   }
+  // Always recompute from source, never short-circuit on `swept` (e.g. "swept === 0, so stats
+  // can't have changed") - a re-entry sweeps 0 for rows a PRIOR attempt already archived, and
+  // those rows are exactly what this recompute needs to reflect.
   await recomputeLakeStats(existing, { db });
 
   return updated;

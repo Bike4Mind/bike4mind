@@ -1171,7 +1171,9 @@ describe('archiveDataLake - retrieval-index removal', () => {
     await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
 
     expect(adapters.db.dataLakes.claimFilesArchivedAt).not.toHaveBeenCalled();
-    expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
+    // No stamp to give these rows, so archiveDataLake generates an orphaned one visibly at the
+    // call site rather than relying on archiveByDataLakeTag's own default.
+    expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, expect.any(Date));
   });
 
   it('claims normally when the lake has no unstamped archived members', async () => {
@@ -1219,7 +1221,7 @@ describe('archiveDataLake - retrieval-index removal', () => {
     expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('archive recorded no stamp'), {
       dataLakeId: 'lake1',
     });
-    expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
+    expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, expect.any(Date));
     // No stamp means the zero-swept clear-back below can never fire for this lake - nothing to
     // clear, and clearing would wipe a mark a concurrent claimant may since have written.
     expect(adapters.db.dataLakes.update).not.toHaveBeenCalledWith(expect.objectContaining({ filesArchivedAt: null }));
