@@ -128,6 +128,10 @@ export function RowActionsMenu({
           ...menuSurfaceSx(menuTheme),
           borderRadius: '8px',
           minWidth: 180,
+          // Above a Joy Modal: the manager panel is modal-hosted, and this menu portals to body,
+          // so at the default z-index it opens BEHIND the dialog and reads as a dead button.
+          // Same remedy the organizations member menu uses; matches the sidebar's floating layers.
+          zIndex: 10001,
           // Joy's List vars, pinned for the same reason as the row's: p:1 from the shared recipe
           // would otherwise fight --List-padding.
           '--List-padding': '8px',
