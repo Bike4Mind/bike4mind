@@ -302,11 +302,7 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
   // Handle close - dismiss the panel entirely. Re-docking is a separate action
   // (the dock-right/dock-bottom controls in ChatPanelControls), not this button's job.
   const handleClose = useCallback(() => {
-    setSessionLayout({
-      layout: 'hide',
-      floatingChatMinimized: false,
-      previousLayout: undefined,
-    });
+    setSessionLayout({ layout: 'hide', floatingChatMinimized: false });
   }, []);
 
   const bounds = {

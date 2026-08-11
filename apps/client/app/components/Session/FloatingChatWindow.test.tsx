@@ -17,7 +17,7 @@ const Wrapper = ({ children }: { children: React.ReactNode }) => (
 
 describe('FloatingChatWindow', () => {
   beforeEach(() => {
-    setSessionLayout({ layout: 'floatingChat', floatingChatMinimized: false, previousLayout: 'dockRight' });
+    setSessionLayout({ layout: 'floatingChat', floatingChatMinimized: false });
   });
 
   it('dismisses the window instead of re-docking when the close button is clicked', () => {
@@ -29,8 +29,6 @@ describe('FloatingChatWindow', () => {
 
     fireEvent.click(screen.getByTestId('floating-chat-close'));
 
-    const state = useSessionLayout.getState();
-    expect(state.layout).toBe('hide');
-    expect(state.previousLayout).toBeUndefined();
+    expect(useSessionLayout.getState().layout).toBe('hide');
   });
 });
