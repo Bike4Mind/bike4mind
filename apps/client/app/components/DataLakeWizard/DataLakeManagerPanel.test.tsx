@@ -209,23 +209,27 @@ describe('DataLakeManagerPanel - root view', () => {
     await user.click(screen.getByTestId('datalake-manager-discover-btn'));
     // The catalog shows on THIS click: the activeLake branch used to outrank the tab and swallow it.
     expect(screen.getByTestId('mock-discover')).toBeInTheDocument();
-    // The lake is really closed, so a later Back cannot drop the user into Discover by surprise.
-    expect(screen.queryByTestId('datalake-manager-back')).not.toBeInTheDocument();
+    // The lake is really closed, so Back leaves the catalog for the overview instead of dropping
+    // the user back inside the lake they came from.
+    await user.click(screen.getByTestId('datalake-manager-back'));
+    expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
+    expect(screen.queryByTestId('mock-discover')).not.toBeInTheDocument();
   });
 
-  it('toggles back out of Discover - the one exit that needs no lake of your own to click', async () => {
+  it('leaves Discover via Back - an exit that needs no lake of your own to click', async () => {
     const user = userEvent.setup();
-    // No lakes: selectLake, the only other route back to the overview, has no row to click.
+    // No lakes: selectLake, the other route back to the overview, has no row to click.
     useGetDataLakes.mockReturnValue({ data: [], isLoading: false });
     renderPanel();
     const discover = screen.getByTestId('datalake-manager-discover-btn');
-    expect(discover).toHaveAttribute('aria-pressed', 'false');
+    // The button navigates rather than holding a mode, so it never reads as pressed.
+    expect(discover).not.toHaveAttribute('aria-pressed');
 
     await user.click(discover);
     expect(screen.getByTestId('mock-discover')).toBeInTheDocument();
-    expect(discover).toHaveAttribute('aria-pressed', 'true');
+    expect(discover).not.toHaveAttribute('aria-pressed');
 
-    await user.click(discover);
+    await user.click(screen.getByTestId('datalake-manager-back'));
     expect(screen.queryByTestId('mock-discover')).not.toBeInTheDocument();
     expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
   });

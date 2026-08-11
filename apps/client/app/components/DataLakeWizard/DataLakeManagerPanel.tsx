@@ -180,13 +180,10 @@ export default function DataLakeManagerPanel() {
 
   // Discover swaps the right pane, but the activeLake branch below outranks it - so a click
   // while a lake was open changed nothing on screen, then surfaced later as the catalog
-  // appearing when the user pressed Back. Exit the lake on the way in. Toggling back out is
-  // the only exit that does not require owning a lake to click.
-  const toggleDiscover = () => {
-    if (managerTab === 'discover') {
-      openManager('mine');
-      return;
-    }
+  // appearing when the user pressed Back. Exit the lake on the way in. One-way by design: the
+  // catalog is a place you go, not a mode you hold, so the nav's Back row is the way out (which
+  // also means leaving never depends on owning a lake to click).
+  const openDiscover = () => {
     setLakeId(null);
     setPath([]);
     setSelectedFile(null);
@@ -227,7 +224,8 @@ export default function DataLakeManagerPanel() {
         onSelectFile={setSelectedFile}
         onCreateLake={openWizard}
         isDiscovering={managerTab === 'discover'}
-        onDiscover={toggleDiscover}
+        onDiscover={openDiscover}
+        onExitDiscover={() => openManager('mine')}
         onReviewTaxonomy={setReviewingBatchId}
       />
       {activeLake ? (
@@ -293,10 +291,12 @@ interface ManagerNavProps {
   onExitLake: () => void;
   onSelectFile: (file: IFabFileDocument) => void;
   onCreateLake: () => void;
-  /** True while the right pane shows the public catalog, so the footer button reads as pressed. */
+  /** True while the right pane shows the public catalog, so the nav offers a way back out. */
   isDiscovering: boolean;
-  /** Toggles the public-lake Discover catalog in the right pane. */
+  /** Opens the public-lake Discover catalog in the right pane. */
   onDiscover: () => void;
+  /** Leaves the catalog for the caller's own lakes. */
+  onExitDiscover: () => void;
   /** Opens the review/apply panel for a batch whose taxonomy suggestions are ready or failed. */
   onReviewTaxonomy: (batchId: string) => void;
 }
@@ -316,6 +316,7 @@ function ManagerNav({
   onCreateLake,
   isDiscovering,
   onDiscover,
+  onExitDiscover,
   onReviewTaxonomy,
 }: ManagerNavProps) {
   const theme = useTheme();
@@ -494,12 +495,18 @@ function ManagerNav({
       </Box>
 
       <Box sx={{ ...TREE_SCROLL_SX, px: '8px' }}>
-        {activeLake && (
+        {/* The catalog is a destination, not a toggled mode, so it gets the same way back as a
+            lake does - and this exit works with no lakes to click. */}
+        {(activeLake || isDiscovering) && (
           <Box sx={TREE_BACK_STICKY_SX}>
-            <ListItemButton onClick={handleBack} data-testid="datalake-manager-back" sx={treeBackRowSx(hoverBg)}>
+            <ListItemButton
+              onClick={activeLake ? handleBack : onExitDiscover}
+              data-testid="datalake-manager-back"
+              sx={treeBackRowSx(hoverBg)}
+            >
               <ArrowBackIcon sx={{ fontSize: 16, color: 'text.secondary', flexShrink: 0 }} />
               <Typography noWrap sx={rowTypographySx}>
-                {backLabel}
+                {activeLake ? backLabel : 'All Lakes'}
               </Typography>
             </ListItemButton>
           </Box>
@@ -817,19 +824,13 @@ function ManagerNav({
 
       {/* Sticky bottom bar, same chrome as the in-chat tree footer. */}
       <Box sx={{ display: 'flex', gap: '8px', p: '12px', borderTop: '1px solid', borderColor }}>
-        <Tooltip
-          title={
-            isDiscovering
-              ? 'Showing public data lakes. Click to return to your own lakes.'
-              : 'Browse data lakes other people have published, from across the app.'
-          }
-          size="sm"
-        >
+        <Tooltip title="Browse data lakes other people have published, from across the app." size="sm">
+          {/* Navigates to the catalog; deliberately stateless - it never reads as pressed, because
+              it is not a mode you are holding. Leaving is the nav's Back row. */}
           <Button
-            variant={isDiscovering ? 'soft' : 'outlined'}
+            variant="outlined"
             color="neutral"
             onClick={onDiscover}
-            aria-pressed={isDiscovering}
             data-testid="datalake-manager-discover-btn"
             sx={FOOTER_BTN_SX}
           >
