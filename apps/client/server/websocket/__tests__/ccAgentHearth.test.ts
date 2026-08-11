@@ -67,6 +67,8 @@ vi.mock('@bike4mind/database', () => ({
   CcBridgeDevice: ccBridgeDeviceModelMock,
   codeAgentEventRepository: codeAgentEventRepositoryMock,
   hearthRepository: hearthRepositoryMock,
+  // Reached through the shared toPresenceProjection, which clamps with it.
+  MAX_PRESENCE_FIELD_LENGTH: 200,
   Connection: connectionMock,
   QuerySubscription: querySubscriptionMock,
   User: userModelMock,
@@ -140,7 +142,10 @@ function appendedEvent() {
     actorId: string;
     kind: string;
     human: { text: string; format: string };
-    machine: { schema: string; payload: Record<string, unknown> };
+    machine: {
+      schema: string;
+      payload: Record<string, unknown> & { activity?: { reason?: string }; slug?: string };
+    };
   };
 }
 
@@ -184,16 +189,22 @@ function applyMockDefaults() {
   hearthRepositoryMock.ensureChannelByName.mockResolvedValue({ _id: 'ch-default' });
   hearthRepositoryMock.getOwnedChannel.mockResolvedValue({ _id: 'ch-override' });
   hearthRepositoryMock.ensureActor.mockResolvedValue({ _id: { toString: () => 'actor-1' } });
-  hearthRepositoryMock.store.appendEvent.mockResolvedValue({
-    id: 'ev-1',
-    channelId: 'ch-default',
-    seq: 1,
-    actorId: 'actor-1',
-    kind: 'presence',
-    human: { text: 'x', format: 'text' },
-    refs: {},
-    createdAt: EVENT_CREATED_AT,
-  });
+  // Echoes the channel and actor it was handed, as the real store does: the
+  // roster row is now projected FROM the returned event, so a canned channelId
+  // here would hide the very drift the shared projection exists to prevent.
+  hearthRepositoryMock.store.appendEvent.mockImplementation(
+    (input: { channelId: string; actorId: string; human: { text: string; format: string } }) =>
+      Promise.resolve({
+        id: 'ev-1',
+        channelId: input.channelId,
+        seq: 1,
+        actorId: input.actorId,
+        kind: 'presence',
+        human: input.human,
+        refs: {},
+        createdAt: EVENT_CREATED_AT,
+      })
+  );
   hearthRepositoryMock.upsertPresence.mockResolvedValue({ _id: 'presence-1' });
   connectionMock.findOne.mockResolvedValue({ connectionId: 'conn-1', userId: USER });
   connectionMock.deleteOne.mockResolvedValue({ deletedCount: 1 });
@@ -229,17 +240,23 @@ describe('cc_agent_register dual-write', () => {
     expect(appended.channelId).toBe('ch-default');
     expect(appended.actorId).toBe('actor-1');
     expect(hearthRepositoryMock.ensureChannelByName).toHaveBeenCalledWith(USER, 'agents');
-    expect(hearthRepositoryMock.ensureActor).toHaveBeenCalledWith(USER, 'agent', `bluebike4mind (${SLUG})`);
-    expect(appended.machine.schema).toBe('hearth.cc-bridge@1');
+    // The slug alone, and the shared presence schema: the hook covering this
+    // same session composes the identical actor name and writes the identical
+    // payload shape, so the two reporters converge on one actor and one row.
+    expect(hearthRepositoryMock.ensureActor).toHaveBeenCalledWith(USER, 'agent', SLUG);
+    expect(appended.machine.schema).toBe('hearth.presence@1');
     expect(appended.machine.payload).toEqual({
-      instanceId: INSTANCE,
+      session_id: INSTANCE,
       slug: SLUG,
       workspace: 'bluebike4mind',
-      reason: 'session_start',
+      surface: 'cc-bridge',
+      // Under `activity`, where the shared contract reads it. At the top level
+      // the projection missed it and every bridge event replayed to `running`.
+      activity: { reason: 'session_start' },
       source: 'claude',
-      claudeVersion: '2.1.0',
+      claude_version: '2.1.0',
     });
-    expect(appended.human.text).toBe(`bluebike4mind (${SLUG}) started a session`);
+    expect(appended.human.text).toBe(`${SLUG} in bluebike4mind started a session`);
     expectNoBait();
   });
 
@@ -259,6 +276,28 @@ describe('cc_agent_register dual-write', () => {
       sessionId: INSTANCE,
       slug: SLUG,
     });
+  });
+
+  // Without this push the roster held the new state in Mongo while an open
+  // panel still rendered the snapshot it last fetched - one roster in the data,
+  // two in the UI. It must carry the resolved actor name, since the wire event
+  // is what surfaces render from.
+  it('pushes the appended event to open clients, after the roster write', async () => {
+    const func = await loadHandler('../ccAgentRegister');
+    await func(makeEvent(REGISTER_BODY), {}, makeLogger());
+
+    expect(sendToClientMock).toHaveBeenCalledWith(
+      USER,
+      'https://ws.example.com/dev',
+      expect.objectContaining({
+        action: 'hearth_event',
+        event: expect.objectContaining({ id: 'ev-1', kind: 'presence', actorName: SLUG }),
+      })
+    );
+
+    const pushIndex = sendToClientMock.mock.invocationCallOrder.at(-1)!;
+    const upsertIndex = hearthRepositoryMock.upsertPresence.mock.invocationCallOrder[0];
+    expect(pushIndex).toBeGreaterThan(upsertIndex);
   });
 
   it('honors a per-device channel override', async () => {
@@ -322,8 +361,8 @@ describe('cc_agent_event dual-write', () => {
     await func(makeEvent(statusBody('awaiting_permission')), {}, makeLogger());
 
     const appended = appendedEvent();
-    expect(appended.machine.payload.reason).toBe('awaiting_permission');
-    expect(appended.human.text).toBe(`bluebike4mind (${SLUG}) needs permission`);
+    expect(appended.machine.payload.activity?.reason).toBe('awaiting_permission');
+    expect(appended.human.text).toBe(`${SLUG} in bluebike4mind needs permission`);
     // The Tavern's own summary path is untouched by the dual-write.
     expect(activeCodeAgentRepositoryMock.updateStatus).toHaveBeenCalledWith(
       INSTANCE,
@@ -403,8 +442,8 @@ describe('cc_agent_disconnect dual-write', () => {
     await func(makeEvent(DISCONNECT_BODY), {}, makeLogger());
 
     const appended = appendedEvent();
-    expect(appended.machine.payload.reason).toBe('disconnected');
-    expect(appended.human.text).toBe(`bluebike4mind (${SLUG}) disconnected`);
+    expect(appended.machine.payload.activity?.reason).toBe('disconnected');
+    expect(appended.human.text).toBe(`${SLUG} in bluebike4mind disconnected`);
     // The roster must read gone, not merely quiet - and never still running.
     expect(upsertedPresence().reason).toBe('disconnected');
     expectNoBait();
@@ -438,7 +477,7 @@ describe('$disconnect sweep dual-write', () => {
     expect(res.statusCode).toBe(200);
     const appended = appendedEvent();
     expect(appended.channelId).toBe('ch-override');
-    expect(appended.machine.payload.reason).toBe('disconnected');
+    expect(appended.machine.payload.activity?.reason).toBe('disconnected');
     expect(appended.machine.payload.slug).toBe(SLUG);
     const row = upsertedPresence();
     expect(row.channelId).toBe('ch-override');

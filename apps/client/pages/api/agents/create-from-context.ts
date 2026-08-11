@@ -137,7 +137,8 @@ async function generateAgentFromContext(
   // 2. Any OpenAI model (more likely to have user keys)
   // 3. Any Anthropic model (non-Bedrock)
   // 4. Any available model
-  let modelInfo = preferredModelId ? models.find(m => m.id === preferredModelId) : null;
+  // Skip a pinned model the catalog now reports as disabled, matching the save-time guard.
+  let modelInfo = preferredModelId ? models.find(m => m.id === preferredModelId && !m.disabled) : null;
 
   if (!modelInfo) {
     // Try OpenAI models first (users more likely to have OpenAI keys)

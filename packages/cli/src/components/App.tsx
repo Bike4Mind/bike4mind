@@ -24,6 +24,12 @@ import type { McpManager } from '../utils/mcpAdapter';
 import { processFileReferences, hasFileReferences } from '../utils/processFileReferences.js';
 import type { CommandDefinition } from '../config/commands.js';
 import { useStdoutDimensions } from '../hooks/useStdoutDimensions.js';
+/**
+ * Live-frame rows reserved for everything outside the step trace: the thinking
+ * line and its margin, the bordered input box and the status bar come to six,
+ * and the rest is headroom for the background agent/shell status blocks.
+ */
+const LIVE_CHROME_ROWS = 10;
 
 interface AppProps {
   onMessage: (message: string) => Promise<void>;
@@ -124,7 +130,13 @@ export function App({
   // color fills the entire row (same pattern as the sent user-prompt
   // highlight in MessageItem.tsx). Subscribes to resize so the live frame
   // repaints at the new width instead of keeping the stale startup width.
-  const [terminalCols] = useStdoutDimensions();
+  const [terminalCols, terminalRows] = useStdoutDimensions();
+
+  // Ink wipes and rebuilds scrollback on every frame taller than the viewport
+  // (see liveStepWindow.ts), so the trace only gets the rows left over. On a
+  // terminal too short to have any left over it drops out entirely - keeping
+  // scrollback usable matters more than a two-line trace.
+  const liveTraceRows = Math.max(0, terminalRows - LIVE_CHROME_ROWS - messageQueue.length);
 
   const handleSubmit = React.useCallback(
     async (input: string) => {
@@ -220,7 +232,7 @@ export function App({
             <Box flexDirection="column">
               {pendingMessages.map(message => (
                 <Box key={message.id} flexDirection="column">
-                  <MessageItem message={message} showThoughts={showThoughts} />
+                  <MessageItem message={message} showThoughts={showThoughts} liveTraceRows={liveTraceRows} />
                 </Box>
               ))}
             </Box>

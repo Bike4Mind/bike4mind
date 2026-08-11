@@ -91,7 +91,9 @@ class UserSubscriptionRepository extends BaseRepository<IUserSubscription> imple
       {
         $lookup: {
           from: 'users',
-          let: { userId: { $toObjectId: '$userId' } },
+          // $convert, not $toObjectId: one subscription with a non-ObjectId userId would abort
+          // the whole aggregation; onError: null leaves that row's user unjoined.
+          let: { userId: { $convert: { input: '$userId', to: 'objectId', onError: null } } },
           pipeline: [{ $match: { $expr: { $eq: ['$_id', '$$userId'] } } }],
           as: 'user',
         },
