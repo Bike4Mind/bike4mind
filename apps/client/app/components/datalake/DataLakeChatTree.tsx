@@ -77,6 +77,9 @@ interface DataLakeChatTreeProps {
   onClose?: () => void;
 }
 
+/** Icon frame for this menu's rows - tighter than the profile menu's 22px to suit 28px rows. */
+const MENU_ICON_FRAME_SX = { ...MENU_ROW_ICON_SX, width: 20, height: 20 } as const;
+
 /**
  * One item in a file row's action menu, styled like the profile menu's rows. Joy MenuItem
  * needs --variant-plainHoverBg pointed at the hover colour too, or its own variant rule wins
@@ -101,19 +104,19 @@ const RowMenuItem = ({
     sx={itemTheme => ({
       ...menuRowSx(itemTheme, danger),
       '--variant-plainHoverBg': itemTheme.palette.notebooklist.hoverBg,
-      // Tighter than the profile menu's 40px: these rows sit in a 260px rail, not a full panel.
-      height: '36px',
+      // Tighter than the profile menu's 40px: this menu hangs off a row in a 260px rail.
+      height: '28px',
       // Joy drives row geometry from these vars, so pin them to the values above rather than
       // relying on sx winning the cascade against Joy's own rule.
-      '--ListItem-paddingLeft': '10px',
-      '--ListItem-paddingRight': '10px',
+      '--ListItem-paddingLeft': '4px',
+      '--ListItem-paddingRight': '4px',
       '--ListItem-paddingY': '0px',
-      '--ListItem-minHeight': '36px',
+      '--ListItem-minHeight': '28px',
       '--ListItem-radius': '8px',
       '--ListItem-gap': '12px',
     })}
   >
-    <Box sx={MENU_ROW_ICON_SX}>{icon}</Box>
+    <Box sx={MENU_ICON_FRAME_SX}>{icon}</Box>
     <Typography level="body-sm" noWrap sx={{ flex: 1, color: 'inherit', fontSize: '14px', fontWeight: 400 }}>
       {label}
     </Typography>
@@ -431,13 +434,13 @@ export default function DataLakeChatTree({
               >
                 <RowMenuItem
                   testId={`datalake-attach-item-${file.id}`}
-                  icon={<AddIcon sx={{ fontSize: 18 }} />}
+                  icon={<AddIcon sx={{ fontSize: 16 }} />}
                   label="Add to chat"
                   onClick={() => onAttachFile(file)}
                 />
                 <RowMenuItem
                   testId={`datalake-view-item-${file.id}`}
-                  icon={<VisibilityOutlinedIcon sx={{ fontSize: 18 }} />}
+                  icon={<VisibilityOutlinedIcon sx={{ fontSize: 16 }} />}
                   label="View"
                   onClick={() => onViewFile(file)}
                 />
@@ -445,7 +448,7 @@ export default function DataLakeChatTree({
                 {canDeleteFile(file) && (
                   <RowMenuItem
                     testId={`datalake-delete-item-${file.id}`}
-                    icon={<DeleteOutlineIcon sx={{ fontSize: 18 }} />}
+                    icon={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
                     label="Remove"
                     onClick={() => onDeleteFile(file)}
                     danger
