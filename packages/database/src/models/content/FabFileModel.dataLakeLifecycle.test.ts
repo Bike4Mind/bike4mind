@@ -153,6 +153,7 @@ describe('FabFile data lake lifecycle membership', () => {
 
       const result = await fabFileRepository.search(CREATOR, '', {}, pagination, order, {
         includeShared: true,
+        userGroups: [CREATOR_GROUP],
         lakeMembership: scope,
         restrictToDataLake: true,
       });
