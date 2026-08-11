@@ -363,7 +363,7 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
           return;
         }
 
-        await shareDocument.mutateAsync({
+        const result = await shareDocument.mutateAsync({
           description,
           recipients: recipientValue,
           id: id,
@@ -372,10 +372,10 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, files, sessi
         });
 
         if (tabIndex === 0) {
-          // Sharing by users
-          toast.success(
-            `Successfully shared ${displayName} to ${recipientValue.length} recipient${recipientValue.length > 1 ? 's' : ''}`
-          );
+          // Sharing by users. Report the server-resolved, deduped recipient count (e.g. an
+          // email and that same person's username collapse to one), not the raw typed count.
+          const sharedCount = result?.recipients?.pending?.length ?? recipientValue.length;
+          toast.success(`Successfully shared ${displayName} to ${sharedCount} recipient${sharedCount > 1 ? 's' : ''}`);
 
           // Clear input and close modal after showing toast
           setCurrentInputValue('');

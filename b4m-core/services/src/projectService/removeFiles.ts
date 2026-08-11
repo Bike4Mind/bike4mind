@@ -56,13 +56,18 @@ export const removeFiles = async (
   // access came from the project, and would lose the direct share too.
   for (const file of files) {
     const projectMemberEntries = file.users.filter(u => u.projectId === project.id);
-    const directlySharedEmails = projectMemberEntries.length
-      ? new Set(
-          (await db.invites.findAllByDocumentId(file.id))
-            .filter(invite => invite.type === InviteType.FabFile)
-            .flatMap(invite => invite.recipients?.accepted ?? [])
-        )
-      : new Set<string>();
+    const directInvites = projectMemberEntries.length
+      ? (await db.invites.findAllByDocumentId(file.id)).filter(invite => invite.type === InviteType.FabFile)
+      : [];
+
+    // Batched, not one findById per entry: this loop runs inside the route's transaction, so
+    // an unmemoized per-entry lookup would hold it open for one round trip per project member.
+    const granteeEmailsById = new Map<string, string>();
+    if (directInvites.length) {
+      for (const grantee of await db.users.findByIds(projectMemberEntries.map(u => u.userId))) {
+        if (grantee.email) granteeEmailsById.set(grantee.id, grantee.email);
+      }
+    }
 
     const nextUsers: typeof file.users = [];
     for (const entry of file.users) {
@@ -70,9 +75,22 @@ export const removeFiles = async (
         nextUsers.push(entry);
         continue;
       }
-      const grantee = directlySharedEmails.size ? await db.users.findById(entry.userId) : null;
-      if (grantee?.email && directlySharedEmails.has(grantee.email)) {
-        nextUsers.push({ ...entry, projectId: undefined });
+      const email = granteeEmailsById.get(entry.userId);
+      const directGrantPermissions = email
+        ? Array.from(
+            new Set(
+              directInvites
+                .filter(invite => invite.recipients?.accepted?.includes(email))
+                .flatMap(invite => ('permissions' in invite ? invite.permissions : []))
+            )
+          )
+        : [];
+      if (directGrantPermissions.length) {
+        // Keep only what the independent direct invite itself grants, not the full
+        // permission union pushShareable may have merged in from the project side -
+        // otherwise a permission that came SOLELY from project membership (e.g. update,
+        // when the direct invite only ever granted read+share) would outlive this revoke.
+        nextUsers.push({ ...entry, projectId: undefined, permissions: directGrantPermissions });
       }
       // else: access came solely from this project - drop the entry entirely.
     }

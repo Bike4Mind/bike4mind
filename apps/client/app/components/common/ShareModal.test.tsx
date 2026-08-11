@@ -117,6 +117,20 @@ describe('ShareModal - By Users tab', () => {
     );
   });
 
+  it('reports the server-resolved recipient count in the success toast, not the raw typed count', async () => {
+    // Two typed recipients (an email and that same person's username) resolve server-side
+    // to one unique person - the toast must say "1 recipient", not "2 recipients".
+    mocks.mutateAsync.mockResolvedValue({ recipients: { pending: ['friend@test.com'] } });
+    const user = await openByUsersTab();
+    const input = screen.getByTestId('share-modal-recipients-input');
+    await user.type(input, 'friend@test.com{Enter}friend{Enter}');
+    await user.click(screen.getByTestId('share-modal-submit-button'));
+
+    await waitFor(() =>
+      expect(mocks.toast.success).toHaveBeenCalledWith('Successfully shared My Notebook to 1 recipient')
+    );
+  });
+
   it('still fires the share request when currentUser has not loaded yet (regression guard)', async () => {
     mocks.currentUser = null;
     const user = await openByUsersTab();

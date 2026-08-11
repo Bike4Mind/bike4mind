@@ -296,3 +296,73 @@ describe('sharingService - acceptInvite (Group)', () => {
     expect(mockAdapters.db.users.update).toHaveBeenCalledWith(expect.objectContaining({ groups: [groupId] }));
   });
 });
+
+/**
+ * `remaining` on a By-Users FabFile invite now scales to the number of named recipients
+ * (#1151), not a flat 1 - a human reviewer caught that acceptInvite never checked the
+ * accepter was actually one of the recipients named in `pending`, so an unintended
+ * accepter could claim a slot meant for someone else while a named recipient still
+ * hadn't accepted. Link-only invites (empty `pending` from creation) must stay open to
+ * anyone; a fully-consumed named invite is already blocked by the `remaining <= 0` check
+ * regardless of identity, so this only needs to gate the "still has named recipients left" case.
+ */
+describe('sharingService - acceptInvite (FabFile recipient membership)', () => {
+  const userId = 'user-1';
+  const fileId = 'file-1';
+  const inviteId = 'invite-1';
+
+  const makeUser = (email: string) => ({ id: userId, email, username: 'u' });
+
+  const makeInvite = (pending: string[], remaining: number) => ({
+    id: inviteId,
+    type: InviteType.FabFile,
+    documentId: fileId,
+    permissions: [Permission.read, Permission.share],
+    remaining,
+    accepted: 0,
+    recipients: { pending, refused: [], accepted: [] },
+  });
+
+  const makeAdapters = () => ({
+    db: {
+      invites: { findById: vi.fn(), update: vi.fn() },
+      fabFiles: { findById: vi.fn(async () => ({ id: fileId, users: [] })), update: vi.fn() },
+      sessions: { findById: vi.fn(), update: vi.fn() },
+      projects: { findById: vi.fn(), update: vi.fn() },
+      groups: { findById: vi.fn() },
+      organization: { findById: vi.fn(), update: vi.fn(), ensureUserDetails: vi.fn() },
+      users: { findById: vi.fn(), update: vi.fn() },
+    },
+  });
+
+  it('rejects an accepter who is not among the still-pending named recipients', async () => {
+    const adapters = makeAdapters();
+    adapters.db.users.findById.mockResolvedValue(makeUser('uninvited@x.com'));
+    adapters.db.invites.findById.mockResolvedValue(makeInvite(['a@x.com', 'b@x.com'], 2));
+
+    await expect(acceptInvite(userId, { id: inviteId }, adapters as any)).rejects.toThrow(ForbiddenError);
+    expect(adapters.db.invites.update).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.update).not.toHaveBeenCalled();
+  });
+
+  it('allows an accepter who is one of the named pending recipients', async () => {
+    const adapters = makeAdapters();
+    adapters.db.users.findById.mockResolvedValue(makeUser('a@x.com'));
+    adapters.db.invites.findById.mockResolvedValue(makeInvite(['a@x.com', 'b@x.com'], 2));
+
+    await acceptInvite(userId, { id: inviteId }, adapters as any);
+
+    expect(adapters.db.invites.update).toHaveBeenCalled();
+    expect(adapters.db.fabFiles.update).toHaveBeenCalled();
+  });
+
+  it('allows anyone to accept a link-only invite (pending was never populated)', async () => {
+    const adapters = makeAdapters();
+    adapters.db.users.findById.mockResolvedValue(makeUser('anyone@x.com'));
+    adapters.db.invites.findById.mockResolvedValue(makeInvite([], 1000));
+
+    await acceptInvite(userId, { id: inviteId }, adapters as any);
+
+    expect(adapters.db.invites.update).toHaveBeenCalled();
+  });
+});
