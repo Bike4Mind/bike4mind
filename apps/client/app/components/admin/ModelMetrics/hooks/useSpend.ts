@@ -1,7 +1,8 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { useUser } from '@client/app/contexts/UserContext';
-import type { SpendData } from '@bike4mind/common';
+import type { SpendData, SpendServerPayload } from '@bike4mind/common';
+import { spendPeriodLabels } from '../utils/spendPeriodLabels';
 
 interface SpendFilters {
   dateFrom?: string;
@@ -22,7 +23,10 @@ export const fetchSpend = async (filters?: SpendFilters, recache = false): Promi
 
   const url = `/api/admin/spend${params.toString() ? `?${params.toString()}` : ''}`;
   const response = await api.get(url);
-  return response.data;
+  // The server can't format the period labels in the caller's timezone (and they're
+  // kept out of its 12h cache), so add them here from the same filter dates.
+  const payload = response.data as SpendServerPayload;
+  return { ...payload, ...spendPeriodLabels(filters?.dateFrom, filters?.dateTo) };
 };
 
 export const useSpend = (filters?: SpendFilters, options?: { enabled?: boolean }) => {

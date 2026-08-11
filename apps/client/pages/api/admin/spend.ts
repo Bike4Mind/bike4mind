@@ -5,12 +5,13 @@ import { cacheService } from '@bike4mind/services';
 import {
   ApiKeyScope,
   CreditHolderType,
+  SPEND_DEFAULT_WINDOW_DAYS,
   type CostByModelRow,
   type DailyCostPoint,
   type ISpendSummary,
   type SpendByAccountRow,
-  type SpendData,
   type SpendKpi,
+  type SpendServerPayload,
 } from '@bike4mind/common';
 import { CacheKeys } from '@server/utils/cacheKeys';
 import { ForbiddenError } from '@server/utils/errors';
@@ -19,7 +20,6 @@ import { Request } from 'express';
 import { z } from 'zod';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_WINDOW_DAYS = 30;
 
 /** Guards org-id casts in the $in lookup from a BSONError 500 (see resolveUserNames). */
 const OBJECT_ID_RE = /^[a-f0-9]{24}$/i;
@@ -63,28 +63,24 @@ const parseDate = (value?: string): Date | undefined => {
   return Number.isNaN(d.getTime()) ? undefined : d;
 };
 
-const fmtDay = (d: Date): string => d.toISOString().slice(0, 10);
-
 /**
  * Resolve the current window from the filter dates and derive the immediately
  * prior window of equal length (for the vs-prior KPI deltas). With no dates the
- * window defaults to the last 30 days.
+ * window defaults to the last 30 days. Human period labels are formatted on the
+ * client (see spendPeriodLabels) since they depend on the viewer's timezone.
  */
 function resolveWindows(dateFrom?: string, dateTo?: string) {
   const now = new Date();
   const to = parseDate(dateTo) ?? now;
-  const from = parseDate(dateFrom) ?? new Date(to.getTime() - DEFAULT_WINDOW_DAYS * DAY_MS);
+  const from = parseDate(dateFrom) ?? new Date(to.getTime() - SPEND_DEFAULT_WINDOW_DAYS * DAY_MS);
   // Defensive floor: QuerySchema already rejects inverted ranges, so this stays >= 0.
   const windowMs = Math.max(to.getTime() - from.getTime(), 0);
   const priorTo = from;
   const priorFrom = new Date(from.getTime() - windowMs);
-  const isDefault = !parseDate(dateFrom) && !parseDate(dateTo);
 
   return {
     current: { from, to },
     prior: { from: priorFrom, to: priorTo },
-    periodLabel: isDefault ? `Last ${DEFAULT_WINDOW_DAYS} days` : `${fmtDay(from)} - ${fmtDay(to)}`,
-    priorPeriodLabel: isDefault ? `Prior ${DEFAULT_WINDOW_DAYS} days` : `${fmtDay(priorFrom)} - ${fmtDay(priorTo)}`,
   };
 }
 
@@ -204,8 +200,8 @@ async function resolveAccountRows(current: ISpendSummary): Promise<SpendByAccoun
   });
 }
 
-async function buildSpendData(query: Omit<SpendQuery, 'recache'>): Promise<SpendData> {
-  const { current, prior, periodLabel, priorPeriodLabel } = resolveWindows(query.dateFrom, query.dateTo);
+async function buildSpendData(query: Omit<SpendQuery, 'recache'>): Promise<SpendServerPayload> {
+  const { current, prior } = resolveWindows(query.dateFrom, query.dateTo);
   const baseFilters = { userId: query.userFilter || undefined, model: query.modelFilter || undefined };
 
   const [currentSummary, priorSummary] = await Promise.all([
@@ -230,8 +226,6 @@ async function buildSpendData(query: Omit<SpendQuery, 'recache'>): Promise<Spend
   const dailyCost: DailyCostPoint[] = currentSummary.dailyCost.map(d => ({ date: d.day, cost: d.cogsUsd }));
 
   return {
-    periodLabel,
-    priorPeriodLabel,
     // "Some events were counted in this window" - requests is $sum:1 in spendSummary.
     hasData: currentSummary.totals.requests > 0,
     activeAccounts: currentSummary.activeAccounts,

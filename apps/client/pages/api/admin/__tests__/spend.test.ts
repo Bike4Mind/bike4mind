@@ -122,7 +122,10 @@ describe('GET /api/admin/spend', () => {
     expect(data.byAccount[0]).toMatchObject({ accountId: 'user-1', accountName: 'Ada Lovelace' });
     // modelId keys on provider+model so distinct backends serving the same model don't merge.
     expect(data.byModel[0]).toMatchObject({ modelId: 'bedrock/opus', modelName: 'bedrock / opus', share: 12 / 20 });
-    expect(data.periodLabel).toBe('Last 30 days');
+    // Period labels are formatted client-side in the viewer's timezone (see
+    // spendPeriodLabels), so the server payload must not carry them.
+    expect(data.periodLabel).toBeUndefined();
+    expect(data.priorPeriodLabel).toBeUndefined();
     // Authoritative empty/truncation signals emitted on the contract, not inferred.
     expect(data.hasData).toBe(true);
     expect(data.activeAccounts).toBe(3);

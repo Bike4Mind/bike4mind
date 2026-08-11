@@ -458,10 +458,19 @@ export interface DailyCostPoint {
   cost: number;
 }
 
+/** Default spend window (in days) when no explicit range is selected. */
+export const SPEND_DEFAULT_WINDOW_DAYS = 30;
+
 export interface SpendData {
-  /** Human label for the selected period (echoes the ControlPanel range). */
+  /**
+   * Human label for the selected period, echoing the ControlPanel range. Formatted
+   * on the CLIENT in the viewer's local timezone (see spendPeriodLabels / useSpend),
+   * NOT part of the server payload: the handler only has UTC instants and never
+   * receives the caller's timezone, so a local-midnight range formatted server-side
+   * lands a day early east of UTC. See SpendServerPayload.
+   */
   periodLabel: string;
-  /** Human label for the prior comparison period. */
+  /** Human label for the prior comparison period; client-formatted, see periodLabel. */
   priorPeriodLabel: string;
   /**
    * Whether any events settled in the window. Authoritative empty-state signal
@@ -480,6 +489,13 @@ export interface SpendData {
   byModel: CostByModelRow[];
   dailyCost: DailyCostPoint[];
 }
+
+/**
+ * What GET /api/admin/spend actually returns. The tz-local period labels are added
+ * by the client (they can't be formatted server-side, and are omitted from the 12h
+ * response cache so a label can't leak across callers in different timezones).
+ */
+export type SpendServerPayload = Omit<SpendData, 'periodLabel' | 'priorPeriodLabel'>;
 
 /** One model's slice of an agent execution's iteration billing. */
 export interface ISessionAgentModelUsage {
