@@ -549,6 +549,11 @@ export default function DataLakeExplorer({
             overflow: 'hidden',
             p: '12px',
             pl: sidenavOpen ? '12px' : '48px',
+            // With the viewer in the centre pane, the host's splitter is immediately to our right.
+            // Keeping the padding would leave a gap between the two, so the splitter reads as part
+            // of the chat dock rather than the boundary between the viewer and the chat - which is
+            // how the embedded host's splitter reads, sitting flush against both panes.
+            pr: railViewerOpen ? 0 : '12px',
             gap: '8px',
             transition: 'padding-left 0.2s ease',
           }}
