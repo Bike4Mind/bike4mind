@@ -168,9 +168,9 @@ export async function apiGetOtcCode(request: APIRequestContext, email: string): 
 /**
  * Full passwordless re-login for an existing test account: /api/otc/send to mint a pending token,
  * read the emailed code back via the non-prod test endpoint, then /api/otc/verify for fresh tokens.
- * Use when a test needs a genuinely NEW session - e.g. after logout, which revokes every prior
- * token for the user (tokenVersion bump), so reusing a seeded token would 401. Non-prod only
- * (same gating as apiGetOtcCode).
+ * Use when a test needs a genuinely NEW, independent session - e.g. after logging out the seeded
+ * session (per-device logout revokes only that session, so reusing its token would 401), or to
+ * hold a second live session alongside the first. Non-prod only (same gating as apiGetOtcCode).
  */
 export async function apiLoginViaOtc(
   request: APIRequestContext,
