@@ -79,8 +79,15 @@ export const archiveDataLake = async (
   // accepts 'archived'/'restoring'. A known limitation, not a full fix for either case.
   const hasUnstampedArchive = !existing.filesArchivedAt && (await db.fabFiles.hasArchivedByDataLakeTag(scope));
   let stamp: Date | undefined;
+  // Whether THIS call's claim actually won the set-if-unset, rather than echoing back a value
+  // someone else (a crashed prior attempt, or a concurrent claim on this same lake) already held -
+  // see the zero-swept clear-back below, which only ever fires for a claim we ourselves minted.
+  let wasMinted = false;
   if (!hasUnstampedArchive) {
-    stamp = (await db.dataLakes.claimFilesArchivedAt(dataLakeId, new Date())) ?? undefined;
+    const at = new Date();
+    const claimed = (await db.dataLakes.claimFilesArchivedAt(dataLakeId, at)) ?? undefined;
+    stamp = claimed;
+    wasMinted = claimed?.getTime() === at.getTime();
     if (!stamp) {
       logger?.warn('[dataLakes] archive recorded no stamp; a later restore will not clear archivedAt for this lake', {
         dataLakeId,
@@ -98,19 +105,15 @@ export const archiveDataLake = async (
   // archived files, since the flip matches on archivedAt alone.
   await warnOnPrefixCollision(db, existing, logger);
   const swept = await db.fabFiles.archiveByDataLakeTag(scope, stamp);
-  // The probe-then-claim window above has no lock, so a concurrent archive on a prefix-colliding
-  // sibling can stamp our row between the two and leave this sweep matching nothing: `stamp` gets
-  // freshly claimed, but zero rows actually carry it. Clearing the mark in that case closes the
-  // race regardless of how it arose - an empty lake also sweeps zero and clearing its
-  // (already meaningless) mark is harmless.
-  //
-  // `!existing.filesArchivedAt` is load-bearing, not incidental: it's what tells a fresh claim
-  // (the race above) apart from a crash re-entry that echoed an ALREADY-set stamp back (:81's
-  // set-if-unset returns the existing value rather than minting one). A re-entry's sweep also
-  // returns 0 - not because the batch was never written, but because every row already carries
-  // this exact stamp from the completed attempt before the crash - and clearing it there would
-  // strand every one of those rows on restore, reintroducing the bug this PR exists to fix.
-  if (stamp && swept === 0 && !existing.filesArchivedAt) {
+  // The probe-then-claim window above has no lock, so a concurrent archive - on a prefix-colliding
+  // sibling lake stamping a shared file, or on this SAME lake via a duplicate request - can leave
+  // this sweep matching nothing despite a stamp in hand. `wasMinted` is what makes clearing safe:
+  // it is true only when THIS call's claim actually won the set-if-unset, so it is false both for
+  // a crash re-entry (echoes an already-set stamp back) and for a same-lake concurrent claim
+  // (echoes the peer's winning stamp back) - in either of those, the stamp names rows that already
+  // exist and clearing it would strand them, reintroducing the bug this PR exists to fix. Only a
+  // truly fresh mint that then swept zero (the sibling race, or an empty lake) is safe to clear.
+  if (stamp && swept === 0 && wasMinted) {
     await db.dataLakes.update({ id: dataLakeId, filesArchivedAt: null });
   }
   // Same scope the sweep ran on. findIdsByDataLakeTag is the id source rather than the flip's

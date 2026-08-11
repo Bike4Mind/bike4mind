@@ -1227,8 +1227,8 @@ describe('archiveDataLake - retrieval-index removal', () => {
 
   it('clears the just-claimed stamp back to null when the sweep matches nothing (a concurrent sibling won the probe-to-claim race)', async () => {
     const adapters = makeAdapters();
-    const stamp = new Date('2026-05-01');
-    adapters.db.dataLakes.claimFilesArchivedAt = vi.fn().mockResolvedValue(stamp);
+    // Base mock echoes the exact `at` passed in, simulating a claim THIS call actually won
+    // (wasMinted true) - a fixed unrelated Date would simulate an echoed peer's stamp instead.
     adapters.db.fabFiles.archiveByDataLakeTag = vi.fn().mockResolvedValue(0);
 
     await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
@@ -1238,9 +1238,21 @@ describe('archiveDataLake - retrieval-index removal', () => {
 
   it('leaves the stamp alone when the sweep matches at least one row', async () => {
     const adapters = makeAdapters();
-    const stamp = new Date('2026-05-01');
-    adapters.db.dataLakes.claimFilesArchivedAt = vi.fn().mockResolvedValue(stamp);
     adapters.db.fabFiles.archiveByDataLakeTag = vi.fn().mockResolvedValue(1);
+
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+
+    expect(adapters.db.dataLakes.update).not.toHaveBeenCalledWith(expect.objectContaining({ filesArchivedAt: null }));
+  });
+
+  it('leaves the stamp alone when a concurrent claim on this SAME lake wins and our sweep matches nothing (echoed, not minted)', async () => {
+    const adapters = makeAdapters();
+    const peerStamp = new Date('2026-05-01');
+    // Our own claim call loses the set-if-unset to a concurrent request on the same lake and
+    // echoes the peer's winning stamp back - unequal to the `at` this call generated internally,
+    // so wasMinted is false even though a stamp came back and the sweep matched nothing.
+    adapters.db.dataLakes.claimFilesArchivedAt = vi.fn().mockResolvedValue(peerStamp);
+    adapters.db.fabFiles.archiveByDataLakeTag = vi.fn().mockResolvedValue(0);
 
     await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
 
