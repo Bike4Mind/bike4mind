@@ -29,8 +29,8 @@ export default function DataLakeChatSurface({ chat }: { chat: React.ReactNode })
     seedFromSession(currentSession);
   }, [currentSession, seedFromSession]);
 
-  // File click on /new: mint the grounded session right away (same creation the first-send
-  // seam uses) so the file opens in the viewer immediately instead of waiting for a message.
+  // Attach on /new: mint the grounded session right away (same creation the first-send
+  // seam uses) so the [+] action lands in a real workbench instead of dead-ending.
   const createSessionForFile = useCallback(async () => (await createDataLakeSession()).id, [createDataLakeSession]);
 
   if (!enabled) return <>{chat}</>;
@@ -40,7 +40,6 @@ export default function DataLakeChatSurface({ chat }: { chat: React.ReactNode })
       source="datalakes"
       rootLabel="Data Lakes"
       chatSlot={chat}
-      chatEmbedded
       onManage={onManage}
       onCreateLake={openWizard}
       createSessionForFile={createSessionForFile}

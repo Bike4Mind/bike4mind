@@ -7,11 +7,16 @@ import DataLakeExplorer from './DataLakeExplorer';
 
 // Chat-first mode opens a clicked file INLINE in the KnowledgeViewer by adding it to the
 // session workbench and switching layout to `vertical`. Spy on those two seams.
-const { setWorkBenchFiles, setSessionLayout, sessionState } = vi.hoisted(() => ({
+const { setWorkBenchFiles, setSessionLayout, sessionState, removeFileMutate, lakesState } = vi.hoisted(() => ({
   setWorkBenchFiles: vi.fn(),
   setSessionLayout: vi.fn(),
   // Mutable so the /new (deferred creation, no session yet) case can null it per-test.
   sessionState: { currentSessionId: 'sess-1' as string | null },
+  removeFileMutate: vi.fn(),
+  // Mutable so delete-gating tests can vary the accessible-lake list per-test.
+  lakesState: {
+    value: [{ id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', canManage: true }] as unknown[],
+  },
 }));
 vi.mock('@client/app/contexts/SessionsContext', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/contexts/SessionsContext')>()),
@@ -37,6 +42,8 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   }),
   // Page mode renders DataLakeArticle, which reads file content.
   useGetFabFileContent: () => ({ data: null, isLoading: false }),
+  useGetDataLakes: () => ({ data: lakesState.value }),
+  useRemoveFileFromDataLake: () => ({ mutate: removeFileMutate, isPending: false }),
 }));
 vi.mock('@client/app/hooks/data/fabFiles', () => ({
   // Page mode renders DataLakeArticle, which reads the selected file's body.
@@ -75,30 +82,43 @@ const { setModeSpy, toastInfo, toastError, toastSuccess } = vi.hoisted(() => ({
 vi.mock('@client/app/hooks/useSetDataLakeMode', () => ({ default: () => setModeSpy }));
 vi.mock('sonner', () => ({ toast: { info: toastInfo, error: toastError, success: toastSuccess } }));
 
-// Stub the tree so we can trigger onSelectFile/onClose deterministically and read the
-// highlight prop. Chat mode (chatSlot set) renders DataLakeChatTree, so that is what we stub.
+// Stub the tree so we can trigger the row actions deterministically and read the highlight
+// prop. Chat mode (chatSlot set) renders DataLakeChatTree, so that is what we stub. The file
+// carries a membership meta-tag so delete-gating tests exercise resolveManageableLake for real.
 vi.mock('./DataLakeChatTree', () => ({
-  default: ({
-    onSelectFile,
-    selectedFileId,
-    onClose,
-  }: {
-    onSelectFile: (f: { id: string; fileName: string }) => void;
+  default: (props: {
+    onAttachFile: (f: { id: string; fileName: string }) => void;
+    onViewFile: (f: { id: string; fileName: string }) => void;
+    canDeleteFile: (f: { id: string; fileName: string }) => boolean;
+    onDeleteFile: (f: { id: string; fileName: string }) => void;
     selectedFileId: string | null;
     onClose?: () => void;
-  }) => (
-    <div data-testid="mock-tree" data-selected={selectedFileId ?? ''}>
-      <button data-testid="mock-select-file" onClick={() => onSelectFile({ id: 'file-123', fileName: 'x.pdf' })}>
-        select
-      </button>
-      {/* Mirror the real header: the close X renders only when an onClose is supplied. */}
-      {onClose && (
-        <button data-testid="mock-close" onClick={onClose}>
-          close
+  }) => {
+    const file = { id: 'file-123', fileName: 'x.pdf', tags: [{ name: 'datalake:lake-a' }] };
+    return (
+      <div
+        data-testid="mock-tree"
+        data-selected={props.selectedFileId ?? ''}
+        data-can-delete={String(props.canDeleteFile(file))}
+        data-has-row-click={String('onSelectFile' in props)}
+      >
+        <button data-testid="mock-attach" onClick={() => props.onAttachFile(file)}>
+          attach
         </button>
-      )}
-    </div>
-  ),
+        <button data-testid="mock-view" onClick={() => props.onViewFile(file)}>
+          view
+        </button>
+        <button data-testid="mock-delete" onClick={() => props.onDeleteFile(file)}>
+          delete
+        </button>
+        {props.onClose && (
+          <button data-testid="mock-close" onClick={props.onClose}>
+            close
+          </button>
+        )}
+      </div>
+    );
+  },
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -106,12 +126,11 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-// Main-app arrangement (DataLakeChatSurface): the chat is embedded in the right pane, so file
-// clicks own the layout. Overlay-host tests override chatEmbedded per-case.
+// Main-app arrangement (DataLakeChatSurface): the chat fills the right pane; row actions are
+// the only way browsing reaches it (no click-to-open).
 const baseProps = {
   source: 'datalakes' as const,
   chatSlot: <div data-testid="my-chat" />,
-  chatEmbedded: true,
 };
 
 const renderExplorer = (props: Partial<React.ComponentProps<typeof DataLakeExplorer>> = {}) =>
@@ -125,41 +144,12 @@ describe('DataLakeExplorer chat-first surface', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sessionState.currentSessionId = 'sess-1';
+    lakesState.value = [{ id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', canManage: true }];
   });
 
   it('renders chatSlot in the right pane', () => {
     renderExplorer();
     expect(screen.getByTestId('my-chat')).toBeInTheDocument();
-  });
-
-  it('opens a clicked file inline (workbench + vertical KnowledgeViewer) in chat mode', () => {
-    renderExplorer();
-    fireEvent.click(screen.getByTestId('mock-select-file'));
-    // Added to the session workbench so the KnowledgeViewer renders it.
-    expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function));
-    // Layout switched to the split view with the file selected.
-    expect(setSessionLayout).toHaveBeenCalledWith({ layout: 'vertical', selectedArtifactId: 'file-123' });
-    // The clicked file is highlighted in the tree.
-    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
-  });
-
-  it('opens the deep-linked articleId inline once it resolves', () => {
-    renderExplorer({ articleId: 'deep-1' });
-    expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function));
-    expect(setSessionLayout).toHaveBeenCalledWith({ layout: 'vertical', selectedArtifactId: 'deep-1' });
-  });
-
-  it('without chatEmbedded (overlay host, chat docked outside): file click adds to the workbench + toasts, never touches layout', () => {
-    // Regression guard: switching to 'vertical' here collapsed the overlay's docked chat into
-    // the 0x0 non-docked branch with no on-surface way back. The contract is keyed on the HOST
-    // prop, not the live layout store - that store is global and leaks across surfaces.
-    renderExplorer({ chatEmbedded: false });
-    fireEvent.click(screen.getByTestId('mock-select-file'));
-    expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function));
-    expect(toastInfo).toHaveBeenCalled();
-    expect(setSessionLayout).not.toHaveBeenCalled();
-    // The clicked file still highlights in the tree.
-    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
   });
 
   it('tree close (X) turns Data Lake mode off via the shared setter', () => {
@@ -173,41 +163,93 @@ describe('DataLakeExplorer chat-first surface', () => {
     expect(screen.queryByTestId('mock-close')).toBeNull();
   });
 
-  it('no session + no createSessionForFile (overlay): file click guides via toast, writes nothing', () => {
-    // The viewer reads the session workbench, so with no session it would render empty and
-    // auto-hide (reads as a dead click); hosts without a create path get guidance instead.
-    sessionState.currentSessionId = null;
+  it('gives the tree no row-click handler: browsing must not mutate the chat', () => {
     renderExplorer();
-    fireEvent.click(screen.getByTestId('mock-select-file'));
-    expect(toastInfo).toHaveBeenCalled();
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-has-row-click', 'false');
     expect(setWorkBenchFiles).not.toHaveBeenCalled();
     expect(setSessionLayout).not.toHaveBeenCalled();
-    // The pick still highlights so the guidance has a visible anchor.
-    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
   });
 
-  it('no session + createSessionForFile (main app /new): mints the session, then opens the file in the viewer', async () => {
+  it('attach action adds the file to the workbench and toasts, never touching layout', () => {
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-attach'));
+    expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function));
+    expect(toastInfo).toHaveBeenCalled();
+    expect(setSessionLayout).not.toHaveBeenCalled();
+  });
+
+  it('attach on /new with createSessionForFile mints the session, then attaches', async () => {
     sessionState.currentSessionId = null;
     const createSessionForFile = vi.fn().mockResolvedValue('sess-new');
     renderExplorer({ createSessionForFile });
-    fireEvent.click(screen.getByTestId('mock-select-file'));
+    fireEvent.click(screen.getByTestId('mock-attach'));
     await vi.waitFor(() => {
       expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-new', expect.any(Function));
-      expect(setSessionLayout).toHaveBeenCalledWith({ layout: 'vertical', selectedArtifactId: 'file-123' });
     });
     expect(createSessionForFile).toHaveBeenCalledTimes(1);
   });
 
-  it('no session + createSessionForFile rejection: toasts an error and opens nothing', async () => {
+  it('attach with no session and no create path guides via toast, writes nothing', () => {
+    sessionState.currentSessionId = null;
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-attach'));
+    expect(toastInfo).toHaveBeenCalled();
+    expect(setWorkBenchFiles).not.toHaveBeenCalled();
+  });
+
+  it('attach create rejection toasts an error and attaches nothing', async () => {
     sessionState.currentSessionId = null;
     const createSessionForFile = vi.fn().mockRejectedValue(new Error('boom'));
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     renderExplorer({ createSessionForFile });
-    fireEvent.click(screen.getByTestId('mock-select-file'));
+    fireEvent.click(screen.getByTestId('mock-attach'));
     await vi.waitFor(() => expect(toastError).toHaveBeenCalled());
     expect(setWorkBenchFiles).not.toHaveBeenCalled();
-    expect(setSessionLayout).not.toHaveBeenCalled();
     errSpy.mockRestore();
+  });
+
+  it('view swaps the rail to the reader without attaching or needing a session', () => {
+    sessionState.currentSessionId = null;
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-view'));
+    expect(screen.getByTestId('datalake-rail-reader')).toBeInTheDocument();
+    expect(screen.queryByTestId('mock-tree')).toBeNull();
+    expect(setWorkBenchFiles).not.toHaveBeenCalled();
+    expect(setSessionLayout).not.toHaveBeenCalled();
+  });
+
+  it('reader back returns to the tree with the viewed file highlighted', () => {
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-view'));
+    fireEvent.click(screen.getByTestId('datalake-reader-back-btn'));
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
+    expect(screen.queryByTestId('datalake-rail-reader')).toBeNull();
+  });
+
+  it('deep-linked articleId opens the reader without attaching', () => {
+    renderExplorer({ articleId: 'deep-1' });
+    expect(screen.getByTestId('datalake-rail-reader')).toBeInTheDocument();
+    expect(setWorkBenchFiles).not.toHaveBeenCalled();
+    expect(setSessionLayout).not.toHaveBeenCalled();
+  });
+
+  it('delete is offered only for a uniquely-resolved manageable lake', () => {
+    renderExplorer();
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-can-delete', 'true');
+  });
+
+  it('delete is not offered when the owning lake is not manageable', () => {
+    lakesState.value = [{ id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', canManage: false }];
+    renderExplorer();
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-can-delete', 'false');
+  });
+
+  it('delete action confirms first, then fires the per-lake removal', () => {
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-delete'));
+    expect(removeFileMutate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('datalake-tree-removefile-confirm-btn'));
+    expect(removeFileMutate).toHaveBeenCalledWith('file-123', expect.anything());
   });
 });
 

@@ -50,8 +50,6 @@ interface DataLakeChatTreeProps {
   breadcrumb: string[];
   onNavigate: (breadcrumb: string[]) => void;
   selectedFileId: string | null;
-  /** Dead since the auto-attach removal (rows are action-driven); deleted with the explorer rewire. */
-  onSelectFile?: (file: IFabFileDocument) => void;
   /** Hover action: attach the file to the chat session. */
   onAttachFile: (file: IFabFileDocument) => void;
   /** Hover menu action: open the file in the rail reader. */
