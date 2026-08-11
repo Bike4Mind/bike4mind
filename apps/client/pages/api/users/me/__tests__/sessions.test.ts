@@ -10,6 +10,7 @@ import { createMocks } from 'node-mocks-http';
 const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
   deleteHandler: null as null | ((req: any, res: any) => unknown),
+  isApiKey: false,
   findBySid: null as null | ReturnType<typeof vi.fn>,
   listUserSessions: null as null | ReturnType<typeof vi.fn>,
   revokeSession: null as null | ReturnType<typeof vi.fn>,
@@ -45,6 +46,7 @@ vi.mock('@bike4mind/services', () => {
   };
 });
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@server/middlewares/apiKeyAuth', () => ({ isApiKeyAuth: () => mockRefs.isApiKey }));
 
 import '@pages/api/users/me/sessions';
 
@@ -70,7 +72,17 @@ function mocks(method: 'GET' | 'DELETE', user: unknown, query?: Record<string, s
 }
 
 describe('GET /api/users/me/sessions', () => {
-  beforeEach(() => mockRefs.listUserSessions?.mockReset());
+  beforeEach(() => {
+    mockRefs.isApiKey = false;
+    mockRefs.listUserSessions?.mockReset();
+  });
+
+  it('refuses an API-key caller (403) - a key must not enumerate the owner devices/IPs', async () => {
+    mockRefs.isApiKey = true;
+    const { req, res } = mocks('GET', { id: 'user-1', sid: 'sid-1' });
+    await expect(mockRefs.getHandler!(req, res)).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockRefs.listUserSessions).not.toHaveBeenCalled();
+  });
 
   it('returns a client-safe DTO (no hashes) and flags the current session', async () => {
     mockRefs.listUserSessions!.mockResolvedValue([sessionRow({ sid: 'sid-1' }), sessionRow({ sid: 'sid-2' })]);
@@ -92,8 +104,23 @@ describe('GET /api/users/me/sessions', () => {
 
 describe('DELETE /api/users/me/sessions', () => {
   beforeEach(() => {
+    mockRefs.isApiKey = false;
     mockRefs.findBySid?.mockReset();
     mockRefs.revokeSession?.mockClear();
+  });
+
+  it('refuses an API-key caller (403) - a key must not be a per-session kill switch', async () => {
+    mockRefs.isApiKey = true;
+    const { req, res } = mocks('DELETE', { id: 'user-1', sid: 'sid-1' }, { sid: 'sid-2' });
+    await expect(mockRefs.deleteHandler!(req, res)).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockRefs.revokeSession).not.toHaveBeenCalled();
+  });
+
+  it('422s a self-revoke of the current session (must use /api/logout instead)', async () => {
+    const { req, res } = mocks('DELETE', { id: 'user-1', sid: 'sid-1' }, { sid: 'sid-1' });
+    await expect(mockRefs.deleteHandler!(req, res)).rejects.toMatchObject({ statusCode: 422 });
+    expect(mockRefs.findBySid).not.toHaveBeenCalled();
+    expect(mockRefs.revokeSession).not.toHaveBeenCalled();
   });
 
   it('revokes an owned session by sid', async () => {

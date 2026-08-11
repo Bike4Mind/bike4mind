@@ -22,10 +22,11 @@ const handler = baseApi().get(async (req, res) => {
 
   // Per-device logout: revoke ONLY this browser's session, never bump tokenVersion. Logout used to
   // bump tokenVersion, which rejected every token the user held and signed them out on ALL devices
-  // (issue #1194). Revoking just this `sid` leaves other devices signed in; the "Log out all
-  // devices" panic lever (POST /api/users/me/sessions/logout-all) keeps the tokenVersion bump for
-  // when the user actually wants every device gone. The revoked session's own access token keeps
-  // working until its short TTL, but its refresh cookie is dead, so it cannot outlive that window.
+  // (issue #1194). Revoking just this `sid` leaves other devices signed in; "Log out of all other
+  // devices" (POST /api/users/me/sessions/revoke-others) revokes the rest while keeping the current
+  // one, and the tokenVersion "sign out everywhere" lever stays on the admin force-logout path. The
+  // revoked session's own access token keeps working until its short TTL, but its refresh cookie is
+  // dead, so it cannot outlive that window.
   //
   // Skip for API-key callers: apiKeyAuth authenticates before JWT and carries no browser `sid`, so
   // there is nothing to revoke (and the old all-device bump would have made any key an account-wide

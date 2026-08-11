@@ -150,7 +150,7 @@ Found in the **Security** area of your settings, this lists every device current
 
 Signing out of the current device (the normal **Log out** in the profile menu) now ends only that session - your phone stays signed in when you log out on your laptop, and vice versa.
 
-**Troubleshooting:** when you sign out another device (individually or via **Log out of all other devices**), that device can stay active for up to a few minutes (one access-token lifetime) before it's fully locked out, though it can no longer stay signed in past that window.
+**Troubleshooting:** when you sign out another device (individually or via **Log out of all other devices**), that device can stay active for up to 30 minutes (one access-token lifetime) before it's fully locked out, though it can no longer stay signed in past that window. If you need a device cut off instantly, an administrator can force-log-out your account from every device.
 
 ### Blocked IPs
 
