@@ -354,6 +354,9 @@ describe('search_knowledge_base partial-corpus disclosure', () => {
     const out = await run(semanticContext());
 
     expect(out).toContain(GROUNDED_NO_INVENTION_RULE);
+    // Ahead of the passages, not trailing them: the rule must frame how to read the content, and a
+    // refactor that appends it behind a large payload would still pass a bare toContain.
+    expect(out.indexOf(GROUNDED_NO_INVENTION_RULE)).toBeLessThan(out.indexOf('pto accrues monthly'));
   });
 
   it('scoped (agent kbScope) arm gets the same disclosure - neither surface may hide it', async () => {

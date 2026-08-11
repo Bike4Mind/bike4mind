@@ -420,6 +420,10 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
     const indexed = await runRetrieval('indexed');
     expect(named.content).toContain(GROUNDED_NO_INVENTION_RULE);
     expect(indexed.content).toContain(GROUNDED_NO_INVENTION_RULE);
+    // Ahead of the retrieved sections so it frames how to use them (see the injection comment):
+    // pin position, not just presence, so a trailing-append refactor cannot pass silently.
+    expect(named.content.indexOf(GROUNDED_NO_INVENTION_RULE)).toBeLessThan(named.content.indexOf('### NCCN'));
+    expect(indexed.content.indexOf(GROUNDED_NO_INVENTION_RULE)).toBeLessThan(indexed.content.indexOf('### [1] NCCN'));
   });
 
   it('indexed: numbers distinct documents in citables order, same file shares its number', async () => {
