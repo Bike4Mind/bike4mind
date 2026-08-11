@@ -38,6 +38,13 @@ describe('SimplifiedChatRequestSchema fail-loud defaults', () => {
   it('requires a message', () => {
     expect(SimplifiedChatRequestSchema.safeParse({}).success).toBe(false);
   });
+
+  it('accepts an optional organizationId billing target and leaves it undefined when omitted', () => {
+    expect(parse({}).data?.organizationId).toBeUndefined();
+    const withOrg = parse({ organizationId: 'org-123' });
+    expect(withOrg.success).toBe(true);
+    expect(withOrg.data?.organizationId).toBe('org-123');
+  });
 });
 
 describe('filterKnownTools', () => {

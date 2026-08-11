@@ -5,7 +5,7 @@ import { dataLakeRepository } from '@bike4mind/database';
 import { CreateDataLakeRequestInput } from '@bike4mind/common';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { resolveActiveOrg } from '@server/dataLakes/resolveActiveOrg';
+import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
 
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableDataLakes'))

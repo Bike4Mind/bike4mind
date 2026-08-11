@@ -32,6 +32,7 @@ const {
   mockIsChatModelUsable,
   mockTryIncrement,
   mockResolveUserRateLimitPerMin,
+  mockOrgFindAccessibleById,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockFindById: vi.fn(),
@@ -43,6 +44,7 @@ const {
   mockIsChatModelUsable: vi.fn(),
   mockTryIncrement: vi.fn(),
   mockResolveUserRateLimitPerMin: vi.fn(),
+  mockOrgFindAccessibleById: vi.fn(),
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -138,6 +140,15 @@ vi.mock('@bike4mind/database', async orig => {
       // Hoisted so tests can assert the per-user limiter actually ran, and drive
       // the over-limit path.
       tryIncrementWithinLimitFixedWindow: (...a: unknown[]) => mockTryIncrement(...a),
+    },
+    // resolveActiveOrg validates a request-supplied organizationId against the caller's
+    // memberships via this gate. Non-admin callers in these tests hit findAccessibleById.
+    organizationRepository: {
+      ...(actual.organizationRepository as object),
+      shareable: {
+        ...((actual.organizationRepository as { shareable?: object })?.shareable ?? {}),
+        findAccessibleById: (...a: unknown[]) => mockOrgFindAccessibleById(...a),
+      },
     },
   };
 });
@@ -411,58 +422,61 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     });
   });
 
-  // req.user.organizationId arrives as a Mongo ObjectId (or, after a .populate(),
-  // a full Organization doc). It flows into the internal request at both top-level
-  // `organizationId` and `promptMeta.session.organizationId`, where a downstream
-  // schema parses it as z.string(). Un-normalized, an org-associated caller 422s
-  // ("expected string, received ObjectId"). The handler must coerce to a hex string
-  // at the boundary. The invoke stub here can't reproduce the downstream 422, so we
-  // assert the shape it receives instead - that IS the fix.
-  describe('organizationId boundary normalization', () => {
+  // Billing target is an explicit, opt-in choice: a request-supplied `organizationId` bills
+  // that org (after membership validation), and its absence bills the caller personally - even
+  // for a caller whose account has a home org. The org id flows into the internal request at
+  // both top-level `organizationId` and `promptMeta.session.organizationId`. The invoke stub
+  // can't observe the downstream credit-holder switch, so we assert the resolved scope it
+  // receives instead - that IS the fix.
+  describe('billing target (organizationId)', () => {
     const invokedBody = () =>
       mockInvoke.mock.calls[0][0] as {
         body: { organizationId?: unknown; promptMeta?: { session?: { organizationId?: unknown } } };
       };
 
-    it('coerces an ObjectId organizationId to a hex string on both surfaces (no 422)', async () => {
-      const orgId = new Types.ObjectId();
+    it('bills personally (no organizationId) when the request omits it, even for a caller with a home org', async () => {
       validateWithScopes([ApiKeyScope.AI_CHAT]);
-      mockFindById.mockReturnValue(
-        Promise.resolve({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false, organizationId: orgId })
-      );
-      const { req, res } = fire();
-      await handler(req, res);
-      expect(res._getStatusCode()).toBe(200);
-      const { body } = invokedBody();
-      expect(body.organizationId).toBe(orgId.toHexString());
-      expect(body.promptMeta?.session?.organizationId).toBe(orgId.toHexString());
-    });
-
-    it('flattens a populated Organization document to its _id hex string, never "[object Object]"', async () => {
-      const orgId = new Types.ObjectId();
-      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      // The caller's account carries a home org, but the request does not opt into org billing.
       mockFindById.mockReturnValue(
         Promise.resolve({
           id: 'user-1',
           _id: 'user-1',
           isBanned: false,
           disputePending: false,
-          organizationId: { _id: orgId, name: 'Acme' },
+          organizationId: new Types.ObjectId(),
         })
       );
       const { req, res } = fire();
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
-      expect(invokedBody().body.organizationId).toBe(orgId.toHexString());
+      const { body } = invokedBody();
+      expect(body.organizationId).toBeUndefined();
+      expect(body.promptMeta?.session?.organizationId).toBeUndefined();
+      // The home-org field is never consulted as a billing source anymore.
+      expect(mockOrgFindAccessibleById).not.toHaveBeenCalled();
     });
 
-    it('leaves organizationId absent for a personal (org-less) caller', async () => {
+    it('bills the requested org on both surfaces once membership is validated', async () => {
+      const orgId = new Types.ObjectId().toHexString();
       validateWithScopes([ApiKeyScope.AI_CHAT]);
-      // beforeEach already returns a user with organizationId: undefined.
-      const { req, res } = fire();
+      mockOrgFindAccessibleById.mockResolvedValue({ id: orgId, name: 'Acme' });
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', organizationId: orgId } });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
-      expect(invokedBody().body.organizationId).toBeUndefined();
+      const { body } = invokedBody();
+      expect(body.organizationId).toBe(orgId);
+      expect(body.promptMeta?.session?.organizationId).toBe(orgId);
+      expect(mockOrgFindAccessibleById).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }), orgId);
+    });
+
+    it('rejects billing an org the caller does not belong to (403) before creating a quest', async () => {
+      const orgId = new Types.ObjectId().toHexString();
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      mockOrgFindAccessibleById.mockResolvedValue(null); // not a member
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', organizationId: orgId } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+      expect(mockInvoke).not.toHaveBeenCalled();
     });
   });
 
