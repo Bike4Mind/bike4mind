@@ -10,23 +10,38 @@ vi.unmock('@/app/contexts/WebsocketContext');
 // Shared, hoisted so the vi.mock factories below can reference them.
 const h = vi.hoisted(() => ({
   capturedOptions: { current: null as unknown as Record<string, (arg: unknown) => void> },
-  apiGet: vi.fn(),
+  capturedUrls: [] as (string | null)[],
+  readyState: 1 as number, // ReadyState.OPEN
+  probeIdentity: vi.fn(),
+  queryClient: {} as unknown,
   accessTokenState: { accessToken: 'tok' as string | null, mfaPending: false },
 }));
 
-// Capture the options react-use-websocket is called with (esp. onOpen/onClose) so the test
-// can drive them directly, and return a stable stub instead of opening a real socket.
+// Capture the url + options react-use-websocket is called with on every render (esp.
+// onOpen/onClose, and whether url dips to null - the reconnect-pulse signal) and return a
+// stable stub instead of opening a real socket.
 vi.mock('react-use-websocket', () => ({
   ReadyState: { UNINSTANTIATED: -1, CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 },
-  useBaseWebsocket: (_url: string | null, options: Record<string, (arg: unknown) => void>) => {
+  useBaseWebsocket: (url: string | null, options: Record<string, (arg: unknown) => void>) => {
     h.capturedOptions.current = options;
-    return { sendJsonMessage: vi.fn(), readyState: 1, lastJsonMessage: null };
+    h.capturedUrls.push(url);
+    return { sendJsonMessage: vi.fn(), readyState: h.readyState, lastJsonMessage: null };
   },
 }));
 
-// The probe fires through this `api` instance; isPublicPath treats only /login as public.
+vi.mock('@tanstack/react-query', () => ({
+  useQueryClient: () => h.queryClient,
+}));
+
+// The close-probe and the refocus reconnect-pulse both funnel through this shared,
+// single-flight helper (tested on its own in sessionBootstrap.test.ts) - mocked here so
+// this file tests only WebsocketContext's own wiring, not probeIdentity's internals.
+vi.mock('@client/app/utils/sessionBootstrap', () => ({
+  probeIdentity: h.probeIdentity,
+}));
+
+// isPublicPath treats only /login as public.
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { get: h.apiGet },
   isPublicPath: (p: string) => p === '/login',
 }));
 
@@ -44,6 +59,9 @@ vi.mock('@client/app/hooks/useAccessToken', () => {
 import { shouldProbeOnFailedWsConnect, WebsocketProvider } from './WebsocketContext';
 
 const base = { openedThisAttempt: false, accessToken: 'tok', mfaPending: false, pathname: '/new' };
+
+const stubVisibility = (state: DocumentVisibilityState) =>
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: state });
 
 describe('shouldProbeOnFailedWsConnect - WS connect-failure auth probe gate (Part 2, reuses Fix B)', () => {
   it('probes on a failed connect ATTEMPT while holding a token', () => {
@@ -67,13 +85,16 @@ describe('shouldProbeOnFailedWsConnect - WS connect-failure auth probe gate (Par
   });
 });
 
-describe('WebsocketProvider - onClose auth-probe wiring (single-flight + fire)', () => {
+describe('WebsocketProvider - onClose auth-probe wiring', () => {
   beforeEach(() => {
-    h.apiGet.mockReset();
-    h.apiGet.mockResolvedValue({ data: {} });
+    h.probeIdentity.mockReset();
+    h.probeIdentity.mockResolvedValue(undefined);
     h.capturedOptions.current = null as unknown as Record<string, (arg: unknown) => void>;
+    h.capturedUrls = [];
+    h.readyState = 1;
     h.accessTokenState.accessToken = 'tok';
     h.accessTokenState.mfaPending = false;
+    stubVisibility('visible');
   });
 
   const mount = () => {
@@ -81,25 +102,13 @@ describe('WebsocketProvider - onClose auth-probe wiring (single-flight + fire)',
     return h.capturedOptions.current;
   };
 
-  it('fires exactly one /api/identify probe on a failed connect attempt', async () => {
+  it('fires probeIdentity with the shared query client on a failed connect attempt', async () => {
     const opts = mount();
     await act(async () => {
       opts.onClose({ code: 1006, reason: '' });
     });
-    expect(h.apiGet).toHaveBeenCalledTimes(1);
-    expect(h.apiGet).toHaveBeenCalledWith('/api/identify');
-  });
-
-  it('single-flights the probe across a burst of closes (one in-flight probe max)', async () => {
-    let resolveGet: (v: unknown) => void = () => {};
-    h.apiGet.mockReturnValue(new Promise(r => (resolveGet = r)));
-    const opts = mount();
-    await act(async () => {
-      opts.onClose({ code: 1006 });
-      opts.onClose({ code: 1006 });
-    });
-    expect(h.apiGet).toHaveBeenCalledTimes(1);
-    await act(async () => resolveGet({}));
+    expect(h.probeIdentity).toHaveBeenCalledTimes(1);
+    expect(h.probeIdentity).toHaveBeenCalledWith(h.queryClient);
   });
 
   it('does not probe when the connection had opened this attempt (a drop is not an auth signal)', async () => {
@@ -108,10 +117,10 @@ describe('WebsocketProvider - onClose auth-probe wiring (single-flight + fire)',
       opts.onOpen({});
       opts.onClose({ code: 1006 });
     });
-    expect(h.apiGet).not.toHaveBeenCalled();
+    expect(h.probeIdentity).not.toHaveBeenCalled();
   });
 
-  it('resets the guard after settle so a later failed attempt probes again', async () => {
+  it("fires again on a later failed attempt (dedup across a burst is probeIdentity's own job, tested separately)", async () => {
     const opts = mount();
     await act(async () => {
       opts.onClose({ code: 1006 });
@@ -119,6 +128,59 @@ describe('WebsocketProvider - onClose auth-probe wiring (single-flight + fire)',
     await act(async () => {
       opts.onClose({ code: 1006 });
     });
-    expect(h.apiGet).toHaveBeenCalledTimes(2);
+    expect(h.probeIdentity).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('WebsocketProvider - refocus reconnect pulse', () => {
+  beforeEach(() => {
+    h.probeIdentity.mockReset();
+    h.probeIdentity.mockResolvedValue(undefined);
+    h.capturedOptions.current = null as unknown as Record<string, (arg: unknown) => void>;
+    h.capturedUrls = [];
+    h.readyState = 1;
+    h.accessTokenState.accessToken = 'tok';
+    h.accessTokenState.mfaPending = false;
+    stubVisibility('visible');
+  });
+
+  it('pulses the url to null and back on refocus when the socket is not open (forces a fresh reconnect budget)', async () => {
+    h.readyState = 3; // ReadyState.CLOSED - e.g. reconnect budget already exhausted while idle
+    render(React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div')));
+    h.capturedUrls = [];
+
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    // The pulse dips the url to null for one commit (resetting react-use-websocket's own
+    // reconnectCount) then straight back to the real url, so both appear in the sequence.
+    expect(h.capturedUrls).toContain(null);
+    expect(h.capturedUrls[h.capturedUrls.length - 1]).toBe('wss://example/ws');
+  });
+
+  it('does not pulse on refocus when the socket is already open', async () => {
+    h.readyState = 1; // ReadyState.OPEN
+    render(React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div')));
+    h.capturedUrls = [];
+
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    expect(h.capturedUrls).not.toContain(null);
+  });
+
+  it('does not pulse when the tab is backgrounded (only a return to visible should)', async () => {
+    h.readyState = 3;
+    render(React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div')));
+    h.capturedUrls = [];
+    stubVisibility('hidden');
+
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    expect(h.capturedUrls).not.toContain(null);
   });
 });

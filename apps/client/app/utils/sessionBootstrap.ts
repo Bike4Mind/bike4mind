@@ -1,4 +1,5 @@
 import { IUserDocument } from '@bike4mind/common';
+import type { QueryClient } from '@tanstack/react-query';
 import { api, isPublicPath } from '@client/app/contexts/ApiContext';
 import { takeLegacyRefreshToken, useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -94,19 +95,40 @@ export function shouldRevalidateOnFocus(params: {
   return true;
 }
 
-/** Single-flight guard so visibilitychange and focus firing together only probes once. */
-let revalidateInFlight = false;
+/** Single-flight guard, shared by every caller of probeIdentity below, so a refocus that
+ *  coincides with a WebsocketContext close-probe fires one authed round trip, not two. */
+let probeInFlight = false;
+
+/**
+ * Liveness probe shared by revalidateSessionOnFocus (below) and WebsocketContext's
+ * close-probe. Refetches the `['identify']` query directly - rather than a bare
+ * `api.get('/api/identify')` - so that when the 401 interceptor refreshes the token, the
+ * fresh { user, accessToken } response lands back in the SAME query cache UserProvider's
+ * identify effect reads. A bare fetch would leave that cache holding the pre-refresh
+ * response; the effect re-runs on the accessToken change and feeds the STALE cached token
+ * right back into the store, undoing the refresh (see useGetIdentify's own doc comment on
+ * this exact stale-cache-feedback failure mode).
+ */
+export function probeIdentity(queryClient: QueryClient): Promise<void> {
+  if (probeInFlight) return Promise.resolve();
+  probeInFlight = true;
+  return queryClient
+    .refetchQueries({ queryKey: ['identify'] })
+    .catch(() => {})
+    .finally(() => {
+      probeInFlight = false;
+    });
+}
 
 /**
  * On a tab returning from idle, `bootstrapSession` only runs at page load (see router.tsx's
- * beforeLoad), so nothing proactively checks whether the access token expired while the tab was
- * hidden. The first refetchOnWindowFocus query to 401 is what currently starts recovery via the
- * ApiContext interceptor - this fires that recovery explicitly, through the SAME interceptor
- * (no separate refresh path), instead of leaving it to whichever query happens to race there
- * first. `/api/identify` is the same cheap authed endpoint WebsocketContext's close-probe uses.
+ * beforeLoad); nothing re-validates the session on refocus. refetchOnWindowFocus defaults to
+ * false (see providers.tsx), and the handful of queries that opt in are mostly admin/settings
+ * surfaces, so an idle tab's expired token could sit unrefreshed indefinitely. This fires that
+ * recovery explicitly, through probeIdentity above (the SAME interceptor, no separate refresh
+ * path), instead of leaving it to whichever query happens to opt in and race there first.
  */
-export function revalidateSessionOnFocus(): void {
-  if (revalidateInFlight) return;
+export function revalidateSessionOnFocus(queryClient: QueryClient): void {
   const { accessToken, mfaPending, expired } = useAccessToken.getState();
   if (
     !shouldRevalidateOnFocus({
@@ -119,11 +141,5 @@ export function revalidateSessionOnFocus(): void {
   ) {
     return;
   }
-  revalidateInFlight = true;
-  api
-    .get('/api/identify')
-    .catch(() => {})
-    .finally(() => {
-      revalidateInFlight = false;
-    });
+  void probeIdentity(queryClient);
 }

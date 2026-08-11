@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { api } from '@client/app/contexts/ApiContext';
+import type { QueryClient } from '@tanstack/react-query';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
-import { shouldRevalidateOnFocus, revalidateSessionOnFocus } from './sessionBootstrap';
+import { shouldRevalidateOnFocus, revalidateSessionOnFocus, probeIdentity } from './sessionBootstrap';
+
+/** A macrotask flush - long enough for a settled promise's .catch().finally() chain to run. */
+const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+
+const makeQueryClient = (refetchQueries: ReturnType<typeof vi.fn>): QueryClient =>
+  ({ refetchQueries }) as unknown as QueryClient;
 
 const base = {
   visibilityState: 'visible' as DocumentVisibilityState,
@@ -37,9 +43,43 @@ describe('shouldRevalidateOnFocus - refocus liveness-check gate', () => {
   });
 });
 
-describe('revalidateSessionOnFocus - probe firing + single-flight', () => {
+describe('probeIdentity - shared single-flight liveness probe', () => {
+  it('refetches the identify query through the shared query client', async () => {
+    const refetchQueries = vi.fn().mockResolvedValue(undefined);
+
+    await probeIdentity(makeQueryClient(refetchQueries));
+
+    expect(refetchQueries).toHaveBeenCalledWith({ queryKey: ['identify'] });
+  });
+
+  it('collapses a second call that lands while the first probe is still in flight', async () => {
+    let resolveFirst: (() => void) | undefined;
+    // The first call hangs until resolved manually; every later call resolves immediately -
+    // otherwise the final probeIdentity call below would await a promise nothing ever settles.
+    const refetchQueries = vi.fn().mockResolvedValue(undefined);
+    refetchQueries.mockImplementationOnce(
+      () =>
+        new Promise<void>(resolve => {
+          resolveFirst = resolve;
+        })
+    );
+    const client = makeQueryClient(refetchQueries);
+
+    const first = probeIdentity(client);
+    const second = probeIdentity(client);
+    expect(refetchQueries).toHaveBeenCalledTimes(1);
+
+    resolveFirst?.();
+    await Promise.all([first, second]);
+
+    // The in-flight guard cleared after the first probe settled - a later call fires again.
+    await probeIdentity(client);
+    expect(refetchQueries).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('revalidateSessionOnFocus - guard gating the shared probe', () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
     useAccessToken.setState({
       accessToken: 'tok',
       refreshToken: 'refresh',
@@ -53,42 +93,22 @@ describe('revalidateSessionOnFocus - probe firing + single-flight', () => {
     });
   });
 
-  it('pings /api/identify through the shared api instance when the guard passes', () => {
-    const apiGet = vi.spyOn(api, 'get').mockResolvedValue({ data: {} });
+  it('probes the identify query through the given client when the guard passes', async () => {
+    const refetchQueries = vi.fn().mockResolvedValue(undefined);
 
-    revalidateSessionOnFocus();
+    revalidateSessionOnFocus(makeQueryClient(refetchQueries));
+    await flush();
 
-    expect(apiGet).toHaveBeenCalledWith('/api/identify');
+    expect(refetchQueries).toHaveBeenCalledWith({ queryKey: ['identify'] });
   });
 
-  it('does not ping when the guard fails (e.g. mfaPending)', () => {
+  it('does not probe when the guard fails (e.g. mfaPending)', async () => {
     useAccessToken.setState({ mfaPending: true });
-    const apiGet = vi.spyOn(api, 'get').mockResolvedValue({ data: {} });
+    const refetchQueries = vi.fn().mockResolvedValue(undefined);
 
-    revalidateSessionOnFocus();
+    revalidateSessionOnFocus(makeQueryClient(refetchQueries));
+    await flush();
 
-    expect(apiGet).not.toHaveBeenCalled();
-  });
-
-  it('collapses a second call that lands while the first probe is still in flight', async () => {
-    let resolveFirst: (() => void) | undefined;
-    const apiGet = vi.spyOn(api, 'get').mockImplementation(
-      () =>
-        new Promise(resolve => {
-          resolveFirst = () => resolve({ data: {} });
-        })
-    );
-
-    revalidateSessionOnFocus();
-    revalidateSessionOnFocus();
-    expect(apiGet).toHaveBeenCalledTimes(1);
-
-    resolveFirst?.();
-    await Promise.resolve();
-    await Promise.resolve();
-
-    // The in-flight guard cleared after the first probe settled - a later call fires again.
-    revalidateSessionOnFocus();
-    expect(apiGet).toHaveBeenCalledTimes(2);
+    expect(refetchQueries).not.toHaveBeenCalled();
   });
 });

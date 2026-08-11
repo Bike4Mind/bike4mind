@@ -1,10 +1,12 @@
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { ReadyState, useBaseWebsocket } from 'react-use-websocket';
 import { HeartbeatAction, IMessageDataToClient, IMessageDataToServer } from '@bike4mind/common';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
-import { api, isPublicPath } from '@client/app/contexts/ApiContext';
+import { isPublicPath } from '@client/app/contexts/ApiContext';
+import { probeIdentity } from '@client/app/utils/sessionBootstrap';
 
 export { ReadyState };
 
@@ -85,11 +87,10 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   const didUnmount = useRef(false);
   const setLastJsonMessage = useLastJsonMessage(useShallow(s => s.setLastJsonMessage));
   const accessToken = useAccessToken(useCallback(state => state.accessToken, []));
+  const queryClient = useQueryClient();
   // True once `onOpen` has fired for the CURRENT connect attempt; reset on each close.
   // Mirrors the same flag in the CLI's WebSocketConnectionManager.
   const openedThisAttemptRef = useRef(false);
-  // Single-flight guard so a burst of close events fires at most one auth probe.
-  const probeInFlightRef = useRef(false);
 
   // Map the action being listened for to the callbacks that want to hear about it
   const listeners = useRef(new Map<string, ((message: IMessageDataToClient) => Promise<void>)[]>());
@@ -97,9 +98,19 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   const [activeSubscriptions, setActiveSubscriptions] = useState<ReadonlySet<string>>(() => new Set());
   const [clientId] = useState(() => crypto.randomUUID().slice(0, 8));
 
+  // Pulsed true-then-false to force react-use-websocket to tear down and reconnect with a
+  // fresh backoff budget (see the visibilitychange effect below). react-use-websocket only
+  // resets its internal reconnectCount on a successful connect or when its url argument goes
+  // null - the former isn't available to us (the socket isn't open, that's the problem), so a
+  // null url is the only lever we have. reconnectCount is capped at DEFAULT_RECONNECT_LIMIT
+  // (20 attempts, ~6 minutes of quadratic backoff - see reconnectInterval below); a tab idle
+  // longer than that exhausts the budget and onReconnectStop fires. Without this, the socket
+  // stays dead until a full reload even after the token refreshes.
+  const [forceDisconnected, setForceDisconnected] = useState(false);
+
   // Only connect when we have both a valid URL and access token
   // URL validation guards against build-time env vars that were undefined
-  const shouldConnect = !!accessToken && isValidWebsocketUrl(url);
+  const shouldConnect = !forceDisconnected && !!accessToken && isValidWebsocketUrl(url);
 
   const { sendJsonMessage, readyState } = useBaseWebsocket(shouldConnect ? url : null, {
     queryParams: { token: accessToken as string },
@@ -126,7 +137,6 @@ export const WebsocketProvider = ({ children, url }: Props) => {
       openedThisAttemptRef.current = false;
 
       if (
-        !probeInFlightRef.current &&
         shouldProbeOnFailedWsConnect({
           openedThisAttempt,
           accessToken,
@@ -134,18 +144,14 @@ export const WebsocketProvider = ({ children, url }: Props) => {
           pathname: window.location.pathname,
         })
       ) {
-        probeInFlightRef.current = true;
         // A connect ATTEMPT just failed to open while holding a token - the closest signal
-        // to "the server rejected this connection" a WS close can carry. Fire one authed
-        // request through `api` and let its existing 401 interceptor (ApiContext) do the
-        // work: refresh -> forceSessionExpiredRedirect on a genuine revocation, or nothing
-        // on a network error (WS keeps retrying on its own backoff either way).
-        api
-          .get('/api/identify')
-          .catch(() => {})
-          .finally(() => {
-            probeInFlightRef.current = false;
-          });
+        // to "the server rejected this connection" a WS close can carry. probeIdentity's own
+        // single-flight (shared with revalidateSessionOnFocus in sessionBootstrap.ts) covers
+        // both a burst of close events here and a refocus landing at the same moment, so this
+        // reduces to at most one authed round trip either way: refresh -> forceSessionExpiredRedirect
+        // on a genuine revocation, or nothing on a network error (WS keeps retrying on its own
+        // backoff either way).
+        void probeIdentity(queryClient);
       }
     },
     onReconnectStop(numAttempts) {
@@ -220,6 +226,31 @@ export const WebsocketProvider = ({ children, url }: Props) => {
       didUnmount.current = true;
     };
   }, []);
+
+  // On refocus, if the socket isn't open, pulse forceDisconnected to force a fresh
+  // reconnect attempt with a reset backoff budget - a tab idle long enough to exhaust
+  // DEFAULT_RECONNECT_LIMIT would otherwise stay dead until reload even after any token
+  // refresh (see the forceDisconnected declaration above for why this is the only lever).
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (readyState === ReadyState.OPEN || readyState === ReadyState.CONNECTING) return;
+      setForceDisconnected(true);
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleVisibility);
+    };
+  }, [readyState]);
+
+  // The other half of the pulse: flip back on the next commit so shouldConnect's dip to
+  // false was only momentary - enough for react-use-websocket to see url turn null (see
+  // the DEFAULT_RECONNECT_LIMIT comment above) and reset before reconnecting.
+  useEffect(() => {
+    if (forceDisconnected) setForceDisconnected(false);
+  }, [forceDisconnected]);
 
   const subscribeToAction = useCallback(
     (action: IMessageDataToClient['action'], callback: (message: IMessageDataToClient) => Promise<void>) => {

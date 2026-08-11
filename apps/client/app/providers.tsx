@@ -152,18 +152,19 @@ export function ClientProviders({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
-  // A reload runs the bootstrap refresh on load, but nothing ran its equivalent on
-  // tab refocus - so a token that expired while the tab was hidden wasn't caught until
-  // whichever refetchOnWindowFocus query happened to fire (and 401) first. Both events
-  // are listened for since a tab-switch fires visibilitychange while an OS-level app-switch
-  // back to the same foreground tab only fires focus; revalidateSessionOnFocus's own
-  // in-flight guard collapses a double-fire into one probe.
+  // A reload runs the bootstrap refresh on load, but nothing ran its equivalent on tab
+  // refocus - see revalidateSessionOnFocus's own doc comment for why an idle tab's expired
+  // token could otherwise sit unrefreshed. Both events are listened for since a tab-switch
+  // fires visibilitychange while an OS-level app-switch back to the same foreground tab
+  // only fires focus; the shared probeIdentity single-flight collapses a double-fire (and
+  // a WebsocketContext close-probe landing at the same time) into one round trip.
   useEffect(() => {
-    document.addEventListener('visibilitychange', revalidateSessionOnFocus);
-    window.addEventListener('focus', revalidateSessionOnFocus);
+    const handleVisibility = () => revalidateSessionOnFocus(queryClient);
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleVisibility);
     return () => {
-      document.removeEventListener('visibilitychange', revalidateSessionOnFocus);
-      window.removeEventListener('focus', revalidateSessionOnFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleVisibility);
     };
   }, []);
 
