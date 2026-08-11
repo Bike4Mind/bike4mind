@@ -1,4 +1,10 @@
-import { IFabFileRepository, IProjectRepository, IUserRepository } from '@bike4mind/common';
+import {
+  IFabFileRepository,
+  InviteType,
+  IInviteRepository,
+  IProjectRepository,
+  IUserRepository,
+} from '@bike4mind/common';
 import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 
@@ -14,6 +20,7 @@ interface RemoveProjectFilesAdapters {
     projects: IProjectRepository;
     fabFiles: IFabFileRepository;
     users: IUserRepository;
+    invites: Pick<IInviteRepository, 'findAllByDocumentId'>;
   };
 }
 
@@ -42,9 +49,34 @@ export const removeFiles = async (
   project.fileIds = project.fileIds.filter(id => !fileIds.includes(id));
   project.updatedAt = new Date();
 
-  // Revoke all project users access to the file
+  // Revoke project-derived access to the file, but keep an entry that ALSO has an
+  // independently-accepted direct invite to the same file (only clearing its projectId) -
+  // IUserShare tracks one projectId, so a user who both is a project member and separately
+  // accepted a direct share for this file cannot otherwise be told apart from one whose only
+  // access came from the project, and would lose the direct share too.
   for (const file of files) {
-    file.users = file.users.filter(u => u.projectId !== project.id);
+    const projectMemberEntries = file.users.filter(u => u.projectId === project.id);
+    const directlySharedEmails = projectMemberEntries.length
+      ? new Set(
+          (await db.invites.findAllByDocumentId(file.id))
+            .filter(invite => invite.type === InviteType.FabFile)
+            .flatMap(invite => invite.recipients?.accepted ?? [])
+        )
+      : new Set<string>();
+
+    const nextUsers: typeof file.users = [];
+    for (const entry of file.users) {
+      if (entry.projectId !== project.id) {
+        nextUsers.push(entry);
+        continue;
+      }
+      const grantee = directlySharedEmails.size ? await db.users.findById(entry.userId) : null;
+      if (grantee?.email && directlySharedEmails.has(grantee.email)) {
+        nextUsers.push({ ...entry, projectId: undefined });
+      }
+      // else: access came solely from this project - drop the entry entirely.
+    }
+    file.users = nextUsers;
     await db.fabFiles.update(file);
   }
 

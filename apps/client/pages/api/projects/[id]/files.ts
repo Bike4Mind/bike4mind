@@ -1,4 +1,10 @@
-import { withTransaction, projectRepository, fabFileRepository, userRepository } from '@bike4mind/database';
+import {
+  withTransaction,
+  projectRepository,
+  fabFileRepository,
+  userRepository,
+  inviteRepository,
+} from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -87,6 +93,7 @@ const handler = baseApi()
               fabFiles: fabFileRepository,
               projects: projectRepository,
               users: userRepository,
+              invites: inviteRepository,
             },
           }
         )
