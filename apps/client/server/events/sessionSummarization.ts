@@ -299,11 +299,21 @@ export const handler = withEventContext(async (event, logger) => {
             unmanageableMetaTags.push(tag);
           }
         }
-        if (unmanageableMetaTags.length > 0) {
+        // A legacy static-registry content tag (e.g. opti:foo) predating this fix can also be
+        // sitting on a session from before #1101 closed this gap - same "don't take the summary
+        // down" reasoning as the meta-tag case above, no DB lookup needed since this arm is
+        // admin-only.
+        const unmanageablePrefixTags = user?.isAdmin
+          ? []
+          : dataLakeService.extractStaticRegistryPrefixedTags((fabFileData.tags ?? []).map(t => t.name));
+        const droppedTagNames = [...unmanageableMetaTags, ...unmanageablePrefixTags];
+        if (droppedTagNames.length > 0) {
           logger.warn(
-            `Dropping unmanageable data-lake tag(s) from session ${session.id} summary: ${unmanageableMetaTags.join(', ')}`
+            `Dropping unmanageable data-lake tag(s) from session ${session.id} summary: ${droppedTagNames.join(', ')}`
           );
-          fabFileData.tags = (fabFileData.tags ?? []).filter(t => !unmanageableMetaTags.includes(t.name.toLowerCase()));
+          fabFileData.tags = (fabFileData.tags ?? []).filter(
+            t => !unmanageableMetaTags.includes(t.name.toLowerCase()) && !unmanageablePrefixTags.includes(t.name)
+          );
         }
         const newFabFile = await fabFilesService.createFabFile(session.userId, fabFileData, {
           db: {

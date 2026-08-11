@@ -69,6 +69,9 @@ vi.mock('@bike4mind/services', () => ({
         )
       ),
     canManageLake: h.canManageLake,
+    // Real (not faked): a fixed test-only prefix, mirroring the shape of DATA_LAKES' opti: entry.
+    extractStaticRegistryPrefixedTags: (names: unknown[]) =>
+      names.filter((n): n is string => typeof n === 'string' && n.startsWith('opti:')),
   },
 }));
 
@@ -287,6 +290,29 @@ describe('sessionSummarization summary-file lookup', () => {
 
       const [, data] = h.createFabFile.mock.calls[0] as [string, { tags: { name: string }[] }];
       expect(data.tags.map(t => t.name)).toEqual(['datalake:someone-elses-lake', 'plain']);
+    });
+  });
+
+  // A legacy static-registry content tag (e.g. opti:foo) predating this fix's rollout can be
+  // sitting on a session too - same reasoning as the datalake: meta-tag case, no DB lookup needed
+  // since that arm is admin-only.
+  describe('a legacy static-registry content tag on a brand-new summary', () => {
+    beforeEach(() => {
+      h.session = {
+        id: SESSION_ID,
+        _id: SESSION_ID,
+        userId: OWNER,
+        name: 'Notebook',
+        tags: [{ name: 'opti:legacy' }, { name: 'plain' }],
+      };
+    });
+
+    it('drops it for a non-admin and still creates the summary with the rest of the tags', async () => {
+      await run();
+
+      const [, data] = h.createFabFile.mock.calls[0] as [string, { tags: { name: string }[] }];
+      expect(data.tags.map(t => t.name)).toEqual(['plain']);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('opti:legacy'));
     });
   });
 });
