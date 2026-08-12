@@ -123,9 +123,15 @@ export default function DataLakeTreeView({
   // filtering stays on the raw query since it's already-loaded local data.
   const [debouncedSearch, setDebouncedSearch] = useState('');
   useEffect(() => {
-    const handle = setTimeout(() => setDebouncedSearch(searchQuery.trim()), SEARCH_DEBOUNCE_MS);
+    const trimmed = searchQuery.trim();
+    if (!trimmed) return;
+    const handle = setTimeout(() => setDebouncedSearch(trimmed), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(handle);
   }, [searchQuery]);
+  // Clearing the box reflects immediately rather than through the debounce above - otherwise
+  // the stale "Articles" section would linger for up to SEARCH_DEBOUNCE_MS after the folder
+  // tree has already reappeared underneath it.
+  const effectiveSearch = searchQuery.trim() ? debouncedSearch : '';
 
   // The synthetic bucket intercepts before leaf-tag resolution: its key is not a real tag.
   const isUncategorized = !!uncategorized && breadcrumb.length === 1 && breadcrumb[0] === UNCATEGORIZED_KEY;
@@ -162,9 +168,9 @@ export default function DataLakeTreeView({
   // Cross-tree article search (#1693): while browsing folders, a query also reaches article
   // titles/tags/notes anywhere in scope via the server - not just this level's segment names.
   // Skipped at a leaf/bucket since `files` above already searches the (already-loaded) scope.
-  const treeSearchActive = !showFiles && !!source && debouncedSearch.length >= MIN_SEARCH_LENGTH;
+  const treeSearchActive = !showFiles && !!source && effectiveSearch.length >= MIN_SEARCH_LENGTH;
   const { data: treeSearchResult, isLoading: treeSearchLoading } = useGetDataLakeArticles(
-    treeSearchActive ? { search: debouncedSearch, limit: 20 } : null,
+    treeSearchActive ? { search: effectiveSearch, limit: 20 } : null,
     source
   );
   const treeSearchArticles = treeSearchActive ? (treeSearchResult?.data ?? []) : [];
