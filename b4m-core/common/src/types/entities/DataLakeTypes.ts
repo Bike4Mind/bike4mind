@@ -105,6 +105,18 @@ export interface IDataLake {
    * `LakeVisibility`: private (no org, not public) | organization (org-scoped) | public.
    */
   isPublic?: boolean;
+  /**
+   * Per-lake opt-in (default false) to logging the natural-language QUERY TEXT behind a
+   * retrieval, alongside the always-on access event (see LakeAccessEventModel). Off by default
+   * because query text is simultaneously the most useful field for a customer and the most
+   * sensitive - without this gate the audit log would become a second copy of the corpus plus a
+   * record of everyone's questions. Read as the caller's INTENT: the actual write only happens
+   * when EVERY lake a retrieval call resolved has opted in (unanimity), never partially. Exposed
+   * to a reader (see LAKE_FIELD_VISIBILITY) so the people whose questions may be logged can see
+   * that the lake records them. Flipping this off does not retro-delete already-written query
+   * text - it expires on its own (shorter) retention clock.
+   */
+  auditQueryTextEnabled?: boolean;
   /** Whether this data lake is active or archived */
   status: DataLakeStatus;
   /** Cached file count (updated on upload/delete) */
