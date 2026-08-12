@@ -1,7 +1,7 @@
 import { execSync } from 'child_process';
 import { lambdaVpc } from './vpc';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
-import { router } from './router';
+import { router, appUrlForLambdaEnv } from './router';
 import { secrets } from './secrets';
 
 // Calculate content hash from git tree - changes immediately when MCP/Common code changes
@@ -45,7 +45,7 @@ export const mcpHandler = new sst.aws.Function('mcpHandler', {
   },
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
-    APP_URL: router ? router.url : 'http://localhost:3000',
+    APP_URL: router ? appUrlForLambdaEnv() : 'http://localhost:3000',
     // Content hash triggers Lambda rebuild when MCP or Common package code changes
     MCP_VERSION: MCP_CONTENT_HASH,
   },
