@@ -38,7 +38,12 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
 
   // MFA mutations
   const setupMFA = useSetupMFA();
-  const { mutate: setupMFAMutate, isPending: setupMFAIsPending, data: setupMFAData } = setupMFA;
+  const {
+    mutate: setupMFAMutate,
+    isPending: setupMFAIsPending,
+    data: setupMFAData,
+    isError: setupMFAIsError,
+  } = setupMFA;
   const verifyMFASetup = useVerifyMFASetup();
 
   useEffect(() => {
@@ -85,8 +90,12 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
     // If MFA is enforced and user doesn't have it configured, force setup.
     // When enforced it applies to ALL users (no "internal" distinction).
     if (enforceMFA && (!mfaStatus?.enabled || !currentUser.mfa?.totpEnabled)) {
-      // Auto-start MFA setup
-      if (!showMFASetup && !setupMFAIsPending && !setupMFAData) {
+      // Auto-start MFA setup. The `!setupMFAIsError` guard is load-bearing: on a persistent
+      // /api/mfa/setup failure onError only toasts, so setupMFAData stays undefined and
+      // setupMFAIsPending cycles true->false - both are effect deps, so without this guard the
+      // settle re-runs the effect and re-fires the mutation at network speed, forever. Firing
+      // once and stopping (the user gets a toast; a reload remounts and retries) is correct.
+      if (!showMFASetup && !setupMFAIsPending && !setupMFAData && !setupMFAIsError) {
         setupMFAMutate(undefined, {
           onSuccess: () => {
             setShowMFASetup(true);
@@ -114,6 +123,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
     setupMFAMutate,
     setupMFAIsPending,
     setupMFAData,
+    setupMFAIsError,
     adminSettings,
     adminSettingsLoading,
   ]);
