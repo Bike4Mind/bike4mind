@@ -82,6 +82,14 @@ export const archiveDataLake = async (
   // more than one lake's meta-tag (addFileToLake has no exclusivity check) that a co-owning lake
   // already archived - still trips this guard, a known limitation for that rarer, deliberate
   // multi-membership case rather than the ordinary prefix collision this scoping closes.
+  //
+  // Trade-off worth naming: a lake whose OWN pre-existing unstamped archive is entirely
+  // prefix-only (no meta-tagged member at all) no longer trips this guard either, so its next
+  // archive claims a real stamp and those old prefix-only rows stop being reachable by the
+  // (now-bounded) unbounded fallback once filesArchivedAt is no longer absent. Accepted
+  // deliberately: that population is fixed and shrinking (only lakes archived before this field
+  // existed), while the sibling-freeing bug this scoping closes is live for as long as prefix
+  // collisions exist.
   const hasUnstampedArchive =
     !existing.filesArchivedAt && (await db.fabFiles.hasArchivedByDataLakeTag({ datalakeTag: existing.datalakeTag }));
   let stamp: Date | undefined;
