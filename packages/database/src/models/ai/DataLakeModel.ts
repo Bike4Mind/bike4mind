@@ -73,6 +73,7 @@ const DataLakeSchema = new mongoose.Schema(
     status: { type: String, enum: DATA_LAKE_STATUSES, default: 'draft' },
     fileCount: { type: Number, default: 0 },
     totalSizeBytes: { type: Number, default: 0 },
+    totalChunkedChars: { type: Number, default: 0 },
     // Lifetime embedding spend, integer micro-USD - see IDataLake.embeddingSpendMicroUsd.
     embeddingSpendMicroUsd: { type: Number, default: 0 },
     lastSyncAt: { type: Date },
@@ -439,10 +440,20 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return holder?.filesArchivedAt ?? null;
   }
 
-  async setStats(id: string, stats: { fileCount: number; totalSizeBytes: number }): Promise<IDataLakeDocument | null> {
+  async setStats(
+    id: string,
+    stats: { fileCount: number; totalSizeBytes: number; totalChunkedChars: number }
+  ): Promise<IDataLakeDocument | null> {
     const doc = await this.dataLakeModel.findByIdAndUpdate(
       id,
-      { $set: { fileCount: stats.fileCount, totalSizeBytes: stats.totalSizeBytes, lastSyncAt: new Date() } },
+      {
+        $set: {
+          fileCount: stats.fileCount,
+          totalSizeBytes: stats.totalSizeBytes,
+          totalChunkedChars: stats.totalChunkedChars,
+          lastSyncAt: new Date(),
+        },
+      },
       { new: true }
     );
     return (doc?.toJSON() as IDataLakeDocument) ?? null;

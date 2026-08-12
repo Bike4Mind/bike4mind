@@ -112,6 +112,12 @@ export interface IDataLake {
   /** Cached total size in bytes (updated on upload/delete) */
   totalSizeBytes?: number;
   /**
+   * Cached sum of member files' chunkedCharCount (Unicode code points of chunked text) -
+   * the retrievable-content denominator for lake health (#1666). Recomputed with
+   * fileCount/totalSizeBytes by recomputeLakeStats; never incremented in place.
+   */
+  totalChunkedChars?: number;
+  /**
    * Lifetime embedding spend attributed to this lake, in integer micro-USD (1e-6 USD - a
    * single chunk can cost well under a cent). Reserved atomically BEFORE each provider
    * embedding call via tryAddEmbeddingSpend, so it can slightly overcount on a crash between
@@ -232,7 +238,10 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     offset?: number;
   }): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
   /** Persist recomputed stats (source via IFabFileRepository.computeDataLakeStats). */
-  setStats(id: string, stats: { fileCount: number; totalSizeBytes: number }): Promise<IDataLakeDocument | null>;
+  setStats(
+    id: string,
+    stats: { fileCount: number; totalSizeBytes: number; totalChunkedChars: number }
+  ): Promise<IDataLakeDocument | null>;
   /**
    * Atomically reserve `amountMicroUsd` of embedding spend against this lake, but only if
    * the running total stays within `limitMicroUsd`. All-or-nothing; false means the caller
