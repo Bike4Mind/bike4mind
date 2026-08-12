@@ -273,9 +273,14 @@ const purgingLakes = new Map<string, number>();
 let purgeOrderTick = 0;
 const nextPurgeOrderTick = () => ++purgeOrderTick;
 
-/** Test-only: drops all pending-purge suppression so module state cannot leak between cases. */
-export function resetPurgingLakesForTests() {
+/**
+ * Test-only: drops all pending-purge suppression AND rewinds the order counter, so module state
+ * cannot leak between cases. Double-underscore prefix marks it as not-for-app-code (matching
+ * `__resetAllSessionMovesForTests` in chessSessionState.ts).
+ */
+export function __resetPurgingLakesForTests() {
   purgingLakes.clear();
+  purgeOrderTick = 0;
 }
 
 /**
