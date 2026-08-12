@@ -44,7 +44,7 @@ describe('tagService - remove', () => {
     };
     mockFabFileRepo = {
       removeTagByUserId: vi.fn().mockResolvedValue(0),
-      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 }),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
     };
     mockDataLakeRepo = {
       find: vi.fn().mockResolvedValue([]),
@@ -190,7 +190,7 @@ describe('tagService - remove', () => {
 
       expect(mockDataLakeRepo.find).toHaveBeenCalledWith({ createdByUserId: { $in: [userId] } });
       expect(mockFabFileRepo.computeDataLakeStats).toHaveBeenCalled();
-      expect(mockDataLakeRepo.setStats).toHaveBeenCalledWith('lake1', { fileCount: 0, totalSizeBytes: 0 });
+      expect(mockDataLakeRepo.setStats).toHaveBeenCalledWith('lake1', { fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 });
     });
 
     it('does not recompute a lake whose prefix the deleted tag does not match', async () => {
@@ -222,7 +222,7 @@ describe('tagService - remove', () => {
 
       await remove(userId, { id: existingTagId }, adapters);
 
-      expect(mockDataLakeRepo.setStats).toHaveBeenCalledWith('lake1', { fileCount: 0, totalSizeBytes: 0 });
+      expect(mockDataLakeRepo.setStats).toHaveBeenCalledWith('lake1', { fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 });
     });
 
     it('issues no dataLakes.find call when the tag name has no colon', async () => {

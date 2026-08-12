@@ -17,6 +17,11 @@ import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import type { Logger } from '@bike4mind/observability';
 import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
+import {
+  defangRetrievedContent,
+  renderRetrievedContentBlock,
+  toContentLabel,
+} from '../../../../dataLakeService/renderRetrievedContentBlock';
 import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
 import {
   describeEmbeddingMismatch,
@@ -55,7 +60,14 @@ function prettyFileName(fn: string): string {
     .trim();
 }
 
-/** Format semantic passages WITH their content so the model can answer without retrieving. */
+/**
+ * Format semantic passages WITH their content so the model can answer without retrieving.
+ *
+ * Passage text is untrusted: a lake can serve content its owner did not author (a shared source
+ * folder, research-driven acquisition), so every passage rides inside the delimited block and has
+ * its line-initial markers defanged. Our own framing - the notices below and the preamble - stays
+ * OUTSIDE the block at column 0, which is what makes the two distinguishable.
+ */
 function formatSemanticResults(
   results: SemanticChunkResult[],
   scan?: SemanticSearchScanAccounting,
@@ -64,7 +76,12 @@ function formatSemanticResults(
   const blocks = results.map((r, i) => {
     const text = r.chunkText.trim();
     const clipped = text.length > CHUNK_TEXT_CAP ? `${text.slice(0, CHUNK_TEXT_CAP)}…` : text;
-    return `${i + 1}. **${prettyFileName(r.fileName)}** (relevance ${r.score.toFixed(2)})\n${clipped}`;
+    // The file name is content-adjacent and equally attacker-influenced: without toContentLabel a
+    // crafted name carries a newline plus a forged marker into the label line.
+    return (
+      `${i + 1}. **${toContentLabel(prettyFileName(r.fileName))}** (relevance ${r.score.toFixed(2)})\n` +
+      defangRetrievedContent(clipped)
+    );
   });
   // A truncated scan ranked only part of the corpus. Say so, or the model will read "no further
   // matches" into what is really "we stopped looking" and assert the library holds nothing else.
@@ -77,7 +94,7 @@ function formatSemanticResults(
     formatSkipNotice(skipNotice) +
     partial +
     `Found ${results.length} relevant passage(s) in the knowledge base — the content is included below, so answer directly and only call retrieve_knowledge_content if you need MORE detail from a specific file:\n\n` +
-    blocks.join('\n\n---\n\n')
+    renderRetrievedContentBlock(blocks)
   );
 }
 
@@ -432,7 +449,13 @@ interface KnowledgeBaseSearchParams {
 }
 
 /**
- * Formats fab file search results for LLM consumption
+ * Formats fab file search results for LLM consumption.
+ *
+ * Metadata only (the caller passes excludeContent), but every field here is still authored
+ * document-side, so the same defenses apply as to retrieved content: a file name carrying a
+ * newline would otherwise land arbitrary text at column 0 in the model's context with no framing
+ * at all - which is worse than the delimited case, not better. No untrusted block wraps this: it
+ * returns no document text, and the block would say "this is data" about our own listing.
  */
 function formatSearchResults(files: IFabFileDocument[]): string {
   if (files.length === 0) {
@@ -440,12 +463,12 @@ function formatSearchResults(files: IFabFileDocument[]): string {
   }
 
   const formattedFiles = files.map((file, index) => {
-    const tags = file.tags?.map(t => t.name).join(', ') || 'none';
-    const notes = file.notes ? `\n   Notes: ${file.notes}` : '';
+    const tags = toContentLabel(file.tags?.map(t => t.name).join(', ') || 'none');
+    const notes = file.notes ? `\n   Notes: ${defangRetrievedContent(file.notes)}` : '';
     const fileType = file.type || 'FILE';
 
     return (
-      `${index + 1}. **${file.fileName}** (ID: ${file.id})\n` +
+      `${index + 1}. **${toContentLabel(file.fileName)}** (ID: ${file.id})\n` +
       `   Type: ${fileType} | MIME: ${file.mimeType}\n` +
       `   Tags: ${tags}${notes}`
     );
