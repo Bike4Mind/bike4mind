@@ -329,6 +329,16 @@ describe('DataLakeTreeView cross-tree article search (#1693)', () => {
     expect(screen.getByTestId('datalake-file-s1')).toBeTruthy();
   });
 
+  it('shows a loading spinner in the search box while a cross-tree search is in flight', async () => {
+    mockGetDataLakeArticles.mockImplementation((params: { search?: string } | null) =>
+      params?.search === 'deep' ? { data: undefined, isLoading: true } : { data: undefined, isLoading: false }
+    );
+    const { container } = renderTree({ source: 'datalakes' });
+    const searchInput = screen.getByTestId('datalake-search').querySelector('input')!;
+    await userEvent.type(searchInput, 'deep');
+    await waitFor(() => expect(container.querySelectorAll('.MuiCircularProgress-root').length).toBeGreaterThan(0));
+  });
+
   it('selects a matched article through the normal onSelectFile callback', async () => {
     mockGetDataLakeArticles.mockReturnValue({ data: { data: [deepMatch] }, isLoading: false });
     const { onSelectFile } = renderTree({ source: 'datalakes' });

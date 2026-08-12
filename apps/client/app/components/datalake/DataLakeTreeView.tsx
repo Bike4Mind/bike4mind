@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Box, Input, List, Skeleton, Typography } from '@mui/joy';
+import { Box, CircularProgress, Input, List, Skeleton, Typography } from '@mui/joy';
 import type { SxProps } from '@mui/joy/styles/types';
 import SearchIcon from '@mui/icons-material/Search';
 import type { TagNode } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
@@ -218,6 +218,7 @@ export default function DataLakeTreeView({
           size="sm"
           placeholder={chrome.searchPlaceholder}
           startDecorator={<SearchIcon sx={{ fontSize: 18 }} />}
+          endDecorator={treeSearchActive && treeSearchLoading ? <CircularProgress size="sm" /> : undefined}
           value={searchQuery}
           onChange={e => setSearchQuery(e.target.value)}
           data-testid="datalake-search"
