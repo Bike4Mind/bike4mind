@@ -1,15 +1,21 @@
 import React from 'react';
-import { Box, Chip, Sheet, Stack, Table, Typography } from '@mui/joy';
+import { Box, Chip, LinearProgress, Sheet, Stack, Table, Typography } from '@mui/joy';
 import { useTheme } from '@mui/joy/styles';
 import { ResponsiveLine } from '@nivo/line';
-import { spendMockData, type SpendData, type SpendKpi, type SpendKpiFormat } from '../utils/spendMockData';
+import { type SpendData, type SpendKpi, type SpendKpiFormat } from '@bike4mind/common';
 
 // Nivo's generics fight strict TS here; the same assertion is used in AnalyticsTab.
 const ResponsiveLineChart = ResponsiveLine as any;
 
 interface SpendTabProps {
-  /** Defaults to the mock fixture; the wiring ticket swaps in live SpendData. */
+  /** Live spend for the selected window; the parent owns the useSpend query. */
   data?: SpendData;
+  isLoading?: boolean;
+  isError?: boolean;
+}
+
+interface SpendTabViewProps {
+  data: SpendData;
 }
 
 const formatKpiValue = (value: number, format: SpendKpiFormat): string => {
@@ -86,7 +92,7 @@ const KpiCard: React.FC<{ kpi: SpendKpi }> = ({ kpi }) => {
   );
 };
 
-export const SpendTab: React.FC<SpendTabProps> = ({ data = spendMockData }) => {
+export const SpendTabView: React.FC<SpendTabViewProps> = ({ data }) => {
   const theme = useTheme();
 
   // Duplicated from AnalyticsTab's chartTheme (hand-rolled, not shared code).
@@ -108,6 +114,10 @@ export const SpendTab: React.FC<SpendTabProps> = ({ data = spendMockData }) => {
 
   const maxModelCost = Math.max(...data.byModel.map(m => m.estCost), 0);
 
+  // The by-account table is capped server-side; data.activeAccounts is the true
+  // distinct count, so surface "top N of M" when the list is partial.
+  const accountsTruncated = data.byAccount.length < data.activeAccounts;
+
   const lineData = [
     {
       id: 'Daily Cost',
@@ -117,15 +127,9 @@ export const SpendTab: React.FC<SpendTabProps> = ({ data = spendMockData }) => {
 
   return (
     <Stack spacing={3} sx={{ mt: 1 }}>
-      {/* Mockup banner: remove once wired to live data (issue No. 1507). */}
-      <Stack direction="row" alignItems="center" spacing={1}>
-        <Chip color="warning" variant="solid" size="sm" data-testid="spend-mockup-badge">
-          MOCKUP - FAKE DATA
-        </Chip>
-        <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-          {data.periodLabel} vs {data.priorPeriodLabel}
-        </Typography>
-      </Stack>
+      <Typography level="body-xs" sx={{ color: 'text.secondary' }} data-testid="spend-period-label">
+        {data.periodLabel} vs {data.priorPeriodLabel}
+      </Typography>
 
       {/* Section 1: KPI row */}
       <Box
@@ -143,9 +147,15 @@ export const SpendTab: React.FC<SpendTabProps> = ({ data = spendMockData }) => {
 
       {/* Section 2: Spend by account */}
       <Box>
-        <Typography level="h4" sx={{ mb: 2 }}>
-          Spend by Account
+        <Typography level="h4" sx={{ mb: accountsTruncated ? 0.5 : 2 }}>
+          {accountsTruncated ? 'Top Spend by Account' : 'Spend by Account'}
         </Typography>
+        {accountsTruncated && (
+          <Typography level="body-xs" sx={{ color: 'text.secondary', mb: 2 }} data-testid="spend-account-truncation">
+            Showing top {data.byAccount.length.toLocaleString('en-US')} of {data.activeAccounts.toLocaleString('en-US')}{' '}
+            accounts by spend.
+          </Typography>
+        )}
         {/* Bounded height gives Table stickyHeader a scroll container to stick within. */}
         <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'auto', maxHeight: 480 }}>
           <Table stickyHeader hoverRow size="sm" data-testid="spend-by-account-table">
@@ -260,4 +270,39 @@ export const SpendTab: React.FC<SpendTabProps> = ({ data = spendMockData }) => {
       </Box>
     </Stack>
   );
+};
+
+export const SpendTab: React.FC<SpendTabProps> = ({ data, isLoading, isError }) => {
+  if (isError) {
+    return (
+      <Box sx={{ p: 2 }}>
+        <Chip color="danger" variant="soft" size="sm" data-testid="spend-error">
+          Failed to load spend data
+        </Chip>
+      </Box>
+    );
+  }
+
+  // No data yet (fetching, or the query is gated off) reads as loading.
+  if (isLoading || !data) {
+    return (
+      <Box sx={{ p: 2 }} data-testid="spend-loading">
+        <LinearProgress />
+        <Typography sx={{ mt: 2 }}>Loading spend data...</Typography>
+      </Box>
+    );
+  }
+
+  // Nothing settled in the window (authoritative flag, not inferred from a cut).
+  if (!data.hasData) {
+    return (
+      <Box sx={{ p: 2 }} data-testid="spend-empty">
+        <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
+          No spend data for {data.periodLabel}.
+        </Typography>
+      </Box>
+    );
+  }
+
+  return <SpendTabView data={data} />;
 };
