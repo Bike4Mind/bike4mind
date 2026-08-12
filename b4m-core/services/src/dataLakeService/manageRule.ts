@@ -5,10 +5,11 @@ export type ManageActor = Pick<AccessContext, 'userId' | 'isAdmin'>;
 
 /**
  * Truthy-guarded creator match, shared by `canManageLake` and every site that needs the SAME
- * ownership check WITHOUT the admin bypass (`setLakeVisibility`'s owner-only expose gate,
- * `isOwn`/`isOwnLake` display labels). The truthiness guard makes it fail closed on a blank
- * identity: without it, a lake with no `createdByUserId` (the synthetic fallback document) would
- * match an actor with no `userId`, since `undefined === undefined` and `'' === ''`. Unreachable
+ * ownership check WITHOUT the admin bypass (`setLakeVisibility`'s owner-only expose gate, and
+ * the `isOwn` display label in `browsePublicDataLakes`/`listDataLakes`). The truthiness guard
+ * makes it fail closed on a blank identity: without it, a lake with no `createdByUserId` (the
+ * synthetic fallback document) would match an actor with no `userId`, since
+ * `undefined === undefined` and `'' === ''`. Unreachable
  * today - the schema requires the field and `AccessContext.userId` is a required string - but this
  * predicate now gates prompt DISCLOSURE as well as writes, so it should not depend on those
  * invariants holding elsewhere. Mirrors the same guard in `getDataLakePrompts.ts`.
