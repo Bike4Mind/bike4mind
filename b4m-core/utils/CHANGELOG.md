@@ -1,5 +1,22 @@
 # @bike4mind/utils
 
+## 4.0.0
+
+### Major Changes
+
+- [#1688](https://github.com/Bike4Mind/bike4mind/pull/1688) [`851e2c2`](https://github.com/Bike4Mind/bike4mind/commit/851e2c26928c92c574d9310e2eec8e268f672882) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - return debug info from buildAndSortMessages
+
+### Minor Changes
+
+- [#1713](https://github.com/Bike4Mind/bike4mind/pull/1713) [`ed20c15`](https://github.com/Bike4Mind/bike4mind/commit/ed20c1595a1a3bdfcd2b67302b1a0d05a713e826) Thanks [@onoya](https://github.com/onoya)! - scoped settings resolver (platform -> org -> owner -> lake)
+
+### Patch Changes
+
+- Updated dependencies [[`abc90f5`](https://github.com/Bike4Mind/bike4mind/commit/abc90f562e15caa46428fc94afa3ffff410e5d5c)]:
+  - @bike4mind/common@4.0.1
+  - @bike4mind/fab-pipeline@1.0.1
+  - @bike4mind/llm-adapters@0.11.1
+
 ## 3.1.0
 
 ### Minor Changes
