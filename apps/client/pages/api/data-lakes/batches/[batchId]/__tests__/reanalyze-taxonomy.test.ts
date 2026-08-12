@@ -5,6 +5,12 @@ const h = vi.hoisted(() => ({
   lakeFindById: vi.fn(),
   setTaxonomyStatusIfActive: vi.fn(),
   analyzeBatchTaxonomy: vi.fn(),
+  // Real admin-or-creator logic (not a bare stub), matching the sibling lifecycle.test.ts mock,
+  // so the manage-gate call behaves identically to production, including the blank-identity case.
+  canManageLake: vi.fn(
+    (lake: { createdByUserId?: string }, actor: { userId?: string; isAdmin: boolean }) =>
+      actor.isAdmin || (!!actor.userId && !!lake.createdByUserId && lake.createdByUserId === actor.userId)
+  ),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -26,6 +32,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeBatchRepository: { findById: h.batchFindById, setTaxonomyStatusIfActive: h.setTaxonomyStatusIfActive },
   dataLakeRepository: { findById: h.lakeFindById },
 }));
+vi.mock('@bike4mind/services', () => ({ dataLakeService: { canManageLake: h.canManageLake } }));
 
 import handler from '../reanalyze-taxonomy';
 
@@ -60,6 +67,15 @@ describe('POST /api/data-lakes/batches/[batchId]/reanalyze-taxonomy', () => {
     const { res } = makeRes();
 
     await expect(run('b1', res)).rejects.toThrow(/creator/i);
+    expect(h.analyzeBatchTaxonomy).not.toHaveBeenCalled();
+  });
+
+  it('now delegates to canManageLake, so a blank-identity lake is rejected rather than granted (#1153)', async () => {
+    h.lakeFindById.mockResolvedValue({ id: 'lake1', createdByUserId: undefined, fileTagPrefix: 'acme:' });
+    const { res } = makeRes();
+
+    await expect(run('b1', res, {}, { id: '', isAdmin: false })).rejects.toThrow(/creator/i);
+    expect(h.canManageLake).toHaveBeenCalled();
     expect(h.analyzeBatchTaxonomy).not.toHaveBeenCalled();
   });
 
