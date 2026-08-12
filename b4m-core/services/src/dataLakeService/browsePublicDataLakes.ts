@@ -4,6 +4,7 @@ import type {
   IDataLakeRepository,
   PublicDataLakeSummary,
 } from '@bike4mind/common';
+import { canManageLake, isLakeCreator } from './manageRule';
 
 /** The browsing caller. Only identity is needed - the public catalog is the same for everyone. */
 interface BrowseActor {
@@ -62,7 +63,8 @@ export const browsePublicDataLakes = async (
   const nameById = new Map(owners.map(u => [String(u.id), u.name || u.username || undefined]));
 
   const data: PublicDataLakeSummary[] = lakes.map((lake: IDataLakeDocument) => {
-    const isOwn = lake.createdByUserId === actor.userId;
+    // isLakeCreator, not canManageLake: isOwn has no admin bypass.
+    const isOwn = isLakeCreator(lake, actor);
     return {
       id: lake.id,
       slug: lake.slug,
@@ -73,7 +75,7 @@ export const browsePublicDataLakes = async (
       fileCount: lake.fileCount ?? 0,
       totalSizeBytes: lake.totalSizeBytes ?? 0,
       isOwn,
-      canManage: actor.isAdmin || isOwn,
+      canManage: canManageLake(lake, actor),
     };
   });
 

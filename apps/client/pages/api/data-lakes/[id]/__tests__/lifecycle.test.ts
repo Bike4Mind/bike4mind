@@ -6,6 +6,12 @@ const h = vi.hoisted(() => ({
   archiveDataLake: vi.fn(),
   deleteDataLake: vi.fn(),
   cleanupDeletedDataLake: vi.fn(),
+  // Real admin-or-creator logic (not a bare stub) so the cleanup action's canManageLake call
+  // behaves identically to production for these tests, including the blank-identity case.
+  canManageLake: vi.fn(
+    (lake: { createdByUserId?: string }, actor: { userId?: string; isAdmin: boolean }) =>
+      actor.isAdmin || (!!actor.userId && !!lake.createdByUserId && lake.createdByUserId === actor.userId)
+  ),
   openSearchRetrievalIndex: vi.fn(() => ({ removeForDataLake: vi.fn() })),
   sendToQueue: vi.fn(),
   getSourceQueueUrl: vi.fn(() => 'https://sqs.example.com/data-lake-cleanup'),
@@ -32,6 +38,7 @@ vi.mock('@bike4mind/services', () => ({
     archiveDataLake: h.archiveDataLake,
     deleteDataLake: h.deleteDataLake,
     cleanupDeletedDataLake: h.cleanupDeletedDataLake,
+    canManageLake: h.canManageLake,
     openSearchRetrievalIndex: h.openSearchRetrievalIndex,
   },
 }));
@@ -91,6 +98,17 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
     await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res);
 
     expect(res.status).toHaveBeenCalledWith(400);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('now delegates to canManageLake, so a blank-identity lake is rejected rather than granted (#1153)', async () => {
+    h.toAccessContext.mockResolvedValueOnce({ userId: '', isAdmin: false });
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: '' });
+    const { res } = makeRes();
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res);
+
+    expect(h.canManageLake).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(403);
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,7 @@
 import type { AccessContext, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
 import { DATA_LAKES, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, normalizeId } from '@bike4mind/utils';
+import { canManageLake } from './manageRule';
 
 interface AssertLakeAccessAdapters {
   db: {
@@ -36,7 +37,7 @@ export function canAccessLake(
   >,
   ctx: AccessContext
 ): boolean {
-  if (ctx.isAdmin || lake.createdByUserId === ctx.userId) return true;
+  if (canManageLake(lake, ctx)) return true;
 
   const normalizedTags = ctx.userTags.map(t => t.toLowerCase());
   const normalizedKeys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
