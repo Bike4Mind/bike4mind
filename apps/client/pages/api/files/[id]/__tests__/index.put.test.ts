@@ -4,9 +4,8 @@ const h = vi.hoisted(() => ({
   findAccessibleById: vi.fn(),
   update: vi.fn(),
   findByDatalakeTag: vi.fn(),
-  // The membership write pair `reconcileLakeTags` now owns: `findById` backs the leave path's
-  // own membership check (removeFileFromLake) and update.ts's post-commit re-read; the mutable
-  // `store` keeps them consistent with each other and with what pullTagsByFabFileId removes.
+  // `findById` backs reconcileLakeTags' prefix-arm owner resolution; the mutable `store` in
+  // makeStatefulFabFile keeps it consistent with what update()/pullTagsByFabFileId do.
   findById: vi.fn(),
   pullTagsByFabFileId: vi.fn(),
   pushTagsByFabFileId: vi.fn(),
@@ -164,7 +163,7 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
     ]);
   });
 
-  it('retracts the stamp when the update drops the meta-tag from a file that carried both', async () => {
+  it('preserves lake membership when a whole-array write drops the meta-tag', async () => {
     h.findAccessibleById.mockResolvedValue(
       fabFile({
         tags: [
@@ -183,14 +182,16 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
     });
     const { res, json } = makeRes();
 
+    // Simulates a stale client resending a tags array fetched before this file joined the lake:
+    // an empty array must never read as "leave".
     await run({ tags: [] }, res);
 
-    // The first write keeps the meta-tag (and the fallback tagger re-backfills its content tag,
-    // since as far as tagsToPersist is concerned the lake is still current) so removeFileFromLake
-    // can still see the file as a member and pull BOTH atomically. The route's final response -
-    // what a client actually observes - is what matters here, not that intermediate array.
-    expect(h.pullTagsByFabFileId).toHaveBeenCalledWith(FILE_ID, [META, 'acme:uncategorized']);
-    expect(json.mock.calls[0][0].tags).toEqual([]);
+    expect(h.pullTagsByFabFileId).not.toHaveBeenCalled();
+    expect(h.setStats).not.toHaveBeenCalled();
+    expect((json.mock.calls[0][0].tags as { name: string }[]).map(t => t.name).sort()).toEqual([
+      'acme:uncategorized',
+      META,
+    ]);
   });
 
   it('does not change tags and never looks a lake up when tags is omitted (a rename)', async () => {

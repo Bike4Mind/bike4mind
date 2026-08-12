@@ -73,8 +73,9 @@ describe('reconcileLakeTags', () => {
     expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
   });
 
-  // The whole point of routing this door through the membership path.
-  it('clears the lake prefixed content tags on leave even when the caller re-listed them', async () => {
+  // The whole point of this door: a whole-array write cannot tell an intentional removal from a
+  // stale client's copy, so it preserves membership rather than treating the drop as a leave.
+  it('preserves lake membership when the caller drops only the meta-tag', async () => {
     const stored = [tag('datalake:lake', 1), tag('lk:invoices', 1), tag('unrelated')];
     const adapters = makeAdapters(stored);
 
@@ -85,13 +86,13 @@ describe('reconcileLakeTags', () => {
       [tag('lk:invoices', 1), tag('unrelated')]
     );
 
-    // The meta-tag is persisted anyway, so membership is intact when the pull evaluates it.
+    // The meta-tag is force-carried back in - membership is untouched.
     expect(result.tagsToPersist).toEqual([tag('lk:invoices', 1), tag('unrelated'), tag('datalake:lake', 1)]);
 
     await result.commit();
 
-    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:invoices']);
-    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+    expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
   });
 
   it('leaves membership alone when the caller round-trips the meta-tag', async () => {
@@ -164,16 +165,21 @@ describe('reconcileLakeTags', () => {
     await expect(run(adapters, [], [tag('datalake:lake', 1)])).rejects.toThrow(/only the creator can add/i);
   });
 
-  it('refuses a leave by a caller who cannot manage the lake', async () => {
+  it('preserves membership when the caller drops the meta-tag, regardless of manage rights', async () => {
     const adapters = makeAdapters([tag('datalake:lake', 1)], lake({ createdByUserId: 'someone-else' }));
 
-    await expect(run(adapters, ['datalake:lake'], [])).rejects.toThrow(/only the creator can remove/i);
+    const result = await run(adapters, ['datalake:lake'], []);
+    await expect(result.commit()).resolves.toBeUndefined();
+
+    // The fallback tagger backfills a folder stamp since the file lost its only content tag under
+    // the lake's prefix - same as the round-trip case above.
+    expect(result.tagsToPersist).toEqual([tag('datalake:lake', 1), tag('lk:uncategorized', 1)]);
+    expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
   });
 
-  // Two lakes can share a fileTagPrefix - nothing makes it unique. Leaving both in one call is
-  // safe because the first pull excludes the reserved datalake: namespace, so the second lake's
-  // meta-tag survives it and that lake is still seen as a member.
-  it('leaves two lakes sharing a fileTagPrefix in one call', async () => {
+  // Two lakes can share a fileTagPrefix - nothing makes it unique. Dropping both meta-tags in one
+  // call preserves both, independently, the same as a single lake would.
+  it('preserves two lakes sharing a fileTagPrefix in one call', async () => {
     const lakeA = lake({ id: 'lakeA', datalakeTag: 'datalake:a', fileTagPrefix: 'qa:' });
     const lakeB = lake({ id: 'lakeB', datalakeTag: 'datalake:b', fileTagPrefix: 'qa:' });
     const stored = [tag('datalake:a', 1), tag('datalake:b', 1), tag('qa:shared', 1)];
@@ -183,23 +189,11 @@ describe('reconcileLakeTags', () => {
     const result = await run(adapters, ['datalake:a', 'datalake:b', 'qa:shared'], [tag('qa:shared', 1)]);
     await expect(result.commit()).resolves.toBeUndefined();
 
-    const pulled = adapters.db.fabFiles.pullTagsByFabFileId.mock.calls.map(c => c[1]);
-    expect(pulled).toEqual([
-      ['datalake:a', 'qa:shared'],
-      ['datalake:b', 'qa:shared'],
-    ]);
-    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledTimes(2);
-  });
-
-  it('treats a concurrent removal as the outcome the caller asked for', async () => {
-    const adapters = makeAdapters([tag('datalake:lake', 1)]);
-    const result = await run(adapters, ['datalake:lake'], []);
-    // The tag went between the array write and the membership write.
-    adapters.db.fabFiles.findById = vi.fn().mockResolvedValue({ id: 'f1', userId: 'owner', tags: [] });
-
-    await expect(result.commit()).resolves.toBeUndefined();
-    // Stats still recompute, so the lake's counts reflect whoever won the race.
-    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledTimes(1);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+    expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+    expect(result.tagsToPersist).toEqual(
+      expect.arrayContaining([tag('qa:shared', 1), tag('datalake:a', 1), tag('datalake:b', 1)])
+    );
   });
 
   it('refuses a built-in fallback lake', async () => {
@@ -216,34 +210,40 @@ describe('reconcileLakeTags', () => {
       return adapters;
     };
 
-    // The headline bug: the file carries no meta-tag for this lake at all, only its prefixed
-    // content tag - so the caller dropping it must still be gated and recomputed exactly like a
-    // meta-tag leave.
-    it('leaves a lake whose sole membership signal is a dropped prefix tag', async () => {
+    // The headline bug this ticket fixes: the file carries no meta-tag for this lake at all, only
+    // its prefixed content tag - a whole-array write dropping it must preserve membership exactly
+    // like the meta-tag case, not treat the drop as a leave.
+    it('preserves a lake whose sole membership signal is a dropped prefix tag', async () => {
       const adapters = withPrefixLakes([tag('lk:invoices', 1)], [lake()]);
 
       const result = await run(adapters, ['lk:invoices'], []);
       await result.commit();
 
-      // removeFileFromLake pulls the meta-tag unconditionally alongside the prefix tags (a no-op
-      // for a name the file never carried) - see its own doc comment on the atomic $pull.
-      expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:invoices']);
-      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
+      expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+      expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+      expect(result.tagsToPersist).toEqual([tag('lk:invoices', 1)]);
     });
 
-    it('refuses a prefix-arm leave by a caller who cannot manage the lake, before any write', async () => {
+    it('preserves a prefix-arm membership on drop regardless of manage rights', async () => {
       // The file is owned by (and the lake created by) 'owner' - a DIFFERENT actor ('editor', with
       // shared edit access to the file but no lake-manage rights) is the one dropping the tag.
       const adapters = withPrefixLakes([tag('lk:invoices', 1)], [lake({ createdByUserId: 'owner' })]);
 
-      await expect(
-        reconcileLakeTags({ userId: 'editor', isAdmin: false }, 'f1', ['lk:invoices'], [], adapters as any)
-      ).rejects.toThrow(/only the creator can remove/i);
+      const result = await reconcileLakeTags(
+        { userId: 'editor', isAdmin: false },
+        'f1',
+        ['lk:invoices'],
+        [],
+        adapters as any
+      );
+      await expect(result.commit()).resolves.toBeUndefined();
+
       expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
       expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+      expect(result.tagsToPersist).toEqual([tag('lk:invoices', 1)]);
     });
 
-    it("an admin may drop another user's sole prefix-arm tag", async () => {
+    it("an admin's whole-array write still cannot drop another user's sole prefix-arm tag", async () => {
       const adapters = withPrefixLakes([tag('lk:invoices', 1)], [lake({ createdByUserId: 'someone-else' })]);
       adapters.db.fabFiles.findById = vi
         .fn()
@@ -258,7 +258,8 @@ describe('reconcileLakeTags', () => {
       );
       await result.commit();
 
-      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
+      expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+      expect(result.tagsToPersist).toEqual([tag('lk:invoices', 1)]);
     });
 
     it('keeps membership when a sibling tag under the same prefix survives', async () => {
@@ -279,7 +280,7 @@ describe('reconcileLakeTags', () => {
       expect(result.tagsToPersist).toEqual([tag('lk:invoices', 3)]);
     });
 
-    it('does not double-enqueue a lake already leaving via its meta-tag', async () => {
+    it('preserves a lake dropped via both its meta-tag and its prefix tag at once', async () => {
       const stored = [tag('datalake:lake', 1), tag('lk:invoices', 1)];
       const adapters = withPrefixLakes(stored, [lake()]);
       adapters.db.dataLakes.findByDatalakeTag = vi.fn().mockResolvedValue(lake());
@@ -287,8 +288,11 @@ describe('reconcileLakeTags', () => {
       const result = await run(adapters, ['datalake:lake', 'lk:invoices'], []);
       await result.commit();
 
-      // One recompute, not two, for the same lake.
-      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledTimes(1);
+      // Membership survives on the preserved meta-tag alone; the prefix content tag was a plain
+      // ordinary edit the caller genuinely dropped, so the fallback tagger backfills a folder stamp
+      // in its place - the lake's meta-tag skip in findPrefixArmChanges avoids double-handling it.
+      expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+      expect(result.tagsToPersist).toEqual([tag('datalake:lake', 1), tag('lk:uncategorized', 1)]);
     });
 
     it('anchors on the file OWNER, not the acting user', async () => {
@@ -305,7 +309,7 @@ describe('reconcileLakeTags', () => {
       expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
     });
 
-    it('two lakes sharing one prefix both recompute on a shared leave', async () => {
+    it('preserves two lakes sharing one prefix on a shared drop', async () => {
       const a = lake({ id: 'a', datalakeTag: 'datalake:a' });
       const b = lake({ id: 'b', datalakeTag: 'datalake:b' });
       const adapters = withPrefixLakes([tag('lk:shared', 1)], [a, b]);
@@ -313,8 +317,8 @@ describe('reconcileLakeTags', () => {
       const result = await run(adapters, ['lk:shared'], []);
       await expect(result.commit()).resolves.toBeUndefined();
 
-      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledTimes(2);
-      // Both lakes' leave list the same signal tag - force-carried once, not twice.
+      expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+      // Both lakes' signal is the same tag - force-carried once, not twice.
       expect(result.tagsToPersist).toEqual([tag('lk:shared', 1)]);
     });
 
@@ -349,7 +353,9 @@ describe('reconcileLakeTags', () => {
       } as any);
       await result.commit();
 
-      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
+      expect(adapters.db.fabFiles.findById).toHaveBeenCalledWith('f1');
+      expect(result.tagsToPersist).toEqual([tag('lk:invoices', 1)]);
+      expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
     });
 
     it('recomputes stats on a prefix-arm join when the actor manages the lake', async () => {

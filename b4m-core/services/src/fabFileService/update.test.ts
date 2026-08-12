@@ -129,10 +129,10 @@ describe('updateFabFile (upload moderation gate)', () => {
     expect(result.fileUrl).toBe('https://s3.example.com/stale-signed-url');
   });
 
-  // A leave clears the lake's prefixed content tags AFTER the array write, so the object
-  // assembled from the request no longer matches storage. Reported by QA on PR #1128: an API
-  // client trusting the response would think tags survived that were already gone.
-  it('reports the tags as persisted after a lake leave, not the pre-cleanup array', async () => {
+  // A whole-array write cannot distinguish an intentional lake-leave from a stale client's copy,
+  // so the meta-tag is force-carried back into the persisted (and returned) array rather than
+  // clearing membership - the response IS the true persisted state, no separate re-read needed.
+  it('preserves lake membership when the caller drops the meta-tag but keeps the folder tag', async () => {
     const inLake = baseFile({
       mimeType: 'text/plain',
       fileName: 'notes.txt',
@@ -151,18 +151,13 @@ describe('updateFabFile (upload moderation gate)', () => {
       createdByUserId: 'user-123',
       status: 'active',
     };
-    // First read is removeFileFromLake testing membership; the second is the post-commit re-read.
-    const findById = vi
-      .fn()
-      .mockResolvedValueOnce(inLake)
-      .mockResolvedValue({ ...inLake, tags: [] });
 
     const adapters = {
       db: {
         fabFiles: {
           shareable: { findAccessibleById },
           update: dbUpdate,
-          findById,
+          findById: vi.fn().mockResolvedValue(inLake),
           pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
           computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 }),
         },
@@ -171,7 +166,7 @@ describe('updateFabFile (upload moderation gate)', () => {
       storage: mockAdapters.storage,
     };
 
-    // The caller drops the meta-tag but asks to keep the folder tag; the leave clears both.
+    // The caller drops the meta-tag but asks to keep the folder tag.
     const result = await updateFabFile(
       mockUser,
       { id: 'file-1', tags: [{ name: 'qa:invoices', strength: 1 }] },
@@ -179,11 +174,14 @@ describe('updateFabFile (upload moderation gate)', () => {
       adapters as any
     );
 
-    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('file-1', [
-      'datalake:qa-lake',
-      'qa:invoices',
-    ]);
-    expect(result.tags).toEqual([]);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+    expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+    expect(result.tags).toEqual(
+      expect.arrayContaining([
+        { name: 'qa:invoices', strength: 1 },
+        { name: 'datalake:qa-lake', strength: 1 },
+      ])
+    );
   });
 });
 
@@ -270,7 +268,7 @@ describe('updateFabFile (lake-tag reconciliation wiring)', () => {
     expect(result.tags).toEqual([{ name: 'design', strength: 1 }]);
   });
 
-  it('reconciles when tags: [] is passed explicitly (a real replacement, not an omission)', async () => {
+  it('preserves membership when tags: [] is passed explicitly (a real replacement, not an omission)', async () => {
     const lake = {
       id: 'lake1',
       datalakeTag: 'datalake:acme',
@@ -280,21 +278,21 @@ describe('updateFabFile (lake-tag reconciliation wiring)', () => {
     };
     findAccessibleById.mockResolvedValue(baseFile({ tags: [{ name: 'datalake:acme', strength: 1 }] }));
     findByDatalakeTag.mockResolvedValue(lake);
-    // removeFileFromLake's own membership check reads this first (still a member, so the pull
-    // fires); the post-commit re-read in update.ts then sees what that pull left behind.
-    mockAdapters.db.fabFiles.findById
-      .mockResolvedValueOnce({ id: 'file-1', userId: 'user-123', tags: [{ name: 'datalake:acme', strength: 1 }] })
-      .mockResolvedValue({ id: 'file-1', userId: 'user-123', tags: [] });
-    mockAdapters.db.fabFiles.pullTagsByFabFileId = vi.fn().mockResolvedValue(1);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result = await updateFabFile(mockUser, { id: 'file-1', tags: [] }, mockAdapters as any);
 
-    // An explicit [] reads as leaving every lake the file was in, which requires resolving one -
-    // an omitted field never would.
+    // An explicit [] still requires resolving the lake (to confirm membership stands), which an
+    // omitted `tags` field never would - but a whole-array write can never leave a lake, so the
+    // meta-tag is force-carried back and the fallback tagger backfills a folder stamp for it.
     expect(findByDatalakeTag).toHaveBeenCalledWith('datalake:acme');
-    expect(mockAdapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('file-1', ['datalake:acme']);
-    expect(result.tags).toEqual([]);
+    expect(mockAdapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+    expect(result.tags).toEqual(
+      expect.arrayContaining([
+        { name: 'datalake:acme', strength: 1 },
+        { name: 'acme:uncategorized', strength: 1 },
+      ])
+    );
   });
 
   it('persists a backfilled content tag from a join, proving the fallback tagger is wired through', async () => {
