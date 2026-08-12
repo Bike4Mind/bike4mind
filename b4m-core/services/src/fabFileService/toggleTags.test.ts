@@ -553,3 +553,44 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
     expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 3, totalSizeBytes: 99 });
   });
 });
+
+describe('toggleTags - static-registry prefix (e.g. opti:), no owning lake document', () => {
+  const runAs = (userId: string, adapters: ReturnType<typeof makeAdapters>, params: unknown) =>
+    toggleTags(userId, params, adapters as any);
+
+  it('refuses a non-admin newly applying a registry-prefixed tag, before any write', async () => {
+    const adapters = makeAdapters([file('f1')]);
+
+    await expect(run(adapters, { ids: ['f1'], tags: ['opti:report'] })).rejects.toThrow(
+      /only an admin can change this data lake/i
+    );
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('allows an admin to apply a registry-prefixed tag', async () => {
+    const adapters = makeAdapters([file('f1')]);
+    adapters.db.users.findById = vi.fn().mockResolvedValue({ id: 'admin', isAdmin: true });
+
+    await runAs('admin', adapters, { ids: ['f1'], tags: ['opti:report'] });
+
+    expect(adapters.store.get('f1')?.tags.map(t => t.name)).toEqual(['opti:report']);
+  });
+
+  it('allows a non-admin to remove a legacy registry-prefixed tag already on the file', async () => {
+    const adapters = makeAdapters([file('f1', [{ name: 'opti:report', strength: 0 }])]);
+
+    await run(adapters, { ids: ['f1'], tags: ['opti:report'] });
+
+    expect(adapters.store.get('f1')?.tags).toEqual([]);
+  });
+
+  it('refuses the whole batch when one file would newly join, even if another is only leaving', async () => {
+    const adapters = makeAdapters([file('f1', [{ name: 'opti:existing', strength: 0 }]), file('f2')]);
+
+    await expect(run(adapters, { ids: ['f1', 'f2'], tags: ['opti:existing', 'opti:new'] })).rejects.toThrow(
+      /only an admin can change this data lake/i
+    );
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
+  });
+});

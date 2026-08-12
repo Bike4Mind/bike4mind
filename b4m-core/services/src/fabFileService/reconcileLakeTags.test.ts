@@ -384,3 +384,42 @@ describe('reconcileLakeTags', () => {
     });
   });
 });
+
+describe('reconcileLakeTags - static-registry prefix (e.g. opti:), no owning lake document', () => {
+  it('refuses a non-admin newly applying a registry-prefixed tag', async () => {
+    const adapters = makeAdapters([]);
+
+    await expect(run(adapters, [], [tag('opti:report')])).rejects.toThrow(/only an admin can change this data lake/i);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('allows an admin to apply a registry-prefixed tag', async () => {
+    const adapters = makeAdapters([]);
+
+    const result = await reconcileLakeTags(
+      { userId: 'admin', isAdmin: true },
+      'f1',
+      [],
+      [tag('opti:report')],
+      adapters as any
+    );
+
+    expect(result.tagsToPersist).toEqual([tag('opti:report')]);
+  });
+
+  it('does not block an unrelated edit to a file that already carries a legacy registry-prefixed tag', async () => {
+    const adapters = makeAdapters([tag('opti:legacy')]);
+
+    const result = await run(adapters, ['opti:legacy'], [tag('opti:legacy'), tag('unrelated')]);
+
+    expect(result.tagsToPersist).toEqual(expect.arrayContaining([tag('opti:legacy'), tag('unrelated')]));
+  });
+
+  it('refuses a non-admin whole-array write that keeps a legacy tag but adds a NEW registry-prefixed one', async () => {
+    const adapters = makeAdapters([tag('opti:legacy')]);
+
+    await expect(run(adapters, ['opti:legacy'], [tag('opti:legacy'), tag('opti:new')])).rejects.toThrow(
+      /only an admin can change this data lake/i
+    );
+  });
+});

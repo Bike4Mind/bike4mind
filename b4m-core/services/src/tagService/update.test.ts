@@ -1,6 +1,12 @@
 import { describe, it, expect, beforeEach, Mock, vi } from 'vitest';
 import { update } from './update';
-import { IDataLakeDocument, IDataLakeRepository, IFabFileRepository, ITagRepository } from '@bike4mind/common';
+import {
+  IDataLakeDocument,
+  IDataLakeRepository,
+  IFabFileRepository,
+  ITagRepository,
+  IUserDocument,
+} from '@bike4mind/common';
 
 describe('tagService - update', () => {
   const userId = 'test-user-123';
@@ -8,10 +14,12 @@ describe('tagService - update', () => {
   type TagRepo = Pick<ITagRepository, 'update' | 'findByIdAndUserId' | 'findAllByUserId' | 'delete'>;
   type FabFileRepo = Pick<IFabFileRepository, 'updateTagsByUserId' | 'dedupeTagByUserId' | 'computeDataLakeStats'>;
   type DataLakeRepo = Pick<IDataLakeRepository, 'find' | 'setStats' | 'activateIfDraft'>;
+  type UserRepo = { findById: (id: string) => Promise<Pick<IUserDocument, 'isAdmin'> | null> };
   let mockTagRepo: TagRepo;
   let mockFabFileRepo: FabFileRepo;
   let mockDataLakeRepo: DataLakeRepo;
-  let adapters: { db: { tags: TagRepo; fabFiles: FabFileRepo; dataLakes: DataLakeRepo } };
+  let mockUserRepo: UserRepo;
+  let adapters: { db: { tags: TagRepo; fabFiles: FabFileRepo; dataLakes: DataLakeRepo; users: UserRepo } };
 
   const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
     ({
@@ -55,11 +63,15 @@ describe('tagService - update', () => {
       setStats: vi.fn(),
       activateIfDraft: vi.fn(),
     };
+    mockUserRepo = {
+      findById: vi.fn().mockResolvedValue({ isAdmin: false }),
+    };
     adapters = {
       db: {
         tags: mockTagRepo,
         fabFiles: mockFabFileRepo,
         dataLakes: mockDataLakeRepo,
+        users: mockUserRepo,
       },
     };
   });
@@ -380,6 +392,58 @@ describe('tagService - update', () => {
         expect(mockTagRepo.update).not.toHaveBeenCalled();
       }
     );
+
+    // 'opti:' is the hardcoded opti-knowledge entry in DATA_LAKES - a static registry lake with
+    // no owning document, so no manage-rights gate elsewhere in this file can see it.
+    it('refuses a non-admin renaming an ordinary tag INTO a static-registry prefix', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'reports' }));
+
+      await expect(update(userId, { id: existingTagId, name: 'opti:report' }, adapters)).rejects.toThrow(
+        "Only an admin can change this data lake's files"
+      );
+      expect(mockFabFileRepo.updateTagsByUserId).not.toHaveBeenCalled();
+      expect(mockTagRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('allows an admin to rename an ordinary tag into a static-registry prefix', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'reports' }));
+      (mockUserRepo.findById as Mock).mockResolvedValueOnce({ isAdmin: true });
+
+      await update(userId, { id: existingTagId, name: 'opti:report' }, adapters);
+
+      expect(mockFabFileRepo.updateTagsByUserId).toHaveBeenCalledWith(userId, 'reports', 'opti:report');
+    });
+
+    it('allows a non-admin to rename AWAY from a legacy static-registry-prefixed tag', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'opti:legacy' }));
+
+      await update(userId, { id: existingTagId, name: 'harmless' }, adapters);
+
+      expect(mockFabFileRepo.updateTagsByUserId).toHaveBeenCalledWith(userId, 'opti:legacy', 'harmless');
+    });
+
+    // The gate must key on the DESTINATION alone: an earlier version skipped the check whenever
+    // the OLD name was already registry-prefixed, which let a non-admin launder a case-variant
+    // file tag (invisible to every apply-time gate) into the canonical, read-arm-matching name by
+    // renaming from one registry name to another - the "already there" old name never actually
+    // left the namespace.
+    it('refuses a non-admin renaming FROM one static-registry-prefixed tag TO another', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'opti:legacy' }));
+
+      await expect(update(userId, { id: existingTagId, name: 'opti:new' }, adapters)).rejects.toThrow(
+        "Only an admin can change this data lake's files"
+      );
+      expect(mockFabFileRepo.updateTagsByUserId).not.toHaveBeenCalled();
+      expect(mockTagRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('does not check admin status for an edit that never touches a registry prefix', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'reports' }));
+
+      await update(userId, { id: existingTagId, name: 'archived' }, adapters);
+
+      expect(mockUserRepo.findById).not.toHaveBeenCalled();
+    });
   });
 
   describe('renaming a tag that is a lake prefix-arm signal', () => {

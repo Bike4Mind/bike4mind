@@ -3,6 +3,7 @@ import {
   IFabFileRepository,
   IAdminSettingsRepository,
   IUserRepository,
+  IDataLakeRepository,
   SupportedFabFileMimeTypes,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
@@ -45,6 +46,7 @@ export async function processEmailBody(
       fabFiles: IFabFileRepository;
       adminSettings: IAdminSettingsRepository;
       users: IUserRepository;
+      dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'>;
     };
   },
   organizationId?: string
@@ -93,6 +95,7 @@ export async function processEmailBody(
         },
         adminSettings: adapters.db.adminSettings,
         users: adapters.db.users,
+        dataLakes: adapters.db.dataLakes,
       },
       storage: {
         upload: (filepath, content, option) => {

@@ -1,5 +1,5 @@
 import type { AccessContext, IDataLakeBatchDocument, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
-import { DATALAKE_TAG_PREFIX } from '@bike4mind/common';
+import { DATA_LAKES, DATALAKE_TAG_PREFIX, normalizeTagPrefix } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { assertLakeAccess, assertLakeWritable } from './assertLakeAccess';
 
@@ -73,11 +73,33 @@ export const extractDataLakeMetaTags = (tagNames: readonly unknown[]): string[] 
   );
 
 /**
+ * The `datalake:*` meta-tags naming a lake in the STATIC REGISTRY (e.g. `datalake:opti-knowledge`),
+ * lowercased to match `extractDataLakeMetaTags`' normalization. These lakes have no owning DB
+ * document by construction, so `db.dataLakes.findByDatalakeTag` always returns null for them -
+ * without this arm, `assertCanWriteDataLakeTags` would refuse every write into a static lake
+ * unconditionally, including the platform-admin ingest scripts that are the only supported way to
+ * populate one.
+ */
+const STATIC_REGISTRY_DATALAKE_TAGS = new Set(DATA_LAKES.map(lake => lake.datalakeTag.toLowerCase()));
+
+/**
+ * Whether a `datalake:*` meta-tag names a STATIC REGISTRY lake rather than a DB-backed one.
+ * Exported so a caller that needs to PREDICT this gate's decision without a DB round-trip (e.g.
+ * a pre-filter dropping tags before a write it doesn't want to fail outright on) can ask the same
+ * question `assertCanWriteDataLakeTags` answers internally, instead of re-deriving its own,
+ * potentially drifted, notion of "unmanageable."
+ */
+export const isStaticRegistryDatalakeTag = (tag: string): boolean =>
+  STATIC_REGISTRY_DATALAKE_TAGS.has(tag.toLowerCase());
+
+/**
  * Gate the file-tag write paths (Send-to-Data-Lake, direct create/update, tag toggle): given the
  * `datalake:*` meta-tags a caller is applying to a file, assert they may write into EVERY
- * referenced lake. Non-meta tags are ignored. A meta-tag that resolves to no lake, or to a lake
- * the caller can't manage, is rejected - this is the check that stops a read-only member from
- * injecting a file into a lake they don't own, mirroring the creator check on the remove path.
+ * referenced lake. Non-meta tags are ignored. A meta-tag naming a STATIC REGISTRY lake is
+ * admin-only (mirrors `assertCanWriteStaticRegistryTags`' rule for that lake's content-prefix
+ * tags - there is no creator to check against). Any other meta-tag that resolves to no lake, or to
+ * a lake the caller can't manage, is rejected - this is the check that stops a read-only member
+ * from injecting a file into a lake they don't own, mirroring the creator check on the remove path.
  */
 export const assertCanWriteDataLakeTags = async (
   actor: ManageActor,
@@ -86,6 +108,12 @@ export const assertCanWriteDataLakeTags = async (
 ): Promise<void> => {
   const metaTags = extractDataLakeMetaTags(tagNames);
   for (const tag of metaTags) {
+    if (STATIC_REGISTRY_DATALAKE_TAGS.has(tag)) {
+      if (!actor.isAdmin) {
+        throw new BadRequestError("Only an admin can change this data lake's files");
+      }
+      continue;
+    }
     const lake = await db.dataLakes.findByDatalakeTag(tag);
     if (!lake || !canManageLake(lake, actor)) {
       // Direction-neutral wording: this gate sees a tag payload, not an intent, so the same
@@ -93,6 +121,42 @@ export const assertCanWriteDataLakeTags = async (
       // told a caller their removal was refused for the wrong reason.
       throw new BadRequestError("Only the creator can change this data lake's files");
     }
+  }
+};
+
+/**
+ * The tag names in a raw list that fall under a STATIC REGISTRY lake's `fileTagPrefix` (e.g.
+ * `opti:report`). These lakes have no owning DB document, so `canManageLake` and the prefix-arm
+ * membership checks (both anchored to a lake's `createdByUserId`) never see them - a caller could
+ * otherwise self-apply one with no gate at all.
+ *
+ * Case-SENSITIVE plain prefix match, deliberately not `satisfiesTagPrefix`'s stricter
+ * category-worthiness rule (non-empty suffix): the read-side bypass this guards against
+ * (`buildOwnershipConditions`'s OPEN prefix arm) builds an unflagged `^(prefix)` regex with no
+ * suffix requirement, so a bare `opti:` would still leak through that arm and must be caught here
+ * too.
+ */
+export const extractStaticRegistryPrefixedTags = (tagNames: readonly unknown[]): string[] => {
+  const prefixes = DATA_LAKES.map(lake => normalizeTagPrefix(lake.fileTagPrefix)).filter(
+    (prefix): prefix is string => prefix !== null
+  );
+  if (prefixes.length === 0) return [];
+  return tagNames.filter(
+    (name): name is string => typeof name === 'string' && prefixes.some(prefix => name.startsWith(prefix))
+  );
+};
+
+/**
+ * Gate a write against the STATIC REGISTRY namespace (e.g. `opti:`) the same way
+ * `assertCanWriteDataLakeTags` gates `datalake:*` meta-tags: those lakes are a shared knowledge
+ * base with no owning document, so only a platform admin may apply one of their content prefixes
+ * to a file - never the lake's own read-side entitlement, which grants browsing, not writing.
+ * Pure (no DB): the registry is a static, in-memory list.
+ */
+export const assertCanWriteStaticRegistryTags = (actor: ManageActor, tagNames: readonly unknown[]): void => {
+  if (actor.isAdmin) return;
+  if (extractStaticRegistryPrefixedTags(tagNames).length > 0) {
+    throw new BadRequestError("Only an admin can change this data lake's files");
   }
 };
 
