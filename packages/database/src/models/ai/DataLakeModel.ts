@@ -62,6 +62,11 @@ const DataLakeSchema = new mongoose.Schema(
       enum: [...DATA_LAKE_GROUNDING_MODES],
       default: DEFAULT_DATA_LAKE_GROUNDING_MODE,
     },
+    // Chunk passage target (TOKENS) this lake REQUIRES of its member files (see
+    // IDataLake.requiredPassageTokenTarget). A constraint the chunk handler checks, NOT an override
+    // (#1662): a member file whose effective target differs is reported as a conflict, never
+    // re-chunked. No index (tiny collection, only read from a lake already in hand).
+    requiredPassageTokenTarget: { type: Number },
     fileTagPrefix: { type: String, required: true },
     datalakeTag: { type: String, required: true },
     requiredUserTag: { type: String },

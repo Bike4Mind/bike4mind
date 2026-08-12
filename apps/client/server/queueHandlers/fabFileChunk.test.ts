@@ -24,6 +24,8 @@ const h = vi.hoisted(() => ({
   deferFailureIfRetryable: vi.fn(),
   fabFileUpdateOne: vi.fn(() => ({ catch: vi.fn() })),
   selfHostOpenSearchEnabled: vi.fn(() => false),
+  recomputeFileChunkPolicyConflict: vi.fn(async () => null),
+  resolveScopedSetting: vi.fn(async () => ({ value: 512, source: 'platform' })),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -39,6 +41,8 @@ vi.mock('@bike4mind/database', () => ({
     shareable: { findAccessibleById: h.findAccessibleById },
     markFailedIfNotAlready: h.markFailedIfNotAlready,
   },
+  dataLakeRepository: {},
+  scopedSettingsRepository: {},
   FabFile: { updateOne: h.fabFileUpdateOne },
   User: { findById: vi.fn(async () => ({ id: 'u1' })) },
   // Run the callback so chunkFabfile actually executes (and rejects) under test.
@@ -47,7 +51,16 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@bike4mind/services', () => ({
   fabFilesService: { chunkFabfile: h.chunkFabfile },
-  dataLakeService: { resolveSpendLevers: vi.fn(async () => ({ vectorizeChunkBatchSize: 50 })) },
+  // Owner-altitude chunk-policy resolution (#1662). The resolver never throws; default it to the
+  // platform value so the handler proceeds exactly as before these seams existed.
+  scopedSettingsService: {
+    scopeForFileOwner: vi.fn(() => ({ owner: { id: 'u1', type: 'user' } })),
+    resolveScopedSetting: h.resolveScopedSetting,
+  },
+  dataLakeService: {
+    resolveSpendLevers: vi.fn(async () => ({ vectorizeChunkBatchSize: 50 })),
+    recomputeFileChunkPolicyConflict: h.recomputeFileChunkPolicyConflict,
+  },
 }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })) }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: vi.fn() }));
@@ -62,7 +75,10 @@ vi.mock('@bike4mind/common', () => ({
   DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT: 50,
 }));
 vi.mock('@bike4mind/utils', () => ({ BadRequestError: class BadRequestError extends Error {} }));
-vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: { deleteByFabFileId: vi.fn() } }));
+vi.mock('@bike4mind/fab-pipeline', () => ({
+  FabFileChunkSearchIndex: { deleteByFabFileId: vi.fn() },
+  effectiveChunkTokenLimit: vi.fn(() => 512),
+}));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpenSearchEnabled }));
 vi.mock('sst', () => ({
   Resource: new Proxy({}, { get: () => new Proxy({}, { get: () => 'mock' }) }),
@@ -261,16 +277,19 @@ describe('fabFileChunk handler - notification failures are non-fatal (human revi
   });
 });
 
-describe('fabFileChunk handler - passage target passthrough (#1420)', () => {
+describe('fabFileChunk handler - passage target: payload override vs owner-altitude (#1420, #1662)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
-    h.findAccessibleById.mockResolvedValue({ id: 'ff1' });
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', userId: 'u1' });
     h.chunkFabfile.mockResolvedValue([]);
+    h.resolveScopedSetting.mockResolvedValue({ value: 512, source: 'platform' });
   });
 
-  it('forwards a payload chunkSize to chunkFabfile as passageTokenTarget', async () => {
-    // chunkSize was historically transported and silently dropped; it must reach the service.
+  it('forwards an explicit payload chunkSize as passageTokenTarget, overriding owner-altitude policy', async () => {
+    // chunkSize was historically transported and silently dropped (#1420); an explicit value from
+    // the UI reprocess door must still reach the service and win over the resolved policy (#1662).
+    h.resolveScopedSetting.mockResolvedValue({ value: 512, source: 'owner' });
     await dispatch(makeEvent({ ...payload, chunkSize: '750' }), {} as never, mockLogger);
     expect(h.chunkFabfile).toHaveBeenCalledWith(
       expect.anything(),
@@ -279,13 +298,47 @@ describe('fabFileChunk handler - passage target passthrough (#1420)', () => {
     );
   });
 
-  it('omits passageTokenTarget when the payload has no chunkSize (chunker default applies)', async () => {
+  it('resolves the owner-altitude chunk policy when the payload has no chunkSize (#1662)', async () => {
+    // No explicit payload value: the automatic doors now inherit the owner-altitude policy (which
+    // falls through to the platform DefaultChunkSize) instead of a hard-coded chunker default.
+    h.resolveScopedSetting.mockResolvedValue({ value: 999, source: 'owner' });
     await dispatch(makeEvent(payload), {} as never, mockLogger);
     expect(h.chunkFabfile).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ passageTokenTarget: undefined }),
+      expect.objectContaining({ passageTokenTarget: 999 }),
       expect.anything()
     );
+  });
+});
+
+describe('fabFileChunk handler - cross-lake chunk-policy conflict (#1662)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', userId: 'u1', tags: [{ name: 'datalake:sales' }] });
+    h.resolveScopedSetting.mockResolvedValue({ value: 512, source: 'platform' });
+  });
+
+  it('recomputes the conflict with the effective target once the file is chunked', async () => {
+    h.chunkFabfile.mockResolvedValue([{ id: 'c1' }]); // non-empty -> past the zero-chunk early return
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.recomputeFileChunkPolicyConflict).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ff1', userId: 'u1' }),
+      512, // effectiveChunkTokenLimit is mocked to 512
+      expect.objectContaining({ embeddingModel: 'text-embedding-3-small' })
+    );
+  });
+
+  it('does not run the conflict check for a zero-chunk file (nothing to satisfy)', async () => {
+    h.chunkFabfile.mockResolvedValue([]); // zero chunks -> early return before the conflict check
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.recomputeFileChunkPolicyConflict).not.toHaveBeenCalled();
+  });
+
+  it('a conflict-check failure does not fail the chunk run', async () => {
+    h.chunkFabfile.mockResolvedValue([{ id: 'c1' }]);
+    h.recomputeFileChunkPolicyConflict.mockRejectedValue(new Error('lake read failed'));
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
   });
 });
 

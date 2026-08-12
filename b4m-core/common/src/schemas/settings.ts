@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import { CREDITS_PER_USD_COST } from '../pricing';
-import { DEFAULT_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET } from '../constants/chunking';
+import {
+  DEFAULT_PASSAGE_TOKEN_TARGET,
+  MAX_PASSAGE_TOKEN_TARGET,
+  MIN_PASSAGE_TOKEN_TARGET,
+} from '../constants/chunking';
 import {
   LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS,
   LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS,
@@ -2133,9 +2137,26 @@ export const settingsMap = {
       'Passage target in TOKENS for splitting large documents. The DEFAULT matches the chunker; a ' +
       'value stored here overrides it, and a stored value larger than the chunker default makes the ' +
       'UI reprocess path produce coarser chunks than /api/files/reprocess. Coarser chunks measurably ' +
-      'worsen retrieval.',
+      'worsen retrieval. Resolves at file-OWNER altitude: an org/individual owner may pin their own ' +
+      'default above the platform value; a data lake does NOT override it (epic decision 7) - a lake ' +
+      'declares the policy it REQUIRES and a file that cannot satisfy every lake it belongs to is ' +
+      'reported as a conflict rather than silently re-chunked.',
     category: 'AI',
     order: 3,
+    // Chunk policy at file-owner altitude (#1662). Owner-only (never lake): chunks are keyed per
+    // FabFile and shared by every consumer of that file, so a lake-owned policy would rewrite
+    // chunks for non-members and a file in two lakes with different policies would oscillate. The
+    // lake is a CONSTRAINT its consumer checks, not a narrower-wins override the resolver considers.
+    // FabFile carries no organizationId, so in practice the owner (uploading user) rung and the
+    // platform base are the reachable altitudes; Organization is registered for forward-compat.
+    // clamp: model-INDEPENDENT sanity bound only (the resolver clamp is pure and cannot know the
+    // embedding model); the exact per-model embedding-window cap is enforced downstream by the
+    // chunker (effectiveChunkTokenLimit), which reduces an over-large value further if needed.
+    scope: {
+      settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner],
+      clamp: (value: number) =>
+        Math.min(Math.max(Math.floor(value), MIN_PASSAGE_TOKEN_TARGET), MAX_PASSAGE_TOKEN_TARGET),
+    },
   }),
   ModerationEnabled: makeBooleanSetting({
     key: 'ModerationEnabled',

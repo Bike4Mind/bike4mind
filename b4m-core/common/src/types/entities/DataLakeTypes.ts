@@ -87,6 +87,17 @@ export interface IDataLake {
    * LAKE_FIELD_VISIBILITY): a reader gets its EFFECT, never reads the setting.
    */
   groundingMode?: DataLakeGroundingMode;
+  /**
+   * The chunk passage target in TOKENS this lake REQUIRES of its member files (#1662). This is a
+   * CONSTRAINT, not an override: chunk policy is resolved at file-OWNER altitude (see the scoped
+   * `DefaultChunkSize` setting), because chunks are keyed per FabFile and shared by every consumer
+   * of that file. A file whose effective chunk target does not equal this - including a file tagged
+   * into two lakes whose requirements disagree - is REPORTED as a conflict (see IFabFile.
+   * chunkPolicyConflict), never silently re-chunked to satisfy one lake at another's or a
+   * non-member's expense. Absent/`null` = the lake imposes no chunk requirement (the common case);
+   * `null` is the explicit clear sentinel written by updateDataLake, undefined is never-set.
+   */
+  requiredPassageTokenTarget?: number | null;
   /** Tag prefix for all files in this data lake, must end with ":" (e.g. "acme:") */
   fileTagPrefix: string;
   /** Auto-computed meta-tag: "datalake:<slug>" */
