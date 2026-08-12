@@ -143,8 +143,35 @@ export interface EmbeddingLabeledFile {
  * rest on positive evidence, so an unknown label is always given the benefit of the doubt and the
  * chunk is scored (and counted under `unlabeled`).
  *
- * No case folding: every id in the embedding-model enums is already canonical lowercase, so
- * folding would only mask a genuinely malformed label.
+ * No case folding, and the exact match is LOAD-BEARING rather than incidental - so it is worth
+ * being precise about what actually backs it, because the embedding-model enums do not. The
+ * `FabFile.embeddingModel` field this reads is a bare `String` with no `enum` and no `lowercase`
+ * (packages/database FabFileSchema), so canonical-lowercase storage rests on the write path, in
+ * two halves:
+ *  - the QUERY model can only be a canonical id: `defaultEmbeddingModel` is declared with an
+ *    `options` list, which makeStringSetting turns into a membership check that the settings
+ *    update route runs on every admin write.
+ *  - the STORED label has exactly one writer - chunkFabfile (fabFileService/chunk.ts) - whose
+ *    `chunkFileSchema` validates it against SupportedEmbeddingModelSchema before the file is
+ *    saved. Chunk labels are stamped from that same validated value by the vectorize handler and by
+ *    the chunk-model backfill script (packages/scripts/datalake).
+ *
+ * Folding here would therefore mask a malformed label without buying anything, and a malformed
+ * label is exactly what should stay visible. An unrecognized id also already fails CLOSED one
+ * layer down: fab-pipeline keys its Atlas index registry with a Map, so an unknown model yields
+ * no index target and the search degrades to the brute-force scan instead of querying a bogus one.
+ *
+ * CANONICAL LIST - three other readers compare this same field to the query's as an exact string,
+ * and each holds its OWN copy of the rule rather than calling this function:
+ *  - the corpus defer gate (llm/ChatCompletionProcess.ts),
+ *  - isFabFileCitable (apps/client/server/memory/lakeSourceReachability.ts),
+ *  - the Atlas `$vectorSearch` `filter: { embeddingModel }` clause (packages/database
+ *    FabFileChunkRepository.vectorSearch).
+ *
+ * So relaxing the comparison HERE does not propagate to them - it makes the four DIVERGE, which is
+ * the actual hazard: the rule has to move in lockstep across all four or not at all. The first two
+ * are also deliberately STRICTER than this predicate (they count an unlabeled file as unreachable
+ * where this one scores it), and their own comments explain why the three must not be consolidated.
  */
 export function isForeignEmbeddingModel(parentModel: string | null | undefined, queryModel: string): boolean {
   const parent = parentModel?.trim();

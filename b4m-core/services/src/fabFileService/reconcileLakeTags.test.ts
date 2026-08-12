@@ -362,11 +362,12 @@ describe('reconcileLakeTags', () => {
     });
 
     // MEMBERSHIP needs no gate (the read-side predicate grants it purely on the tag), but the
-    // stats recompute also flips a draft lake to active (recomputeLakeStats -> activateIfDraft) -
-    // a one-way publication change a mere file-share recipient must not be able to force onto a
-    // lake they do not manage.
-    it('does not recompute stats on a prefix-arm join by an actor who cannot manage the lake', async () => {
-      const adapters = withPrefixLakes([], [lake({ createdByUserId: 'owner' })]);
+    // stats recompute's activation side effect also flips a draft lake to active - a one-way
+    // publication change a mere file-share recipient must not be able to force onto a lake they
+    // do not manage. Stats still get corrected (so they don't drift forever), just never the
+    // activation.
+    it('corrects stats but never activates on a prefix-arm join by an actor who cannot manage the lake', async () => {
+      const adapters = withPrefixLakes([], [lake({ createdByUserId: 'owner', status: 'draft' })]);
       adapters.db.fabFiles.findById = vi.fn().mockResolvedValue({ id: 'f1', userId: 'owner', tags: [] });
 
       const result = await reconcileLakeTags(
@@ -378,7 +379,47 @@ describe('reconcileLakeTags', () => {
       );
       await result.commit();
 
-      expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
+      expect(adapters.db.dataLakes.activateIfDraft).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('reconcileLakeTags - static-registry prefix (e.g. opti:), no owning lake document', () => {
+  it('refuses a non-admin newly applying a registry-prefixed tag', async () => {
+    const adapters = makeAdapters([]);
+
+    await expect(run(adapters, [], [tag('opti:report')])).rejects.toThrow(/only an admin can change this data lake/i);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('allows an admin to apply a registry-prefixed tag', async () => {
+    const adapters = makeAdapters([]);
+
+    const result = await reconcileLakeTags(
+      { userId: 'admin', isAdmin: true },
+      'f1',
+      [],
+      [tag('opti:report')],
+      adapters as any
+    );
+
+    expect(result.tagsToPersist).toEqual([tag('opti:report')]);
+  });
+
+  it('does not block an unrelated edit to a file that already carries a legacy registry-prefixed tag', async () => {
+    const adapters = makeAdapters([tag('opti:legacy')]);
+
+    const result = await run(adapters, ['opti:legacy'], [tag('opti:legacy'), tag('unrelated')]);
+
+    expect(result.tagsToPersist).toEqual(expect.arrayContaining([tag('opti:legacy'), tag('unrelated')]));
+  });
+
+  it('refuses a non-admin whole-array write that keeps a legacy tag but adds a NEW registry-prefixed one', async () => {
+    const adapters = makeAdapters([tag('opti:legacy')]);
+
+    await expect(run(adapters, ['opti:legacy'], [tag('opti:legacy'), tag('opti:new')])).rejects.toThrow(
+      /only an admin can change this data lake/i
+    );
   });
 });

@@ -116,10 +116,12 @@ describe('reconcileLakeTags (via updateFabFile) against real Mongo', () => {
   }, 30000);
 
   // A prefix-arm JOIN needs no manage-rights gate on the membership itself (the read-side
-  // predicate grants it purely on the tag), but recomputeLakeStats also flips a draft lake to
-  // active - a one-way publication change. A shared editor tagging the OWNER's file with the
-  // OWNER's own lake prefix must not be able to force-publish a lake they have no relationship to.
-  it('does not publish a draft lake when a shared editor triggers the join', async () => {
+  // predicate grants it purely on the tag), but recomputeLakeStats's activation side effect
+  // also flips a draft lake to active - a one-way publication change. A shared editor tagging
+  // the OWNER's file with the OWNER's own lake prefix must not be able to force-publish a lake
+  // they have no relationship to. Stats still get corrected (real aggregate, not a mock) so they
+  // don't drift until some other door happens to touch this lake again.
+  it('corrects a draft lake stats without publishing it when a shared editor triggers the join', async () => {
     const lake = await makeLake({ status: 'draft', fileCount: 0, totalSizeBytes: 0 });
     const file = await makeFile([]);
     const editor = { id: editorId, isAdmin: false } as any;
@@ -132,7 +134,7 @@ describe('reconcileLakeTags (via updateFabFile) against real Mongo', () => {
 
     const persistedLake = await DataLakeModel.findById(lake.id);
     expect(persistedLake?.status).toBe('draft');
-    expect(persistedLake?.fileCount).toBe(0);
+    expect(persistedLake?.fileCount).toBe(1);
   }, 30000);
 
   it('publishes a draft lake when the OWNER triggers the same join', async () => {
@@ -199,7 +201,7 @@ describe('toggleTags against real Mongo', () => {
     expect((persistedFile?.tags ?? []).map(t => t.name)).toEqual(['lk:invoices']);
   }, 30000);
 
-  it('does not publish a draft lake when a shared editor triggers the join', async () => {
+  it('corrects a draft lake stats without publishing it when a shared editor triggers the join', async () => {
     const lake = await makeLake({ status: 'draft', fileCount: 0, totalSizeBytes: 0 });
     const file = await makeFile([]);
 
@@ -218,6 +220,6 @@ describe('toggleTags against real Mongo', () => {
 
     const persistedLake = await DataLakeModel.findById(lake.id);
     expect(persistedLake?.status).toBe('draft');
-    expect(persistedLake?.fileCount).toBe(0);
+    expect(persistedLake?.fileCount).toBe(1);
   }, 30000);
 });

@@ -2516,6 +2516,179 @@ describe('history windowing edge cases', () => {
   });
 });
 
+describe('array-content fabMessages that carry no image block', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const warnings = () => mockLogger.warn.mock.calls.map(call => String(call[0])).join('\n');
+
+  it('delivers a text-only array-content message to the model (fails against the old two-filter split)', async () => {
+    const fab: IMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'MARKER-TEXT-BLOCK from the caller' }] }];
+
+    const result = await buildAndSortMessages(
+      [],
+      fab,
+      [{ role: 'user', content: 'ASK-MARKER' }],
+      10000,
+      {},
+      5,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    const blocks = result.flatMap(m => (Array.isArray(m.content) ? m.content : []));
+    expect(
+      blocks.some(block => block.type === 'text' && (block as { text: string }).text.includes('MARKER-TEXT-BLOCK'))
+    ).toBe(true);
+    // Assembled ahead of the prompt, like any other content message.
+    const contentIndex = result.findIndex(m => Array.isArray(m.content));
+    const promptIndex = result.findIndex(m => m.content === 'ASK-MARKER');
+    expect(contentIndex).toBeGreaterThanOrEqual(0);
+    expect(contentIndex).toBeLessThan(promptIndex);
+    expect(mockLogger.warn).not.toHaveBeenCalled();
+  });
+
+  it('drops a tool_result-bearing array-content message with a warning naming what and why', async () => {
+    const fab: IMessage[] = [
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_x', content: 'TOOL-PAYLOAD-DO-NOT-LOG' }] },
+    ];
+
+    const result = await buildAndSortMessages(
+      [],
+      fab,
+      [{ role: 'user', content: 'ASK-MARKER' }],
+      10000,
+      {},
+      5,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    const blocks = result.flatMap(m => (Array.isArray(m.content) ? m.content : []));
+    expect(blocks.some(block => block.type === 'tool_result')).toBe(false);
+    expect(warnings()).toContain('tool_result');
+    expect(warnings()).toContain('Dropped 1');
+    expect(warnings()).toContain('message 1');
+    expect(warnings()).not.toContain('TOOL-PAYLOAD-DO-NOT-LOG');
+    expect(result.some(m => m.content === 'ASK-MARKER')).toBe(true);
+  });
+
+  it('drops a mixed text+tool_result message whole, not just the tool_result block', async () => {
+    const fab: IMessage[] = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'PARTNER-TEXT' },
+          { type: 'tool_result', tool_use_id: 'toolu_y', content: 'irrelevant' },
+        ],
+      },
+    ];
+
+    const result = await buildAndSortMessages([], fab, [], 10000, {}, 5, mockLogger as any, createMockTokenizer());
+
+    const text = result
+      .flatMap(m => (Array.isArray(m.content) ? m.content : []))
+      .filter(block => block.type === 'text')
+      .map(block => (block as { text: string }).text)
+      .join('');
+    expect(text).not.toContain('PARTNER-TEXT');
+    expect(warnings()).toContain('text');
+    expect(warnings()).toContain('tool_result');
+  });
+
+  it('keeps image priority when an image block shares an array with a tool_result block', async () => {
+    const fab: IMessage[] = [
+      {
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } },
+          { type: 'tool_result', tool_use_id: 'toolu_z', content: 'irrelevant' },
+        ],
+      },
+    ];
+
+    const result = await buildAndSortMessages([], fab, [], 10000, {}, 5, mockLogger as any, createMockTokenizer());
+
+    // Classified as an image message (not dropped as "undeliverable blocks") - the image-priority
+    // check runs before the allowlist/drop check. The tool_result block riding alongside it is then
+    // stripped by ensureToolPairingIntegrity's orphan cleanup at the very end (no tool_use exists
+    // anywhere in this call to pair it with), which is correct and separate from classification.
+    const imageMessage = result.find(
+      m => Array.isArray(m.content) && m.content.some(block => (block as { type?: string }).type === 'image')
+    );
+    expect(imageMessage).toBeDefined();
+    expect(warnings()).not.toContain('Dropped');
+  });
+
+  it('drops empty array content with a warning, never as a blank message', async () => {
+    const fab: IMessage[] = [{ role: 'user', content: [] }];
+
+    const result = await buildAndSortMessages([], fab, [], 10000, {}, 5, mockLogger as any, createMockTokenizer());
+
+    expect(result.every(m => !Array.isArray(m.content) || m.content.length > 0)).toBe(true);
+    expect(warnings()).toContain('Ignored 1');
+    expect(warnings()).toContain('empty content array');
+  });
+
+  it('drops a thinking-only array-content message with a named warning', async () => {
+    const fab: IMessage[] = [{ role: 'user', content: [{ type: 'thinking', thinking: 'internal reasoning' }] }];
+
+    const result = await buildAndSortMessages([], fab, [], 10000, {}, 5, mockLogger as any, createMockTokenizer());
+
+    const blocks = result.flatMap(m => (Array.isArray(m.content) ? m.content : []));
+    expect(blocks.some(block => block.type === 'thinking')).toBe(false);
+    expect(warnings()).toContain('thinking');
+    expect(warnings()).toContain('Dropped 1');
+  });
+
+  it('delivers two qualifying text-only array-content messages in order', async () => {
+    const fab: IMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'MARKER-A' }] },
+      { role: 'user', content: [{ type: 'text', text: 'MARKER-B' }] },
+    ];
+
+    const result = await buildAndSortMessages([], fab, [], 10000, {}, 5, mockLogger as any, createMockTokenizer());
+
+    const text = (m: IMessage) => (Array.isArray(m.content) ? ((m.content[0] as { text?: string }).text ?? '') : '');
+    const indexA = result.findIndex(m => text(m).includes('MARKER-A'));
+    const indexB = result.findIndex(m => text(m).includes('MARKER-B'));
+    expect(indexA).toBeGreaterThanOrEqual(0);
+    expect(indexB).toBeGreaterThanOrEqual(0);
+    expect(indexA).toBeLessThan(indexB);
+  });
+
+  it('ignores a non-user-role fabMessage with a named warning (the split-filter hole beyond user array content)', async () => {
+    const fab: IMessage[] = [{ role: 'assistant', content: 'ROLE-MARKER should never reach the model this way' }];
+
+    const result = await buildAndSortMessages([], fab, [], 10000, {}, 5, mockLogger as any, createMockTokenizer());
+
+    expect(result.some(m => typeof m.content === 'string' && m.content.includes('ROLE-MARKER'))).toBe(false);
+    expect(warnings()).toContain('Ignored 1');
+    expect(warnings()).toContain('role assistant');
+  });
+
+  it('does not throw on an untyped content block', async () => {
+    const fab: IMessage[] = [{ role: 'user', content: [{}] as any }];
+
+    await expect(
+      buildAndSortMessages([], fab, [], 10000, {}, 5, mockLogger as any, createMockTokenizer())
+    ).resolves.toBeDefined();
+    expect(warnings()).toContain('untyped');
+    expect(warnings()).toContain('Dropped 1');
+  });
+
+  it('does not throw on a null content block', async () => {
+    const fab: IMessage[] = [{ role: 'user', content: [null] as any }];
+
+    await expect(
+      buildAndSortMessages([], fab, [], 10000, {}, 5, mockLogger as any, createMockTokenizer())
+    ).resolves.toBeDefined();
+    expect(warnings()).toContain('untyped');
+    expect(warnings()).toContain('Dropped 1');
+  });
+});
+
 // A file cut to fit must say so. Without this the model treats the last surviving row as the end of
 // the file and answers about it confidently - QA hit exactly that, reading a mid-file row as the
 // final row of a 416-row CSV.

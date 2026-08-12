@@ -2,7 +2,11 @@ import { DATALAKE_TAG_PREFIX, DATALAKE_TAG_STRENGTH } from '@bike4mind/common';
 import type { IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from '../dataLakeService/assertLakeAccess';
-import { canManageLake, extractDataLakeMetaTags } from '../dataLakeService/authorizeLakeWrite';
+import {
+  assertCanWriteStaticRegistryTags,
+  canManageLake,
+  extractDataLakeMetaTags,
+} from '../dataLakeService/authorizeLakeWrite';
 import { reconcileDataLakeFallbackTags } from '../dataLakeService/fallbackLakeTags';
 import { removeFileFromLake, type MembershipActor, type MembershipLake } from '../dataLakeService/lakeMembership';
 import { findPrefixArmChanges } from '../dataLakeService/prefixArmMembership';
@@ -74,6 +78,10 @@ const isMetaTag = (name: string): boolean => name.toLowerCase().startsWith(DATAL
  * Everything above is keyed by `datalake:*` META-TAGS. A lake a file belongs to ONLY via a
  * `fileTagPrefix` content tag - no meta-tag ever involved - is a second, independent join/leave
  * source evaluated after the tagger runs; see the `findPrefixArmChanges` call below for that half.
+ *
+ * A THIRD, unrelated concern sits ahead of all of it: `ordinaryTags` is also checked against the
+ * static-registry namespace (e.g. `opti:`), which has no owning lake document at all and so is
+ * invisible to both mechanisms above.
  */
 export const reconcileLakeTags = async (
   actor: MembershipActor,
@@ -82,7 +90,16 @@ export const reconcileLakeTags = async (
   desiredTags: { name: string; strength: number }[],
   { db, logger, fileOwnerUserId }: ReconcileLakeTagsAdapters
 ): Promise<LakeTagReconciliation> => {
+  // `primaryTag` (a separate string field on the route, gated there against `datalake:*` meta-tags
+  // alongside `tags`) is deliberately absent from `ordinaryTags`: no lake read arm consults
+  // `primaryTag`, so it cannot carry static-registry membership the way a `tags` entry can.
   const ordinaryTags = desiredTags.filter(tag => !isMetaTag(tag.name));
+  // Gate only NEWLY-appearing static-registry tags, not ones already stored: a whole-array write
+  // must not brick an unrelated edit to a file that already illegitimately carries a legacy
+  // registry-prefixed tag (predating this gate). Mirrors toggleTags' equivalent gate, so the two
+  // whole-array/element-level doors cannot disagree about what a "join" is.
+  const newlyAppearingOrdinaryNames = ordinaryTags.map(tag => tag.name).filter(name => !currentTagNames.includes(name));
+  assertCanWriteStaticRegistryTags(actor, newlyAppearingOrdinaryNames);
   const desiredKeys = new Set(extractDataLakeMetaTags(desiredTags.map(tag => tag.name)));
   const currentKeys = new Set(extractDataLakeMetaTags(currentTagNames));
 
@@ -165,14 +182,18 @@ export const reconcileLakeTags = async (
   leaves.push(...prefixArmLeaves.map(l => l.lake));
   // The mirror case: a write that newly satisfies a lake's prefix arm is automatic MEMBERSHIP
   // (today's accepted model for content tags - the read-side predicate grants it purely on the
-  // tag, with no permission check either). But recomputeLakeStats's side effect is stronger than
-  // membership: it also flips a draft lake to active (recomputeLakeStats -> activateIfDraft),
-  // a one-way, publication-visibility change. `owner` is the FILE's owner, not the acting user -
-  // a caller merely SHARED on that file (findAccessibleById admits a read/write share) could
-  // otherwise force-publish a lake they have no relationship to. Gate the stats/activation side
-  // effect on canManageLake; an unmanaged join just leaves the recompute for later rather than
-  // silently publishing someone else's unfinished lake.
-  joins.push(...prefixArmJoins.filter(j => canManageLake(j.lake, actor)).map(j => j.lake));
+  // tag, with no permission check either). But recomputeLakeStats's activation side effect is
+  // stronger than membership: it also flips a draft lake to active (activateIfDraft), a one-way,
+  // publication-visibility change. `owner` is the FILE's owner, not the acting user - a caller
+  // merely SHARED on that file (findAccessibleById admits a read/write share) could otherwise
+  // force-publish a lake they have no relationship to. Gate the ACTIVATION on canManageLake; an
+  // unmanaged join still gets its stats corrected via statsOnlyJoins below (see commit()), rather
+  // than drifting until some other door happens to touch the same lake.
+  const statsOnlyJoins: MembershipLake[] = [];
+  for (const j of prefixArmJoins) {
+    if (canManageLake(j.lake, actor)) joins.push(j.lake);
+    else statsOnlyJoins.push(j.lake);
+  }
 
   // Force-carried, mirroring metaTagsToPersist above: removeFileFromLake checks membership
   // against the STORED document, so if the persisted array already dropped every prefix tag it
@@ -210,8 +231,14 @@ export const reconcileLakeTags = async (
       // Joins need no write here: the caller has already persisted the canonical meta-tag (or,
       // for a prefix-arm join, the qualifying content tag) as part of `tagsToPersist`, and their
       // gate (where one applies) ran above, before that write. They still need stats.
+      const recomputed = new Set<string>();
       for (const lake of [...leaves, ...joins]) {
         await recomputeLakeStats(lake, { db });
+        recomputed.add(lake.id);
+      }
+      // An unmanaged prefix-arm join: stats only, activation stays gated - see the comment above.
+      for (const lake of statsOnlyJoins) {
+        if (!recomputed.has(lake.id)) await recomputeLakeStats(lake, { db }, { skipActivation: true });
       }
     },
   };

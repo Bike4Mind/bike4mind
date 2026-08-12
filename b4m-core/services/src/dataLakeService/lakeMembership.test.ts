@@ -132,6 +132,29 @@ describe('removeFileFromLake', () => {
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
   });
 
+  it('refuses the lake creator removing a prefix-only file merely shared with them (#1040)', async () => {
+    // Same code path as the admin test above - ownsFile never reads file.users/file.groups - but
+    // spelled out for #1040's literal scenario: the ACTOR here is the lake's own creator (passes
+    // canManageLake trivially), and the file's owner shared it with them read/write. A share is
+    // not ownership, so the outcome is identical to the admin case.
+    const adapters = {
+      db: {
+        fabFiles: {
+          findById: vi.fn().mockResolvedValue({
+            id: 'f1',
+            userId: 'victim',
+            users: [{ userId: 'owner', permissions: ['read', 'write'] }],
+            tags: [{ name: 'lk:invoices', strength: 1 }],
+          }),
+          pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
+        },
+      },
+    };
+
+    await expect(removeFileFromLake(owner, lake(), 'f1', adapters)).rejects.toThrow(/not found in this data lake/i);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
   it('strips only the meta-tag, not a bystander prefix-matching tag, on a file the creator does not own', async () => {
     // Admitted to inLake via the meta-tag arm only (e.g. an admin's addFileToLake added a
     // stranger's file) - the read path's prefix arm never admitted this file since it is not

@@ -581,9 +581,15 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
 
       // Session switch completed - files will be restored via useEffect
 
-      // Update the user's last notebook ID if it's a different session
+      // Fire-and-forget on purpose: lastNotebookId feeds API chat routing (getSessionId in
+      // pages/api/chat.ts), session resumption, and Slack notebook resolution (notebook-manager
+      // in b4m-core/slack, which only ever reads it - a lost write is repaired by the next
+      // web-app message, never by a Slack one). Awaiting would hold up the switch, and a toast
+      // would interrupt a path the user is actively navigating.
       if (sessionId && currentUser.lastNotebookId !== sessionId) {
-        updateUserToServer(currentUser.id, { lastNotebookId: sessionId });
+        updateUserToServer(currentUser.id, { lastNotebookId: sessionId }).catch(error => {
+          console.error('[SessionsContext] Failed to persist lastNotebookId to server', error);
+        });
         queryClient.invalidateQueries({ queryKey: ['sessions', sessionId] });
       }
     },

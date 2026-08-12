@@ -9,7 +9,7 @@ import {
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from '../dataLakeService/assertLakeAccess';
-import { canManageLake } from '../dataLakeService/authorizeLakeWrite';
+import { assertCanWriteStaticRegistryTags, canManageLake } from '../dataLakeService/authorizeLakeWrite';
 import { createDataLakeFallbackTagger } from '../dataLakeService/fallbackLakeTags';
 import { addFileToLake, removeFileFromLake, type MembershipLake } from '../dataLakeService/lakeMembership';
 import {
@@ -125,6 +125,10 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
   const prefixJoinsByFile = new Map<string, PrefixArmChange[]>();
   // Short-circuits the whole thing (no query) when nothing requested could carry a prefix arm -
   // every usable prefix ends in ':' (see `prefixArmTagNames`), and a meta-tag never matches one.
+  // The static-registry gate below rides on this same condition: normalizeTagPrefix requires a
+  // trailing ':' too, so a registry-prefixed tag always contains one - but nothing enforces that
+  // coupling, so narrowing this condition for the prefix-arm case alone would silently disable
+  // the registry gate as well.
   if (tags.some(tag => !isDataLakeTag(tag) && tag.includes(':'))) {
     const candidateLakes = await loadPrefixArmCandidateLakes(
       fabFiles.map(f => f.userId),
@@ -134,6 +138,11 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
       fabFiles.map(async file => {
         const currentTagNames = storedTagNames(file);
         const resultingTagNames = predictToggleResult(currentTagNames, tags);
+        // Gate only tags NEWLY becoming present: a non-admin toggling OFF a legacy tag they
+        // already carry under a registry prefix (predating this gate) must still be able to,
+        // matching reconcileLakeTags' whole-array counterpart.
+        const newlyAppearing = resultingTagNames.filter(name => !currentTagNames.includes(name));
+        assertCanWriteStaticRegistryTags(actor, newlyAppearing);
         const { leaves, joins } = await findPrefixArmChanges(
           { fileOwnerUserId: file.userId, currentTagNames, resultingTagNames },
           { db, candidateLakes }
@@ -155,6 +164,13 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
   const touchedTags = new Set<string>();
   const lakesByTag = new Map<string, Promise<MembershipLake>>();
   const touchedLakes = new Map<string, MembershipLake>();
+  // Membership via a prefix-arm join is automatic (the read-side predicate grants it purely on
+  // the tag, no permission check), but recomputeLakeStats's activation side effect is gated - see
+  // finalizePrefixArmLeaves. An unmanaged join lands here instead of touchedLakes, so its stats
+  // still get corrected (skipping activation) rather than drifting forever. Checked against
+  // touchedLakes before recomputing, so a lake this actor DOES manage elsewhere in the same
+  // batch isn't redundantly recomputed a second time with activation suppressed.
+  const statsOnlyLakes = new Map<string, MembershipLake>();
   // One tagger for the whole request: it memoizes the lake lookup per meta-tag, so a bulk toggle
   // into one lake costs a single extra read, not one per file.
   const applyFallbackTags = createDataLakeFallbackTagger({ db, logger });
@@ -183,7 +199,6 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
 
   const toggleLakeMembership = async (file: IFabFileDocument, tag: string): Promise<void> => {
     const lake = await resolveLake(tag);
-    touchedLakes.set(lake.id, lake);
     // Direction is decided on an EXACT match of the lake's canonical meta-tag - the same test
     // removeFileFromLake applies, so the two cannot disagree about which way to go. Two
     // consequences, both deliberate: a file carrying only the lake's prefixed tag gains the
@@ -193,15 +208,21 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
     const isMember = storedTagNames(file).includes(lake.datalakeTag);
     if (!isMember) {
       await addFileToLake(actor, lake, file.id, { db });
-      return;
+    } else {
+      try {
+        await removeFileFromLake(actor, lake, file.id, { db });
+      } catch (error) {
+        // A concurrent removal landing between the read above and this write leaves nothing to
+        // remove, which is the state the caller asked for anyway.
+        if (!(error instanceof NotFoundError)) throw error;
+      }
     }
-    try {
-      await removeFileFromLake(actor, lake, file.id, { db });
-    } catch (error) {
-      // A concurrent removal landing between the read above and this write leaves nothing to
-      // remove, which is the state the caller asked for anyway.
-      if (!(error instanceof NotFoundError)) throw error;
-    }
+    // Touched only once the write actually lands (or hits the benign race above): both
+    // addFileToLake and removeFileFromLake throw their manage-rights gate's BadRequestError
+    // before any write, and that throw exits this function before reaching here - so a rejected
+    // toggle never triggers recomputeLakeStats's activateIfDraft side effect on a lake this actor
+    // cannot manage. The same treatment the prefix-arm join below already gets.
+    touchedLakes.set(lake.id, lake);
   };
 
   const toggleOrdinaryTag = async (file: IFabFileDocument, tag: string): Promise<void> => {
@@ -231,6 +252,9 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
    */
   const finalizePrefixArmLeaves = async (file: IFabFileDocument): Promise<void> => {
     for (const { lake } of prefixLeavesByFile.get(file.id) ?? []) {
+      // Touched before the write, unlike toggleLakeMembership's meta-tag leave above - safe here
+      // only because every prefix-arm leave's canManageLake gate already ran for the WHOLE batch
+      // up front (see the loop above resolving prefixLeavesByFile), before this ever runs.
       touchedLakes.set(lake.id, lake);
       try {
         await removeFileFromLake(actor, lake, file.id, { db });
@@ -242,13 +266,15 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
       }
     }
     // MEMBERSHIP needs no gate here (the read-side predicate grants it purely on the tag), but
-    // recomputeLakeStats's side effect is stronger: it also flips a draft lake to active
-    // (activateIfDraft), a one-way, publication-visibility change. `file.userId` is the file's
-    // OWNER, not necessarily this actor - `findAllAccessibleByIds` admits a read/write share, so
-    // an unrelated sharee could otherwise force-publish a lake they have no relationship to.
-    // Gated on canManageLake; an unmanaged join just leaves the recompute for later.
+    // recomputeLakeStats's activation side effect is stronger: it also flips a draft lake to
+    // active (activateIfDraft), a one-way, publication-visibility change. `file.userId` is the
+    // file's OWNER, not necessarily this actor - `findAllAccessibleByIds` admits a read/write
+    // share, so an unrelated sharee could otherwise force-publish a lake they have no
+    // relationship to. Gated on canManageLake; an unmanaged join still gets its stats corrected
+    // via statsOnlyLakes, just never the activation.
     for (const { lake } of prefixJoinsByFile.get(file.id) ?? []) {
       if (canManageLake(lake, actor)) touchedLakes.set(lake.id, lake);
+      else statsOnlyLakes.set(lake.id, lake);
     }
   };
 
@@ -314,6 +340,9 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
 
   for (const lake of touchedLakes.values()) {
     await recomputeLakeStats(lake, { db });
+  }
+  for (const lake of statsOnlyLakes.values()) {
+    if (!touchedLakes.has(lake.id)) await recomputeLakeStats(lake, { db }, { skipActivation: true });
   }
 
   // Lake meta-tags are deliberately absent from this set: they are lake membership, not entries in

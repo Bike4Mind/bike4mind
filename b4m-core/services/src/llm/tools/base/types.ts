@@ -84,7 +84,10 @@ export interface ToolContext {
     >;
     users?: Pick<IUserRepository, 'findById'>;
     projects?: IProjectRepository;
-    dataLakes?: Pick<IDataLakeRepository, 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements'>;
+    dataLakes?: Pick<
+      IDataLakeRepository,
+      'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag'
+    >;
     /** Optional skill repository - present when the host wires `/api/skills`. Used by the `skill` LLM tool. */
     skills?: Pick<ISkillRepository, 'findAccessibleByNameForUser' | 'listAccessibleInvocableForUser'>;
     /**

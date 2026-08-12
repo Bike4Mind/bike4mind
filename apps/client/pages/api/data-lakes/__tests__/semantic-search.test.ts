@@ -76,6 +76,9 @@ vi.mock('@bike4mind/services', async () => ({
       await import('../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch')
     ).emptyEmbeddingMismatchReport,
     resolveSearchBudgets: mockResolveSearchBudgets,
+    // A distinct, identifiable value (not a real adapter) so a test can assert reference
+    // equality without depending on openSearchChunkAdapter's own implementation.
+    openSearchChunkAdapter: 'OPENSEARCH_CHUNK_ADAPTER_MARKER',
     emptyScanAccounting: (b?: { maxFiles?: number; maxChunks?: number }) => ({
       truncated: false,
       fileBudgetHit: false,
@@ -135,6 +138,7 @@ const makeRes = () => {
 };
 
 const searchParams = () => mockSemanticSearch.mock.calls[0][0];
+const searchAdapters = () => mockSemanticSearch.mock.calls[0][1];
 
 describe('POST /api/data-lakes/semantic-search lake scoping', () => {
   beforeEach(() => {
@@ -187,6 +191,24 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
     await handler(makeReq({ query: 'onboarding' }), makeRes());
 
     expect(searchParams().vectorSearchEnabled).toBe(false);
+  });
+
+  it('wires the self-host OpenSearch adapter when the backend and flag are on', async () => {
+    const originalEnv = { ...process.env };
+    process.env.B4M_SELF_HOST = 'true';
+    process.env.B4M_SELF_HOST_OPENSEARCH = 'true';
+    process.env.OPENSEARCH_ENDPOINT = 'localhost:9200';
+    try {
+      await handler(makeReq({ query: 'onboarding' }), makeRes());
+      expect(searchAdapters().vectorIndex).toBe('OPENSEARCH_CHUNK_ADAPTER_MARKER');
+    } finally {
+      process.env = originalEnv;
+    }
+  });
+
+  it('never wires the OpenSearch adapter on the default (Atlas) backend', async () => {
+    await handler(makeReq({ query: 'onboarding' }), makeRes());
+    expect(searchAdapters().vectorIndex).toBeUndefined();
   });
 
   it('falls back to ada-002 when the admin setting is unset or no longer supported', async () => {

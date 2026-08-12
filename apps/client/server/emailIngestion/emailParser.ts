@@ -6,6 +6,7 @@ import {
   ingestedEmailRepository,
   fabFileRepository,
   adminSettingsRepository,
+  dataLakeRepository,
   connectDB,
 } from '@bike4mind/database';
 import { Resource } from 'sst';
@@ -228,6 +229,7 @@ export const dispatch: SQSHandler = async (event: SQSEvent) => {
               ingestedEmails: ingestedEmailRepository,
               fabFiles: fabFileRepository,
               adminSettings: adminSettingsRepository,
+              dataLakes: dataLakeRepository,
             },
             storage: storageAdapter,
             queue: queueAdapter, // Triggers AI analysis after ingestion

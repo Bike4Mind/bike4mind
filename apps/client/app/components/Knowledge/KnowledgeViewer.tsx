@@ -1412,12 +1412,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
                         backgroundColor: theme.palette.primary.softActiveBg,
                       }),
                     })}
-                    onClick={() =>
-                      setSessionLayout({
-                        layout: layout === 'floatingChat' ? 'hide' : 'floatingChat',
-                        previousLayout: layout !== 'floatingChat' ? layout : undefined,
-                      })
-                    }
+                    onClick={() => setSessionLayout({ layout: layout === 'floatingChat' ? 'hide' : 'floatingChat' })}
                   >
                     <OpenInNewIcon sx={{ fontSize: 16 }} />
                   </IconButton>

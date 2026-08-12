@@ -6,7 +6,7 @@ import {
   extensionFromMimeType,
   isImageServeable,
 } from '@bike4mind/common';
-import { FabFile, User, withTransaction, adminSettingsRepository } from '@bike4mind/database';
+import { FabFile, User, withTransaction, adminSettingsRepository, dataLakeRepository } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -59,6 +59,7 @@ const handler = baseApi()
               adminSettings: adminSettingsRepository,
               fabFiles: FabFile,
               users: User,
+              dataLakes: dataLakeRepository,
             },
             storage: {
               upload: async (filepath, _content, option) => {

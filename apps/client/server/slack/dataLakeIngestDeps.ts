@@ -62,6 +62,7 @@ export function buildSlackLakeIngestDeps(args: {
               adminSettings: adminSettingsRepository,
               fabFiles: FabFile,
               users: User,
+              dataLakes: dataLakeRepository,
             },
             storage: {
               upload: async (filepath, content, option) => {

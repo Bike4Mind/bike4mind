@@ -61,6 +61,28 @@ export interface IAuthSession {
 
 export interface IAuthSessionDocument extends IAuthSession, IMongoDocument {}
 
+/**
+ * Client-safe projection of an AuthSession for the active-sessions UI (GET /api/users/me/sessions).
+ * Deliberately omits every secret (`refreshTokenHash`, `previousRefreshTokenHash`) - only fields a
+ * user may see about their own devices. Dates are ISO strings (JSON transport). `current` flags the
+ * session making the request so the UI can label "This device" and hide its self-revoke button.
+ */
+export interface IActiveSessionDto {
+  sid: string;
+  createdVia: AuthSessionCreatedVia;
+  device?: IAuthSessionDevice;
+  /** Last time this session refreshed its token - approximates "last active". ISO string. */
+  lastUsedAt: string;
+  /** When the session was created (sign-in time). ISO string. */
+  createdAt: string;
+  /** When the session (and its refresh cookie) expires. ISO string. */
+  expiresAt: string;
+  /** True when this session was created by an admin impersonating the user. */
+  impersonated: boolean;
+  /** True for the session that issued the current request. */
+  current: boolean;
+}
+
 export interface IAuthSessionRepository extends IBaseRepository<IAuthSessionDocument> {
   findBySid: (sid: string) => Promise<IAuthSessionDocument | null>;
   /** Active == not revoked and not yet expired. Backs the active-sessions UI. */

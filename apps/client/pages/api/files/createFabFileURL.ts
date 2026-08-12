@@ -1,4 +1,4 @@
-import { adminSettingsRepository, FabFile, User, withTransaction } from '@bike4mind/database';
+import { adminSettingsRepository, dataLakeRepository, FabFile, User, withTransaction } from '@bike4mind/database';
 import { Permission } from '@bike4mind/common';
 import { fabFilesService } from '@bike4mind/services';
 import { createFabFile } from '@server/managers/fabFileManager';
@@ -32,6 +32,7 @@ const handler = baseApi()
               fabFiles: FabFile,
               adminSettings: adminSettingsRepository,
               users: User,
+              dataLakes: dataLakeRepository,
             },
             storage: {
               generateSignedUrl: (path, expireInSeconds) =>

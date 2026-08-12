@@ -43,4 +43,21 @@ describe('recomputeLakeStats draft activation', () => {
   it('still returns the stats it computed', async () => {
     expect(await recomputeLakeStats(lake, makeAdapters(3))).toEqual({ fileCount: 3, totalSizeBytes: 300 });
   });
+
+  it('skipActivation still corrects stats but never activates, even with member files', async () => {
+    const adapters = makeAdapters(1);
+
+    await recomputeLakeStats(lake, adapters, { skipActivation: true });
+
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 1, totalSizeBytes: 100 });
+    expect(adapters.db.dataLakes.activateIfDraft).not.toHaveBeenCalled();
+  });
+
+  it('activates normally when skipActivation is omitted or false', async () => {
+    const adapters = makeAdapters(1);
+
+    await recomputeLakeStats(lake, adapters, { skipActivation: false });
+
+    expect(adapters.db.dataLakes.activateIfDraft).toHaveBeenCalledWith('lake1');
+  });
 });

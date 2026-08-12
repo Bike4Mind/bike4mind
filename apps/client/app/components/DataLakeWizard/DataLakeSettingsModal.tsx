@@ -10,12 +10,15 @@ import {
   Input,
   Modal,
   ModalDialog,
+  Option,
   Radio,
   RadioGroup,
+  Select,
   Stack,
   Textarea,
 } from '@mui/joy';
 import { useSetLakeVisibility, useUpdateDataLake } from '@client/app/hooks/data/dataLakes';
+import { useActivatablePrompts } from '@client/app/hooks/data/useActivatablePrompts';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
 
 export interface EditableLake {
@@ -34,8 +37,13 @@ export interface EditableLake {
    */
   systemPrompt: string;
   /**
+   * Preferred registry system prompt bound to this lake, by promptId ('' = none). Editor-only,
+   * same as systemPrompt: the field renders off `canManage`, not off this value.
+   */
+  preferredSystemPromptId: string;
+  /**
    * Whether the caller may manage this lake - server-computed, see DataLakeConfig.canManage.
-   * Gates the editor-only System prompt field.
+   * Gates the editor-only per-lake config fields (System prompt, Preferred prompt).
    */
   canManage: boolean;
 }
@@ -77,6 +85,21 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const [requiredUserTag, setRequiredUserTag] = useState('');
   const [requiredEntitlement, setRequiredEntitlement] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
+  const [preferredSystemPromptId, setPreferredSystemPromptId] = useState('');
+  // Only fetch the picker options when an editor is actually viewing the settings (a lake is open
+  // and manageable) - a reader never sees the field, so never pays for the list.
+  const {
+    data: activatablePrompts,
+    isLoading: promptsLoading,
+    isError: promptsFailed,
+  } = useActivatablePrompts(!!lake?.canManage);
+  const activatable = activatablePrompts ?? [];
+  // The bound prompt's <Option> may be absent: the allowlist loads async (not there on first open),
+  // or an admin delisted a prompt this lake was bound to. A controlled Joy Select whose value has
+  // no matching <Option> resolves the value to '' and fires onChange - which would silently clear
+  // the binding on the next save. Track whether the current value is represented so we can always
+  // render an Option for it (see the fallback Option below).
+  const boundPromptListed = activatable.some(prompt => prompt.promptId === preferredSystemPromptId);
 
   // Seed the form once per opened lake, keyed on id (NOT the object): `lake` is now derived
   // from the live list, so it changes identity on every refetch - keying on id keeps a
@@ -91,6 +114,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       // normalize a server response missing this field would otherwise set state to
       // undefined and crash the character-count helper text below (`.trim()` on undefined).
       setSystemPrompt(lake.systemPrompt ?? '');
+      setPreferredSystemPromptId(lake.preferredSystemPromptId ?? '');
     }
     // Intentional id-keying: seed once per lake, not on every live-object refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -128,6 +152,14 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         // guards a path no user can currently take. Blank from an EDITOR is a deliberate clear,
         // and '' is what unsets it.
         ...(lake.canManage ? { systemPrompt: systemPrompt.trim() } : {}),
+        // Send only when the editor actually changed the binding. Omitting an unchanged value is
+        // "leave as-is" server-side, which (a) never re-sends a now-delisted id that the write
+        // boundary would 400 on - that would block saving name/description/gate too - and (b) still
+        // lets an explicit None ('') through as a deliberate clear. Pairs with the fallback <Option>
+        // above, which keeps the Select from silently resetting the value to '' before we get here.
+        ...(lake.canManage && preferredSystemPromptId !== (lake.preferredSystemPromptId ?? '')
+          ? { preferredSystemPromptId }
+          : {}),
       },
       { onSuccess: onClose }
     );
@@ -177,6 +209,48 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                       // Count what SAVE will persist (trimmed), not the raw field contents.
                       systemPrompt.trim() ? ` (${systemPrompt.trim().length} characters)` : ''
                     }`}
+                  </FormHelperText>
+                </FormControl>
+              )}
+              {/* Per-lake config, editor-only (canManage). This section is the home for lake-scoped
+                  session defaults - the preferred prompt today, a per-lake grounding mode next -
+                  so new fields join here rather than spawning a second config surface. */}
+              {lake?.canManage && (
+                <FormControl>
+                  <FormLabel>Preferred prompt</FormLabel>
+                  <Select
+                    value={preferredSystemPromptId}
+                    onChange={(_e, value) => setPreferredSystemPromptId(value ?? '')}
+                    data-testid="datalake-preferred-prompt-select"
+                    slotProps={{ button: { 'data-testid': 'datalake-preferred-prompt-button' } }}
+                  >
+                    <Option value="" data-testid="datalake-preferred-prompt-none">
+                      None
+                    </Option>
+                    {activatable.map(prompt => (
+                      <Option
+                        key={prompt.promptId}
+                        value={prompt.promptId}
+                        data-testid={`datalake-preferred-prompt-${prompt.promptId}`}
+                      >
+                        {prompt.name}
+                      </Option>
+                    ))}
+                    {/* Keep an Option for the currently-bound value so the controlled Select can
+                        always hold it - otherwise a first-open (list still loading) or a delisted
+                        prompt collapses the value to '' and a save clears the binding. While the
+                        list loads we don't have the display name yet, so show a neutral label; a
+                        genuinely delisted id is shown verbatim so the editor can see it. */}
+                    {preferredSystemPromptId && !boundPromptListed && (
+                      <Option value={preferredSystemPromptId} data-testid="datalake-preferred-prompt-bound-fallback">
+                        {promptsLoading ? 'Loading...' : preferredSystemPromptId}
+                      </Option>
+                    )}
+                  </Select>
+                  <FormHelperText data-testid="datalake-preferred-prompt-help">
+                    {promptsFailed
+                      ? "Couldn't load the available prompts. Any existing binding is unchanged; reopen settings to try again."
+                      : 'Applied when someone starts a chat with this lake, unless they picked their own prompt. Leave as None for the default behavior.'}
                   </FormHelperText>
                 </FormControl>
               )}

@@ -116,6 +116,18 @@ describe('applyTaxonomySuggestions', () => {
     expect(adapters.db.batches.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
   });
 
+  // A prefix colliding with a static-registry lake (opti:) has no owning document, so its read
+  // arm is an ownership bypass - create() already refuses such a prefix, so this only fires for
+  // a row that predates that check.
+  it('refuses to apply tags for a lake whose prefix overlaps a static-registry lake', async () => {
+    const adapters = makeAdapters({ lakeDoc: lake({ fileTagPrefix: 'opti:' }) });
+
+    await expect(
+      applyTaxonomySuggestions({ userId: 'owner', isAdmin: false }, 'b1', [], adapters as any)
+    ).rejects.toThrow(/overlaps a built-in data lake/i);
+    expect(adapters.db.batches.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
+  });
+
   it('allows an admin to apply suggestions for a lake they do not own', async () => {
     const adapters = makeAdapters();
 

@@ -32,6 +32,7 @@ const {
   mockIsChatModelUsable,
   mockTryIncrement,
   mockResolveUserRateLimitPerMin,
+  mockSystemPromptText,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockFindById: vi.fn(),
@@ -43,6 +44,9 @@ const {
   mockIsChatModelUsable: vi.fn(),
   mockTryIncrement: vi.fn(),
   mockResolveUserRateLimitPerMin: vi.fn(),
+  // What process() leaves on itself, rather than on the quest: the disclosed text is never
+  // persisted. Holds a value only for the tests that opt in.
+  mockSystemPromptText: { value: undefined as unknown },
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -102,6 +106,9 @@ vi.mock('@bike4mind/services', async orig => {
   // The wait=true path constructs this directly; the async-path tests never reach it.
   class MockChatCompletionProcess {
     pipelinePhases = undefined;
+    get systemPromptText() {
+      return mockSystemPromptText.value;
+    }
     process = (...a: unknown[]) => mockProcess(...a);
   }
   return {
@@ -516,6 +523,7 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockSystemPromptText.value = undefined;
     mockGetSettingsMap.mockResolvedValue({});
     mockInvoke.mockResolvedValue({
       id: 'quest-2',
@@ -555,6 +563,34 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).not.toHaveProperty('promptDetails');
+  });
+
+  it('returns the prompt text when includeSystemPrompt is set', async () => {
+    const TEXT = { blocks: [{ source: 'hardcoded', name: 'date_time_context', text: 'today', redacted: false }] };
+    mockSystemPromptText.value = TEXT;
+    const { req, res } = fire({
+      body: { message: 'hello', sessionId: 'sess-1', wait: true, includeSystemPrompt: true },
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().promptText).toEqual(TEXT);
+  });
+
+  it('omits the prompt text without the flag, so the text is never returned unasked', async () => {
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).not.toHaveProperty('promptText');
+  });
+
+  it('passes includeSystemPrompt through to process, which is what gates building the text', async () => {
+    const { req, res } = fire({
+      body: { message: 'hello', sessionId: 'sess-1', wait: true, includeSystemPrompt: true },
+    });
+    await handler(req, res);
+    expect(mockProcess).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.objectContaining({ includeSystemPrompt: true }) })
+    );
   });
 
   it('accepts promptMode: raw at the HTTP boundary', async () => {
