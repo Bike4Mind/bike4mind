@@ -26,6 +26,10 @@ interface UnarchiveDataLakeAdapters {
  * Restores an archived data lake with a dedup pass: if a file was re-uploaded while
  * the lake was archived, the live copy wins and the archived duplicate is discarded
  * (not restored). Owner or admin only. Uses transitional 'restoring' state.
+ *
+ * The reversal is bounded by `filesArchivedAt`, this lake's own archive stamp: it stops
+ * unarchiving from also freeing a prefix-sharing sibling lake's independently-archived files (see
+ * `unarchiveByDataLakeTag`'s own doc for the meta-tag-vs-prefix-arm split that makes this safe).
  */
 export const unarchiveDataLake = async (
   actor: { userId: string; isAdmin: boolean },
@@ -56,11 +60,12 @@ export const unarchiveDataLake = async (
 
   let skippedDuplicates = 0;
   if (archivedHashes.length > 0) {
-    // Meta-tag only, NOT the membership scope: the loser of this comparison is hard-deleted
-    // below, and fileTagPrefix is not unique, so a prefix match could nominate a live file
-    // belonging to a DIFFERENT lake as the winner and destroy this lake's archived member.
-    // Any re-upload worth deduping carries the meta-tag, so the narrow probe loses nothing;
-    // at worst a prefix-only re-upload leaves a duplicate, which beats deleting the wrong file.
+    // Meta-tag only, NOT the membership scope: the loser of this comparison is soft-deleted
+    // (recoverable) below, and fileTagPrefix is not unique, so a prefix match could nominate a
+    // live file belonging to a DIFFERENT lake as the winner and soft-delete this lake's archived
+    // member. Any re-upload worth deduping carries the meta-tag, so the narrow probe loses
+    // nothing; at worst a prefix-only re-upload leaves a duplicate, which beats discarding the
+    // wrong file.
     const live = await db.fabFiles.findByContentHashesInDataLake(archivedHashes, existing.datalakeTag);
     const liveHashes = new Set(live.map(f => f.contentHash));
     const duplicateIds = archived.filter(f => f.contentHash && liveHashes.has(f.contentHash)).map(f => f.id);
@@ -70,8 +75,9 @@ export const unarchiveDataLake = async (
     }
   }
 
-  // Restore the remaining archived files (the non-duplicates).
-  const restoredCount = await db.fabFiles.unarchiveByDataLakeTag(scope);
+  // Restore the remaining archived files (the non-duplicates). undefined for a lake archived
+  // before `filesArchivedAt` existed, which keeps the prefix arm's old unbounded reversal.
+  const restoredCount = await db.fabFiles.unarchiveByDataLakeTag(scope, existing.filesArchivedAt ?? undefined);
 
   // Explicit null, not undefined (mongoose drops undefined): a later re-archive claims a FRESH
   // stamp via claimFilesArchivedAt's set-if-unset, rather than reusing this spent one.
