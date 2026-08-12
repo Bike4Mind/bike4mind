@@ -82,6 +82,13 @@ export async function resolveSpendLevers(
       cause: err,
     });
   }
+  // A non-object return (e.g. an incompletely-stubbed accessor) must fail closed like a read
+  // error, not TypeError on the property reads below.
+  if (values === null || typeof values !== 'object') {
+    throw new SpendLeverResolutionError(
+      `spend-lever settings read returned ${JSON.stringify(values)}; halting spend (fail closed)`
+    );
+  }
 
   return {
     spendEnabled: booleanLever(values.dataLakeEmbeddingSpendEnabled, true, 'dataLakeEmbeddingSpendEnabled'),
