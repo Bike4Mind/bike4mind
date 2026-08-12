@@ -122,6 +122,7 @@ describe('filterByPromptMode', () => {
     expect(filterByPromptMode(everything, 'grounded').map(t => t.source)).toEqual([
       'extraContext',
       'knowledgeRetrieval',
+      'lakeMemory',
       'urls',
       'attachedFiles',
     ]);
@@ -133,6 +134,7 @@ describe('filterByPromptMode', () => {
       'organizationPrompt',
       'sessionPrompt',
       'knowledgeRetrieval',
+      'lakeMemory',
       'urls',
       'attachedFiles',
     ]);

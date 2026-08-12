@@ -34,6 +34,7 @@ export type PromptSourceId =
   | 'sessionPrompt'
   | 'skills'
   | 'knowledgeRetrieval'
+  | 'lakeMemory'
   | 'contextSummary'
   | 'mementos'
   | 'project'
@@ -60,6 +61,7 @@ export const PROMPT_SOURCE_ORDER: PromptSourceId[] = [
   'sessionPrompt',
   'skills',
   'knowledgeRetrieval',
+  'lakeMemory',
   'contextSummary',
   'mementos',
   'project',
@@ -112,8 +114,8 @@ const CALLER_SUPPLIED_SOURCES: PromptSourceId[] = ['extraContext', 'urls', 'atta
 
 export const PROMPT_MODE_SOURCES: Record<PromptMode, PromptSourceId[]> = {
   raw: CALLER_SUPPLIED_SOURCES,
-  grounded: [...CALLER_SUPPLIED_SOURCES, 'knowledgeRetrieval'],
-  surface: [...CALLER_SUPPLIED_SOURCES, 'knowledgeRetrieval', 'organizationPrompt', 'sessionPrompt'],
+  grounded: [...CALLER_SUPPLIED_SOURCES, 'knowledgeRetrieval', 'lakeMemory'],
+  surface: [...CALLER_SUPPLIED_SOURCES, 'knowledgeRetrieval', 'lakeMemory', 'organizationPrompt', 'sessionPrompt'],
 };
 
 /**
@@ -156,6 +158,9 @@ export const SYSTEM_PROMPT_PRIORITY: Record<PromptSourceId, number> = {
   contextSummary: 22,
   mementos: 23,
   recentImages: 24,
+  // Lightest-weight grounding signal in this band (a hot-card summary, not forced retrieval
+  // itself), so it is first to go if the budget must drop something from the tier.
+  lakeMemory: 25,
 
   // Guidance we wrote. Each one degrades gracefully: the model still answers, with worse formatting,
   // weaker abstention, or no awareness of a product surface.
@@ -239,6 +244,7 @@ export const PROMPT_SOURCE_METADATA: Record<
   sessionPrompt: { origin: 'session', name: 'session_prompt' },
   skills: { origin: 'session', name: 'skills' },
   knowledgeRetrieval: { origin: 'session', name: 'knowledge_retrieval' },
+  lakeMemory: { origin: 'session', name: 'lake_memory' },
   contextSummary: { origin: 'session', name: 'context_summary' },
   mementos: { origin: 'user', name: 'mementos' },
   project: { origin: 'project', name: 'project_context' },

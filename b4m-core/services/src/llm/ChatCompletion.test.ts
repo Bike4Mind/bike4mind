@@ -37,7 +37,8 @@ import {
 import { ToolBuilder } from './tools/ToolBuilder';
 import { SYSTEM_PROMPT_PRIORITY } from './systemPromptSources';
 import { SkillsFeature } from './features/SkillsFeature';
-import type { ISkill } from '@bike4mind/common';
+import { LakeMemoryFeature } from './ChatCompletionFeatures';
+import type { ISkill, IDataLakeDocument } from '@bike4mind/common';
 import { runWithFakeTimers } from './__tests__/helpers/fakeTimers';
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
@@ -2203,6 +2204,113 @@ describe('ChatCompletionProcess', () => {
         expect(typeof options.systemMessagePriority).toBe('function');
         expect(options.systemMessagePriority!({ role: 'system', content: 'not from this assembly' })).toBeUndefined();
       });
+    });
+  });
+
+  // LakeMemoryFeature computes a real belief card (entitlement resolution, DB lake lookup, the
+  // recallLakeMemory call) but the drop was in the ASSEMBLY: 'lakeMemory' was never a
+  // PromptSourceId and never spread into contextAndSystemMessages, so the card silently vanished
+  // whenever a Data-Lake-mode turn ran it. Same assert-present/assert-absent shape as the
+  // SkillsFeature test above.
+  describe('LakeMemoryFeature context reaches the assembled system prompt (#1404)', () => {
+    const ownedLake = (id: string): IDataLakeDocument =>
+      ({
+        id,
+        name: id,
+        slug: id,
+        fileTagPrefix: `${id}:`,
+        datalakeTag: `datalake:${id}`,
+        createdByUserId: 'user1', // matches mockUser.id, so it resolves via the owner bypass
+        status: 'active',
+      }) as IDataLakeDocument;
+
+    const runAndCaptureSystemText = async (params: {
+      message: string;
+      beliefs?: { fact: string; relevance: number; sources: string[] }[];
+      recallLakeMemory?: (input: unknown) => Promise<unknown>;
+      retrievalTags?: string[];
+    }): Promise<string> => {
+      mockDb.dataLakes = { findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([ownedLake('corpus')]) };
+      (service as any).entitlementsResolved = true;
+      (service as any).entitlementKeys = [];
+      (service as any).recallLakeMemory = params.recallLakeMemory ?? vi.fn().mockResolvedValue(params.beliefs ?? []);
+      // buildOptimizedFeatures is stubbed in beforeEach, so register the real feature under the
+      // same key the assembly reads, mirroring the SkillsFeature test above.
+      service.features.set('lakeMemory', new LakeMemoryFeature(service, params.retrievalTags ?? [], {}));
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!'])),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: params.message }]);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: params.message });
+
+      const body = {
+        ...startQuestParams,
+        message: params.message,
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      };
+      await service.process({ body, logger: mockLogger });
+
+      const contextAndSystemMessages = (mockedBuildAndSortMessages.mock.calls[0]?.[1] ?? []) as IMessage[];
+      return contextAndSystemMessages
+        .map(m => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
+        .join('\n---\n');
+    };
+
+    it('spreads the hot-card belief text into the system messages', async () => {
+      const systemText = await runAndCaptureSystemText({
+        message: 'What is the warranty on the X-200 pump?',
+        beliefs: [{ fact: 'The X-200 pump has a 5-year warranty.', relevance: 0.9, sources: ['doc1'] }],
+      });
+
+      expect(systemText).toContain('Background reference facts');
+      expect(systemText).toContain('The X-200 pump has a 5-year warranty.');
+    });
+
+    it('emits no lake-memory block when recall returns nothing (assert-absent counterpart)', async () => {
+      const systemText = await runAndCaptureSystemText({ message: 'just chatting, no lake query' });
+
+      expect(systemText).not.toContain('Background reference facts');
+    });
+
+    it('degrades to no card, without failing the turn, when recall throws (fail-open contract)', async () => {
+      const systemText = await runAndCaptureSystemText({
+        message: 'What is the warranty?',
+        recallLakeMemory: vi.fn().mockRejectedValue(new Error('lake recall backend down')),
+      });
+
+      expect(systemText).not.toContain('Background reference facts');
+    });
+
+    it('emits no card when the session lake selection excludes every entitled lake', async () => {
+      // retrievalTags narrows to a lake the user does not actually have -- the intersection with
+      // entitledTags is empty, so the feature must return early rather than fall back to the
+      // full entitled set.
+      const systemText = await runAndCaptureSystemText({
+        message: 'What is the warranty?',
+        beliefs: [{ fact: 'should never be recalled', relevance: 0.9, sources: ['doc1'] }],
+        retrievalTags: ['datalake:other'],
+      });
+
+      expect(systemText).not.toContain('Background reference facts');
     });
   });
 
