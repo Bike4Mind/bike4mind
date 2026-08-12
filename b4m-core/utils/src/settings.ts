@@ -47,7 +47,14 @@ export async function getScopedOverrides(
   return getScopedSettingsCache(options?.logger).getOverrides(scopes, settingNames, db);
 }
 
-/** Invalidate cached overrides for one rung address, or all of them. Call from a scoped-override writer. */
+/**
+ * Invalidate cached overrides for one rung address, or all of them. Call from a scoped-override writer.
+ *
+ * In-process only: this clears the calling process's map. With negative caching and the 5-minute TTL,
+ * a newly-written override can stay invisible on other Lambda/container instances for up to one TTL.
+ * That is acceptable while no writer ships (this PR), but a future write path needs a cross-instance
+ * invalidation story (shared cache or short TTL) rather than relying on this alone.
+ */
 export function invalidateScopedSettingsCache(scope?: ScopeRef): void {
   if (!globalScopedSettingsCache) return;
   if (scope) {
@@ -245,6 +252,10 @@ export function shutdownSettingsCache(): void {
   if (globalSettingsCache) {
     globalSettingsCache.shutdown();
     globalSettingsCache = null;
+  }
+  if (globalScopedSettingsCache) {
+    globalScopedSettingsCache.shutdown();
+    globalScopedSettingsCache = null;
   }
 }
 

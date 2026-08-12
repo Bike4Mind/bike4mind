@@ -136,4 +136,16 @@ export class ScopedSettingsCache {
   invalidateAll(): void {
     this.cache.clear();
   }
+
+  /** Snapshot for monitoring, parity with AdminSettingsCache.getStats(). */
+  getStats(): { scopes: number; entries: number } {
+    let entries = 0;
+    for (const inner of this.cache.values()) entries += inner.size;
+    return { scopes: this.cache.size, entries };
+  }
+
+  /** Graceful shutdown - no timers to stop (unlike AdminSettingsCache), just drop the map. */
+  shutdown(): void {
+    this.cache.clear();
+  }
 }

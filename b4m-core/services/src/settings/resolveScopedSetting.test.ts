@@ -27,14 +27,18 @@ const fullScope: SettingScope = { organizationId: 'o1', owner, lakeId: 'l1' };
 function makeDb(
   platform: Record<string, string>,
   overrides: Array<Partial<IScopedSetting>> = [],
-  opts?: { throwOverrides?: boolean }
+  opts?: { throwOverrides?: boolean; throwPlatform?: boolean }
 ) {
   return {
     adminSettings: {
-      findAll: async () =>
-        Object.entries(platform).map(([settingName, settingValue]) => ({ settingName, settingValue })),
-      findBySettingNames: async (names: string[]) =>
-        names.filter(n => platform[n] != null).map(n => ({ settingName: n, settingValue: platform[n] })),
+      findAll: async () => {
+        if (opts?.throwPlatform) throw new Error('settings table down');
+        return Object.entries(platform).map(([settingName, settingValue]) => ({ settingName, settingValue }));
+      },
+      findBySettingNames: async (names: string[]) => {
+        if (opts?.throwPlatform) throw new Error('settings table down');
+        return names.filter(n => platform[n] != null).map(n => ({ settingName: n, settingValue: platform[n] }));
+      },
     },
     scopedSettings: {
       findOverrides: async (scopes: ScopeRef[], names: string[]) => {
@@ -95,6 +99,20 @@ describe('computeCandidateRefs (rung gating - the decision-7 seam)', () => {
 
   it('returns nothing when there is no scoped store', () => {
     expect(computeCandidateRefs(KEY, [SettingScopeLevel.Owner], false, fullScope, false)).toEqual([]);
+  });
+
+  it('warns when a settable rung is in scope but no store is wired (forgotten db.scopedSettings)', () => {
+    const logger = { warn: vi.fn() };
+    const refs = computeCandidateRefs(KEY, [SettingScopeLevel.Owner], false, fullScope, false, logger as never);
+    expect(refs).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('no scoped-override store was provided'));
+  });
+
+  it('stays silent about a missing store when the scope carries no settable rung', () => {
+    const logger = { warn: vi.fn() };
+    // settable only at lake, but scope has no lakeId -> nothing to resolve, nothing to warn about.
+    computeCandidateRefs(KEY, [SettingScopeLevel.Lake], false, { organizationId: 'o1' }, false, logger as never);
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it('warns and resolves wider rungs when owner is required but absent from scope', () => {
@@ -220,6 +238,19 @@ describe('resolveScopedSetting (integration, through the real settingsMap)', () 
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('overlay read failed'), expect.anything());
   });
 
+  it('NEVER throws: a platform-read outage degrades to the coded default and warns', async () => {
+    // The module contract promises the platform read is guarded too, not only the overlay read.
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+    const db = makeDb({ [KEY]: '3000' }, [], { throwPlatform: true });
+    const r = await resolveScopedSetting(KEY, fullScope, db, { logger: logger as never });
+    expect(r.value).toBe(DATA_LAKE_SEARCH_MAX_FILES_DEFAULT);
+    expect(r.source).toBe(SettingScopeLevel.Platform);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('platform settings read failed'),
+      expect.anything()
+    );
+  });
+
   it('resolves several keys in one call, each keeping its own value', async () => {
     const db = makeDb({ dataLakeSearchMaxFiles: '3000', dataLakeSearchMaxChunks: '50000' }, [
       override(SettingScopeLevel.Lake, 'l1', '1000'),
@@ -251,10 +282,19 @@ describe('scope builders', () => {
     });
   });
 
-  it('scopeForFileOwner: file-owner altitude, no lake rung (decision 7)', () => {
+  it('scopeForFileOwner: org-owned file is owned by the Organization, no lake rung (decision 7)', () => {
     const s = scopeForFileOwner({ userId: 'u1', organizationId: 'o1' });
-    expect(s.owner).toEqual({ id: 'u1', type: CreditHolderType.User });
+    // Owner derivation mirrors scopeForLake: org-owned -> Organization owner, so an org chunk policy
+    // set via the lake path (owner:o1) is read by the file path (owner:o1), not stranded at owner:u1.
+    expect(s.owner).toEqual({ id: 'o1', type: CreditHolderType.Organization });
     expect(s.organizationId).toBe('o1');
+    expect(s.lakeId).toBeUndefined();
+  });
+
+  it('scopeForFileOwner: an org-less file is individually owned', () => {
+    const s = scopeForFileOwner({ userId: 'u1', organizationId: '' });
+    expect(s.owner).toEqual({ id: 'u1', type: CreditHolderType.User });
+    expect(s.organizationId).toBeUndefined();
     expect(s.lakeId).toBeUndefined();
   });
 });

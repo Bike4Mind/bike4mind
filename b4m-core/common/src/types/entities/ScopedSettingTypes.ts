@@ -103,7 +103,12 @@ export interface SettingScopeConfig {
 export interface IScopedSetting extends IMongoDocument {
   scopeLevel: Exclude<SettingScopeLevel, SettingScopeLevel.Platform>;
   scopeId: string;
-  /** Present only when `scopeLevel` is `Owner`; disambiguates an individual from an org owner. */
+  /**
+   * Present only when `scopeLevel` is `Owner`: attribution of an individual vs org owner for audit
+   * and #1675's cost tiers. NOT part of the row's identity - the unique key is `(scopeLevel, scopeId,
+   * settingName)` and `scopeId` alone addresses the rung, so a writer must never treat `ownerType` as
+   * disambiguating two rows at the same `scopeId`. Written by a future scoped-override writer.
+   */
   ownerType?: SettingOwnerType;
   settingName: SettingKey;
   settingValue: string;

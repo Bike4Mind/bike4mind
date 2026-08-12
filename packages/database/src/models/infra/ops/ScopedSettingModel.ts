@@ -40,10 +40,21 @@ const ScopedSettingSchema = new Schema<IScopedSetting, IScopedSettingsModel, ISc
 
 ScopedSettingSchema.plugin(softDeletePlugin);
 
-// One override per (rung address, setting). unique is a data constraint, not a query hint - it is the
-// invariant the resolver's "narrowest wins" relies on: there is never more than one candidate value
-// to pick from at a given altitude.
-ScopedSettingSchema.index({ scopeLevel: 1, scopeId: 1, settingName: 1 }, { unique: true });
+// One LIVE override per (rung address, setting). unique is a data constraint, not a query hint - it
+// is the invariant the resolver's "narrowest wins" relies on: there is never more than one candidate
+// value to pick from at a given altitude. The `scopeId` alone identifies the rung; `ownerType` is
+// attribution only and deliberately NOT part of the key.
+//
+// The partial filter is load-bearing: softDeletePlugin does not remove rows, it stamps `deletedAt`
+// (default `null` on every live row, a Date once deleted). Without `partialFilterExpression`, a
+// soft-deleted tombstone keeps occupying the key, so clear-then-reset of an override at the same
+// address would throw E11000 and leave the lever permanently unsettable. `deletedAt: null` indexes
+// exactly the live rows (matching the plugin's default) and drops tombstones out. Precedent:
+// ProjectModel's per-user unique name index.
+ScopedSettingSchema.index(
+  { scopeLevel: 1, scopeId: 1, settingName: 1 },
+  { unique: true, partialFilterExpression: { deletedAt: null } }
+);
 
 export const ScopedSetting =
   (mongoose.models.ScopedSetting as IScopedSettingsModel) ??

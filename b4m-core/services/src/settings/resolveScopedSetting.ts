@@ -69,7 +69,21 @@ export function computeCandidateRefs(
   hasStore: boolean,
   logger?: Logger
 ): ScopeRef[] {
-  if (!settableAt || settableAt.length === 0 || !hasStore) return [];
+  if (!settableAt || settableAt.length === 0) return [];
+  if (!hasStore) {
+    // A scoped-capable setting resolved with a populated scope but no overlay store wired is almost
+    // always a caller that forgot to add `scopedSettings` to its ad-hoc `db` object (there is no
+    // central aggregate to inherit it from). Silently falling back to platform-only is exactly the
+    // no-op lever the epic forbids, so say so when the scope actually carried a settable rung.
+    const carriesSettableRung = settableAt.some(level => !!scopeIdForLevel(scope, level));
+    if (carriesSettableRung) {
+      logger?.warn?.(
+        `[scopedSettings] '${key}' is settable at ${settableAt.join('/')} and a matching rung is in scope, ` +
+          `but no scoped-override store was provided; resolving platform value only`
+      );
+    }
+    return [];
+  }
   if (isSensitive) {
     // Sensitive values live encrypted in AdminSettings and are stored plaintext-only in the overlay;
     // never resolve one through a scoped rung. The lockstep test forbids the registration; this is
@@ -147,10 +161,20 @@ async function resolveAll<K extends SettingKey>(
   if (keys.length === 0) return result;
 
   // 1. Platform base for every key (existing cached accessor - a warm cache costs no round-trip).
-  const platformRecord = (await getSettingsByNames(keys as unknown as SettingKey[], db, { logger })) as Record<
-    string,
-    string
-  >;
+  //    Guarded so the module's "NEVER throws" contract holds even for the platform read: a settings
+  //    outage degrades to the per-key coded default (via getSettingsValue below) and warns, rather
+  //    than rejecting into any caller that took the contract at its word. `getSettingsByNames` yields
+  //    `string | null`; strip the nulls so getSettingsValue sees a genuinely-missing key and falls to
+  //    the coded default, instead of coercing null (e.g. z.coerce.number() would turn null into 0).
+  const platformRecord: Record<string, string> = {};
+  try {
+    const raw = await getSettingsByNames(keys as unknown as SettingKey[], db, { logger });
+    for (const [name, val] of Object.entries(raw)) {
+      if (val !== null && val !== undefined) platformRecord[name] = val;
+    }
+  } catch (err) {
+    logger?.warn?.('[scopedSettings] platform settings read failed; resolving coded defaults', err);
+  }
 
   // 2. Collect every possible (rung, key) override and fetch them in a single overlay query.
   const refsByKey = new Map<K, ScopeRef[]>();
@@ -158,8 +182,10 @@ async function resolveAll<K extends SettingKey>(
   const scopedKeys: SettingKey[] = [];
   const hasStore = !!db.scopedSettings;
   for (const key of keys) {
+    // `key` is a registered SettingKey, so `settingsMap[key]` is always present - accessed unguarded
+    // here and in the resolve loop below (the `scope`/`isSensitive` fields are the optional parts).
     const def = settingsMap[key] as { scope?: { settableAt: readonly SettingScopeLevel[] }; isSensitive?: boolean };
-    const refs = computeCandidateRefs(key, def?.scope?.settableAt, !!def?.isSensitive, scope, hasStore, logger);
+    const refs = computeCandidateRefs(key, def.scope?.settableAt, !!def.isSensitive, scope, hasStore, logger);
     if (refs.length === 0) continue;
     refsByKey.set(key, refs);
     scopedKeys.push(key);
@@ -240,6 +266,11 @@ export async function resolveScopedSetting<K extends SettingKey>(
  * Derive the scope of a data lake. The owner rung reflects lake ownership: an org-owned lake
  * (`organizationId` set) is owned by that Organization; otherwise the individual `createdByUserId`.
  * This is the individual-vs-org distinction #1675's cost tiers turn on, computed in exactly one place.
+ *
+ * Note: for an org-owned lake the org and owner rungs carry the same id (`owner` beats `organization`
+ * in {@link SETTING_SCOPE_PRECEDENCE}, so the owner rung wins if both are set). They are distinct rows
+ * keyed by `scopeLevel`, so this is not a collision - but an admin surface should write org-wide
+ * overrides at ONE rung (the owner rung) rather than both, so intent has a single home.
  */
 export function scopeForLake(lake: {
   id?: string;
@@ -261,10 +292,19 @@ export function scopeForLake(lake: {
  * `lakeId` is deliberately OMITTED - chunks are keyed per file and shared across lakes, so a file's
  * policy resolves at its owner, and each lake it belongs to is a separate CONSTRAINT the caller
  * checks, never a narrower-wins override here.
+ *
+ * Owner derivation MUST match `scopeForLake` (and the rule documented on `SettingOwnerType`): an
+ * org-owned file (organizationId set) is owned by that Organization, otherwise by the individual
+ * `userId`. If files addressed `owner:<userId>` while org lakes addressed `owner:<orgId>`, an
+ * org-wide chunk policy set through the lake path would write a rung the file path never reads - the
+ * "lever that does nothing" this scheme exists to prevent.
  */
 export function scopeForFileOwner(file: { userId: string; organizationId?: string | null }): SettingScope {
+  const orgId = file.organizationId || undefined;
   return {
-    organizationId: file.organizationId || undefined,
-    owner: { id: file.userId, type: CreditHolderType.User },
+    organizationId: orgId,
+    owner: orgId
+      ? { id: orgId, type: CreditHolderType.Organization }
+      : { id: file.userId, type: CreditHolderType.User },
   };
 }
