@@ -71,7 +71,7 @@ describe('POST /api/data-lakes/batches/[batchId]/reanalyze-taxonomy', () => {
   });
 
   it('now delegates to canManageLake, so a blank-identity lake is rejected rather than granted (#1153)', async () => {
-    h.lakeFindById.mockResolvedValue({ id: 'lake1', createdByUserId: undefined, fileTagPrefix: 'acme:' });
+    h.lakeFindById.mockResolvedValue({ id: 'lake1', createdByUserId: '', fileTagPrefix: 'acme:' });
     const { res } = makeRes();
 
     await expect(run('b1', res, {}, { id: '', isAdmin: false })).rejects.toThrow(/creator/i);

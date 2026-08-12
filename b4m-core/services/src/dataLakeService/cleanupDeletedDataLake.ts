@@ -5,7 +5,7 @@ import type {
   IFabFileChunkRepository,
 } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
-import { canManageLake } from './authorizeLakeWrite';
+import { canManageLake } from './manageRule';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
 import { strictIndexRemove, type RetrievalIndexPort } from './ports';

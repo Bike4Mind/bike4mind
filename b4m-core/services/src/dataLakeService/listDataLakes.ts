@@ -32,6 +32,12 @@ interface ListDataLakesAdapters {
 
 const toConfig = (dl: IDataLakeDocument): DataLakeConfig => toDataLakeConfig(dl);
 
+// Truthy-guarded like canManageLake's owner arm, but deliberately not that predicate: isOwn has
+// no admin bypass (it answers "did I create this", not "may I manage this"), and it gates the
+// UI's "not your lake" warning marker - a blank-creator legacy lake must not read as owned.
+const isOwnLake = (dl: Pick<IDataLakeDocument, 'createdByUserId'>, ctx: Pick<AccessContext, 'userId'>): boolean =>
+  !!ctx.userId && !!dl.createdByUserId && dl.createdByUserId === ctx.userId;
+
 /**
  * Batch-resolve creator display names (name || username, never email - the same PII rule as the
  * discover catalog) for the lakes the caller does not own, in one round-trip. Returns an empty
@@ -124,12 +130,7 @@ export const listDataLakes = async (
   // content-scope resolver passes no `users` adapter and this resolves to an empty map).
   const ownerNames = await resolveOwnerNames(dynamicLakes, ctx.userId, db.users);
   const dynamicConfigs = dynamicLakes.map(dl =>
-    toManageableConfig(
-      dl,
-      canManageLake(dl, ctx),
-      dl.createdByUserId === ctx.userId,
-      ownerNames.get(dl.createdByUserId)
-    )
+    toManageableConfig(dl, canManageLake(dl, ctx), isOwnLake(dl, ctx), ownerNames.get(dl.createdByUserId))
   );
 
   // Merge with hardcoded fallbacks (DB entries take precedence by slug/id).
@@ -168,7 +169,7 @@ export const listAllDataLakes = async (
 
   const ownerNames = await resolveOwnerNames(dynamicLakes, ctx.userId, db.users);
   const dynamicConfigs = dynamicLakes.map(dl =>
-    toManageableConfig(dl, true, dl.createdByUserId === ctx.userId, ownerNames.get(dl.createdByUserId))
+    toManageableConfig(dl, true, isOwnLake(dl, ctx), ownerNames.get(dl.createdByUserId))
   );
   const dynamicIds = new Set(dynamicLakes.map(d => d.slug));
   const fallbacks = DATA_LAKES.filter(dl => !dynamicIds.has(dl.id)).map(toFallbackConfig);

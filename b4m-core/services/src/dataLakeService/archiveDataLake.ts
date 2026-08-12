@@ -5,7 +5,7 @@ import type {
   IFabFileRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { canManageLake } from './authorizeLakeWrite';
+import { canManageLake } from './manageRule';
 import { recomputeLakeStats } from './recomputeLakeStats';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import { warnOnPrefixCollision } from './tagPrefixCollision';

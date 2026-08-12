@@ -1,7 +1,7 @@
 import type { IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
 import { UpdateDataLakeRequestInput, normalizeEntitlementKey } from '@bike4mind/common';
 import { secureParameters, BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { canManageLake } from './authorizeLakeWrite';
+import { canManageLake } from './manageRule';
 import type { z } from 'zod';
 
 type UpdateDataLakeParams = z.infer<typeof UpdateDataLakeRequestInput>;

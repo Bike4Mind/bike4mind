@@ -103,7 +103,7 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
 
   it('now delegates to canManageLake, so a blank-identity lake is rejected rather than granted (#1153)', async () => {
     h.toAccessContext.mockResolvedValueOnce({ userId: '', isAdmin: false });
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: undefined });
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: '' });
     const { res } = makeRes();
     await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res);
 

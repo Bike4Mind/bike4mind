@@ -4,7 +4,7 @@ import type {
   IDataLakeRepository,
   PublicDataLakeSummary,
 } from '@bike4mind/common';
-import { canManageLake } from './authorizeLakeWrite';
+import { canManageLake } from './manageRule';
 
 /** The browsing caller. Only identity is needed - the public catalog is the same for everyone. */
 interface BrowseActor {
@@ -63,7 +63,10 @@ export const browsePublicDataLakes = async (
   const nameById = new Map(owners.map(u => [String(u.id), u.name || u.username || undefined]));
 
   const data: PublicDataLakeSummary[] = lakes.map((lake: IDataLakeDocument) => {
-    const isOwn = lake.createdByUserId === actor.userId;
+    // Truthy-guarded like canManageLake's owner arm, but deliberately not that predicate: isOwn
+    // has no admin bypass, and a blank-creator legacy lake must not read as owned by a caller
+    // with no identity.
+    const isOwn = !!actor.userId && !!lake.createdByUserId && lake.createdByUserId === actor.userId;
     return {
       id: lake.id,
       slug: lake.slug,

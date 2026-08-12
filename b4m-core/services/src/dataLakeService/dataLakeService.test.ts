@@ -83,7 +83,7 @@ describe('canAccessLake — the single access gate rule', () => {
   it('now delegates the owner arm to canManageLake, so a blank identity fails closed (#1153)', () => {
     // Before: `ctx.isAdmin || lake.createdByUserId === ctx.userId` granted when both sides were
     // blank/undefined. A revert back to that bare form would flip this to true.
-    expect(canAccessLake(lake({ createdByUserId: undefined as unknown as string }), ctx({ userId: '' }))).toBe(false);
+    expect(canAccessLake(lake({ createdByUserId: '' }), ctx({ userId: '' }))).toBe(false);
   });
 
   it('grants a non-owner who satisfies BOTH org and tag', () => {
@@ -386,7 +386,7 @@ describe('listDataLakes - per-lake canManage flag for the UI', () => {
   });
 
   it('now delegates to canManageLake, so a blank-identity lake stays unmanageable (#1153)', async () => {
-    const blank = lake({ id: 'blank', slug: 'blank', createdByUserId: undefined as unknown as string });
+    const blank = lake({ id: 'blank', slug: 'blank', createdByUserId: '' });
     const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([blank]), find: vi.fn() } };
 
     const result = await listDataLakes(ctx({ userId: '' }), { db });
@@ -802,7 +802,7 @@ describe('assertLakeWriteAccess — read-then-manage gate for the upload doors',
 
 describe('updateDataLake - now delegates the manage gate to canManageLake (#1153)', () => {
   it('denies a blank-identity lake rather than granting on the both-unset match', async () => {
-    const blank = lake({ createdByUserId: undefined as unknown as string });
+    const blank = lake({ createdByUserId: '' });
     const db = { dataLakes: { findById: vi.fn().mockResolvedValue(blank), update: vi.fn() } };
     await expect(updateDataLake({ userId: '', isAdmin: false }, 'lake1', { name: 'Renamed' }, { db })).rejects.toThrow(
       /creator/i
@@ -1142,7 +1142,7 @@ describe('createDataLake', () => {
 
 describe('unarchiveDataLake - now delegates the manage gate to canManageLake (#1153)', () => {
   it('denies a blank-identity lake rather than granting on the both-unset match', async () => {
-    const blank = lake({ createdByUserId: undefined as unknown as string, status: 'archived' });
+    const blank = lake({ createdByUserId: '', status: 'archived' });
     const db = { dataLakes: { findById: vi.fn().mockResolvedValue(blank), update: vi.fn(), setStats: vi.fn() } };
     await expect(unarchiveDataLake({ userId: '', isAdmin: false }, 'lake1', { db } as any)).rejects.toThrow(/creator/i);
     expect(db.dataLakes.update).not.toHaveBeenCalled();
@@ -1204,7 +1204,7 @@ describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
 
 describe('restoreDeletedDataLake - now delegates the manage gate to canManageLake (#1153)', () => {
   it('denies a blank-identity lake rather than granting on the both-unset match', async () => {
-    const blank = lake({ createdByUserId: undefined as unknown as string, status: 'deleted' });
+    const blank = lake({ createdByUserId: '', status: 'deleted' });
     const db = { dataLakes: { findById: vi.fn().mockResolvedValue(blank), update: vi.fn(), setStats: vi.fn() } };
     await expect(restoreDeletedDataLake({ userId: '', isAdmin: false }, 'lake1', { db } as any)).rejects.toThrow(
       /creator/i
@@ -1263,7 +1263,7 @@ describe('restoreDeletedDataLake — deleted→active with dedup', () => {
 
 describe('archiveDataLake - now delegates the manage gate to canManageLake (#1153)', () => {
   it('denies a blank-identity lake rather than granting on the both-unset match', async () => {
-    const blank = lake({ createdByUserId: undefined as unknown as string });
+    const blank = lake({ createdByUserId: '' });
     const db = { dataLakes: { findById: vi.fn().mockResolvedValue(blank), update: vi.fn(), setStats: vi.fn() } };
     await expect(archiveDataLake({ userId: '', isAdmin: false }, 'lake1', { db } as any)).rejects.toThrow(/creator/i);
     expect(db.dataLakes.update).not.toHaveBeenCalled();
@@ -1445,7 +1445,7 @@ describe('archiveDataLake - retrieval-index removal', () => {
 
 describe('deleteDataLake - now delegates the manage gate to canManageLake (#1153)', () => {
   it('denies a blank-identity lake rather than granting on the both-unset match', async () => {
-    const blank = lake({ createdByUserId: undefined as unknown as string });
+    const blank = lake({ createdByUserId: '' });
     const db = { dataLakes: { findById: vi.fn().mockResolvedValue(blank), update: vi.fn() } };
     await expect(deleteDataLake({ userId: '', isAdmin: false }, 'lake1', { db } as any)).rejects.toThrow(/creator/i);
     expect(db.dataLakes.update).not.toHaveBeenCalled();
@@ -1681,7 +1681,7 @@ describe('teardown stamp bookkeeping', () => {
 
 describe('cleanupDeletedDataLake - now delegates the manage gate to canManageLake (#1153)', () => {
   it('denies a blank-identity lake rather than granting on the both-unset match', async () => {
-    const blank = lake({ createdByUserId: undefined as unknown as string, status: 'deleted' });
+    const blank = lake({ createdByUserId: '', status: 'deleted' });
     const db = { dataLakes: { findById: vi.fn().mockResolvedValue(blank) } };
     await expect(cleanupDeletedDataLake({ userId: '', isAdmin: false }, 'lake1', { db } as any)).rejects.toThrow(
       /creator/i
@@ -2105,7 +2105,7 @@ describe('removeFileFromDataLake — single-file removal', () => {
 
 describe('setLakeVisibility - now delegates the manage gate to canManageLake (#1153)', () => {
   it('denies a blank-identity lake rather than granting on the both-unset match', async () => {
-    const blank = lake({ createdByUserId: undefined as unknown as string });
+    const blank = lake({ createdByUserId: '' });
     const db = { dataLakes: { findById: vi.fn().mockResolvedValue(blank), update: vi.fn() } };
     await expect(setLakeVisibility({ userId: '', isAdmin: false }, 'lake1', 'private', { db } as any)).rejects.toThrow(
       /creator/i
@@ -2116,7 +2116,7 @@ describe('setLakeVisibility - now delegates the manage gate to canManageLake (#1
   it('the separate owner-only expose check ALSO fails closed on a blank identity, without an admin bypass', async () => {
     // Line 50 is deliberately NOT canManageLake (no admin bypass), so pin it with its own case:
     // an admin with a blank userId must still be refused when exposing a blank-owner lake.
-    const blank = lake({ createdByUserId: undefined as unknown as string });
+    const blank = lake({ createdByUserId: '' });
     const db = { dataLakes: { findById: vi.fn().mockResolvedValue(blank), update: vi.fn() } };
     await expect(setLakeVisibility({ userId: '', isAdmin: true }, 'lake1', 'public', { db } as any)).rejects.toThrow(
       /owner/i
@@ -2311,7 +2311,7 @@ describe('browsePublicDataLakes - canManage now delegates to canManageLake (#115
     const blank = lake({
       id: 'pub-blank',
       slug: 'pub-blank',
-      createdByUserId: undefined as unknown as string,
+      createdByUserId: '',
       isPublic: true,
     });
     const db = { dataLakes: { findPublicLakes: vi.fn().mockResolvedValue({ lakes: [blank], total: 1 }) }, users: {} };
