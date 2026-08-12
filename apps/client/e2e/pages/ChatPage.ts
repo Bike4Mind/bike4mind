@@ -269,4 +269,40 @@ export class ChatPage extends BasePage {
 
     return img;
   }
+
+  /**
+   * Non-throwing {@link waitForImageResponse}: resolves true when an image renders within the
+   * budget, false when none does. Lets a caller assert on a produced image but fall back to a
+   * text check when the model has no image generation, instead of hard-failing the prompt.
+   */
+  async tryWaitForImageResponse(timeout: number = TIMEOUTS.IMAGE_GENERATION): Promise<boolean> {
+    try {
+      await this.waitForImageResponse(timeout);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Waits for the artifact placeholders to clear on the newest reply, so a text scrape reads
+   * the resolved content instead of a spinner.
+   *
+   * Streaming completing (stop-generation-btn gone) does NOT mean the reply text is final. An
+   * artifact reply passes through TWO sequential placeholders before its content mounts:
+   *   1. "Generating artifact..." (PromptReplies, testid `generating-artifact-indicator`) while
+   *      the artifact is being produced, then
+   *   2. "Loading artifact..." (ArtifactRenderer, testid `artifact-loading`) while the renderer
+   *      resolves and lazy-loads it.
+   * ArtifactRenderer mounts already showing "Loading..." in the same commit that removes
+   * "Generating...", so the COMBINED count never dips to 0 mid-handoff - polling the sum to 0
+   * waits out the whole lifecycle without racing the transition. No-op (returns at once) when
+   * neither placeholder is present, so it is safe on prompts that may not render an artifact.
+   */
+  async waitForArtifactSettled(timeout: number = TIMEOUTS.IMAGE_GENERATION) {
+    const root = this.aiResponseRoot.last();
+    const generating = root.getByTestId('generating-artifact-indicator');
+    const loading = root.getByTestId('artifact-loading');
+    await expect.poll(async () => (await generating.count()) + (await loading.count()), { timeout }).toBe(0);
+  }
 }

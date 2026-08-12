@@ -97,8 +97,29 @@ export function createAiLatencySuite({
       resolvedModel = await resolveSelectedModel(modelSelector);
       await modelSelector.selectTextModel(resolvedModel, disableSmartTools ? { disableSmartTools: true } : undefined);
 
+      // Image-generating and artifact-producing prompts render past the flat text-streaming
+      // budget, so give them the image-generation budget (the long pole is the render, not the
+      // token stream). Plain text prompts keep the standard streaming budget.
+      const streamBudget =
+        scenario.expectsImage || scenario.generatesArtifact ? TIMEOUTS.IMAGE_GENERATION : TIMEOUTS.AI_RESPONSE;
+
       const startMs = Date.now();
-      await chatPage.sendMessageAndWaitForResponse(scenario.prompt, TIMEOUTS.AI_RESPONSE);
+      let imageAsserted = false;
+      if (scenario.expectsImage) {
+        // Image flow: do not gate on the text container (it only mounts with the image), then
+        // assert the image itself as the success signal. If no image renders within budget (e.g.
+        // a model without image generation), fall through to the keyword check below rather than
+        // hard-failing, so the suite stays meaningful across model capabilities.
+        await chatPage.sendImageMessageAndWaitForResponse(scenario.prompt, streamBudget);
+        imageAsserted = await chatPage.tryWaitForImageResponse(streamBudget);
+      } else {
+        await chatPage.sendMessageAndWaitForResponse(scenario.prompt, streamBudget);
+        // Streaming completing does not mean the artifact resolved; wait out the placeholder so
+        // the scrape below reads the finished reply instead of "Generating artifact...".
+        if (scenario.generatesArtifact) {
+          await chatPage.waitForArtifactSettled(streamBudget);
+        }
+      }
       const responseTimeMs = Date.now() - startMs;
 
       const allTexts = await chatPage.aiResponseRoot.allInnerTexts();
@@ -107,19 +128,27 @@ export function createAiLatencySuite({
       const responseTimeSec = responseTimeMs / 1000;
       const responseRateCharsPerSec = responseText.length > 0 ? Math.round(responseText.length / responseTimeSec) : 0;
 
-      const normalizedResponse = normalizeForMatch(responseText);
-      const foundKeywords = scenario.expectedKeywords.filter(kw => normalizedResponse.includes(normalizeForMatch(kw)));
-      const matchedKeyword = foundKeywords[0];
+      // Keyword-on-text validates prose replies. Skip it only when a rendered image was actually
+      // asserted above: an image-only reply carries no caption, so keyword matching would be a
+      // false negative. When an image prompt produced no image (imageAsserted false), fall through
+      // and validate on text - the graceful path for models without image generation.
+      if (!imageAsserted) {
+        const normalizedResponse = normalizeForMatch(responseText);
+        const foundKeywords = scenario.expectedKeywords.filter(kw =>
+          normalizedResponse.includes(normalizeForMatch(kw))
+        );
+        const matchedKeyword = foundKeywords[0];
 
-      expect
-        .soft(
-          matchedKeyword,
-          `Keyword match failed — ` +
-            `found: [${foundKeywords.length ? foundKeywords.join(', ') : 'none'}], ` +
-            `missing: [${scenario.expectedKeywords.filter(kw => !foundKeywords.includes(kw)).join(', ')}]. ` +
-            `Response: "${responseText.slice(0, 300)}"`
-        )
-        .toBeTruthy();
+        expect
+          .soft(
+            matchedKeyword,
+            `Keyword match failed - ` +
+              `found: [${foundKeywords.length ? foundKeywords.join(', ') : 'none'}], ` +
+              `missing: [${scenario.expectedKeywords.filter(kw => !foundKeywords.includes(kw)).join(', ')}]. ` +
+              `Response: "${responseText.slice(0, 300)}"`
+          )
+          .toBeTruthy();
+      }
 
       const result: PromptResult = {
         id: scenario.id,

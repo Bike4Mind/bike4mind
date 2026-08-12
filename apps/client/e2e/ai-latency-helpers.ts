@@ -109,6 +109,18 @@ export interface PromptScenario {
   id: string;
   prompt: string;
   expectedKeywords: string[];
+  /**
+   * The reply's deliverable is a generated image (rendered as `ai-response-image`). Success is
+   * asserted on the rendered image, not on text keywords - an image-only reply carries no prose,
+   * so keyword-on-text is a false negative for it. Also grants the image-generation time budget.
+   */
+  expectsImage?: boolean;
+  /**
+   * The reply streams an artifact (shows the "Generating artifact..." placeholder) before its
+   * text is final. Grants the image-generation time budget and waits for the placeholder to clear
+   * before scraping text, so the keyword check reads the resolved article rather than the spinner.
+   */
+  generatesArtifact?: boolean;
 }
 
 export interface PromptResult {
