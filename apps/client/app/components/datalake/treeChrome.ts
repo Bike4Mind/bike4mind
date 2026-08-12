@@ -62,6 +62,9 @@ export const COUNT_CHIP_SX = {
   flexShrink: 0,
   '--Chip-paddingInline': '0px',
   '--Chip-minHeight': 'auto',
+  // The count is secondary to the row's name, so it takes the same tertiary ink the tree's other
+  // quiet glyphs use. Set on the label slot: Joy's Chip paints the label from its own variant.
+  '& .MuiChip-label': { color: 'text.tertiary' },
 } as const;
 
 /**
