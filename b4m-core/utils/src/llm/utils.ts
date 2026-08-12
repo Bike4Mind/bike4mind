@@ -1977,8 +1977,7 @@ const processMessages = (
 /**
  * Truncation telemetry for one buildAndSortMessages call. Non-nullable here because
  * ContextDebugInfo always carries a real value once assembled; buildAndSortMessages itself
- * returns this or null (the non-positive-budget early exit, never read by its caller either -
- * see the throw right after that call site).
+ * returns this or null on its non-positive-budget early exit.
  */
 export interface MessageTruncationInfo {
   wasTruncated: boolean;

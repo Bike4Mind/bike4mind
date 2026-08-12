@@ -705,6 +705,54 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    // Every other test in this file mocks messageTruncation: null, which never exercises the
+    // `if (messageTruncationInfo)` persist branch below - this is the one test that does.
+    it('persists a non-null messageTruncation onto quest.promptMeta.context', async () => {
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Hi!']);
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      const messageTruncation = {
+        wasTruncated: true,
+        originalMessageCount: 10,
+        truncatedMessageCount: 6,
+        truncationMethod: 'token-budget' as const,
+      };
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const logger = mockLogger;
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+      await service.process({ body, logger });
+
+      const updateCall = mockDb.quests.update.mock.calls.find(
+        ([arg]: [any]) => arg?.promptMeta?.context?.messageTruncation !== undefined
+      );
+      expect(updateCall).toBeDefined();
+      expect(updateCall[0].promptMeta.context.messageTruncation).toEqual(messageTruncation);
+    });
+
     // The promptMode wiring, asserted at the boundary the prompt actually crosses: the
     // context/system array handed to buildAndSortMessages. The two cases form a discriminating
     // pair - if the filter were unwired, the raw case would still carry the date context and the

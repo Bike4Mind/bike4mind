@@ -649,7 +649,7 @@ describe('Context Management Tests', () => {
 
       const tokenizer = createMockTokenizer();
 
-      const { messages: resultZero } = await buildAndSortMessages(
+      const { messages: resultZero, messageTruncation } = await buildAndSortMessages(
         messages,
         [],
         [],
@@ -661,6 +661,7 @@ describe('Context Management Tests', () => {
       );
 
       expect(resultZero).toBeDefined();
+      expect(messageTruncation).toBeNull();
       expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('Invalid maxInputTokens'));
     });
 
@@ -3977,9 +3978,10 @@ describe('buildAndSortMessages - concurrent calls do not share truncation teleme
 
     const [truncated, untouched] = await Promise.all([truncatedCall, untouchedCall]);
 
-    // Each result reflects only its own inputs. Under the old shared-state implementation this
-    // would fail: whichever call's buildDebugInfo ran LAST (here, the truncated one, since its
-    // tokenizer is slow) would leave both callers reading its numbers.
+    // Each result reflects only its own inputs, regardless of which call's internal tokenizer
+    // resolves last (here, the truncated one, since its tokenizer is slow). Locks the return-value
+    // contract that replaced the old shared-property implementation, where the two calls would
+    // have raced to overwrite the same slot.
     expect(untouched.messageTruncation?.wasTruncated).toBe(false);
     expect(truncated.messageTruncation?.wasTruncated).toBe(true);
     expect(truncated.messageTruncation?.truncationMethod).toBe('token-budget');
