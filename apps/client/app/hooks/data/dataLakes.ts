@@ -212,13 +212,15 @@ export function useBrowsePublicDataLakes(search: string) {
 
 type LifecycleAction = 'archive' | 'unarchive' | 'restore' | 'delete' | 'cleanup';
 
+async function postLifecycle(id: string, action: LifecycleAction) {
+  const response = await api.post(`/api/data-lakes/${id}/lifecycle`, { action });
+  return response.data;
+}
+
 function useLifecycleMutation(action: LifecycleAction, successMessage: string, errorMessage: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (id: string) => {
-      const response = await api.post(`/api/data-lakes/${id}/lifecycle`, { action });
-      return response.data;
-    },
+    mutationFn: (id: string) => postLifecycle(id, action),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.archived });
@@ -251,9 +253,49 @@ export function usePermanentDeleteDataLake() {
   return useLifecycleMutation('delete', 'Data lake deleted (recoverable)', 'Failed to delete data lake');
 }
 
-/** Phase 2 of permanent delete: irreversible hard-delete sweep. */
+/**
+ * Lakes whose purge the server ACCEPTED (202) but whose background sweep may not have run yet, so
+ * GET /api/data-lakes/deleted still lists them. Clearing the row from the cache alone is not
+ * enough: the next read of that list re-adds it, and there are two easy triggers - re-expanding
+ * the Deleted section, and any sibling lake mutation, since they all invalidate this key
+ * (see useLifecycleMutation). Consulted by useGetDeletedDataLakes, which self-prunes each id the
+ * moment a response stops listing it.
+ *
+ * Module-scoped so it survives the section remounting. Deliberate consequence: if a sweep fails
+ * permanently (message DLQs), the row stays hidden until a reload rather than reappearing.
+ */
+const purgingLakeIds = new Set<string>();
+
+/**
+ * Phase 2 of permanent delete: irreversible hard-delete sweep.
+ *
+ * The only lifecycle action that answers 202-queued rather than doing the work inline: the sweep
+ * runs in a background consumer (see the timeout note in pages/api/data-lakes/[id]/lifecycle.ts),
+ * so the lake is still `status: 'deleted'` when this mutation resolves. Refetching the deleted
+ * list here would therefore re-render the very row it was meant to clear, which is what kept a
+ * purged lake visible until the section was collapsed and re-expanded. Clear the row from the
+ * cache and hold the id in `purgingLakeIds` until the server agrees it is gone.
+ */
 export function useCleanupDataLake() {
-  return useLifecycleMutation('cleanup', 'Data lake permanently purged', 'Failed to clean up data lake');
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => postLifecycle(id, 'cleanup'),
+    onSuccess: (_data, id) => {
+      purgingLakeIds.add(id);
+      // A fetch already in flight when the purge was confirmed would land afterwards and re-add
+      // the row, so cancel it before writing.
+      queryClient.cancelQueries({ queryKey: dataLakeKeys.deleted });
+      queryClient.setQueryData<DataLakeConfig[]>(dataLakeKeys.deleted, old => old?.filter(lake => lake.id !== id));
+      // Deliberately NOT invalidating dataLakeKeys.list: ['data-lakes'] prefix-matches
+      // ['data-lakes', 'deleted'], so it would refetch the list above and undo the removal. No
+      // other catalog changes either - a purgeable lake is already soft-deleted, so it is
+      // already absent from the active/archived/public lists.
+      toast.success('Data lake permanently purged');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to clean up data lake');
+    },
+  });
 }
 
 /** Lists archived data lakes (management view). */
@@ -268,14 +310,24 @@ export function useGetArchivedDataLakes(enabled = true) {
   });
 }
 
-/** Lists soft-deleted data lakes (management view: restore / purge). */
+/**
+ * Lists soft-deleted data lakes (management view: restore / purge), minus any whose purge has been
+ * accepted but not yet swept - see `purgingLakeIds`. Filtering here rather than at the call site
+ * means no refetch of this key can resurrect a purged row, whatever triggered it.
+ */
 export function useGetDeletedDataLakes(enabled = true) {
   return useQuery({
     queryKey: dataLakeKeys.deleted,
     enabled,
     queryFn: async () => {
       const response = await api.get<{ data: DataLakeConfig[] }>('/api/data-lakes/deleted');
-      return response.data.data;
+      const lakes = response.data.data;
+      // Self-prune first: once the sweep has removed a lake, stop tracking it, so the set cannot
+      // outlive the purges it describes (and a re-listed id is never hidden twice over).
+      for (const id of purgingLakeIds) {
+        if (!lakes.some(lake => lake.id === id)) purgingLakeIds.delete(id);
+      }
+      return lakes.filter(lake => !purgingLakeIds.has(lake.id));
     },
   });
 }
