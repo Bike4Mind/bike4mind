@@ -3,6 +3,11 @@ import { CitableSource, IFabFileDocument } from '@bike4mind/common';
 import { filterRetrievalExcluded, isRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
+import {
+  defangRetrievedContent,
+  renderRetrievedContentBlock,
+  toContentLabel,
+} from '../../../../dataLakeService/renderRetrievedContentBlock';
 import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
 
 interface KnowledgeBaseRetrieveParams {
@@ -302,12 +307,18 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                   ? `${content.length} (truncated at budget)`
                   : `${content.length}`;
 
+            // Untrusted on every part that comes from the document, not just the body: the file
+            // name and tag list are attacker-influenced too, and a newline in either would carry a
+            // forged marker into the header lines. See renderRetrievedContentBlock.
             sections.push(
-              `### ${file.fileName} (ID: ${file.id})\n` +
-                `Tags: ${fileTags}\n` +
+              `### ${toContentLabel(file.fileName)} (ID: ${file.id})\n` +
+                `Tags: ${toContentLabel(fileTags)}\n` +
                 `Chunks: ${chunkLabel} | Characters: ${charLabel}\n` +
+                // Deliberately a literal, not RETRIEVED_SECTION_SEPARATOR: this rule divides one
+                // file's metadata from its body, while that constant joins one section to the next.
+                // Same glyph, different jobs - they are free to diverge.
                 `---\n` +
-                content
+                defangRetrievedContent(content)
             );
 
             totalCharsUsed += content.length;
@@ -352,8 +363,11 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             context.logger.log(`📖 Knowledge Retrieve: Stored ${citables.length} citables`);
           }
 
+          // This channel returns WHOLE documents (up to ABSOLUTE_MAX_CHARS) and is reachable
+          // without a prior search, so the delimiter matters more here than on the search path.
+          // The count line is ours and stays outside the block.
           const header = `Retrieved content from ${retrievedFiles.length} of ${files.length} document(s):\n`;
-          const result = header + '\n' + sections.join('\n\n---\n\n');
+          const result = header + '\n' + renderRetrievedContentBlock(sections);
 
           // Retrieval-scoped lake-prompt injection (#1108): prepend the operating instructions of
           // the trusted lakes this content came from. Skipped for the agent-scoped branch, which

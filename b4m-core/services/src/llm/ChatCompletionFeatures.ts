@@ -59,6 +59,11 @@ import {
 } from '../dataLakeService/embeddingMismatch';
 import { getAccessibleDataLakePrompts, datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
 import { renderDataLakePromptSection } from '../dataLakeService/renderDataLakePromptBlock';
+import {
+  defangRetrievedContent,
+  renderRetrievedContentBlock,
+  toContentLabel,
+} from '../dataLakeService/renderRetrievedContentBlock';
 import { getRelevantMementos } from '../mementoService';
 import {
   BaseStorage,
@@ -1890,7 +1895,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         if (used >= FORCED_RETRIEVAL_CHAR_BUDGET) break;
         const file = fileById.get(candidate.fabFileId);
         const remaining = FORCED_RETRIEVAL_CHAR_BUDGET - used;
-        const text = candidate.text.length > remaining ? candidate.text.slice(0, remaining) : candidate.text;
+        // Defang BEFORE the budget slice, not after: the defang adds one space per line-initial
+        // marker, so slicing the raw text and defanging the result would emit more characters than
+        // `used` counts and overshoot FORCED_RETRIEVAL_CHAR_BUDGET. Slicing the defanged string
+        // keeps `used` equal to what is actually injected.
+        const defanged = defangRetrievedContent(candidate.text);
+        const text = defanged.length > remaining ? defanged.slice(0, remaining) : defanged;
         const name = file?.fileName || candidate.fabFileId;
         // Distinct-file first-appearance order IS the citation index order: the
         // citables emitted below follow sourceFileIds, so [N] -> citables[N-1].
@@ -1899,10 +1909,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           sourceFileIds.push(candidate.fabFileId);
           fileIdx = sourceFileIds.length - 1;
         }
+        // Untrusted on every content-derived part, exactly as the two knowledge tools do - this is
+        // the THIRD injection site for retrieved content and the only always-on one. toContentLabel
+        // wraps `name` alone, never the whole heading: it strips brackets, so applying it wider
+        // would eat the `[N]` the indexed citation contract depends on.
+        const safeName = toContentLabel(name);
         const heading =
           this.citationStyle === 'indexed'
-            ? `### [${fileIdx + 1}] ${name} (ID: ${candidate.fabFileId})`
-            : `### ${name} (ID: ${candidate.fabFileId})`;
+            ? `### [${fileIdx + 1}] ${safeName} (ID: ${candidate.fabFileId})`
+            : `### ${safeName} (ID: ${candidate.fabFileId})`;
         sections.push(`${heading}\n${text}`);
         used += text.length;
       }
@@ -2019,9 +2034,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           : '[Knowledge Base — Retrieved Context]\n' +
             'The following content was retrieved from the curated library for this query. Ground your answer in it and ' +
             'cite documents by name. If it does not address the question, say so rather than relying on outside knowledge.\n\n';
+      // The header, capability and coverage notes are ours and stay OUTSIDE the block at column 0;
+      // only the retrieved sections go inside it. renderRetrievedContentBlock owns the same
+      // `\n\n---\n\n` join this used to do inline, so the separator is unchanged.
       const retrievedContext: IMessage = {
         role: 'system' as const,
-        content: header + capabilityNote + coverageNote + sections.join('\n\n---\n\n'),
+        content: header + capabilityNote + coverageNote + renderRetrievedContentBlock(sections),
       };
 
       // Retrieval-scoped lake-prompt injection (#1108): attach the operating instructions of ONLY
