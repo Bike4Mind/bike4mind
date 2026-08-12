@@ -31,16 +31,13 @@ import {
   fileScopedSemanticSearch,
   semanticDataLakeSearch,
   SemanticChunkResult,
-  type SemanticSearchBudgets,
   type SemanticSearchScanAccounting,
 } from '../../../../dataLakeService/semanticDataLakeSearch';
-import { resolveSearchBudgets } from '../../../../dataLakeService/resolveSearchBudgets';
+import { resolveSearchBudgets, type ResolvedSearchBudgets } from '../../../../dataLakeService/resolveSearchBudgets';
 import { openSearchChunkAdapter } from '../../../../dataLakeService/openSearchChunkAdapter';
 import { getEffectiveLLMApiKeys } from '../../../../apiKeyService';
 import { recordOperationalUsage } from '../../../../billing';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
-
-const CHUNK_TEXT_CAP = 1200;
 
 // One tiktoken tokenizer for the whole module: KB search fires up to 3x per turn on
 // the hot chat path, and a fresh tokenizer would throw away its encoder cache each call.
@@ -67,15 +64,30 @@ function prettyFileName(fn: string): string {
  * folder, research-driven acquisition), so every passage rides inside the delimited block and has
  * its line-initial markers defanged. Our own framing - the notices below and the preamble - stays
  * OUTSIDE the block at column 0, which is what makes the two distinguishable.
+ *
+ * `maxChunkChars` comes from resolveSearchBudgets, which derives it from the chunk-size policy. It is
+ * not a constant here on purpose: a serve cap set independently of the chunk size WILL disagree with
+ * it, and the disagreement is invisible - every full-size passage arrives pre-truncated and the model
+ * answers from a fraction of what the lake stores. Clipping now only fires on chunks larger than the
+ * current policy would produce (legacy content from a coarser chunker), and says so when it does.
  */
 function formatSemanticResults(
   results: SemanticChunkResult[],
+  maxChunkChars: number,
   scan?: SemanticSearchScanAccounting,
-  skipNotice?: string | null
+  skipNotice?: string | null,
+  logger?: Logger
 ): string {
+  let clippedCount = 0;
+  let longestChars = 0;
   const blocks = results.map((r, i) => {
     const text = r.chunkText.trim();
-    const clipped = text.length > CHUNK_TEXT_CAP ? `${text.slice(0, CHUNK_TEXT_CAP)}…` : text;
+    longestChars = Math.max(longestChars, text.length);
+    // Clip BEFORE defanging, never after: defang indents line-initial markers, so slicing the
+    // defanged string would spend part of the content budget on the defense itself.
+    const overBudget = text.length > maxChunkChars;
+    if (overBudget) clippedCount++;
+    const clipped = overBudget ? `${text.slice(0, maxChunkChars)}\u2026` : text;
     // The file name is content-adjacent and equally attacker-influenced: without toContentLabel a
     // crafted name carries a newline plus a forged marker into the label line.
     return (
@@ -83,6 +95,15 @@ function formatSemanticResults(
       defangRetrievedContent(clipped)
     );
   });
+  // One line per call, not per passage: this runs on the hot chat path up to MAX_SEARCHES times a
+  // turn. Silence here was the reason a lake could deliver a fraction of its content indefinitely
+  // without anything to grep for, so the counts and the longest passage are both named.
+  if (clippedCount > 0) {
+    logger?.warn(
+      `📚 [semantic] clipped ${clippedCount}/${results.length} passage(s) at ${maxChunkChars} chars ` +
+        `(longest ${longestChars}); these chunks exceed the current chunk policy and should be reprocessed`
+    );
+  }
   // A truncated scan ranked only part of the corpus. Say so, or the model will read "no further
   // matches" into what is really "we stopped looking" and assert the library holds nothing else.
   // filesScanned + annFilesQueried, not filesScanned alone: an Atlas-served file was searched too,
@@ -90,9 +111,23 @@ function formatSemanticResults(
   const partial = scan?.truncated
     ? `NOTE: this search covered only ${scan.filesScanned + scan.annFilesQueried} of ${scan.filesMatching} documents (a scan budget was reached), so these passages may be incomplete. Do not state or imply the knowledge base has nothing further on this topic.\n\n`
     : '';
+  // Distinct from the note above: that one says how much of the corpus was reached, this says that a
+  // passage which WAS reached arrived incomplete. Composed here at column 0, deliberately outside the
+  // untrusted block - inside it, defangRetrievedContent would indent our own notice.
+  const clippedScope =
+    clippedCount === results.length
+      ? results.length === 1
+        ? 'The passage'
+        : `All ${results.length} passages`
+      : `${clippedCount} of the ${results.length} passages`;
+  const truncated =
+    clippedCount > 0
+      ? `NOTE: ${clippedScope} below ${clippedCount === 1 ? 'was' : 'were'} truncated at ${maxChunkChars} characters, so ${clippedCount === 1 ? 'it shows' : 'each shows'} only its opening. Do not treat a truncated passage as the document's full content; call retrieve_knowledge_content for the rest of a file you need to quote or reason over precisely.\n\n`
+      : '';
   return (
     formatSkipNotice(skipNotice) +
     partial +
+    truncated +
     `Found ${results.length} relevant passage(s) in the knowledge base — the content is included below, so answer directly and only call retrieve_knowledge_content if you need MORE detail from a specific file:\n\n` +
     renderRetrievedContentBlock(blocks)
   );
@@ -119,7 +154,7 @@ async function resolveEmbeddingContext(context: ToolContext): Promise<{
   embeddingModel: SupportedEmbeddingModel;
   provider: string;
   apiKeyTable: Awaited<ReturnType<typeof getEffectiveLLMApiKeys>>;
-  budgets: SemanticSearchBudgets;
+  budgets: ResolvedSearchBudgets;
   vectorSearchEnabled: boolean;
 } | null> {
   const adminSettings = context.db.adminSettings;
@@ -372,7 +407,7 @@ async function trySemanticKbSearch(
 
     // Provenance for retrieval-scoped lake-prompt injection: which lakes these passages came from.
     return {
-      output: formatSemanticResults(ranked, search.scan, skipNotice),
+      output: formatSemanticResults(ranked, budgets.maxChunkChars, search.scan, skipNotice, context.logger),
       skipNotice,
       datalakeTags: datalakeTagsFrom(ranked.flatMap(r => r.fileTags)),
     };
@@ -434,7 +469,11 @@ async function tryScopedSemanticKbSearch(
     await emitSemanticCitables(context, ranked, "this agent's knowledge base", skipNotice);
     // Agent-scoped results never carry a lake prompt: this arm must not consult owner-wide access
     // or imply a wider corpus, so its provenance is intentionally empty (no injection downstream).
-    return { output: formatSemanticResults(ranked, search.scan, skipNotice), skipNotice, datalakeTags: [] };
+    return {
+      output: formatSemanticResults(ranked, budgets.maxChunkChars, search.scan, skipNotice, context.logger),
+      skipNotice,
+      datalakeTags: [],
+    };
   } catch (err) {
     context.logger.warn('📚 [semantic] scoped KB search failed, falling back to scoped keyword:', err);
     return NO_SEMANTIC_RESULT;
