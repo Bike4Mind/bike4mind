@@ -16,7 +16,9 @@ const makeAdapters = (fileCount: number) => ({
       activateIfDraft: vi.fn().mockResolvedValue(true),
     },
     fabFiles: {
-      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount, totalSizeBytes: fileCount * 100 }),
+      computeDataLakeStats: vi
+        .fn()
+        .mockResolvedValue({ fileCount, totalSizeBytes: fileCount * 100, totalChunkedChars: 0 }),
     },
   },
 });
@@ -27,7 +29,11 @@ describe('recomputeLakeStats draft activation', () => {
 
     await recomputeLakeStats(lake, adapters);
 
-    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 1, totalSizeBytes: 100 });
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
+      fileCount: 1,
+      totalSizeBytes: 100,
+      totalChunkedChars: 0,
+    });
     expect(adapters.db.dataLakes.activateIfDraft).toHaveBeenCalledWith('lake1');
   });
 
@@ -36,12 +42,20 @@ describe('recomputeLakeStats draft activation', () => {
 
     await recomputeLakeStats(lake, adapters);
 
-    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 0, totalSizeBytes: 0 });
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
+      fileCount: 0,
+      totalSizeBytes: 0,
+      totalChunkedChars: 0,
+    });
     expect(adapters.db.dataLakes.activateIfDraft).not.toHaveBeenCalled();
   });
 
   it('still returns the stats it computed', async () => {
-    expect(await recomputeLakeStats(lake, makeAdapters(3))).toEqual({ fileCount: 3, totalSizeBytes: 300 });
+    expect(await recomputeLakeStats(lake, makeAdapters(3))).toEqual({
+      fileCount: 3,
+      totalSizeBytes: 300,
+      totalChunkedChars: 0,
+    });
   });
 
   it('skipActivation still corrects stats but never activates, even with member files', async () => {
@@ -49,7 +63,11 @@ describe('recomputeLakeStats draft activation', () => {
 
     await recomputeLakeStats(lake, adapters, { skipActivation: true });
 
-    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 1, totalSizeBytes: 100 });
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
+      fileCount: 1,
+      totalSizeBytes: 100,
+      totalChunkedChars: 0,
+    });
     expect(adapters.db.dataLakes.activateIfDraft).not.toHaveBeenCalled();
   });
 

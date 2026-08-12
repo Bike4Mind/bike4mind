@@ -70,8 +70,12 @@ async function backfillFiles(opts: Options): Promise<number> {
     if (ids.length === 0) break;
     afterFileId = ids[ids.length - 1];
     for (const id of ids) {
-      const total = await fabFileChunkRepository.sumChunkCharLengthByFabFileId(id);
-      if (opts.execute) await fabFileRepository.setChunkedCharCount(id, total);
+      // Dry-run never needs the sum - it only exists to be discarded - so skip the aggregate
+      // entirely rather than paying for it on every file in the lake.
+      if (opts.execute) {
+        const total = await fabFileChunkRepository.sumChunkCharLengthByFabFileId(id);
+        await fabFileRepository.setChunkedCharCount(id, total);
+      }
       processed++;
     }
     console.log(`  phase 2: ${opts.execute ? 'stamped' : '[dry-run] would stamp'} ${processed} file(s) so far`);
@@ -120,6 +124,14 @@ async function main(opts: Options): Promise<number> {
 const argv = yargs(hideBin(process.argv))
   .option('execute', { type: 'boolean', default: false, describe: 'Actually write (default: dry-run)' })
   .option('batch-size', { type: 'number', default: 5_000, describe: 'Chunks read per page' })
+  .check(checkedArgv => {
+    // A batch size of 0 means an unbounded page under Mongo's `.limit()` semantics (0 = no limit),
+    // not an empty one - so this must reject rather than silently scanning the whole collection.
+    if (checkedArgv['batch-size'] < 1) {
+      throw new Error('--batch-size must be at least 1');
+    }
+    return true;
+  })
   .parseSync();
 
 main({ execute: argv.execute, batchSize: argv['batch-size'] })

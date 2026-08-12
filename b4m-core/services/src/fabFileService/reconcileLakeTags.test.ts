@@ -26,7 +26,7 @@ const makeAdapters = (
       findById: vi.fn().mockResolvedValue({ id: 'f1', userId: 'owner', tags: storedTags }),
       pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
       pushTagsByFabFileId: vi.fn().mockResolvedValue(1),
-      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 4, totalSizeBytes: 40 }),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 4, totalSizeBytes: 40, totalChunkedChars: 0 }),
     },
     dataLakes: {
       findByDatalakeTag: vi.fn().mockResolvedValue(lakeDoc),
@@ -70,7 +70,7 @@ describe('reconcileLakeTags', () => {
     // under the lake's prefix would reproduce the "counted but not browseable" bug otherwise.
     expect(result.tagsToPersist).toEqual([tag('datalake:lake', 1), tag('lk:uncategorized', 1)]);
     expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
-    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40, totalChunkedChars: 0 });
   });
 
   // The whole point of routing this door through the membership path.
@@ -91,7 +91,7 @@ describe('reconcileLakeTags', () => {
     await result.commit();
 
     expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:invoices']);
-    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40, totalChunkedChars: 0 });
   });
 
   it('leaves membership alone when the caller round-trips the meta-tag', async () => {
@@ -228,7 +228,7 @@ describe('reconcileLakeTags', () => {
       // removeFileFromLake pulls the meta-tag unconditionally alongside the prefix tags (a no-op
       // for a name the file never carried) - see its own doc comment on the atomic $pull.
       expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:invoices']);
-      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
+      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40, totalChunkedChars: 0 });
     });
 
     it('refuses a prefix-arm leave by a caller who cannot manage the lake, before any write', async () => {
@@ -258,7 +258,7 @@ describe('reconcileLakeTags', () => {
       );
       await result.commit();
 
-      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
+      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40, totalChunkedChars: 0 });
     });
 
     it('keeps membership when a sibling tag under the same prefix survives', async () => {
@@ -349,7 +349,7 @@ describe('reconcileLakeTags', () => {
       } as any);
       await result.commit();
 
-      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
+      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40, totalChunkedChars: 0 });
     });
 
     it('recomputes stats on a prefix-arm join when the actor manages the lake', async () => {
@@ -358,7 +358,7 @@ describe('reconcileLakeTags', () => {
       const result = await run(adapters, [], [tag('lk:invoices', 1)]);
       await result.commit();
 
-      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
+      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40, totalChunkedChars: 0 });
     });
 
     // MEMBERSHIP needs no gate (the read-side predicate grants it purely on the tag), but the
@@ -379,7 +379,7 @@ describe('reconcileLakeTags', () => {
       );
       await result.commit();
 
-      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
+      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40, totalChunkedChars: 0 });
       expect(adapters.db.dataLakes.activateIfDraft).not.toHaveBeenCalled();
     });
   });
