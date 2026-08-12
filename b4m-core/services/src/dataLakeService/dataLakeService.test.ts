@@ -1223,13 +1223,39 @@ describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
     const result = await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
       db: { dataLakes, fabFiles },
     });
-    // The dedup probe stays on the bare meta-tag: it decides which copy gets hard-deleted, and
+    // The dedup probe stays on the bare meta-tag: it decides which copy gets soft-deleted, and
     // fileTagPrefix is not unique, so a widened probe could nominate another lake's file.
     expect(fabFiles.findByContentHashesInDataLake).toHaveBeenCalledWith(['h1', 'h2'], 'datalake:lake');
-    expect(fabFiles.unarchiveByDataLakeTag).toHaveBeenCalledWith(lakeScope);
+    // No filesArchivedAt on this lake (a lake archived before the field existed), so both the
+    // dedup read and the reversal stay unbounded, unchanged from before this stamp was threaded
+    // through.
+    expect(fabFiles.findArchivedByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
+    expect(fabFiles.unarchiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, undefined);
     expect(fabFiles.deleteManyInIds).toHaveBeenCalledWith(['a1']);
     expect(result.skippedDuplicates).toBe(1);
     expect(result.restoredCount).toBe(1);
+  });
+
+  it("passes this lake's own filesArchivedAt stamp through to both the dedup read and the reversal", async () => {
+    const STAMP = new Date('2026-05-01');
+    const fabFiles = {
+      findArchivedByDataLakeTag: vi.fn().mockResolvedValue([]),
+      findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
+      unarchiveByDataLakeTag: vi.fn().mockResolvedValue(1),
+      deleteManyInIds: vi.fn().mockResolvedValue(undefined),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 1, totalSizeBytes: 10 }),
+    };
+    const dataLakes = {
+      findById: vi.fn().mockResolvedValue(lake({ status: 'archived', filesArchivedAt: STAMP })),
+      update: vi.fn().mockResolvedValue(lake()),
+      setStats: vi.fn().mockResolvedValue(lake()),
+      activateIfDraft: vi.fn(),
+    };
+
+    await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { db: { dataLakes, fabFiles } });
+
+    expect(fabFiles.findArchivedByDataLakeTag).toHaveBeenCalledWith(lakeScope, STAMP);
+    expect(fabFiles.unarchiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, STAMP);
   });
 
   it('clears filesArchivedAt so a later re-archive claims a fresh stamp, not a stale reused one', async () => {
@@ -1395,17 +1421,47 @@ describe('archiveDataLake - retrieval-index removal', () => {
 
   // Covers a legacy pre-field lake and a claim-without-sweep crash alike (see archiveDataLake's
   // hasUnstampedArchive guard): naming a fresh batch here would be narrower than what's archived.
-  it('skips the claim when unstamped archived members already exist, archiving unstamped instead', async () => {
+  it('skips the claim when THIS lake already has an unstamped archived member of its own, archiving unstamped instead', async () => {
     const adapters = makeAdapters();
     adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(lake({ filesArchivedAt: undefined }));
     adapters.db.fabFiles.hasArchivedByDataLakeTag = vi.fn().mockResolvedValue(true);
 
     await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
 
+    // Scoped to the meta-tag alone, not the full scope - see the call site's own comment for why
+    // the full scope would make this trip on every second archiver in a live collision.
+    expect(adapters.db.fabFiles.hasArchivedByDataLakeTag).toHaveBeenCalledWith({ datalakeTag: 'datalake:lake' });
     expect(adapters.db.dataLakes.claimFilesArchivedAt).not.toHaveBeenCalled();
     // No stamp to give these rows, so archiveDataLake generates an orphaned one visibly at the
     // call site rather than relying on archiveByDataLakeTag's own default.
     expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, expect.any(Date));
+  });
+
+  it('claims its own stamp even when a prefix-sharing sibling already has an archived row, so the second lake to archive in a collision is not left permanently unstamped', async () => {
+    // The regression this guards against: a meta-tag-scoped hasArchivedByDataLakeTag mock
+    // returning false (this lake's OWN meta-tag has no archived member) even though a sibling's
+    // prefix-only row is already archived - the full-scope version would have returned true here
+    // and skipped the claim on every archive this lake ever runs while the sibling stays archived.
+    const adapters = makeAdapters();
+    const stamp = new Date('2026-05-01');
+    adapters.db.fabFiles.hasArchivedByDataLakeTag = vi.fn().mockResolvedValue(false);
+    adapters.db.dataLakes.claimFilesArchivedAt = vi.fn().mockResolvedValue(stamp);
+
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+
+    expect(adapters.db.dataLakes.claimFilesArchivedAt).toHaveBeenCalledWith('lake1', expect.any(Date));
+    expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, stamp);
+  });
+
+  it("still skips the claim when a co-owning lake already archived a file carrying THIS lake's own meta-tag too (the residual multi-membership limitation)", async () => {
+    const adapters = makeAdapters();
+    adapters.db.dataLakes.findById = vi.fn().mockResolvedValue(lake({ filesArchivedAt: undefined }));
+    adapters.db.fabFiles.hasArchivedByDataLakeTag = vi.fn().mockResolvedValue(true);
+
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+
+    expect(adapters.db.fabFiles.hasArchivedByDataLakeTag).toHaveBeenCalledWith({ datalakeTag: 'datalake:lake' });
+    expect(adapters.db.dataLakes.claimFilesArchivedAt).not.toHaveBeenCalled();
   });
 
   it('claims normally when the lake has no unstamped archived members', async () => {
@@ -1415,7 +1471,7 @@ describe('archiveDataLake - retrieval-index removal', () => {
 
     await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
 
-    expect(adapters.db.fabFiles.hasArchivedByDataLakeTag).toHaveBeenCalledWith(lakeScope);
+    expect(adapters.db.fabFiles.hasArchivedByDataLakeTag).toHaveBeenCalledWith({ datalakeTag: 'datalake:lake' });
     expect(adapters.db.dataLakes.claimFilesArchivedAt).toHaveBeenCalledWith('lake1', expect.any(Date));
     expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, stamp);
   });
@@ -1454,39 +1510,28 @@ describe('archiveDataLake - retrieval-index removal', () => {
       dataLakeId: 'lake1',
     });
     expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, expect.any(Date));
-    // No stamp means the zero-swept clear-back below can never fire for this lake - nothing to
-    // clear, and clearing would wipe a mark a concurrent claimant may since have written.
     expect(adapters.db.dataLakes.update).not.toHaveBeenCalledWith(expect.objectContaining({ filesArchivedAt: null }));
   });
 
-  it('clears the just-claimed stamp back to null when the sweep matches nothing (a concurrent sibling won the probe-to-claim race)', async () => {
+  it('keeps a freshly-minted stamp even when the sweep matches nothing (an empty lake, or a concurrent sibling/same-lake claim that swept first)', async () => {
+    // Clearing this back to null used to be the behavior - it now reads downstream as "this lake
+    // predates filesArchivedAt" and makes a later unarchive run unbounded, freeing whatever a
+    // sibling or a co-owning lake legitimately holds archived under its OWN stamp. The regression
+    // this test guards against: archiving an ordinary empty lake, in isolation, must never leave it
+    // in a state where its own later unarchive call can reach outside its own batch.
     const adapters = makeAdapters();
-    // Base mock echoes the exact `at` passed in, simulating a claim THIS call actually won
-    // (wasMinted true) - a fixed unrelated Date would simulate an echoed peer's stamp instead.
+    const stamp = new Date('2026-05-01');
+    adapters.db.dataLakes.claimFilesArchivedAt = vi.fn().mockResolvedValue(stamp);
     adapters.db.fabFiles.archiveByDataLakeTag = vi.fn().mockResolvedValue(0);
 
     await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
 
-    expect(adapters.db.dataLakes.update).toHaveBeenCalledWith({ id: 'lake1', filesArchivedAt: null });
+    expect(adapters.db.dataLakes.update).not.toHaveBeenCalledWith(expect.objectContaining({ filesArchivedAt: null }));
   });
 
   it('leaves the stamp alone when the sweep matches at least one row', async () => {
     const adapters = makeAdapters();
     adapters.db.fabFiles.archiveByDataLakeTag = vi.fn().mockResolvedValue(1);
-
-    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
-
-    expect(adapters.db.dataLakes.update).not.toHaveBeenCalledWith(expect.objectContaining({ filesArchivedAt: null }));
-  });
-
-  it('leaves the stamp alone when a concurrent claim on this SAME lake wins and our sweep matches nothing (echoed, not minted)', async () => {
-    const adapters = makeAdapters();
-    const peerStamp = new Date('2026-05-01');
-    // Our own claim call loses the set-if-unset to a concurrent request on the same lake and
-    // echoes the peer's winning stamp back - unequal to the `at` this call generated internally,
-    // so wasMinted is false even though a stamp came back and the sweep matched nothing.
-    adapters.db.dataLakes.claimFilesArchivedAt = vi.fn().mockResolvedValue(peerStamp);
-    adapters.db.fabFiles.archiveByDataLakeTag = vi.fn().mockResolvedValue(0);
 
     await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
 

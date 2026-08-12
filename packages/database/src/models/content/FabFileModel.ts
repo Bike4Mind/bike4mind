@@ -1032,9 +1032,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   // restore now also clears `archivedAt` (an archive->delete->restore must not leave files
   // archived-and-invisible) - so equality-bounding that clear against the stamp is what stops it
   // from freeing a prefix-sharing sibling's independently-archived files, the same way the delete
-  // axis avoids reviving a file the creator deleted on their own. `unarchiveByDataLakeTag` still
-  // matches on `archivedAt` alone (unbounded) - that reversal's own bounding is separate,
-  // unresolved scope.
+  // axis avoids reviving a file the creator deleted on their own. `unarchiveByDataLakeTag` and
+  // `findArchivedByDataLakeTag` bound themselves the same way, over the WHOLE membership filter -
+  // a meta-tag match is not exempt: `addFileToLake` lets one file carry more than one lake's
+  // meta-tag with no exclusivity check, so a meta-tagged row can just as easily belong to a
+  // co-owning lake's own archive as a prefix-tagged row can belong to a sibling's.
 
   async archiveByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<number> {
     const result = await this.fabFileModel.updateMany(
@@ -1044,26 +1046,33 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.modifiedCount;
   }
 
-  async unarchiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number> {
+  async unarchiveByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<number> {
     const result = await this.fabFileModel.updateMany(
-      { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: { $ne: null } },
+      { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: stampedAt ?? { $ne: null } },
       { $set: { archivedAt: null } }
     );
     return result.modifiedCount;
   }
 
-  async findArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]> {
+  // `stampedAt` narrows the dedup read the same way it narrows the reversal above - omitting it
+  // (a lake with no recorded stamp) matches every archived row, same as before this parameter
+  // existed. Without this, the dedup pass could read a co-owning or sibling lake's own archived
+  // member and, if it happens to share a contentHash with one of THIS lake's live files,
+  // soft-delete that other lake's row as a "duplicate" it never owned.
+  async findArchivedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({
       ...buildDataLakeMembershipFilter(scope),
       deletedAt: null,
-      archivedAt: { $ne: null },
+      archivedAt: stampedAt ?? { $ne: null },
     });
     return result.map(d => d.toJSON());
   }
 
-  // Same predicate as findArchivedByDataLakeTag, but an existence probe rather than a full read -
-  // for a caller (archiveDataLake's hasUnstampedArchive guard) that only needs to know "any?", not
-  // the documents themselves, and would otherwise materialize every archived row on every archive.
+  // Unbounded existence probe, deliberately with no `stampedAt` param unlike
+  // findArchivedByDataLakeTag above - its one caller (archiveDataLake's hasUnstampedArchive
+  // guard) needs to know whether ANY member is already archived, stamped or not, to decide
+  // whether claiming a fresh stamp would strand a pre-existing one; scoping it by a stamp that
+  // does not exist yet would defeat the check.
   async hasArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<boolean> {
     return (
       (await this.fabFileModel.exists({
