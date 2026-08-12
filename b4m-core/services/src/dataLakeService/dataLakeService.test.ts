@@ -8,7 +8,13 @@ import {
   type IDataLakeDocument,
   type IDataLakeBatchDocument,
 } from '@bike4mind/common';
-import { canAccessLake, assertLakeAccess, assertLakeWritable, isFallbackLake } from './assertLakeAccess';
+import {
+  canAccessLake,
+  assertLakeAccess,
+  assertLakeWritable,
+  assertLakeGrantable,
+  isFallbackLake,
+} from './assertLakeAccess';
 import { canManageLake, assertLakeWriteAccess, assertCanWriteDataLakeTags } from './authorizeLakeWrite';
 import { createDataLake } from './createDataLake';
 import { archiveDataLake } from './archiveDataLake';
@@ -318,6 +324,16 @@ describe('assertLakeWritable / isFallbackLake — fallback lakes are read-only',
   it('passes a persisted (ObjectId-style) lake through untouched', () => {
     expect(isFallbackLake({ id: '507f1f77bcf86cd799439011' })).toBe(false);
     expect(() => assertLakeWritable({ id: '507f1f77bcf86cd799439011' })).not.toThrow();
+  });
+});
+
+describe('assertLakeGrantable - fallback lakes cannot hold access grants (#1667 carve-out)', () => {
+  it('refuses a grant against a fallback lake (no backing document to attach membership to)', () => {
+    expect(() => assertLakeGrantable({ id: 'opti-knowledge' })).toThrow(/built into the platform/i);
+  });
+
+  it('passes a persisted (ObjectId-style) lake through untouched', () => {
+    expect(() => assertLakeGrantable({ id: '507f1f77bcf86cd799439011' })).not.toThrow();
   });
 });
 
