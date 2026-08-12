@@ -15,6 +15,12 @@ export interface SpendPeriodLabels {
  * Mirrors the window math in the /api/admin/spend handler's resolveWindows: with no
  * range it is the default trailing window; otherwise the prior window is the same
  * length immediately before `from`. dateFrom/dateTo are ISO instants from the filter.
+ *
+ * @see apps/client/pages/api/admin/spend.ts `resolveWindows` - the server twin these
+ * labels describe; the two derivations must stay in sync. They already diverge on the
+ * dateTo-only path: the subtract() below is calendar-aware while the server subtracts a
+ * fixed 30 * DAY_MS, so a derived `from` landing within an hour of local midnight on a
+ * DST-transition day labels one calendar day and queries another.
  */
 export function spendPeriodLabels(dateFrom?: string, dateTo?: string): SpendPeriodLabels {
   const hasFrom = Boolean(dateFrom);
