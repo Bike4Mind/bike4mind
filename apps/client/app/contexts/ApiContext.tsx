@@ -192,10 +192,19 @@ api.interceptors.response.use(
         return Promise.reject(error);
       }
 
-      // Prevent secondary loops: if this request was already retried after
-      // a successful refresh and still got 401, give up.
+      // A refresh already succeeded (_retryCount is only bumped after refreshPromise
+      // RESOLVES) and we retried once, yet this request STILL 401s. The freshly minted
+      // token is being rejected, so the session is unrecoverable - e.g. a server-side
+      // token/session mismatch where /api/auth/refreshToken keeps returning 200 but the
+      // access verifier keeps rejecting the token it mints. Left un-torn-down, the session
+      // stays alive (expired: false) and every repeating trigger - WS reconnect probes,
+      // tab-focus probes, polling queries - re-drives another refresh+retry cycle forever,
+      // spamming /api/auth/refreshToken and /api/identify with no prompt (the "401 storm a
+      // reload can't fix, only re-login" failure). Tear down to a clean session_expired
+      // redirect instead of silently rejecting and looping.
       const retryCount = error.config?._retryCount || 0;
       if (retryCount >= 1) {
+        await forceSessionExpiredRedirect();
         return Promise.reject(error);
       }
 

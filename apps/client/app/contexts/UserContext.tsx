@@ -230,6 +230,11 @@ export const migrateUserContext = (persistedState: unknown, version: number | un
   return persistedState as UserContextProps;
 };
 
+/** Single-flight guard for refreshUser's imperative /api/identify call (see refreshUser
+ *  below). Module-scoped so it is shared across all callers, mirroring probeInFlight in
+ *  sessionBootstrap.ts. */
+let refreshUserInFlight: Promise<void> | null = null;
+
 export const useUser = create<UserContextProps>()(
   persist(
     set => ({
@@ -254,20 +259,30 @@ export const useUser = create<UserContextProps>()(
         });
       },
       refreshUser: async () => {
-        try {
-          const response = await api.get<{ user: IUserDocument }>('/api/identify');
-          set({
-            currentUser: response.data.user,
-            isHydrated: true,
-            isAdmin: !!response.data.user?.isAdmin,
-            isBanned: !!response.data.user?.isBanned,
-            isModerated: !!response.data.user?.isModerated,
-            isDeveloper: userIsDeveloper(response.data.user),
-            isCustomer: userIsCustomer(response.data.user),
-          });
-        } catch (error) {
-          console.error('Error refreshing user:', error);
-        }
+        // Single-flight: unlike probeIdentity (sessionBootstrap.ts) this imperative
+        // /api/identify call had no dedup, so an effect that re-runs each render could fire
+        // one identify per render. Concurrent callers share the one in-flight request; the
+        // guard clears on settle so a later, genuinely-new refresh still runs.
+        if (refreshUserInFlight) return refreshUserInFlight;
+        refreshUserInFlight = (async () => {
+          try {
+            const response = await api.get<{ user: IUserDocument }>('/api/identify');
+            set({
+              currentUser: response.data.user,
+              isHydrated: true,
+              isAdmin: !!response.data.user?.isAdmin,
+              isBanned: !!response.data.user?.isBanned,
+              isModerated: !!response.data.user?.isModerated,
+              isDeveloper: userIsDeveloper(response.data.user),
+              isCustomer: userIsCustomer(response.data.user),
+            });
+          } catch (error) {
+            console.error('Error refreshing user:', error);
+          } finally {
+            refreshUserInFlight = null;
+          }
+        })();
+        return refreshUserInFlight;
       },
     }),
     {

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { IUserDocument } from '@bike4mind/common';
+import { api } from '@client/app/contexts/ApiContext';
 import {
   useUser,
   migrateUserContext,
@@ -23,6 +24,13 @@ vi.mock('../components/ExpiredSession', () => ({ default: () => null }));
 vi.mock('@client/app/hooks/data/user', () => ({
   useGetIdentify: vi.fn(),
   useReturnTokenValidation: vi.fn(),
+}));
+// refreshUser calls api.get('/api/identify'); mock the axios instance so the single-flight
+// guard can be exercised without a network layer (and to avoid ApiContext's module-scope
+// interceptor registration side effects).
+vi.mock('@client/app/contexts/ApiContext', () => ({
+  api: { get: vi.fn() },
+  isPublicPath: () => false,
 }));
 
 // Minimal stand-in for a user record. The store actions only read `tags`,
@@ -191,5 +199,54 @@ describe('useUser store — isHydrated flag', () => {
     useUser.getState().setCurrentUser(fakeUser({ aupAcceptedVersion: 'v1' }));
     const persisted = JSON.parse(localStorage.getItem('user-context') as string);
     expect(persisted.state.currentUser.aupAcceptedVersion).toBe('v1');
+  });
+});
+
+describe('refreshUser single-flight guard', () => {
+  const mockGet = api.get as unknown as ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    mockGet.mockReset();
+    useUser.setState({ currentUser: null });
+  });
+
+  it('collapses concurrent calls into a single /api/identify request', async () => {
+    let resolveGet!: (value: unknown) => void;
+    mockGet.mockReturnValue(
+      new Promise(resolve => {
+        resolveGet = resolve;
+      })
+    );
+
+    const { refreshUser } = useUser.getState();
+    const first = refreshUser();
+    const second = refreshUser();
+
+    // Both callers share the one in-flight request instead of each firing its own.
+    expect(mockGet).toHaveBeenCalledTimes(1);
+
+    resolveGet({ data: { user: fakeUser() } });
+    await Promise.all([first, second]);
+    expect(mockGet).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows a genuinely new refresh after the previous one settles', async () => {
+    mockGet.mockResolvedValue({ data: { user: fakeUser() } });
+    const { refreshUser } = useUser.getState();
+
+    await refreshUser();
+    await refreshUser();
+
+    expect(mockGet).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears the guard even when the request rejects, so a retry can still fire', async () => {
+    mockGet.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce({ data: { user: fakeUser() } });
+    const { refreshUser } = useUser.getState();
+
+    await refreshUser(); // swallows the error (logged), then clears the guard
+    await refreshUser();
+
+    expect(mockGet).toHaveBeenCalledTimes(2);
   });
 });
