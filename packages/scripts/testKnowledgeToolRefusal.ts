@@ -24,7 +24,18 @@
  *
  * Usage:
  *   pnpm --filter @bike4mind/scripts test:kb-refusal \
- *     -- --base-url=https://app.pr<N>.preview.bike4mind.com --trials=10 --arms=gpt-4o,meta.llama3-70b-instruct-v1:0
+ *     -- --base-url=https://app.pr<N>.preview.bike4mind.com --trials=10 --arms=gpt-4o
+ *
+ * A quiet/fast preview can vectorize the fixture inside the script's own upload-to-ask round
+ * trip, which INVALIDates a trial without exercising the gate at all (see runTrial). Rather than
+ * require a human to guess a large-enough --trials, each non-control arm keeps running numbered
+ * attempts past --trials until it collects --min-valid (default 5) genuinely-valid trials, up to
+ * a generous attempt ceiling - so the SAME command self-scales on a fast stage instead of coming
+ * back inconclusive. Add --arms=<model>,meta.llama3-70b-instruct-v1:0 (or another Bedrock Llama
+ * id) ONLY if that model is actually present on the target stage's catalog (GET /api/models) -
+ * it is an OPTIONAL control arm proving inline delivery still works, not part of the default, and
+ * is exempt from --min-valid since it cannot call tools and its invalid rate never touches the
+ * gate either way. Do not read a green Llama column as evidence the gating fix works.
  *
  * Add --search-my-files to also run one "search my files for..." phrased trial per arm,
  * exercising the tool-recommender bypass path (a caller-requested tool survives the
@@ -40,7 +51,7 @@
  *   - the `openaiDemoKey` admin setting is populated - OPENAI_API_KEY env is ignored unless
  *     B4M_SELF_HOST=true, so a plain env var is a no-op on any hosted SST stage.
  *   - AWS Bedrock model access granted for the Llama arn/id in $AWS_REGION (default us-east-2),
- *     if running that arm.
+ *     only if you explicitly add a Llama/Bedrock control arm.
  */
 
 import { writeFileSync, mkdirSync } from 'node:fs';
@@ -54,6 +65,7 @@ import path from 'node:path';
 type CliArgs = {
   baseUrl: string;
   trials: number;
+  minValid: number;
   arms: string[];
   searchMyFiles: boolean;
   timeoutMs: number;
@@ -70,7 +82,9 @@ function parseArgs(): CliArgs {
   }
   const baseUrl = (flags['base-url'] ?? process.env.BASE_URL ?? '').replace(/\/$/, '');
   if (!baseUrl) throw new Error('--base-url=<url> or BASE_URL env is required');
-  const arms = (flags.arms ?? process.env.ARMS ?? 'gpt-4o,meta.llama3-70b-instruct-v1:0')
+  // No Llama/Bedrock id by default: it is an OPTIONAL control arm, and hardcoding one here means
+  // the copy-paste default errors the moment a stage's catalog does not carry that exact id.
+  const arms = (flags.arms ?? process.env.ARMS ?? 'gpt-4o')
     .split(',')
     .map(s => s.trim())
     .filter(Boolean);
@@ -79,6 +93,7 @@ function parseArgs(): CliArgs {
   return {
     baseUrl,
     trials: Number(flags.trials ?? process.env.TRIALS ?? 10),
+    minValid: Number(flags['min-valid'] ?? process.env.MIN_VALID ?? 5),
     arms,
     searchMyFiles: flags['search-my-files'] === 'true' || process.env.SEARCH_MY_FILES === '1',
     timeoutMs: Number(flags.timeout ?? process.env.TIMEOUT_MS ?? 60_000),
@@ -315,6 +330,9 @@ interface TrialRecord {
   model: string;
   phrasing: 'plain' | 'search-my-files';
   offeredTools: string[];
+  // On an INVALID verdict these two are placeholder `false` set before the model's reply was ever
+  // inspected, not a measurement - the precondition failed before there was anything to check.
+  // Do not read a run's INVALID rows as "the model failed to answer".
   refusalMatched: boolean;
   canaryFound: boolean;
   verdict: Verdict;
@@ -392,10 +410,11 @@ async function runTrial(
 async function main(): Promise<void> {
   const args = parseArgs();
   const runId = `${Date.now().toString(36)}-${process.pid}`;
-  console.log(`BASE_URL = ${args.baseUrl}`);
-  console.log(`TRIALS   = ${args.trials}`);
-  console.log(`ARMS     = ${args.arms.join(', ')}`);
-  console.log(`RUN_ID   = ${runId}`);
+  console.log(`BASE_URL  = ${args.baseUrl}`);
+  console.log(`TRIALS    = ${args.trials}`);
+  console.log(`MIN_VALID = ${args.minValid}`);
+  console.log(`ARMS      = ${args.arms.join(', ')}`);
+  console.log(`RUN_ID    = ${runId}`);
 
   const armResults: Record<string, TrialRecord[]> = {};
 
@@ -430,11 +449,24 @@ async function main(): Promise<void> {
 
   for (const model of args.arms) {
     const trials: TrialRecord[] = [];
-    for (let n = 1; n <= args.trials; n++) {
+    // Llama-family control arms cannot call tools at all, so their invalid rate never touches the
+    // gate either way (see the hardFail exemption below) - run exactly --trials for them. Every
+    // other arm keeps going past --trials, up to a generous ceiling, until it collects --min-valid
+    // genuinely-valid trials: a fast preview can lose the vectorization race on nearly every
+    // attempt, and a FIXED trial count can never adapt to that, no matter how large (QA: 10 and 30
+    // trials both landed a ~90% invalid rate). Attempting more trials is the correct response to a
+    // fast environment, not a bigger --trials the tester has to guess.
+    const isControlArm = model.toLowerCase().includes('llama');
+    const maxAttempts = isControlArm ? args.trials : Math.max(args.trials, args.minValid * 20);
+    let n = 0;
+    let validCount = 0;
+    while (n < maxAttempts && (isControlArm ? n < args.trials : validCount < args.minValid)) {
+      n++;
       await runAndRecord(model, n, 'plain', trials);
+      if (trials[trials.length - 1].verdict !== 'INVALID') validCount++;
     }
     if (args.searchMyFiles) {
-      await runAndRecord(model, args.trials + 1, 'search-my-files', trials);
+      await runAndRecord(model, n + 1, 'search-my-files', trials);
     }
     armResults[model] = trials;
   }
@@ -466,8 +498,11 @@ async function main(): Promise<void> {
     console.error('FAIL: search_knowledge_base was offered on at least one trial while the file was unvectorized.');
   }
   for (const row of summary) {
-    if (row.invalid >= 3 && !row.model.toLowerCase().includes('llama')) {
-      console.error(`FAIL: ${row.model} had ${row.invalid} invalid trials (>= 3) - run is inconclusive, not green.`);
+    if (!row.model.toLowerCase().includes('llama') && row.pass + row.fail < args.minValid) {
+      console.error(
+        `FAIL: ${row.model} collected only ${row.pass + row.fail} valid trial(s) (need >= ${args.minValid}) ` +
+          `after ${row.pass + row.fail + row.invalid} attempts - run is inconclusive, not green.`
+      );
     }
   }
 
@@ -476,16 +511,18 @@ async function main(): Promise<void> {
   writeFileSync(outPath, JSON.stringify({ runId, args, armResults, summary }, null, 2));
   console.log(`\nWrote ${outPath}`);
 
-  // Rates, not absolute counts - a hardcoded "< 8" or ">= 3" silently stops meaning what it says
-  // the moment --trials is anything other than 10.
+  // An absolute floor, not a rate: the trial loop above already retries past --trials until it
+  // collects --min-valid valid trials, so a fixed valid-count requirement can never become
+  // unsatisfiable just because the environment is fast (a RATE like "invalid/total >= 0.3" is -
+  // it stays constant no matter how many attempts run, which is exactly what QA's #1163 report
+  // caught: 10 and 30 trials both landed the same ~90% invalid rate). Hitting this now means the
+  // attempt ceiling was exhausted, a genuinely rare case worth surfacing rather than rounding up.
   const hardFail =
     anyGateViolation ||
     // Llama arms are a control (cannot call tools) - they only prove raw-content delivery still
-    // works, not the auto-offer gate, so neither their pass rate nor their invalid rate (a
+    // works, not the auto-offer gate, so neither their pass rate nor their invalid count (a
     // vectorization race that never touches the gate either way) should fail the run.
-    summary.some(
-      r => !r.model.toLowerCase().includes('llama') && r.invalid / Math.max(1, r.pass + r.fail + r.invalid) >= 0.3
-    ) ||
+    summary.some(r => !r.model.toLowerCase().includes('llama') && r.pass + r.fail < args.minValid) ||
     summary.some(
       r => !r.model.toLowerCase().includes('llama') && r.pass + r.fail > 0 && r.pass / (r.pass + r.fail) < 0.8
     );
