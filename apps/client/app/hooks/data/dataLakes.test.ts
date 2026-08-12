@@ -36,7 +36,7 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => {
 vi.mock('@client/app/hooks/useGearsStatus', () => ({ invalidateGearsStatusWhileLocked: () => {} }));
 
 import {
-  resetPurgingLakesForTests,
+  __resetPurgingLakesForTests,
   useBrowsePublicDataLakes,
   useCleanupDataLake,
   useDuplicatePrefixLake,
@@ -228,7 +228,7 @@ describe('useCleanupDataLake queued purge', () => {
   const deletedFetchCount = () => apiGet.mock.calls.filter(call => call[0] === '/api/data-lakes/deleted').length;
 
   beforeEach(() => {
-    resetPurgingLakesForTests();
+    __resetPurgingLakesForTests();
     apiGet.mockReset();
     apiPost.mockReset();
     apiPost.mockResolvedValue({ data: { success: true, queued: true } });
