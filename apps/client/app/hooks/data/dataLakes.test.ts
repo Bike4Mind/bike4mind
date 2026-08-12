@@ -14,8 +14,13 @@ import type { BrowsePublicDataLakesResult, PublicDataLakeSummary } from '@bike4m
 
 const apiGet = vi.fn();
 const apiDelete = vi.fn();
+const apiPost = vi.fn();
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { get: (...args: unknown[]) => apiGet(...args), delete: (...args: unknown[]) => apiDelete(...args) },
+  api: {
+    get: (...args: unknown[]) => apiGet(...args),
+    delete: (...args: unknown[]) => apiDelete(...args),
+    post: (...args: unknown[]) => apiPost(...args),
+  },
 }));
 // dataLakes.ts value-imports these at module load for its OTHER hooks; useBrowsePublicDataLakes
 // touches none of them, and AccountSelector alone would pull in MUI Joy plus two React contexts.
@@ -30,7 +35,13 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => {
 });
 vi.mock('@client/app/hooks/useGearsStatus', () => ({ invalidateGearsStatusWhileLocked: () => {} }));
 
-import { useBrowsePublicDataLakes, useDuplicatePrefixLake, useRemoveFileFromDataLake } from './dataLakes';
+import {
+  useBrowsePublicDataLakes,
+  useCleanupDataLake,
+  useDuplicatePrefixLake,
+  useGetDeletedDataLakes,
+  useRemoveFileFromDataLake,
+} from './dataLakes';
 
 const PAGE_SIZE = 24;
 
@@ -179,6 +190,126 @@ describe('useRemoveFileFromDataLake cache invalidation', () => {
     // fileCount derived from the files holding each tag, and invalidating only the longer
     // key leaves that list stale. Prefix matching covers the counts endpoint too.
     expect(keys).toContain(JSON.stringify(['file-tags']));
+  });
+});
+
+/**
+ * The purge is queued, not done: POST .../lifecycle {action:'cleanup'} answers 202 and the sweep
+ * runs in a background consumer, so GET /api/data-lakes/deleted still returns the lake for a
+ * while afterwards. That is why these tests mock the endpoint to keep returning BOTH lakes - a
+ * refetch on the purge path is guaranteed to see the pre-sweep truth and put the row back (#1487).
+ */
+describe('useCleanupDataLake queued purge', () => {
+  const deletedLake = (id: string) => ({ id, name: `Lake ${id}`, fileTagPrefix: `${id}:` });
+  const listing = (...ids: string[]) => ({ data: { data: ids.map(deletedLake) } });
+
+  // The pending-purge set behind this behavior is module-scoped (session-scoped by design: it must
+  // survive the Deleted section remounting), so a purged id stays tracked until the server stops
+  // listing it. Tests therefore use DISTINCT lake ids rather than resetting shared state.
+  const mountPurgeSurface = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    const view = renderHook(() => ({ deleted: useGetDeletedDataLakes(true), cleanup: useCleanupDataLake() }), {
+      wrapper,
+    });
+    return { ...view, queryClient, invalidate };
+  };
+
+  // Any refetch the purge triggers resolves immediately here, so one macrotask is enough for it
+  // to have landed - which is what makes "it never happened" a real assertion rather than a race.
+  const settle = () =>
+    act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+
+  const deletedFetchCount = () => apiGet.mock.calls.filter(call => call[0] === '/api/data-lakes/deleted').length;
+
+  beforeEach(() => {
+    apiGet.mockReset();
+    apiPost.mockReset();
+    apiPost.mockResolvedValue({ data: { success: true, queued: true } });
+  });
+
+  it('removes the purged lake from the expanded list and keeps it gone', async () => {
+    apiGet.mockResolvedValue(listing('lk1', 'lk2'));
+    const { result, invalidate } = mountPurgeSurface();
+    await waitFor(() => expect(result.current.deleted.data).toHaveLength(2));
+
+    await act(async () => {
+      await result.current.cleanup.mutateAsync('lk1');
+    });
+    await settle();
+
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lk1/lifecycle', { action: 'cleanup' });
+    expect(result.current.deleted.data).toEqual([deletedLake('lk2')]);
+    // Exactly the mount fetch: a second GET would have re-added the still-soft-deleted lk1.
+    expect(deletedFetchCount()).toBe(1);
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it('invalidates no key that prefix-matches the deleted list', async () => {
+    apiGet.mockResolvedValue(listing('lk3', 'lk4'));
+    const { result, invalidate } = mountPurgeSurface();
+    await waitFor(() => expect(result.current.deleted.data).toHaveLength(2));
+
+    await act(async () => {
+      await result.current.cleanup.mutateAsync('lk3');
+    });
+    await settle();
+
+    // Literal keys on purpose (the parity convention of this file). ['data-lakes'] is the trap:
+    // it PREFIX-matches ['data-lakes','deleted'], so invalidating the lake list here would
+    // refetch the deleted list and undo the removal above just as surely as naming it directly.
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).not.toContain(JSON.stringify(['data-lakes']));
+    expect(keys).not.toContain(JSON.stringify(['data-lakes', 'deleted']));
+  });
+
+  it('stays gone when a sibling mutation refetches the list before the sweep has run', async () => {
+    // The realistic trigger: every other lake mutation invalidates dataLakeKeys.list, which
+    // prefix-matches this key, and re-expanding the section refetches too. The server still lists
+    // the lake for the whole sweep window, so the cache write alone would be undone here.
+    apiGet.mockResolvedValue(listing('lk5', 'lk6'));
+    const { result, queryClient } = mountPurgeSurface();
+    await waitFor(() => expect(result.current.deleted.data).toHaveLength(2));
+
+    await act(async () => {
+      await result.current.cleanup.mutateAsync('lk5');
+    });
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ['data-lakes'] });
+    });
+    await settle();
+
+    expect(deletedFetchCount()).toBe(2); // the refetch really happened
+    expect(result.current.deleted.data).toEqual([deletedLake('lk6')]);
+  });
+
+  it('stops suppressing a purged id once the server no longer lists it', async () => {
+    // Self-prune, so the set cannot grow forever or hide a lake indefinitely. Second phase asserts
+    // the id was genuinely dropped rather than suppressed for the rest of the session.
+    apiGet.mockResolvedValue(listing('lk7', 'lk8'));
+    const { result, queryClient } = mountPurgeSurface();
+    await waitFor(() => expect(result.current.deleted.data).toHaveLength(2));
+
+    await act(async () => {
+      await result.current.cleanup.mutateAsync('lk7');
+    });
+
+    // Sweep finished: the endpoint stops listing lk7, which is what prunes it.
+    apiGet.mockResolvedValue(listing('lk8'));
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ['data-lakes', 'deleted'] });
+    });
+    await waitFor(() => expect(result.current.deleted.data).toEqual([deletedLake('lk8')]));
+
+    apiGet.mockResolvedValue(listing('lk7', 'lk8'));
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ['data-lakes', 'deleted'] });
+    });
+    await waitFor(() => expect(result.current.deleted.data).toHaveLength(2));
   });
 });
 
