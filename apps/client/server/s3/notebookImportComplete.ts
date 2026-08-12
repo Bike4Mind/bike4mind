@@ -205,12 +205,29 @@ const processNotebookImport = async (
         skippedItems: result.skippedNotebooks,
       });
 
+      // Attachment failures are warnings, not errors, so they do not abort the import - but the
+      // user still has to hear about them, or a notebook silently arrives without its files.
+      const warnings = result.warnings ?? [];
+      const shown = warnings.slice(0, 5);
+      // Assembled from parts and joined, so an absent clause cannot leave a double space behind.
+      const parts = [
+        `Successfully imported ${result.importedNotebooks} notebook(s) with ${result.importedMessages} messages.`,
+      ];
+      if (result.skippedNotebooks > 0) {
+        parts.push(`Skipped ${result.skippedNotebooks} duplicate(s).`);
+      }
+      if (warnings.length) {
+        // Neutral wording on purpose: not every entry is a failure. A file that imported with its
+        // type degraded says so itself, and calling that "could not be imported" contradicts the
+        // record. Each message states its own outcome.
+        const more = warnings.length > shown.length ? `; and ${warnings.length - shown.length} more` : '';
+        parts.push(`${warnings.length} attachment issue(s): ${shown.join('; ')}${more}.`);
+      }
+
       await inboxRepository.createInboxMessage({
         type: InboxType.COMMON,
-        title: '✅ Notebook Import Successful',
-        message: `Successfully imported ${result.importedNotebooks} notebook(s) with ${result.importedMessages} messages. ${
-          result.skippedNotebooks > 0 ? `Skipped ${result.skippedNotebooks} duplicate(s).` : ''
-        }`,
+        title: warnings.length ? '⚠️ Notebook Import Completed With Issues' : '✅ Notebook Import Successful',
+        message: parts.join(' '),
         receiverId: userId,
         userId,
       });

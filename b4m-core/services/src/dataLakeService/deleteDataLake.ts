@@ -5,6 +5,7 @@ import type {
   IFabFileRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { canManageLake } from './manageRule';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
 import { bestEffortIndexRemove, type RetrievalIndexPort } from './ports';
@@ -35,7 +36,7 @@ export const deleteDataLake = async (
   if (!existing) {
     throw new NotFoundError('Data lake not found');
   }
-  if (!actor.isAdmin && existing.createdByUserId !== actor.userId) {
+  if (!canManageLake(existing, actor)) {
     throw new BadRequestError('Only the creator can delete this data lake');
   }
   // Only short-circuit on the terminal state. A lake stuck in transitional 'deleting'

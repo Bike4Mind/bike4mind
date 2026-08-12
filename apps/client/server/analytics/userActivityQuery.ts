@@ -24,17 +24,11 @@
 import { z } from 'zod';
 import { SAFE_USER_LOOKUP_PROJECT, dayjs } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
+import { DEFAULT_PAGE_SIZE, MetadataFilterSchema, type MetadataFilter } from './metadataFilterContract';
 
-export const DEFAULT_PAGE_SIZE = 25;
+export { DEFAULT_PAGE_SIZE, type MetadataFilter };
 /** Keeps one page comfortably under Lambda's 6MB response cap even for wide metadata. */
 export const MAX_PAGE_SIZE = 5000;
-
-/**
- * Metadata paths are interpolated into Mongo field keys, so they are allowlisted rather
- * than escaped: letters-first segments only, which rules out `$`-prefixed operators and
- * `__proto__`.
- */
-const METADATA_FIELD = /^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*){0,4}$/;
 
 /**
  * The only metadata keys that split the row unit. A key belongs here when two rows differing
@@ -46,16 +40,6 @@ const METADATA_FIELD = /^[A-Za-z][A-Za-z0-9_-]*(\.[A-Za-z][A-Za-z0-9_-]*){0,4}$/
  * `modelName` would split rows the client used to merge.
  */
 export const SPLIT_METADATA_KEYS = ['reportId'] as const;
-
-const MetadataFilterSchema = z.object({
-  field: z.string().max(64).regex(METADATA_FIELD),
-  operator: z.enum(['equals', 'contains', 'in', 'exists', 'not_exists']),
-  // Scalars only. `unknown` let a crafted object reach String(value) and throw (an object with
-  // non-callable toString/valueOf has no primitive), which surfaced as a 500 rather than a 400.
-  value: z.union([z.string().max(200), z.number(), z.boolean()]).optional(),
-});
-
-export type MetadataFilter = z.infer<typeof MetadataFilterSchema>;
 
 /** Parses the JSON-encoded `metadataFilters` query param. Throws ZodError on anything unsafe. */
 export function parseMetadataFilters(raw: string | undefined): MetadataFilter[] {
@@ -122,11 +106,16 @@ function metadataCondition({ field, operator, value }: MetadataFilter): Record<s
     case 'in':
       return {
         [path]: {
+          // A numeric/boolean metadata field never matches a regex, so each token widens to its
+          // coerced scalar too - the same trick coerceValues already applies to `equals`.
           $in: String(value ?? '')
             .split(',')
             .map(v => v.trim())
             .filter(Boolean)
-            .map(v => new RegExp(`^${regexSource(v)}$`, 'i')),
+            .flatMap(v => [
+              new RegExp(`^${regexSource(v)}$`, 'i'),
+              ...coerceValues(v).filter(coerced => typeof coerced !== 'string'),
+            ]),
         },
       };
     case 'equals':

@@ -26,7 +26,7 @@ const makeAdapters = (
       findById: vi.fn().mockResolvedValue({ id: 'f1', userId: 'owner', tags: storedTags }),
       pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
       pushTagsByFabFileId: vi.fn().mockResolvedValue(1),
-      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 4, totalSizeBytes: 40 }),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 4, totalSizeBytes: 40, totalChunkedChars: 0 }),
     },
     dataLakes: {
       findByDatalakeTag: vi.fn().mockResolvedValue(lakeDoc),
@@ -70,7 +70,11 @@ describe('reconcileLakeTags', () => {
     // under the lake's prefix would reproduce the "counted but not browseable" bug otherwise.
     expect(result.tagsToPersist).toEqual([tag('datalake:lake', 1), tag('lk:uncategorized', 1)]);
     expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
-    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
+      fileCount: 4,
+      totalSizeBytes: 40,
+      totalChunkedChars: 0,
+    });
   });
 
   // The whole point of this door: a whole-array write cannot tell an intentional removal from a
@@ -424,7 +428,11 @@ describe('reconcileLakeTags', () => {
       const result = await run(adapters, [], [tag('lk:invoices', 1)]);
       await result.commit();
 
-      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
+      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
+        fileCount: 4,
+        totalSizeBytes: 40,
+        totalChunkedChars: 0,
+      });
     });
 
     // MEMBERSHIP needs no gate (the read-side predicate grants it purely on the tag), but the
@@ -445,7 +453,11 @@ describe('reconcileLakeTags', () => {
       );
       await result.commit();
 
-      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 4, totalSizeBytes: 40 });
+      expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
+        fileCount: 4,
+        totalSizeBytes: 40,
+        totalChunkedChars: 0,
+      });
       expect(adapters.db.dataLakes.activateIfDraft).not.toHaveBeenCalled();
     });
   });

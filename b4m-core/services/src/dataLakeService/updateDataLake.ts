@@ -1,6 +1,7 @@
 import type { IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
 import { UpdateDataLakeRequestInput, normalizeEntitlementKey } from '@bike4mind/common';
 import { secureParameters, BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { canManageLake } from './manageRule';
 import type { z } from 'zod';
 
 type UpdateDataLakeParams = z.infer<typeof UpdateDataLakeRequestInput>;
@@ -32,7 +33,7 @@ export const updateDataLake = async (
     throw new NotFoundError(`Data lake not found`);
   }
 
-  if (!actor.isAdmin && existing.createdByUserId !== actor.userId) {
+  if (!canManageLake(existing, actor)) {
     throw new BadRequestError('Only the creator can update this data lake');
   }
 

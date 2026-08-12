@@ -9,6 +9,7 @@ import {
   TAXONOMY_RATE_LIMIT_WINDOW_MS,
 } from '@server/dataLakes/taxonomyRateLimit';
 import { BadRequestError, NotFoundError, ReanalyzeTaxonomyRequestInput, hasDeveloperUserTag } from '@bike4mind/common';
+import { dataLakeService } from '@bike4mind/services';
 import { dataLakeBatchRepository, dataLakeRepository } from '@bike4mind/database';
 import { Request } from 'express';
 
@@ -42,7 +43,7 @@ const handler = baseApi()
 
     const lake = await dataLakeRepository.findById(batch.dataLakeId);
     if (!lake) throw new NotFoundError('Data lake not found');
-    if (!req.user.isAdmin && lake.createdByUserId !== userId) {
+    if (!dataLakeService.canManageLake(lake, { userId, isAdmin: req.user.isAdmin })) {
       throw new BadRequestError('Only the creator can re-analyze this batch');
     }
 
