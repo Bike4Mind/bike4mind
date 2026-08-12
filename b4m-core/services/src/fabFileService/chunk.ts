@@ -1,4 +1,5 @@
 import {
+  countCodePoints,
   IFabFileChunkDocument,
   IFabFileRepository,
   IUserDocument,
@@ -79,6 +80,8 @@ export const chunkFabfile = async (
   chunker.freeEncoder();
   Logger.globalInstance.log(`Completed chunking file into ${chunks.length} chunks`);
 
+  const chunkCharLengths = chunks.map(chunk => countCodePoints(chunk.text));
+
   // Resolved before the old chunks are deleted below - their per-chunk embeddingModel is the
   // only place this survives once they're gone. Chunks can span more than one model if this
   // file was already re-embedded once before (see IFabFileChunk.embeddingModel), so
@@ -91,6 +94,7 @@ export const chunkFabfile = async (
   fabFile.isChunking = false;
   fabFile.chunked = chunks.length > 0;
   fabFile.chunkCount = chunks.length;
+  fabFile.chunkedCharCount = chunkCharLengths.reduce((sum, len) => sum + len, 0);
 
   fabFile.isVectorizing = false;
   fabFile.vectorized = chunks.length > 0;
@@ -111,9 +115,10 @@ export const chunkFabfile = async (
   }
 
   const fabFileChunks = await Promise.all(
-    chunks.map(async chunk => {
+    chunks.map(async (chunk, i) => {
       return {
         ...chunk,
+        charLength: chunkCharLengths[i],
         fabFileId,
         createdAt: new Date(),
         updatedAt: new Date(),

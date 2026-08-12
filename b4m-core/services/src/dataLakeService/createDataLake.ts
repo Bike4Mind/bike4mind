@@ -122,6 +122,7 @@ export const createDataLake = async (
       status: 'draft',
       fileCount: 0,
       totalSizeBytes: 0,
+      totalChunkedChars: 0,
     } as Omit<IDataLakeDocument, 'id' | 'createdAt' | 'updatedAt'>);
 
     return dataLake;

@@ -115,7 +115,20 @@ describe('FabFile data lake lifecycle membership', () => {
       expect(await fabFileRepository.computeDataLakeStats(metaOnlyScope)).toEqual({
         fileCount: 1,
         totalSizeBytes: 100,
+        totalChunkedChars: 0,
       });
+    });
+
+    it('sums member files chunkedCharCount, treating missing as 0', async () => {
+      const rows = await seedLakeRows();
+      await FabFile.updateOne({ _id: rows.metaTagged._id }, { $set: { chunkedCharCount: 1200 } });
+      // prefixOwned deliberately left without the field (legacy doc).
+      // Stranger-owned rows must not contribute even when stamped:
+      await FabFile.updateOne({ _id: rows.unrelated._id }, { $set: { chunkedCharCount: 999 } });
+
+      const stats = await fabFileRepository.computeDataLakeStats(scope);
+
+      expect(stats.totalChunkedChars).toBe(1200);
     });
 
     it('ignores archived and deleted members', async () => {

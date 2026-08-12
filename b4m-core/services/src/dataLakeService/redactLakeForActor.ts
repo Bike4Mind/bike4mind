@@ -35,6 +35,7 @@ export const READER_LAKE_FIELDS = [
   'status',
   'fileCount',
   'totalSizeBytes',
+  'totalChunkedChars',
   'lastSyncAt',
 ] as const satisfies readonly (keyof IDataLakeDocument)[];
 
@@ -72,6 +73,7 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   status: 'reader',
   fileCount: 'reader',
   totalSizeBytes: 'reader',
+  totalChunkedChars: 'reader',
   lastSyncAt: 'reader',
   // Teardown bookkeeping: of no use to a reader, and it reports when the owner tore the lake down.
   filesDeletedAt: 'withheld',

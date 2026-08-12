@@ -144,7 +144,7 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
     vi.clearAllMocks();
     h.findByDatalakeTag.mockResolvedValue(LAKE);
     h.update.mockResolvedValue(undefined);
-    h.computeDataLakeStats.mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 });
+    h.computeDataLakeStats.mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 });
     h.find.mockResolvedValue([]);
   });
 

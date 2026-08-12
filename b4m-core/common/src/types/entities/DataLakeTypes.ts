@@ -111,6 +111,12 @@ export interface IDataLake {
   fileCount?: number;
   /** Cached total size in bytes (updated on upload/delete) */
   totalSizeBytes?: number;
+  /**
+   * Cached sum of member files' chunkedCharCount (Unicode code points of chunked text) -
+   * the retrievable-content denominator for lake health (#1666). Recomputed with
+   * fileCount/totalSizeBytes by recomputeLakeStats; never incremented in place.
+   */
+  totalChunkedChars?: number;
   /** Last time files were synced/uploaded to this data lake */
   lastSyncAt?: Date;
   /**
@@ -225,7 +231,10 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     offset?: number;
   }): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
   /** Persist recomputed stats (source via IFabFileRepository.computeDataLakeStats). */
-  setStats(id: string, stats: { fileCount: number; totalSizeBytes: number }): Promise<IDataLakeDocument | null>;
+  setStats(
+    id: string,
+    stats: { fileCount: number; totalSizeBytes: number; totalChunkedChars: number }
+  ): Promise<IDataLakeDocument | null>;
   /**
    * One-way draft -> active, the transition that makes a lake reachable from `findPublicLakes`
    * and the `findActive*` retrieval arms. Guarded inside the query, so a caller holding a stale

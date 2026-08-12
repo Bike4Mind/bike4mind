@@ -245,6 +245,47 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
   async getAtlasIndexStatus(model: string): Promise<{ queryable: boolean; status: string } | null> {
     return getAtlasIndexStatusForModel(mongoose.connection, model);
   }
+
+  /**
+   * One page of chunk ids still missing `charLength`, ascending by `_id` - the char-length
+   * backfill's keyset cursor (packages/scripts/datalake/backfill-chunk-char-length.ts).
+   * `charLength: null` deliberately matches missing AND explicit null.
+   */
+  async findChunkIdsMissingCharLength(
+    options: { limit?: number; afterChunkId?: string } = {}
+  ): Promise<string[]> {
+    const { limit = 5_000, afterChunkId } = options;
+    const docs = await this.fabFileChunkModel
+      .find({ charLength: null, ...(afterChunkId ? { _id: { $gt: afterChunkId } } : {}) })
+      .select({ _id: 1 })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean();
+    return docs.map(d => String(d._id));
+  }
+
+  /**
+   * Stamp `charLength` on the given chunks server-side: a pipeline update computing $strLenCP
+   * over the stored text, so chunk text never leaves the database. Counts Unicode code points -
+   * the same number countCodePoints produces on the live write path (see that helper's comment
+   * for why the two must agree).
+   */
+  async backfillCharLengthByIds(chunkIds: string[]): Promise<number> {
+    if (chunkIds.length === 0) return 0;
+    const result = await this.fabFileChunkModel.updateMany({ _id: { $in: chunkIds } }, [
+      { $set: { charLength: { $strLenCP: '$text' } } },
+    ]);
+    return result.modifiedCount;
+  }
+
+  /** Sum of a file's chunks' charLength, unstamped chunks counted as 0 - backfill phase 2 input. */
+  async sumChunkCharLengthByFabFileId(fabFileId: string): Promise<number> {
+    const [agg] = await this.fabFileChunkModel.aggregate<{ total: number }>([
+      { $match: { fabFileId } },
+      { $group: { _id: null, total: { $sum: { $ifNull: ['$charLength', 0] } } } },
+    ]);
+    return agg?.total ?? 0;
+  }
 }
 
 const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
@@ -256,6 +297,8 @@ const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
       required: true,
     },
     tokenCount: { type: Number, required: true },
+    // Unicode code points of `text` (countCodePoints / $strLenCP); see IFabFileChunk.charLength.
+    charLength: { type: Number, required: false },
     vector: { type: [Number], required: false },
     embeddingModel: { type: String, required: false },
   },
@@ -861,6 +904,29 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.map(d => d.toJSON());
   }
 
+  async findByDriveFileIdsInDataLake(driveFileIds: string[], datalakeTag: string): Promise<IFabFileDocument[]> {
+    if (driveFileIds.length === 0) return [];
+    // The recursive Drive walk can surface up to 100k children PER folder, so an unchunked $in
+    // would risk Mongo's 16 MB BSON query ceiling and a degraded plan long before it. Query in
+    // id-chunks and concatenate.
+    const CHUNK_SIZE = 5000;
+    const results: IFabFileDocument[] = [];
+    for (let i = 0; i < driveFileIds.length; i += CHUNK_SIZE) {
+      const chunk = driveFileIds.slice(i, i + CHUNK_SIZE);
+      const docs = await this.fabFileModel.find({
+        driveFileId: { $in: chunk },
+        deletedAt: null,
+        archivedAt: null,
+        tags: { $elemMatch: { name: datalakeTag } },
+        // Same orphan-pending exclusion as findByContentHashesInDataLake: a failed prior ingest
+        // left 'pending' must not block a legit re-ingest of the same Drive file.
+        status: { $ne: 'pending' },
+      });
+      results.push(...docs.map(d => d.toJSON()));
+    }
+    return results;
+  }
+
   // Data lake lifecycle. Membership is the two-signal rule in buildDataLakeMembershipFilter
   // (meta-tag OR a fileTagPrefix match on a file the lake's creator owns), shared with the
   // single-lake browse so a read and a whole-lake write never disagree about who is a member.
@@ -881,8 +947,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * conjunct is not in that index, so a prefix-heavy lake fetches its candidate documents to
    * check ownership.
    */
-  async computeDataLakeStats(scope: DataLakeMembershipScope): Promise<{ fileCount: number; totalSizeBytes: number }> {
-    const [agg] = await this.fabFileModel.aggregate<{ fileCount: number; totalSizeBytes: number }>([
+  async computeDataLakeStats(
+    scope: DataLakeMembershipScope
+  ): Promise<{ fileCount: number; totalSizeBytes: number; totalChunkedChars: number }> {
+    const [agg] = await this.fabFileModel.aggregate<{
+      fileCount: number;
+      totalSizeBytes: number;
+      totalChunkedChars: number;
+    }>([
       {
         $match: {
           ...buildDataLakeMembershipFilter(scope),
@@ -891,10 +963,43 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           status: { $ne: 'pending' },
         },
       },
-      { $group: { _id: null, fileCount: { $sum: 1 }, totalSizeBytes: { $sum: { $ifNull: ['$fileSize', 0] } } } },
-      { $project: { _id: 0, fileCount: 1, totalSizeBytes: 1 } },
+      {
+        $group: {
+          _id: null,
+          fileCount: { $sum: 1 },
+          totalSizeBytes: { $sum: { $ifNull: ['$fileSize', 0] } },
+          totalChunkedChars: { $sum: { $ifNull: ['$chunkedCharCount', 0] } },
+        },
+      },
+      { $project: { _id: 0, fileCount: 1, totalSizeBytes: 1, totalChunkedChars: 1 } },
     ]);
-    return agg ?? { fileCount: 0, totalSizeBytes: 0 };
+    return agg ?? { fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 };
+  }
+
+  /**
+   * One page of file ids that have chunks but no `chunkedCharCount` (missing or nulled by a
+   * content rewrite), ascending by `_id` - the char-length backfill's phase-2 cursor.
+   */
+  async findFileIdsMissingChunkedCharCount(
+    options: { limit?: number; afterFileId?: string } = {}
+  ): Promise<string[]> {
+    const { limit = 1_000, afterFileId } = options;
+    const docs = await this.fabFileModel
+      .find({
+        chunkedCharCount: null,
+        chunkCount: { $gt: 0 },
+        ...(afterFileId ? { _id: { $gt: afterFileId } } : {}),
+      })
+      .select({ _id: 1 })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean();
+    return docs.map(d => String(d._id));
+  }
+
+  /** Stamp a file's recomputed `chunkedCharCount` - the char-length backfill's phase-2 write. */
+  async setChunkedCharCount(id: string, chunkedCharCount: number): Promise<void> {
+    await this.fabFileModel.updateOne({ _id: id }, { $set: { chunkedCharCount } });
   }
 
   /**
@@ -1226,6 +1331,8 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
 
     chunkCount: { type: Number, default: 0 },
     vectorizedChunkCount: { type: Number, default: 0 },
+    // Sum of the file's chunks' charLength; nulled on content rewrite. See IFabFile.chunkedCharCount.
+    chunkedCharCount: { type: Number, required: false },
 
     isChunking: { type: Boolean, default: false },
     chunked: { type: Boolean, default: false },
@@ -1267,6 +1374,12 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // per-source origin (for Slack: channel + message ts) that makes an ingested file auditable.
     sourceType: { type: String, enum: Object.values(FabFileSourceType), required: false },
     sourceMetadata: { type: Schema.Types.Mixed, required: false },
+    // Google Drive ingest provenance (#1589). Populated when sourceType === GOOGLE_DRIVE.
+    driveFileId: { type: String },
+    driveModifiedTime: { type: Date },
+    driveMd5Checksum: { type: String },
+    sourceLakeId: { type: String },
+    driveConnectionId: { type: String },
     archivedAt: { type: Date },
     // Absent until the first AI edit of a docx/xlsx; each edit appends an entry.
     versions: { type: [FabFileVersionSchema], default: undefined },
@@ -1322,6 +1435,9 @@ FabFileSchema.index({ 'tags.name': 1, archivedAt: 1, deletedAt: 1 });
 
 // Content hash deduplication lookups
 FabFileSchema.index({ contentHash: 1, userId: 1 });
+
+// Google Drive ingest dedup (driveFileId is the stable re-sync key; contentHash changes on edit)
+FabFileSchema.index({ driveFileId: 1 });
 
 // Un-chunked rescue sweep (buildFabFileChunkScanFilter: self-host worker scan + the hosted
 // dataLakeBatchReconcile cron). Equality prefix, createdAt range last; without it the daily

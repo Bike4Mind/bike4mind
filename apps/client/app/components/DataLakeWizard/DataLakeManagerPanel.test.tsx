@@ -12,6 +12,10 @@ const archiveMutate = vi.fn((_id: string, opts?: { onSuccess?: () => void }) => 
 // Same for purge, so the confirm dialog's close-on-success wiring is exercised.
 const cleanupMutate = vi.fn((_id: string, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
 const useActiveDataLakeBatches = vi.fn(() => ({ data: [] as unknown[] }));
+// Lifecycle lists default to in-flight (undefined); a test can resolve them to drive the
+// empty-section rendering.
+const useGetArchivedDataLakes = vi.fn(() => ({ data: undefined as unknown[] | undefined }));
+const useGetDeletedDataLakes = vi.fn(() => ({ data: undefined as unknown[] | undefined }));
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });
   return {
@@ -20,7 +24,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     useRestoreDeletedDataLake: mutation,
     usePermanentDeleteDataLake: mutation,
     useCleanupDataLake: () => ({ mutate: cleanupMutate, isPending: false }),
-    useGetArchivedDataLakes: () => ({ data: undefined }),
+    useGetArchivedDataLakes: () => useGetArchivedDataLakes(),
     useGetDeletedDataLakes: () => useGetDeletedDataLakes(),
     useActiveDataLakeBatches: () => useActiveDataLakeBatches(),
     useGetDataLakes: () => useGetDataLakes(),
@@ -77,11 +81,12 @@ const lakeFiles = [
   // uncategorized and the backfill stamps it. This bucket has to agree, or the file is reachable
   // from neither the tree nor here.
   { id: 'f4', fileName: 'bare.md', tags: [{ name: 'datalake:mine' }, { name: 'lk:' }] },
+  // Tagged with "genre" itself, not a deeper child - "genre" is ALSO the parent of war/peace
+  // above, so this file must stay reachable once genre has subfolders.
+  { id: 'f5', fileName: 'genre-overview.md', tags: [{ name: 'lk:genre' }] },
 ];
 
 const useGetDataLakes = vi.fn(() => ({ data: [] as unknown[], isLoading: false }));
-// undefined data = the section's query has not resolved (it only fires once expanded).
-const useGetDeletedDataLakes = vi.fn(() => ({ data: undefined as unknown[] | undefined }));
 
 // Default (flag on) is established per-describe; tests override per-case.
 const isFeatureEnabled = vi.fn();
@@ -164,6 +169,10 @@ beforeEach(() => {
   useGetDeletedDataLakes.mockReturnValue({ data: undefined });
   useActiveDataLakeBatches.mockReset();
   useActiveDataLakeBatches.mockReturnValue({ data: [] });
+  useGetArchivedDataLakes.mockReset();
+  useGetArchivedDataLakes.mockReturnValue({ data: undefined });
+  useGetDeletedDataLakes.mockReset();
+  useGetDeletedDataLakes.mockReturnValue({ data: undefined });
   // managerTab is module state in the real store, so a test left in Discover would otherwise
   // decide what the next one renders.
   useDataLakeWizardStore.setState({ managerTab: 'mine' });
@@ -202,6 +211,24 @@ describe('DataLakeManagerPanel - root view', () => {
     expect(screen.getByTestId('datalake-manager-create-btn')).toBeInTheDocument();
   });
 
+  it('states an empty lifecycle section on its header instead of offering an accordion', async () => {
+    const user = userEvent.setup();
+    useGetArchivedDataLakes.mockReturnValue({ data: [] });
+    useGetDeletedDataLakes.mockReturnValue({ data: [] });
+    renderPanel();
+
+    const archived = screen.getByTestId('datalake-archived-section-toggle');
+    expect(archived).toHaveTextContent('Archived');
+    expect(archived).toHaveTextContent('No files');
+    expect(screen.getByTestId('datalake-deleted-section-toggle')).toHaveTextContent('No files');
+    // Not a control: nothing to expand, so no button semantics and no chevron.
+    expect(archived).not.toHaveAttribute('role', 'button');
+
+    // Clicking it does nothing rather than toggling an empty body open.
+    await user.click(archived);
+    expect(archived).toHaveTextContent('No files');
+  });
+
   it('opens the public Discover catalog from the footer and returns to it via the store tab', async () => {
     const user = userEvent.setup();
     renderPanel();
@@ -225,25 +252,33 @@ describe('DataLakeManagerPanel - root view', () => {
     await user.click(screen.getByTestId('datalake-manager-discover-btn'));
     // The catalog shows on THIS click: the activeLake branch used to outrank the tab and swallow it.
     expect(screen.getByTestId('mock-discover')).toBeInTheDocument();
-    // The lake is really closed, so a later Back cannot drop the user into Discover by surprise.
+    // The lake is really closed, so no in-lake Back row survives into the catalog.
     expect(screen.queryByTestId('datalake-manager-back')).not.toBeInTheDocument();
   });
 
-  it('toggles back out of Discover - the one exit that needs no lake of your own to click', async () => {
+  it('reads as a plain destination, never as a pressed mode', async () => {
     const user = userEvent.setup();
-    // No lakes: selectLake, the only other route back to the overview, has no row to click.
-    useGetDataLakes.mockReturnValue({ data: [], isLoading: false });
     renderPanel();
     const discover = screen.getByTestId('datalake-manager-discover-btn');
-    expect(discover).toHaveAttribute('aria-pressed', 'false');
+    expect(discover).not.toHaveAttribute('aria-pressed');
 
     await user.click(discover);
+
     expect(screen.getByTestId('mock-discover')).toBeInTheDocument();
-    expect(discover).toHaveAttribute('aria-pressed', 'true');
+    // Same button, same look: it navigated rather than latching a mode on.
+    expect(discover).not.toHaveAttribute('aria-pressed');
+    expect(discover.className).toMatch(/MuiButton-variantOutlined/);
+  });
 
-    await user.click(discover);
+  it('leaves the catalog by opening one of your own lakes', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(screen.getByTestId('datalake-manager-discover-btn'));
+    expect(screen.getByTestId('mock-discover')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+
     expect(screen.queryByTestId('mock-discover')).not.toBeInTheDocument();
-    expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
   });
 
   it('collapses the Data Lakes accordion, hiding the lake rows', async () => {
@@ -325,6 +360,24 @@ describe('DataLakeManagerPanel - lake navigation', () => {
     await user.click(screen.getByTestId('datalake-manager-back'));
     expect(screen.getByTestId('datalake-manager-lake-mine')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
+  });
+
+  it('lists a category-tagged file alongside its own subfolders, not just inside them', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-manager-node-genre'));
+
+    // war/peace are genre's children; f5 is tagged "lk:genre" itself - all three must be
+    // reachable from this one folder, or f5 has no path to it anywhere in the tree.
+    expect(screen.getByTestId('datalake-manager-node-war')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-manager-node-peace')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-manager-file-f5')).toHaveTextContent('genre-overview');
+
+    // Selecting it opens the file directly - no extra navigation hop.
+    await user.click(screen.getByTestId('datalake-manager-file-f5'));
+    expect(screen.getByTestId('mock-article')).toHaveTextContent('genre-overview.md');
   });
 
   it('opens the Uncategorized bucket and lists the untagged file', async () => {
@@ -614,6 +667,8 @@ describe('DataLakeManagerPanel - purge confirmation', () => {
     await user.click(screen.getByTestId('datalake-deleted-section-toggle'));
     expect(screen.getByTestId('datalake-deleted-section-card-gone')).toBeInTheDocument();
 
+    // Lifecycle row actions moved behind a RowActionsMenu trigger on main; open it before the item.
+    await user.click(screen.getByTestId('datalake-deleted-section-menu-btn-gone'));
     await user.click(screen.getByTestId('datalake-purge-btn-gone'));
     expect(screen.getByTestId('datalake-purge-confirm')).toBeInTheDocument();
     await user.click(screen.getByTestId('datalake-purge-confirm-btn'));
