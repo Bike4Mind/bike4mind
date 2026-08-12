@@ -336,10 +336,12 @@ export interface ISessionUsageSummary {
 }
 
 /**
- * Filters for the admin Spend rollup. Date bounds map to `createdAt` (inclusive);
- * omitting a field spans all. `userId`/`model` mirror the ModelMetrics user/model
- * filters. Status is intentionally not a filter here: it would distort the
- * error-rate KPI, which is derived from the same event set.
+ * Filters for the admin Spend rollup. Date bounds map to `createdAt` as the half-open
+ * window `[from, to)` - the upper bound is exclusive so a window and the equal-length
+ * prior window before it (whose `to` is this window's `from`) don't both count an event
+ * at the shared instant. Omitting a field spans all. `userId`/`model` mirror the
+ * ModelMetrics user/model filters. Status is intentionally not a filter here: it would
+ * distort the error-rate KPI, which is derived from the same event set.
  */
 export interface ISpendSummaryFilters {
   from?: Date;
