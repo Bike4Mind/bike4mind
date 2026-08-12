@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { RecordLakeAccessEventInput } from '@bike4mind/common';
@@ -198,6 +198,24 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       const stored = await LakeAccessQueryTextModel.findById(event.id);
       expect(stored?.queryText.length).toBe(4000);
       expect(stored?.queryTextTruncated).toBe(true);
+    });
+
+    it('reports queryTextLogged=false, not a lie, when the opted-in text write itself fails', async () => {
+      // Every other test here proves the OPT-IN decision; this one proves the OUTCOME still wins
+      // when the decision was "yes" but the actual write throws - the exact bug the write-before
+      // ordering in `record()` exists to prevent.
+      const lakeA = await optedInLake(true);
+      const createSpy = vi
+        .spyOn(LakeAccessQueryTextModel, 'create')
+        .mockRejectedValueOnce(new Error('simulated write failure'));
+
+      const event = await repo.record(
+        baseInput({ resolvedLakeIds: [lakeA], queryText: 'this should not be lost silently' })
+      );
+
+      expect(event.queryTextLogged).toBe(false);
+      expect(await LakeAccessQueryTextModel.countDocuments({})).toBe(0);
+      createSpy.mockRestore();
     });
   });
 

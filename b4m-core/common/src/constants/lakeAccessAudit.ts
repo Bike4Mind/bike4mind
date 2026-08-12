@@ -63,7 +63,9 @@ export function resolveLakeAccessQueryTextRetentionDays(
 }
 
 /** The one place `now + days` is computed, so the event and query-text collections cannot drift
- * on the arithmetic (three existing audit models each re-inline this independently). */
+ * on the arithmetic (AdminSupportAccessAuditLogModel and WebhookAuditLogModel each re-inline this
+ * same computation independently - other audit models sidestep it with a fixed-duration TTL on
+ * `createdAt` instead, which this file's two-collection, two-different-lifetimes shape can't use). */
 export function lakeAccessExpiresAt(now: Date, days: number): Date {
   return new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
 }
