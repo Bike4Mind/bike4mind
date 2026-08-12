@@ -68,7 +68,7 @@ function knowledgeFile(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function makeService(uploaded: string[] = []) {
+function makeService(overrides: Record<string, unknown> = {}, uploaded: string[] = []) {
   const adapters = {
     sessionRepository: createSessionWrites(),
     chatHistoryRepository: createChatHistoryWrites(),
@@ -85,6 +85,7 @@ function makeService(uploaded: string[] = []) {
     },
     logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
     generateId: () => new mongoose.Types.ObjectId().toString(),
+    ...overrides,
   };
   return new NotebookImportService(adapters as never);
 }
@@ -101,7 +102,7 @@ const OPTIONS = {
 describe('notebook import writes knowledge files', () => {
   it('persists the file with the schema field names', async () => {
     const uploaded: string[] = [];
-    const result = await makeService(uploaded).importNotebooks(
+    const result = await makeService({}, uploaded).importNotebooks(
       USER,
       payload([knowledgeFile()]) as never,
       OPTIONS as never
@@ -187,6 +188,48 @@ describe('notebook import writes knowledge files', () => {
     expect(await FabFile.countDocuments({})).toBe(0);
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings?.[0]).toContain('Failed to import knowledge file');
+  }, 60000);
+
+  it('marks the file servable rather than leaving it for a scan that cannot see it', async () => {
+    await makeService().importNotebooks(USER, payload([knowledgeFile()]) as never, OPTIONS as never);
+
+    // The row is written inside the import's transaction, and the S3 scan that would flip this
+    // gives up ~7.5s later - long before a real import commits. A 'pending' file never recovers.
+    expect((await FabFile.findOne({ userId: USER }))?.moderationStatus).toBe('clean');
+  }, 60000);
+
+  it('reports a degraded type as an import, not as a failure', async () => {
+    const result = await makeService().importNotebooks(
+      USER,
+      payload([knowledgeFile({ type: 'SOMETHING_NEWER' })]) as never,
+      OPTIONS as never
+    );
+
+    // The file landed, so the note must not read like one that did not.
+    expect(result.importedAttachments).toBe(1);
+    expect(result.warnings?.[0]).toContain('Imported');
+    expect(result.warnings?.[0]).not.toContain('Failed to import');
+  }, 60000);
+
+  it('refuses a file that would only reference the exporter storage', async () => {
+    const remote = knowledgeFile({ content: undefined, contentUrl: 'https://other-env.test/knowledge/kf-1' });
+
+    const result = await makeService().importNotebooks(USER, payload([remote]) as never, OPTIONS as never);
+
+    // Copying by URL is not implemented; recording the source path would claim a file the importing
+    // user has no copy of.
+    expect(await FabFile.countDocuments({})).toBe(0);
+    expect(result.importedAttachments).toBe(0);
+    expect(result.warnings?.[0]).toContain('not implemented');
+  }, 60000);
+
+  it('reports a store that returns no id rather than recording a dangling reference', async () => {
+    const service = makeService({ knowledgeRepository: { create: async () => ({}) } });
+
+    const result = await service.importNotebooks(USER, payload([knowledgeFile()]) as never, OPTIONS as never);
+
+    expect(result.importedAttachments).toBe(0);
+    expect(result.warnings?.[0]).toContain('no id');
   }, 60000);
 
   it('reports a failed attachment instead of claiming success', async () => {

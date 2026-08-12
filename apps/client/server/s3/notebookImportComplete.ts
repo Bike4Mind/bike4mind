@@ -217,8 +217,11 @@ const processNotebookImport = async (
         parts.push(`Skipped ${result.skippedNotebooks} duplicate(s).`);
       }
       if (warnings.length) {
+        // Neutral wording on purpose: not every entry is a failure. A file that imported with its
+        // type degraded says so itself, and calling that "could not be imported" contradicts the
+        // record. Each message states its own outcome.
         const more = warnings.length > shown.length ? `; and ${warnings.length - shown.length} more` : '';
-        parts.push(`${warnings.length} attachment(s) could not be imported: ${shown.join('; ')}${more}.`);
+        parts.push(`${warnings.length} attachment issue(s): ${shown.join('; ')}${more}.`);
       }
 
       await inboxRepository.createInboxMessage({

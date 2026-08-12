@@ -343,6 +343,11 @@ export class NotebookImportService {
           fileSize: file.size,
           filePath,
           type: toKnowledgeType(file.type),
+          // The S3 scan that would flip this cannot see the row: it is written inside the import's
+          // transaction and the scan gives up after ~7.5s, long before a real import commits, so a
+          // 'pending' file would be unservable forever. Safe to mark clean here because the export
+          // only emits content for a file that was already clean at source.
+          moderationStatus: 'clean',
         };
         // No `uploadedAt`/`metadata`: not paths on FabFileSchema, so strict mode drops them silently.
 
@@ -357,9 +362,7 @@ export class NotebookImportService {
         // true, and a file that then failed would otherwise be reported twice. Absent is expected
         // of older exports; present-but-unknown is format drift worth saying.
         if (file.type && !isValidEnumValue(file.type, KnowledgeType)) {
-          this.attachmentWarnings.push(
-            `Unrecognised knowledge type "${file.type}" for "${file.name}"; imported as FILE`
-          );
+          this.attachmentWarnings.push(`Imported "${file.name}" as FILE: unrecognised knowledge type "${file.type}"`);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -399,6 +402,9 @@ export class NotebookImportService {
         await this.adapters.artifactRepository.create(artifactData);
         importedIds.push(newArtifactId);
       } catch (error) {
+        this.attachmentWarnings.push(
+          `Failed to import artifact "${artifact.name}": ${error instanceof Error ? error.message : String(error)}`
+        );
         this.adapters.logger.warn('Failed to import artifact', {
           artifactName: artifact.name,
           error,
@@ -433,6 +439,9 @@ export class NotebookImportService {
         await this.adapters.toolRepository.create(toolData);
         importedIds.push(newToolId);
       } catch (error) {
+        this.attachmentWarnings.push(
+          `Failed to import tool "${tool.name}": ${error instanceof Error ? error.message : String(error)}`
+        );
         this.adapters.logger.warn('Failed to import tool', {
           toolName: tool.name,
           error,
@@ -467,6 +476,9 @@ export class NotebookImportService {
         await this.adapters.agentRepository.create(agentData);
         importedIds.push(newAgentId);
       } catch (error) {
+        this.attachmentWarnings.push(
+          `Failed to import agent "${agent.name}": ${error instanceof Error ? error.message : String(error)}`
+        );
         this.adapters.logger.warn('Failed to import agent', {
           agentName: agent.name,
           error,
@@ -503,9 +515,11 @@ export class NotebookImportService {
     }
   }
 
-  private async copyFileFromUrl(sourceUrl: string, targetUserId: string, newFileId: string): Promise<string> {
-    // Not yet implemented - returns the source URL as a fallback.
-    return sourceUrl;
+  private async copyFileFromUrl(_sourceUrl: string, _targetUserId: string, _newFileId: string): Promise<string> {
+    // Throws rather than returning the source URL: handing back the exporter's own storage key
+    // records a file the importing user has no copy of, and counts it as imported. The caller
+    // turns this into a per-file warning, so the notebook still imports.
+    throw new Error('importing a knowledge file by URL reference is not implemented');
   }
 }
 
