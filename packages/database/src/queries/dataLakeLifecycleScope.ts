@@ -50,9 +50,10 @@ export function buildDataLakeMetaTagFilter(
 /**
  * The prefix arm alone, or null when this scope has no usable prefix arm (same fail-closed rule
  * as buildDataLakeMembershipFilter: no prefix, a reserved namespace, or no creator to anchor it).
- * A `fileTagPrefix` is registered per-creator, not per-lake, so two lakes owned by the same
- * creator can share one - a file reached only through this arm cannot be attributed to one lake
- * over a prefix-sharing sibling.
+ * The ownership conjunct means only a SAME-creator sibling can ever match the same file here - a
+ * unique index plus a create-time overlap check now block a fresh same-creator collision, but a
+ * legacy pair predating those guards still can, and its files are a permanent liability: a file
+ * reached only through this arm cannot be attributed to one lake over that sibling.
  */
 export function buildDataLakePrefixArmFilter(scope: DataLakeMembershipScope): Record<string, unknown> | null {
   const prefix = normalizeTagPrefix(scope.fileTagPrefix);

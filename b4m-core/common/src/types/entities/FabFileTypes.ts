@@ -665,9 +665,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   /**
    * Files in a lake matching any hash, by META-TAG ONLY - deliberately narrower than the
    * `DataLakeMembershipScope` the rest of the lifecycle family takes. Its callers act on the
-   * answer destructively (the unarchive dedup hard-deletes the losing copy) or by skipping a
-   * caller's upload, and every re-upload path that matters writes the meta-tag, so admitting a
-   * prefix match here would risk the wrong file for no gain.
+   * answer destructively (the unarchive dedup soft-deletes, recoverably, the losing copy) or by
+   * skipping a caller's upload, and every re-upload path that matters writes the meta-tag, so
+   * admitting a prefix match here would risk the wrong file for no gain.
    */
   findByContentHashesInDataLake(hashes: string[], datalakeTag: string): Promise<IFabFileDocument[]>;
   markFailedIfNotAlready(fabFileId: string, errorMessage: string): Promise<boolean>;
