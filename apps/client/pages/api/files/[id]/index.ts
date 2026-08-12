@@ -80,10 +80,11 @@ const handler = baseApi()
     // WRITE into that lake, so gate it with the same creator/admin check the remove path uses -
     // otherwise a read-only member could inject files via Send-to-Data-Lake.
     //
-    // A `fileTagPrefix` content tag is membership too (since #1263), but this route-level gate
-    // is NOT extended to cover it: it has no resolved file, so it cannot know the owner a
-    // prefix-arm leave/join is anchored to. `reconcileLakeTags` (inside `updateFabFile` below)
-    // owns that check.
+    // A `fileTagPrefix` content tag is membership too, but this route-level gate is NOT extended
+    // to cover it: it has no resolved file, so it cannot know the owner a prefix-arm join is
+    // anchored to. `reconcileLakeTags` (inside `updateFabFile` below) gates that join - a whole-
+    // array write can only ever join or preserve membership through either mechanism, never
+    // leave one; see that function's docstring.
     const candidateTagNames = [
       ...(req.body.tags?.map(t => t.name) ?? []),
       ...(req.body.primaryTag ? [req.body.primaryTag] : []),

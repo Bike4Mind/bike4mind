@@ -251,9 +251,7 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
    * backfill's keyset cursor (packages/scripts/datalake/backfill-chunk-char-length.ts).
    * `charLength: null` deliberately matches missing AND explicit null.
    */
-  async findChunkIdsMissingCharLength(
-    options: { limit?: number; afterChunkId?: string } = {}
-  ): Promise<string[]> {
+  async findChunkIdsMissingCharLength(options: { limit?: number; afterChunkId?: string } = {}): Promise<string[]> {
     const { limit = 5_000, afterChunkId } = options;
     const docs = await this.fabFileChunkModel
       .find({ charLength: null, ...(afterChunkId ? { _id: { $gt: afterChunkId } } : {}) })
@@ -980,9 +978,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * One page of file ids that have chunks but no `chunkedCharCount` (missing or nulled by a
    * content rewrite), ascending by `_id` - the char-length backfill's phase-2 cursor.
    */
-  async findFileIdsMissingChunkedCharCount(
-    options: { limit?: number; afterFileId?: string } = {}
-  ): Promise<string[]> {
+  async findFileIdsMissingChunkedCharCount(options: { limit?: number; afterFileId?: string } = {}): Promise<string[]> {
     const { limit = 1_000, afterFileId } = options;
     const docs = await this.fabFileModel
       .find({

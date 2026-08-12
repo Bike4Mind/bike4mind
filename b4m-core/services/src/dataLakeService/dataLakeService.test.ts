@@ -1833,7 +1833,9 @@ describe('reconcileStuckBatches — guarded read-time reconciliation', () => {
   const makeDb = () => ({
     dataLakes: { findById: vi.fn().mockResolvedValue(lake()), setStats: vi.fn(), activateIfDraft: vi.fn() },
     batches: { markTerminalIfActive: vi.fn().mockResolvedValue(batch({ status: 'completed_with_errors' })) },
-    fabFiles: { computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }) },
+    fabFiles: {
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+    },
   });
   let db: ReturnType<typeof makeDb>;
   beforeEach(() => {
