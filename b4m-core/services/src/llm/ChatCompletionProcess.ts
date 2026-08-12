@@ -59,7 +59,6 @@ import {
   usdToCreditsStochastic,
   LOW_CREDIT_ALERT_THRESHOLD,
   ITokenizer,
-  getLastBuildDebugInfo,
   getSettingsByNames,
   attachedContentExtractionBudget,
   effectiveContextWindow,
@@ -2523,7 +2522,9 @@ export class ChatCompletionProcess {
         imageGenerationAvailable,
         systemMessagePriority: (message: IMessage) => systemPromptPriorities.get(message),
       };
-      let messages = await buildAndSortMessages(
+      // messageTruncationInfo is captured ONLY from this first build - the overflow-recovery rebuild
+      // further down does not refresh it, so downstream telemetry always reflects the first attempt.
+      const firstBuild = await buildAndSortMessages(
         previousMessages,
         contextAndSystemMessages,
         currentUserPromptMessages,
@@ -2534,6 +2535,8 @@ export class ChatCompletionProcess {
         this.tokenizer,
         buildOptions
       );
+      let messages = firstBuild.messages;
+      const messageTruncationInfo = firstBuild.messageTruncation;
       // The length check is the part that matters: buildAndSortMessages returns an EMPTY ARRAY when
       // the input budget is non-positive, and `!messages` is false for `[]`, so an empty prompt used
       // to reach the model. It then answers confidently from nothing, which reads to the user as the
@@ -2546,8 +2549,6 @@ export class ChatCompletionProcess {
         );
       }
 
-      // Phase 2: Capture message truncation debug info
-      const messageTruncationInfo = getLastBuildDebugInfo();
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Message building completed (${messages.length} total messages) in ${
           Date.now() - messageBuildingStartTime
@@ -2672,7 +2673,8 @@ export class ChatCompletionProcess {
             const trimmed = dropOldestHistoryTurn(recoveryHistory);
             if (!trimmed) break; // only the most-recent turn left: system/tools/prompt itself is oversized
             recoveryHistory = trimmed;
-            const rebuilt = await buildAndSortMessages(
+            // messageTruncationInfo is deliberately not refreshed here - it stays pinned to the first build.
+            const { messages: rebuilt } = await buildAndSortMessages(
               recoveryHistory,
               contextAndSystemMessages,
               currentUserPromptMessages,
