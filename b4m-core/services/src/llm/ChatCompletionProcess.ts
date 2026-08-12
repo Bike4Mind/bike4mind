@@ -2460,7 +2460,7 @@ export class ChatCompletionProcess {
         // data-context blocks below so an explicit invocation is not diluted by retrieval noise.
         skills: featureContextMessages['skills'],
         knowledgeRetrieval: featureContextMessages['knowledgeRetrieval'], // Forced data-lake retrieval (grounding + citations)
-        lakeMemory: featureContextMessages['lakeMemory'], // Extracted lake-memory hot card (was computed but never spread here)
+        lakeMemory: featureContextMessages['lakeMemory'], // Lake-memory hot card: durable beliefs extracted from the session's entitled lakes
         // Add LLM-optimized context summary if available (covers messages before verbatim window)
         contextSummary: session.contextSummary
           ? [
