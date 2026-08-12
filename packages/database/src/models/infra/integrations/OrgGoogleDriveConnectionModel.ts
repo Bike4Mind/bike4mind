@@ -80,11 +80,13 @@ const OrgGoogleDriveConnectionSchema = new Schema<IOrgGoogleDriveConnectionDocum
 );
 
 // FIRST-CLAIM-WINS on the Drive folder id: the unique index rejects a SECOND row for a folder
-// already claimed. It does NOT verify the first claimant actually owns the folder - that ownership
-// check (a files.get capabilities lookup with the connecting user's credential) lands with the
-// connect flow (issue D). This is a NEW pattern, not sibling precedent: the sibling Org* connections
-// scope uniqueness to the org and never make a third-party resource id globally unique; making
-// driveFolderId global is a deliberate anti-double-claim choice.
+// already claimed. The index alone does NOT verify the claimant owns the folder; that ownership check
+// - a files.get read probe with the connecting user's own credential (getFolderAccess) - runs BEFORE
+// the claim in drive-sync.ts, so a folder can only be claimed by someone who can actually read it
+// (without it, a manager could squat a folder id they don't own and lock out its real owner). This is
+// a NEW pattern, not sibling precedent: the sibling Org* connections scope uniqueness to the org and
+// never make a third-party resource id globally unique; making driveFolderId global is a deliberate
+// anti-double-claim choice.
 OrgGoogleDriveConnectionSchema.index({ driveFolderId: 1 }, { unique: true, name: 'org_gdrive_conn_folder_id' });
 
 // A lake is fed by at most one Drive folder (v1: one-folder-per-lake).
@@ -149,18 +151,35 @@ class OrgGoogleDriveConnectionRepository
   }
 
   /**
-   * (Re)write the org-owned encrypted refresh token, org-scoped so one org can't overwrite another's.
-   * Marks the connection healthy since a fresh credential resolves a prior credential_error.
-   * The value must already be encrypted by the caller (crypto is not reachable from packages/database).
+   * (Re)write the org-owned encrypted refresh token and re-stamp `connectedBy` to the re-syncing user
+   * (the identity ingest runs as - see driveLakeIngest), org-scoped so one org can't overwrite
+   * another's. The value must already be encrypted by the caller (crypto is not reachable from
+   * packages/database).
+   *
+   * The credential + connectedBy are written UNCONDITIONALLY, but status/lastError are healed to
+   * 'connected' only from a NON-'syncing' state (pipeline `$cond`): a Re-sync issued while an ingest
+   * is in flight must not flip 'syncing' -> 'connected', or claimForSync would let the re-triggered
+   * run claim ON TOP of the live one and both would walk the folder (duplicate FabFiles). Leaving the
+   * status 'syncing' makes the new run defer behind the running one instead.
    */
   async updateCredential(
     id: string,
     organizationId: string,
-    encryptedRefreshToken: string
+    encryptedRefreshToken: string,
+    connectedBy: string
   ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
     return this.model.findOneAndUpdate(
       { _id: id, organizationId },
-      { $set: { oauthRefreshToken: encryptedRefreshToken, status: 'connected', lastError: null } },
+      [
+        {
+          $set: {
+            oauthRefreshToken: encryptedRefreshToken,
+            connectedBy,
+            status: { $cond: [{ $eq: ['$status', 'syncing'] }, '$status', 'connected'] },
+            lastError: { $cond: [{ $eq: ['$status', 'syncing'] }, '$lastError', null] },
+          },
+        },
+      ],
       { new: true }
     );
   }

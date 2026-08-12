@@ -54,6 +54,14 @@ const handler = baseApi()
     const { lakeId, organizationId } = await resolveOrgLake(req);
     const conn = await orgGoogleDriveConnectionRepository.findByDataLakeId(lakeId, organizationId);
     if (conn) {
+      // Don't hard-delete under a live ingest: the running handler still holds the connection it
+      // loaded and would keep creating FabFiles stamped with a driveConnectionId that no longer
+      // resolves, while the UI reads "Disconnected". Make the user wait out (or the claim go stale).
+      if (conn.status === 'syncing') {
+        return res
+          .status(409)
+          .json({ error: 'A sync is in progress for this folder. Try disconnecting again once it finishes.' });
+      }
       await orgGoogleDriveConnectionRepository.release(conn.id, organizationId);
     }
     return res.status(204).send();

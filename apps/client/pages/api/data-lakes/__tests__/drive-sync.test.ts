@@ -12,6 +12,9 @@ const h = vi.hoisted(() => ({
   connFindByDriveFolderId: vi.fn(),
   connCreate: vi.fn(),
   connUpdateCredential: vi.fn(),
+  getValidUserDriveAccessToken: vi.fn(),
+  createDriveClient: vi.fn(),
+  getFolderAccess: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -27,6 +30,14 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
+vi.mock('@server/integrations/google/drive/common', () => ({
+  getValidUserDriveAccessToken: h.getValidUserDriveAccessToken,
+}));
+// Keep isValidDriveFolderId real (the folder-id validation runs for real); mock only the Drive calls.
+vi.mock('@server/integrations/google/drive/driveClient', async importOriginal => {
+  const actual = await importOriginal<typeof import('@server/integrations/google/drive/driveClient')>();
+  return { ...actual, createDriveClient: h.createDriveClient, getFolderAccess: h.getFolderAccess };
+});
 vi.mock('@server/security/tokenEncryption', () => ({ decryptToken: h.decryptToken }));
 vi.mock('@server/security/secretEncryption', () => ({ isEncrypted: h.isEncrypted }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
@@ -69,6 +80,10 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     h.decryptToken.mockReturnValue('plain-refresh');
     h.connFindByDriveFolderId.mockResolvedValue(null);
     h.connCreate.mockResolvedValue({ id: 'conn1' });
+    h.connUpdateCredential.mockResolvedValue({ id: 'conn1' });
+    h.getValidUserDriveAccessToken.mockResolvedValue('user-access-token');
+    h.createDriveClient.mockReturnValue({});
+    h.getFolderAccess.mockResolvedValue({ exists: true, isFolder: true, canRead: true });
   });
 
   it('captures the org-owned credential on the connection and enqueues ingest', async () => {
@@ -87,6 +102,38 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     );
     expect(h.sendToQueue).toHaveBeenCalledWith('queue-url', { connectionId: 'conn1' });
     expect(status).toHaveBeenCalledWith(202);
+    // The gate is checked against the LAKE's org, never a caller-supplied one.
+    expect(h.verifyOrgAccess).toHaveBeenCalledWith(expect.anything(), 'orgA');
+  });
+
+  it('refuses to claim a folder the connecting user cannot read (anti-squat gate)', async () => {
+    // Drive 404s a folder the caller can't see, so getFolderAccess reports it as non-existent - the
+    // claim must be refused so a manager can't squat a folder id belonging to another org.
+    h.getFolderAccess.mockResolvedValue({ exists: false, isFolder: false, canRead: false });
+    const { res } = makeRes();
+    await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(
+      /do not have access/i
+    );
+    expect(h.connFindByDriveFolderId).not.toHaveBeenCalled();
+    expect(h.connCreate).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('rejects a readable id that is a file, not a folder', async () => {
+    h.getFolderAccess.mockResolvedValue({ exists: true, isFolder: false, canRead: true });
+    const { res } = makeRes();
+    await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(/not a folder/i);
+    expect(h.connCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a credential that is not stored encrypted (never persists a plaintext token)', async () => {
+    h.isEncrypted.mockReturnValue(false);
+    const { res } = makeRes();
+    await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(
+      /not stored securely/i
+    );
+    expect(h.connCreate).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
   it('rejects when the connecting user has no Drive refresh token (must connect Drive first)', async () => {
@@ -152,15 +199,28 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
-  it('reuses the same folder+lake connection and refreshes its stored credential', async () => {
+  it('reuses the same folder+lake connection, refreshes its credential, and re-stamps connectedBy', async () => {
     h.connFindByDriveFolderId.mockResolvedValue({ id: 'conn1', targetDataLakeId: 'lake1' });
     const { res, status } = makeRes();
     await run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res);
 
-    expect(h.connUpdateCredential).toHaveBeenCalledWith('conn1', 'orgA', 'enc-refresh');
+    // connectedBy is re-stamped to the re-syncing caller so ingest never runs as a deleted user.
+    expect(h.connUpdateCredential).toHaveBeenCalledWith('conn1', 'orgA', 'enc-refresh', 'u1');
     expect(h.connCreate).not.toHaveBeenCalled();
     expect(h.sendToQueue).toHaveBeenCalledWith('queue-url', { connectionId: 'conn1' });
     expect(status).toHaveBeenCalledWith(202);
+  });
+
+  it('409s (not a false 202) when the reuse-branch credential update matches nothing', async () => {
+    // updateCredential is org-scoped; a null return means the folder's connection belongs to another
+    // org. The route must not report success for a write that changed nothing.
+    h.connFindByDriveFolderId.mockResolvedValue({ id: 'conn1', targetDataLakeId: 'lake1' });
+    h.connUpdateCredential.mockResolvedValue(null);
+    const { res, status } = makeRes();
+    await run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res);
+
+    expect(status).toHaveBeenCalledWith(409);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
   it('rejects an invalid Drive folder id before any lookup', async () => {

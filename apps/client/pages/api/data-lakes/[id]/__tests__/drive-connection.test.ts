@@ -89,6 +89,8 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     await run(makeReq('DELETE'), res);
     expect(h.connRelease).toHaveBeenCalledWith('conn1', 'orgA');
     expect(status).toHaveBeenCalledWith(204);
+    // The gate + release are scoped to the LAKE's org, never a caller-supplied one.
+    expect(h.verifyOrgAccess).toHaveBeenCalledWith(expect.anything(), 'orgA');
   });
 
   it('DELETE 204s even when there is nothing to release', async () => {
@@ -97,6 +99,16 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     await run(makeReq('DELETE'), res);
     expect(h.connRelease).not.toHaveBeenCalled();
     expect(status).toHaveBeenCalledWith(204);
+  });
+
+  it('DELETE 409s (does NOT hard-delete) while a sync is in progress', async () => {
+    // Hard-deleting under a live ingest would orphan the running handler's connection while the UI
+    // reads "Disconnected"; make the caller wait until the sync finishes (or its claim goes stale).
+    h.connFindByDataLakeId.mockResolvedValue({ id: 'conn1', status: 'syncing' });
+    const { res, status } = makeRes();
+    await run(makeReq('DELETE'), res);
+    expect(h.connRelease).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(409);
   });
 
   it('denies a caller who is not an org owner/manager', async () => {
