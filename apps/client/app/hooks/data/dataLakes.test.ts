@@ -36,6 +36,7 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => {
 vi.mock('@client/app/hooks/useGearsStatus', () => ({ invalidateGearsStatusWhileLocked: () => {} }));
 
 import {
+  resetPurgingLakesForTests,
   useBrowsePublicDataLakes,
   useCleanupDataLake,
   useDuplicatePrefixLake,
@@ -203,9 +204,9 @@ describe('useCleanupDataLake queued purge', () => {
   const deletedLake = (id: string) => ({ id, name: `Lake ${id}`, fileTagPrefix: `${id}:` });
   const listing = (...ids: string[]) => ({ data: { data: ids.map(deletedLake) } });
 
-  // The pending-purge set behind this behavior is module-scoped (session-scoped by design: it must
-  // survive the Deleted section remounting), so a purged id stays tracked until the server stops
-  // listing it. Tests therefore use DISTINCT lake ids rather than resetting shared state.
+  // The pending-purge map behind this behavior is module-scoped (session-scoped by design: it must
+  // survive the Deleted section remounting), so it is reset per case below. Ids stay distinct per
+  // case anyway, so a leak would show up as a wrong assertion rather than as passing by luck.
   const mountPurgeSurface = () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
@@ -227,6 +228,7 @@ describe('useCleanupDataLake queued purge', () => {
   const deletedFetchCount = () => apiGet.mock.calls.filter(call => call[0] === '/api/data-lakes/deleted').length;
 
   beforeEach(() => {
+    resetPurgingLakesForTests();
     apiGet.mockReset();
     apiPost.mockReset();
     apiPost.mockResolvedValue({ data: { success: true, queued: true } });
@@ -285,6 +287,87 @@ describe('useCleanupDataLake queued purge', () => {
 
     expect(deletedFetchCount()).toBe(2); // the refetch really happened
     expect(result.current.deleted.data).toEqual([deletedLake('lk6')]);
+  });
+
+  it('lets a fetch that was already in flight land, and still hides the purged row', async () => {
+    // Ordering the other way round from the test above: a sibling mutation (e.g. restoring another
+    // lake) has already started a refetch when the purge resolves. Cancelling that fetch would
+    // revert the query to its pre-fetch snapshot and strand the OTHER lake under Deleted, so the
+    // fetch is allowed to finish - the queryFn filter is what keeps the purged row hidden.
+    let releaseInFlight = (_value: unknown) => {};
+    const inFlight = new Promise(resolve => {
+      releaseInFlight = resolve;
+    });
+
+    apiGet.mockResolvedValueOnce(listing('lk9', 'lk10')); // mount
+    const { result, queryClient } = mountPurgeSurface();
+    await waitFor(() => expect(result.current.deleted.data).toHaveLength(2));
+
+    // A refetch starts and hangs. Its eventual answer reflects lk10 having been restored elsewhere.
+    apiGet.mockImplementationOnce(async () => {
+      await inFlight;
+      return listing('lk9');
+    });
+    act(() => {
+      void queryClient.invalidateQueries({ queryKey: ['data-lakes'] });
+    });
+    await waitFor(() => expect(deletedFetchCount()).toBe(2));
+
+    // Purge lk9 while that fetch is still outstanding, then let it land.
+    await act(async () => {
+      await result.current.cleanup.mutateAsync('lk9');
+    });
+    await act(async () => {
+      releaseInFlight(null);
+      await settle();
+    });
+
+    // The in-flight answer was applied (lk10 is gone because it was restored), and lk9 stays hidden
+    // even though that response still listed it.
+    expect(result.current.deleted.data).toEqual([]);
+  });
+
+  it('does not prune on a response from a request that predates the purge', async () => {
+    // The prune must only trust a request that STARTED after the purge. An older one can be missing
+    // the lake for an unrelated reason (it predates the soft-delete), and pruning on it would
+    // un-hide a row whose sweep has not run.
+    let releaseStale = (_value: unknown) => {};
+    const stale = new Promise(resolve => {
+      releaseStale = resolve;
+    });
+
+    apiGet.mockResolvedValueOnce(listing('lk11', 'lk12')); // mount
+    const { result, queryClient } = mountPurgeSurface();
+    await waitFor(() => expect(result.current.deleted.data).toHaveLength(2));
+
+    // In-flight fetch that will answer WITHOUT lk11 - as if taken before lk11 was soft-deleted.
+    apiGet.mockImplementationOnce(async () => {
+      await stale;
+      return listing('lk12');
+    });
+    act(() => {
+      void queryClient.invalidateQueries({ queryKey: ['data-lakes'] });
+    });
+    await waitFor(() => expect(deletedFetchCount()).toBe(2));
+
+    await act(async () => {
+      await result.current.cleanup.mutateAsync('lk11');
+    });
+    await act(async () => {
+      releaseStale(null);
+      await settle();
+    });
+
+    // lk11 must still be suppressed: a later fetch that DOES list it keeps the row hidden.
+    apiGet.mockResolvedValue(listing('lk11', 'lk12'));
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ['data-lakes', 'deleted'] });
+    });
+    // Settle before asserting: waitFor would pass instantly against the pre-render snapshot, which
+    // makes the assertion unfailable (it did, until this was caught).
+    await settle();
+    expect(deletedFetchCount()).toBe(3);
+    expect(result.current.deleted.data).toEqual([deletedLake('lk12')]);
   });
 
   it('stops suppressing a purged id once the server no longer lists it', async () => {
