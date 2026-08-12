@@ -264,16 +264,21 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
             },
           ],
           status: [{ $group: { _id: '$status', count: { $sum: 1 } } }],
+          // Both spend facets rank by cogsUsd, not creditsCharged like the sibling
+          // usage summaries below: this is a cost dashboard, and cost with zero
+          // credits is a normal path (embeds with enforcement off, abort
+          // settlements, media), so a credit sort would truncate away real top cost
+          // drivers. Secondary keys make the cap deterministic across equal-cost ties.
           byModel: [
             { $group: { _id: { provider: '$provider', model: '$model' }, ...spendSums } },
             { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...spendFields } },
-            { $sort: { creditsCharged: -1 } },
+            { $sort: { cogsUsd: -1, provider: 1, model: 1 } },
             { $limit: SPEND_MODEL_LIMIT },
           ],
           byAccount: [
             { $group: { _id: { ownerId: '$ownerId', ownerType: '$ownerType' }, ...spendSums } },
             { $project: { _id: 0, ownerId: '$_id.ownerId', ownerType: '$_id.ownerType', ...spendFields } },
-            { $sort: { creditsCharged: -1 } },
+            { $sort: { cogsUsd: -1, ownerId: 1 } },
             { $limit: SPEND_ACCOUNT_LIMIT },
           ],
           // Uncapped by design: one row per UTC day in the window feeds the line

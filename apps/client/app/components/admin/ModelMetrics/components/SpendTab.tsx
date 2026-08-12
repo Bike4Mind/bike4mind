@@ -210,6 +210,7 @@ export const SpendTabView: React.FC<SpendTabViewProps> = ({ data }) => {
                   }}
                 >
                   <Box
+                    data-testid={`spend-model-bar-${model.modelId}`}
                     sx={{
                       height: '100%',
                       borderRadius: 'sm',

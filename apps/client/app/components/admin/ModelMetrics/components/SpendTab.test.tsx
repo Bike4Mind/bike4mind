@@ -60,6 +60,22 @@ describe('SpendTabView', () => {
     }
   });
 
+  it('scales model bars by cost, so a zero-credit cost leader draws the widest bar', () => {
+    // The payload arrives cost-descending (spendSummary ranks byModel on cogsUsd);
+    // the bars are drawn from estCost, so the list must read monotonically here.
+    const data: SpendData = {
+      ...spendMockData,
+      byModel: [
+        { modelId: 'p/embed', modelName: 'p / embed', estCost: 40, requests: 10, share: 0.8 },
+        { modelId: 'p/opus', modelName: 'p / opus', estCost: 10, requests: 2, share: 0.2 },
+      ],
+    };
+    render(<SpendTabView data={data} />, { wrapper: TestWrapper });
+
+    expect(screen.getByTestId('spend-model-bar-p/embed')).toHaveStyle({ width: '100%' });
+    expect(screen.getByTestId('spend-model-bar-p/opus')).toHaveStyle({ width: '25%' });
+  });
+
   it('colors a rising cost metric red (higherIsBetter=false) and a rising good metric green', () => {
     const data: SpendData = {
       ...spendMockData,

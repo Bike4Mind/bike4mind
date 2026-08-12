@@ -589,7 +589,7 @@ describe('UsageEventRepository', () => {
       expect(summary.totals).toEqual({ requests: 3, cogsUsd: 4, creditsCharged: 400 });
       expect(summary.activeAccounts).toBe(2);
 
-      // Descending by creditsCharged: opus (300) before sonnet (100).
+      // Descending by cogsUsd: opus (3) before sonnet (1).
       expect(summary.byModel.map(m => m.model)).toEqual(['opus', 'sonnet']);
       expect(summary.byModel[0]).toMatchObject({ model: 'opus', requests: 2, cogsUsd: 3, creditsCharged: 300 });
 
@@ -605,6 +605,55 @@ describe('UsageEventRepository', () => {
       // Every event shares baseEvent's default createdAt day, so one daily bucket.
       expect(summary.dailyCost).toHaveLength(1);
       expect(summary.dailyCost[0].cogsUsd).toBe(4);
+    });
+
+    it('ranks both spend facets by cost, so a zero-credit cost driver leads', async () => {
+      // Embeds with enforcement off, abort settlements and media all settle a real
+      // costUsd with creditsCharged 0; a credit sort would bury this row last.
+      await record({
+        ownerId: 'org-embed',
+        ownerType: CreditHolderType.Organization,
+        model: 'titan-embed',
+        costUsd: 9,
+        creditsCharged: 0,
+      });
+      await record({
+        ownerId: 'org-chat',
+        ownerType: CreditHolderType.Organization,
+        model: 'opus',
+        costUsd: 1,
+        creditsCharged: 5000,
+      });
+
+      const summary = await usageEventRepository.spendSummary();
+
+      expect(summary.byModel.map(m => m.model)).toEqual(['titan-embed', 'opus']);
+      expect(summary.byAccount.map(a => a.ownerId)).toEqual(['org-embed', 'org-chat']);
+    });
+
+    it('keeps the top cost driver when the account cap truncates the list', async () => {
+      // 60 credit-heavy accounts whose cost is a rounding error, plus one zero-credit
+      // account that dominates cost: ranked by credits it lands past the cap and
+      // disappears from the one dashboard built to find it.
+      await Promise.all([
+        ...Array.from({ length: 60 }, (_, i) =>
+          record({
+            ownerId: `org-filler-${i}`,
+            ownerType: CreditHolderType.Organization,
+            costUsd: 0.01,
+            creditsCharged: 1000,
+          })
+        ),
+        record({ ownerId: 'org-embed', ownerType: CreditHolderType.Organization, costUsd: 50, creditsCharged: 0 }),
+      ]);
+
+      const summary = await usageEventRepository.spendSummary();
+
+      // Asserted against the account count rather than SPEND_ACCOUNT_LIMIT so
+      // retuning the cap doesn't break the test.
+      expect(summary.activeAccounts).toBe(61);
+      expect(summary.byAccount.length).toBeLessThan(61);
+      expect(summary.byAccount[0]).toMatchObject({ ownerId: 'org-embed', cogsUsd: 50, creditsCharged: 0 });
     });
 
     it('computes p50/p95 latency and error/timeout/refusal counts', async () => {
