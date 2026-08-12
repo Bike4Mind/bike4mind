@@ -223,7 +223,10 @@ export default function DataLakeTreeView({
           data-testid="datalake-search"
           sx={chrome.searchSx}
         />
-        {chrome.renderSortButton(sortBy, () => setSortBy(prev => (prev === 'count' ? 'alpha' : 'count')))}
+        {/* The toggle only ever reorders the folder list below - a pure file view (leaf or the
+            uncategorized bucket) always sorts by category then title, so showing an interactive
+            control that visibly does nothing there would read as broken. */}
+        {!showFiles && chrome.renderSortButton(sortBy, () => setSortBy(prev => (prev === 'count' ? 'alpha' : 'count')))}
       </Box>
 
       {/* Back row above the scroll pane unless the chrome pins it inside (chat tree). */}

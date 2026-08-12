@@ -138,6 +138,11 @@ describe('DataLakeTreeView nodes', () => {
     fireEvent.click(screen.getByTestId('datalake-node-books'));
     expect(onNavigate).toHaveBeenCalledWith(['books']);
   });
+
+  it('shows the sort toggle at a folder level, where it actually reorders something', () => {
+    renderTree();
+    expect(screen.getByTestId('datalake-sort-toggle')).toBeTruthy();
+  });
 });
 
 describe('DataLakeTreeView leaf files', () => {
@@ -164,6 +169,11 @@ describe('DataLakeTreeView leaf files', () => {
   it('shows the chrome empty-files label at an empty leaf', () => {
     renderTree({ breadcrumb: ['books', 'war'], articles: [] });
     expect(screen.getByText('No articles found')).toBeTruthy();
+  });
+
+  it('hides the sort toggle at a leaf - it always sorts by category then title regardless, so a live toggle would visibly do nothing', () => {
+    renderTree({ breadcrumb: ['books', 'war'] });
+    expect(screen.queryByTestId('datalake-sort-toggle')).toBeNull();
   });
 
   it('filters the leaf file list locally by the search query (#1693)', async () => {
