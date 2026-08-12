@@ -1,6 +1,7 @@
 import { RequestHandler } from 'express';
 import { ForbiddenError } from '@server/utils/errors';
 import { extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
+import { isLocalAppUrl } from '@server/utils/validators';
 
 /**
  * CSRF Protection Middleware
@@ -76,10 +77,13 @@ export const csrfProtection = (): RequestHandler => {
     // `new URL(header).origin`, which is always scheme + host + optional port with
     // no trailing slash and a lowercased host. Pushing the raw env value made the
     // comparison sensitive to how APP_URL happens to be written: a single trailing
-    // slash produced an allow-list entry no request could ever match, so EVERY
-    // state-changing request on the deployment returned 403 while reads kept working.
-    // That presents as "nothing saves anywhere" rather than as a fault in any one
-    // route, which sends the reader looking at auth instead of at configuration.
+    // slash produced an allow-list entry no request could ever match, so every
+    // state-changing request ON THE ROUTES THAT OPT INTO THIS MIDDLEWARE returned
+    // 403 while reads kept working. That is a scattered handful of routes, not the
+    // whole app (csrfProtection is opt-in, wired into a few dozen route files), so
+    // the symptom is "these particular saves fail" rather than an outage - which is
+    // harder to place, since a partial write failure reads as an auth or per-route
+    // bug rather than as one misformatted configuration value.
     //
     // A malformed APP_URL now fails the same way an unset one does - loudly, naming
     // the variable - rather than being buried under origin-rejection 403s.
@@ -100,8 +104,10 @@ export const csrfProtection = (): RequestHandler => {
 
     // In dev, allow any localhost origin (Next.js may start on any available port).
     // Reads the normalized origin, not the raw env value, so this branch cannot
-    // disagree with the allow-list entry above about what APP_URL points at.
-    if (new URL(appOrigin).hostname === 'localhost') {
+    // disagree with the allow-list entry above about what APP_URL points at, and
+    // shares one predicate with the OAuth callback sites (isLocalAppUrl) so the
+    // three cannot drift on what counts as local.
+    if (isLocalAppUrl(appOrigin)) {
       if (origin) {
         try {
           const url = new URL(origin);

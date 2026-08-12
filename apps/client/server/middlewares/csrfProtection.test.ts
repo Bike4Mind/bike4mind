@@ -246,6 +246,18 @@ describe('csrfProtection', () => {
       ).toThrow(/expected https:\/\/app\.bike4mind\.com/);
     });
 
+    it('names the NORMALIZED origin when rejecting, not the raw APP_URL', () => {
+      // The test above leaves APP_URL at a bare origin, so appOrigin and the env value
+      // are the same string and it cannot tell them apart. With a trailing slash they
+      // differ, which pins the message to the normalized value: a regression that
+      // interpolated process.env.APP_URL again would show the slash and fail here.
+      process.env.APP_URL = 'https://app.bike4mind.com/';
+
+      expect(() =>
+        csrfProtection()(makeReq({ headers: { origin: 'https://attacker.com' } }), makeRes(), makeNext())
+      ).toThrow(/expected https:\/\/app\.bike4mind\.com(?!\/)/);
+    });
+
     it('does not open the localhost allowance for a non-localhost APP_URL that merely contains the word', () => {
       // The dev branch used a substring test on the raw env value, so any APP_URL
       // CONTAINING "localhost" - in a path, or as part of a longer hostname - switched on
