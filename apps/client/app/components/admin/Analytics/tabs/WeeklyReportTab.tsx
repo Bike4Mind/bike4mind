@@ -7,16 +7,14 @@ import { WeekPicker, WeekRange } from '../filters/WeekPicker';
 import { AnalyticsErrorCard } from '../AnalyticsErrorCard';
 
 interface WeeklyReportTabProps {
-  rawData: any[];
-  loading: boolean;
   error?: unknown;
   onRefresh: () => void;
 }
 
-export const WeeklyReportTab: React.FC<WeeklyReportTabProps> = ({ loading, error, onRefresh }) => {
+export const WeeklyReportTab: React.FC<WeeklyReportTabProps> = ({ error, onRefresh }) => {
   const [selectedWeeks, setSelectedWeeks] = useState<WeekRange[]>([]);
 
-  const { data: reports, isLoading, refetch, error: reportsError } = useWeeklyReports(selectedWeeks);
+  const { data: reports, isLoading, refetch } = useWeeklyReports(selectedWeeks);
 
   const handleRefresh = useCallback(() => {
     refetch();
@@ -29,11 +27,11 @@ export const WeeklyReportTab: React.FC<WeeklyReportTabProps> = ({ loading, error
         <WeekPicker selectedWeeks={selectedWeeks} onWeekSelect={setSelectedWeeks} maxWeeks={4} />
       </Card>
 
-      {loading || isLoading ? (
+      {isLoading ? (
         <LinearProgress />
-      ) : error || reportsError ? (
+      ) : error ? (
         <AnalyticsErrorCard
-          error={error || reportsError}
+          error={error}
           onRetry={handleRefresh}
           title="Could not load weekly reports"
           testId="weekly-report-error"
@@ -48,7 +46,7 @@ export const WeeklyReportTab: React.FC<WeeklyReportTabProps> = ({ loading, error
               size="sm"
               startDecorator={<RefreshIcon />}
               onClick={handleRefresh}
-              disabled={loading || isLoading}
+              disabled={isLoading}
               sx={{ ml: 2 }}
             >
               Refresh
