@@ -10,7 +10,7 @@ import DataLakeChatTree from './DataLakeChatTree';
 import DataLakeArticle from './DataLakeArticle';
 import { DataLakeNavProvider } from './dataLakeNavContext';
 import { StatTicker, inkFor, surfaceBackground } from '@client/app/components/datalake/surfaceChrome';
-import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
+import { humanizeSegment, useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
 import { ManageKnowledgeButton } from '@client/app/components/datalake/manageKnowledge';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import useSetDataLakeMode from '@client/app/hooks/useSetDataLakeMode';
@@ -18,7 +18,11 @@ import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { useNotebookLayout } from '@client/app/components/layouts/Notebook';
 import { useGetDataLakeArticles, useGetDataLakeTagCounts } from '@client/app/hooks/data/dataLakes';
 import type { DataLakeBrowseSource } from '@client/app/hooks/data/dataLakes';
-import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
+import {
+  buildTagTree,
+  getNodeAtPath,
+  getNodesAtPath,
+} from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import DataLakeIngestPickerModal from '@client/app/components/DataLakeWizard/DataLakeIngestPickerModal';
 import { readDroppedItems } from '@client/app/utils/dropReader';
 import { DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
@@ -111,7 +115,7 @@ export default function DataLakeExplorer({
   const chatMode = chatSlot != null;
   const muiTheme = useTheme();
   const isDark = muiTheme.palette.mode === 'dark';
-  const { theme, copy } = useDataLakeSurface();
+  const { theme, copy, taxonomy } = useDataLakeSurface();
   const acceptedHint = copy.dropAcceptedHint;
   const accentInk = inkFor(theme.accent, isDark);
   const [breadcrumb, setBreadcrumb] = useState<string[]>([]);
@@ -218,16 +222,27 @@ export default function DataLakeExplorer({
   const { data: tagCountsData, isLoading: tagCountsLoading, isError: tagCountsError } = useGetDataLakeTagCounts(source);
   const tree = useMemo(() => buildTagTree(tagCountsData?.tagCounts ?? []), [tagCountsData]);
 
-  // Derive the current leaf tag from breadcrumb + tree state
-  const currentNodes = getNodesAtPath(tree, breadcrumb);
-  const leafTag = breadcrumb.length > 0 && currentNodes.length === 0 ? breadcrumb.join(':') : null;
+  // Derive the current leaf tag from breadcrumb + tree state. A branch node (has children) can
+  // ALSO carry files tagged with its own exact path, which DataLakeTreeView renders mixed into
+  // the folder list - so this must fetch whenever there's anything to show at this breadcrumb,
+  // not only at a true leaf, or those own-tagged files never even reach the tree.
+  const currentNodes = useMemo(() => getNodesAtPath(tree, breadcrumb), [tree, breadcrumb]);
+  const currentNode = useMemo(() => getNodeAtPath(tree, breadcrumb), [tree, breadcrumb]);
+  const leafTag =
+    breadcrumb.length > 0 && (currentNodes.length === 0 || (currentNode?.ownFileCount ?? 0) > 0)
+      ? breadcrumb.join(':')
+      : null;
 
-  // Phase 2: Fetch articles only when at a leaf node (filtered by tag, paginated)
+  // Phase 2: Fetch articles only when there's a tag at this breadcrumb to filter by (paginated)
   const { data: leafArticlesResult, isLoading: leafLoading } = useGetDataLakeArticles(
     leafTag ? { tags: [leafTag], limit: 50 } : null,
     source
   );
   const leafArticles = leafTag ? (leafArticlesResult?.data ?? []) : [];
+  // isLoading passed to the tree below only waits on leafLoading at a true leaf
+  // (currentNodes.length === 0): a branch node's subfolder list needs no fetch at all, so
+  // blocking it on the own-tagged-files fetch would blank an already-renderable folder list
+  // behind a skeleton every time a mixed node is opened.
 
   // Deep-link: fetch the specific article by ID when the URL param is present. Page mode shows
   // it in the inline reader; chat mode opens it in the viewer (effect below).
@@ -429,7 +444,12 @@ export default function DataLakeExplorer({
                 {
                   label: copy.statDepthLabel,
                   value: String(breadcrumb.length),
-                  sub: breadcrumb.length === 0 ? copy.depthRootLabel : breadcrumb.join(' : '),
+                  // Humanized like the tree beside it - a raw segment here would disagree with
+                  // the branch label whenever a taxonomy is injected. Index = depth.
+                  sub:
+                    breadcrumb.length === 0
+                      ? copy.depthRootLabel
+                      : breadcrumb.map((segment, depth) => humanizeSegment(segment, depth, taxonomy)).join(' : '),
                 },
               ]}
               isDark={isDark}
@@ -489,7 +509,7 @@ export default function DataLakeExplorer({
             onNavigate={handleNavigate}
             selectedFileId={viewerFileId}
             onSelectFile={handleSelectFile}
-            isLoading={tagCountsLoading || (!!leafTag && leafLoading)}
+            isLoading={tagCountsLoading || (!!leafTag && leafLoading && currentNodes.length === 0)}
             isError={tagCountsError}
             title={rootLabel ?? copy.rootLabel}
             onManage={onManage}
@@ -509,7 +529,7 @@ export default function DataLakeExplorer({
             onNavigate={handleNavigate}
             selectedFileId={selectedFile?.id ?? null}
             onSelectFile={handleSelectFile}
-            isLoading={tagCountsLoading || (!!leafTag && leafLoading)}
+            isLoading={tagCountsLoading || (!!leafTag && leafLoading && currentNodes.length === 0)}
             isError={tagCountsError}
           />
           <DataLakeArticle

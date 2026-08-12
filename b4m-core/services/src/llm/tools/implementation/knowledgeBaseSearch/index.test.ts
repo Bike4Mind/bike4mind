@@ -85,6 +85,7 @@ const emptySemanticResult = () => ({
   chunksScored: 0,
   embeddingModel: ADA,
   embeddingMismatch: emptyEmbeddingMismatchReport(),
+  alternateModelsEmbedded: [],
 });
 
 /** A report describing one file withheld for being embedded with another model. */
@@ -685,6 +686,111 @@ describe('search_knowledge_base embedding-mismatch disclosure', () => {
     const withWarning = calls.find(c => (c[0] as { promptMeta?: { warnings?: string[] } })?.promptMeta?.warnings);
     expect(withWarning).toBeDefined();
     expect((withWarning![0] as { promptMeta: { warnings: string[] } }).promptMeta.warnings[0]).toContain(SMALL_3);
+  });
+});
+
+describe('search_knowledge_base alternate-model billing', () => {
+  const VOYAGE_3 = 'voyage-3';
+
+  function billingContext(overrides: Partial<ToolContext> = {}): ToolContext {
+    return makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }) },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+    });
+  });
+
+  it('bills one usage event per alternate model actually embedded, in addition to the primary', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [{ chunkId: 'c1', fileId: 'f1', fileName: 'a.md', fileTags: [], chunkText: 'body', score: 0.8 }],
+      alternateModelsEmbedded: [SMALL_3, VOYAGE_3],
+    });
+    const ctx = billingContext();
+
+    await run(ctx);
+
+    const record = ctx.db.usageEvents!.record as ReturnType<typeof vi.fn>;
+    expect(record).toHaveBeenCalledTimes(3);
+    // Each event bills ITS OWN model/provider - not all three attributed to the primary.
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ model: ADA, provider: 'openai' }));
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ model: SMALL_3, provider: 'openai' }));
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ model: VOYAGE_3, provider: 'voyageai' }));
+  });
+
+  it('bills only the primary model when no alternates were embedded', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [{ chunkId: 'c1', fileId: 'f1', fileName: 'a.md', fileTags: [], chunkText: 'body', score: 0.8 }],
+    });
+    const ctx = billingContext();
+
+    await run(ctx);
+
+    const record = ctx.db.usageEvents!.record as ReturnType<typeof vi.fn>;
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ model: ADA }));
+  });
+
+  it('also bills alternates on the agent-scoped arm', async () => {
+    fileScopedSemanticSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [{ chunkId: 'c1', fileId: 'f1', fileName: 'a.md', fileTags: [], chunkText: 'body', score: 0.8 }],
+      alternateModelsEmbedded: [SMALL_3],
+    });
+    const ctx = billingContext({ kbScope: { fileIds: ['f1'] } as never });
+
+    await run(ctx);
+
+    const record = ctx.db.usageEvents!.record as ReturnType<typeof vi.fn>;
+    expect(record).toHaveBeenCalledTimes(2);
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ model: SMALL_3 }));
+  });
+
+  it('still returns the search result when the organization lookup for billing throws', async () => {
+    // Regression: hoisting the organization fetch out of the per-model try/catch (so it runs
+    // once, not once per model) means an unguarded throw here would otherwise propagate up
+    // through the semantic arm's own try/catch, which falls through to keyword search on ANY
+    // error - discarding an already-successful semantic result over a billing-only failure.
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [{ chunkId: 'c1', fileId: 'f1', fileName: 'a.md', fileTags: [], chunkText: 'body', score: 0.8 }],
+    });
+    const findOrg = vi.fn().mockRejectedValue(new Error('db unavailable'));
+    const ctx = billingContext({
+      user: { id: 'u1', groups: [], organizationId: 'org1' } as never,
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }) },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+        organizations: { findById: findOrg },
+      } as never,
+    });
+
+    const out = await run(ctx);
+
+    expect(out).toContain('body');
+    expect(ctx.db.usageEvents!.record).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('failed to resolve organization'),
+      expect.any(Error)
+    );
   });
 });
 

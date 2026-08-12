@@ -1,6 +1,7 @@
 import type { AccessContext, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
 import { DATA_LAKES, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, normalizeId } from '@bike4mind/utils';
+import { canManageLake } from './manageRule';
 
 interface AssertLakeAccessAdapters {
   db: {
@@ -36,7 +37,7 @@ export function canAccessLake(
   >,
   ctx: AccessContext
 ): boolean {
-  if (ctx.isAdmin || lake.createdByUserId === ctx.userId) return true;
+  if (canManageLake(lake, ctx)) return true;
 
   const normalizedTags = ctx.userTags.map(t => t.toLowerCase());
   const normalizedKeys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
@@ -85,6 +86,20 @@ export function isFallbackLake(lake: Pick<IDataLakeDocument, 'id'>): boolean {
 export function assertLakeWritable(lake: Pick<IDataLakeDocument, 'id'>): void {
   if (isFallbackLake(lake)) {
     throw new BadRequestError('This data lake is built into the platform and is read-only');
+  }
+}
+
+/**
+ * Refuse access-grant (membership) operations against a fallback lake. A hardcoded DATA_LAKES lake
+ * has no backing document, so there is nothing to hang a grant row on and no `createdByUserId` to
+ * seed an owner grant from - its access is curated config, granted to everyone via the list/read
+ * path. This is the explicit fallback carve-out issue #1667 calls for; every grant write path
+ * (add/remove/reprocess a member) must call it after the access gate, mirroring how
+ * `assertLakeWritable` guards the file-write paths.
+ */
+export function assertLakeGrantable(lake: Pick<IDataLakeDocument, 'id'>): void {
+  if (isFallbackLake(lake)) {
+    throw new BadRequestError('This data lake is built into the platform; its membership is managed by configuration');
   }
 }
 

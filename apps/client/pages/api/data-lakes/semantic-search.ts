@@ -17,7 +17,6 @@ import { apiKeyService, dataLakeService, recordOperationalUsage } from '@bike4mi
 import { getProviderFromModel } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import {
-  ApiKeyType,
   getEmbeddingModelCost,
   ModelBackend,
   OpenAIEmbeddingModel,
@@ -116,6 +115,12 @@ const toMismatchPayload = (report: dataLakeService.EmbeddingMismatchReport) => (
     },
   },
   unlabeled: { chunks: report.unlabeled.chunks, files: report.unlabeled.files },
+  // Files searched via an ALTERNATE model's own ANN index rather than excluded - see
+  // groupFilesByEmbeddingModel/alternateModelAnn.ts. Never implies partial_results on its own.
+  alternate_model_served: {
+    files: report.alternateModelServed.files,
+    models: report.alternateModelServed.models,
+  },
   query_embedding_failed: report.queryEmbeddingFailed,
 });
 
@@ -128,12 +133,14 @@ const toScanPayload = (scan: dataLakeService.SemanticSearchScanAccounting) => ({
   files_scanned: scan.filesScanned,
   chunks_scanned: scan.chunksScanned,
   chunks_skipped_dimension_mismatch: scan.chunksSkippedDimensionMismatch,
-  // Files served by Atlas $vectorSearch instead of the brute-force scan - additive to
-  // files_scanned, not a replacement (see SemanticSearchScanAccounting.annFilesQueried). Without
-  // these a caller computing coverage from files_scanned alone would undercount an ANN-served file
-  // as unsearched.
+  // Files served by ANN retrieval (Atlas $vectorSearch or self-host OpenSearch, across the
+  // primary model and every alternate model queried) instead of the brute-force scan - additive
+  // to files_scanned, not a replacement (see SemanticSearchScanAccounting.annFilesQueried).
+  // Without these a caller computing coverage from files_scanned alone would undercount an
+  // ANN-served file as unsearched.
   ann_files_queried: scan.annFilesQueried,
   ann_hits: scan.annHits,
+  ann_models_queried: scan.annModelsQueried,
   budgets: { max_files: scan.budgets.maxFiles, max_chunks: scan.budgets.maxChunks },
 });
 
@@ -240,48 +247,46 @@ const handler = baseApi()
         });
       }
 
-      // --- Get the embedding-provider API key (OpenAI or VoyageAI) for the requested model ---
-      // embedding_model may be a VoyageAI model, so resolve the key for the model's actual
-      // provider instead of assuming OpenAI - otherwise a configured VoyageAI key is never
-      // used and the search fails despite being set up correctly.
-      const dbAdapters = { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } };
+      // --- Get the embedding-provider API keys, for every provider we have one, not just the
+      // requested model's own provider ---
+      // The mixed-embeddingModel ANN cutover (semanticDataLakeSearch) can attempt an ALTERNATE
+      // model from a different provider than the primary (e.g. a lake re-embedded from ada-002 to
+      // voyage-3); a table scoped to only the primary model's provider means that alternate can
+      // never actually be reached here, regardless of readiness/cap. Mirrors the chat
+      // search_knowledge_base tool's resolveEmbeddingContext, which already resolves the full
+      // multi-provider table this way.
       const userIdForService = req.user?.id || 'system';
       const embeddingProvider = getProviderFromModel(embedding_model as SupportedEmbeddingModel);
+      const effectiveKeys = await apiKeyService.getEffectiveLLMApiKeys(
+        userIdForService,
+        { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },
+        { logger: req.logger }
+      );
 
-      // Branch POSITIVELY on the provider. A catch-all `else` here assumed every provider it
-      // did not recognise needed an OpenAI or VoyageAI key, so Bedrock - which authenticates
-      // through the AWS credential chain and has no key to find - resolved a credential it
-      // never needed and 500'd on environments without one, after ingesting the corpus fine.
-      // A keyless provider's ready state is an EMPTY table; semanticDataLakeSearch treats it
-      // as such via resolveEmbeddingConfig. Adding a provider means adding an arm here.
-      let embeddingApiKeyTable: { openai?: string | null; voyageai?: string | null; ollama?: string | null } = {};
-      if (embeddingProvider === ModelBackend.Ollama) {
-        const effectiveKeys = await apiKeyService.getEffectiveLLMApiKeys(
-          userIdForService,
-          { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },
-          { logger: req.logger }
-        );
-        if (!effectiveKeys?.ollama) {
-          return res.status(500).json({
-            error: `Ollama base URL not configured. Required for query embedding with model ${embedding_model}.`,
-          });
-        }
-        embeddingApiKeyTable = { ollama: effectiveKeys.ollama };
-      } else if (embeddingProvider === ModelBackend.OpenAI || embeddingProvider === ModelBackend.VoyageAI) {
-        const embeddingKeyType = embeddingProvider === ModelBackend.VoyageAI ? ApiKeyType.voyageai : ApiKeyType.openai;
-        const embeddingApiKey = await apiKeyService.getEffectiveApiKey(
-          userIdForService,
-          { type: embeddingKeyType },
-          dbAdapters
-        );
-        if (!embeddingApiKey) {
-          return res.status(500).json({
-            error: `${embeddingProvider} API key not configured. Required for query embedding with model ${embedding_model}.`,
-          });
-        }
-        embeddingApiKeyTable =
-          embeddingProvider === ModelBackend.VoyageAI ? { voyageai: embeddingApiKey } : { openai: embeddingApiKey };
+      // Branch POSITIVELY on the PRIMARY model's own provider only - a hard 500 here is about the
+      // model the caller actually asked for, not about a downstream alternate model's coverage,
+      // which degrades gracefully via semanticDataLakeSearch's own missingCredential skip reason
+      // instead. A keyless provider's ready state is an EMPTY table; semanticDataLakeSearch treats
+      // it as such via resolveEmbeddingConfig. Adding a provider means adding an arm here.
+      if (embeddingProvider === ModelBackend.Ollama && !effectiveKeys?.ollama) {
+        return res.status(500).json({
+          error: `Ollama base URL not configured. Required for query embedding with model ${embedding_model}.`,
+        });
+      } else if (embeddingProvider === ModelBackend.OpenAI && !effectiveKeys?.openai) {
+        return res.status(500).json({
+          error: `${embeddingProvider} API key not configured. Required for query embedding with model ${embedding_model}.`,
+        });
+      } else if (embeddingProvider === ModelBackend.VoyageAI && !effectiveKeys?.voyageai) {
+        return res.status(500).json({
+          error: `${embeddingProvider} API key not configured. Required for query embedding with model ${embedding_model}.`,
+        });
       }
+
+      const embeddingApiKeyTable: { openai?: string | null; voyageai?: string | null; ollama?: string | null } = {
+        openai: effectiveKeys?.openai,
+        voyageai: effectiveKeys?.voyageai,
+        ollama: effectiveKeys?.ollama,
+      };
 
       if (isAborted()) return res.end();
 
@@ -311,39 +316,62 @@ const handler = baseApi()
         }
       );
 
-      // Record the query-embedding spend (the embed ran inside the search above).
-      // Best-effort: never let a recording failure fail the search response.
+      // Record the query-embedding spend for the primary model plus every alternate model the
+      // mixed-embeddingModel ANN cutover actually embedded under - each alternate embed ran (and
+      // is billable) regardless of whether its ANN query then found anything. `user`/`organization`
+      // are resolved ONCE, not re-fetched per model, and every recording runs concurrently.
+      // Best-effort as a whole: a recording failure (including resolving user/organization) must
+      // never fail the search response, and one model's recording failure must never skip another's.
       try {
         const user = await userRepository.findById(req.user.id);
         if (user) {
           const organization = user.organizationId ? await organizationRepository.findById(user.organizationId) : null;
-          const queryTokens = await getSharedTokenizer(req.logger).countTokens(query, embedding_model);
-          await recordOperationalUsage(
-            {
-              requestId: req.user.id,
-              user,
-              organization,
-              feature: 'embedding',
-              provider: embeddingProvider,
-              model: embedding_model,
-              inputTokens: queryTokens,
-              costUsd: getEmbeddingModelCost(embedding_model, queryTokens),
-              source: 'api',
-            },
-            {
-              db: {
-                usageEvents: usageEventRepository,
-                adminSettings: adminSettingsRepository,
-                creditTransactions: creditTransactionRepository,
-                users: userRepository,
-                organizations: organizationRepository,
-              },
-              logger: req.logger,
+          const recordEmbeddingUsage = async (model: string, provider: string): Promise<void> => {
+            try {
+              const queryTokens = await getSharedTokenizer(req.logger).countTokens(query, model);
+              await recordOperationalUsage(
+                {
+                  requestId: req.user.id,
+                  user,
+                  organization,
+                  feature: 'embedding',
+                  provider,
+                  model,
+                  inputTokens: queryTokens,
+                  costUsd: getEmbeddingModelCost(model, queryTokens),
+                  source: 'api',
+                },
+                {
+                  db: {
+                    usageEvents: usageEventRepository,
+                    adminSettings: adminSettingsRepository,
+                    creditTransactions: creditTransactionRepository,
+                    users: userRepository,
+                    organizations: organizationRepository,
+                  },
+                  logger: req.logger,
+                }
+              );
+            } catch (recordErr) {
+              req.logger?.warn(`[semantic-search] failed to record embedding usage for ${model}`, recordErr);
             }
-          );
+          };
+
+          await Promise.all([
+            recordEmbeddingUsage(embedding_model, embeddingProvider),
+            // Defensive: the planner (alternateModelAnn.ts) already only ever selects a
+            // registry-known model, so this filter should never actually drop anything. Mirrors
+            // the same guard in knowledgeBaseSearch/index.ts's recordAllEmbeddingUsage.
+            ...search.alternateModelsEmbedded
+              .filter(isSupportedEmbeddingModel)
+              .map(altModel => recordEmbeddingUsage(altModel, getProviderFromModel(altModel))),
+          ]);
         }
       } catch (recordErr) {
-        req.logger?.warn('[semantic-search] failed to record embedding usage', recordErr);
+        req.logger?.warn(
+          '[semantic-search] failed to resolve user/organization for embedding usage recording',
+          recordErr
+        );
       }
 
       if (isAborted()) return res.end();

@@ -4,8 +4,12 @@ import AddIcon from '@mui/icons-material/Add';
 import ChatIcon from '@mui/icons-material/Chat';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
 import { REDUCED_MOTION_OFF, driftFloat, inkFor, ringPing } from '@client/app/components/datalake/surfaceChrome';
-import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
-import type { DataLakeSurfaceCopy, DataLakeSurfaceTheme } from '@client/app/components/datalake/surfaceTokens';
+import { humanizeSegment, useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
+import type {
+  DataLakeSurfaceCopy,
+  DataLakeSurfaceTaxonomy,
+  DataLakeSurfaceTheme,
+} from '@client/app/components/datalake/surfaceTokens';
 import { useGetFabFileContent } from '@client/app/hooks/data/fabFiles';
 import type { IFabFileDocument } from '@bike4mind/common';
 
@@ -37,10 +41,6 @@ function getMeaningfulTags(file: IFabFileDocument): string[] {
   return file.tags.map(t => t.name).filter(name => !name.startsWith('datalake:'));
 }
 
-function humanizeDive(segment: string): string {
-  return segment.charAt(0).toUpperCase() + segment.slice(1).replace(/-/g, ' ');
-}
-
 /* Drifting motes behind the empty state; `hue` picks which token ink each one takes. */
 const MOTES: {
   left: string;
@@ -66,6 +66,7 @@ function EmptyState({
   onCreate,
   theme,
   copy,
+  taxonomy,
 }: {
   isDark: boolean;
   quickDives: QuickDive[];
@@ -73,6 +74,7 @@ function EmptyState({
   onCreate?: () => void;
   theme: DataLakeSurfaceTheme;
   copy: DataLakeSurfaceCopy;
+  taxonomy: DataLakeSurfaceTaxonomy;
 }) {
   const accent = inkFor(theme.accent, isDark);
   return (
@@ -196,7 +198,9 @@ function EmptyState({
                 },
               }}
             >
-              {humanizeDive(dive.segment)}
+              {/* Same humanizer as the tree, so an injected label reads identically; the depth
+                  is the segment's index in the path. */}
+              {humanizeSegment(dive.segment, dive.path.length - 1, taxonomy)}
             </Chip>
           ))}
         </Box>
@@ -208,7 +212,7 @@ function EmptyState({
 export default function DataLakeArticle({ file, onAskAbout, quickDives = [], onDive, onCreate }: DataLakeArticleProps) {
   const muiTheme = useTheme();
   const isDark = muiTheme.palette.mode === 'dark';
-  const { theme, copy, icons } = useDataLakeSurface();
+  const { theme, copy, icons, taxonomy } = useDataLakeSurface();
   const { secondaryActionLabel, secondaryActionPrompt } = copy;
   const SecondaryActionIcon = icons.secondaryAction;
   const { data: content, isLoading } = useGetFabFileContent(file);
@@ -222,6 +226,7 @@ export default function DataLakeArticle({ file, onAskAbout, quickDives = [], onD
         onCreate={onCreate}
         theme={theme}
         copy={copy}
+        taxonomy={taxonomy}
       />
     );
   }
