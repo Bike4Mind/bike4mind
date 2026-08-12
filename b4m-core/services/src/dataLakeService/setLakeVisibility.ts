@@ -1,6 +1,6 @@
 import type { IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { canManageLake } from './manageRule';
+import { canManageLake, isLakeCreator } from './manageRule';
 import { findCollidingPrefixLakes } from './tagPrefixCollision';
 
 /**
@@ -48,9 +48,9 @@ export const setLakeVisibility = async (
   // Exposing (org or public) targets the ACTOR's own scope, so only the owner may do it -
   // otherwise a platform admin acting on someone else's lake would expose it without consent
   // (and org promotion would pull it into the admin's org). Demotion to private stays owner/admin.
-  // Deliberately NOT canManageLake: that rule includes the admin bypass this check must exclude,
-  // so it stays a separate, hardened (fails closed on a blank identity) comparison.
-  if (exposes && (!actor.userId || !existing.createdByUserId || existing.createdByUserId !== actor.userId)) {
+  // Deliberately isLakeCreator, not canManageLake: that rule includes the admin bypass this
+  // check must exclude.
+  if (exposes && !isLakeCreator(existing, actor)) {
     throw new BadRequestError('Only the lake’s owner can change how it is shared.');
   }
   if (visibility === 'organization' && !actor.organizationId) {
