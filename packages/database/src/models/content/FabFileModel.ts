@@ -1052,23 +1052,37 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async findChunkedFilesByScope(scope: DataLakeMembershipScope): Promise<{ id: string; userId: string }[]> {
     const docs = await this.fabFileModel
       .find(
-        { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: null, chunked: true },
+        // `isChunking: {$ne: true}` excludes a file another wave (or a per-file reprocess) already
+        // claimed and is mid-flight on, so a concurrent rebuild can't re-select and double-enqueue it.
+        {
+          ...buildDataLakeMembershipFilter(scope),
+          deletedAt: null,
+          archivedAt: null,
+          chunked: true,
+          isChunking: { $ne: true },
+        },
         { _id: 1, userId: 1 }
       )
       .lean();
     return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
   }
 
-  async resetChunkStateByIds(ids: string[]): Promise<number> {
+  async claimFilesForRechunkByIds(ids: string[]): Promise<number> {
     if (ids.length === 0) return 0;
-    // Mirrors /api/files/reprocess's per-file $set: clearing `chunked` is what lets the re-enqueued
-    // chunk job past fabFileChunk.ts's idempotency guard; the rest keeps the file's status honest
-    // while it re-processes (and clears the Atlas-cutover stamp so it isn't read as ANN-ready early).
+    // Sets isChunking:TRUE to CLAIM each file for the imminent re-enqueue. Between this reset and an
+    // SQS worker actually dequeuing the chunk message, the file is chunkCount:0/chunked:false - which
+    // matches the background rescue sweep's filter exactly (chunkScan.ts), so without the claim the
+    // sweep would re-enqueue it and race the wave's own worker (fabFileChunk.ts's idempotency guard
+    // only checks `chunked`, not `isChunking`, so a duplicate delivery would slip past and its
+    // unconditional deleteManyByFabFileId could wipe chunks the first delivery just wrote). The
+    // per-file reprocess/chunk routes guard the same window with `if (fabFile.isChunking) throw`.
+    // The worker sets isChunking:true again on pickup and clears it in `finally`; a send that never
+    // lands must be released (releaseChunkClaimByIds) or the file stays claimed and invisible forever.
     const result = await this.fabFileModel.updateMany(
       { _id: { $in: ids } },
       {
         $set: {
-          isChunking: false,
+          isChunking: true,
           chunked: false,
           chunkCount: 0,
           vectorized: false,
@@ -1079,6 +1093,34 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       }
     );
     return result.modifiedCount;
+  }
+
+  async releaseChunkClaimByIds(ids: string[]): Promise<number> {
+    if (ids.length === 0) return 0;
+    // Undo a claim whose chunk message never made it onto the queue: restore `chunked:true` (the old
+    // chunks were never deleted - the worker never ran) and clear `isChunking`, so the file is
+    // re-detectable by the next wave and no longer stranded outside both detection and the rescue
+    // sweep. chunkCount stays 0 until the next successful rebuild; detection keys off actual chunk
+    // token sizes, not this field, so the file is still correctly re-flagged as under-chunked.
+    const result = await this.fabFileModel.updateMany(
+      { _id: { $in: ids } },
+      { $set: { isChunking: false, chunked: true } }
+    );
+    return result.modifiedCount;
+  }
+
+  async countFailedFilesByScope(scope: DataLakeMembershipScope): Promise<number> {
+    // Files whose re-chunk gave up (error set, no chunks). They are invisible to both
+    // findChunkedFilesByScope (needs chunked:true) and the rescue sweep (needs empty error), so the
+    // rebuild badge would read zero for them; surfaced separately so a manager can tell "done" from
+    // "some files failed and won't retry on their own".
+    return this.fabFileModel.countDocuments({
+      ...buildDataLakeMembershipFilter(scope),
+      deletedAt: null,
+      archivedAt: null,
+      chunkCount: { $lte: 0 },
+      error: { $nin: [null, ''] },
+    });
   }
 
   async countDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<Record<string, number>> {

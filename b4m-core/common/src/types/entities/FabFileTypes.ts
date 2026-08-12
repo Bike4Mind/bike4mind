@@ -806,15 +806,29 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   /**
    * Live, already-chunked files in the lake, as {id, userId} - the input set for under-chunked
    * detection. userId is the file OWNER, needed to re-enqueue the chunk job under the same
-   * identity the original ingest used. Excludes deleted/archived/still-pending files.
+   * identity the original ingest used. Excludes deleted/archived/still-pending files, and files
+   * already claimed and in-flight (isChunking) so a concurrent wave can't re-select them.
    */
   findChunkedFilesByScope(scope: DataLakeMembershipScope): Promise<{ id: string; userId: string }[]>;
   /**
-   * Reset the chunk/vector processing flags on the given files so a re-enqueued chunk job runs
-   * instead of hitting the "already chunked" idempotency guard - the bulk form of what
-   * /api/files/reprocess does per file. Returns the number of files modified.
+   * CLAIM the given files for re-chunking (isChunking:true) and reset their chunk/vector flags so a
+   * re-enqueued chunk job runs instead of hitting the "already chunked" idempotency guard. The claim
+   * hides the file from the background rescue sweep during the reset->worker-pickup window, so the
+   * sweep can't duplicate it. A claimed file whose enqueue then fails MUST be released
+   * (releaseChunkClaimByIds) or it stays stranded. Returns the number of files modified.
    */
-  resetChunkStateByIds(ids: string[]): Promise<number>;
+  claimFilesForRechunkByIds(ids: string[]): Promise<number>;
+  /**
+   * Undo a claim whose chunk message never reached the queue: restore chunked:true and clear
+   * isChunking so the file is re-detectable and not stranded. Returns the number modified.
+   */
+  releaseChunkClaimByIds(ids: string[]): Promise<number>;
+  /**
+   * Count the lake's files whose re-chunk failed (error set, no chunks) - invisible to both the
+   * under-chunked detection and the rescue sweep, so surfaced separately so a manager can tell
+   * "rebuild done" from "some files gave up".
+   */
+  countFailedFilesByScope(scope: DataLakeMembershipScope): Promise<number>;
   /**
    * Distinct live file count per lake, keyed by `datalakeTag`. Same predicate as
    * computeDataLakeStats, so what a browse surface displays cannot disagree with a lake's

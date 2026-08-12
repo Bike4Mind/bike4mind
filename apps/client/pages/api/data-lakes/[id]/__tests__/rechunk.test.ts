@@ -4,7 +4,9 @@ const h = vi.hoisted(() => ({
   assertLakeAccess: vi.fn(),
   assertLakeWriteAccess: vi.fn(),
   detectUnderChunkedFiles: vi.fn(),
-  resetChunkStateByIds: vi.fn(),
+  countFailedLakeFiles: vi.fn(),
+  claimFilesForRechunkByIds: vi.fn(),
+  releaseChunkClaimByIds: vi.fn(),
   sendToQueue: vi.fn(),
   getSourceQueueUrl: vi.fn(() => 'https://sqs.example.com/fab-file-chunk'),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false })),
@@ -27,13 +29,17 @@ vi.mock('@bike4mind/services', () => ({
     assertLakeAccess: h.assertLakeAccess,
     assertLakeWriteAccess: h.assertLakeWriteAccess,
     detectUnderChunkedFiles: h.detectUnderChunkedFiles,
+    countFailedLakeFiles: h.countFailedLakeFiles,
     DEFAULT_REBUILD_WAVE: 50,
     MAX_REBUILD_WAVE: 200,
   },
 }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
-  fabFileRepository: { resetChunkStateByIds: h.resetChunkStateByIds },
+  fabFileRepository: {
+    claimFilesForRechunkByIds: h.claimFilesForRechunkByIds,
+    releaseChunkClaimByIds: h.releaseChunkClaimByIds,
+  },
   fabFileChunkRepository: {},
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
@@ -62,33 +68,36 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.assertLakeAccess.mockResolvedValue(lake);
   h.assertLakeWriteAccess.mockResolvedValue(lake);
-  h.resetChunkStateByIds.mockResolvedValue(0);
+  h.countFailedLakeFiles.mockResolvedValue(0);
+  h.claimFilesForRechunkByIds.mockResolvedValue(0);
+  h.releaseChunkClaimByIds.mockResolvedValue(0);
   h.sendToQueue.mockResolvedValue(undefined);
 });
 
 describe('GET /api/data-lakes/[id]/rechunk', () => {
-  it('returns the under-chunked count (read access, no writes)', async () => {
+  it('returns the under-chunked count and the failed count (read access, no writes)', async () => {
     h.detectUnderChunkedFiles.mockResolvedValue([
       { fabFileId: 'f1', userId: 'u1' },
       { fabFileId: 'f2', userId: 'u1' },
     ]);
+    h.countFailedLakeFiles.mockResolvedValue(1);
     const { json } = await invoke('GET');
-    expect(json).toHaveBeenCalledWith({ underChunkedCount: 2 });
+    expect(json).toHaveBeenCalledWith({ underChunkedCount: 2, failedCount: 1 });
     expect(h.assertLakeAccess).toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
-    expect(h.resetChunkStateByIds).not.toHaveBeenCalled();
+    expect(h.claimFilesForRechunkByIds).not.toHaveBeenCalled();
   });
 });
 
 describe('POST /api/data-lakes/[id]/rechunk', () => {
-  it('resets and enqueues the whole detected set when under the wave cap', async () => {
+  it('claims and enqueues the whole detected set when under the wave cap', async () => {
     h.detectUnderChunkedFiles.mockResolvedValue([
       { fabFileId: 'f1', userId: 'u1' },
       { fabFileId: 'f2', userId: 'u2' },
     ]);
     const { json } = await invoke('POST', {});
     expect(h.assertLakeWriteAccess).toHaveBeenCalled();
-    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['f1', 'f2']);
+    expect(h.claimFilesForRechunkByIds).toHaveBeenCalledWith(['f1', 'f2']);
     expect(h.sendToQueue).toHaveBeenCalledTimes(2);
     expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
       fabFileId: 'f1',
@@ -98,6 +107,7 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
       fabFileId: 'f2',
       userId: 'u2',
     });
+    expect(h.releaseChunkClaimByIds).not.toHaveBeenCalled();
     expect(json).toHaveBeenCalledWith({ detected: 2, enqueued: 2, remaining: 0 });
   });
 
@@ -108,20 +118,33 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
       { fabFileId: 'c', userId: 'u' },
     ]);
     const { json } = await invoke('POST', { limit: 2 });
-    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['a', 'b']);
+    expect(h.claimFilesForRechunkByIds).toHaveBeenCalledWith(['a', 'b']);
     expect(h.sendToQueue).toHaveBeenCalledTimes(2);
     expect(json).toHaveBeenCalledWith({ detected: 3, enqueued: 2, remaining: 1 });
+  });
+
+  it('releases the claim on a file whose send failed, and excludes it from `enqueued`', async () => {
+    h.detectUnderChunkedFiles.mockResolvedValue([
+      { fabFileId: 'ok', userId: 'u1' },
+      { fabFileId: 'bad', userId: 'u2' },
+    ]);
+    // first send lands, second rejects (SQS hiccup)
+    h.sendToQueue.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('sqs unavailable'));
+    const { json } = await invoke('POST', {});
+    expect(h.claimFilesForRechunkByIds).toHaveBeenCalledWith(['ok', 'bad']);
+    expect(h.releaseChunkClaimByIds).toHaveBeenCalledWith(['bad']); // un-strand the failed one
+    expect(json).toHaveBeenCalledWith({ detected: 2, enqueued: 1, remaining: 1 });
   });
 
   it('is a no-op enqueue when nothing is under-chunked', async () => {
     h.detectUnderChunkedFiles.mockResolvedValue([]);
     const { json } = await invoke('POST', {});
-    expect(h.resetChunkStateByIds).not.toHaveBeenCalled();
+    expect(h.claimFilesForRechunkByIds).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
     expect(json).toHaveBeenCalledWith({ detected: 0, enqueued: 0, remaining: 0 });
   });
 
-  it('gates on write access - a rejected assert never enqueues', async () => {
+  it('gates on write access - a rejected assert never claims or enqueues', async () => {
     h.assertLakeWriteAccess.mockRejectedValue(new Error('Only the creator can add files to this data lake'));
     await expect(invoke('POST', {})).rejects.toThrow(/creator/);
     expect(h.detectUnderChunkedFiles).not.toHaveBeenCalled();

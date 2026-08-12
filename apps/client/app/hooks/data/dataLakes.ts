@@ -539,22 +539,29 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
   });
 }
 
+export type LakeRebuildStatus = { underChunkedCount: number; failedCount: number };
+
 /**
- * Hook: how many of a lake's files are still stored as oversized passages (predating the
- * passage-target fix) and would benefit from a "Rebuild passages" pass. Polls itself down while a
- * rebuild drains (count > 0), then goes quiet. Owner/admin only surface, so only enable when the
- * viewer can manage the lake.
+ * Hook: the lake's rebuild status - how many files are still oversized passages (predating the
+ * passage-target fix) plus how many gave up (failed re-chunk). Polls itself down while a rebuild
+ * drains, backing off as the backlog stays large so a multi-thousand-file lake isn't re-scanned
+ * every 5s for the whole drain. Owner/admin only surface, so only enable when the viewer can manage.
  */
 export function useUnderChunkedCount(dataLakeId: string | null, enabled = true) {
   return useQuery({
     queryKey: dataLakeKeys.rebuildStatus(dataLakeId ?? 'none'),
-    queryFn: async () => {
-      const res = await api.get<{ underChunkedCount: number }>(`/api/data-lakes/${dataLakeId}/rechunk`);
-      return res.data.underChunkedCount;
+    queryFn: async (): Promise<LakeRebuildStatus> => {
+      const res = await api.get<LakeRebuildStatus>(`/api/data-lakes/${dataLakeId}/rechunk`);
+      return { underChunkedCount: res.data.underChunkedCount, failedCount: res.data.failedCount ?? 0 };
     },
     enabled: enabled && !!dataLakeId,
-    // Tick the badge down as a wave completes; stop once there is nothing left to rebuild.
-    refetchInterval: query => ((query.state.data ?? 0) > 0 ? 5000 : false),
+    // Tick down as waves complete; coarser cadence while the backlog is large (each poll is a full
+    // lake rescan), quiet once nothing is left to rebuild.
+    refetchInterval: query => {
+      const n = query.state.data?.underChunkedCount ?? 0;
+      if (n <= 0) return false;
+      return n > 200 ? 30_000 : n > 50 ? 15_000 : 5_000;
+    },
   });
 }
 

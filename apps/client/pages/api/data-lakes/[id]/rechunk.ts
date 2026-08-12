@@ -42,8 +42,13 @@ const handler = baseApi()
     const { id } = req.query;
     const ctx = await toAccessContext(req);
     const lake = await dataLakeService.assertLakeAccess(id, ctx, { db: { dataLakes: dataLakeRepository } });
-    const underChunked = await dataLakeService.detectUnderChunkedFiles(lake, detectDeps);
-    return res.json({ underChunkedCount: underChunked.length });
+    // `failedCount` distinguishes "rebuild finished" from "some files gave up": a failed re-chunk
+    // (error set, no chunks) is invisible to detection, so the badge alone would read it as done.
+    const [underChunked, failedCount] = await Promise.all([
+      dataLakeService.detectUnderChunkedFiles(lake, detectDeps),
+      dataLakeService.countFailedLakeFiles(lake, { db: { fabFiles: fabFileRepository } }),
+    ]);
+    return res.json({ underChunkedCount: underChunked.length, failedCount });
   })
   .post(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
     const { id } = req.query;
@@ -54,22 +59,33 @@ const handler = baseApi()
     const detected = await dataLakeService.detectUnderChunkedFiles(lake, detectDeps);
     const wave = detected.slice(0, limit ?? dataLakeService.DEFAULT_REBUILD_WAVE);
 
+    let enqueued = 0;
     if (wave.length > 0) {
-      // Clear the idempotency flags so the re-enqueued chunk job actually re-chunks. A reset file
-      // reads as un-chunked until its job completes, so it also drops out of the next detection -
-      // repeated waves advance through the population without re-enqueuing an in-flight file.
-      await fabFileRepository.resetChunkStateByIds(wave.map(f => f.fabFileId));
       const queueUrl = getSourceQueueUrl('fabFileChunkQueue');
       if (!queueUrl) throw new Error('Chunk queue URL not found');
-      // Enqueue under each file's OWNER userId (as /api/files/reprocess does), so the chunk handler
-      // resolves the same identity the original ingest used.
-      await Promise.all(wave.map(f => sendToQueue(queueUrl, { fabFileId: f.fabFileId, userId: f.userId })));
+      // Claim first (isChunking:true) so the rescue sweep can't duplicate a file in the reset->pickup
+      // window; the claim also flips `chunked` off so the re-enqueued job clears fabFileChunk.ts's
+      // idempotency guard. Enqueue under each file's OWNER userId (as /api/files/reprocess does).
+      const waveIds = wave.map(f => f.fabFileId);
+      await fabFileRepository.claimFilesForRechunkByIds(waveIds);
+      // allSettled, not all: one failed send must not fail the batch and strand the OTHER claimed
+      // files with nothing on the queue. Release the claim on any file whose send didn't land so it
+      // is re-detectable next wave instead of stuck claimed-and-invisible.
+      const results = await Promise.allSettled(
+        wave.map(f => sendToQueue(queueUrl, { fabFileId: f.fabFileId, userId: f.userId }))
+      );
+      const failedIds = wave.filter((_, i) => results[i].status === 'rejected').map(f => f.fabFileId);
+      if (failedIds.length > 0) {
+        req.logger?.error?.(`rechunk: ${failedIds.length}/${wave.length} sends failed for lake ${lake.id}, released`);
+        await fabFileRepository.releaseChunkClaimByIds(failedIds);
+      }
+      enqueued = wave.length - failedIds.length;
     }
 
     return res.json({
       detected: detected.length,
-      enqueued: wave.length,
-      remaining: detected.length - wave.length,
+      enqueued,
+      remaining: detected.length - enqueued,
     });
   });
 

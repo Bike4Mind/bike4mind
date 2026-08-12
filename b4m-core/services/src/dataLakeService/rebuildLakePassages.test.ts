@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '@bike4mind/common';
-import { detectUnderChunkedFiles } from './rebuildLakePassages';
+import { detectUnderChunkedFiles, countFailedLakeFiles } from './rebuildLakePassages';
 
 const lake = { datalakeTag: 'datalake:acme', fileTagPrefix: 'acme:', createdByUserId: 'owner-1' };
 
@@ -68,5 +68,18 @@ describe('detectUnderChunkedFiles', () => {
     const deps = makeDeps([{ id: 'f1', userId: 'owner-1' }], ['f1', 'ghost']);
     const result = await detectUnderChunkedFiles(lake, deps);
     expect(result).toEqual([{ fabFileId: 'f1', userId: 'owner-1' }]);
+  });
+});
+
+describe('countFailedLakeFiles', () => {
+  it('delegates to the repo with the lake membership scope and returns the count', async () => {
+    const countFailedFilesByScope = vi.fn().mockResolvedValue(3);
+    const result = await countFailedLakeFiles(lake, { db: { fabFiles: { countFailedFilesByScope } } });
+    expect(result).toBe(3);
+    expect(countFailedFilesByScope).toHaveBeenCalledWith({
+      datalakeTag: 'datalake:acme',
+      fileTagPrefix: 'acme:',
+      creatorUserId: 'owner-1',
+    });
   });
 });

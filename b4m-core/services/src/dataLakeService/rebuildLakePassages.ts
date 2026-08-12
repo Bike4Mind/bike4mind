@@ -51,3 +51,13 @@ export const detectUnderChunkedFiles = async (
     })
     .filter((f): f is UnderChunkedFile => f !== null);
 };
+
+/**
+ * How many of the lake's files failed their re-chunk (error set, no chunks). These are invisible to
+ * both `detectUnderChunkedFiles` and the rescue sweep, so the rebuild badge would read them as done;
+ * reported alongside the under-chunked count so a manager can distinguish "finished" from "gave up".
+ */
+export const countFailedLakeFiles = async (
+  lake: ScopeSourceLake,
+  { db }: { db: { fabFiles: Pick<IFabFileRepository, 'countFailedFilesByScope'> } }
+): Promise<number> => db.fabFiles.countFailedFilesByScope(lakeMembershipScope(lake));

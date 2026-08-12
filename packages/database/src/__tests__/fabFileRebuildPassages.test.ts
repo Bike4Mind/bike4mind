@@ -26,12 +26,9 @@ describe('FabFileChunkRepository.findUnderChunkedFabFileIds', () => {
 
   it('returns only files with a chunk over the threshold, worst-first', async () => {
     await FabFileChunk.create([
-      // f-big: one huge chunk (legacy blob)
       { fabFileId: 'f-big', text: 'a', tokenCount: 6000 },
       { fabFileId: 'f-big', text: 'b', tokenCount: 400 },
-      // f-mid: over the threshold but smaller than f-big
       { fabFileId: 'f-mid', text: 'c', tokenCount: 2000 },
-      // f-ok: correctly chunked, never over threshold
       { fabFileId: 'f-ok', text: 'd', tokenCount: 500 },
       { fabFileId: 'f-ok', text: 'e', tokenCount: 480 },
     ]);
@@ -47,9 +44,7 @@ describe('FabFileChunkRepository.findUnderChunkedFabFileIds', () => {
       { fabFileId: 'out', text: 'y', tokenCount: 5000 },
     ]);
 
-    const ids = await fabFileChunkRepository.findUnderChunkedFabFileIds(['in'], 1500);
-
-    expect(ids).toEqual(['in']);
+    expect(await fabFileChunkRepository.findUnderChunkedFabFileIds(['in'], 1500)).toEqual(['in']);
   });
 
   it('an empty id list returns nothing (no scan)', async () => {
@@ -69,46 +64,57 @@ describe('FabFileRepository.findChunkedFilesByScope', () => {
     await FabFile.deleteMany({});
   });
 
-  it('returns chunked lake files as {id, userId}, excluding unchunked / deleted / archived / non-member', async () => {
-    const [member, unchunked] = await FabFile.create([
-      makeFile({ userId: 'u1' }),
-      makeFile({ userId: 'u1', chunked: false }),
-    ]);
+  it('returns chunked lake files, excluding unchunked / deleted / archived / in-flight / non-member', async () => {
+    const [member] = await FabFile.create([makeFile({ userId: 'u1' })]);
     await FabFile.create([
+      makeFile({ userId: 'u1', chunked: false }),
       makeFile({ userId: 'u2', deletedAt: new Date() }),
       makeFile({ userId: 'u2', archivedAt: new Date() }),
+      makeFile({ userId: 'u2', isChunking: true }), // claimed / in-flight -> excluded
       makeFile({ userId: 'u3', tags: [{ name: 'datalake:other', strength: 1 }] }),
     ]);
 
     const result = await fabFileRepository.findChunkedFilesByScope(scope);
-
     expect(result).toEqual([{ id: member._id.toString(), userId: 'u1' }]);
-    // sanity: the unchunked member is a real lake file but must not appear
-    expect(result.some(r => r.id === unchunked._id.toString())).toBe(false);
+  });
+
+  it('matches the prefix arm: a creator-owned file tagged under the lake prefix, not another owner', async () => {
+    const prefixScope = { datalakeTag: TAG, fileTagPrefix: 'proj:', creatorUserId: 'owner' };
+    const [ownerFile] = await FabFile.create([
+      makeFile({ userId: 'owner', tags: [{ name: 'proj:reports', strength: 1 }] }),
+    ]);
+    await FabFile.create([
+      // same prefix tag but a DIFFERENT owner -> the prefix arm's ownership conjunct excludes it
+      makeFile({ userId: 'intruder', tags: [{ name: 'proj:reports', strength: 1 }] }),
+    ]);
+
+    const result = await fabFileRepository.findChunkedFilesByScope(prefixScope);
+    expect(result).toEqual([{ id: ownerFile._id.toString(), userId: 'owner' }]);
   });
 });
 
-describe('FabFileRepository.resetChunkStateByIds', () => {
+describe('FabFileRepository.claimFilesForRechunkByIds', () => {
   setupMongoTest();
   beforeEach(async () => {
     await FabFile.deleteMany({});
   });
 
-  it('clears the chunk/vector processing flags so a re-enqueued job re-chunks', async () => {
+  it('claims the file (isChunking:true) and resets the chunk/vector flags', async () => {
     const [f] = await FabFile.create([
       makeFile({
         chunked: true,
         chunkCount: 1,
+        isChunking: false,
         vectorized: true,
         vectorizedChunkCount: 1,
         chunkEmbeddingModelStampedAt: new Date(),
       }),
     ]);
 
-    const modified = await fabFileRepository.resetChunkStateByIds([f._id.toString()]);
-    expect(modified).toBe(1);
+    expect(await fabFileRepository.claimFilesForRechunkByIds([f._id.toString()])).toBe(1);
 
     const after = await FabFile.findById(f._id).lean();
+    expect(after?.isChunking).toBe(true); // claimed, so the rescue sweep can't grab it mid-flight
     expect(after?.chunked).toBe(false);
     expect(after?.chunkCount).toBe(0);
     expect(after?.vectorized).toBe(false);
@@ -117,6 +123,43 @@ describe('FabFileRepository.resetChunkStateByIds', () => {
   });
 
   it('an empty id list is a no-op', async () => {
-    expect(await fabFileRepository.resetChunkStateByIds([])).toBe(0);
+    expect(await fabFileRepository.claimFilesForRechunkByIds([])).toBe(0);
+  });
+});
+
+describe('FabFileRepository.releaseChunkClaimByIds', () => {
+  setupMongoTest();
+  beforeEach(async () => {
+    await FabFile.deleteMany({});
+  });
+
+  it('releases the claim and restores chunked:true so the file is re-detectable', async () => {
+    const [f] = await FabFile.create([makeFile({ chunked: false, isChunking: true, chunkCount: 0 })]);
+
+    expect(await fabFileRepository.releaseChunkClaimByIds([f._id.toString()])).toBe(1);
+
+    const after = await FabFile.findById(f._id).lean();
+    expect(after?.isChunking).toBe(false);
+    expect(after?.chunked).toBe(true);
+  });
+});
+
+describe('FabFileRepository.countFailedFilesByScope', () => {
+  setupMongoTest();
+  beforeEach(async () => {
+    await FabFile.deleteMany({});
+  });
+
+  it('counts lake files with an error and no chunks, ignoring healthy / empty-error / deleted / non-member', async () => {
+    await FabFile.create([
+      makeFile({ chunked: false, chunkCount: 0, error: 'corrupt pdf' }), // counts
+      makeFile({ chunked: false, chunkCount: 0, error: 'unparseable' }), // counts
+      makeFile({ chunked: true, chunkCount: 5 }), // healthy -> no
+      makeFile({ chunked: false, chunkCount: 0, error: '' }), // empty error -> no
+      makeFile({ chunked: false, chunkCount: 0, error: 'x', deletedAt: new Date() }), // deleted -> no
+      makeFile({ chunked: false, chunkCount: 0, error: 'y', tags: [{ name: 'datalake:other', strength: 1 }] }), // non-member -> no
+    ]);
+
+    expect(await fabFileRepository.countFailedFilesByScope(scope)).toBe(2);
   });
 });

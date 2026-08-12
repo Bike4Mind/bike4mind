@@ -1122,7 +1122,9 @@ function LakeInfoPanel({
   const visibility = lake.isPublic ? 'Public' : lake.organizationId ? 'Organization' : 'Private';
   // "Rebuild passages": manager-only, and only surfaced when the lake actually has legacy
   // oversized-chunk files to repair (the count self-polls down as a rebuild wave drains).
-  const { data: underChunkedCount = 0 } = useUnderChunkedCount(lake.id, lake.canManage);
+  const { data: rebuildStatus } = useUnderChunkedCount(lake.id, lake.canManage);
+  const underChunkedCount = rebuildStatus?.underChunkedCount ?? 0;
+  const failedCount = rebuildStatus?.failedCount ?? 0;
   const rechunk = useRechunkDataLake(lake.id);
 
   return (
@@ -1282,6 +1284,25 @@ function LakeInfoPanel({
                 data-testid={`datalake-manager-rebuild-chip-${lake.id}`}
               >
                 {underChunkedCount} to rebuild
+              </Chip>
+            </Tooltip>
+          )}
+          {/* A rebuild badge reaching zero doesn't mean success if some files failed to re-chunk -
+              those won't retry on their own, so surface them distinctly. */}
+          {lake.canManage && failedCount > 0 && (
+            <Tooltip
+              title="These files failed to re-chunk (e.g. a corrupt or unparseable file) and won't retry automatically. Open the file and Re-process, or re-upload it."
+              size="sm"
+            >
+              <Chip
+                size="sm"
+                variant="soft"
+                color="danger"
+                startDecorator={<ErrorOutlineIcon sx={{ fontSize: 12 }} />}
+                sx={{ fontSize: '11px' }}
+                data-testid={`datalake-manager-rebuild-failed-chip-${lake.id}`}
+              >
+                {failedCount} failed
               </Chip>
             </Tooltip>
           )}
