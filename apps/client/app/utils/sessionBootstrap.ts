@@ -155,15 +155,20 @@ interface IdentifyResponse {
 export function probeIdentity(queryClient: QueryClient): Promise<void> {
   if (probeInFlight) return Promise.resolve();
   probeInFlight = true;
-  return api
-    .get<IdentifyResponse>('/api/identify')
-    .then(response => {
-      queryClient.setQueryData(['identify'], response.data);
-    })
-    .catch(() => {})
-    .finally(() => {
-      probeInFlight = false;
-    });
+  return (
+    api
+      // Bounded like the interceptor's own refresh call (ApiContext.tsx): without this, a
+      // hanging server leaves probeInFlight stuck true forever, blocking every future probe
+      // from both the WS close-probe and revalidateSessionOnFocus below.
+      .get<IdentifyResponse>('/api/identify', { timeout: 10000 })
+      .then(response => {
+        queryClient.setQueryData(['identify'], response.data);
+      })
+      .catch(() => {})
+      .finally(() => {
+        probeInFlight = false;
+      })
+  );
 }
 
 /**

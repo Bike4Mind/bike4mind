@@ -90,7 +90,7 @@ describe('probeIdentity - shared single-flight liveness probe', () => {
 
     await probeIdentity(makeQueryClient(setQueryData));
 
-    expect(apiGet).toHaveBeenCalledWith('/api/identify');
+    expect(apiGet).toHaveBeenCalledWith('/api/identify', { timeout: 10000 });
     expect(setQueryData).toHaveBeenCalledWith(['identify'], identify);
   });
 
@@ -100,8 +100,22 @@ describe('probeIdentity - shared single-flight liveness probe', () => {
 
     await probeIdentity(makeQueryClient(setQueryData));
 
-    expect(apiGet).toHaveBeenCalledWith('/api/identify');
+    expect(apiGet).toHaveBeenCalledWith('/api/identify', { timeout: 10000 });
     expect(setQueryData).not.toHaveBeenCalled();
+  });
+
+  it('bounds the request with a timeout so a hanging server cannot wedge the single-flight guard', async () => {
+    const timeoutError = Object.assign(new Error('timeout of 10000ms exceeded'), { code: 'ECONNABORTED' });
+    const apiGet = vi.spyOn(api, 'get');
+    apiGet.mockRejectedValueOnce(timeoutError);
+    apiGet.mockResolvedValueOnce({ data: { user: {}, accessToken: 'x' } });
+    const client = makeQueryClient(vi.fn());
+
+    await probeIdentity(client);
+    await probeIdentity(client);
+
+    expect(apiGet).toHaveBeenCalledTimes(2);
+    expect(apiGet).toHaveBeenNthCalledWith(1, '/api/identify', { timeout: 10000 });
   });
 
   it('collapses a second call that lands while the first probe is still in flight', async () => {
@@ -155,7 +169,7 @@ describe('revalidateSessionOnFocus - guard gating the shared probe', () => {
     revalidateSessionOnFocus(makeQueryClient(setQueryData));
     await flush();
 
-    expect(apiGet).toHaveBeenCalledWith('/api/identify');
+    expect(apiGet).toHaveBeenCalledWith('/api/identify', { timeout: 10000 });
   });
 
   it('does not probe when the guard fails (e.g. mfaPending)', async () => {
