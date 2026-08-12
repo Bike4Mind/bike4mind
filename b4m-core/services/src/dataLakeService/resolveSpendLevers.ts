@@ -130,10 +130,13 @@ export async function resolveSpendLevers(
   };
 }
 
-const isAbsent = (raw: string | null | undefined): raw is null | undefined | '' =>
-  raw === null || raw === undefined || raw === '';
+// Raw values are TYPED string|null but can arrive as number 0 or boolean false at runtime
+// (the admin panel stores typed values; see the `?? null` note in getSettingsByNames). Every
+// lever parser below therefore normalizes through String() before judging the value, so a
+// stored 0 reads as "0" (a valid STOP) rather than crashing or slipping through a type hole.
+const isAbsent = (raw: unknown): raw is null | undefined | '' => raw === null || raw === undefined || raw === '';
 
-function halt(label: string, raw: string): never {
+function halt(label: string, raw: unknown): never {
   throw new SpendLeverResolutionError(
     `unusable spend lever ${label}=${JSON.stringify(raw)}; halting spend rather than resuming at a default`
   );
@@ -154,7 +157,7 @@ function usdLeverToMicroUsd(
   logger?: Logger
 ): number {
   if (isAbsent(raw)) return fallbackUsd * MICRO_USD_PER_USD;
-  const parsed = Number(raw);
+  const parsed = Number(String(raw));
   if (!Number.isFinite(parsed) || parsed < 0) halt(label, raw);
   return Math.round(clamp(parsed, maxUsd, label, logger) * MICRO_USD_PER_USD);
 }
@@ -168,7 +171,7 @@ function nonNegativeIntLever(
   logger?: Logger
 ): number {
   if (isAbsent(raw)) return fallback;
-  const parsed = Number(raw);
+  const parsed = Number(String(raw));
   if (!Number.isInteger(parsed) || parsed < 0) halt(label, raw);
   return clamp(parsed, max, label, logger);
 }
@@ -182,7 +185,7 @@ function positiveIntLever(
   logger?: Logger
 ): number {
   if (isAbsent(raw)) return fallback;
-  const parsed = Number(raw);
+  const parsed = Number(String(raw));
   if (!Number.isInteger(parsed) || parsed < 1) halt(label, raw);
   return clamp(parsed, max, label, logger);
 }
@@ -190,7 +193,7 @@ function positiveIntLever(
 /** Boolean lever: only the literal strings true/false (any case) are acceptable when set. */
 function booleanLever(raw: string | null | undefined, fallback: boolean, label: string): boolean {
   if (isAbsent(raw)) return fallback;
-  const normalized = raw.toLowerCase();
+  const normalized = String(raw).toLowerCase();
   if (normalized === 'true') return true;
   if (normalized === 'false') return false;
   halt(label, raw);

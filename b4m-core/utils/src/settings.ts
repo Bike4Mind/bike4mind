@@ -165,7 +165,11 @@ export async function getSettingsByNames(
 
   const result: Record<string, string | null> = {};
   settingNames.forEach(name => {
-    result[name] = allSettings[name] || null;
+    // `?? null`, NOT `|| null`: settingValue is typed string but stored values can be the
+    // number 0 or boolean false (the admin panel saves typed values), and `||` would erase
+    // exactly those into "absent" - e.g. an operator's 0 spend budget silently reverting to
+    // the coded default. Mirrors the same fix in getSettingByName / AdminSettingsCache.
+    result[name] = allSettings[name] ?? null;
   });
 
   return result;

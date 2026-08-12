@@ -108,6 +108,20 @@ describe('resolveSpendLevers', () => {
     expect(logger.warn).toHaveBeenCalledOnce();
   });
 
+  // Regression: the admin panel stores typed values, so a 0 budget arrives as the NUMBER 0
+  // and the off switch as the BOOLEAN false - not strings. Both must keep their meaning.
+  it('honors a stored numeric 0 and boolean false, not just their string forms', async () => {
+    mockedGetSettings.mockResolvedValue(
+      settings({
+        dataLakeEmbeddingBudgetPerRunUsd: 0 as unknown as string,
+        dataLakeEmbeddingSpendEnabled: false as unknown as string,
+      })
+    );
+    const levers = await resolveSpendLevers(db);
+    expect(levers.perRunBudgetMicroUsd).toBe(0);
+    expect(levers.spendEnabled).toBe(false);
+  });
+
   it('parses the boolean switch case-insensitively', async () => {
     mockedGetSettings.mockResolvedValue(settings({ dataLakeEmbeddingSpendEnabled: 'False' }));
     const levers = await resolveSpendLevers(db);
