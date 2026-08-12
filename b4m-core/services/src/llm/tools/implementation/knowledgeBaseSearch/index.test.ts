@@ -31,6 +31,8 @@ vi.mock('../../../../apiKeyService', () => ({
   getEffectiveLLMApiKeys: (...args: unknown[]) => getEffectiveLLMApiKeysMock(...args),
 }));
 
+import { invalidateSettingsCache } from '@bike4mind/utils';
+import { RETRIEVED_CONTENT_BEGIN } from '../../../../dataLakeService/renderRetrievedContentBlock';
 import { knowledgeBaseSearchTool } from './index';
 import { emptyEmbeddingMismatchReport } from '../../../../dataLakeService/embeddingMismatch';
 import type { ToolContext } from '../../base/types';
@@ -1018,5 +1020,231 @@ describe('search_knowledge_base keyword fallback: untrusted metadata (#1659)', (
     expect(out).not.toMatch(/^NOTE: this search covered every document/m);
     expect(out).not.toMatch(/^---$/m);
     expect(out).toContain('this search covered every document.');
+  });
+});
+
+describe('search_knowledge_base serve budget agrees with the chunk policy (#1661)', () => {
+  const IN_POLICY_CHARS = 3000;
+  const OVER_POLICY_CHARS = 5000;
+  const DERIVED_DEFAULT_CAP = 3072;
+  const HISTORICAL_CAP = 1200;
+  /** 300 tokens x the serve bound - distinct from both the old constant and the default. */
+  const CONFIGURED_CAP = 1800;
+
+  /** Distinctive body so an assertion can prove the tail survived, not just the head. */
+  const passage = (chars: number) => `HEAD-MARKER ${'lorem ipsum '.repeat(chars).slice(0, chars - 24)} TAIL-MARKER`;
+
+  const hitOf = (chunkText: string) => ({
+    chunkId: 'c1',
+    fileId: 'f1',
+    fileName: 'Handbook.pdf',
+    fileTags: [],
+    chunkText,
+    score: 0.81,
+  });
+
+  const scan = {
+    truncated: false,
+    fileBudgetHit: false,
+    chunkBudgetHit: false,
+    filesMatching: 3,
+    filesScoped: 3,
+    filesScanned: 3,
+    chunksScanned: 9,
+    chunksSkippedDimensionMismatch: 0,
+    annFilesQueried: 0,
+    annHits: 0,
+    budgets: { maxFiles: 20000, maxChunks: 100000 },
+  };
+
+  /**
+   * The settings cache calls logger.debug, and the resolver swallows the resulting TypeError as a
+   * settings outage - which silently returns coded defaults and makes a settings-driven test pass
+   * for the wrong reason. Full surface required, not just the three the module logs through.
+   */
+  const budgetLogger = { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), info: vi.fn() } as never;
+
+  beforeEach(() => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+    });
+    invalidateSettingsCache();
+  });
+
+  /** `settings` present -> the real resolver runs and derives from them; absent -> coded defaults. */
+  function semanticContext(overrides: Partial<ToolContext> = {}, settings?: Record<string, string>): ToolContext {
+    const rows = Object.entries(settings ?? {}).map(([settingName, settingValue]) => ({ settingName, settingValue }));
+    return makeContext({
+      logger: budgetLogger,
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: {
+          getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002'),
+          ...(settings
+            ? {
+                findAll: vi.fn().mockResolvedValue(rows),
+                findBySettingNames: vi.fn().mockResolvedValue(rows),
+              }
+            : {}),
+        },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+      ...overrides,
+    });
+  }
+
+  it('serves an in-policy passage WHOLE - the regression this change exists to prevent', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [hitOf(passage(IN_POLICY_CHARS))],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      scan,
+    });
+
+    const out = await run(semanticContext());
+
+    // Longer than the cap this replaces, so under the old constant the tail was unreachable.
+    expect(IN_POLICY_CHARS).toBeGreaterThan(HISTORICAL_CAP);
+    expect(out).toContain('TAIL-MARKER');
+    expect(out).not.toContain('truncated at');
+    expect(budgetLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('clipped'));
+  });
+
+  it('clips an over-policy passage, tells the model, and warns the operator with counts', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [hitOf(passage(OVER_POLICY_CHARS))],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      scan,
+    });
+
+    const out = await run(semanticContext());
+
+    expect(out).toContain('HEAD-MARKER');
+    expect(out).not.toContain('TAIL-MARKER');
+    expect(out).toContain(`truncated at ${DERIVED_DEFAULT_CAP} characters`);
+    expect(budgetLogger.warn).toHaveBeenCalledWith(
+      expect.stringContaining(`clipped 1/1 passage(s) at ${DERIVED_DEFAULT_CAP} chars`)
+    );
+    expect(budgetLogger.warn).toHaveBeenCalledWith(expect.stringContaining(`longest ${OVER_POLICY_CHARS}`));
+  });
+
+  it('keeps the truncation notice at column 0, outside the untrusted block', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [hitOf(passage(OVER_POLICY_CHARS))],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      scan,
+    });
+
+    const out = await run(semanticContext());
+
+    // Inside the block it would be indented by the defang pass and read as document text.
+    expect(out).toMatch(/^NOTE: The passage below was truncated/m);
+    expect(out.indexOf('truncated at')).toBeLessThan(out.indexOf(RETRIEVED_CONTENT_BEGIN));
+  });
+
+  it('derives the cap from the configured chunk policy, not from a constant', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [hitOf(passage(IN_POLICY_CHARS))],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      scan,
+    });
+
+    // 300 tokens derives 1800 chars - a number NEITHER the removed constant (1200) nor the default
+    // policy (3072) can produce, so this cannot pass against a hardcoded cap of any value. A cap that
+    // happens to equal the floor would have made this test vacuous.
+    const out = await run(semanticContext({}, { DefaultChunkSize: '300' }));
+
+    expect(CONFIGURED_CAP).not.toBe(HISTORICAL_CAP);
+    expect(CONFIGURED_CAP).not.toBe(DERIVED_DEFAULT_CAP);
+    expect(out).toContain(`truncated at ${CONFIGURED_CAP} characters`);
+    expect(out).not.toContain('TAIL-MARKER');
+  });
+
+  it('applies the same budget on the agent-scoped arm - neither surface may serve less', async () => {
+    fileScopedSemanticSearchMock.mockResolvedValue({
+      results: [hitOf(passage(IN_POLICY_CHARS))],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      scan,
+    });
+
+    const out = await run(semanticContext({ kbScope: { fileIds: ['f1'] } as never }));
+
+    expect(fileScopedSemanticSearchMock).toHaveBeenCalled();
+    expect(out).toContain('TAIL-MARKER');
+    expect(out).not.toContain('truncated at');
+  });
+});
+
+describe('search_knowledge_base clip order vs the untrusted-content defense (#1661 + #1659)', () => {
+  const scan = {
+    truncated: false,
+    fileBudgetHit: false,
+    chunkBudgetHit: false,
+    filesMatching: 1,
+    filesScoped: 1,
+    filesScanned: 1,
+    chunksScanned: 1,
+    chunksSkippedDimensionMismatch: 0,
+    annFilesQueried: 0,
+    annHits: 0,
+    budgets: { maxFiles: 20000, maxChunks: 100000 },
+  };
+
+  beforeEach(() => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+    });
+    invalidateSettingsCache();
+  });
+
+  it('spends the whole budget on content, never on the defense it adds', async () => {
+    // Every line opens with a marker the defang pass indents, so defanging adds one char PER LINE.
+    // Short lines are what make that measurable: 490 six-char lines put the sentinel at original
+    // offset 2940 (inside the 3072 budget) but at defanged offset 3430 (outside it). So clipping the
+    // defanged string drops content that fits, and clipping first does not.
+    const markerLine = '--- f\n'; // 6 chars, line-initial marker the defang pass indents
+    const lines = 490;
+    const body = markerLine.repeat(lines);
+    const chunkText = `${body}SENTINEL-INSIDE-BUDGET${markerLine.repeat(200)}`;
+    // Pin the arithmetic the test rests on, or a change to either number makes it vacuous in silence.
+    expect(body.length).toBe(2940);
+    expect(body.length).toBeLessThan(3072);
+    expect(body.length + lines).toBeGreaterThan(3072);
+
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [{ chunkId: 'c1', fileId: 'f1', fileName: 'Handbook.pdf', fileTags: [], chunkText, score: 0.81 }],
+      totalChunksSearched: 1,
+      filesInScope: 1,
+      scan,
+    });
+
+    const out = await run(
+      makeContext({
+        logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), info: vi.fn() } as never,
+        retrievalFilter: undefined,
+        db: {
+          fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+          fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+          adminSettings: { getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002') },
+          apiKeys: {},
+          usageEvents: { record: vi.fn() },
+        } as never,
+      })
+    );
+
+    expect(out).toContain('SENTINEL-INSIDE-BUDGET');
+    // And the defense is still applied to what survived: no forged separator at column 0.
+    expect(out).not.toMatch(/^--- f$/m);
   });
 });
