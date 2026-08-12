@@ -12,7 +12,7 @@ import { DataLakeNavProvider } from './dataLakeNavContext';
 import { StatTicker, inkFor, surfaceBackground } from '@client/app/components/datalake/surfaceChrome';
 import { humanizeSegment, useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
 import { ManageKnowledgeButton } from '@client/app/components/datalake/manageKnowledge';
-import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
+import { useSessions, useWorkBenchActions, useWorkBenchFiles } from '@client/app/contexts/SessionsContext';
 import useSetDataLakeMode from '@client/app/hooks/useSetDataLakeMode';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { useNotebookLayout } from '@client/app/components/layouts/Notebook';
@@ -91,6 +91,9 @@ interface DataLakeExplorerProps {
 /** True only for drags carrying real files (not text/image-from-page drags). */
 const isFileDrag = (e: React.DragEvent) => Array.from(e.dataTransfer.types ?? []).includes('Files');
 
+/** Stable identity so a Set-typed prop doesn't churn every render when nothing is selected. */
+const EMPTY_FILE_IDS: ReadonlySet<string> = new Set();
+
 export default function DataLakeExplorer({
   onBack,
   onAskAbout,
@@ -117,13 +120,24 @@ export default function DataLakeExplorer({
   const [breadcrumb, setBreadcrumb] = useState<string[]>([]);
   // Page mode: file shown in the inline article reader.
   const [userSelectedFile, setUserSelectedFile] = useState<IFabFileDocument | null>(null);
-  // Chat mode: id of the file most recently opened in the viewer, kept to highlight it in the tree.
+  // Chat mode: id of the file most recently opened in the viewer, kept to highlight it in the
+  // tree even on hosts with no session to attach it to (the guidance-toast path below never
+  // reaches the workbench, so it needs its own anchor).
   const [viewerFileId, setViewerFileId] = useState<string | null>(articleId ?? null);
 
   // Chat-mode wiring: attach clicked files to the current session's workbench (#836). The hooks
   // are always called (React rules); page mode simply never invokes openFileInViewer.
   const { currentSessionId } = useSessions();
   const { setWorkBenchFiles } = useWorkBenchActions();
+  // Files currently attached to the chat's prompt, unioned with viewerFileId - drives the tree's
+  // persistent highlight in chat mode, so a file stays marked "already added" regardless of which
+  // one was clicked most recently or how far the user has since navigated the tree (#1693).
+  const workBenchFiles = useWorkBenchFiles(currentSessionId);
+  const attachedFileIds = useMemo(() => {
+    const ids = new Set(workBenchFiles.map(f => f.id));
+    if (viewerFileId) ids.add(viewerFileId);
+    return ids;
+  }, [workBenchFiles, viewerFileId]);
   const setDataLakeMode = useSetDataLakeMode();
   // When the sidenav is collapsed its floating expand control overlaps the top-left, so the
   // chat tree needs extra left clearance past it (same 48px the deck top bar uses).
@@ -239,6 +253,10 @@ export default function DataLakeExplorer({
 
   // Page mode: user's explicit click takes priority, then the deep-link result. Pure derivation.
   const selectedFile = userSelectedFile ?? (articleId ? deepLinkTarget : null);
+  const pageSelectedFileIds = useMemo(
+    () => (selectedFile ? new Set([selectedFile.id]) : EMPTY_FILE_IDS),
+    [selectedFile]
+  );
 
   // Chat mode: open the URL's article in the inline viewer once it resolves, once per id.
   const openedDeepLinkRef = useRef<string | null>(null);
@@ -492,7 +510,8 @@ export default function DataLakeExplorer({
             articles={leafArticles}
             breadcrumb={breadcrumb}
             onNavigate={handleNavigate}
-            selectedFileId={viewerFileId}
+            source={source}
+            selectedFileIds={attachedFileIds}
             onSelectFile={handleSelectFile}
             isLoading={tagCountsLoading || (!!leafTag && leafLoading)}
             isError={tagCountsError}
@@ -512,7 +531,8 @@ export default function DataLakeExplorer({
             articles={leafArticles}
             breadcrumb={breadcrumb}
             onNavigate={handleNavigate}
-            selectedFileId={selectedFile?.id ?? null}
+            source={source}
+            selectedFileIds={pageSelectedFileIds}
             onSelectFile={handleSelectFile}
             isLoading={tagCountsLoading || (!!leafTag && leafLoading)}
             isError={tagCountsError}

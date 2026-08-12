@@ -14,6 +14,13 @@ vi.mock('@client/app/hooks/data/fabFiles', () => ({
   useGetFabFileContent: () => ({ data: undefined, isLoading: false }),
 }));
 
+// DataLakeTree's underlying DataLakeTreeView always calls this (cross-tree search, #1693); no
+// `source` is passed in these tests so the query stays disabled, but the hook itself still needs
+// a stub since these tests render without a QueryClientProvider.
+vi.mock('@client/app/hooks/data/dataLakes', () => ({
+  useGetDataLakeArticles: () => ({ data: undefined, isLoading: false }),
+}));
+
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children, tokens }: { children: ReactNode; tokens?: DataLakeSurfaceOverrides }) => (
   <CssVarsProvider theme={appTheme}>
@@ -29,7 +36,7 @@ const treeProps = {
   articles: [],
   breadcrumb: [],
   onNavigate: vi.fn(),
-  selectedFileId: null,
+  selectedFileIds: new Set<string>(),
   onSelectFile: vi.fn(),
   isLoading: false,
 };

@@ -33,6 +33,7 @@ import {
   treeRowSx,
 } from '@client/app/components/datalake/treeChrome';
 import type { IFabFileDocument } from '@bike4mind/common';
+import type { DataLakeBrowseSource } from '@client/app/hooks/data/dataLakes';
 import { gray } from '@client/app/utils/themes/colors';
 
 interface DataLakeChatTreeProps {
@@ -41,7 +42,9 @@ interface DataLakeChatTreeProps {
   articles: IFabFileDocument[];
   breadcrumb: string[];
   onNavigate: (breadcrumb: string[]) => void;
-  selectedFileId: string | null;
+  /** Threaded to DataLakeTreeView's cross-tree article search. */
+  source?: DataLakeBrowseSource;
+  selectedFileIds: ReadonlySet<string>;
   onSelectFile: (file: IFabFileDocument) => void;
   isLoading: boolean;
   isError?: boolean;
@@ -65,7 +68,8 @@ export default function DataLakeChatTree({
   articles,
   breadcrumb,
   onNavigate,
-  selectedFileId,
+  source,
+  selectedFileIds,
   onSelectFile,
   isLoading,
   isError,
@@ -251,25 +255,30 @@ export default function DataLakeChatTree({
         </ListItem>
       );
     },
-    renderFileRow: (file, selected, onSelect) => (
-      <ListItem key={file.id}>
-        <ListItemButton
-          selected={selected}
-          onClick={onSelect}
-          data-testid={`datalake-file-${file.id}`}
-          sx={treeRowSx(theme.palette.notebooklist.hoverBg)}
-        >
-          <ArticleOutlinedIcon
-            sx={{ fontSize: 16, color: selected ? inkFor(HUES.cyan, isDark) : 'text.tertiary', flexShrink: 0 }}
-          />
-          <ListItemContent>
-            <Typography noWrap sx={{ fontSize: '14px', fontWeight: selected ? 'lg' : 400, color: 'text.primary' }}>
-              {file.fileName.replace(/\.[^/.]+$/, '')}
-            </Typography>
-          </ListItemContent>
-        </ListItemButton>
-      </ListItem>
-    ),
+    renderFileRow: (file, selected, onSelect) => {
+      const displayName = file.fileName.replace(/\.[^/.]+$/, '');
+      return (
+        <ListItem key={file.id}>
+          <ListItemButton
+            selected={selected}
+            onClick={onSelect}
+            data-testid={`datalake-file-${file.id}`}
+            sx={treeRowSx(theme.palette.notebooklist.hoverBg)}
+          >
+            <ArticleOutlinedIcon
+              sx={{ fontSize: 16, color: selected ? inkFor(HUES.cyan, isDark) : 'text.tertiary', flexShrink: 0 }}
+            />
+            <ListItemContent>
+              <Tooltip title={displayName} size="sm" enterDelay={500}>
+                <Typography noWrap sx={{ fontSize: '14px', fontWeight: selected ? 'lg' : 400, color: 'text.primary' }}>
+                  {displayName}
+                </Typography>
+              </Tooltip>
+            </ListItemContent>
+          </ListItemButton>
+        </ListItem>
+      );
+    },
     humanize: humanizeSegment,
     allCategoriesLabel: 'All Categories',
     emptyFilesLabel: 'No articles found',
@@ -282,7 +291,8 @@ export default function DataLakeChatTree({
       articles={articles}
       breadcrumb={breadcrumb}
       onNavigate={onNavigate}
-      selectedFileId={selectedFileId}
+      source={source}
+      selectedFileIds={selectedFileIds}
       onSelectFile={onSelectFile}
       isLoading={isLoading}
       isError={isError}

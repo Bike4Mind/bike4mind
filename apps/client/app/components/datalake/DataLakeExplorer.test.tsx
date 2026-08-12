@@ -7,17 +7,26 @@ import DataLakeExplorer from './DataLakeExplorer';
 import { DataLakeSurfaceProvider } from './surfaceTokens';
 
 // Chat-first mode opens a clicked file INLINE in the KnowledgeViewer by adding it to the
-// session workbench and switching layout to `vertical`. Spy on those two seams.
-const { setWorkBenchFiles, setSessionLayout, sessionState } = vi.hoisted(() => ({
+// session workbench and switching layout to `vertical`. Spy on those two seams. setWorkBenchFiles
+// also mutates workBenchState so useWorkBenchFiles reads it back reactively, like the real store -
+// the tree's persistent highlight (#1693) is driven by that read, not by the click itself.
+const { setWorkBenchFiles, setSessionLayout, sessionState, workBenchState } = vi.hoisted(() => ({
   setWorkBenchFiles: vi.fn(),
   setSessionLayout: vi.fn(),
   // Mutable so the /new (deferred creation, no session yet) case can null it per-test.
   sessionState: { currentSessionId: 'sess-1' as string | null },
+  workBenchState: { files: [] as { id: string; fileName: string }[] },
 }));
+setWorkBenchFiles.mockImplementation(
+  (_sessionId: string, updater: (prev: typeof workBenchState.files) => typeof workBenchState.files) => {
+    workBenchState.files = updater(workBenchState.files);
+  }
+);
 vi.mock('@client/app/contexts/SessionsContext', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/contexts/SessionsContext')>()),
   useSessions: () => ({ currentSessionId: sessionState.currentSessionId }),
   useWorkBenchActions: () => ({ setWorkBenchFiles }),
+  useWorkBenchFiles: () => workBenchState.files,
 }));
 vi.mock('@client/app/hooks/useSessionLayout', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/hooks/useSessionLayout')>()),
@@ -90,16 +99,19 @@ vi.mock('sonner', () => ({ toast: { info: toastInfo, error: toastError, success:
 vi.mock('./DataLakeChatTree', () => ({
   default: ({
     onSelectFile,
-    selectedFileId,
+    selectedFileIds,
     onClose,
   }: {
     onSelectFile: (f: { id: string; fileName: string }) => void;
-    selectedFileId: string | null;
+    selectedFileIds: ReadonlySet<string>;
     onClose?: () => void;
   }) => (
-    <div data-testid="mock-tree" data-selected={selectedFileId ?? ''}>
+    <div data-testid="mock-tree" data-selected={Array.from(selectedFileIds).join(',')}>
       <button data-testid="mock-select-file" onClick={() => onSelectFile({ id: 'file-123', fileName: 'x.pdf' })}>
         select
+      </button>
+      <button data-testid="mock-select-file-2" onClick={() => onSelectFile({ id: 'file-456', fileName: 'y.pdf' })}>
+        select second
       </button>
       {/* Mirror the real header: the close X renders only when an onClose is supplied. */}
       {onClose && (
@@ -135,6 +147,7 @@ describe('DataLakeExplorer chat-first surface', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sessionState.currentSessionId = 'sess-1';
+    workBenchState.files = [];
   });
 
   it('renders chatSlot in the right pane', () => {
@@ -151,6 +164,15 @@ describe('DataLakeExplorer chat-first surface', () => {
     expect(setSessionLayout).toHaveBeenCalledWith({ layout: 'vertical', selectedArtifactId: 'file-123' });
     // The clicked file is highlighted in the tree.
     expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
+  });
+
+  it('keeps an earlier attached file highlighted after a second file is added (#1693)', () => {
+    renderExplorer();
+    fireEvent.click(screen.getByTestId('mock-select-file'));
+    fireEvent.click(screen.getByTestId('mock-select-file-2'));
+    // Both files are attached to the prompt (the session workbench), so both must stay
+    // highlighted - not just the most recently clicked one.
+    expect(screen.getByTestId('mock-tree').dataset.selected?.split(',').sort()).toEqual(['file-123', 'file-456']);
   });
 
   it('opens the deep-linked articleId inline once it resolves', () => {
