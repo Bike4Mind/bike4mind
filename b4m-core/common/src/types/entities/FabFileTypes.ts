@@ -719,7 +719,11 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * `stampedAt` matches every archived row, same as before this parameter existed.
    */
   findArchivedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]>;
-  /** Existence-only form of findArchivedByDataLakeTag, for a caller that just needs "any?". */
+  /**
+   * Existence-only probe, unbounded by any stamp (unlike findArchivedByDataLakeTag) - a caller
+   * deciding whether to claim a fresh stamp needs to know if ANY member is already archived,
+   * stamped or not.
+   */
   hasArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<boolean>;
   /** Soft-deleted member files stamped `stampedAt` - used by the deleted->active restore dedup pass. */
   findDeletedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]>;

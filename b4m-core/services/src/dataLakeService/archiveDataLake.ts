@@ -71,13 +71,19 @@ export const archiveDataLake = async (
   // mark. Archiving unstamped instead leaves those rows exactly as unrecoverable as they already
   // were, which is the safe direction to fail in.
   //
-  // Also wider than the legacy case: the scope-matched query can't tell "pre-field legacy" apart
-  // from "a prefix-sharing sibling's own stamp", so either one skips the claim here - and with it,
-  // any freshly-archived rows this same sweep is about to write. Such a lake stays broken on
-  // restore until someone archives it again (once nothing is left unstamped) and then unarchives
-  // it - not "unarchive once" as a lake fresh out of restore is 'active', and unarchive only
-  // accepts 'archived'/'restoring'. A known limitation, not a full fix for either case.
-  const hasUnstampedArchive = !existing.filesArchivedAt && (await db.fabFiles.hasArchivedByDataLakeTag(scope));
+  // Scoped to the META-TAG arm alone, not the full scope: the full scope also matches a
+  // prefix-sharing sibling's own already-archived row, and for the SECOND lake to archive in a
+  // live collision that row is always present - checking the full scope would make that lake skip
+  // claiming a stamp EVERY time, so it could never bound its own later unarchive and would keep
+  // freeing the sibling's rows unbounded, the exact bug this whole fix exists to close. The
+  // meta-tag arm has no such false positive: no other lake's document can carry this lake's own
+  // tag (see buildDataLakeMembershipFilter), so an unstamped row found there is genuinely this
+  // lake's own history, not a sibling's. The narrower residual case this leaves - a file carrying
+  // more than one lake's meta-tag (addFileToLake has no exclusivity check) that a co-owning lake
+  // already archived - still trips this guard, a known limitation for that rarer, deliberate
+  // multi-membership case rather than the ordinary prefix collision this scoping closes.
+  const hasUnstampedArchive =
+    !existing.filesArchivedAt && (await db.fabFiles.hasArchivedByDataLakeTag({ datalakeTag: existing.datalakeTag }));
   let stamp: Date | undefined;
   if (!hasUnstampedArchive) {
     const at = new Date();

@@ -967,9 +967,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.map(d => d.toJSON());
   }
 
-  // Same predicate as findArchivedByDataLakeTag, but an existence probe rather than a full read -
-  // for a caller (archiveDataLake's hasUnstampedArchive guard) that only needs to know "any?", not
-  // the documents themselves, and would otherwise materialize every archived row on every archive.
+  // Unbounded existence probe, deliberately with no `stampedAt` param unlike
+  // findArchivedByDataLakeTag above - its one caller (archiveDataLake's hasUnstampedArchive
+  // guard) needs to know whether ANY member is already archived, stamped or not, to decide
+  // whether claiming a fresh stamp would strand a pre-existing one; scoping it by a stamp that
+  // does not exist yet would defeat the check.
   async hasArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<boolean> {
     return (
       (await this.fabFileModel.exists({
