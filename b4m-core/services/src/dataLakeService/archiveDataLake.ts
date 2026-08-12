@@ -71,10 +71,10 @@ export const archiveDataLake = async (
   // mark. Archiving unstamped instead leaves those rows exactly as unrecoverable as they already
   // were, which is the safe direction to fail in.
   //
-  // Scoped to the META-TAG arm alone, not the full scope: the full scope also matches a
+  // Scoped to the META-TAG arm alone, not the full scope. The full scope also matches a
   // prefix-sharing sibling's own already-archived row, and for the SECOND lake to archive in a
-  // live collision that row is always present - checking the full scope would make that lake skip
-  // claiming a stamp EVERY time, so it could never bound its own later unarchive and would keep
+  // live collision that row is always present, so checking the full scope would make that lake
+  // skip claiming a stamp EVERY time; it could never bound its own later unarchive and would keep
   // freeing the sibling's rows unbounded, the exact bug this whole fix exists to close. No other
   // lake's document can carry this lake's own tag (see buildDataLakeMembershipFilter), so this
   // check cannot get a false positive from a SIBLING's document. It is not immune to a false
@@ -83,12 +83,12 @@ export const archiveDataLake = async (
   // lake's OWN archive, either because that same document also carries a second lake's meta-tag
   // (addFileToLake has no exclusivity check), or because it independently satisfies a sibling's
   // prefix arm (its owner matches that sibling's creator and it carries a tag under that
-  // sibling's prefix) - the sweep that stamps it runs on the sibling's OWN scope, which does not
+  // sibling's prefix). The sweep that stamps it runs on the sibling's OWN scope, which does not
   // care what else the document is tagged with. Either way this guard still trips (correctly
   // conservative: it cannot tell "genuinely mine, never archived" from "mine, but a sibling
   // archived it first"), a known limitation for these rarer, deliberate or coincidental
   // multi-membership cases rather than the ordinary single-arm prefix collision this scoping
-  // closes.
+  // closes. Tracked in #1729.
   //
   // Trade-off worth naming: a lake whose OWN pre-existing unstamped archive is entirely
   // prefix-only (no meta-tagged member at all) no longer trips this guard either, so its next
@@ -116,7 +116,7 @@ export const archiveDataLake = async (
   // Step 3: soft-hide files + best-effort index removal. The scope covers prefix-tagged
   // members too, so a file that never got the meta-tag no longer stays browsable here.
   // Archive hides files, so a colliding sibling lake loses its prefix-tagged files from every
-  // browse (they filter archivedAt: null) - unarchiving either lake now bounds its own reversal
+  // browse (they filter archivedAt: null). Unarchiving either lake now bounds its own reversal
   // to its own stamp, so it no longer brings back the other's (see unarchiveByDataLakeTag).
   await warnOnPrefixCollision(db, existing, logger);
   // Generated here rather than left to archiveByDataLakeTag's default: when `stamp` is undefined,
@@ -126,10 +126,10 @@ export const archiveDataLake = async (
   const sweepStamp = stamp ?? new Date();
   await db.fabFiles.archiveByDataLakeTag(scope, sweepStamp);
   // A stamp is kept even when it names zero rows (an empty lake, or a concurrent sibling/same-lake
-  // claim that swept the shared rows first) - NOT cleared back to null. A cleared stamp reads,
+  // claim that swept the shared rows first), NOT cleared back to null. A cleared stamp reads,
   // downstream, as "this lake predates filesArchivedAt", which makes unarchiveByDataLakeTag run
   // its reversal unbounded and free whatever a sibling or a co-owning lake legitimately holds
-  // archived under its own stamp - exactly the bug this field exists to prevent. An orphaned stamp
+  // archived under its own stamp, exactly the bug this field exists to prevent. An orphaned stamp
   // that names nothing is the safe value here: a later unarchive bounded to it also matches
   // nothing, which is the correct outcome for a lake with nothing of its own to restore.
   // Same scope the sweep ran on. findIdsByDataLakeTag is the id source rather than the flip's
@@ -143,7 +143,7 @@ export const archiveDataLake = async (
     throw new NotFoundError('Data lake not found after archive');
   }
   // Always recompute from source, never short-circuit on the sweep's own count ("it archived
-  // nothing, so stats can't have changed") - a re-entry sweeps 0 for rows a PRIOR attempt already
+  // nothing, so stats can't have changed"): a re-entry sweeps 0 for rows a PRIOR attempt already
   // archived, and those rows are exactly what this recompute needs to reflect.
   await recomputeLakeStats(existing, { db });
 
