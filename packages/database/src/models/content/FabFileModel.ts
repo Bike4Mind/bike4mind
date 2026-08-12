@@ -904,6 +904,29 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.map(d => d.toJSON());
   }
 
+  async findByDriveFileIdsInDataLake(driveFileIds: string[], datalakeTag: string): Promise<IFabFileDocument[]> {
+    if (driveFileIds.length === 0) return [];
+    // The recursive Drive walk can surface up to 100k children PER folder, so an unchunked $in
+    // would risk Mongo's 16 MB BSON query ceiling and a degraded plan long before it. Query in
+    // id-chunks and concatenate.
+    const CHUNK_SIZE = 5000;
+    const results: IFabFileDocument[] = [];
+    for (let i = 0; i < driveFileIds.length; i += CHUNK_SIZE) {
+      const chunk = driveFileIds.slice(i, i + CHUNK_SIZE);
+      const docs = await this.fabFileModel.find({
+        driveFileId: { $in: chunk },
+        deletedAt: null,
+        archivedAt: null,
+        tags: { $elemMatch: { name: datalakeTag } },
+        // Same orphan-pending exclusion as findByContentHashesInDataLake: a failed prior ingest
+        // left 'pending' must not block a legit re-ingest of the same Drive file.
+        status: { $ne: 'pending' },
+      });
+      results.push(...docs.map(d => d.toJSON()));
+    }
+    return results;
+  }
+
   // Data lake lifecycle. Membership is the two-signal rule in buildDataLakeMembershipFilter
   // (meta-tag OR a fileTagPrefix match on a file the lake's creator owns), shared with the
   // single-lake browse so a read and a whole-lake write never disagree about who is a member.
@@ -1351,6 +1374,12 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // per-source origin (for Slack: channel + message ts) that makes an ingested file auditable.
     sourceType: { type: String, enum: Object.values(FabFileSourceType), required: false },
     sourceMetadata: { type: Schema.Types.Mixed, required: false },
+    // Google Drive ingest provenance (#1589). Populated when sourceType === GOOGLE_DRIVE.
+    driveFileId: { type: String },
+    driveModifiedTime: { type: Date },
+    driveMd5Checksum: { type: String },
+    sourceLakeId: { type: String },
+    driveConnectionId: { type: String },
     archivedAt: { type: Date },
     // Absent until the first AI edit of a docx/xlsx; each edit appends an entry.
     versions: { type: [FabFileVersionSchema], default: undefined },
@@ -1406,6 +1435,9 @@ FabFileSchema.index({ 'tags.name': 1, archivedAt: 1, deletedAt: 1 });
 
 // Content hash deduplication lookups
 FabFileSchema.index({ contentHash: 1, userId: 1 });
+
+// Google Drive ingest dedup (driveFileId is the stable re-sync key; contentHash changes on edit)
+FabFileSchema.index({ driveFileId: 1 });
 
 // Un-chunked rescue sweep (buildFabFileChunkScanFilter: self-host worker scan + the hosted
 // dataLakeBatchReconcile cron). Equality prefix, createdAt range last; without it the daily
