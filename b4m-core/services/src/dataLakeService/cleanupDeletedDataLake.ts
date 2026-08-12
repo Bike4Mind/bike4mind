@@ -5,6 +5,7 @@ import type {
   IFabFileChunkRepository,
 } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
+import { canManageLake } from './authorizeLakeWrite';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
 import { strictIndexRemove, type RetrievalIndexPort } from './ports';
@@ -61,7 +62,7 @@ export const cleanupDeletedDataLake = async (
     // Already gone - idempotent success.
     return;
   }
-  if (!actor.isAdmin && existing.createdByUserId !== actor.userId) {
+  if (!canManageLake(existing, actor)) {
     throw new BadRequestError('Only the creator can clean up this data lake');
   }
   if (existing.status !== 'deleted') {
