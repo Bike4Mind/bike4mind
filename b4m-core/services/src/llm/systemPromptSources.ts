@@ -92,6 +92,20 @@ export function buildTaggedContextMessages(bySource: MessagesBySource): TaggedSy
 }
 
 /**
+ * Features whose getContextMessages() contract is to always return [] - the real work happens in
+ * onComplete (a post-turn side effect), so they have no PromptSourceId and never need one. Exempts
+ * them from the reconciliation guard in systemPromptSources.test.ts, which otherwise requires every
+ * content-producing feature to be a consumed PromptSourceId - the exact gap that let a computed
+ * feature's output (SkillsFeature, then lakeMemory) silently vanish before reaching the model.
+ */
+export const SIDE_EFFECT_ONLY_FEATURES: featureNames[] = [
+  'slack',
+  'summarizeNotebook',
+  'contextSummarization',
+  'autoNameSession',
+];
+
+/**
  * What an API caller is asking us to put in front of the model, beyond their own message.
  *
  * Exists because an external caller previously had no way to switch any of this off, which made

@@ -1,5 +1,8 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { FORMAT_PROMPT_PRIORITY, IMAGE_PROMPT_PRIORITY } from '@bike4mind/utils';
 import { describe, expect, it } from 'vitest';
+import { ALL_FEATURE_NAMES } from './ChatCompletionFeatures';
 import {
   buildTaggedContextMessages,
   filterByPromptMode,
@@ -7,6 +10,7 @@ import {
   PROMPT_SOURCE_METADATA,
   PROMPT_SOURCE_ORDER,
   resolveForcedRetrieval,
+  SIDE_EFFECT_ONLY_FEATURES,
   SYSTEM_PROMPT_PRIORITY,
   toPromptDetails,
   type PromptSourceId,
@@ -259,5 +263,33 @@ describe('toPromptDetails', () => {
     await expect(toPromptDetails(tagged, countChars)).resolves.toEqual([
       { source: 'hardcoded', name: 'date_time_context', tokenCount: 3, wasIncluded: true },
     ]);
+  });
+});
+
+// A ChatCompletionFeature that registers into this.features, runs getContextMessages, and returns
+// non-empty content is otherwise silently discarded if its key never reaches the assembly - the
+// SkillsFeature and lakeMemory drops were both this shape. Guards against a THIRD occurrence.
+describe('feature-to-source reconciliation', () => {
+  const contentProducingFeatures = ALL_FEATURE_NAMES.filter(name => !SIDE_EFFECT_ONLY_FEATURES.includes(name));
+
+  // Table-membership guard: catches a feature never given a PromptSourceId at all.
+  it('gives every content-producing feature a PromptSourceId consumed by the assembly', () => {
+    const missing = contentProducingFeatures.filter(name => !PROMPT_SOURCE_ORDER.includes(name as PromptSourceId));
+
+    expect(missing).toEqual([]);
+  });
+
+  // CRITICAL: a table-membership check alone is a proxy, not the invariant. #1344 was fixed by
+  // adding 'skills' to PROMPT_SOURCE_ORDER AND the assembly literal in the same commit, so a future
+  // feature that is dutifully added to every table but never spread into the literal would pass the
+  // check above while reproducing #1344/#1404 exactly. This reads the real assembly source instead
+  // of trusting the tables as a stand-in for it.
+  it('actually spreads every content-producing feature key into the ChatCompletionProcess assembly', () => {
+    const assemblySource = readFileSync(join(__dirname, 'ChatCompletionProcess.ts'), 'utf-8');
+    const notWired = contentProducingFeatures.filter(
+      name => !assemblySource.includes(`${name}: featureContextMessages['${name}']`)
+    );
+
+    expect(notWired).toEqual([]);
   });
 });
