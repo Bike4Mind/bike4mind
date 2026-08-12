@@ -45,17 +45,18 @@ export async function resolveExecutionMementoGates(
   adapters: MementoGateAdapters,
   logger: Logger
 ): Promise<ResolvedMementoGates> {
+  // An explicit per-request opt-out disables both pipelines regardless of the admin setting or the V2
+  // opt-in (resolveMementoGates(false, ...) is always { v1: false, v2: false }). Checked FIRST so an
+  // opt-out is unconditionally authoritative here, independent of whether the executor happened to
+  // persist a verdict. It is also the highest-volume input this resolver sees - the Slack senders and
+  // the voice proxy all hard-code false - so short-circuiting skips both round trips below.
+  if (execution.enableMementos === false) return { v1: false, v2: false, v2OptInLookupFailed: false };
+
   // Resolve-once memoization (#1525). When the execution start already resolved and persisted the
   // gates, reuse them verbatim - the read path, the write path, and the stop-at-gate WS handler all
   // route through here, so returning the persisted verdict is what stops a mid-run flip of the admin
   // setting or the V2 opt-in from making those sites disagree. Also skips the two DB reads below.
   if (execution.resolvedMementoGates) return execution.resolvedMementoGates;
-
-  // An explicit per-request opt-out disables both pipelines regardless of the admin setting or the V2
-  // opt-in (resolveMementoGates(false, ...) is always { v1: false, v2: false }). It is also the
-  // highest-volume input this resolver sees - the Slack senders and the voice proxy all hard-code
-  // false - so short-circuiting skips both round trips and keeps the dominant flow off the reads below.
-  if (execution.enableMementos === false) return { v1: false, v2: false, v2OptInLookupFailed: false };
 
   // Both lookups fail closed to "not enabled" (memory degrades, it never fails the turn - the same
   // convention the chat and read paths use) and are independent - one AdminSettings read, one user

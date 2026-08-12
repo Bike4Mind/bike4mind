@@ -285,15 +285,9 @@ export interface IAgentExecution {
    * read by persistRunAsQuest so all terminal paths (continuation, gate-stop, abort) get the badge. */
   usedMementoIds?: string[];
   /**
-   * The memory gates (V1/V2 + opt-in-lookup-failure signal) resolved ONCE at the
-   * start of this execution and persisted so every downstream site observes the
-   * same verdict. The read path (first-iteration preamble), the write path
-   * (completion event), and the stop-at-gate WS handler all resolve through
-   * `resolveExecutionMementoGates`, which short-circuits to this value when set -
-   * so a mid-run flip of the `EnableMementos` admin setting or the user's V2
-   * opt-in can no longer make the read and write paths disagree. Absent for
-   * per-request opt-outs (`enableMementos === false`), which resolve read-free and
-   * deterministically, and for legacy executions dispatched before this field.
+   * Memory gates resolved once at execution start and persisted so the read, write, and
+   * stop-at-gate paths all observe one verdict via `resolveExecutionMementoGates` (#1525).
+   * Absent for per-request opt-outs (`enableMementos === false`) and legacy executions.
    */
   resolvedMementoGates?: { v1: boolean; v2: boolean; v2OptInLookupFailed: boolean };
 

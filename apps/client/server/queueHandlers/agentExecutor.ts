@@ -137,10 +137,6 @@ import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
 import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
 import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
 import { resolveAndBuildMementosPreamble } from '@server/utils/getFirstIterationMementosPreamble';
-// Resolve the memory gates once per execution and persist them (#1525). The composed
-// read/write helpers above route through `resolveExecutionMementoGates`, which memoizes on
-// the persisted value - so both paths observe one verdict instead of re-deriving it from
-// mutable state at two moments a whole agent run apart.
 import { resolveExecutionMementoGates } from '@server/utils/resolveExecutionMementoGates';
 import { getFirstIterationSkillsPreamble } from '@server/utils/getFirstIterationSkillsPreamble';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
@@ -727,29 +723,6 @@ async function processExecution(
       });
     }
 
-    // Resolve the memory gates ONCE, here at the start, and persist them (#1525). Before this the
-    // read path (first-iteration preamble) and the write path (completion event) each resolved
-    // independently - one AdminSettings read plus one V2-opt-in lookup apiece - a whole agent run
-    // apart, so a mid-run flip of `EnableMementos` or the user's V2 opt-in made the two disagree
-    // (memory injected-but-not-recorded, or recorded-but-not-injected). Persisting the verdict lets
-    // continuation Lambdas and the stop-at-gate WS handler read the same value; the downstream
-    // helpers route through `resolveExecutionMementoGates`, which short-circuits to it.
-    //
-    // Only new executions resolve (continuations load the persisted value). An explicit per-request
-    // opt-out (`enableMementos === false`, e.g. Slack/voice/questmaster-V5 senders) resolves
-    // deterministically and read-free in the resolver, so persisting it would only add a write on the
-    // highest-volume path for a value nothing can disagree about - skip it. The in-memory stamp makes
-    // the read and write paths in THIS Lambda reuse the value too, not just cross-Lambda resumes.
-    if (isNewExecution && execution.enableMementos !== false && !execution.resolvedMementoGates) {
-      const resolvedGates = await resolveExecutionMementoGates(
-        execution,
-        { db: { adminSettings: adminSettingsRepository } },
-        logger
-      );
-      await agentExecutionRepository.persistResolvedMementoGates(executionId, resolvedGates);
-      execution.resolvedMementoGates = resolvedGates;
-    }
-
     // Get API keys and LLM backend
     const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(execution.userId, {
       db: {
@@ -780,6 +753,32 @@ async function processExecution(
       });
       await sendWs('failed', { executionId, reason: 'insufficient_credits' });
       return;
+    }
+
+    // Resolve the memory gates ONCE and persist them (#1525). The read path (first-iteration
+    // preamble) and the write path (completion event) used to resolve independently a whole run
+    // apart, so a mid-run flip of `EnableMementos` or the user's V2 opt-in made them disagree.
+    // Persisting one verdict lets continuation Lambdas and the stop-at-gate WS handler read it back;
+    // the downstream helpers route through `resolveExecutionMementoGates`, which short-circuits to it.
+    // Only new executions resolve; an explicit opt-out (`enableMementos === false`) resolves read-free
+    // in the resolver, so we skip the write for it. Runs below the credit/backend guards so a doomed
+    // execution never pays for it. The persist is best-effort: the in-memory stamp below already gives
+    // THIS Lambda read/write consistency, so a write blip must degrade memoization, not fail the run.
+    if (isNewExecution && execution.enableMementos !== false && !execution.resolvedMementoGates) {
+      const resolvedGates = await resolveExecutionMementoGates(
+        execution,
+        { db: { adminSettings: adminSettingsRepository } },
+        logger
+      );
+      try {
+        await agentExecutionRepository.persistResolvedMementoGates(executionId, resolvedGates);
+      } catch (err) {
+        logger.warn('[Mementos] Failed to persist resolved gates; continuing with the in-memory value', {
+          executionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      execution.resolvedMementoGates = resolvedGates;
     }
 
     // Resolve the top-level orchestration profile. Two paths:
@@ -1944,16 +1943,11 @@ async function processExecution(
         logger,
         fabFileRepository
       );
-      // Memento retrieval parity with chat_completion. Append the
+      // Memento retrieval parity with chat_completion. Appends the
       // `[KNOWN FACTS ABOUT THE USER ...]` preamble to the same iteration-0 user
-      // message the file preamble lands in, so the agent reads both from a
-      // single materialized string that gets persisted into the checkpoint.
-      // Continuation Lambdas, gate-resumes, and DAG-resumes inherit it via
-      // the checkpoint replay - same handoff contract as the file preamble.
-      // The helper guards on `parentExecutionId` and the resolved `MementoGates`,
-      // matching `publishMementoCompletion` on the write side. It routes through
-      // `resolveExecutionMementoGates`, which returns the gates resolved once at
-      // execution start (#1525), so read and write cannot disagree mid-run.
+      // message the file preamble lands in, so both survive into the checkpoint and
+      // inherit through continuation/gate/DAG resumes. Gates come from the resolver,
+      // which returns the verdict resolved once at execution start (#1525).
       if (firstIterationQuery !== undefined) {
         const { preamble: mementoPreamble, mementoIds } = await resolveAndBuildMementosPreamble(
           execution,
@@ -2366,13 +2360,9 @@ async function processExecution(
       allSideEffects
     );
 
-    // Memento parity with chat_completion. Routes through the one authority
-    // (`resolveExecutionMementoGates`), which returns the gates resolved and persisted at
-    // execution start (#1525) - so this write agrees with the read-path preamble even if the
-    // admin setting or V2 opt-in flipped mid-run. The publisher fires only when a gate is live
-    // and skips subagent / DAG children via the `parentExecutionId`/`spawnedByExecutionId` guard
-    // inside the helper. Reads `execution` (loaded at the top of this function), which carries the
-    // persisted gates on continuation Lambdas and the in-memory stamp on the resolving Lambda.
+    // Memento parity with chat_completion, write side. Gates come from the resolver's verdict
+    // resolved once at execution start (#1525), so this write agrees with the read-path preamble
+    // even across a mid-run flip. The publisher's own guards skip subagent/DAG children.
     await resolveAndPublishMementoCompletion(execution, { db: { adminSettings: adminSettingsRepository } }, logger);
 
     logger.info('[Complete] Agent execution finished', {

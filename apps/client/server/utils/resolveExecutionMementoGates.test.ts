@@ -149,6 +149,23 @@ describe('resolveExecutionMementoGates (agent-surface authority, #1337)', () => 
   });
 
   describe('resolve-once memoization (#1525)', () => {
+    it('an explicit opt-out wins even when a persisted verdict is present', async () => {
+      // The opt-out short-circuit is ordered ABOVE the memo short-circuit, so `enableMementos: false`
+      // is authoritative here regardless of any persisted gates - it never has to trust the executor
+      // guard to have skipped the persist. Both lookups stay untouched.
+      const gates = await resolveExecutionMementoGates(
+        makeExecution({
+          enableMementos: false,
+          resolvedMementoGates: { v1: true, v2: true, v2OptInLookupFailed: false },
+        }),
+        makeAdapters(),
+        makeLogger()
+      );
+      expect(gates).toEqual({ v1: false, v2: false, v2OptInLookupFailed: false });
+      expect(getSettingsValueMock).not.toHaveBeenCalled();
+      expect(isMementosV2EnabledMock).not.toHaveBeenCalled();
+    });
+
     it('returns the persisted gates verbatim and reads NO mutable state', async () => {
       // This is the whole fix: once the execution start has resolved and persisted a verdict, every
       // downstream site (read preamble, write completion, stop-at-gate) gets that same verdict back
