@@ -39,6 +39,12 @@ export type LakeAccessSurface = (typeof LAKE_ACCESS_SURFACES)[number];
  * anyone is expected to hit. */
 export const LAKE_ACCESS_EVENT_MAX_IDS = 500;
 
+/** Per-element cap on a chunk/file identifier, enforced at the schema layer - not just by field
+ * naming - so a future caller that mistakenly hands this model a passage/snippet instead of an
+ * id cannot silently turn the audit trail into a copy of the corpus. Real ids are short; this is
+ * generous headroom, not a realistic limit. */
+export const LAKE_ACCESS_IDENTIFIER_MAX_CHARS = 256;
+
 export interface ILakeAccessEvent {
   principalKind: LakeAccessPrincipalKind;
   principalId: string;
@@ -57,8 +63,11 @@ export interface ILakeAccessEvent {
   returnedChunkIds: string[];
   /** Some surfaces (whole-document retrieval) are file-granular and never see a chunk id. */
   returnedFileIds: string[];
-  /** Pre-truncation count, so volume stays measurable even when identifiersTruncated is true. */
+  /** Pre-truncation counts, so volume stays measurable even when identifiersTruncated is true -
+   * tracked separately because a file-granular surface (see returnedFileIds) contributes only to
+   * the file count, and a chunk-granular one only to the chunk count. */
   returnedChunkCount: number;
+  returnedFileCount: number;
   identifiersTruncated: boolean;
   surface: LakeAccessSurface;
   /** Whether a query-text sibling document was written for this event (see
@@ -88,8 +97,6 @@ export interface RecordLakeAccessEventInput {
    * clamped to the floor inside `record()` regardless of what is passed here. */
   retentionDays?: number;
   queryTextRetentionDays?: number;
-  /** Test-only injectable clock. */
-  now?: Date;
 }
 
 export interface ILakeAccessEventRepository extends Pick<

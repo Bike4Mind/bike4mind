@@ -18,6 +18,9 @@ const LakeAccessQueryTextSchema = new Schema<ILakeAccessQueryTextDocument>(
     // definition type, since `_id` isn't a key of ILakeAccessQueryTextDocument (that's `id`).
     queryText: { type: String, required: true },
     queryTextTruncated: { type: Boolean, default: false },
+    // See the equivalent field on LakeAccessEventModel for what `immutable` does and does not
+    // guarantee here (bypassable via `overwriteImmutable` or the raw driver) - the same guard
+    // test covers both models.
     expiresAt: { type: Date, required: true, immutable: true },
   },
   {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { RecordLakeAccessEventInput } from '@bike4mind/common';
@@ -15,7 +15,6 @@ const baseInput = (overrides: Partial<RecordLakeAccessEventInput> = {}): RecordL
   principalId: 'alice',
   resolvedLakeIds: [],
   surface: 'data-lake-semantic-search',
-  now: NOW,
   ...overrides,
 });
 
@@ -37,8 +36,16 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
   // setupMongoTest's beforeEach dropDatabase()s (indexes included), and these models are not in
   // its one-time ensureIndexes list - rebuild TTL/query indexes per test so index-shaped
   // assertions below are real, not accidentally passing because a prior run's index lingers.
+  // Fake timers give every test a deterministic `now` without `record()` accepting one as an
+  // input - a caller-facing clock override would let anyone backdate an event past its own
+  // floor-clamped retention window (the floor only bounds the DURATION, not the origin point).
   beforeEach(async () => {
     await Promise.all([LakeAccessEventModel.ensureIndexes(), LakeAccessQueryTextModel.ensureIndexes()]);
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe('persistence fidelity', () => {
@@ -85,6 +92,7 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
           principalId: 'a',
           surface: 'not-a-real-surface',
           returnedChunkCount: 0,
+          returnedFileCount: 0,
           expiresAt: new Date(),
         } as never)
       ).rejects.toThrow();
@@ -94,6 +102,7 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
           principalId: 'a',
           surface: 'chat-kb-search',
           returnedChunkCount: 0,
+          returnedFileCount: 0,
           expiresAt: new Date(),
         } as never)
       ).rejects.toThrow();
@@ -106,8 +115,15 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
           principalId: 'a',
           surface: 'chat-kb-search',
           returnedChunkCount: 0,
+          returnedFileCount: 0,
         } as never)
       ).rejects.toThrow();
+    });
+
+    it('tracks chunk and file counts separately - a file-only surface must not silently lose its count', async () => {
+      const event = await repo.record(baseInput({ surface: 'chat-kb-retrieve', fileIds: ['f1', 'f2'] }));
+      expect(event.returnedChunkCount).toBe(0);
+      expect(event.returnedFileCount).toBe(2);
     });
   });
 
@@ -118,6 +134,7 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
         principalId: 'a',
         surface: 'chat-kb-search',
         returnedChunkCount: 0,
+        returnedFileCount: 0,
         expiresAt: new Date(),
         chunkText: 'this must never be stored',
       } as never);
@@ -130,6 +147,11 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       const paths = Object.keys(LakeAccessEventModel.schema.paths).filter(p => p !== 'queryTextLogged');
       const suspicious = paths.filter(p => /text|content|body|snippet|passage/i.test(p));
       expect(suspicious).toEqual([]);
+    });
+
+    it('rejects an identifier that looks like passage text, not a short id - the naming-convention guard alone cannot catch this', async () => {
+      await expect(repo.record(baseInput({ chunkIds: ['x'.repeat(1000)] }))).rejects.toThrow();
+      await expect(repo.record(baseInput({ fileIds: ['x'.repeat(1000)] }))).rejects.toThrow();
     });
   });
 
@@ -217,6 +239,20 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       expect(await LakeAccessQueryTextModel.countDocuments({})).toBe(0);
       createSpy.mockRestore();
     });
+
+    it('deletes the already-written query text when the EVENT write itself then fails - no orphaned record of a question with no audit context', async () => {
+      const lakeA = await optedInLake(true);
+      // An invalid surface passes everyLakeOptedIn (which never looks at `surface`) and fails
+      // only at the final eventModel.create() - exactly the ordering the cleanup path covers.
+      await expect(
+        repo.record(
+          baseInput({ resolvedLakeIds: [lakeA], queryText: 'orphan risk', surface: 'not-a-real-surface' as never })
+        )
+      ).rejects.toThrow();
+
+      expect(await LakeAccessQueryTextModel.countDocuments({})).toBe(0);
+      expect(await LakeAccessEventModel.countDocuments({})).toBe(0);
+    });
   });
 
   describe('retention floor', () => {
@@ -256,6 +292,14 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       const ttlText = textIndexes.find(idx => idx.key?.expiresAt === 1);
       expect(ttlText?.expireAfterSeconds).toBe(0);
     });
+
+    it('is not fooled by system-clock manipulation - record() always uses the real clock, not a caller-supplied one', async () => {
+      // RecordLakeAccessEventInput has no `now` field; this asserts the type-level removal holds
+      // at runtime too - an extra `now` on the input object is simply ignored.
+      const event = await repo.record({ ...baseInput(), now: new Date('2020-01-01') } as never);
+      const days = (event.expiresAt.getTime() - NOW.getTime()) / (24 * 60 * 60 * 1000);
+      expect(days).toBeCloseTo(LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS, 3);
+    });
   });
 
   describe('identifier caps', () => {
@@ -279,12 +323,37 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
       expect(reloaded!.expiresAt.getTime()).toBe(new Date(originalExpiresAt).getTime());
     });
 
-    it('no other source file calls updateOne/updateMany/findOneAndUpdate on LakeAccessEventModel', () => {
+    it('documents (does not hide) the real Mongoose escape hatch: overwriteImmutable bypasses the guard', async () => {
+      // Honesty check for the claim in LakeAccessEventModel.ts's schema comment: `immutable`
+      // is NOT an absolute guarantee in this Mongoose version - it is stripped from a query
+      // update UNLESS the caller passes `overwriteImmutable: true`. This test exists so that
+      // fact is asserted, not assumed - and so the guard test below (grepping for exactly this
+      // escape hatch) has a reason to exist.
+      const event = await repo.record(baseInput());
+      await LakeAccessEventModel.updateOne(
+        { _id: event.id },
+        { $set: { expiresAt: new Date('2020-01-01') } },
+        { overwriteImmutable: true }
+      );
+      const reloaded = await LakeAccessEventModel.findById(event.id);
+      expect(reloaded!.expiresAt.getTime()).toBe(new Date('2020-01-01').getTime());
+    });
+
+    it('no other source file writes to LakeAccessEventModel/LakeAccessQueryTextModel outside their own repository methods', () => {
       const repoRoot = path.resolve(__dirname, '../../../../..');
       const thisFile = path.resolve(__dirname, 'LakeAccessEventModel.test.ts');
-      const modelFile = path.resolve(__dirname, 'LakeAccessEventModel.ts');
+      const allowedFiles = new Set([
+        thisFile,
+        path.resolve(__dirname, 'LakeAccessEventModel.ts'),
+        path.resolve(__dirname, 'LakeAccessQueryTextModel.ts'),
+      ]);
       const skipDirs = new Set(['node_modules', '.git', 'dist', '.turbo', '.next', 'coverage', '.claude']);
-      const pattern = /LakeAccessEventModel\s*\.\s*(updateOne|updateMany|findOneAndUpdate)\s*\(/;
+      // Covers the ordinary query-update verbs AND the raw-driver/collection escape hatch and
+      // overwriteImmutable, on BOTH models - the two prior gaps this test used to have. Grep
+      // cannot catch an aliased import (`import { LakeAccessEventModel as X }`), which is a real
+      // limit of a text-pattern guard, not a claim this test makes.
+      const pattern =
+        /(LakeAccessEventModel|LakeAccessQueryTextModel)\s*\.\s*(updateOne|updateMany|findOneAndUpdate|bulkWrite|replaceOne|collection)\s*[.(]/;
       const offenders: string[] = [];
 
       const walk = (dir: string) => {
@@ -294,7 +363,7 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
             walk(path.join(dir, entry.name));
           } else if (entry.isFile() && (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx'))) {
             const full = path.join(dir, entry.name);
-            if (full === thisFile || full === modelFile) continue;
+            if (allowedFiles.has(full)) continue;
             if (pattern.test(fs.readFileSync(full, 'utf-8'))) offenders.push(full);
           }
         }

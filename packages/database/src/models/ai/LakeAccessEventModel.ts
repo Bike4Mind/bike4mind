@@ -8,6 +8,7 @@ import type {
 } from '@bike4mind/common';
 import {
   LAKE_ACCESS_EVENT_MAX_IDS,
+  LAKE_ACCESS_IDENTIFIER_MAX_CHARS,
   LAKE_ACCESS_PRINCIPAL_KINDS,
   LAKE_ACCESS_QUERY_TEXT_MAX_CHARS,
   LAKE_ACCESS_SURFACES,
@@ -40,15 +41,24 @@ const LakeAccessEventSchema = new Schema<ILakeAccessEventDocument>(
     onBehalfOfUserId: { type: String },
     organizationId: { type: String },
     resolvedLakeIds: { type: [String], default: [] },
-    returnedChunkIds: { type: [String], default: [] },
-    returnedFileIds: { type: [String], default: [] },
+    // maxlength validates each ARRAY ELEMENT for a String-array path (Mongoose applies element
+    // validators to every entry) - real ids are short, so this is a structural backstop against
+    // a future caller mistakenly handing this model passage text instead of an identifier, not
+    // just the naming-convention guard the corpus-leak test already covers.
+    returnedChunkIds: { type: [{ type: String, maxlength: LAKE_ACCESS_IDENTIFIER_MAX_CHARS }], default: [] },
+    returnedFileIds: { type: [{ type: String, maxlength: LAKE_ACCESS_IDENTIFIER_MAX_CHARS }], default: [] },
     returnedChunkCount: { type: Number, required: true, min: 0 },
+    returnedFileCount: { type: Number, required: true, min: 0 },
     identifiersTruncated: { type: Boolean, default: false },
     surface: { type: String, enum: LAKE_ACCESS_SURFACES, required: true },
     queryTextLogged: { type: Boolean, default: false },
-    // Computed at write time from the floor-clamped retention; immutable so nothing downstream
-    // can shorten the audit trail below the floor by mutating this field after the fact (the
-    // floor guarantee in `record()` would otherwise be bypassable via a plain updateOne).
+    // Computed at write time from the floor-clamped retention. `immutable` blocks the ordinary
+    // updateOne/updateMany/findOneAndUpdate paths (Mongoose strips immutable fields from a query
+    // update's cast unless the caller explicitly passes `overwriteImmutable: true`) - it is a
+    // backstop against an accidental mutation, NOT a guarantee against a caller that deliberately
+    // opts out of it or reaches the collection via the raw driver. The repository below never
+    // exposes update/delete, and the guard test in LakeAccessEventModel.test.ts is the real
+    // enforcement that no OTHER file in this codebase tries either bypass.
     expiresAt: { type: Date, required: true, immutable: true },
   },
   {
@@ -81,13 +91,18 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
    * flag.
    */
   async record(input: RecordLakeAccessEventInput): Promise<ILakeAccessEventDocument> {
-    const now = input.now ?? new Date();
+    // The real wall clock, always - there is no caller-facing override. An injectable `now` on
+    // the public input would let any caller (accidentally or not) backdate an event past its own
+    // floor-clamped retention window, since the floor only bounds the DURATION (`auditDays`), not
+    // the point it is measured from. Tests control time via `vi.useFakeTimers()` instead.
+    const now = new Date();
     const auditDays = resolveLakeAccessAuditRetentionDays(input.retentionDays);
     const expiresAt = lakeAccessExpiresAt(now, auditDays);
 
     const chunkIds = input.chunkIds ?? [];
     const fileIds = input.fileIds ?? [];
     const returnedChunkCount = chunkIds.length;
+    const returnedFileCount = fileIds.length;
     const identifiersTruncated =
       chunkIds.length > LAKE_ACCESS_EVENT_MAX_IDS || fileIds.length > LAKE_ACCESS_EVENT_MAX_IDS;
 
@@ -102,23 +117,35 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
       queryTextLogged = await this.tryWriteQueryText(eventId, queryText, auditDays, input.queryTextRetentionDays, now);
     }
 
-    const created = await this.eventModel.create({
-      _id: eventId,
-      principalKind: input.principalKind,
-      principalId: input.principalId,
-      onBehalfOfUserId: input.onBehalfOfUserId,
-      organizationId: input.organizationId,
-      resolvedLakeIds: input.resolvedLakeIds,
-      returnedChunkIds: chunkIds.slice(0, LAKE_ACCESS_EVENT_MAX_IDS),
-      returnedFileIds: fileIds.slice(0, LAKE_ACCESS_EVENT_MAX_IDS),
-      returnedChunkCount,
-      identifiersTruncated,
-      surface: input.surface,
-      queryTextLogged,
-      expiresAt,
-    });
-
-    return created.toJSON() as unknown as ILakeAccessEventDocument;
+    try {
+      const created = await this.eventModel.create({
+        _id: eventId,
+        principalKind: input.principalKind,
+        principalId: input.principalId,
+        onBehalfOfUserId: input.onBehalfOfUserId,
+        organizationId: input.organizationId,
+        resolvedLakeIds: input.resolvedLakeIds,
+        returnedChunkIds: chunkIds.slice(0, LAKE_ACCESS_EVENT_MAX_IDS),
+        returnedFileIds: fileIds.slice(0, LAKE_ACCESS_EVENT_MAX_IDS),
+        returnedChunkCount,
+        returnedFileCount,
+        identifiersTruncated,
+        surface: input.surface,
+        queryTextLogged,
+        expiresAt,
+      });
+      return created.toJSON() as unknown as ILakeAccessEventDocument;
+    } catch (err) {
+      // If the event itself fails to persist (a bad enum, a future schema change), a query-text
+      // row already written under `eventId` would otherwise survive ORPHANED - unreachable by
+      // listByLake/listByPrincipal and unattributable to any principal or lake, exactly the
+      // "record of everyone's questions with no audit context" the two-collection split exists
+      // to prevent. Best-effort cleanup; the original error is what the caller needs to see.
+      if (queryTextLogged) {
+        await LakeAccessQueryTextModel.deleteOne({ _id: eventId }).catch(() => undefined);
+      }
+      throw err;
+    }
   }
 
   async listByLake(lakeId: string, opts?: { limit?: number }): Promise<ILakeAccessEventDocument[]> {
