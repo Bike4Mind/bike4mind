@@ -73,6 +73,8 @@ const DataLakeSchema = new mongoose.Schema(
     status: { type: String, enum: DATA_LAKE_STATUSES, default: 'draft' },
     fileCount: { type: Number, default: 0 },
     totalSizeBytes: { type: Number, default: 0 },
+    // Lifetime embedding spend, integer micro-USD - see IDataLake.embeddingSpendMicroUsd.
+    embeddingSpendMicroUsd: { type: Number, default: 0 },
     lastSyncAt: { type: Date },
     // Teardown batch key (see IDataLake.filesDeletedAt): the exact stamp phase-1 delete wrote on
     // the lake's member files, matched by equality on restore. Set only through
@@ -122,6 +124,42 @@ DataLakeSchema.index({ createdByUserId: 1, fileTagPrefix: 1 }, { unique: true })
 export const DataLakeModel =
   (mongoose.models['DataLake'] as unknown as mongoose.Model<IDataLakeDocument>) ||
   mongoose.model<IDataLakeDocument>('DataLake', DataLakeSchema);
+
+/**
+ * Shared reserve-first spend meter behind both tryAddEmbeddingSpend implementations (lake and
+ * batch - the per-lake and per-run budget levers share one contract). Atomically adds
+ * `amountMicroUsd` to the document's embeddingSpendMicroUsd ONLY if the total stays within
+ * `limitMicroUsd`; all-or-nothing, so two concurrent reservations can never jointly breach the
+ * budget. The $or arm covers documents created before the field existed (an absent field fails
+ * plain comparison queries in Mongo, which would permanently deny legacy lakes/batches).
+ *
+ * amount <= 0 is a no-op success (a fully-cached run spends nothing); limit <= 0 always denies
+ * BEFORE checking amount - 0 is the operator's "stop" value, and it must win even for a
+ * zero-cost call so "stopped" reads unambiguously as "no provider calls at all".
+ */
+async function tryAddSpendWithinLimit(
+  model: mongoose.Model<IDataLakeDocument> | mongoose.Model<IDataLakeBatchDocument>,
+  id: string,
+  amountMicroUsd: number,
+  limitMicroUsd: number
+): Promise<boolean> {
+  if (limitMicroUsd <= 0) return false;
+  if (amountMicroUsd <= 0) return true;
+  // Denied before the query: the $exists arm below would otherwise let a legacy document
+  // seed a first reservation larger than the whole budget.
+  if (amountMicroUsd > limitMicroUsd) return false;
+  const res = await (model as mongoose.Model<IDataLakeDocument>).updateOne(
+    {
+      _id: id,
+      $or: [
+        { embeddingSpendMicroUsd: { $exists: false } },
+        { embeddingSpendMicroUsd: { $lte: limitMicroUsd - amountMicroUsd } },
+      ],
+    },
+    { $inc: { embeddingSpendMicroUsd: amountMicroUsd } }
+  );
+  return res.modifiedCount === 1;
+}
 
 class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements IDataLakeRepository {
   constructor(private dataLakeModel: mongoose.Model<IDataLakeDocument>) {
@@ -410,6 +448,10 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return (doc?.toJSON() as IDataLakeDocument) ?? null;
   }
 
+  async tryAddEmbeddingSpend(id: string, amountMicroUsd: number, limitMicroUsd: number): Promise<boolean> {
+    return tryAddSpendWithinLimit(this.dataLakeModel, id, amountMicroUsd, limitMicroUsd);
+  }
+
   async activateIfDraft(id: string): Promise<boolean> {
     // The status guard lives in the FILTER, not in a prior read: the membership doors that call
     // this hand over a lake document they fetched before their own status writes, so testing the
@@ -500,6 +542,8 @@ const DataLakeBatchSchema = new mongoose.Schema(
     skippedFiles: { type: Number, default: 0 },
     totalSizeBytes: { type: Number, default: 0 },
     uploadedSizeBytes: { type: Number, default: 0 },
+    // Embedding spend metered against this run, integer micro-USD - see IDataLakeBatch.
+    embeddingSpendMicroUsd: { type: Number, default: 0 },
     files: [DataLakeBatchFileSchema],
     appliedTags: [
       {
@@ -655,6 +699,13 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
       { new: true }
     );
     return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
+  }
+
+  // Deliberately NOT guarded on non-terminal status like incrementCounters: the reserve
+  // happens before a provider call that is about to spend real money, and a batch the
+  // reconciler just forced terminal must still meter (never lose) that spend.
+  async tryAddEmbeddingSpend(batchId: string, amountMicroUsd: number, limitMicroUsd: number): Promise<boolean> {
+    return tryAddSpendWithinLimit(this.batchModel, batchId, amountMicroUsd, limitMicroUsd);
   }
 
   /**

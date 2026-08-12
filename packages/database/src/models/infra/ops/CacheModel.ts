@@ -170,6 +170,21 @@ class CacheRepository extends BaseRepository<ICacheDocument> implements ICacheRe
     limit: number,
     ttlMs: number
   ): Promise<{ success: boolean; count: number; expiresAt: Date }> {
+    return this.tryAddWithinLimitFixedWindow(key, 1, limit, ttlMs);
+  }
+
+  /**
+   * `tryIncrementWithinLimitFixedWindow` generalized to add `amount` per call (spend
+   * metering, where each event's weight differs). All-or-nothing: if count + amount
+   * would exceed `limit`, nothing is applied. `amount <= 0` is a no-op success (nothing
+   * to meter); a window that cannot fit `amount` at all (`limit < amount`) is a deny.
+   */
+  async tryAddWithinLimitFixedWindow(
+    key: string,
+    amount: number,
+    limit: number,
+    ttlMs: number
+  ): Promise<{ success: boolean; count: number; expiresAt: Date }> {
     const now = new Date();
     const freshExpiresAt = new Date(now.getTime() + ttlMs);
 
@@ -181,46 +196,61 @@ class CacheRepository extends BaseRepository<ICacheDocument> implements ICacheRe
       return { success: true, count, expiresAt: doc.expiresAt };
     };
 
-    // (1) Increment if doc exists, in-window, and under limit.
+    if (amount <= 0) {
+      // Nothing to meter. Report current window state without consuming from it.
+      const existing = await this.model.findOne({ key, expiresAt: { $gt: now } });
+      const count = (existing?.result as { count?: number })?.count ?? 0;
+      return { success: true, count, expiresAt: existing?.expiresAt ?? freshExpiresAt };
+    }
+
+    // `count + amount <= limit`, expressed as a query bound. With amount = 1 this is the
+    // original `$lt: limit`. Also the `limit < amount` deny: the bound goes negative and
+    // matches nothing (counts are never negative).
+    const roomBound = { $lte: limit - amount };
+
+    // (1) Add if doc exists, in-window, and the amount still fits.
     const incremented = await this.model.findOneAndUpdate(
       {
         key,
         expiresAt: { $gt: now },
-        'result.count': { $lt: limit },
+        'result.count': roomBound,
       },
-      { $inc: { 'result.count': 1 } },
+      { $inc: { 'result.count': amount } },
       { new: true }
     );
     if (incremented) return readSuccess(incremented);
 
-    // (2) Claim a fresh window - absent doc, expired doc, or legacy shape.
-    try {
-      const claimed = await this.model.findOneAndUpdate(
-        {
-          key,
-          $or: [{ expiresAt: { $lte: now } }, { 'result.count': { $exists: false } }],
-        },
-        { $set: { result: { count: 1 }, expiresAt: freshExpiresAt } },
-        { upsert: true, new: true }
-      );
-      if (claimed) return readSuccess(claimed);
-    } catch (err) {
-      if ((err as { code?: number }).code !== 11000) throw err;
-      // (3) Duplicate-key: doc exists, not expired. Either at limit or another
-      // caller just claimed it. Retry the increment once.
-      const retried = await this.model.findOneAndUpdate(
-        {
-          key,
-          expiresAt: { $gt: now },
-          'result.count': { $lt: limit },
-        },
-        { $inc: { 'result.count': 1 } },
-        { new: true }
-      );
-      if (retried) return readSuccess(retried);
+    // (2) Claim a fresh window - absent doc, expired doc, or legacy shape. Skipped when the
+    // amount cannot fit even in an empty window, which must deny rather than seed count > limit.
+    if (amount <= limit) {
+      try {
+        const claimed = await this.model.findOneAndUpdate(
+          {
+            key,
+            $or: [{ expiresAt: { $lte: now } }, { 'result.count': { $exists: false } }],
+          },
+          { $set: { result: { count: amount }, expiresAt: freshExpiresAt } },
+          { upsert: true, new: true }
+        );
+        if (claimed) return readSuccess(claimed);
+      } catch (err) {
+        if ((err as { code?: number }).code !== 11000) throw err;
+        // (3) Duplicate-key: doc exists, not expired. Either at limit or another
+        // caller just claimed it. Retry the add once.
+        const retried = await this.model.findOneAndUpdate(
+          {
+            key,
+            expiresAt: { $gt: now },
+            'result.count': roomBound,
+          },
+          { $inc: { 'result.count': amount } },
+          { new: true }
+        );
+        if (retried) return readSuccess(retried);
+      }
     }
 
-    // At limit. Look up current state for Retry-After.
+    // No room. Look up current state for Retry-After.
     const existing = await this.model.findOne({ key });
     const count = (existing?.result as { count?: number })?.count ?? limit;
     return {
