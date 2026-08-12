@@ -312,16 +312,31 @@ export const KNOWN_ENTITLEMENT_KEYS: readonly EntitlementKey[] = [...allKnownEnt
  * (`CreateDataLakeRequestInput` in b4m-core/common/src/schemas/dataLake.ts). Deliberately
  * NOT added to `KNOWN_ENTITLEMENT_KEYS` (that list is "products with a fixed identity";
  * a lake slug is per-tenant data) - checked separately in `unknownEntitlementKeys`.
+ *
+ * Known gap: this only validates SHAPE, not that a lake with that slug exists - a
+ * well-formed but nonexistent/mistyped slug is accepted as "known" and would persist as a
+ * silent no-op grant (the same class of bug #324 fixed for the fixed catalog). Closing that
+ * needs a DB read against `DataLakeModel`, which belongs with the read-time grant resolution
+ * work (dataLakes epic #1658 lane C, #1673), not this pattern-registration step.
  */
 const DATALAKE_ENTITLEMENT_PREFIX = 'datalake:';
 const DATALAKE_ENTITLEMENT_SLUG_REGEX = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/;
+// Mirrors slug.max(60) on CreateDataLakeRequestInput (schemas/dataLake.ts) - a longer slug
+// can't belong to a real lake, so accepting it here would reopen the exact silent-no-op-grant
+// risk `unknownEntitlementKeys` exists to close. (min(2) is already implied by the regex shape:
+// first char + last char, with the middle `*` allowed to match zero characters.)
+const DATALAKE_ENTITLEMENT_MAX_SLUG_LENGTH = 60;
 
-/** Whether `key` (assumed already normalized) is a `datalake:<slug>` entitlement. */
+/**
+ * Whether `key` is a `datalake:<slug>` entitlement. Normalizes internally (matches
+ * `isBypassExemptEntitlement` above) so a caller can't get a wrong answer by forgetting to
+ * normalize first.
+ */
 export function isDatalakeEntitlementKey(key: string): boolean {
-  return (
-    key.startsWith(DATALAKE_ENTITLEMENT_PREFIX) &&
-    DATALAKE_ENTITLEMENT_SLUG_REGEX.test(key.slice(DATALAKE_ENTITLEMENT_PREFIX.length))
-  );
+  const normalized = normalizeTag(key);
+  if (!normalized.startsWith(DATALAKE_ENTITLEMENT_PREFIX)) return false;
+  const slug = normalized.slice(DATALAKE_ENTITLEMENT_PREFIX.length);
+  return slug.length <= DATALAKE_ENTITLEMENT_MAX_SLUG_LENGTH && DATALAKE_ENTITLEMENT_SLUG_REGEX.test(slug);
 }
 
 /**

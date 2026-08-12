@@ -367,9 +367,21 @@ describe('isDatalakeEntitlementKey', () => {
     expect(isDatalakeEntitlementKey('datalake:')).toBe(false);
     expect(isDatalakeEntitlementKey('datalake:-abc')).toBe(false);
     expect(isDatalakeEntitlementKey('datalake:abc-')).toBe(false);
-    expect(isDatalakeEntitlementKey('datalake:Abc')).toBe(false); // caller must normalize first
     expect(isDatalakeEntitlementKey('datalakes:acme')).toBe(false);
     expect(isDatalakeEntitlementKey('optihashi:pro')).toBe(false);
+  });
+
+  it('normalizes internally, so case/whitespace in the input still resolves correctly', () => {
+    expect(isDatalakeEntitlementKey('  DataLake:Acme-Legal  ')).toBe(true);
+    expect(isDatalakeEntitlementKey('datalake:Bad_Char')).toBe(false); // uppercase segment normalizes to `_`, still invalid
+  });
+
+  it('rejects a slug longer than a real lake slug can be (max 60, matches CreateDataLakeRequestInput)', () => {
+    const maxSlug = 'a'.repeat(60);
+    const tooLong = 'a'.repeat(61);
+    expect(isDatalakeEntitlementKey(`datalake:${maxSlug}`)).toBe(true);
+    expect(isDatalakeEntitlementKey(`datalake:${tooLong}`)).toBe(false);
+    expect(unknownEntitlementKeys([`datalake:${tooLong}`])).toEqual([`datalake:${tooLong}`]);
   });
 });
 

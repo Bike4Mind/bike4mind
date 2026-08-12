@@ -100,6 +100,12 @@ describe('/api/admin/partner-signup-rules — create (POST)', () => {
     expect(res._getStatusCode()).toBe(201);
     expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ entitlements: ['datalake:acme-legal'] }));
   });
+
+  it('still rejects a malformed datalake: key (empty slug) with a 400 and never writes', async () => {
+    const { req, res } = makeReqRes('POST', { body: { ...validRule, entitlements: ['datalake:'] } });
+    await expect(handlers.post(req, res)).rejects.toThrow(/unknown entitlement key/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
 });
 
 describe('/api/admin/partner-signup-rules — list (GET)', () => {
