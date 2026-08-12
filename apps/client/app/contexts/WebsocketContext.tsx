@@ -131,6 +131,11 @@ export const WebsocketProvider = ({ children, url }: Props) => {
     // thundering herd after a deploy or network blip. Without jitter, 400 users reconnect
     // at the same instant and flood subscribe_query Lambdas simultaneously.
     reconnectInterval: i => 125 * (i + 1) ** 2 + Math.random() * 1000,
+    // Matches the library's own DEFAULT_RECONNECT_LIMIT. Set explicitly (rather than relying
+    // on the default) because the shared-listener close handler passes this raw option value
+    // to onReconnectStop below instead of its resolved default - leaving it unset means
+    // onReconnectStop always logs undefined instead of the real attempt count.
+    reconnectAttempts: 20,
     onOpen: () => {
       console.log('ws connected');
       openedThisAttemptRef.current = true;
@@ -161,6 +166,12 @@ export const WebsocketProvider = ({ children, url }: Props) => {
     },
     onReconnectStop(numAttempts) {
       console.log('ws reconnect stopped after', numAttempts, 'attempts');
+      // No separate probe needed here: the fork calls onClose and onReconnectStop
+      // synchronously in the same close-event handler (see attach-shared-listeners.ts), so
+      // the FINAL failed attempt's own onClose above has already fired probeIdentity - a
+      // second call here would just hit probeIdentity's own in-flight guard and no-op. If
+      // that probe refreshes the token, the accessToken effect below turns it into a
+      // reconnect pulse with no focus event needed.
       reconnectExhaustedRef.current = true;
     },
 
@@ -233,20 +244,31 @@ export const WebsocketProvider = ({ children, url }: Props) => {
     };
   }, []);
 
-  // On refocus, pulse forceDisconnected to force a fresh reconnect attempt with a reset
-  // backoff budget - but ONLY once reconnectExhaustedRef is set (onReconnectStop already
-  // fired, so there is no pending backoff timer left to cancel). Gating on readyState alone
-  // (e.g. "not OPEN") would also pulse mid-backoff: react-use-websocket's own
-  // reconnectInterval below deliberately staggers reconnects with jitter to avoid a
-  // thundering herd after an outage, and cancelling that on every refocus would defeat it -
-  // plus the library never clears its own pending reconnect timer on a url change, so a
-  // mid-backoff pulse leaves a second, stale reconnect attempt to fire later. Once genuinely
-  // exhausted there is no such timer left, so this has neither problem.
+  // Pulse forceDisconnected to force a fresh reconnect attempt with a reset backoff budget -
+  // but ONLY once reconnectExhaustedRef is set (onReconnectStop already fired, so there is no
+  // pending backoff timer left to cancel). Gating on readyState alone (e.g. "not OPEN") would
+  // also pulse mid-backoff: react-use-websocket's own reconnectInterval below deliberately
+  // staggers reconnects with jitter to avoid a thundering herd after an outage, and cancelling
+  // that on every trigger would defeat it - plus the library never clears its own pending
+  // reconnect timer on a url change, so a mid-backoff pulse leaves a second, stale reconnect
+  // attempt to fire later. Once genuinely exhausted there is no such timer left, so this has
+  // neither problem. Shared by both triggers below (refocus, and a post-exhaustion token
+  // refresh) - see each effect's own comment for why a single trigger isn't enough.
+  const pulseReconnect = useCallback(() => {
+    if (!reconnectExhaustedRef.current) return;
+    // Clear it now, not on the next onOpen: the fresh budget this pulse grants means the
+    // socket is no longer "exhausted" the instant we hand it that budget, regardless of
+    // whether the resulting attempt succeeds. Without this, a second trigger (another token
+    // change, or a refocus) arriving before the pulsed attempt opens would pulse AGAIN
+    // mid-backoff - the exact stale-timer/thundering-herd case the comment above warns about.
+    reconnectExhaustedRef.current = false;
+    setForceDisconnected(true);
+  }, []);
+
   useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState !== 'visible') return;
-      if (!reconnectExhaustedRef.current) return;
-      setForceDisconnected(true);
+      pulseReconnect();
     };
     document.addEventListener('visibilitychange', handleVisibility);
     window.addEventListener('focus', handleVisibility);
@@ -255,6 +277,21 @@ export const WebsocketProvider = ({ children, url }: Props) => {
       window.removeEventListener('focus', handleVisibility);
     };
   }, []);
+
+  // A token refresh alone changes the socket's queryParams (a new url -> a brand new
+  // WebSocket, per create-or-join.ts's per-url sharedWebSockets map) but never resets the
+  // library's own reconnectCount - so once the budget is exhausted, the fresh connection gets
+  // exactly one attempt and immediately re-exhausts, forever, with no focus event to save it.
+  // That's the focused-tab gap: nothing ever blurs, so the visibilitychange pulse above never
+  // fires. Treat a post-exhaustion token change as the second trigger for the same pulse.
+  // prevAccessTokenRef skips the mount's own token (nothing has exhausted yet at mount).
+  const prevAccessTokenRef = useRef(accessToken);
+  useEffect(() => {
+    const changed = prevAccessTokenRef.current !== accessToken;
+    prevAccessTokenRef.current = accessToken;
+    if (!changed) return;
+    pulseReconnect();
+  }, [accessToken, pulseReconnect]);
 
   // The other half of the pulse: flip back on the next commit so shouldConnect's dip to
   // false was only momentary - enough for react-use-websocket to see url turn null (see
