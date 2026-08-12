@@ -16,7 +16,11 @@ import BaseRepository from '@bike4mind/db-core';
 import { addLowercaseField } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
 import { buildFabFileSearchQuery, buildOwnershipConditions, escapeRegex } from '../../queries/fabFileSearchQuery';
-import { buildDataLakeMembershipFilter } from '../../queries/dataLakeLifecycleScope';
+import {
+  buildDataLakeMembershipFilter,
+  buildDataLakeMetaTagFilter,
+  buildDataLakePrefixArmFilter,
+} from '../../queries/dataLakeLifecycleScope';
 
 /**
  * "not a lake membership tag", derived from the one constant rather than spelled out, so a change
@@ -931,9 +935,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   // restore now also clears `archivedAt` (an archive->delete->restore must not leave files
   // archived-and-invisible) - so equality-bounding that clear against the stamp is what stops it
   // from freeing a prefix-sharing sibling's independently-archived files, the same way the delete
-  // axis avoids reviving a file the creator deleted on their own. `unarchiveByDataLakeTag` still
-  // matches on `archivedAt` alone (unbounded) - that reversal's own bounding is separate,
-  // unresolved scope.
+  // axis avoids reviving a file the creator deleted on their own. `unarchiveByDataLakeTag`'s own
+  // reversal is bounded the same way, but split by arm (see its own comment) because the two arms
+  // disagree on whether a stamp can even attribute a row to this lake.
 
   async archiveByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<number> {
     const result = await this.fabFileModel.updateMany(
@@ -943,12 +947,37 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.modifiedCount;
   }
 
-  async unarchiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number> {
-    const result = await this.fabFileModel.updateMany(
-      { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: { $ne: null } },
-      { $set: { archivedAt: null } }
-    );
-    return result.modifiedCount;
+  // Split by arm rather than one query over buildDataLakeMembershipFilter, because the two arms
+  // disagree on what "unbounded" costs. The meta-tag arm is unambiguous - no other lake's document
+  // can ever carry this tag - so it is always unarchived in full regardless of `stampedAt`; that is
+  // also what recovers a member whose stamp this lake's own `filesArchivedAt` no longer names (a
+  // same-millisecond mint collision, or any future write that touches `archivedAt` outside
+  // `archiveByDataLakeTag`), since ownership there needs no stamp to prove. The prefix arm is the
+  // opposite: a `fileTagPrefix` is shared by any lake that registers it, so a row reached only
+  // through that arm can belong to a sibling, and `stampedAt` is the only thing that tells them
+  // apart - equality-bound when given, matching `undeleteByDataLakeTag`'s pattern on the delete
+  // axis. Deliberately NOT "falls back to unbounded when the bounded pass matches nothing": a retry
+  // after a crash between a successful sweep and clearing `filesArchivedAt` also matches nothing on
+  // the bounded pass, and that heuristic would then free a sibling's own differently-stamped prefix
+  // rows - reintroducing the bug this split exists to fix. `stampedAt` undefined (a lake archived
+  // before `filesArchivedAt` existed) is the one case that still runs the prefix arm unbounded,
+  // unchanged from today - a prefix-only row stranded under any other stamp drift stays archived,
+  // an accepted limitation matching `archiveDataLake`'s own `hasUnstampedArchive` guard.
+  async unarchiveByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<number> {
+    const prefixArm = buildDataLakePrefixArmFilter(scope);
+    const [metaResult, prefixResult] = await Promise.all([
+      this.fabFileModel.updateMany(
+        { ...buildDataLakeMetaTagFilter(scope), deletedAt: null, archivedAt: { $ne: null } },
+        { $set: { archivedAt: null } }
+      ),
+      prefixArm
+        ? this.fabFileModel.updateMany(
+            { ...prefixArm, deletedAt: null, archivedAt: stampedAt ?? { $ne: null } },
+            { $set: { archivedAt: null } }
+          )
+        : Promise.resolve({ modifiedCount: 0 }),
+    ]);
+    return metaResult.modifiedCount + prefixResult.modifiedCount;
   }
 
   async findArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]> {
