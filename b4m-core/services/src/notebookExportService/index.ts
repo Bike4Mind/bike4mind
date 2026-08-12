@@ -72,7 +72,16 @@ type SessionRow = Pick<
 
 type KnowledgeRow = Pick<
   IFabFileDocument,
-  'id' | 'fileName' | 'fileSize' | 'mimeType' | 'createdAt' | 'updatedAt' | 'filePath' | 'moderationStatus' | 'fileUrl'
+  | 'id'
+  | 'fileName'
+  | 'fileSize'
+  | 'mimeType'
+  | 'type'
+  | 'createdAt'
+  | 'updatedAt'
+  | 'filePath'
+  | 'moderationStatus'
+  | 'fileUrl'
 >;
 
 /** No `content`: the body lives in a separate collection, reached via contentId. */
@@ -324,6 +333,7 @@ export class NotebookExportService {
           name: file.fileName,
           mimeType: file.mimeType,
           size: file.fileSize,
+          type: file.type,
           uploadedAt: (file.createdAt ?? file.updatedAt ?? new Date()).toISOString(),
         };
 

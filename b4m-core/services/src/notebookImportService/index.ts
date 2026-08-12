@@ -11,6 +11,7 @@ import {
   NotebookImportError,
   SUPPORTED_IMPORT_VERSIONS,
 } from '../notebookExportService/types';
+import { isValidEnumValue, KnowledgeType } from '@bike4mind/common';
 import type { IChatHistoryItem } from '@bike4mind/common';
 
 export interface NotebookImportAdapters {
@@ -30,8 +31,23 @@ export interface NotebookImportAdapters {
   generateId: () => string; // ID generation function
 }
 
+/** Unknown or absent types degrade to FILE: the store enum-validates this, so a value it does not
+ * know would otherwise fail the write and lose the file. */
+function toKnowledgeType(raw: string | undefined): KnowledgeType {
+  return raw && isValidEnumValue(raw, KnowledgeType) ? raw : KnowledgeType.FILE;
+}
+
 export class NotebookImportService {
   constructor(private adapters: NotebookImportAdapters) {}
+
+  /**
+   * Attachment failures. Deliberately not `errors`: the handler rolls the whole import back on a
+   * non-empty `errors`, so one unreadable file would discard every notebook that imported cleanly.
+   */
+  private attachmentWarnings: string[] = [];
+
+  /** Attachments actually persisted, as opposed to the count the export file claims. */
+  private attachmentsWritten = 0;
 
   async importNotebooks(
     targetUserId: string,
@@ -64,6 +80,9 @@ export class NotebookImportService {
         newNotebookIds: [],
       };
 
+      this.attachmentWarnings = [];
+      this.attachmentsWritten = 0;
+
       // Process each notebook
       for (const notebook of parsedData.notebooks) {
         try {
@@ -72,7 +91,6 @@ export class NotebookImportService {
           if (importedNotebookId) {
             result.importedNotebooks++;
             result.importedMessages += notebook.chatHistory.length;
-            result.importedAttachments += this.countAttachments(notebook);
             result.newNotebookIds!.push(importedNotebookId);
           } else {
             result.skippedNotebooks++;
@@ -86,6 +104,9 @@ export class NotebookImportService {
           });
         }
       }
+
+      result.importedAttachments = this.attachmentsWritten;
+      result.warnings!.push(...this.attachmentWarnings);
 
       // Determine overall success
       result.success = result.errors!.length === 0 || result.importedNotebooks > 0;
@@ -170,6 +191,12 @@ export class NotebookImportService {
     if (options.importAgents && notebook.agents.length > 0) {
       sessionData.agentIds = await this.importAgents(notebook.agents, targetUserId, options);
     }
+
+    this.attachmentsWritten +=
+      sessionData.knowledgeIds.length +
+      sessionData.artifactIds.length +
+      sessionData.toolIds.length +
+      sessionData.agentIds.length;
 
     // Create session
     const createdSession = await this.adapters.sessionRepository.create(sessionData);
@@ -308,21 +335,33 @@ export class NotebookImportService {
           throw new Error('No content or URL provided for file');
         }
 
-        // Create knowledge record
+        // No `id`: FabFile has no such path, so the store assigns one.
         const knowledgeData = {
-          id: newFileId,
           userId: targetUserId,
-          name: file.name,
+          fileName: file.name,
           mimeType: file.mimeType,
-          size: file.size,
-          path: filePath,
-          uploadedAt: new Date(file.uploadedAt),
-          metadata: file.metadata,
+          fileSize: file.size,
+          filePath,
+          type: toKnowledgeType(file.type),
         };
+        // No `uploadedAt`/`metadata`: not paths on FabFileSchema, so strict mode drops them silently.
 
-        await this.adapters.knowledgeRepository.create(knowledgeData);
-        importedIds.push(newFileId);
+        // The store's id, not `newFileId`: knowledgeIds must resolve to real documents.
+        if (file.type && !isValidEnumValue(file.type, KnowledgeType)) {
+          // Absent is expected of older exports; present-but-unknown is format drift worth saying.
+          this.attachmentWarnings.push(
+            `Unrecognised knowledge type "${file.type}" for "${file.name}"; imported as FILE`
+          );
+        }
+
+        const created = (await this.adapters.knowledgeRepository.create(knowledgeData)) as { id?: string } | null;
+        if (!created?.id) {
+          throw new Error('knowledge store returned no id');
+        }
+        importedIds.push(String(created.id));
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.attachmentWarnings.push(`Failed to import knowledge file "${file.name}": ${message}`);
         this.adapters.logger.warn('Failed to import knowledge file', {
           fileName: file.name,
           error,
@@ -465,10 +504,6 @@ export class NotebookImportService {
   private async copyFileFromUrl(sourceUrl: string, targetUserId: string, newFileId: string): Promise<string> {
     // Not yet implemented - returns the source URL as a fallback.
     return sourceUrl;
-  }
-
-  private countAttachments(notebook: ExportedNotebook): number {
-    return notebook.knowledge.length + notebook.artifacts.length + notebook.tools.length + notebook.agents.length;
   }
 }
 

@@ -1,4 +1,4 @@
-import type { PromptMeta } from '@bike4mind/common';
+import type { PromptMeta, KnowledgeType } from '@bike4mind/common';
 
 // Notebook Export/Import Types
 // This defines the standardized format for exporting and importing notebooks/chat sessions
@@ -98,6 +98,11 @@ export interface ExportedKnowledgeFile {
   name: string;
   mimeType: string;
   size: number;
+  /**
+   * The source file's KnowledgeType. Optional because exports written before this field existed do
+   * not carry it; an import without it falls back to a plain uploaded file.
+   */
+  type?: KnowledgeType;
   uploadedAt: string; // ISO timestamp
   content?: string; // Base64 encoded content for small files
   contentUrl?: string; // Reference URL for large files
