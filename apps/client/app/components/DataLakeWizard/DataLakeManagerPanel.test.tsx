@@ -79,6 +79,9 @@ const lakeFiles = [
   // uncategorized and the backfill stamps it. This bucket has to agree, or the file is reachable
   // from neither the tree nor here.
   { id: 'f4', fileName: 'bare.md', tags: [{ name: 'datalake:mine' }, { name: 'lk:' }] },
+  // Tagged with "genre" itself, not a deeper child - "genre" is ALSO the parent of war/peace
+  // above, so this file must stay reachable once genre has subfolders.
+  { id: 'f5', fileName: 'genre-overview.md', tags: [{ name: 'lk:genre' }] },
 ];
 
 const useGetDataLakes = vi.fn(() => ({ data: [] as unknown[], isLoading: false }));
@@ -352,6 +355,24 @@ describe('DataLakeManagerPanel - lake navigation', () => {
     await user.click(screen.getByTestId('datalake-manager-back'));
     expect(screen.getByTestId('datalake-manager-lake-mine')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
+  });
+
+  it('lists a category-tagged file alongside its own subfolders, not just inside them', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-manager-node-genre'));
+
+    // war/peace are genre's children; f5 is tagged "lk:genre" itself - all three must be
+    // reachable from this one folder, or f5 has no path to it anywhere in the tree.
+    expect(screen.getByTestId('datalake-manager-node-war')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-manager-node-peace')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-manager-file-f5')).toHaveTextContent('genre-overview');
+
+    // Selecting it opens the file directly - no extra navigation hop.
+    await user.click(screen.getByTestId('datalake-manager-file-f5'));
+    expect(screen.getByTestId('mock-article')).toHaveTextContent('genre-overview.md');
   });
 
   it('opens the Uncategorized bucket and lists the untagged file', async () => {
