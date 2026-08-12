@@ -146,8 +146,9 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
    * considered ids agreed" would otherwise be vacuously true and log a query nobody consented to.
    */
   private async everyLakeOptedIn(resolvedLakeIds: string[]): Promise<boolean> {
-    const validIds = [...new Set(resolvedLakeIds.filter(id => mongoose.isValidObjectId(id)))];
-    if (validIds.length === 0 || validIds.length !== new Set(resolvedLakeIds).size) return false;
+    const uniqueIds = [...new Set(resolvedLakeIds)];
+    const validIds = uniqueIds.filter(id => mongoose.isValidObjectId(id));
+    if (validIds.length === 0 || validIds.length !== uniqueIds.length) return false;
 
     const optedInCount = await DataLakeModel.countDocuments({
       _id: { $in: validIds },

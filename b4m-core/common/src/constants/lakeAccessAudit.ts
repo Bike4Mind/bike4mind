@@ -32,15 +32,20 @@ export const LAKE_ACCESS_QUERY_TEXT_RETENTION_MAX_DAYS = 90;
  * stored verbatim so an unusually long query cannot balloon the (already short-retention) row. */
 export const LAKE_ACCESS_QUERY_TEXT_MAX_CHARS = 4000;
 
+const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), max);
+
+/** `undefined` on anything that isn't a finite number once coerced (absent, null, '', NaN, Infinity). */
+const toFiniteDaysOrUndefined = (value: number | null | undefined): number | undefined => {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? Math.floor(parsed) : undefined;
+};
+
 /** An unset/blank/non-finite input yields the default; any numeric input is clamped into
  * [FLOOR, MAX] - the floor applies unconditionally, even to an explicit low value. */
 export function resolveLakeAccessAuditRetentionDays(configuredDays?: number | null): number {
-  const parsed = typeof configuredDays === 'number' ? configuredDays : Number(configuredDays);
-  if (!Number.isFinite(parsed)) return LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS;
-  return Math.min(
-    Math.max(Math.floor(parsed), LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS),
-    LAKE_ACCESS_AUDIT_RETENTION_MAX_DAYS
-  );
+  const parsed = toFiniteDaysOrUndefined(configuredDays);
+  if (parsed === undefined) return LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS;
+  return clamp(parsed, LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS, LAKE_ACCESS_AUDIT_RETENTION_MAX_DAYS);
 }
 
 /**
@@ -53,13 +58,13 @@ export function resolveLakeAccessQueryTextRetentionDays(
   configuredDays: number | null | undefined,
   effectiveAuditDays: number
 ): number {
-  const parsed = typeof configuredDays === 'number' ? configuredDays : Number(configuredDays);
-  const upperBound = Math.max(
+  const upperBound = clamp(
+    effectiveAuditDays - 1,
     LAKE_ACCESS_QUERY_TEXT_RETENTION_MIN_DAYS,
-    Math.min(LAKE_ACCESS_QUERY_TEXT_RETENTION_MAX_DAYS, effectiveAuditDays - 1)
+    LAKE_ACCESS_QUERY_TEXT_RETENTION_MAX_DAYS
   );
-  const base = Number.isFinite(parsed) ? Math.floor(parsed) : LAKE_ACCESS_QUERY_TEXT_RETENTION_DEFAULT_DAYS;
-  return Math.min(Math.max(base, LAKE_ACCESS_QUERY_TEXT_RETENTION_MIN_DAYS), upperBound);
+  const base = toFiniteDaysOrUndefined(configuredDays) ?? LAKE_ACCESS_QUERY_TEXT_RETENTION_DEFAULT_DAYS;
+  return clamp(base, LAKE_ACCESS_QUERY_TEXT_RETENTION_MIN_DAYS, upperBound);
 }
 
 /** The one place `now + days` is computed, so the event and query-text collections cannot drift
