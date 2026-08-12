@@ -1,5 +1,11 @@
 # @bike4mind/common
 
+## 4.0.1
+
+### Patch Changes
+
+- [#1598](https://github.com/Bike4Mind/bike4mind/pull/1598) [`abc90f5`](https://github.com/Bike4Mind/bike4mind/commit/abc90f562e15caa46428fc94afa3ffff410e5d5c) Thanks [@onoya](https://github.com/onoya)! - keep grounded chat from inventing customers, deals and figures absent from retrieval
+
 ## 4.0.0
 
 ### Major Changes
