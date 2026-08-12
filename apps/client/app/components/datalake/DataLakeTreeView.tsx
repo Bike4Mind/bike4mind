@@ -118,9 +118,9 @@ export default function DataLakeTreeView({
   }, [isUncategorized, bucketFiles, leafTag, articles]);
 
   // A branch node (has children) can ALSO carry files tagged with its own exact path, not just
-  // a deeper child tag (#1692) - those render as file rows mixed into the folder list below,
-  // rather than a separate route, so they read like a normal file browser (folders + files
-  // together) instead of a folder that contains only itself.
+  // a deeper child tag. Render those as file rows mixed into the folder list below, so the view
+  // reads like a normal file browser (folders + files together) instead of hiding them behind a
+  // folder that only ever contains itself.
   const ownTag = !isUncategorized && !leafTag && breadcrumb.length > 0 ? breadcrumb.join(':') : null;
   const ownFiles = useMemo(() => {
     if (!ownTag || !currentNode?.ownFileCount) return [];

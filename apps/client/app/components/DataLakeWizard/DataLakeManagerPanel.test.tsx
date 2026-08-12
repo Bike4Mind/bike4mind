@@ -76,7 +76,7 @@ const lakeFiles = [
   // from neither the tree nor here.
   { id: 'f4', fileName: 'bare.md', tags: [{ name: 'datalake:mine' }, { name: 'lk:' }] },
   // Tagged with "genre" itself, not a deeper child - "genre" is ALSO the parent of war/peace
-  // above, so this file must stay reachable once genre has subfolders (#1692).
+  // above, so this file must stay reachable once genre has subfolders.
   { id: 'f5', fileName: 'genre-overview.md', tags: [{ name: 'lk:genre' }] },
 ];
 
@@ -323,7 +323,7 @@ describe('DataLakeManagerPanel - lake navigation', () => {
     expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
   });
 
-  it('lists a category-tagged file alongside its own subfolders, not just inside them (#1692)', async () => {
+  it('lists a category-tagged file alongside its own subfolders, not just inside them', async () => {
     const user = userEvent.setup();
     renderPanel();
 

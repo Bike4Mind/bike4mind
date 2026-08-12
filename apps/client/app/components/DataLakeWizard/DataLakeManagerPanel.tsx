@@ -415,8 +415,8 @@ function ManagerNav({
   }, [isUncategorized, uncategorizedFiles, leafTag, articles]);
 
   // A branch node (has children) can ALSO carry files tagged with its own exact path, not just a
-  // deeper child tag (#1692) - shown as file rows mixed into the folder list below rather than a
-  // separate route, matching DataLakeTreeView's fix for the standalone/chat surfaces.
+  // deeper child tag - shown as file rows mixed into the folder list below rather than a separate
+  // route, matching how DataLakeTreeView handles the same case for the standalone/chat surfaces.
   const ownTag = activeLake && !isUncategorized && !leafTag && path.length > seedDepth ? path.join(':') : null;
   const ownFiles = useMemo(() => {
     if (!ownTag || !currentNode?.ownFileCount) return [];
@@ -851,7 +851,7 @@ function ManagerNav({
               </ListItem>
             )}
 
-            {/* Files tagged with this branch's own exact path, mixed in alongside its subfolders (#1692). */}
+            {/* Files tagged with this branch's own exact path, mixed in alongside its subfolders. */}
             {showOwnFiles &&
               ownFiles.map(file => (
                 <ListItem key={file.id}>

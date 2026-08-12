@@ -223,9 +223,9 @@ export default function DataLakeExplorer({
   const tree = useMemo(() => buildTagTree(tagCountsData?.tagCounts ?? []), [tagCountsData]);
 
   // Derive the current leaf tag from breadcrumb + tree state. A branch node (has children) can
-  // ALSO carry files tagged with its own exact path (#1692), which DataLakeTreeView renders
-  // mixed into the folder list - so this must fetch whenever there's anything to show at this
-  // breadcrumb, not only at a true leaf, or those own-tagged files never even reach the tree.
+  // ALSO carry files tagged with its own exact path, which DataLakeTreeView renders mixed into
+  // the folder list - so this must fetch whenever there's anything to show at this breadcrumb,
+  // not only at a true leaf, or those own-tagged files never even reach the tree.
   const currentNodes = useMemo(() => getNodesAtPath(tree, breadcrumb), [tree, breadcrumb]);
   const currentNode = useMemo(() => getNodeAtPath(tree, breadcrumb), [tree, breadcrumb]);
   const leafTag =

@@ -5,9 +5,9 @@ export interface TagNode {
   fileCount: number;
   /**
    * Files tagged with this node's exact fullPath, as opposed to a deeper child tag. A node can
-   * carry both children AND its own directly-tagged files (e.g. a file tagged "a:b" while
-   * others are tagged "a:b:c") - those own-tagged files are otherwise unreachable from the tree,
-   * since navigating into a branch node only ever shows its children (#1692).
+   * carry both children AND its own directly-tagged files (e.g. a file tagged "a:b" while others
+   * are tagged "a:b:c"). Tracked separately from fileCount because navigating into a branch node
+   * only ever shows its children - without this, those files would have nowhere to render.
    */
   ownFileCount: number;
   children: TagNode[];

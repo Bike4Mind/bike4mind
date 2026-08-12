@@ -69,7 +69,7 @@ describe('buildTagTree', () => {
     const b = a.children[0];
     expect(b.segment).toBe('b');
     expect(b.fileCount).toBe(9); // 2 (own) + 7 (from child c)
-    expect(b.ownFileCount).toBe(2); // #1692: what the tree can't otherwise surface once b has children
+    expect(b.ownFileCount).toBe(2); // what fileCount alone can't surface once b has children
     expect(b.children).toHaveLength(1);
     expect(b.children[0]).toMatchObject({ segment: 'c', fileCount: 7, ownFileCount: 7 });
   });

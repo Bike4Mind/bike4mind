@@ -261,10 +261,10 @@ describe('DataLakeTreeView uncategorized bucket', () => {
   });
 });
 
-// #1692: "books" is tagged directly on one file AND is the parent of "books:war"/"books:peace" -
-// that file was previously unreachable from any breadcrumb path once "books" had children. It
-// now renders as an ordinary file row mixed into the folder list, not behind a separate route.
-describe('DataLakeTreeView own-tagged files mixed into the folder list (#1692)', () => {
+// "books" is tagged directly on one file AND is the parent of "books:war"/"books:peace" - that
+// file would otherwise be unreachable from any breadcrumb path once "books" had children. It
+// renders as an ordinary file row mixed into the folder list, not behind a separate route.
+describe('DataLakeTreeView own-tagged files mixed into the folder list', () => {
   const directArticles = [...ARTICLES, file('d1', 'own-books.md', ['books'])];
   const directTree = buildTagTree([
     { tag: 'books:war', count: 2 },
