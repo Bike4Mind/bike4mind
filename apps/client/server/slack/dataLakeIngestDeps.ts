@@ -6,6 +6,7 @@ import { getUserEntitlements } from '@server/entitlements';
 import { getFilesStorage } from '@server/utils/storage';
 import type { DataLakeCommandRepo } from './handleDataLakeCommand';
 import type { SlackLakeIngestDeps } from './dataLakeFileIngest';
+import type { SlackLinkIngestDeps } from './dataLakeLinkIngest';
 
 /**
  * Bind the Slack data-lake ingest to the app's real repositories and storage. Kept out of
@@ -19,7 +20,33 @@ import type { SlackLakeIngestDeps } from './dataLakeFileIngest';
 export function buildSlackLakeIngestDeps(args: {
   downloadFile: (url: string, fileName: string) => Promise<Buffer>;
   logger: SlackLakeIngestDeps['logger'];
-}): SlackLakeIngestDeps & { dataLakes: DataLakeCommandRepo } {
+}): SlackLakeIngestDeps & SlackLinkIngestDeps & { dataLakes: DataLakeCommandRepo } {
+  // Shared by the attachment and link paths so a Slack-ingested file lands identically however it
+  // arrived. Declared once rather than per-call: two copies is how the two paths would drift.
+  const db = {
+    adminSettings: adminSettingsRepository,
+    fabFiles: FabFile,
+    users: User,
+  };
+  const storage = {
+    upload: async (
+      filepath: string,
+      content: string | Buffer,
+      option?: { ContentType?: string; ContentLength?: number }
+    ) => {
+      await getFilesStorage().upload(content, filepath, {
+        ContentType: option?.ContentType || 'text/plain',
+        ContentLength: option?.ContentLength || Buffer.byteLength(content),
+      });
+      return filepath;
+    },
+    // Thread `type` through rather than hardcoding 'put': createFabFile asks for 'get'
+    // when it stores fileUrl, and a PUT URL parked there costs a wasted round-trip on
+    // first read (get.ts test-fetches and regenerates). Mirrors researchEngineQueue.
+    generateSignedUrl: (filepath: string, expireInSeconds: number, type: 'get' | 'put' = 'get') =>
+      getFilesStorage().getSignedUrl(filepath, type, { expiresIn: expireInSeconds }),
+  };
+
   return {
     dataLakes: dataLakeRepository,
     fabFiles: fabFileRepository,
@@ -58,30 +85,38 @@ export function buildSlackLakeIngestDeps(args: {
             tags: params.tags,
           },
           {
-            db: {
-              adminSettings: adminSettingsRepository,
-              fabFiles: FabFile,
-              users: User,
-            },
-            storage: {
-              upload: async (filepath, content, option) => {
-                await getFilesStorage().upload(content, filepath, {
-                  ContentType: option?.ContentType || 'text/plain',
-                  ContentLength: option?.ContentLength || Buffer.byteLength(content),
-                });
-                return filepath;
-              },
-              // Thread `type` through rather than hardcoding 'put': createFabFile asks for 'get'
-              // when it stores fileUrl, and a PUT URL parked there costs a wasted round-trip on
-              // first read (get.ts test-fetches and regenerates). Mirrors researchEngineQueue.
-              generateSignedUrl: (filepath: string, expireInSeconds: number, type = 'get') =>
-                getFilesStorage().getSignedUrl(filepath, type, { expiresIn: expireInSeconds }),
-            },
+            db,
+            storage,
             // Server-supplied: the request body can never reach this, so a Slack origin stamp
             // cannot be forged by a caller who merely uploaded a file.
             provenance: params.provenance,
           }
         )
+      ),
+    // LINK ingest. `tags` and `provenance` are adapters on this service too, for the same reason:
+    // both are server-only facts, and a lake meta-tag is permission-bearing.
+    //
+    // NOT wrapped in `withTransaction`, unlike `createLakeFile` above, and the asymmetry is
+    // deliberate: `createFabFileByUrl` performs the outbound HTTP fetch ITSELF, so a transaction
+    // here would hold a Mongo session open across a network round trip. Two concrete failures come
+    // with that - `withTransaction` retries transient errors up to two extra attempts, so an
+    // attacker-chosen URL would be fetched up to three times; and a slow or redirecting URL can
+    // approach MongoDB's default 60s transactionLifetimeLimitSeconds and abort AFTER the bytes were
+    // already transferred. The file path keeps its transaction because the download happens outside
+    // it, so only DB work is inside. Nothing is lost here: the sole write is one `fabFiles.create`,
+    // which is atomic on its own. (`pages/api/files/createFabFileURL.ts` still has the wrapped
+    // shape; it predates this and is a single hop, so it is left alone rather than widening this
+    // change into the web door.)
+    createLakeFileFromUrl: (userId, params) =>
+      fabFilesService.createFabFileByUrl(
+        userId,
+        { url: params.url },
+        {
+          db,
+          storage,
+          tags: params.tags,
+          provenance: params.provenance,
+        }
       ),
   };
 }
