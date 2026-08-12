@@ -95,6 +95,39 @@ describe('reconcileLakeTags', () => {
     expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
   });
 
+  // Security-relevant: preserving the meta-tag alone would let a mere file-share recipient (no
+  // relation to the lake beyond a share on this one file) use this door to strip or rewrite the
+  // lake's OWN content tags. The lake's content tags must be force-carried too when the actor
+  // cannot manage it.
+  it('preserves a lake content tag when the actor cannot manage the lake', async () => {
+    const stored = [tag('datalake:lake', 1), tag('lk:invoices', 1)];
+    const adapters = makeAdapters(stored);
+    const editor = { userId: 'editor', isAdmin: false };
+
+    const result = await reconcileLakeTags(
+      editor,
+      'f1',
+      ['datalake:lake', 'lk:invoices'],
+      [tag('datalake:lake', 1)],
+      adapters as any
+    );
+    await result.commit();
+
+    expect(result.tagsToPersist).toEqual(expect.arrayContaining([tag('datalake:lake', 1), tag('lk:invoices', 1)]));
+    expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+  });
+
+  it("lets the lake manager freely edit their own lake's content tags through this door", async () => {
+    const stored = [tag('datalake:lake', 1), tag('lk:invoices', 1)];
+    const adapters = makeAdapters(stored);
+
+    // Same drop, but the actor IS the lake's manager - their own content-tag edit goes through.
+    const result = await run(adapters, ['datalake:lake', 'lk:invoices'], [tag('datalake:lake', 1)]);
+    await result.commit();
+
+    expect(result.tagsToPersist).not.toEqual(expect.arrayContaining([tag('lk:invoices', 1)]));
+  });
+
   it('leaves membership alone when the caller round-trips the meta-tag', async () => {
     // Also has no tag under 'lk:', so the fallback tagger backfills one - the invariant applies
     // on every write through this door, not only a join.

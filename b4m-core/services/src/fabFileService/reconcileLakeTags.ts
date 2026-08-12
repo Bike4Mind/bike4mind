@@ -1,4 +1,4 @@
-import { DATALAKE_TAG_PREFIX, DATALAKE_TAG_STRENGTH } from '@bike4mind/common';
+import { DATALAKE_TAG_PREFIX, DATALAKE_TAG_STRENGTH, prefixArmTagNames } from '@bike4mind/common';
 import type { IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { assertLakeWritable } from '../dataLakeService/assertLakeAccess';
@@ -47,13 +47,21 @@ const isMetaTag = (name: string): boolean => name.toLowerCase().startsWith(DATAL
  *
  * A whole array is not a reliable signal of intent to leave: a client holding a copy fetched
  * before the last membership change resends it on an unrelated edit and, read literally, that
- * looks identical to "the user removed this tag." So this door can only ever JOIN a lake or
- * PRESERVE existing membership - never LEAVE one, for either mechanism (a `datalake:` meta-tag, or
- * a content tag matching a lake's `fileTagPrefix`). The only doors that can remove membership are
- * the single-tag toggle (`POST /api/files/tags/toggle`, which never reaches this function - it
- * calls `findPrefixArmChanges` and the membership repository itself) and the dedicated
- * `DELETE /api/data-lakes/:id/files/:fileId` route. Both are unambiguous, explicit actions with no
- * staleness window.
+ * looks identical to "the user removed this tag." So this door can only ever JOIN a Mongo-backed
+ * lake or PRESERVE existing membership - never LEAVE one, for either mechanism (a `datalake:`
+ * meta-tag, or a content tag matching a lake's `fileTagPrefix`). The only doors that can remove
+ * that membership are the single-tag toggle (`POST /api/files/tags/toggle`, which never reaches
+ * this function - it calls `findPrefixArmChanges` and the membership repository itself) and the
+ * dedicated `DELETE /api/data-lakes/:id/files/:fileId` route. Both are unambiguous, explicit
+ * actions with no staleness window. (The static-registry namespace below has no lake document to
+ * preserve membership IN, so this invariant does not extend to it.)
+ *
+ * Preserving membership is not the same as leaving the CONTENT tags under it unprotected: an
+ * actor who cannot manage a lake (no relation to it beyond a share on this one file) still gets
+ * its meta-tag force-carried back, but any of that lake's content tags this write would otherwise
+ * have dropped are force-carried too - see the `unmanagedPreservedLakes` force-carry below. Without
+ * that, a mere file-share recipient could use this whole-array door to rewrite another user's
+ * lake's curated tag taxonomy despite having no rights over the lake itself.
  *
  * Because a JOIN needs no write beyond persisting the array itself (the caller's `tagsToPersist`
  * already carries the canonical meta-tag or content tag), `commit()` only ever recomputes stats -
@@ -103,6 +111,9 @@ export const reconcileLakeTags = async (
 
   const joins: MembershipLake[] = [];
   const metaTagsToPersist: string[] = [];
+  // Lakes whose meta-tag is preserved above but whose CONTENT tags this actor has no standing to
+  // touch - see the force-carry below, right after `resultingTagNames` is known.
+  const unmanagedPreservedLakes: MembershipLake[] = [];
 
   for (const key of new Set([...desiredKeys, ...currentKeys])) {
     const wanted = desiredKeys.has(key);
@@ -124,6 +135,7 @@ export const reconcileLakeTags = async (
       // intentional removal from a stale client's copy predating the last membership change, so
       // this door never leaves a lake on its own - see the toggle/DELETE doors for that.
       metaTagsToPersist.push(lake.datalakeTag);
+      if (!canManageLake(lake, actor)) unmanagedPreservedLakes.push(lake);
     } else if (wanted) {
       metaTagsToPersist.push(lake.datalakeTag);
       joins.push(lake);
@@ -178,17 +190,25 @@ export const reconcileLakeTags = async (
     else statsOnlyJoins.push(j.lake);
   }
 
-  // Force-carried, mirroring metaTagsToPersist above: preserves membership for a lake the array
-  // would otherwise have dropped the last qualifying tag for. Restores each tag's ORIGINAL
-  // strength (a content tag's strength is user-meaningful, unlike a meta-tag's fixed
-  // DATALAKE_TAG_STRENGTH), so re-fetch the stored doc only on this rare path. Deduped by name:
-  // two lakes sharing one prefix both list the same tag as their signal, and it only needs
-  // carrying once.
+  // Force-carried, mirroring metaTagsToPersist above, for two cases: (a) a prefix-arm-only lake
+  // the array would otherwise have dropped the last qualifying tag for, and (b) any content tag
+  // under a META-TAG-preserved lake this actor cannot manage. (b) matters because the meta-tag
+  // preserve above only protects membership, not the lake's curated content-tag taxonomy - a mere
+  // file-share recipient (findAccessibleById admits a read/write share) could otherwise use this
+  // whole-array door to silently strip or rewrite another user's lake's content tags despite
+  // having no rights over that lake at all; only its creator/admin may edit those, whether through
+  // this door or any other. Restores each tag's ORIGINAL strength (a content tag's strength is
+  // user-meaningful, unlike a meta-tag's fixed DATALAKE_TAG_STRENGTH), so re-fetch the stored doc
+  // only on this rare path. Deduped by name: two lakes sharing one prefix both list the same tag
+  // as their signal, and it only needs carrying once.
+  const unmanagedLakeContentNames = unmanagedPreservedLakes.flatMap(lake =>
+    prefixArmTagNames(currentTagNames, lake.fileTagPrefix).filter(name => !resultingTagNames.includes(name))
+  );
   let departingPrefixTags: { name: string; strength: number }[] = [];
-  if (prefixArmLeaves.length > 0) {
+  if (prefixArmLeaves.length > 0 || unmanagedLakeContentNames.length > 0) {
     const storedFile = cachedFile ?? (await db.fabFiles.findById(fabFileId));
     const strengthByName = new Map((storedFile?.tags ?? []).map(t => [t.name, t.strength] as const));
-    const departingNames = new Set(prefixArmLeaves.flatMap(l => l.signalTags));
+    const departingNames = new Set([...prefixArmLeaves.flatMap(l => l.signalTags), ...unmanagedLakeContentNames]);
     departingPrefixTags = [...departingNames].map(name => ({
       name,
       strength: strengthByName.get(name) ?? DATALAKE_TAG_STRENGTH,
