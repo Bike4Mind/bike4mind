@@ -190,6 +190,18 @@ describe('reconcileLakeTags', () => {
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
   });
 
+  // A whole-array write's "resend everything you already have" shape must not look like a NEW
+  // add attempt just because the resolved-no-lake namespace has no owning document to check
+  // against - only a genuinely new (not currently held) meta-tag throws.
+  it('lets an orphaned meta-tag be resent without throwing', async () => {
+    const adapters = makeAdapters([tag('datalake:gone', 1)], null);
+
+    const result = await run(adapters, ['datalake:gone'], [tag('note'), tag('datalake:gone', 1)]);
+    await result.commit();
+
+    expect(result.tagsToPersist).toEqual([tag('note')]);
+  });
+
   // The gates must fire before the caller persists anything: the tag array write alone would
   // already have granted or revoked membership.
   it('refuses a join by a caller who cannot manage the lake, before returning a payload', async () => {
@@ -490,6 +502,19 @@ describe('reconcileLakeTags - static-registry prefix (e.g. opti:), no owning lak
 
     expect(result.tagsToPersist).toEqual(expect.arrayContaining([tag('note'), tag(staticTag, 1)]));
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  // A client's "resend everything you already have" snapshot naturally includes an already-held
+  // static-registry meta-tag too, not just newer ones - that resend must not look like an
+  // unauthorized attempt to newly join a lake with no owning document to check membership against.
+  it('lets a caller resend an already-held static-registry meta-tag without throwing', async () => {
+    const staticTag = DATA_LAKES[0].datalakeTag;
+    const adapters = makeAdapters([tag(staticTag, 1)], null);
+
+    const result = await run(adapters, [staticTag], [tag('note'), tag(staticTag, 1)]);
+    await result.commit();
+
+    expect(result.tagsToPersist).toEqual(expect.arrayContaining([tag('note'), tag(staticTag, 1)]));
   });
 
   it('preserves a dropped static-registry content tag the same way as a dynamic-lake prefix tag', async () => {

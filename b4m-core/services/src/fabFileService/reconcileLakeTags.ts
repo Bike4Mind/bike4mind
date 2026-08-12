@@ -78,9 +78,11 @@ const isMetaTag = (name: string): boolean => name.toLowerCase().startsWith(DATAL
  * already carries the canonical meta-tag or content tag), `commit()` only ever recomputes stats -
  * there is nothing left to pull.
  *
- * A meta-tag that resolves to no lake is refused when the caller is trying to APPLY it, matching
- * the route gate; the same string being dropped is let through as a plain tag removal, since an
- * orphaned meta-tag left by a deleted lake must not make the file uneditable.
+ * A meta-tag that resolves to no lake is refused when the caller is trying to NEWLY apply it
+ * (not currently held), matching the route gate; a currently-held one that resolves to no lake -
+ * resent, or dropped - is let through, since neither a static-registry meta-tag's real membership
+ * nor an orphaned dynamic lake's leftover string can be told apart from the array shape alone, and
+ * either way the file must not become uneditable over it.
  *
  * `tagsToPersist` is also run through the fallback tagger (see `fallbackLakeTags`) before it is
  * returned, so a lake joined here without a real content tag still gets its `<prefix>uncategorized`
@@ -134,13 +136,17 @@ export const reconcileLakeTags = async (
     const lake = await db.dataLakes.findByDatalakeTag(key);
 
     if (!lake) {
-      if (wanted) {
+      // Only a genuinely NEW attempt (not currently held) throws - a caller resending a
+      // static-registry meta-tag it already carries must not look like an illegitimate "add"
+      // just because that namespace has no owning document to look up.
+      if (wanted && !currentKeys.has(key)) {
         throw new BadRequestError('Only the creator can add files to this data lake');
       }
       // A static-registry meta-tag (e.g. `datalake:opti-knowledge`) has no owning document, so it
       // hits this branch on every write, but it is still real membership and needs no DB round
-      // trip to identify - preserve it the same as a Mongo-backed lake's meta-tag. An orphaned
-      // meta-tag from a genuinely DELETED dynamic lake is the only case this door still drops.
+      // trip to identify - preserve it the same as a Mongo-backed lake's meta-tag, whether resent
+      // or omitted. An orphaned meta-tag from a genuinely DELETED dynamic lake is the only case
+      // this door still drops (resent or not - there is no registry entry to preserve it under).
       if (isStaticRegistryDatalakeTag(key)) metaTagsToPersist.push(key);
       continue;
     }
@@ -199,7 +205,10 @@ export const reconcileLakeTags = async (
   const resultingTagNames = reconciledTags.map(t => t.name);
   // Resolved once and reused for the unmanaged-prefix-drop check below - both need the same
   // owner-scoped candidate set, and querying it twice per write was pure I/O waste (a dropped,
-  // non-meta content tag containing ':' is always already part of this diff too).
+  // non-meta content tag containing ':' is always already part of this diff too). This mirrors
+  // (and duplicates the O(N) cost of, not the query of) `resolveCandidates`' own symmetric-diff
+  // check in `prefixArmMembership.ts` - unavoidable, since deciding whether to fetch at all has
+  // to happen before `findPrefixArmChanges` runs, not inside it.
   const currentNameSet = new Set(currentTagNames);
   const resultingNameSet = new Set(resultingTagNames);
   const changedTagNames = [...new Set([...currentTagNames, ...resultingTagNames])].filter(
