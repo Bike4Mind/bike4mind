@@ -75,13 +75,20 @@ export const archiveDataLake = async (
   // prefix-sharing sibling's own already-archived row, and for the SECOND lake to archive in a
   // live collision that row is always present - checking the full scope would make that lake skip
   // claiming a stamp EVERY time, so it could never bound its own later unarchive and would keep
-  // freeing the sibling's rows unbounded, the exact bug this whole fix exists to close. The
-  // meta-tag arm has no such false positive: no other lake's document can carry this lake's own
-  // tag (see buildDataLakeMembershipFilter), so an unstamped row found there is genuinely this
-  // lake's own history, not a sibling's. The narrower residual case this leaves - a file carrying
-  // more than one lake's meta-tag (addFileToLake has no exclusivity check) that a co-owning lake
-  // already archived - still trips this guard, a known limitation for that rarer, deliberate
-  // multi-membership case rather than the ordinary prefix collision this scoping closes.
+  // freeing the sibling's rows unbounded, the exact bug this whole fix exists to close. No other
+  // lake's document can carry this lake's own tag (see buildDataLakeMembershipFilter), so this
+  // check cannot get a false positive from a SIBLING's document. It is not immune to a false
+  // positive on one of THIS lake's own documents, though: a document genuinely carrying this
+  // lake's meta-tag can still be swept and stamped by a co-owning or prefix-sharing sibling
+  // lake's OWN archive, either because that same document also carries a second lake's meta-tag
+  // (addFileToLake has no exclusivity check), or because it independently satisfies a sibling's
+  // prefix arm (its owner matches that sibling's creator and it carries a tag under that
+  // sibling's prefix) - the sweep that stamps it runs on the sibling's OWN scope, which does not
+  // care what else the document is tagged with. Either way this guard still trips (correctly
+  // conservative: it cannot tell "genuinely mine, never archived" from "mine, but a sibling
+  // archived it first"), a known limitation for these rarer, deliberate or coincidental
+  // multi-membership cases rather than the ordinary single-arm prefix collision this scoping
+  // closes.
   //
   // Trade-off worth naming: a lake whose OWN pre-existing unstamped archive is entirely
   // prefix-only (no meta-tagged member at all) no longer trips this guard either, so its next
