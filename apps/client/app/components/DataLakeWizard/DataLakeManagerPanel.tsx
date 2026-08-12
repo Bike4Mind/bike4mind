@@ -37,7 +37,11 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
-import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
+import {
+  buildTagTree,
+  getNodeAtPath,
+  getNodesAtPath,
+} from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
 import {
   COUNT_CHIP_SX,
@@ -364,6 +368,7 @@ function ManagerNav({
   }, [articles, activeLake]);
 
   const currentNodes = useMemo(() => getNodesAtPath(tree, path), [tree, path]);
+  const currentNode = useMemo(() => getNodeAtPath(tree, path), [tree, path]);
 
   const filteredNodes = useMemo(() => {
     let nodes = currentNodes;
@@ -404,10 +409,22 @@ function ManagerNav({
   const files = useMemo(() => {
     if (isUncategorized) return uncategorizedFiles;
     if (!leafTag) return [];
-    return [...articles]
+    return articles
       .filter(f => (f.tags ?? []).some(t => t.name === leafTag))
       .sort((a, b) => a.fileName.localeCompare(b.fileName));
   }, [isUncategorized, uncategorizedFiles, leafTag, articles]);
+
+  // A branch node (has children) can ALSO carry files tagged with its own exact path, not just a
+  // deeper child tag - shown as file rows mixed into the folder list below rather than a separate
+  // route, matching how DataLakeTreeView handles the same case for the standalone/chat surfaces.
+  const ownTag = activeLake && !isUncategorized && !leafTag && path.length > seedDepth ? path.join(':') : null;
+  const ownFiles = useMemo(() => {
+    if (!ownTag || !currentNode?.ownFileCount) return [];
+    return articles
+      .filter(f => (f.tags ?? []).some(t => t.name === ownTag))
+      .sort((a, b) => a.fileName.localeCompare(b.fileName));
+  }, [ownTag, currentNode, articles]);
+  const showOwnFiles = !searchQuery && ownFiles.length > 0;
 
   const filteredLakes = useMemo(() => {
     let list = lakes ?? [];
@@ -834,9 +851,38 @@ function ManagerNav({
               </ListItem>
             )}
 
-            {filteredNodes.length === 0 && !(atLakeRoot && !searchQuery && uncategorizedFiles.length > 0) && (
-              <EmptyHint text={searchQuery ? 'No matches' : 'No categories'} />
-            )}
+            {/* Files tagged with this branch's own exact path, mixed in alongside its subfolders. */}
+            {showOwnFiles &&
+              ownFiles.map(file => (
+                <ListItem key={file.id}>
+                  <ListItemButton
+                    selected={selectedFileId === file.id}
+                    onClick={() => onSelectFile(file)}
+                    data-testid={`datalake-manager-file-${file.id}`}
+                    sx={treeRowSx(hoverBg)}
+                  >
+                    <ArticleOutlinedIcon
+                      sx={{
+                        fontSize: 16,
+                        color: selectedFileId === file.id ? inkFor(HUES.cyan, isDark) : 'text.tertiary',
+                        flexShrink: 0,
+                      }}
+                    />
+                    <ListItemContent>
+                      <Typography
+                        noWrap
+                        sx={{ ...rowTypographySx, fontWeight: selectedFileId === file.id ? 'lg' : 400 }}
+                      >
+                        {file.fileName.replace(/\.[^/.]+$/, '')}
+                      </Typography>
+                    </ListItemContent>
+                  </ListItemButton>
+                </ListItem>
+              ))}
+
+            {filteredNodes.length === 0 &&
+              !(atLakeRoot && !searchQuery && uncategorizedFiles.length > 0) &&
+              !showOwnFiles && <EmptyHint text={searchQuery ? 'No matches' : 'No categories'} />}
           </List>
         )}
       </Box>

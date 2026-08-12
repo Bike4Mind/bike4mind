@@ -27,6 +27,11 @@ export function buildSlackLakeIngestDeps(args: {
     adminSettings: adminSettingsRepository,
     fabFiles: FabFile,
     users: User,
+    // Required by createFabFile's tag gate (assertCanWriteDataLakeTags +
+    // assertCanWriteStaticRegistryTags), which every caller now passes through. Declared on the
+    // shared adapter so BOTH the attachment and link paths are gated - a link path that quietly
+    // skipped it would be a tag-write hole, since this PR is what gives that path caller-set tags.
+    dataLakes: dataLakeRepository,
   };
   const storage = {
     upload: async (

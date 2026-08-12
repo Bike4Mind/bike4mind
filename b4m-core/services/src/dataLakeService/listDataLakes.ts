@@ -6,6 +6,7 @@ import type {
   ManageableDataLakeConfig,
 } from '@bike4mind/common';
 import { DATA_LAKES, toDataLakeConfig, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
+import { canManageLake, isLakeCreator } from './manageRule';
 import { redactLakesForActor, type ReaderDataLake } from './redactLakeForActor';
 
 /**
@@ -55,14 +56,6 @@ const resolveOwnerNames = async (
   }
   return nameById;
 };
-
-/**
- * Per-lake write/manage flag for the caller. Mirrors canManageLake (admin or creator)
- * so the client's management affordances agree with what the write paths enforce. Kept
- * local rather than importing authorizeLakeWrite to avoid a cycle - it is a one-liner.
- */
-const canManage = (dl: Pick<IDataLakeDocument, 'createdByUserId'>, ctx: AccessContext): boolean =>
-  ctx.isAdmin || dl.createdByUserId === ctx.userId;
 
 /**
  * The one place a list response may carry an editor-only field: the shared config, the caller's
@@ -131,7 +124,7 @@ export const listDataLakes = async (
   // content-scope resolver passes no `users` adapter and this resolves to an empty map).
   const ownerNames = await resolveOwnerNames(dynamicLakes, ctx.userId, db.users);
   const dynamicConfigs = dynamicLakes.map(dl =>
-    toManageableConfig(dl, canManage(dl, ctx), dl.createdByUserId === ctx.userId, ownerNames.get(dl.createdByUserId))
+    toManageableConfig(dl, canManageLake(dl, ctx), isLakeCreator(dl, ctx), ownerNames.get(dl.createdByUserId))
   );
 
   // Merge with hardcoded fallbacks (DB entries take precedence by slug/id).
@@ -170,7 +163,7 @@ export const listAllDataLakes = async (
 
   const ownerNames = await resolveOwnerNames(dynamicLakes, ctx.userId, db.users);
   const dynamicConfigs = dynamicLakes.map(dl =>
-    toManageableConfig(dl, true, dl.createdByUserId === ctx.userId, ownerNames.get(dl.createdByUserId))
+    toManageableConfig(dl, true, isLakeCreator(dl, ctx), ownerNames.get(dl.createdByUserId))
   );
   const dynamicIds = new Set(dynamicLakes.map(d => d.slug));
   const fallbacks = DATA_LAKES.filter(dl => !dynamicIds.has(dl.id)).map(toFallbackConfig);

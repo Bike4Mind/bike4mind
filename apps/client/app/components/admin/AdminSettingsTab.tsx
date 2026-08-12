@@ -17,8 +17,6 @@ import {
   CardOverflow,
   Divider,
   SvgIcon,
-  Theme,
-  Box,
   type SvgIconProps,
   Button,
   FormLabel,
@@ -29,7 +27,6 @@ import AdminSettingInputField from './AdminSettingInputField';
 import { AdminOperationsModelSetting } from './AdminOperationsModelSetting';
 
 import AdminLogoUpload from './AdminLogoUpload';
-import { keyframes } from '@mui/system';
 import { McpServerName } from '@bike4mind/common';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 
@@ -74,263 +71,13 @@ type SearchableSetting = Pick<
   'key' | 'name' | 'description' | 'isSensitive'
 >;
 
-const spin = keyframes`
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-`;
-
-const bounce = keyframes`
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-5px); }
-`;
-
-const sparkle = keyframes`
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.5; transform: scale(1.2); }
-`;
-
-const shake = keyframes`
-  0%, 100% { transform: rotate(0deg); }
-  25% { transform: rotate(-5deg); }
-  75% { transform: rotate(5deg); }
-`;
-
-const rainbow = keyframes`
-  0% { color: #ff0000; }
-  17% { color: #ff8000; }
-  33% { color: #ffff00; }
-  50% { color: #00ff00; }
-  67% { color: #0000ff; }
-  83% { color: #8000ff; }
-  100% { color: #ff0000; }
-`;
-
-const pulse = keyframes`
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.1); }
-`;
-
-const rain = keyframes`
-  0% { 
-    opacity: 0;
-    transform: translateY(-100%);
-  }
-  50% { opacity: 1; }
-  100% { 
-    opacity: 0;
-    transform: translateY(100%);
-  }
-`;
-
-const snow = keyframes`
-  0% {
-    opacity: 0;
-    transform: translate(-20px, -100%) rotate(0deg);
-  }
-  50% { opacity: 0.8; }
-  100% {
-    opacity: 0;
-    transform: translate(20px, 100%) rotate(360deg);
-  }
-`;
-
-const sunshine = keyframes`
-  0% { 
-    transform: scale(1) rotate(0deg);
-    box-shadow: 0 0 0 0 rgba(255, 191, 0, 0.7);
-  }
-  50% { 
-    transform: scale(1.2) rotate(180deg);
-    box-shadow: 0 0 20px 10px rgba(255, 191, 0, 0.3);
-  }
-  100% { 
-    transform: scale(1) rotate(360deg);
-    box-shadow: 0 0 0 0 rgba(255, 191, 0, 0.7);
-  }
-`;
-
-const doubleRainbow = keyframes`
-  0% { 
-    filter: drop-shadow(0 0 2px #ff0000)
-           drop-shadow(0 0 2px #ff8000)
-           drop-shadow(0 0 2px #ffff00)
-           drop-shadow(0 0 2px #00ff00)
-           drop-shadow(0 0 2px #0000ff);
-    transform: scale(1);
-  }
-  50% { 
-    filter: drop-shadow(0 0 8px #ff0000)
-           drop-shadow(0 0 8px #ff8000)
-           drop-shadow(0 0 8px #ffff00)
-           drop-shadow(0 0 8px #00ff00)
-           drop-shadow(0 0 8px #0000ff);
-    transform: scale(1.1);
-  }
-  100% { 
-    filter: drop-shadow(0 0 2px #ff0000)
-           drop-shadow(0 0 2px #ff8000)
-           drop-shadow(0 0 2px #ffff00)
-           drop-shadow(0 0 2px #00ff00)
-           drop-shadow(0 0 2px #0000ff);
-    transform: scale(1);
-  }
-`;
-
-const gentleTilt = keyframes`
-  0% { transform: rotate(0deg); }
-  25% { transform: rotate(1deg); }
-  75% { transform: rotate(-1deg); }
-  100% { transform: rotate(0deg); }
-`;
-
-const gentleFloat = keyframes`
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-2px); }
-`;
-
-const createWeatherParticles = (count: number) => {
-  const styles: Record<string, any> = {};
-  for (let i = 0; i < count; i++) {
-    const delay = Math.random() * 2;
-    const leftPos = Math.random() * 100;
-    styles[`&:before:nth-of-type(${i + 1})`] = {
-      left: `${leftPos}%`,
-      animationDelay: `${delay}s`,
-    };
-  }
-  return styles;
-};
-
-const getRandomWeatherEffect = () => {
-  const effects = [
-    {
-      // Rain effect
-      '&:before': {
-        content: '""',
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        pointerEvents: 'none',
-        background: 'linear-gradient(180deg, transparent, #4dabf5)',
-        animation: `${rain} 1s linear infinite`,
-        ...createWeatherParticles(10),
-      },
-    },
-    {
-      // Snow effect
-      '&:before': {
-        content: '""',
-        position: 'absolute',
-        width: '5px',
-        height: '5px',
-        borderRadius: '50%',
-        background: 'white',
-        boxShadow: '0 0 5px white',
-        animation: `${snow} 3s ease-in-out infinite`,
-        ...createWeatherParticles(15),
-      },
-    },
-    {
-      // Sunshine effect
-      '&:before': {
-        content: '""',
-        position: 'absolute',
-        top: '50%',
-        left: '50%',
-        width: '30px',
-        height: '30px',
-        borderRadius: '50%',
-        background: '#ffbf00',
-        transform: 'translate(-50%, -50%)',
-        animation: `${sunshine} 4s ease infinite`,
-      },
-    },
-    {
-      // Rainbow effect
-      '&:before': {
-        content: '""',
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        animation: `${doubleRainbow} 2s ease infinite`,
-        background:
-          'linear-gradient(180deg, rgba(255,0,0,0.2), rgba(255,165,0,0.2), rgba(255,255,0,0.2), rgba(0,128,0,0.2), rgba(0,0,255,0.2), rgba(75,0,130,0.2), rgba(238,130,238,0.2))',
-        borderRadius: 'inherit',
-      },
-    },
-  ] as const;
-
-  return effects[Math.floor(Math.random() * effects.length)];
-};
-
-// Wrapper for MUI icons that adds hover animations
+// Wrapper mapping a MUI icon component into the plain section-header icon that
+// IconMap exposes. Kept as a thin indirection so IconMap and its completeness
+// test keep working.
 const JoyIcon = (IconComponent: React.ComponentType<any>) => {
-  const shouldHaveWeatherEffect = IconComponent === WbSunnyIcon;
-  const WrappedIcon: React.FC<{ sx?: SvgIconProps['sx'] }> = ({ sx, ...props }) => {
-    const weatherEffect = React.useMemo(
-      () => (shouldHaveWeatherEffect ? getRandomWeatherEffect() : undefined),
-      [] // No dependencies needed since shouldHaveWeatherEffect is constant
-    );
-
-    return (
-      <SvgIcon
-        component={IconComponent}
-        sx={{
-          transition: 'all 0.3s ease',
-          '&:hover': {
-            ...(IconComponent === AutoAwesomeIcon && {
-              animation: `${sparkle} 1s ease infinite`,
-              color: 'warning.400',
-            }),
-            ...(IconComponent === ScienceIcon && {
-              animation: `${bounce} 0.5s ease infinite`,
-              color: 'success.400',
-            }),
-            ...(IconComponent === SettingsIcon && {
-              animation: `${spin} 2s linear infinite`,
-              color: 'primary.400',
-            }),
-            ...(IconComponent === PsychologyIcon && {
-              transform: 'scale(1.2)',
-              color: 'warning.400',
-            }),
-            ...(IconComponent === SmartToyIcon && {
-              animation: `${bounce} 1s ease infinite`,
-              color: 'success.400',
-            }),
-            ...(IconComponent === SecurityIcon && {
-              animation: `${pulse} 1s ease infinite`,
-              color: 'success.400',
-              filter: 'drop-shadow(0 0 5px currentColor)',
-            }),
-            ...(IconComponent === PaletteIcon && {
-              animation: `${rainbow} 3s linear infinite`,
-            }),
-            ...(IconComponent === HandymanIcon && {
-              animation: `${shake} 0.5s ease infinite`,
-              color: 'warning.400',
-            }),
-            ...(IconComponent === ForumIcon && {
-              transform: 'scale(1.2) rotate(15deg)',
-              color: 'primary.400',
-            }),
-            ...(IconComponent === CalendarMonthIcon && {
-              animation: `${gentleFloat} 2s ease-in-out infinite`,
-              color: 'primary.400',
-              filter: 'drop-shadow(0 0 2px currentColor)',
-            }),
-            ...(IconComponent === WbSunnyIcon && weatherEffect),
-          },
-          ...sx,
-        }}
-        {...props}
-      />
-    );
-  };
+  const WrappedIcon: React.FC<{ sx?: SvgIconProps['sx'] }> = ({ sx, ...props }) => (
+    <SvgIcon component={IconComponent} sx={sx} {...props} />
+  );
   WrappedIcon.displayName = `JoyIcon(${IconComponent.displayName || 'Unknown'})`;
   return WrappedIcon;
 };
@@ -733,81 +480,8 @@ const AdminSettingsTab: React.FC = () => {
       }
     }
 
-    const cardHoverEffects = {
-      ...(groupId === 'experimentalService' && {
-        '&:hover': {
-          transform: 'rotate(-1deg)',
-          transition: 'transform 0.3s ease',
-          animation: `${rainbow} 5s linear infinite`,
-          borderColor: 'warning.400',
-        },
-      }),
-      ...(groupId === 'openAIService' && {
-        '&:hover': {
-          boxShadow: (theme: Theme) => `0 0 15px ${theme.vars.palette.primary[200]}`,
-          transition: 'all 0.3s ease',
-          transform: 'translateY(-2px)',
-        },
-      }),
-      ...(groupId === 'anthropicAPIService' && {
-        '&:hover': {
-          transform: 'scale(1.01)',
-          transition: 'all 0.3s ease',
-          animation: `${pulse} 2s ease infinite`,
-        },
-      }),
-      ...(groupId === 'weatherAPIService' && {
-        position: 'relative',
-        overflow: 'hidden',
-        '&:hover': {
-          transform: 'translateY(-2px)',
-          transition: 'all 0.3s ease',
-          '& .weather-effect': {
-            opacity: 1,
-          },
-        },
-      }),
-      ...(groupId === 'searchAPIService' && {
-        '&:hover': {
-          animation: `${bounce} 1s ease infinite`,
-          boxShadow: (theme: Theme) => `0 0 10px ${theme.vars.palette.warning[200]}`,
-        },
-      }),
-      ...(groupId === 'calendarAPIService' && {
-        '&:hover': {
-          animation: `${gentleTilt} 3s ease-in-out infinite`,
-          boxShadow: (theme: Theme) => `0 0 8px ${theme.vars.palette.primary[200]}`,
-          transition: 'all 0.5s ease',
-        },
-      }),
-    };
-
     return (
-      <Card
-        key={groupId || 'ungrouped'}
-        variant="outlined"
-        sx={{
-          mb: 2,
-          ...cardHoverEffects,
-          transition: 'all 0.3s ease',
-        }}
-      >
-        {groupId === 'weatherAPIService' && (
-          <Box
-            className="weather-effect"
-            sx={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              opacity: 0,
-              transition: 'opacity 0.3s ease',
-              pointerEvents: 'none',
-              ...getRandomWeatherEffect(),
-            }}
-          />
-        )}
+      <Card key={groupId || 'ungrouped'} variant="outlined" sx={{ mb: 2 }}>
         {groupName && (
           <CardOverflow>
             <Stack
@@ -818,20 +492,7 @@ const AdminSettingsTab: React.FC = () => {
             >
               <Stack direction="row" alignItems="center" spacing={1}>
                 <IconComponent />
-                <Typography
-                  level="title-lg"
-                  sx={{
-                    ...(groupId === 'experimentalService' && {
-                      '&:hover': {
-                        color: 'warning.400',
-                        transition: 'color 0.3s ease',
-                        cursor: 'default',
-                      },
-                    }),
-                  }}
-                >
-                  {groupName}
-                </Typography>
+                <Typography level="title-lg">{groupName}</Typography>
               </Stack>
               {groupInfo?.description && (
                 <Typography

@@ -2,7 +2,11 @@ import { DATALAKE_TAG_PREFIX, DATALAKE_TAG_STRENGTH } from '@bike4mind/common';
 import type { IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from '../dataLakeService/assertLakeAccess';
-import { canManageLake, extractDataLakeMetaTags } from '../dataLakeService/authorizeLakeWrite';
+import {
+  assertCanWriteStaticRegistryTags,
+  canManageLake,
+  extractDataLakeMetaTags,
+} from '../dataLakeService/authorizeLakeWrite';
 import { reconcileDataLakeFallbackTags } from '../dataLakeService/fallbackLakeTags';
 import { removeFileFromLake, type MembershipActor, type MembershipLake } from '../dataLakeService/lakeMembership';
 import { findPrefixArmChanges } from '../dataLakeService/prefixArmMembership';
@@ -74,6 +78,10 @@ const isMetaTag = (name: string): boolean => name.toLowerCase().startsWith(DATAL
  * Everything above is keyed by `datalake:*` META-TAGS. A lake a file belongs to ONLY via a
  * `fileTagPrefix` content tag - no meta-tag ever involved - is a second, independent join/leave
  * source evaluated after the tagger runs; see the `findPrefixArmChanges` call below for that half.
+ *
+ * A THIRD, unrelated concern sits ahead of all of it: `ordinaryTags` is also checked against the
+ * static-registry namespace (e.g. `opti:`), which has no owning lake document at all and so is
+ * invisible to both mechanisms above.
  */
 export const reconcileLakeTags = async (
   actor: MembershipActor,
@@ -82,7 +90,16 @@ export const reconcileLakeTags = async (
   desiredTags: { name: string; strength: number }[],
   { db, logger, fileOwnerUserId }: ReconcileLakeTagsAdapters
 ): Promise<LakeTagReconciliation> => {
+  // `primaryTag` (a separate string field on the route, gated there against `datalake:*` meta-tags
+  // alongside `tags`) is deliberately absent from `ordinaryTags`: no lake read arm consults
+  // `primaryTag`, so it cannot carry static-registry membership the way a `tags` entry can.
   const ordinaryTags = desiredTags.filter(tag => !isMetaTag(tag.name));
+  // Gate only NEWLY-appearing static-registry tags, not ones already stored: a whole-array write
+  // must not brick an unrelated edit to a file that already illegitimately carries a legacy
+  // registry-prefixed tag (predating this gate). Mirrors toggleTags' equivalent gate, so the two
+  // whole-array/element-level doors cannot disagree about what a "join" is.
+  const newlyAppearingOrdinaryNames = ordinaryTags.map(tag => tag.name).filter(name => !currentTagNames.includes(name));
+  assertCanWriteStaticRegistryTags(actor, newlyAppearingOrdinaryNames);
   const desiredKeys = new Set(extractDataLakeMetaTags(desiredTags.map(tag => tag.name)));
   const currentKeys = new Set(extractDataLakeMetaTags(currentTagNames));
 

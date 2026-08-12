@@ -3,6 +3,7 @@ import {
   IUserDocument,
   IUserRepository,
   IFabFileRepository,
+  IDataLakeRepository,
   KnowledgeType,
   ITaskScheduleRepository,
   ResearchTaskExecutionType,
@@ -49,6 +50,12 @@ interface ResearchTaskProcessAdapters {
     researchDatas: IResearchDataRepository;
     taskSchedules: ITaskScheduleRepository;
     apiKeys: Pick<IApiKeyRepository, 'findByUserIdAndType' | 'findByUserIdAndTypes'>;
+    // Widened to match ToolContext.db.dataLakes below (this whole `db` object is passed through
+    // to it), not just what the new write-gate call needs.
+    dataLakes: Pick<
+      IDataLakeRepository,
+      'findByDatalakeTag' | 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements'
+    >;
   };
   llm: Pick<ICompletionBackend, 'complete' | 'currentModel'>;
   storage: CreateFabFileAdapters['storage'];

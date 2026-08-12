@@ -128,6 +128,17 @@ describe('POST /api/files/generate-presigned-url - data-lake tags', () => {
     expect(h.createFabFile.mock.calls[0][0]).not.toHaveProperty('tags');
     expect(h.findByDatalakeTag).not.toHaveBeenCalled();
   });
+
+  // This route creates the FabFile through the manager's direct FabFile.create(), not the
+  // fabFileService.createFabFile door that gates this namespace centrally - it needs its own
+  // check, same as the meta-tag one above.
+  it('refuses a non-admin self-applying a static-registry-prefixed tag (e.g. opti:)', async () => {
+    const { res } = makeRes();
+    await expect(run(body({ tags: [{ name: 'opti:report', strength: 1 }] }), res)).rejects.toThrow(
+      /only an admin can change this data lake/i
+    );
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/files/generate-presigned-url - batch ownership (IDOR guard)', () => {

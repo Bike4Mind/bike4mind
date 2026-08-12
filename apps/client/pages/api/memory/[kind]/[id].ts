@@ -163,7 +163,12 @@ handler.delete(async (req, res) => {
     // admin) may shred what the whole org reads. A reader who isn't the creator gets a 403, not a
     // 404 - assertLakeAccess already confirmed they can see the lake. Mirrors the lifecycle guards
     // (data-lakes/[id]/lifecycle.ts).
-    if (!dataLakeService.canManageLake({ createdByUserId: target.ownerUserId }, { userId: ownerUserId, isAdmin: !!req.user?.isAdmin })) {
+    if (
+      !dataLakeService.canManageLake(
+        { createdByUserId: target.ownerUserId },
+        { userId: ownerUserId, isAdmin: !!req.user?.isAdmin }
+      )
+    ) {
       return res.status(403).json({ error: 'Only the lake creator can delete its memory.' });
     }
 

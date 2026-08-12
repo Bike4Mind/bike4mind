@@ -105,4 +105,48 @@ describe('chunkFabfile', () => {
     expect(mockAdapter.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds).not.toHaveBeenCalled();
     expect(result).toEqual([]);
   });
+
+  // Rejecting at the boundary is what keeps an unmatchable label out of the database: this is the
+  // only writer of FabFile.embeddingModel, and a mis-cased value reads as positively FOREIGN to the
+  // readers rather than unknown. See isForeignEmbeddingModel (dataLakeService/embeddingMismatch.ts)
+  // for those readers and the reasoning. The `embeddingModel` in the message proves it was the
+  // schema that rejected it, not something failing later in the chunker.
+  it.each([
+    ['mis-cased', 'Text-Embedding-3-Small'],
+    ['unrecognized', 'not-a-real-embedder'],
+    ['blank', ''],
+  ])('rejects a %s embedding model without writing anything', async (_label, embeddingModel) => {
+    await expect(chunkFabfile(mockUser, { fabFileId: 'file-1', embeddingModel }, mockAdapter as never)).rejects.toThrow(
+      /embeddingModel/
+    );
+
+    expect(mockAdapter.db.fabFiles.shareable.findAccessibleById).not.toHaveBeenCalled();
+    expect(mockAdapter.db.fabFiles.update).not.toHaveBeenCalled();
+    expect(mockAdapter.db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
+    expect(mockAdapter.db.fabFileChunks.bulkInsert).not.toHaveBeenCalled();
+  });
+
+  it('stamps charLength (code points) on every inserted chunk and their sum on the file', async () => {
+    (SmartChunker as unknown as Mock).mockImplementation(function MockSmartChunker(this: unknown) {
+      return {
+        chunkFile: vi.fn().mockResolvedValue([
+          { text: 'chunk one', tokenCount: 2 }, // 9 code points
+          { text: 'four\u{1F600}', tokenCount: 2 }, // 5 code points, 6 UTF-16 units
+        ]),
+        freeEncoder: vi.fn(),
+      };
+    });
+
+    await chunkFabfile(
+      mockUser,
+      { fabFileId: 'file-1', embeddingModel: 'text-embedding-ada-002' },
+      mockAdapter as never
+    );
+
+    const inserted = mockAdapter.db.fabFileChunks.bulkInsert.mock.calls[0][0] as Array<{ charLength: number }>;
+    expect(inserted.map(c => c.charLength)).toEqual([9, 5]);
+
+    const updatedFile = mockAdapter.db.fabFiles.update.mock.calls[0][0] as { chunkedCharCount: number };
+    expect(updatedFile.chunkedCharCount).toBe(14);
+  });
 });

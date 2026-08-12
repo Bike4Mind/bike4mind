@@ -244,6 +244,13 @@ const urlDerivedMessages = new WeakSet<IMessage>();
  */
 const IMAGE_TOKEN_ESTIMATE = 1600;
 
+/**
+ * Block types a caller-supplied user-role message can deliver on its own. An allowlist rather than
+ * a denylist, so a block type added to MessageContentTypes later is dropped loudly by the
+ * classifier below instead of forwarded to a provider that rejects it.
+ */
+const DELIVERABLE_USER_BLOCK_TYPES = new Set<string>(['text']);
+
 /** Bounded so building a log label never walks a multi-MB attachment. */
 const ATTACHMENT_LABEL_SCAN_CHARS = 400;
 
@@ -264,7 +271,11 @@ const estimateTokenLength = (text: string): number => {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
 };
 
-const isImageBlock = (obj: { type?: string }): boolean => obj.type === 'image' || obj.type === 'image_url';
+// Array content is caller-controlled (extraContextMessages accepts z.array(z.any())), so a block can
+// be null/undefined/not-an-object at runtime despite the static type; every caller here iterates raw
+// message.content, so the null-safety has to live in this one shared helper rather than at each call site.
+const isImageBlock = (obj: { type?: string } | null | undefined): boolean =>
+  obj?.type === 'image' || obj?.type === 'image_url';
 
 /**
  * Flattens a message's content to its text, skipping image blocks - their base64 payload is not text
@@ -2126,9 +2137,76 @@ export async function buildAndSortMessages(
   // CSS classes only", and said nothing about publishing - so the model followed it and produced
   // non-publishable artifacts. It has been removed so ArtifactEmissionPrompt is the single source of truth.
 
-  const nonImageMessages: IMessage[] = fabMessages.filter(
-    message => message.role === 'user' && !Array.isArray(message.content)
-  );
+  // Classifies every non-system fabMessage into exactly one bucket (system messages are handled by
+  // systemCandidates below), rather than two positive filters that could both miss a message: a
+  // role:user array-content message with no image block (only text, or a tool_use/tool_result/
+  // thinking block) used to match neither the old nonImageMessages nor imageMessages filter and
+  // vanish with no trace. This is reachable today - extraContextMessages accepts z.array(z.any())
+  // content, so a caller can post exactly that shape.
+  const imageMessages: IMessage[] = [];
+  const nonImageMessages: IMessage[] = [];
+  const undeliverableBlockMessages: Array<{ index: number; message: IMessage }> = [];
+  const unassignableMessages: Array<{ index: number; message: IMessage }> = [];
+
+  fabMessages.forEach((message, index) => {
+    if (message.role === 'system') return; // handled by systemCandidates below
+    if (message.role !== 'user') {
+      unassignableMessages.push({ index, message });
+      return;
+    }
+    const blocks = message.content;
+    if (!Array.isArray(blocks)) {
+      nonImageMessages.push(message);
+      return;
+    }
+    if (blocks.length === 0) {
+      unassignableMessages.push({ index, message });
+      return;
+    }
+    // Image priority checked first so a block mixing an image with e.g. a tool_result still delivers
+    // as an image message rather than being caught by the undeliverable-block bucket below.
+    if (blocks.some(isImageBlock)) {
+      imageMessages.push(message);
+      return;
+    }
+    if (blocks.every(block => DELIVERABLE_USER_BLOCK_TYPES.has((block as { type?: string })?.type ?? ''))) {
+      nonImageMessages.push(message);
+      return;
+    }
+    undeliverableBlockMessages.push({ index, message });
+  });
+
+  // Content-free labels (block types, position, est. tokens only - never payload text), matching the
+  // no-content-in-logs convention attachmentLabel already follows below.
+  const blockTypesLabel = ({ index, message }: { index: number; message: IMessage }): string => {
+    const types = Array.isArray(message.content)
+      ? Array.from(new Set(message.content.map(block => (block as { type?: string })?.type ?? 'untyped')))
+      : [];
+    return `message ${index + 1} [${types.join(', ')}] (~${estimateMessageTokens(message)} est. tokens)`;
+  };
+
+  if (undeliverableBlockMessages.length > 0) {
+    logger.warn(
+      `Dropped ${undeliverableBlockMessages.length} user context message(s) carrying block types that cannot ` +
+        `be delivered in a user turn: ${undeliverableBlockMessages.map(blockTypesLabel).join(' | ')}. A ` +
+        `tool_result supplied here has no tool_use to pair with - replayed history already pairs every ` +
+        `tool_use it emits - so it would be stripped as an orphan after assembly; a thinking block is ` +
+        `assistant-only and the provider rejects it on a user turn.`
+    );
+  }
+  if (unassignableMessages.length > 0) {
+    logger.warn(
+      `Ignored ${unassignableMessages.length} context message(s) assembly has no slot for: ` +
+        `${unassignableMessages
+          .map(
+            ({ index, message }) =>
+              `message ${index + 1} (role ${message.role}${
+                Array.isArray(message.content) && message.content.length === 0 ? ', empty content array' : ''
+              })`
+          )
+          .join(' | ')}. Only system and user messages are assembled from this argument.`
+    );
+  }
 
   // Attached content is reserved out of the budget BEFORE system instructions are charged against it,
   // and only on a turn that actually carries a file: with no attachment the reserve is 0 and the cap
@@ -2237,6 +2315,12 @@ export async function buildAndSortMessages(
   // not. URL-derived content opens with the fetched page body and has no header at all, so it is
   // labelled positionally rather than by echoing what it contains.
   const attachmentLabel = (message: IMessage, index: number): string => {
+    // Array content (e.g. caller-supplied text blocks routed here by the classifier above) has no
+    // filename header to find; naming it "attachment N" would misreport a context block as a file.
+    if (Array.isArray(message.content)) {
+      const types = Array.from(new Set(message.content.map(block => (block as { type?: string })?.type ?? 'untyped')));
+      return `context blocks [${types.join(', ')}] (~${estimateMessageTokens(message)} est. tokens)`;
+    }
     const head = messageContentText(message).slice(0, ATTACHMENT_LABEL_SCAN_CHARS);
     const named: string[] = [];
     for (const pattern of ATTACHMENT_NAME_HEADERS) {
@@ -2345,8 +2429,15 @@ export async function buildAndSortMessages(
   // counting it would report a truncation on a completely healthy turn. URL-derived content is
   // excluded on the same grounds: it rides in this block but is not an attachment, and counting it
   // made the note claim a file was lost on turns where the file arrived whole, or where the prompt
-  // carried only a link and no file existed at all.
-  const isAttachment = (message: IMessage): boolean => !urlDerivedMessages.has(message) && fileTokens(message) > 0;
+  // carried only a link and no file existed at all. The array-content builders that exist today
+  // (processUrlsFromPrompt's image URLs, processFabFilesServer's image blocks) emit image-only
+  // arrays, which imageMessages claims before nonImageMessages ever sees them - so nonImageMessages
+  // only ever held string content until the classifier above started routing caller-supplied
+  // array-content context blocks here too. The string guard excludes those: without it, one could
+  // join attachmentsWithContent, get told to the model as an undelivered FILE it never was, and be
+  // deleted outright by the sliver rule below.
+  const isAttachment = (message: IMessage): boolean =>
+    typeof message.content === 'string' && !urlDerivedMessages.has(message) && fileTokens(message) > 0;
   const attachmentsWithContent = nonImageMessages.filter(isAttachment);
   let undeliveredNote: IMessage | null = null;
 
@@ -2418,14 +2509,6 @@ export async function buildAndSortMessages(
   };
 
   processedContentMessages = declareUndeliveredAttachments(processedContentMessages);
-
-  // Separate image and non-image messages
-  const imageMessages: IMessage[] = fabMessages.filter(
-    message =>
-      message.role === 'user' &&
-      Array.isArray(message.content) &&
-      message.content.some(obj => obj.type.startsWith('image'))
-  );
 
   // Check if the user prompt contains a tool_result
   const promptHasToolResult = userPrompt.some(

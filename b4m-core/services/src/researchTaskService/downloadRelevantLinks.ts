@@ -3,6 +3,7 @@ import {
   IFabFileRepository,
   IFileTagRepository,
   IAdminSettingsRepository,
+  IDataLakeRepository,
   IResearchDataRepository,
   IResearchTaskRepository,
   IResearchTaskScrape,
@@ -37,6 +38,7 @@ interface IResearchTaskDownloadRelevantLinksAdapters {
     fabFiles: IFabFileRepository;
     fileTags: IFileTagRepository;
     adminSettings: IAdminSettingsRepository;
+    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'>;
   };
   storage: CreateFabFileAdapters['storage'];
   logger?: {
