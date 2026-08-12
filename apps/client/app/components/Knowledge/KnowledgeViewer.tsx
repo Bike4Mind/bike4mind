@@ -342,9 +342,16 @@ const buttonTooltipTitle = (item: KnowledgeItem) => {
 interface KnowledgeViewerProps {
   /** When true (default), auto-hides the layout when no knowledge items or artifacts exist. Set to false for pages like /opti that manage their own layout. */
   autoHideOnEmpty?: boolean;
+  /**
+   * When false, hides the layout-switching ButtonGroup (vertical/horizontal/pip/floating/noAI);
+   * Close stays. For mounts on hosts whose global layout must not change - a docked-chat host
+   * renders its chat 0x0 in any non-docked layout and nothing on that surface restores it
+   * (see DataLakeRailViewer).
+   */
+  showLayoutControls?: boolean;
 }
 
-const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = true }) => {
+const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = true, showLayoutControls = true }) => {
   const { currentSession, currentSessionId } = useSessions();
   const workBenchFiles = useWorkBenchFiles(currentSessionId);
   const { systemFiles } = useSystemPromptFiles();
@@ -1349,87 +1356,89 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
               </IconButton>
             </Tooltip>
 
-            <ButtonGroup className="knowledge-viewer-layout-controls" size="sm" variant="solid">
-              <Tooltip title="Vertical" disableInteractive>
-                <IconButton
-                  size="sm"
-                  sx={(theme: Theme) => ({
-                    borderColor: theme.palette.divider,
-                    ...(layout === 'vertical' && {
-                      backgroundColor: theme.palette.primary.softActiveBg,
-                    }),
-                  })}
-                  onClick={() => setSessionLayout({ layout: layout === 'vertical' ? 'hide' : 'vertical' })}
-                >
-                  <Splitscreen sx={{ rotate: '90deg' }} />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title="Horizontal" disableInteractive>
-                <IconButton
-                  size="sm"
-                  sx={(theme: Theme) => ({
-                    borderColor: theme.palette.divider,
-                    ...(layout === 'horizontal' && {
-                      backgroundColor: theme.palette.primary.softActiveBg,
-                    }),
-                  })}
-                  onClick={() => setSessionLayout({ layout: layout === 'horizontal' ? 'hide' : 'horizontal' })}
-                >
-                  <Splitscreen />
-                </IconButton>
-              </Tooltip>
+            {showLayoutControls && (
+              <ButtonGroup className="knowledge-viewer-layout-controls" size="sm" variant="solid">
+                <Tooltip title="Vertical" disableInteractive>
+                  <IconButton
+                    size="sm"
+                    sx={(theme: Theme) => ({
+                      borderColor: theme.palette.divider,
+                      ...(layout === 'vertical' && {
+                        backgroundColor: theme.palette.primary.softActiveBg,
+                      }),
+                    })}
+                    onClick={() => setSessionLayout({ layout: layout === 'vertical' ? 'hide' : 'vertical' })}
+                  >
+                    <Splitscreen sx={{ rotate: '90deg' }} />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title="Horizontal" disableInteractive>
+                  <IconButton
+                    size="sm"
+                    sx={(theme: Theme) => ({
+                      borderColor: theme.palette.divider,
+                      ...(layout === 'horizontal' && {
+                        backgroundColor: theme.palette.primary.softActiveBg,
+                      }),
+                    })}
+                    onClick={() => setSessionLayout({ layout: layout === 'horizontal' ? 'hide' : 'horizontal' })}
+                  >
+                    <Splitscreen />
+                  </IconButton>
+                </Tooltip>
 
-              <Tooltip title="Picture in Picture" disableInteractive>
-                <IconButton
-                  size="sm"
-                  sx={(theme: Theme) => ({
-                    borderColor: theme.palette.divider,
-                    ...(layout === 'pip' && {
-                      backgroundColor: theme.palette.primary.softActiveBg,
-                    }),
-                  })}
-                  onClick={() => setSessionLayout({ layout: layout === 'pip' ? 'hide' : 'pip' })}
-                >
-                  <PictureInPictureIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Tooltip>
+                <Tooltip title="Picture in Picture" disableInteractive>
+                  <IconButton
+                    size="sm"
+                    sx={(theme: Theme) => ({
+                      borderColor: theme.palette.divider,
+                      ...(layout === 'pip' && {
+                        backgroundColor: theme.palette.primary.softActiveBg,
+                      }),
+                    })}
+                    onClick={() => setSessionLayout({ layout: layout === 'pip' ? 'hide' : 'pip' })}
+                  >
+                    <PictureInPictureIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </Tooltip>
 
-              <Tooltip title="Floating Chat" disableInteractive>
-                <IconButton
-                  size="sm"
-                  data-testid="floating-chat-layout-btn"
-                  sx={(theme: Theme) => ({
-                    borderColor: theme.palette.divider,
-                    ...(layout === 'floatingChat' && {
-                      backgroundColor: theme.palette.primary.softActiveBg,
-                    }),
-                  })}
-                  onClick={() =>
-                    setSessionLayout({
-                      layout: layout === 'floatingChat' ? 'hide' : 'floatingChat',
-                      previousLayout: layout !== 'floatingChat' ? layout : undefined,
-                    })
-                  }
-                >
-                  <OpenInNewIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Tooltip>
+                <Tooltip title="Floating Chat" disableInteractive>
+                  <IconButton
+                    size="sm"
+                    data-testid="floating-chat-layout-btn"
+                    sx={(theme: Theme) => ({
+                      borderColor: theme.palette.divider,
+                      ...(layout === 'floatingChat' && {
+                        backgroundColor: theme.palette.primary.softActiveBg,
+                      }),
+                    })}
+                    onClick={() =>
+                      setSessionLayout({
+                        layout: layout === 'floatingChat' ? 'hide' : 'floatingChat',
+                        previousLayout: layout !== 'floatingChat' ? layout : undefined,
+                      })
+                    }
+                  >
+                    <OpenInNewIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </Tooltip>
 
-              <Tooltip title="Hide AI" disableInteractive>
-                <IconButton
-                  size="sm"
-                  sx={(theme: Theme) => ({
-                    borderColor: theme.palette.divider,
-                    ...(layout === 'noAI' && {
-                      backgroundColor: theme.palette.primary.softActiveBg,
-                    }),
-                  })}
-                  onClick={() => setSessionLayout({ layout: layout === 'noAI' ? 'hide' : 'noAI' })}
-                >
-                  <ExtensionOff />
-                </IconButton>
-              </Tooltip>
-            </ButtonGroup>
+                <Tooltip title="Hide AI" disableInteractive>
+                  <IconButton
+                    size="sm"
+                    sx={(theme: Theme) => ({
+                      borderColor: theme.palette.divider,
+                      ...(layout === 'noAI' && {
+                        backgroundColor: theme.palette.primary.softActiveBg,
+                      }),
+                    })}
+                    onClick={() => setSessionLayout({ layout: layout === 'noAI' ? 'hide' : 'noAI' })}
+                  >
+                    <ExtensionOff />
+                  </IconButton>
+                </Tooltip>
+              </ButtonGroup>
+            )}
 
             <ButtonGroup className="knowledge-viewer-action-buttons" size="sm" variant="solid" sx={{ ml: 1 }}>
               {knowledgeItems[selectedTabIndex]?.type === 'file' && (

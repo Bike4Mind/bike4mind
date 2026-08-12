@@ -41,10 +41,17 @@ touch) holding the actions below, and clicking the row itself runs View.
     and the chat's own SessionContainer renders the viewer.
   - External-chat host (the overlay): the chat is docked (`dockRight`), a mode in
     which SessionContainer renders no viewer, and the layout cannot be used to get
-    one - `vertical` collapses the dock and the host force-redocks anything else.
-    So only `selectedArtifactId` is set and the explorer mounts its own viewer in
-    the rail (`autoHideOnEmpty={false}`, or the viewer would push the layout to
-    `hide` and take the dock with it), with a Back control that restores the tree.
+    one - the host renders its chat 0x0 in any non-docked layout and nothing on
+    that surface restores it. So only `selectedArtifactId` is set and the explorer
+    mounts its own viewer in the rail, defused on both fronts that could write the
+    layout: `autoHideOnEmpty={false}` (or the viewer pushes `hide` when empty and
+    takes the dock with it) and `showLayoutControls={false}` (the header's layout
+    ButtonGroup writes the layout unconditionally). Close survives: the explorer's
+    layout subscription answers its `hide` write by closing the rail viewer and
+    restoring the layout captured when it opened; any OTHER layout write while the
+    viewer is up is a host rearrangement, which closes the viewer and stands. The
+    host's page content is hidden (not unmounted) behind the viewer, so its
+    in-progress state survives a look at a file.
 
 Revised twice after seeing the first build: View opened an in-rail markdown reader
 on every surface, which took away reading a file beside the chat, and then opened
@@ -57,9 +64,10 @@ had; the bug being fixed is browsing mutating the chat, not viewing doing so.
 Row click was dead in the first build, then wired to View, so on the embedded
 host a click attaches again - the very effect this change set out to remove. What
 survives is that nothing happens *silently*: the file opens in the viewer where
-the user can see it, instead of quietly joining the chat's files as it used to on
-the overlay. Closing the gap properly means teaching KnowledgeViewer to render a
-file that is not in the workbench (a preview tab), after which View - and so the
+the user can see it, AND the attachment itself is toasted whenever View actually
+adds the file (this also covers `?article=` deep links, which attach with no user
+gesture at all). Closing the gap properly means teaching KnowledgeViewer to render
+a file that is not in the workbench (a preview tab), after which View - and so the
 row click - costs no attachment. Until then, Add to chat and View both write to
 the workbench and only Remove is side-effect-free.
 
@@ -105,8 +113,12 @@ AND it has `canManage`. Consequences, both intended:
 - Tree chrome tests: a row click runs View, an actions-menu click does not, the
   trigger is frameless, and the menu's items gate on `canDeleteFile`.
 
-## Known follow-up (not this change)
+## Server-side gating (verified, no follow-up needed)
 
-The removal endpoint authorizes with `assertLakeAccess` + `assertLakeWritable`
-only - any reader of a lake can delete its files via the API while the UI now
-implies manage-only. Server-side gating deserves its own fix.
+An earlier revision of this spec claimed the removal endpoint let any lake
+reader delete files. That was wrong: the route's `assertLakeAccess` +
+`assertLakeWritable` is only the outer gate - `removeFileFromDataLake` then
+rejects non-creator/non-admin actors via `canManageLake`
+(`b4m-core/services/src/dataLakeService/lakeMembership.ts`), the same rule
+`resolveManageableLake` mirrors client-side. The destructive action is gated
+on both sides.
