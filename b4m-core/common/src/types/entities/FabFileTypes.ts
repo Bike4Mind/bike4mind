@@ -56,6 +56,14 @@ export interface IFabFileChunk {
   fabFileId: string;
   text: string;
   tokenCount: number;
+  /**
+   * Length of `text` in Unicode CODE POINTS (countCodePoints on the write path, $strLenCP in the
+   * backfill - the two must agree, which is why this is NOT UTF-16 `text.length`). Written at
+   * chunk time; absent on chunks that predate the field until
+   * packages/scripts/datalake/backfill-chunk-char-length.ts runs. Unit basis for the lake
+   * health predicates (#1666), which are stated in characters because the serve cap is.
+   */
+  charLength?: number;
   vector?: number[];
   /**
    * Embedding model this chunk's vector was generated with. Chunks can outlive their file's
@@ -129,6 +137,15 @@ export interface IFabFile {
   chunkCount?: number;
   /** Number of chunks that have been vectorized. */
   vectorizedChunkCount?: number;
+  /**
+   * Sum of this file's chunks' `charLength` (Unicode code points), stamped by chunkFabfile in
+   * the same update as `chunkCount`. The chunk-derived counterpart of `extractedCharCount`,
+   * which a DIFFERENT extractor writes lazily on the composer dry-run path - the two
+   * legitimately drift and must not be conflated. Nullable for the same reason as
+   * extractedCharCount: a content rewrite nulls it via FAB_FILE_CONTENT_REWRITE_PATCH (Mongoose
+   * strips undefined from $set) and the re-chunk that follows re-stamps it.
+   */
+  chunkedCharCount?: number | null;
 
   /** Whether this FabFile is currently being chunked. */
   isChunking?: boolean;
@@ -254,8 +271,11 @@ export interface IFabFileDocument extends IFabFile, IShareableDocument {}
  *
  * null, NOT undefined - Mongoose strips undefined from a `$set`, so the undefined form of this leaves
  * the stale number in place and only looks correct.
+ *
+ * Also clears `chunkedCharCount`, the chunk-derived sum: a content rewrite invalidates the chunks
+ * it was summed from, and the re-chunk that follows re-stamps it.
  */
-export const FAB_FILE_CONTENT_REWRITE_PATCH = { extractedCharCount: null } as const;
+export const FAB_FILE_CONTENT_REWRITE_PATCH = { extractedCharCount: null, chunkedCharCount: null } as const;
 
 export interface IFabFileListItem {
   userId: string;

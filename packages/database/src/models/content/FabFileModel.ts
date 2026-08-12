@@ -256,6 +256,8 @@ const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
       required: true,
     },
     tokenCount: { type: Number, required: true },
+    // Unicode code points of `text` (countCodePoints / $strLenCP); see IFabFileChunk.charLength.
+    charLength: { type: Number, required: false },
     vector: { type: [Number], required: false },
     embeddingModel: { type: String, required: false },
   },
@@ -1226,6 +1228,8 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
 
     chunkCount: { type: Number, default: 0 },
     vectorizedChunkCount: { type: Number, default: 0 },
+    // Sum of the file's chunks' charLength; nulled on content rewrite. See IFabFile.chunkedCharCount.
+    chunkedCharCount: { type: Number, required: false },
 
     isChunking: { type: Boolean, default: false },
     chunked: { type: Boolean, default: false },

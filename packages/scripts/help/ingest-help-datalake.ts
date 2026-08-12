@@ -45,7 +45,12 @@ import {
 import { apiKeyService } from '@bike4mind/services';
 import { EmbeddingFactory, getProviderFromModel } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { KnowledgeType, isSupportedEmbeddingModel, type IFabFileChunkDocument } from '@bike4mind/common';
+import {
+  countCodePoints,
+  KnowledgeType,
+  isSupportedEmbeddingModel,
+  type IFabFileChunkDocument,
+} from '@bike4mind/common';
 import { chunkByHeadings, stripFrontmatter } from './utils.js';
 import type { HelpIndex } from './types.js';
 
@@ -185,6 +190,7 @@ async function main(opts: Options): Promise<number> {
           fabFileId: '',
           text,
           tokenCount: estimateTokens(text),
+          charLength: countCodePoints(text),
           vector,
           createdAt: now,
           updatedAt: now,
@@ -223,6 +229,7 @@ async function main(opts: Options): Promise<number> {
       system: true,
       chunked: true,
       chunkCount: chunkPayloads.length,
+      chunkedCharCount: chunkPayloads.reduce((sum, c) => sum + (c.charLength ?? 0), 0),
       vectorized: true,
       vectorizedChunkCount: chunkPayloads.length,
       embeddingModel,
