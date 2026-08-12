@@ -25,6 +25,8 @@ const h = vi.hoisted(() => ({
   stampChunkEmbeddingModel: vi.fn(),
   indexChunks: vi.fn(),
   selfHostOpenSearchEnabled: vi.fn(() => false),
+  enforceEmbeddingSpendGate: vi.fn(async () => undefined),
+  batchFindById: vi.fn(async () => ({ id: 'batch-1', dataLakeId: 'lake-1' })),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -35,7 +37,10 @@ vi.mock('@bike4mind/database', () => ({
     incrementCounter: h.incrementCounter,
     incrementCounters: h.incrementCounters,
     claimFileStatus: h.claimFileStatus,
+    findById: h.batchFindById,
   },
+  dataLakeRepository: {},
+  cacheRepository: {},
   embeddingCacheRepository: {},
   fabFileChunkRepository: { findById: vi.fn(), countTerminalChunks: h.countTerminalChunks, update: h.chunkUpdate },
   fabFileRepository: {
@@ -51,6 +56,18 @@ vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn(async () => ({})) },
   embeddingCacheService: { getEmbedding: h.getEmbedding, setEmbedding: vi.fn().mockResolvedValue(undefined) },
   fabFilesService: { stampChunkEmbeddingModel: h.stampChunkEmbeddingModel },
+  dataLakeService: {
+    enforceEmbeddingSpendGate: h.enforceEmbeddingSpendGate,
+    // Mirror the real class's retryable flag so the handler's terminal-denial branch classifies correctly.
+    EmbeddingSpendDeniedError: class EmbeddingSpendDeniedError extends Error {
+      retryable: boolean;
+      constructor(reason: string, options?: { retryable?: boolean }) {
+        super(reason);
+        this.name = 'EmbeddingSpendDeniedError';
+        this.retryable = options?.retryable ?? false;
+      }
+    },
+  },
 }));
 vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: vi.fn(),
@@ -61,7 +78,10 @@ vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => unde
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@server/utils/errors', () => ({ NotFoundError: class NotFoundError extends Error {} }));
 // Module-load zod schemas used by VectorizePayload.
-vi.mock('@bike4mind/common', () => ({ SupportedEmbeddingModelSchema: z.string() }));
+vi.mock('@bike4mind/common', () => ({
+  SupportedEmbeddingModelSchema: z.string(),
+  getEmbeddingModelCost: vi.fn(() => 0.0001),
+}));
 vi.mock('@bike4mind/fab-pipeline', () => ({
   ChunkSchema: z.object({}).passthrough(),
   EmbeddingFactory: class {
@@ -180,6 +200,77 @@ describe('fabFileVectorize handler - stored error copy on vectorization failure'
     h.deferFailureIfRetryable.mockResolvedValue(false);
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
     expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', 'rate limit exceeded');
+  });
+});
+
+describe('fabFileVectorize handler - spend gate', () => {
+  const unvectorizedFile = (batchId?: string) => ({
+    id: 'ff1',
+    batchId,
+    vectorized: false,
+    chunkCount: 1,
+    vectorizedChunkCount: 0,
+  });
+  // Same shape the mocked services module produces - the handler classifies via instanceof.
+  const denial = async (reason: string, retryable: boolean) => {
+    const { dataLakeService } = await import('@bike4mind/services');
+    return new dataLakeService.EmbeddingSpendDeniedError(reason, { retryable });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text: 'hello world',
+      tokenCount: 5,
+    });
+    h.getEmbedding.mockResolvedValue(null); // cache miss -> the gate is in play
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+    // clearAllMocks resets calls but not replaced implementations - re-grant so a
+    // denial mocked in one test can never leak into later describes.
+    h.enforceEmbeddingSpendGate.mockResolvedValue(undefined);
+  });
+
+  it('runs the gate for a data-lake file before any provider call', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.enforceEmbeddingSpendGate).toHaveBeenCalledWith(
+      expect.objectContaining({ batchId: 'batch-1', dataLakeId: 'lake-1' })
+    );
+  });
+
+  it('skips the gate entirely for a turn-attached file (no batchId)', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.enforceEmbeddingSpendGate).not.toHaveBeenCalled();
+  });
+
+  it('a terminal denial accounts the failure immediately and CONSUMES the message', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.enforceEmbeddingSpendGate.mockRejectedValueOnce(await denial('budget exhausted', false));
+
+    // Resolves (no rethrow): the message must not ride SQS retries into the DLQ.
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', expect.stringContaining('budget exhausted'));
+    expect(h.getVector).not.toHaveBeenCalled();
+  });
+
+  it('a retryable (rate-limit) denial keeps the normal SQS retry path', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.enforceEmbeddingSpendGate.mockRejectedValueOnce(await denial('rate limit stayed exhausted', true));
+    h.deferFailureIfRetryable.mockResolvedValue(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
+    expect(h.deferFailureIfRetryable).toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
   });
 });
 

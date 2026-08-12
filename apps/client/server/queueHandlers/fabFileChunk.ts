@@ -9,7 +9,8 @@ import {
 } from '@bike4mind/database';
 import { sendToClient } from '@server/websocket/utils';
 import { z } from 'zod';
-import { fabFilesService } from '@bike4mind/services';
+import { dataLakeService, fabFilesService } from '@bike4mind/services';
+import { DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT } from '@bike4mind/common';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { getFilesStorage } from '@server/utils/storage';
@@ -254,12 +255,21 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     const queueUrl = Resource.fabFileVectorizeQueue.url;
     if (!queueUrl) throw new Error('Vectorize queue URL not found');
 
-    // Target batch size: aim for ~50 chunks or ~100K tokens per batch (conservative)
-    const BATCH_SIZE = 50;
+    // How many chunks per vectorize message is the operator's dataLakeVectorizeChunkBatchSize
+    // lever. Unlike the spend levers, this is not a money value, so a resolution failure
+    // falls back to the coded default instead of halting - chunking itself spends nothing,
+    // and the spend gate in fabFileVectorize.ts is where money is actually guarded.
+    const batchSize = await dataLakeService
+      .resolveSpendLevers({ adminSettings: adminSettingsRepository }, logger)
+      .then(levers => levers.vectorizeChunkBatchSize)
+      .catch((err: unknown) => {
+        logger.warn(`Could not resolve vectorize batch size; using default: ${err}`);
+        return DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT;
+      });
     const batches: (typeof fabFileChunks)[] = [];
 
-    for (let i = 0; i < fabFileChunks.length; i += BATCH_SIZE) {
-      batches.push(fabFileChunks.slice(i, i + BATCH_SIZE));
+    for (let i = 0; i < fabFileChunks.length; i += batchSize) {
+      batches.push(fabFileChunks.slice(i, i + batchSize));
     }
 
     logger.updateMetadata({ batchCount: batches.length });

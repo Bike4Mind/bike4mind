@@ -3,7 +3,9 @@ import { getVector } from '@server/managers/fabFileManager';
 import {
   adminSettingsRepository,
   apiKeyRepository,
+  cacheRepository,
   dataLakeBatchRepository,
+  dataLakeRepository,
   embeddingCacheRepository,
   fabFileChunkRepository,
   fabFileRepository,
@@ -22,7 +24,8 @@ import {
   FabFileChunkSearchIndex,
 } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
-import { apiKeyService, embeddingCacheService, fabFilesService } from '@bike4mind/services';
+import { apiKeyService, dataLakeService, embeddingCacheService, fabFilesService } from '@bike4mind/services';
+import { getEmbeddingModelCost } from '@bike4mind/common';
 import {
   finalizeBatchIfComplete,
   isBatchComplete,
@@ -179,6 +182,31 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     if (cacheMisses.length > 0) {
       const missTexts = cacheMisses.map(m => m.text);
       const missTokenCounts = cacheMisses.map(m => m.tokenCount);
+
+      // COST GOVERNANCE GATE - data-lake work only (batchId present). This is the single
+      // point where a provider embedding call spends money on a lake owner's behalf, so it
+      // sits downstream of the cache (hits are free) and upstream of every embed call. A
+      // denial throws and rides the existing failure path below: the file is marked failed
+      // with the gate's user-safe reason and the batch still reaches a terminal state.
+      if (existingFabFile.batchId) {
+        const missTokens = missTokenCounts.reduce((sum, n) => sum + n, 0);
+        // Ceil, never round: a spend meter may overcount a fraction of a micro-USD, not under.
+        const estimatedMicroUsd = Math.ceil(getEmbeddingModelCost(embeddingModel, missTokens) * 1_000_000);
+        const batch = await dataLakeBatchRepository.findById(existingFabFile.batchId);
+        await dataLakeService.enforceEmbeddingSpendGate({
+          estimatedMicroUsd,
+          batchId: existingFabFile.batchId,
+          dataLakeId: batch?.dataLakeId,
+          db: {
+            adminSettings: adminSettingsRepository,
+            cache: cacheRepository,
+            dataLakes: dataLakeRepository,
+            dataLakeBatches: dataLakeBatchRepository,
+          },
+          logger,
+        });
+        logger.log(`[spendGate] granted ~${estimatedMicroUsd} microUSD for ${missTokens} tokens`);
+      }
 
       let newVectors: number[][];
       if (missTexts.length === 1) {
@@ -370,17 +398,23 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       logger.warn(`Vectorization failed for ${fabFileId} (embedding auth): ${errorMessage}`);
     }
 
+    // A non-retryable spend-gate denial is deterministic (a budget does not regrow, the
+    // switch does not flip itself): retrying only re-reserves spend from the wider meters
+    // and burns delivery attempts, so it skips the retry deferral and accounts immediately.
+    const isTerminalSpendDenial = err instanceof dataLakeService.EmbeddingSpendDeniedError && !err.retryable;
+
     // Only account a failure into the batch/file state on the LAST SQS delivery attempt -
     // see deferFailureIfRetryable's doc comment for why an earlier attempt must leave
     // 'failed' status untouched.
     if (
-      await deferFailureIfRetryable(event, FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT, {
+      !isTerminalSpendDenial &&
+      (await deferFailureIfRetryable(event, FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT, {
         fabFileId,
         batchId: existingFabFile.batchId,
         action: 'Vectorization',
         errorMessage,
         logger,
-      })
+      }))
     ) {
       throw err; // Re-throw so SQS retries
     }
@@ -411,6 +445,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       } catch (innerErr) {
         logger.error(`Error reporting batch failure: ${innerErr}`);
       }
+    }
+    // A terminal denial is fully accounted above - consume the message instead of
+    // rethrowing, so a deliberately stopped pipeline does not shovel messages into the
+    // DLQ and page whoever flipped the switch.
+    if (isTerminalSpendDenial) {
+      logger.warn(`Vectorization denied by spend gate for ${fabFileId}: ${errorMessage}`);
+      return;
     }
     throw err; // Re-throw so SQS marks the message failed
   }

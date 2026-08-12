@@ -45,7 +45,10 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: vi.fn((fn: () => unknown) => fn()),
 }));
 
-vi.mock('@bike4mind/services', () => ({ fabFilesService: { chunkFabfile: h.chunkFabfile } }));
+vi.mock('@bike4mind/services', () => ({
+  fabFilesService: { chunkFabfile: h.chunkFabfile },
+  dataLakeService: { resolveSpendLevers: vi.fn(async () => ({ vectorizeChunkBatchSize: 50 })) },
+}));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })) }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: vi.fn() }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h.sendToClient(...a) }));
@@ -54,7 +57,10 @@ vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   isBatchComplete: (...a: unknown[]) => h.isBatchComplete(...a),
   deferFailureIfRetryable: (...a: unknown[]) => h.deferFailureIfRetryable(...a),
 }));
-vi.mock('@bike4mind/common', () => ({ isSupportedEmbeddingModel: vi.fn(() => true) }));
+vi.mock('@bike4mind/common', () => ({
+  isSupportedEmbeddingModel: vi.fn(() => true),
+  DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT: 50,
+}));
 vi.mock('@bike4mind/utils', () => ({ BadRequestError: class BadRequestError extends Error {} }));
 vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: { deleteByFabFileId: vi.fn() } }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpenSearchEnabled }));
