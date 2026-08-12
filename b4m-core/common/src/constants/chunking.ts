@@ -42,6 +42,15 @@ export const MIN_PASSAGE_TOKEN_TARGET = 64;
 export const MAX_PASSAGE_TOKEN_TARGET = 8192;
 
 /**
+ * A chunk larger than this (in tokens) marks a file whose chunking predates the passage-target
+ * fix: a whole-document / whole-section blob rather than a ~512-token passage. Used to detect the
+ * files a lake "Rebuild passages" pass should re-chunk. Deliberately well above
+ * DEFAULT_PASSAGE_TOKEN_TARGET (512) so a correctly-chunked passage never trips it, and below the
+ * ~6.5K model-window packing the old chunker produced, so every legacy blob does.
+ */
+export const OVERSIZED_PASSAGE_TOKEN_THRESHOLD = 1500;
+
+/**
  * Characters per token used to turn a chunk's TOKEN target into the SERVE path's CHARACTER budget.
  *
  * Deliberately an upper bound, not the ~4 chars/token average for English prose. The number exists

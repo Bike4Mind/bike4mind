@@ -417,6 +417,13 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
   backfillCharLengthByIds(chunkIds: string[]): Promise<number>;
   /** Sum of a file's chunks' charLength, unstamped chunks counted as 0. */
   sumChunkCharLengthByFabFileId(fabFileId: string): Promise<number>;
+  /**
+   * Of the given files, those with at least one chunk larger than `tokenThreshold` - i.e. files
+   * whose passages predate the passage-target fix (a whole-document blob, not a ~512-token
+   * passage). Returned worst-first (largest oversized chunk first) so a bounded rebuild wave
+   * repairs the least-retrievable files first. Powers the lake "Rebuild passages" detection.
+   */
+  findUnderChunkedFabFileIds(fabFileIds: string[], tokenThreshold: number): Promise<string[]>;
 }
 
 /**
@@ -796,6 +803,18 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   findFileIdsMissingChunkedCharCount(options?: { limit?: number; afterFileId?: string }): Promise<string[]>;
   /** Stamp a file's recomputed `chunkedCharCount` - the char-length backfill's phase-2 write. */
   setChunkedCharCount(id: string, chunkedCharCount: number): Promise<void>;
+  /**
+   * Live, already-chunked files in the lake, as {id, userId} - the input set for under-chunked
+   * detection. userId is the file OWNER, needed to re-enqueue the chunk job under the same
+   * identity the original ingest used. Excludes deleted/archived/still-pending files.
+   */
+  findChunkedFilesByScope(scope: DataLakeMembershipScope): Promise<{ id: string; userId: string }[]>;
+  /**
+   * Reset the chunk/vector processing flags on the given files so a re-enqueued chunk job runs
+   * instead of hitting the "already chunked" idempotency guard - the bulk form of what
+   * /api/files/reprocess does per file. Returns the number of files modified.
+   */
+  resetChunkStateByIds(ids: string[]): Promise<number>;
   /**
    * Distinct live file count per lake, keyed by `datalakeTag`. Same predicate as
    * computeDataLakeStats, so what a browse surface displays cannot disagree with a lake's

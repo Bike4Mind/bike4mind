@@ -32,6 +32,9 @@ export const dataLakeKeys = {
   filesOf: (dataLakeId: string) => ['dataLakeFiles', dataLakeId] as const,
   /** Invalidation prefix covering all lakes' file lists. */
   filesRoot: ['dataLakeFiles'] as const,
+  /** One lake's count of under-chunked files (GET /api/data-lakes/:id/rechunk) - the "Rebuild
+   *  passages" badge, polled while a rebuild drains. */
+  rebuildStatus: (dataLakeId: string) => ['dataLakeRebuildStatus', dataLakeId] as const,
   tagCounts: (source: DataLakeBrowseSource) => ['dataLakeTagCounts', source] as const,
   tagCountsRoot: ['dataLakeTagCounts'] as const,
   articles: (source: DataLakeBrowseSource, params?: DataLakeArticlesParams) =>

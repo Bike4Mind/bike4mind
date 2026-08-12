@@ -37,6 +37,7 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
+import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import {
   buildTagTree,
   getNodeAtPath,
@@ -71,6 +72,8 @@ import {
   usePermanentDeleteDataLake,
   useRestoreDeletedDataLake,
   useUnarchiveDataLake,
+  useUnderChunkedCount,
+  useRechunkDataLake,
 } from '@client/app/hooks/data/dataLakes';
 import { toast } from 'sonner';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
@@ -1117,6 +1120,10 @@ function LakeInfoPanel({
   const startChatWithLake = useStartChatWithLake();
   const [startingChat, setStartingChat] = useState(false);
   const visibility = lake.isPublic ? 'Public' : lake.organizationId ? 'Organization' : 'Private';
+  // "Rebuild passages": manager-only, and only surfaced when the lake actually has legacy
+  // oversized-chunk files to repair (the count self-polls down as a rebuild wave drains).
+  const { data: underChunkedCount = 0 } = useUnderChunkedCount(lake.id, lake.canManage);
+  const rechunk = useRechunkDataLake(lake.id);
 
   return (
     <Box
@@ -1190,6 +1197,25 @@ function LakeInfoPanel({
               >
                 Settings
               </Button>
+              {underChunkedCount > 0 && (
+                <Tooltip
+                  title="Re-chunk files stored as oversized passages into retrieval-sized ones. Runs in bounded waves; safe to repeat until zero."
+                  size="sm"
+                >
+                  <Button
+                    size="sm"
+                    variant="outlined"
+                    color="primary"
+                    startDecorator={<AutoFixHighIcon sx={{ fontSize: 16 }} />}
+                    data-testid={`datalake-rebuild-passages-btn-${lake.id}`}
+                    loading={rechunk.isPending}
+                    onClick={() => rechunk.mutate(undefined)}
+                    sx={{ flexShrink: 0, fontSize: '13px' }}
+                  >
+                    Rebuild passages
+                  </Button>
+                </Tooltip>
+              )}
               <Tooltip title="Archive (restorable from the manager home)" size="sm">
                 <Button
                   size="sm"
@@ -1239,6 +1265,25 @@ function LakeInfoPanel({
             <Chip size="sm" variant="outlined" color="neutral" sx={{ fontSize: '11px' }}>
               {fileCount} {fileCount === 1 ? 'file' : 'files'}
             </Chip>
+          )}
+          {/* Retrievability health: files still stored as oversized (pre-passage-target) chunks.
+              Manager-only, and the count self-polls down as the Rebuild passages wave drains. */}
+          {lake.canManage && underChunkedCount > 0 && (
+            <Tooltip
+              title="These files are stored as oversized passages; use Rebuild passages to re-chunk them."
+              size="sm"
+            >
+              <Chip
+                size="sm"
+                variant="soft"
+                color="warning"
+                startDecorator={<AutoFixHighIcon sx={{ fontSize: 12 }} />}
+                sx={{ fontSize: '11px' }}
+                data-testid={`datalake-manager-rebuild-chip-${lake.id}`}
+              >
+                {underChunkedCount} to rebuild
+              </Chip>
+            </Tooltip>
           )}
           {/* Background AI-tag suggestion progress - an independent clock from ingest, so this
               can appear well after the lake's files are already fully uploaded/searchable. */}

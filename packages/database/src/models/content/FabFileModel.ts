@@ -145,6 +145,19 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
     return this.fabFileChunkModel.countDocuments({ fabFileId });
   }
 
+  async findUnderChunkedFabFileIds(fabFileIds: string[], tokenThreshold: number): Promise<string[]> {
+    if (fabFileIds.length === 0) return [];
+    // Match on tokenCount first so only oversized chunks feed the group; the { fabFileId: 1, _id: 1 }
+    // index serves the id-set half. Worst-first ($sort on the max oversized chunk) so a bounded
+    // rebuild wave repairs the least-retrievable files before the marginal ones.
+    const rows = await this.fabFileChunkModel.aggregate<{ _id: string }>([
+      { $match: { fabFileId: { $in: fabFileIds }, tokenCount: { $gt: tokenThreshold } } },
+      { $group: { _id: '$fabFileId', maxTokenCount: { $max: '$tokenCount' } } },
+      { $sort: { maxTokenCount: -1 } },
+    ]);
+    return rows.map(r => r._id);
+  }
+
   /**
    * Count a file's "terminal" chunks: those that have an embedding vector OR are
    * oversized (token count exceeds the model context window, so they can never be
@@ -1036,6 +1049,38 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * file carrying several taxonomy tags. Same predicate and live-file filter as
    * computeDataLakeStats, so a displayed count and a lake's stored stats cannot disagree.
    */
+  async findChunkedFilesByScope(scope: DataLakeMembershipScope): Promise<{ id: string; userId: string }[]> {
+    const docs = await this.fabFileModel
+      .find(
+        { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: null, chunked: true },
+        { _id: 1, userId: 1 }
+      )
+      .lean();
+    return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
+  }
+
+  async resetChunkStateByIds(ids: string[]): Promise<number> {
+    if (ids.length === 0) return 0;
+    // Mirrors /api/files/reprocess's per-file $set: clearing `chunked` is what lets the re-enqueued
+    // chunk job past fabFileChunk.ts's idempotency guard; the rest keeps the file's status honest
+    // while it re-processes (and clears the Atlas-cutover stamp so it isn't read as ANN-ready early).
+    const result = await this.fabFileModel.updateMany(
+      { _id: { $in: ids } },
+      {
+        $set: {
+          isChunking: false,
+          chunked: false,
+          chunkCount: 0,
+          vectorized: false,
+          vectorizedChunkCount: 0,
+          notes: '',
+          chunkEmbeddingModelStampedAt: null,
+        },
+      }
+    );
+    return result.modifiedCount;
+  }
+
   async countDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<Record<string, number>> {
     if (scopes.length === 0) return {};
     const counts = await Promise.all(

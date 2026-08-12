@@ -485,7 +485,12 @@ export function useReprocessFabFile(dataLakeId: string | null) {
     },
     onSuccess: () => {
       toast.success('Re-processing started - chunking and vectorization will re-run.');
-      if (dataLakeId) queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+      if (dataLakeId) {
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+        // Re-chunking a file that was an oversized blob drops it from the under-chunked set, so the
+        // "Rebuild passages" badge must refresh too (it otherwise only self-heals on its next poll).
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
+      }
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to re-process file');
@@ -509,7 +514,11 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
     },
     onSuccess: () => {
       toast.success('File removed from data lake.');
-      if (dataLakeId) queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+      if (dataLakeId) {
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+        // Removing a file can drop the lake's under-chunked count, so refresh the rebuild badge.
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
+      }
       // Refresh the lake list to pick up the recomputed stats. fileCount counts meta-tagged
       // files only, so removing a file that was in the lake by prefix alone drops a row from
       // the list without moving the count.
@@ -526,6 +535,56 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to remove file from data lake');
+    },
+  });
+}
+
+/**
+ * Hook: how many of a lake's files are still stored as oversized passages (predating the
+ * passage-target fix) and would benefit from a "Rebuild passages" pass. Polls itself down while a
+ * rebuild drains (count > 0), then goes quiet. Owner/admin only surface, so only enable when the
+ * viewer can manage the lake.
+ */
+export function useUnderChunkedCount(dataLakeId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: dataLakeKeys.rebuildStatus(dataLakeId ?? 'none'),
+    queryFn: async () => {
+      const res = await api.get<{ underChunkedCount: number }>(`/api/data-lakes/${dataLakeId}/rechunk`);
+      return res.data.underChunkedCount;
+    },
+    enabled: enabled && !!dataLakeId,
+    // Tick the badge down as a wave completes; stop once there is nothing left to rebuild.
+    refetchInterval: query => ((query.state.data ?? 0) > 0 ? 5000 : false),
+  });
+}
+
+/**
+ * Hook: re-chunk a bounded wave of the lake's under-chunked files. Server picks the worst
+ * offenders first and caps the wave; call again (the badge shows `remaining`) to drain the rest.
+ */
+export function useRechunkDataLake(dataLakeId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (limit?: number) => {
+      const res = await api.post<{ detected: number; enqueued: number; remaining: number }>(
+        `/api/data-lakes/${dataLakeId}/rechunk`,
+        limit ? { limit } : {}
+      );
+      return res.data;
+    },
+    onSuccess: data => {
+      toast.success(
+        data.enqueued > 0
+          ? `Rebuilding ${data.enqueued} file(s) into passages - ${data.remaining} remaining.`
+          : 'All files are already chunked into passages.'
+      );
+      if (dataLakeId) {
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+      }
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Failed to start rebuild');
     },
   });
 }
