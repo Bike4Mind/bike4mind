@@ -755,6 +755,25 @@ async function processExecution(
       return;
     }
 
+    // Org-billed per-member cap: coarse gate only. An agent run has no single upfront
+    // estimate (it bills per-iteration at settlement), so we can refuse to START a member
+    // who has already reached their cap, but a run that crosses the cap mid-execution is
+    // not stopped here (#1536, tracked as follow-up).
+    if (organization?.maxCreditsPerMember != null) {
+      const memberUsedCredits = creditService.getMemberUsedCredits(organization, execution.userId);
+      if (memberUsedCredits >= organization.maxCreditsPerMember) {
+        logger.warn('[Credits] Member credit cap reached; refusing to start execution', {
+          used: memberUsedCredits,
+          cap: organization.maxCreditsPerMember,
+        });
+        await agentExecutionRepository.markFailed(executionId, {
+          message: 'Organization member credit limit reached',
+        });
+        await sendWs('failed', { executionId, reason: 'insufficient_credits' });
+        return;
+      }
+    }
+
     // Resolve the memory gates ONCE and persist them (#1525). The read path (first-iteration
     // preamble) and the write path (completion event) used to resolve independently a whole run
     // apart, so a mid-run flip of `EnableMementos` or the user's V2 opt-in made them disagree.

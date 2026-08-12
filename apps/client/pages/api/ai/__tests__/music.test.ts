@@ -76,22 +76,21 @@ vi.mock('@bike4mind/database', () => ({
     incrementCredits: (...a: unknown[]) => userIncrement(...a),
   },
 }));
-vi.mock('@bike4mind/services', () => ({
-  apiKeyService: { getEffectiveApiKey: (...a: unknown[]) => getEffectiveApiKey(...a) },
-  creditService: {
-    deductCreditsWithOrgSupport: (...a: unknown[]) => deductCredits(...a),
-    // Faithful reimplementation of the real pure helper so org-billed tests
-    // exercise the cap decision the handler now depends on.
-    isMemberCreditCapExceeded: (
-      org: { maxCreditsPerMember?: number | null; userDetails?: { id: string; usedCredits?: number }[] },
-      userId: string,
-      credits: number
-    ) =>
-      org.maxCreditsPerMember != null &&
-      (org.userDetails?.find(u => u.id === userId)?.usedCredits ?? 0) + credits > org.maxCreditsPerMember,
-  },
-  estimateMusicCredits: (...a: unknown[]) => estimateMusicCredits(...a),
-}));
+// Keep the real pure cap helper so org-billed tests exercise the actual cap decision
+// the handler depends on; only the write (deductCreditsWithOrgSupport) is stubbed.
+vi.mock('@bike4mind/services', async () => {
+  const creditService = await vi.importActual<typeof import('@bike4mind/services/creditService')>(
+    '@bike4mind/services/creditService'
+  );
+  return {
+    apiKeyService: { getEffectiveApiKey: (...a: unknown[]) => getEffectiveApiKey(...a) },
+    creditService: {
+      ...creditService,
+      deductCreditsWithOrgSupport: (...a: unknown[]) => deductCredits(...a),
+    },
+    estimateMusicCredits: (...a: unknown[]) => estimateMusicCredits(...a),
+  };
+});
 vi.mock('@bike4mind/utils', () => ({
   aiMusicService: () => ({ generate: (...a: unknown[]) => generate(...a) }),
   getSettingsMap: vi.fn(async () => ({})),
