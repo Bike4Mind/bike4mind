@@ -18,7 +18,11 @@ import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { useNotebookLayout } from '@client/app/components/layouts/Notebook';
 import { useGetDataLakeArticles, useGetDataLakeTagCounts } from '@client/app/hooks/data/dataLakes';
 import type { DataLakeBrowseSource } from '@client/app/hooks/data/dataLakes';
-import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
+import {
+  buildTagTree,
+  getNodeAtPath,
+  getNodesAtPath,
+} from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import DataLakeIngestPickerModal from '@client/app/components/DataLakeWizard/DataLakeIngestPickerModal';
 import { readDroppedItems } from '@client/app/utils/dropReader';
 import { DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
@@ -218,11 +222,18 @@ export default function DataLakeExplorer({
   const { data: tagCountsData, isLoading: tagCountsLoading, isError: tagCountsError } = useGetDataLakeTagCounts(source);
   const tree = useMemo(() => buildTagTree(tagCountsData?.tagCounts ?? []), [tagCountsData]);
 
-  // Derive the current leaf tag from breadcrumb + tree state
-  const currentNodes = getNodesAtPath(tree, breadcrumb);
-  const leafTag = breadcrumb.length > 0 && currentNodes.length === 0 ? breadcrumb.join(':') : null;
+  // Derive the current leaf tag from breadcrumb + tree state. A branch node (has children) can
+  // ALSO carry files tagged with its own exact path (#1692), which DataLakeTreeView renders
+  // mixed into the folder list - so this must fetch whenever there's anything to show at this
+  // breadcrumb, not only at a true leaf, or those own-tagged files never even reach the tree.
+  const currentNodes = useMemo(() => getNodesAtPath(tree, breadcrumb), [tree, breadcrumb]);
+  const currentNode = useMemo(() => getNodeAtPath(tree, breadcrumb), [tree, breadcrumb]);
+  const leafTag =
+    breadcrumb.length > 0 && (currentNodes.length === 0 || (currentNode?.ownFileCount ?? 0) > 0)
+      ? breadcrumb.join(':')
+      : null;
 
-  // Phase 2: Fetch articles only when at a leaf node (filtered by tag, paginated)
+  // Phase 2: Fetch articles only when there's a tag at this breadcrumb to filter by (paginated)
   const { data: leafArticlesResult, isLoading: leafLoading } = useGetDataLakeArticles(
     leafTag ? { tags: [leafTag], limit: 50 } : null,
     source

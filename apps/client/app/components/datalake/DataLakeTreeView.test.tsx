@@ -260,3 +260,53 @@ describe('DataLakeTreeView uncategorized bucket', () => {
     expect(screen.getByTestId('datalake-node-uncategorized')).toBeTruthy();
   });
 });
+
+// #1692: "books" is tagged directly on one file AND is the parent of "books:war"/"books:peace" -
+// that file was previously unreachable from any breadcrumb path once "books" had children. It
+// now renders as an ordinary file row mixed into the folder list, not behind a separate route.
+describe('DataLakeTreeView own-tagged files mixed into the folder list (#1692)', () => {
+  const directArticles = [...ARTICLES, file('d1', 'own-books.md', ['books'])];
+  const directTree = buildTagTree([
+    { tag: 'books:war', count: 2 },
+    { tag: 'books:peace', count: 1 },
+    { tag: 'books', count: 1 },
+    { tag: 'news:today', count: 1 },
+    { tag: 'zebra:x', count: 5 },
+  ]);
+
+  it('lists the directly-tagged file alongside its subfolders, reconciling the branch total', () => {
+    renderTree({ tree: directTree, articles: directArticles, breadcrumb: ['books'] });
+    expect(screen.getByTestId('datalake-node-war')).toBeTruthy();
+    expect(screen.getByTestId('datalake-node-peace')).toBeTruthy();
+    expect(screen.getByTestId('datalake-file-d1')).toBeTruthy();
+    // Reachable from this one folder: war(2) + peace(1) + d1(1) = 4, matching "books".fileCount.
+    const books = directTree[0];
+    expect(books.fileCount).toBe(4);
+  });
+
+  it('selects the file directly on click - no extra navigation hop', () => {
+    const { onNavigate, onSelectFile } = renderTree({
+      tree: directTree,
+      articles: directArticles,
+      breadcrumb: ['books'],
+    });
+    fireEvent.click(screen.getByTestId('datalake-file-d1'));
+    expect(onSelectFile).toHaveBeenCalledWith(directArticles.find(f => f.id === 'd1'));
+    expect(onNavigate).not.toHaveBeenCalled();
+  });
+
+  it('omits any own-file rows for a branch with none of its own', () => {
+    renderTree({ tree: directTree, articles: directArticles, breadcrumb: ['news'] });
+    expect(screen.getByTestId('datalake-node-today')).toBeTruthy();
+    expect(screen.queryAllByTestId(/^datalake-file-/)).toHaveLength(0);
+  });
+
+  it('hides own files while searching, alongside the filtered-out subfolder', async () => {
+    renderTree({ tree: directTree, articles: directArticles, breadcrumb: ['books'] });
+    const searchInput = screen.getByTestId('datalake-search').querySelector('input')!;
+    await userEvent.type(searchInput, 'war');
+    expect(screen.getByTestId('datalake-node-war')).toBeTruthy();
+    expect(screen.queryByTestId('datalake-node-peace')).toBeNull();
+    expect(screen.queryByTestId('datalake-file-d1')).toBeNull();
+  });
+});
