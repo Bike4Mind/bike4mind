@@ -303,16 +303,39 @@ export const DOMAIN_GRANTS: ReadonlyMap<string, readonly EntitlementKey[]> = new
 export const KNOWN_ENTITLEMENT_KEYS: readonly EntitlementKey[] = [...allKnownEntitlementKeys()].sort();
 
 /**
+ * Entitlement key family for lake-scoped grants (`IDataLake.requiredEntitlement`,
+ * dataLakes epic #1658 lane D). A datalake entitlement is admin-authored per lake
+ * with an arbitrary slug - there is no fixed catalog of lakes to enumerate as a grant
+ * row here (and an open-core file must never name a customer's lake), so unlike every
+ * other key in this registry it can't be listed. Recognized as KNOWN by pattern
+ * instead: `datalake:<slug>`, slug matching the same rule as a lake slug
+ * (`CreateDataLakeRequestInput` in b4m-core/common/src/schemas/dataLake.ts). Deliberately
+ * NOT added to `KNOWN_ENTITLEMENT_KEYS` (that list is "products with a fixed identity";
+ * a lake slug is per-tenant data) - checked separately in `unknownEntitlementKeys`.
+ */
+const DATALAKE_ENTITLEMENT_PREFIX = 'datalake:';
+const DATALAKE_ENTITLEMENT_SLUG_REGEX = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/;
+
+/** Whether `key` (assumed already normalized) is a `datalake:<slug>` entitlement. */
+export function isDatalakeEntitlementKey(key: string): boolean {
+  return (
+    key.startsWith(DATALAKE_ENTITLEMENT_PREFIX) &&
+    DATALAKE_ENTITLEMENT_SLUG_REGEX.test(key.slice(DATALAKE_ENTITLEMENT_PREFIX.length))
+  );
+}
+
+/**
  * The entitlement keys in `keys` the registry does NOT recognize (normalized, de-duplicated).
- * Empty means every key is a known grantable product. Used to reject typo'd keys at admin
- * write boundaries before they persist as a silent no-op grant.
+ * Empty means every key is a known grantable product, or a `datalake:<slug>` grant (see
+ * `isDatalakeEntitlementKey`). Used to reject typo'd keys at admin write boundaries before
+ * they persist as a silent no-op grant.
  */
 export function unknownEntitlementKeys(keys: Iterable<string>): string[] {
   const known = new Set(KNOWN_ENTITLEMENT_KEYS);
   const unknown = new Set<string>();
   for (const raw of keys) {
     const key = normalizeTag(raw);
-    if (key && !known.has(key)) unknown.add(key);
+    if (key && !known.has(key) && !isDatalakeEntitlementKey(key)) unknown.add(key);
   }
   return [...unknown];
 }

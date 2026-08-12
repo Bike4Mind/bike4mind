@@ -91,6 +91,15 @@ describe('/api/admin/partner-signup-rules — create (POST)', () => {
     expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ domain: 'partner.com', createdBy: 'admin-1' }));
     expect(invalidatePartnerRuleCache).toHaveBeenCalledTimes(1);
   });
+
+  it('accepts a datalake:<slug> entitlement, unlisted but matching the registered key family (#1669)', async () => {
+    const body = { ...validRule, entitlements: ['datalake:acme-legal'] };
+    repo.create.mockResolvedValue({ id: 'r1', ...body, enabled: true });
+    const { req, res } = makeReqRes('POST', { body });
+    await handlers.post(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ entitlements: ['datalake:acme-legal'] }));
+  });
 });
 
 describe('/api/admin/partner-signup-rules — list (GET)', () => {

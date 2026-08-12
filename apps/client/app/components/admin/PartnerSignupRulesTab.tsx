@@ -477,6 +477,7 @@ export default function PartnerSignupRulesTab() {
               <FormLabel>Entitlements</FormLabel>
               <Autocomplete
                 multiple
+                freeSolo
                 options={ENTITLEMENT_OPTIONS}
                 value={form.entitlements}
                 onChange={(_event, value) => setForm(f => ({ ...f, entitlements: value }))}
@@ -484,8 +485,9 @@ export default function PartnerSignupRulesTab() {
                 data-testid="partner-rule-entitlements-input"
               />
               <FormHelperText>
-                Pick from the products the registry recognizes. A new product key must be added to the entitlement
-                registry before it appears here.
+                Pick from the products the registry recognizes, or type a lake grant as{' '}
+                <code>datalake:&lt;slug&gt;</code> and press Enter. A new product key must be added to the entitlement
+                registry before it appears in the list.
               </FormHelperText>
             </FormControl>
 
