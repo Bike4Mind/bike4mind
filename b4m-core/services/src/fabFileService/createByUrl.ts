@@ -30,12 +30,26 @@ type CreateFabFileByUrlAdapters = {
     upload: CreateFabFileAdapters['storage']['upload'];
     generateSignedUrl: CreateFabFileAdapters['storage']['generateSignedUrl'];
   };
+  /**
+   * Tags to stamp on the created file.
+   *
+   * An ADAPTER, deliberately not a field on `createFabFileByUrlSchema`, even though `createFabFile`
+   * takes `tags` as an ordinary parameter. A data-lake meta-tag is permission-bearing - stamping one
+   * is what puts a file in a lake - and this schema is `secureParameters`-parsed straight from an
+   * HTTP request body. A body-supplied tag would therefore turn the web URL door
+   * (`pages/api/files/createFabFileURL.ts`), which runs no lake-tag write gate, into an unguarded
+   * path into any lake. Only a server-side caller that has already run the gate can pass these.
+   * Same reasoning as `provenance` below.
+   */
+  tags?: Array<{ name: string; strength: number }>;
+  /** Where this file came from, stamped by the server that fetched it. See `CreateFabFileAdapters`. */
+  provenance?: CreateFabFileAdapters['provenance'];
 };
 
 export const createFabFileByUrl = async (
   userId: string,
   parameters: CreateFabFileByUrlParameters,
-  { db, storage }: CreateFabFileByUrlAdapters
+  { db, storage, tags, provenance }: CreateFabFileByUrlAdapters
 ) => {
   const params = secureParameters(parameters, createFabFileByUrlSchema);
   const user = await db.users.findById(userId);
@@ -54,10 +68,13 @@ export const createFabFileByUrl = async (
       type: KnowledgeType.URL,
       public: false,
       prefix: 'url',
+      // Forwarded from the adapters, not from `params` - see the `tags` note above.
+      ...(tags && { tags }),
     },
     {
       db,
       storage,
+      provenance,
     }
   );
 
