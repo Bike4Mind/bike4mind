@@ -72,7 +72,6 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   usdToCredits: vi.fn(),
   usdToCreditsStochastic: vi.fn(),
   processUrlsFromPrompt: vi.fn(),
-  getLastBuildDebugInfo: vi.fn().mockReturnValue({}),
   isOverloadedError: vi.fn().mockReturnValue(false),
   shouldTriggerFallback: vi.fn().mockReturnValue(false),
   getLlmWithFallback: vi.fn().mockResolvedValue(null),
@@ -685,7 +684,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -729,7 +731,10 @@ describe('ChatCompletionProcess', () => {
             supportsImageVariation: false,
           },
         ]);
-        mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
         mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
         mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
       };
@@ -890,7 +895,7 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([]);
+      mockedBuildAndSortMessages.mockResolvedValue({ messages: [], messageTruncation: null });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -925,7 +930,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'a duck on a bicycle' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'a duck on a bicycle' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'a duck on a bicycle' });
 
@@ -996,7 +1004,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1102,7 +1113,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1232,7 +1246,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1327,7 +1344,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1407,7 +1427,10 @@ describe('ChatCompletionProcess', () => {
             supportsImageVariation: false,
           },
         ]);
-        mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: `hi ${FORCE_FALLBACK_TEST_MARKER}` }]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: `hi ${FORCE_FALLBACK_TEST_MARKER}` }],
+          messageTruncation: null,
+        });
         mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
         mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'hi' });
 
@@ -1496,7 +1519,10 @@ describe('ChatCompletionProcess', () => {
             supportsImageVariation: false,
           },
         ]);
-        mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: `hi ${FORCE_FALLBACK_TEST_MARKER}` }]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: `hi ${FORCE_FALLBACK_TEST_MARKER}` }],
+          messageTruncation: null,
+        });
         mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
         mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'hi' });
 
@@ -1548,7 +1574,10 @@ describe('ChatCompletionProcess', () => {
             supportsImageVariation: false,
           },
         ]);
-        mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: `hi ${FORCE_FALLBACK_TEST_MARKER}` }]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: `hi ${FORCE_FALLBACK_TEST_MARKER}` }],
+          messageTruncation: null,
+        });
         mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
         mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'hi' });
 
@@ -1591,7 +1620,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1640,7 +1672,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1689,7 +1724,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1757,7 +1795,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1818,7 +1859,10 @@ describe('ChatCompletionProcess', () => {
             supportsImageVariation: false,
           },
         ]);
-        mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
         mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
         mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1882,7 +1926,10 @@ describe('ChatCompletionProcess', () => {
         },
       ] as any);
       mockedBuildAndSortMessages.mockClear();
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }] as any);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
@@ -1972,7 +2019,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: params.message }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: params.message }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: params.message });
 
@@ -2063,7 +2113,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ] as any);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }] as any);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
@@ -2129,7 +2182,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: params.message }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: params.message }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: params.message });
 
@@ -2269,7 +2325,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ] as any);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }] as any);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
@@ -2490,7 +2549,10 @@ describe('ChatCompletionProcess', () => {
 
     function setupTimeoutMocks() {
       mockedGetAvailableModels.mockResolvedValue([modelInfo]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
       // Timeout errors are retryable
@@ -2663,7 +2725,10 @@ describe('ChatCompletionProcess', () => {
 
     function setupStreamIdleTimeoutMocks() {
       mockedGetAvailableModels.mockResolvedValue([modelInfo]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
       mockedShouldTriggerFallback.mockReturnValue(true);

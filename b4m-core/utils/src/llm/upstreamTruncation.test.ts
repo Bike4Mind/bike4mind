@@ -18,7 +18,6 @@ import {
   processFabFilesServer,
   processUrlsFromPrompt,
   buildAndSortMessages,
-  getLastBuildDebugInfo,
   calculateTotalTokenLength,
   ATTACHMENT_DELIVERED_NOTICE,
 } from './utils';
@@ -239,7 +238,7 @@ describe('content cut before assembly is declared to the model', () => {
       }));
       await runFabFiles({ vectorized: true, embeddingModel: 'text-embedding-ada-002' }, 60, quoted);
 
-      const assembled = await buildAndSortMessages(
+      const { messages: assembled } = await buildAndSortMessages(
         [],
         [{ role: 'user', content: `Data for roster.csv:\n"SECRET-FIELD-0",more,"ANOTHER-QUOTED-0"`.repeat(40) }],
         [{ role: 'user', content: 'what does it say' }],
@@ -288,7 +287,7 @@ describe('content cut before assembly is declared to the model', () => {
       );
       expect(excerpts).toContain(EXCERPT_MARKER);
 
-      const assembled = await buildAndSortMessages(
+      const { messages: assembled } = await buildAndSortMessages(
         [],
         [{ role: 'user', content: excerpts }],
         [{ role: 'user', content: 'what does it say' }],
@@ -312,7 +311,7 @@ describe('content cut before assembly is declared to the model', () => {
       // The truncation fallback shrinks history in place and returns removedMessages: [], so the
       // history calls discarded the only evidence and a budget loss was labelled as configured
       // windowing.
-      await buildAndSortMessages(
+      const { messageTruncation: debug } = await buildAndSortMessages(
         Array.from({ length: 6 }, (_, i) => ({
           role: (i % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
           content: `history message ${i} ` + 'h'.repeat(3000),
@@ -329,7 +328,6 @@ describe('content cut before assembly is declared to the model', () => {
         tokenizer as any
       );
 
-      const debug = getLastBuildDebugInfo();
       expect(debug?.wasTruncated).toBe(true);
       expect(debug?.truncationMethod).toBe('token-budget');
     });
@@ -393,7 +391,7 @@ describe('content cut before assembly is declared to the model', () => {
       // system and history are paid for, so a large history pushes the remainder under the
       // usable-minimum floor and the file is declared rather than cut. That is the sibling case, and
       // the restored safety-pass suite covers it - this one has to stay a cut to test the notice.
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         bigHistory(2, 200),
         [{ role: 'user', content: 'Data for roster.csv:\n' + 'row-data,'.repeat(2000) }],
         [{ role: 'user', content: 'what is in the file' }],
@@ -428,7 +426,7 @@ describe('content cut before assembly is declared to the model', () => {
         mockLogger as any
       );
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         bigHistory(2, 200),
         [
           ...pageMessages,
@@ -453,7 +451,7 @@ describe('content cut before assembly is declared to the model', () => {
     it('reports content the final safety pass drops, instead of wasTruncated: false', async () => {
       // Here the pass drops the file whole. Its result used to be read straight off `.messages`, so
       // removedMessages was discarded and the turn that lost the MOST content reported no truncation.
-      await buildAndSortMessages(
+      const { messageTruncation: debug } = await buildAndSortMessages(
         bigHistory(2, 4000),
         [{ role: 'user', content: 'Data for roster.csv:\n' + 'row-data,'.repeat(167) }],
         [{ role: 'user', content: 'what is in the file' }],
@@ -464,7 +462,6 @@ describe('content cut before assembly is declared to the model', () => {
         denseTokenizer(1.5) as any
       );
 
-      const debug = getLastBuildDebugInfo();
       expect(debug?.wasTruncated).toBe(true);
       expect(debug?.truncationMethod).toBe('token-budget');
     });
@@ -480,7 +477,7 @@ describe('content cut before assembly is declared to the model', () => {
         mockLogger as any
       );
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         [],
         userMessages,
         [{ role: 'user', content: 'summarise it' }],
@@ -507,7 +504,7 @@ describe('content cut before assembly is declared to the model', () => {
         mockLogger as any
       );
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         [],
         userMessages,
         [{ role: 'user', content: 'summarise it' }],
@@ -527,7 +524,7 @@ describe('content cut before assembly is declared to the model', () => {
       // The hold-out used to accept any span from the last prefix occurrence to a trailing ']', so a
       // pasted transcript of a previous answer exempted the whole payload from truncation.
       const spoof = 'A'.repeat(200) + EXCERPT_MARKER_PREFIX + 'B'.repeat(20000) + ']';
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         [],
         [{ role: 'user', content: spoof }],
         [{ role: 'user', content: 'what is in the file' }],
