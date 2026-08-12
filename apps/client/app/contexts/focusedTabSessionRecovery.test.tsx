@@ -296,11 +296,10 @@ describe('focused-tab session recovery (#1691)', () => {
       closeAndScheduleReconnect();
     });
 
-    // Run out the full 20-attempt WS reconnect budget while the outage is active. Every probe
-    // attempt during this window 503s and does nothing (a 503 never reaches the interceptor's
-    // 401/refresh branch at all) - don't assert zero requests, assert the outcome. This also
-    // covers onReconnectStop's own exhaustion-triggered probe (FP-1): it fires but 503s too,
-    // since the outage is still active at the exact moment the budget runs out.
+    // Run out the full 20-attempt WS reconnect budget while the outage is active. Every failed
+    // attempt's own onClose fires a probe (including the 20th, exhausting one) and every one
+    // 503s and does nothing (a 503 never reaches the interceptor's 401/refresh branch at all) -
+    // don't assert zero requests, assert the outcome.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(400_000);
     });

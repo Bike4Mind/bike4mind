@@ -206,27 +206,39 @@ const MIN_REVALIDATE_DELAY_MS = 5_000;
  *  just as a bounded interval instead of an unconditional probe. */
 const UNREADABLE_EXP_FALLBACK_MS = 5 * 60_000;
 
+/** Small positive margin PAST the exp claim, not a pre-expiry buffer like
+ *  REVALIDATE_EXPIRY_BUFFER_MS above. The server only rotates the token once it has actually
+ *  expired (pages/api/identify.ts's own refresh branch), and the standard JWT auth middleware
+ *  already rejects an expired token before that - so a probe fired BEFORE the deadline just
+ *  gets the unchanged token back and, since the delay floors at MIN_REVALIDATE_DELAY_MS as
+ *  expiry approaches, would otherwise poll every few seconds for nothing until the deadline
+ *  actually arrives. This margin only exists to tolerate clock skew between this tab and the
+ *  server, not to refresh early. */
+const POST_EXPIRY_PROBE_MARGIN_MS = 2_000;
+
 /**
  * Pure: how long until the current access token is worth a liveness probe. `null` when there
- * is no token to schedule against. Mirrors shouldRevalidateOnFocus's exp-claim buffer, but as
- * a delay to arm a timer with rather than a yes/no gate for an event that already happened.
+ * is no token to schedule against. Deliberately targets just AFTER the exp claim (see
+ * POST_EXPIRY_PROBE_MARGIN_MS) rather than shouldRevalidateOnFocus's pre-expiry buffer above -
+ * that buffer suits a one-shot event-triggered check; a self-re-arming timer has no such
+ * latency to hide and firing early only wastes round trips.
  */
 export function nextRevalidationDelayMs(token: string | null, nowMs: number = Date.now()): number | null {
   if (!token) return null;
   const expMs = decodeTokenExpiryMs(token);
   if (expMs === null) return UNREADABLE_EXP_FALLBACK_MS;
-  return Math.max(MIN_REVALIDATE_DELAY_MS, expMs - REVALIDATE_EXPIRY_BUFFER_MS - nowMs);
+  return Math.max(MIN_REVALIDATE_DELAY_MS, expMs - nowMs + POST_EXPIRY_PROBE_MARGIN_MS);
 }
 
 /**
  * Self-re-arming timer that keeps a focused tab's session fresh even when nothing else ever
  * probes: revalidateSessionOnFocus (above) only fires from a focus/visibilitychange event,
  * which an always-visible tab never sends, and an established WebSocket carries no further
- * auth check once open. Fires probeIdentity near the token's exp claim, then re-arms against
- * whatever the current token is afterward - regardless of whether that probe changed it, so a
- * single failed round trip can't permanently stop the loop. A token change from any other path
- * (a reactive 401 refresh, logout) also re-arms immediately rather than waiting for the stale
- * timer. Returns a disposer; call once per app lifetime (see providers.tsx).
+ * auth check once open. Fires probeIdentity shortly after the token's exp claim, then re-arms
+ * against whatever the current token is afterward - regardless of whether that probe changed
+ * it, so a single failed round trip can't permanently stop the loop. A token change from any
+ * other path (a reactive 401 refresh, logout) also re-arms immediately rather than waiting for
+ * the stale timer. Returns a disposer; call once per app lifetime (see providers.tsx).
  */
 export function scheduleSessionRevalidation(queryClient: QueryClient): () => void {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -236,7 +248,17 @@ export function scheduleSessionRevalidation(queryClient: QueryClient): () => voi
     const delay = nextRevalidationDelayMs(useAccessToken.getState().accessToken);
     if (delay === null) return;
     timer = setTimeout(() => {
-      void probeIdentity(queryClient).then(arm);
+      const { accessToken, mfaPending, expired } = useAccessToken.getState();
+      // Mirrors shouldRevalidateOnFocus's non-visibility gates: an mfaPending or already-torn-
+      // down session has nothing to revalidate, and a public-path tab (e.g. sitting on /login)
+      // has no session to keep warm. Skip the probe but still re-arm - the delay recomputes
+      // against whatever the token is by the time this next fires, so a session that later
+      // clears mfaPending (or navigates off a public path) picks back up on its own.
+      if (accessToken && !mfaPending && !expired && !isPublicPath(window.location.pathname)) {
+        void probeIdentity(queryClient).then(arm);
+      } else {
+        arm();
+      }
     }, delay);
   };
 

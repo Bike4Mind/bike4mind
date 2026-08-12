@@ -193,9 +193,9 @@ describe('nextRevalidationDelayMs - pure delay predicate for scheduleSessionReva
     expect(nextRevalidationDelayMs(null, nowMs)).toBeNull();
   });
 
-  it('schedules near the exp claim, minus the same buffer shouldRevalidateOnFocus uses', () => {
+  it('schedules just AFTER the exp claim, not before - the server only rotates a token once it has actually expired', () => {
     const token = makeToken({ exp: Math.floor(nowMs / 1000) + 600 }); // 10 minutes out
-    expect(nextRevalidationDelayMs(token, nowMs)).toBe(600_000 - 30_000);
+    expect(nextRevalidationDelayMs(token, nowMs)).toBe(600_000 + 2_000);
   });
 
   it('floors at a minimum delay for an already-expired token, instead of a near-zero hot loop', () => {
@@ -219,18 +219,37 @@ describe('scheduleSessionRevalidation - expiry-driven timer for a tab that never
     vi.useRealTimers();
   });
 
-  it('probes once the token nears its exp claim, with no focus event', async () => {
+  it('probes shortly AFTER the token exp claim, not before, with no focus event', async () => {
     const nowMs = Date.now();
-    const token = makeToken({ exp: Math.floor(nowMs / 1000) + 60 }); // 60s out; buffer is 30s
+    const token = makeToken({ exp: Math.floor(nowMs / 1000) + 60 }); // 60s out; margin is 2s past
     useAccessToken.setState({ accessToken: token, expired: false, expiredReason: null, mfaPending: false });
     const apiGet = vi.spyOn(api, 'get').mockResolvedValue({ data: { user: {}, accessToken: token } });
 
     const dispose = scheduleSessionRevalidation(makeQueryClient(vi.fn()));
 
-    await vi.advanceTimersByTimeAsync(20_000);
+    await vi.advanceTimersByTimeAsync(59_000);
     expect(apiGet).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(apiGet).toHaveBeenCalledWith('/api/identify', { timeout: 10000 });
+
+    dispose();
+  });
+
+  it('skips the probe while mfaPending, expired, or on a public path, but still re-arms', async () => {
+    const nowMs = Date.now();
+    const token = makeToken({ exp: Math.floor(nowMs / 1000) + 60 });
+    useAccessToken.setState({ accessToken: token, expired: false, expiredReason: null, mfaPending: true });
+    const apiGet = vi.spyOn(api, 'get').mockResolvedValue({ data: { user: {}, accessToken: token } });
+
+    const dispose = scheduleSessionRevalidation(makeQueryClient(vi.fn()));
+
+    await vi.advanceTimersByTimeAsync(62_000);
+    expect(apiGet).not.toHaveBeenCalled();
+
+    // mfaPending clears; the re-armed timer (same token, same delay computation) picks it up.
+    useAccessToken.setState({ mfaPending: false });
+    await vi.advanceTimersByTimeAsync(62_000);
     expect(apiGet).toHaveBeenCalledWith('/api/identify', { timeout: 10000 });
 
     dispose();
@@ -264,7 +283,7 @@ describe('scheduleSessionRevalidation - expiry-driven timer for a tab that never
     const soonToken = makeToken({ exp: Math.floor(nowMs / 1000) + 60 });
     useAccessToken.setState({ accessToken: soonToken });
 
-    await vi.advanceTimersByTimeAsync(35_000);
+    await vi.advanceTimersByTimeAsync(62_000);
     expect(apiGet).toHaveBeenCalledWith('/api/identify', { timeout: 10000 });
 
     dispose();

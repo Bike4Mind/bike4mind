@@ -252,10 +252,10 @@ describe('WebsocketProvider - reconnect recovery on a token change (no focus eve
   });
 
   // A tab that never blurs never sends the visibilitychange/focus event the pulse above
-  // relies on - a token refresh (from ANY path: probeIdentity, the 401 interceptor, this
-  // provider's own onReconnectStop probe) is the only signal such a tab can produce. This
-  // covers the FP-1 fix: once the reconnect budget is exhausted, a token change alone must
-  // still reset it.
+  // relies on - a token refresh (from ANY path: the exhausting attempt's own onClose probe,
+  // scheduleSessionRevalidation's timer, a reactive 401 refresh) is the only signal such a tab
+  // can produce. This covers the FP-1 fix: once the reconnect budget is exhausted, a token
+  // change alone must still reset it.
   it('pulses the reconnect budget when the access token changes after exhaustion, with zero focus events', async () => {
     const rendered = render(
       React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div'))
@@ -289,6 +289,39 @@ describe('WebsocketProvider - reconnect recovery on a token change (no focus eve
     h.capturedUrls = [];
 
     h.accessTokenState.accessToken = 'tok-2';
+    await act(async () => {
+      rendered.rerender(
+        React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div'))
+      );
+    });
+
+    expect(h.capturedUrls).not.toContain(null);
+  });
+
+  // The pulse hands the socket a fresh reconnect budget immediately, not only once it opens -
+  // otherwise a second trigger (another token change, or a refocus) landing anywhere in that
+  // still-connecting window would pulse AGAIN mid-backoff: the exact stale-timer/thundering-herd
+  // case the pulse's own guard comment warns against, and onOpen never fires to clear the guard
+  // if the reconnect fails again.
+  it('does not pulse a second time from a token change landing mid-backoff, before the pulsed attempt opens', async () => {
+    const rendered = render(
+      React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div'))
+    );
+    const opts = h.capturedOptions.current;
+    await act(async () => {
+      opts.onReconnectStop(20);
+    });
+
+    h.accessTokenState.accessToken = 'tok-2';
+    await act(async () => {
+      rendered.rerender(
+        React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div'))
+      );
+    });
+    h.capturedUrls = [];
+
+    // No onOpen in between - the pulsed attempt is still connecting when a second change lands.
+    h.accessTokenState.accessToken = 'tok-3';
     await act(async () => {
       rendered.rerender(
         React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div'))

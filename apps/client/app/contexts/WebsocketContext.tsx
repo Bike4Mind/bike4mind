@@ -166,23 +166,13 @@ export const WebsocketProvider = ({ children, url }: Props) => {
     },
     onReconnectStop(numAttempts) {
       console.log('ws reconnect stopped after', numAttempts, 'attempts');
+      // No separate probe needed here: the fork calls onClose and onReconnectStop
+      // synchronously in the same close-event handler (see attach-shared-listeners.ts), so
+      // the FINAL failed attempt's own onClose above has already fired probeIdentity - a
+      // second call here would just hit probeIdentity's own in-flight guard and no-op. If
+      // that probe refreshes the token, the accessToken effect below turns it into a
+      // reconnect pulse with no focus event needed.
       reconnectExhaustedRef.current = true;
-
-      // Exhaustion itself is an auth signal for a focused tab: nothing else will probe (no
-      // refocus is coming if the tab never blurred), so treat "ran out of reconnect attempts"
-      // the same as a failed connect attempt. If the token really did expire, this refreshes
-      // it - which the accessToken effect below turns into a reconnect pulse, closing the loop
-      // with no polling and no dependency on a focus event ever firing.
-      if (
-        shouldProbeOnFailedWsConnect({
-          openedThisAttempt: false,
-          accessToken,
-          mfaPending: useAccessToken.getState().mfaPending,
-          pathname: window.location.pathname,
-        })
-      ) {
-        void probeIdentity(queryClient);
-      }
     },
 
     onMessage: event => {
@@ -266,6 +256,12 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   // refresh) - see each effect's own comment for why a single trigger isn't enough.
   const pulseReconnect = useCallback(() => {
     if (!reconnectExhaustedRef.current) return;
+    // Clear it now, not on the next onOpen: the fresh budget this pulse grants means the
+    // socket is no longer "exhausted" the instant we hand it that budget, regardless of
+    // whether the resulting attempt succeeds. Without this, a second trigger (another token
+    // change, or a refocus) arriving before the pulsed attempt opens would pulse AGAIN
+    // mid-backoff - the exact stale-timer/thundering-herd case the comment above warns about.
+    reconnectExhaustedRef.current = false;
     setForceDisconnected(true);
   }, []);
 
