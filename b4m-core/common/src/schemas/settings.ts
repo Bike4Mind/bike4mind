@@ -271,6 +271,15 @@ export const SettingKeySchema = z.enum([
   'dataLakeSearchMaxFiles',
   'dataLakeSearchMaxChunks',
 
+  // DATA LAKE COST GOVERNANCE (spend levers - see resolveSpendLevers)
+  'dataLakeEmbeddingSpendEnabled',
+  'dataLakeEmbeddingBudgetPerRunUsd',
+  'dataLakeEmbeddingBudgetPerLakeUsd',
+  'dataLakeEmbeddingBudgetPerPeriodUsd',
+  'dataLakeEmbeddingBudgetPeriodHours',
+  'dataLakeEmbeddingMaxCallsPerMinute',
+  'dataLakeVectorizeChunkBatchSize',
+
   // New MaxContentLength setting
   'MaxContentLength',
 
@@ -687,6 +696,28 @@ function makeStringSetting(
  */
 export const DATA_LAKE_SEARCH_MAX_FILES_DEFAULT = 5_000;
 export const DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT = 100_000;
+
+/**
+ * Data-lake embedding SPEND levers: defaults and hard rails, shared by the admin-settings
+ * definitions below and resolveSpendLevers in the dataLakeService (imported there so the two
+ * cannot drift). Unlike the scan budgets above, these govern money, so their semantics differ
+ * deliberately: 0 is a VALID operator value meaning "stop spending", only an absent setting
+ * falls back to the default, and an unparseable one halts the spend path rather than resuming.
+ * The MAX_* rails are the "adjustable is not unbounded" ceilings - the resolver clamps to them
+ * even if a larger value is somehow stored.
+ */
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_DEFAULT = 5;
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_MAX = 500;
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_DEFAULT = 100;
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_MAX = 10_000;
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_DEFAULT = 50;
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_MAX = 5_000;
+export const DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_DEFAULT = 24;
+export const DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_MAX = 720; // 30 days
+export const DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_DEFAULT = 120;
+export const DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_MAX = 10_000;
+export const DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT = 50;
+export const DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_MAX = 500;
 
 function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: number } & BaseSetting) {
   let numberSchema = z.coerce.number();
@@ -1298,6 +1329,23 @@ export const API_SERVICE_GROUPS = {
       { key: 'defaultEmbeddingModel', order: 1 },
       { key: 'dataLakeSearchMaxFiles', order: 2 },
       { key: 'dataLakeSearchMaxChunks', order: 3 },
+    ],
+  },
+  DATA_LAKE_COST: {
+    id: 'dataLakeCostGovernance',
+    name: 'Data Lake Cost Governance',
+    description:
+      'Spend levers for data-lake embedding work (ingestion, reprocessing, convergence). ' +
+      'Budgets are USD; 0 means stop spending, not "use the default".',
+    icon: 'Savings',
+    settings: [
+      { key: 'dataLakeEmbeddingSpendEnabled', order: 1 },
+      { key: 'dataLakeEmbeddingBudgetPerRunUsd', order: 2 },
+      { key: 'dataLakeEmbeddingBudgetPerLakeUsd', order: 3 },
+      { key: 'dataLakeEmbeddingBudgetPerPeriodUsd', order: 4 },
+      { key: 'dataLakeEmbeddingBudgetPeriodHours', order: 5 },
+      { key: 'dataLakeEmbeddingMaxCallsPerMinute', order: 6 },
+      { key: 'dataLakeVectorizeChunkBatchSize', order: 7 },
     ],
   },
   VOICE_SESSION: {
@@ -2972,6 +3020,92 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 3,
+  }),
+  // Data-lake cost governance. These are SPEND levers, not scan budgets: 0 is a valid value
+  // meaning "stop spending" (min: 0, unlike the search budgets above), the defaults apply only
+  // when a setting is absent, and resolveSpendLevers (dataLakeService) halts - never resumes at
+  // a default - on an unparseable stored value. Rails (max) mirror the MAX_* constants.
+  dataLakeEmbeddingSpendEnabled: makeBooleanSetting({
+    key: 'dataLakeEmbeddingSpendEnabled',
+    name: 'Data Lake Embedding Spend Enabled',
+    defaultValue: true,
+    description:
+      'Master switch for data-lake embedding spend (ingestion, reprocessing, convergence). Off halts all provider embedding calls on those paths; cached embeddings still apply.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 1,
+  }),
+  dataLakeEmbeddingBudgetPerRunUsd: makeNumberSetting({
+    key: 'dataLakeEmbeddingBudgetPerRunUsd',
+    name: 'Embedding Budget Per Run (USD)',
+    defaultValue: DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_MAX,
+    description:
+      'Most USD one ingestion/reprocess run (upload batch) may spend on embedding calls. 0 stops runs from spending at all.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 2,
+  }),
+  dataLakeEmbeddingBudgetPerLakeUsd: makeNumberSetting({
+    key: 'dataLakeEmbeddingBudgetPerLakeUsd',
+    name: 'Embedding Budget Per Lake (USD)',
+    defaultValue: DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_MAX,
+    description:
+      'Most USD one data lake may spend on embedding calls over its lifetime. 0 stops all spend for every lake.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 3,
+  }),
+  dataLakeEmbeddingBudgetPerPeriodUsd: makeNumberSetting({
+    key: 'dataLakeEmbeddingBudgetPerPeriodUsd',
+    name: 'Embedding Budget Per Period (USD)',
+    defaultValue: DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_MAX,
+    description:
+      'Most USD the whole platform may spend on data-lake embedding calls per rolling period (see the period-hours setting). 0 stops all spend.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 4,
+  }),
+  dataLakeEmbeddingBudgetPeriodHours: makeNumberSetting({
+    key: 'dataLakeEmbeddingBudgetPeriodHours',
+    name: 'Embedding Budget Period (hours)',
+    defaultValue: DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_DEFAULT,
+    min: 1,
+    max: DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_MAX,
+    description:
+      'Length of the per-period budget window in hours. Not a spend value itself, so 0 is not meaningful here (min 1).',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 5,
+  }),
+  dataLakeEmbeddingMaxCallsPerMinute: makeNumberSetting({
+    key: 'dataLakeEmbeddingMaxCallsPerMinute',
+    name: 'Embedding Max Calls Per Minute',
+    defaultValue: DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_MAX,
+    description:
+      'Most provider embedding API calls per minute across all data-lake work. The real throttle in front of the embed call (the queue concurrency in infra is a deploy-time constant, not this lever). 0 stops all calls.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 6,
+  }),
+  dataLakeVectorizeChunkBatchSize: makeNumberSetting({
+    key: 'dataLakeVectorizeChunkBatchSize',
+    name: 'Vectorize Chunk Batch Size',
+    defaultValue: DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT,
+    min: 1,
+    max: DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_MAX,
+    description:
+      'How many chunks the chunk handler packs into one vectorize-queue message. Smaller batches smooth the fan-out; not a spend value, so min 1.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 7,
   }),
   // Analytics Bot (existing production bot - DO NOT CHANGE)
   slackSigningSecret: makeStringSetting({
