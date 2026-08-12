@@ -56,6 +56,14 @@ export interface IFabFileChunk {
   fabFileId: string;
   text: string;
   tokenCount: number;
+  /**
+   * Length of `text` in Unicode CODE POINTS (countCodePoints on the write path, $strLenCP in the
+   * backfill - the two must agree, which is why this is NOT UTF-16 `text.length`). Written at
+   * chunk time; absent on chunks that predate the field until
+   * packages/scripts/datalake/backfill-chunk-char-length.ts runs. Unit basis for the lake
+   * health predicates (#1666), which are stated in characters because the serve cap is.
+   */
+  charLength?: number;
   vector?: number[];
   /**
    * Embedding model this chunk's vector was generated with. Chunks can outlive their file's
@@ -129,6 +137,15 @@ export interface IFabFile {
   chunkCount?: number;
   /** Number of chunks that have been vectorized. */
   vectorizedChunkCount?: number;
+  /**
+   * Sum of this file's chunks' `charLength` (Unicode code points), stamped by chunkFabfile in
+   * the same update as `chunkCount`. The chunk-derived counterpart of `extractedCharCount`,
+   * which a DIFFERENT extractor writes lazily on the composer dry-run path - the two
+   * legitimately drift and must not be conflated. Nullable for the same reason as
+   * extractedCharCount: a content rewrite nulls it via FAB_FILE_CONTENT_REWRITE_PATCH (Mongoose
+   * strips undefined from $set) and the re-chunk that follows re-stamps it.
+   */
+  chunkedCharCount?: number | null;
 
   /** Whether this FabFile is currently being chunked. */
   isChunking?: boolean;
@@ -254,8 +271,11 @@ export interface IFabFileDocument extends IFabFile, IShareableDocument {}
  *
  * null, NOT undefined - Mongoose strips undefined from a `$set`, so the undefined form of this leaves
  * the stale number in place and only looks correct.
+ *
+ * Also clears `chunkedCharCount`, the chunk-derived sum: a content rewrite invalidates the chunks
+ * it was summed from, and the re-chunk that follows re-stamps it.
  */
-export const FAB_FILE_CONTENT_REWRITE_PATCH = { extractedCharCount: null } as const;
+export const FAB_FILE_CONTENT_REWRITE_PATCH = { extractedCharCount: null, chunkedCharCount: null } as const;
 
 export interface IFabFileListItem {
   userId: string;
@@ -336,6 +356,12 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
   ): Promise<{ id: string; text: string }[]>;
   /** Every chunk of a file, vectorless included - lets a paging caller tell a whole file from a slice. */
   countByFabFileId(fabFileId: string): Promise<number>;
+  /** One page of chunk ids still missing `charLength`, ascending by `_id` - backfill's keyset cursor. */
+  findChunkIdsMissingCharLength(options?: { limit?: number; afterChunkId?: string }): Promise<string[]>;
+  /** Server-side $strLenCP stamp of `charLength` on the given chunks; chunk text never leaves the DB. */
+  backfillCharLengthByIds(chunkIds: string[]): Promise<number>;
+  /** Sum of a file's chunks' charLength, unstamped chunks counted as 0. */
+  sumChunkCharLengthByFabFileId(fabFileId: string): Promise<number>;
 }
 
 /**
@@ -680,7 +706,16 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Authoritative lake stats recomputed from source records via an aggregate (NOT
    * find().length). Counts only live files (not archived, not deleted).
    */
-  computeDataLakeStats(scope: DataLakeMembershipScope): Promise<{ fileCount: number; totalSizeBytes: number }>;
+  computeDataLakeStats(
+    scope: DataLakeMembershipScope
+  ): Promise<{ fileCount: number; totalSizeBytes: number; totalChunkedChars: number }>;
+  /**
+   * One page of file ids that have chunks but no `chunkedCharCount` (missing or nulled by a
+   * content rewrite), ascending by `_id` - the char-length backfill's phase-2 cursor.
+   */
+  findFileIdsMissingChunkedCharCount(options?: { limit?: number; afterFileId?: string }): Promise<string[]>;
+  /** Stamp a file's recomputed `chunkedCharCount` - the char-length backfill's phase-2 write. */
+  setChunkedCharCount(id: string, chunkedCharCount: number): Promise<void>;
   /**
    * Distinct live file count per lake, keyed by `datalakeTag`. Same predicate as
    * computeDataLakeStats, so what a browse surface displays cannot disagree with a lake's

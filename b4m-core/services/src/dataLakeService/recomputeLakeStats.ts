@@ -36,7 +36,7 @@ export const recomputeLakeStats = async (
   lake: Pick<IDataLakeDocument, 'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId'>,
   { db }: RecomputeLakeStatsAdapters,
   opts?: { skipActivation?: boolean }
-): Promise<{ fileCount: number; totalSizeBytes: number }> => {
+): Promise<{ fileCount: number; totalSizeBytes: number; totalChunkedChars: number }> => {
   const stats = await db.fabFiles.computeDataLakeStats(lakeMembershipScope(lake));
   await db.dataLakes.setStats(lake.id, stats);
   // Emptying a lake never sends it back to draft - the transition is one-way, so a lake the owner

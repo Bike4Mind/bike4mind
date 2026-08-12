@@ -56,7 +56,7 @@ describe('tagService - update', () => {
     mockFabFileRepo = {
       updateTagsByUserId: vi.fn().mockResolvedValue(0),
       dedupeTagByUserId: vi.fn().mockResolvedValue(0),
-      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 }),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
     };
     mockDataLakeRepo = {
       find: vi.fn().mockResolvedValue([]),
@@ -454,7 +454,7 @@ describe('tagService - update', () => {
       await update(userId, { id: existingTagId, name: 'archived' }, adapters);
 
       expect(mockDataLakeRepo.find).toHaveBeenCalledWith({ createdByUserId: { $in: [userId] } });
-      expect(mockDataLakeRepo.setStats).toHaveBeenCalledWith('lake1', { fileCount: 0, totalSizeBytes: 0 });
+      expect(mockDataLakeRepo.setStats).toHaveBeenCalledWith('lake1', { fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 });
     });
 
     it('recomputes stats for a lake whose prefix the NEW name matches (a possible join)', async () => {
@@ -463,7 +463,7 @@ describe('tagService - update', () => {
 
       await update(userId, { id: existingTagId, name: 'lk:invoices' }, adapters);
 
-      expect(mockDataLakeRepo.setStats).toHaveBeenCalledWith('lake1', { fileCount: 0, totalSizeBytes: 0 });
+      expect(mockDataLakeRepo.setStats).toHaveBeenCalledWith('lake1', { fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 });
     });
 
     it('does not recompute when neither the old nor the new name matches any prefix', async () => {

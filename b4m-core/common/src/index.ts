@@ -63,6 +63,7 @@ export * from './utils/artifactHelpers';
 export * from './utils/creditTransactionDisplay';
 export * from './utils/requireEnv';
 export * from './utils/internalStaffDomains';
+export * from './utils/countCodePoints';
 export * from './utils/modelHelpers';
 export * from './utils/activity';
 export * from './utils/sseEvents';

@@ -737,6 +737,7 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
         'requiredUserTag',
         'slug',
         'status',
+        'totalChunkedChars',
         'totalSizeBytes',
         'updatedAt',
       ].sort()
@@ -1177,7 +1178,7 @@ describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
       findByContentHashesInDataLake: vi.fn().mockResolvedValue([{ id: 'live1', contentHash: 'h1' }]),
       unarchiveByDataLakeTag: vi.fn().mockResolvedValue(1),
       deleteManyInIds: vi.fn().mockResolvedValue(undefined),
-      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 1, totalSizeBytes: 10 }),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 1, totalSizeBytes: 10, totalChunkedChars: 0 }),
     };
     const dataLakes = {
       findById: vi.fn().mockResolvedValue(lake({ status: 'archived' })),
@@ -1203,7 +1204,7 @@ describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
       findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
       unarchiveByDataLakeTag: vi.fn().mockResolvedValue(0),
       deleteManyInIds: vi.fn().mockResolvedValue(undefined),
-      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 }),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
     };
     const dataLakes = {
       findById: vi.fn().mockResolvedValue(lake({ status: 'archived', filesArchivedAt: new Date('2026-05-01') })),
@@ -1258,7 +1259,7 @@ describe('restoreDeletedDataLake — deleted→active with dedup', () => {
       // a live file with hash h1 exists -> d1 is a dup and must be excluded from un-delete.
       findByContentHashesInDataLake: vi.fn().mockResolvedValue([{ id: 'live1', contentHash: 'h1' }]),
       undeleteByDataLakeTag: vi.fn().mockResolvedValue(1),
-      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 1, totalSizeBytes: 10 }),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 1, totalSizeBytes: 10, totalChunkedChars: 0 }),
     };
     const dataLakes = {
       findById: vi.fn().mockResolvedValue(lake({ status: 'deleted' })),
@@ -1305,7 +1306,7 @@ describe('archiveDataLake - retrieval-index removal', () => {
       },
       fabFiles: {
         archiveByDataLakeTag: vi.fn().mockResolvedValue(2),
-        computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 }),
+        computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
         findIdsByDataLakeTag: vi.fn().mockResolvedValue(memberIds),
         hasArchivedByDataLakeTag: vi.fn().mockResolvedValue(false),
       },
@@ -1574,7 +1575,7 @@ describe('teardown stamp bookkeeping', () => {
         findDeletedByDataLakeTag: vi.fn().mockResolvedValue([]),
         findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
         undeleteByDataLakeTag: vi.fn().mockResolvedValue(2),
-        computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 2, totalSizeBytes: 20 }),
+        computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 2, totalSizeBytes: 20, totalChunkedChars: 0 }),
       },
     },
   });
@@ -1832,7 +1833,7 @@ describe('reconcileStuckBatches — guarded read-time reconciliation', () => {
   const makeDb = () => ({
     dataLakes: { findById: vi.fn().mockResolvedValue(lake()), setStats: vi.fn(), activateIfDraft: vi.fn() },
     batches: { markTerminalIfActive: vi.fn().mockResolvedValue(batch({ status: 'completed_with_errors' })) },
-    fabFiles: { computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 }) },
+    fabFiles: { computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }) },
   });
   let db: ReturnType<typeof makeDb>;
   beforeEach(() => {
@@ -1958,7 +1959,7 @@ describe('removeFileFromDataLake — single-file removal', () => {
       fabFiles: {
         findById: vi.fn().mockResolvedValue(file),
         pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
-        computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 }),
+        computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
       },
     },
   });
@@ -1971,7 +1972,7 @@ describe('removeFileFromDataLake — single-file removal', () => {
     // removal) and never a soft-delete. The other lake's tags are untouched.
     expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake', 'lk:invoices']);
     expect(adapters.db.dataLakes.setStats).toHaveBeenCalled();
-    expect(result).toEqual({ success: true, fileCount: 0, totalSizeBytes: 0 });
+    expect(result).toEqual({ success: true, fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 });
   });
 
   it('removes a file whose only membership signal is a prefixed tag', async () => {
@@ -2082,7 +2083,7 @@ describe('removeFileFromDataLake — single-file removal', () => {
     // Same tag-pull path as the multi-lake case - the service has no cascade-delete branch,
     // so "last lake" is not special: the tag is pulled and the file is left to exist.
     expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake']);
-    expect(result).toEqual({ success: true, fileCount: 0, totalSizeBytes: 0 });
+    expect(result).toEqual({ success: true, fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 });
   });
 
   it('allows an admin who is not the creator', async () => {
