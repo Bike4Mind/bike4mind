@@ -337,9 +337,9 @@ describe('GET /api/publish/serve - gated-bundle loader shell', () => {
     const data = res._getData() as string;
     expect(data).toContain('<iframe id="b4m-frame" sandbox="allow-scripts"');
     expect(data).not.toContain('allow-same-origin');
-    expect(data).toContain("localStorage.getItem('access-token-storage')");
+    expect(data).toContain("fetch('/api/auth/refreshToken'");
     expect(data).toContain("'raw=1'");
-    // CSP permits the shell's inline bootstrap + the same-origin ?raw=1 fetch.
+    // CSP permits the shell's inline bootstrap + the same-origin refresh/?raw=1 fetches.
     const csp = res.getHeader('Content-Security-Policy') as string;
     expect(csp).toContain("script-src 'unsafe-inline'");
     expect(csp).toContain('connect-src https://app.bike4mind.com');
@@ -944,7 +944,7 @@ describe('GET /api/publish/serve - gated reply/fabfile loader shell', () => {
     const data = res._getData() as string;
     expect(data).toContain('<iframe id="b4m-frame" sandbox="allow-scripts"');
     expect(data).not.toContain('allow-same-origin');
-    expect(data).toContain("localStorage.getItem('access-token-storage')");
+    expect(data).toContain("fetch('/api/auth/refreshToken'");
     expect(data).toContain("'raw=1'");
     // Shell must NOT leak the gated reply's content or title.
     expect(data).not.toContain('Secret org reply');
