@@ -2537,10 +2537,10 @@ export class ChatCompletionProcess {
       );
       let messages = firstBuild.messages;
       const messageTruncationInfo = firstBuild.messageTruncation;
-      // The length check is the part that matters: buildAndSortMessages returns an EMPTY ARRAY when
-      // the input budget is non-positive, and `!messages` is false for `[]`, so an empty prompt used
-      // to reach the model. It then answers confidently from nothing, which reads to the user as the
-      // assistant ignoring their file rather than as a misconfiguration.
+      // The length check is the part that matters: buildAndSortMessages returns an EMPTY messages
+      // array when the input budget is non-positive, and `!messages` is false for `[]`, so an empty
+      // prompt used to reach the model. It then answers confidently from nothing, which reads to the
+      // user as the assistant ignoring their file rather than as a misconfiguration.
       if (!messages || messages.length === 0) {
         throw new Error(
           `Cannot build a prompt for ${modelInfo.name || model}: no input budget. The model's context window ` +

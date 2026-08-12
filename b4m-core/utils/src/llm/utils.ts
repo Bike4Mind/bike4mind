@@ -1975,6 +1975,24 @@ const processMessages = (
 };
 
 /**
+ * Truncation telemetry for one buildAndSortMessages call. Non-nullable here because
+ * ContextDebugInfo always carries a real value once assembled; buildAndSortMessages itself
+ * returns this or null (the non-positive-budget early exit, never read by its caller either -
+ * see the throw right after that call site).
+ */
+export interface MessageTruncationInfo {
+  wasTruncated: boolean;
+  originalMessageCount: number;
+  truncatedMessageCount: number;
+  truncationMethod?: 'priority' | 'token-budget' | 'history-limit';
+  removedMessages?: Array<{
+    role: string;
+    tokens: number;
+    priority: number;
+  }>;
+}
+
+/**
  * Context debug info return type.
  */
 export interface ContextDebugInfo {
@@ -1988,17 +2006,7 @@ export interface ContextDebugInfo {
     overflowDetected?: boolean;
     overflowAmount?: number;
   };
-  messageTruncation: {
-    wasTruncated: boolean;
-    originalMessageCount: number;
-    truncatedMessageCount: number;
-    truncationMethod?: 'priority' | 'token-budget' | 'history-limit';
-    removedMessages?: Array<{
-      role: string;
-      tokens: number;
-      priority: number;
-    }>;
-  };
+  messageTruncation: MessageTruncationInfo;
 }
 
 export async function buildAndSortMessages(
@@ -2042,7 +2050,7 @@ export async function buildAndSortMessages(
      */
     systemMessagePriority?: (message: IMessage) => number | undefined;
   } = { verbose: false }
-): Promise<{ messages: IMessage[]; messageTruncation: ContextDebugInfo['messageTruncation'] | null }> {
+): Promise<{ messages: IMessage[]; messageTruncation: MessageTruncationInfo | null }> {
   // Negated like processMessages' budget guard so a NaN lands here rather than sailing past every
   // comparison below.
   if (!(maxInputTokens > 0)) {
@@ -2563,7 +2571,7 @@ export async function buildAndSortMessages(
   // mid-message is a budget loss that drops no message and so leaves allRemovedMessages empty.
   // Called on BOTH return paths: the overflow path below returns early, so building this only at
   // the end would report the wrong finalContentMessages for that path.
-  const buildDebugInfo = (finalContentMessages: IMessage[]): ContextDebugInfo['messageTruncation'] => {
+  const buildDebugInfo = (finalContentMessages: IMessage[]): MessageTruncationInfo => {
     const historyWindowed = previousMessages.length > historyMessages.length;
     const budgetTruncated = allRemovedMessages.length > 0 || contentSqueezed || historyCutMidMessage;
     return {

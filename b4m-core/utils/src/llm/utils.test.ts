@@ -3946,7 +3946,10 @@ describe('buildAndSortMessages - concurrent calls do not share truncation teleme
   });
 
   it("resolves each call's own messageTruncation, unaffected by a slower overlapping call", async () => {
-    // Truncated: a small budget against a long history. Deferred tokenizer, so this call's final
+    const slowTokenizer = orderedTokenizer('deferred');
+    const fastTokenizer = orderedTokenizer('immediate');
+
+    // Truncated: a small budget against a long history. Slow tokenizer, so this call's final
     // safety pass resolves AFTER the untruncated call below has already returned.
     const truncatedCall = buildAndSortMessages(
       Array.from({ length: 20 }, (_, i) => ({ role: 'user' as const, content: `history ${i} ` + 'x'.repeat(500) })),
@@ -3956,11 +3959,11 @@ describe('buildAndSortMessages - concurrent calls do not share truncation teleme
       {},
       20,
       mockLogger as any,
-      orderedTokenizer('deferred')
+      slowTokenizer
     );
 
-    // Untouched: a large budget against a short prompt. Immediate tokenizer, so this call's own
-    // recordDebugInfo runs and this promise resolves first.
+    // Untouched: a large budget against a short prompt. Fast tokenizer, so this call's own
+    // buildDebugInfo runs and this promise resolves first.
     const untouchedCall = buildAndSortMessages(
       [],
       [],
@@ -3969,14 +3972,14 @@ describe('buildAndSortMessages - concurrent calls do not share truncation teleme
       {},
       5,
       mockLogger as any,
-      orderedTokenizer('immediate')
+      fastTokenizer
     );
 
     const [truncated, untouched] = await Promise.all([truncatedCall, untouchedCall]);
 
     // Each result reflects only its own inputs. Under the old shared-state implementation this
-    // would fail: whichever call's recordDebugInfo ran LAST (here, the truncated one, since its
-    // tokenizer is deferred) would leave both callers reading its numbers.
+    // would fail: whichever call's buildDebugInfo ran LAST (here, the truncated one, since its
+    // tokenizer is slow) would leave both callers reading its numbers.
     expect(untouched.messageTruncation?.wasTruncated).toBe(false);
     expect(truncated.messageTruncation?.wasTruncated).toBe(true);
     expect(truncated.messageTruncation?.truncationMethod).toBe('token-budget');
