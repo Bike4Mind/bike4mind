@@ -209,18 +209,22 @@ const processNotebookImport = async (
       // user still has to hear about them, or a notebook silently arrives without its files.
       const warnings = result.warnings ?? [];
       const shown = warnings.slice(0, 5);
-      const attachmentNote = warnings.length
-        ? ` ${warnings.length} attachment(s) could not be imported: ${shown.join('; ')}${
-            warnings.length > shown.length ? `; and ${warnings.length - shown.length} more` : ''
-          }.`
-        : '';
+      // Assembled from parts and joined, so an absent clause cannot leave a double space behind.
+      const parts = [
+        `Successfully imported ${result.importedNotebooks} notebook(s) with ${result.importedMessages} messages.`,
+      ];
+      if (result.skippedNotebooks > 0) {
+        parts.push(`Skipped ${result.skippedNotebooks} duplicate(s).`);
+      }
+      if (warnings.length) {
+        const more = warnings.length > shown.length ? `; and ${warnings.length - shown.length} more` : '';
+        parts.push(`${warnings.length} attachment(s) could not be imported: ${shown.join('; ')}${more}.`);
+      }
 
       await inboxRepository.createInboxMessage({
         type: InboxType.COMMON,
         title: warnings.length ? '⚠️ Notebook Import Completed With Issues' : '✅ Notebook Import Successful',
-        message: `Successfully imported ${result.importedNotebooks} notebook(s) with ${result.importedMessages} messages. ${
-          result.skippedNotebooks > 0 ? `Skipped ${result.skippedNotebooks} duplicate(s).` : ''
-        }${attachmentNote}`,
+        message: parts.join(' '),
         receiverId: userId,
         userId,
       });

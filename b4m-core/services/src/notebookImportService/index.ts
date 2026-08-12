@@ -347,18 +347,20 @@ export class NotebookImportService {
         // No `uploadedAt`/`metadata`: not paths on FabFileSchema, so strict mode drops them silently.
 
         // The store's id, not `newFileId`: knowledgeIds must resolve to real documents.
-        if (file.type && !isValidEnumValue(file.type, KnowledgeType)) {
-          // Absent is expected of older exports; present-but-unknown is format drift worth saying.
-          this.attachmentWarnings.push(
-            `Unrecognised knowledge type "${file.type}" for "${file.name}"; imported as FILE`
-          );
-        }
-
         const created = (await this.adapters.knowledgeRepository.create(knowledgeData)) as { id?: string } | null;
         if (!created?.id) {
           throw new Error('knowledge store returned no id');
         }
         importedIds.push(String(created.id));
+
+        // After the write, not before: the file has to have landed for "imported as FILE" to be
+        // true, and a file that then failed would otherwise be reported twice. Absent is expected
+        // of older exports; present-but-unknown is format drift worth saying.
+        if (file.type && !isValidEnumValue(file.type, KnowledgeType)) {
+          this.attachmentWarnings.push(
+            `Unrecognised knowledge type "${file.type}" for "${file.name}"; imported as FILE`
+          );
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.attachmentWarnings.push(`Failed to import knowledge file "${file.name}": ${message}`);

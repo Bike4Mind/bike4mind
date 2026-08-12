@@ -173,6 +173,22 @@ describe('notebook import writes knowledge files', () => {
     expect((await FabFile.findOne({ userId: USER }))?.type).toBe('FILE');
   }, 60000);
 
+  it('warns once, not twice, when a file has an unknown type and also fails to write', async () => {
+    // Content resolves, so the upload succeeds and the loop reaches the write - which then fails
+    // on the missing required `fileName`. That is the only ordering where both warnings compete.
+    const result = await makeService().importNotebooks(
+      USER,
+      payload([knowledgeFile({ type: 'SOMETHING_NEWER', name: undefined })]) as never,
+      OPTIONS as never
+    );
+
+    // "imported as FILE" only makes sense for a file that landed, so a file that failed must
+    // produce exactly one warning - the failure - not that plus a type note.
+    expect(await FabFile.countDocuments({})).toBe(0);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings?.[0]).toContain('Failed to import knowledge file');
+  }, 60000);
+
   it('reports a failed attachment instead of claiming success', async () => {
     // No content and no contentUrl: the service cannot resolve a path, so this one must fail.
     const broken = knowledgeFile({ content: undefined });
