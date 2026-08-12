@@ -869,7 +869,7 @@ async function rankChunksForFiles(args: {
   );
   if (outcomes.length > 0) {
     logger?.debug?.(
-      `[semanticSearch] alternate-model ANN: ${outcomes.map(o => `${o.model}=${o.failed ? 'failed' : `${o.hitsReturned}hits/${o.filesWithHits.size}files`}`).join(', ')}`
+      `[semanticSearch] alternate-model ANN: ${outcomes.map(o => `${o.model}=${o.failed ? 'failed' : `${o.hitsReturned}hits/${o.filesWithHits.size}files/${o.filesMissed.length}missed`}`).join(', ')}`
     );
   }
 

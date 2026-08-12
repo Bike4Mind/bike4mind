@@ -83,6 +83,12 @@ export interface EmbeddingMismatchReport {
    * `excludedFiles` and deliberately does NOT raise `partial`: nothing was withheld. Reported so a
    * reader can tell "this lake is mixed-model and we covered it" apart from "this lake is
    * single-model".
+   *
+   * This is COVERAGE, not "returned a visible result": a file counts as served once its ANN query
+   * returns any raw hit, before `minScore` is applied (see excludedForeignFiles in
+   * semanticDataLakeSearch.ts). A minScore floor tuned for the primary model's cosine scale can
+   * still filter every one of an alternate model's rows out of the final results - see the
+   * cross-model raw-cosine caveat where the merge happens.
    */
   alternateModelServed: { files: number; models: string[] };
   /**
