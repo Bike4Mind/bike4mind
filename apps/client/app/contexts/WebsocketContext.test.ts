@@ -133,6 +133,22 @@ describe('WebsocketProvider - onClose auth-probe wiring', () => {
   });
 });
 
+describe('WebsocketProvider - reconnect budget option', () => {
+  beforeEach(() => {
+    h.capturedOptions.current = null as unknown as Record<string, (arg: unknown) => void>;
+    h.capturedUrls = [];
+    h.readyState = 1;
+    h.accessTokenState.accessToken = 'tok';
+    h.accessTokenState.mfaPending = false;
+    stubVisibility('visible');
+  });
+
+  it('passes reconnectAttempts explicitly, so onReconnectStop logs the real limit instead of undefined', () => {
+    render(React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div')));
+    expect((h.capturedOptions.current as unknown as { reconnectAttempts: number }).reconnectAttempts).toBe(20);
+  });
+});
+
 describe('WebsocketProvider - refocus reconnect pulse', () => {
   beforeEach(() => {
     h.probeIdentity.mockReset();

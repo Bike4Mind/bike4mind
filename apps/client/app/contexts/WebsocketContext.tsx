@@ -131,6 +131,11 @@ export const WebsocketProvider = ({ children, url }: Props) => {
     // thundering herd after a deploy or network blip. Without jitter, 400 users reconnect
     // at the same instant and flood subscribe_query Lambdas simultaneously.
     reconnectInterval: i => 125 * (i + 1) ** 2 + Math.random() * 1000,
+    // Matches the library's own DEFAULT_RECONNECT_LIMIT. Set explicitly (rather than relying
+    // on the default) because the shared-listener close handler passes this raw option value
+    // to onReconnectStop below instead of its resolved default - leaving it unset means
+    // onReconnectStop always logs undefined instead of the real attempt count.
+    reconnectAttempts: 20,
     onOpen: () => {
       console.log('ws connected');
       openedThisAttemptRef.current = true;
