@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -9,6 +9,8 @@ import DataLakeManagerPanel from './DataLakeManagerPanel';
 
 // Archive resolves synchronously so the onSuccess (exit-to-root) wiring is exercised.
 const archiveMutate = vi.fn((_id: string, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
+// Same for purge, so the confirm dialog's close-on-success wiring is exercised.
+const cleanupMutate = vi.fn((_id: string, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
 const useActiveDataLakeBatches = vi.fn(() => ({ data: [] as unknown[] }));
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });
@@ -17,9 +19,9 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     useUnarchiveDataLake: mutation,
     useRestoreDeletedDataLake: mutation,
     usePermanentDeleteDataLake: mutation,
-    useCleanupDataLake: mutation,
+    useCleanupDataLake: () => ({ mutate: cleanupMutate, isPending: false }),
     useGetArchivedDataLakes: () => ({ data: undefined }),
-    useGetDeletedDataLakes: () => ({ data: undefined }),
+    useGetDeletedDataLakes: () => useGetDeletedDataLakes(),
     useActiveDataLakeBatches: () => useActiveDataLakeBatches(),
     useGetDataLakes: () => useGetDataLakes(),
     // Per-lake files: only the selected lake queries (id != null).
@@ -78,6 +80,8 @@ const lakeFiles = [
 ];
 
 const useGetDataLakes = vi.fn(() => ({ data: [] as unknown[], isLoading: false }));
+// undefined data = the section's query has not resolved (it only fires once expanded).
+const useGetDeletedDataLakes = vi.fn(() => ({ data: undefined as unknown[] | undefined }));
 
 // Default (flag on) is established per-describe; tests override per-case.
 const isFeatureEnabled = vi.fn();
@@ -155,6 +159,9 @@ beforeEach(() => {
   useGetDataLakes.mockReset();
   useGetDataLakes.mockReturnValue({ data: [mineLake, theirsLake], isLoading: false });
   archiveMutate.mockClear();
+  cleanupMutate.mockClear();
+  useGetDeletedDataLakes.mockReset();
+  useGetDeletedDataLakes.mockReturnValue({ data: undefined });
   useActiveDataLakeBatches.mockReset();
   useActiveDataLakeBatches.mockReturnValue({ data: [] });
   // managerTab is module state in the real store, so a test left in Discover would otherwise
@@ -593,5 +600,28 @@ describe('DataLakeManagerPanel - background AI-tag suggestion status', () => {
 
     await user.click(screen.getByTestId('datalake-manager-taxonomy-review-mine'));
     expect(screen.getByTestId('mock-taxonomy-review-panel')).toHaveAttribute('data-batch-id', 'b1');
+  });
+});
+
+describe('DataLakeManagerPanel - purge confirmation', () => {
+  const deletedLake = { id: 'gone', name: 'Gone', fileTagPrefix: 'gn' };
+
+  it('purges the confirmed lake by id and closes the dialog', async () => {
+    useGetDeletedDataLakes.mockReturnValue({ data: [deletedLake] });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-deleted-section-toggle'));
+    expect(screen.getByTestId('datalake-deleted-section-card-gone')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('datalake-purge-btn-gone'));
+    expect(screen.getByTestId('datalake-purge-confirm')).toBeInTheDocument();
+    await user.click(screen.getByTestId('datalake-purge-confirm-btn'));
+
+    // The lake id is this panel's whole contract with useCleanupDataLake: the purge answers
+    // 202-queued, so that hook clears the row by filtering the deleted-list cache on exactly
+    // this argument rather than refetching (see dataLakes.test.ts).
+    expect(cleanupMutate).toHaveBeenCalledWith('gone', expect.objectContaining({ onSuccess: expect.any(Function) }));
+    await waitFor(() => expect(screen.queryByTestId('datalake-purge-confirm')).not.toBeInTheDocument());
   });
 });
