@@ -3,6 +3,7 @@ import { alpha } from '@mui/system';
 import SortByAlphaIcon from '@mui/icons-material/SortByAlpha';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import type { TagNode } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
+import FileIndexingAlert from './FileIndexingAlert';
 import DataLakeTreeView, { type DataLakeTreeChrome } from './DataLakeTreeView';
 import { inkFor } from '@client/app/components/datalake/surfaceChrome';
 import type { Hue } from '@client/app/components/datalake/surfaceChrome';
@@ -127,15 +128,20 @@ export default function DataLakeTree(props: DataLakeTreeProps) {
           <ArticleGlyph
             sx={{
               fontSize: 16,
-              color: selected ? inkFor(theme.accent, isDark) : 'text.tertiary',
+              color: file.error ? 'danger.500' : selected ? inkFor(theme.accent, isDark) : 'text.tertiary',
               flexShrink: 0,
             }}
           />
           <ListItemContent>
-            <Typography level="body-xs" noWrap sx={{ fontWeight: selected ? 'lg' : undefined }}>
+            <Typography
+              level="body-xs"
+              noWrap
+              sx={{ fontWeight: selected ? 'lg' : undefined, color: file.error ? 'danger.500' : undefined }}
+            >
               {file.fileName.replace(/\.[^/.]+$/, '')}
             </Typography>
           </ListItemContent>
+          <FileIndexingAlert file={file} />
         </ListItemButton>
       </ListItem>
     ),

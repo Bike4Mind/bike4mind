@@ -17,6 +17,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import { HEADER_ICON_BUTTON_SX } from '@client/app/components/Session/AISettings/headerIconButtonSx';
 import type { TagNode } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
+import FileIndexingAlert from './FileIndexingAlert';
 import DataLakeTreeView, { type DataLakeTreeChrome } from './DataLakeTreeView';
 import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
 import {
@@ -260,13 +261,25 @@ export default function DataLakeChatTree({
           sx={treeRowSx(theme.palette.notebooklist.hoverBg)}
         >
           <ArticleOutlinedIcon
-            sx={{ fontSize: 16, color: selected ? inkFor(HUES.cyan, isDark) : 'text.tertiary', flexShrink: 0 }}
+            sx={{
+              fontSize: 16,
+              color: file.error ? 'danger.500' : selected ? inkFor(HUES.cyan, isDark) : 'text.tertiary',
+              flexShrink: 0,
+            }}
           />
           <ListItemContent>
-            <Typography noWrap sx={{ fontSize: '14px', fontWeight: selected ? 'lg' : 400, color: 'text.primary' }}>
+            <Typography
+              noWrap
+              sx={{
+                fontSize: '14px',
+                fontWeight: selected ? 'lg' : 400,
+                color: file.error ? 'danger.500' : 'text.primary',
+              }}
+            >
               {file.fileName.replace(/\.[^/.]+$/, '')}
             </Typography>
           </ListItemContent>
+          <FileIndexingAlert file={file} />
         </ListItemButton>
       </ListItem>
     ),
