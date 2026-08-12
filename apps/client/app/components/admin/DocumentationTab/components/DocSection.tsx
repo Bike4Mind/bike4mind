@@ -9,6 +9,7 @@ import LaunchIcon from '@mui/icons-material/Launch';
 import LocalOfferIcon from '@mui/icons-material/LocalOffer';
 
 import { DocumentationItem, DocumentationCategory } from '../utils/docData';
+import { openInNewTab } from '@client/app/utils/externalLinks';
 
 interface DocSectionProps {
   doc: DocumentationItem;
@@ -38,7 +39,7 @@ export const DocSection: React.FC<DocSectionProps> = ({ doc }) => {
   const categoryInfo = categoryConfig[doc.category];
 
   const handleOpenDocumentation = () => {
-    window.open(doc.docusaurusUrl, '_blank');
+    openInNewTab(doc.docusaurusUrl);
   };
 
   return (

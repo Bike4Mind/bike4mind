@@ -78,6 +78,7 @@ import { z } from 'zod';
 import XLSXViewer from './XLSXViewer';
 import { toast } from 'react-hot-toast';
 import DownloadMenu, { downloadFile, copyToClipboard } from '../common/DownloadMenu';
+import { openInNewTab } from '@client/app/utils/externalLinks';
 import ShareIcon from '@mui/icons-material/Share';
 import { useUser } from '@client/app/contexts/UserContext';
 import { usePublishShare } from '@client/app/hooks/usePublishShare';
@@ -1186,7 +1187,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
             toast.error('No file URL available');
             return;
           }
-          window.open(currentItem.content.fileUrl, '_blank');
+          openInNewTab(currentItem.content.fileUrl);
         } else if (currentItem.content.mimeType === 'text/markdown') {
           try {
             if (!currentItem.content.fileUrl) {

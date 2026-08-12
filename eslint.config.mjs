@@ -170,6 +170,37 @@ const WALK_MESSAGE =
   'Do not walk the filesystem (readdir/opendir/glob) in tests under pages/ (#9627): Next traces ' +
   'these as routes, and the dynamic reads pull the whole project into the server Lambda (>250MB, ' +
   'breaks preview deploys). Move fs-scanning tests out of pages/ — e.g. to apps/client/server/__tests__/.';
+// Ban window.open in client UI code: it opens a popup WINDOW rather than a tab in Safari (whose
+// default is windows unless the user has switched "Open pages in tabs instead of windows" to
+// Automatically), and in EVERY browser the moment a feature string is passed - even just
+// 'noopener'. openInNewTab() synthesises an <a target="_blank" rel="noopener noreferrer"> click,
+// which opens a tab and applies both protections at open time.
+//
+// This rule exists because fixing the call sites alone did not hold: the same defect was fixed once
+// for a single screen and ten other call sites kept the old behaviour, with nothing to stop an
+// eleventh appearing. Scoped to apps/client/app/** (the SPA's UI); apps/client/pages/** is the
+// Pages-API backend, where there is no window to open.
+//
+// Covered by the selectors below: `window.open(...)` and its `globalThis`/`self` aliases. The bare
+// `open(url)` form is covered by no-restricted-globals in the same block instead - a syntax
+// selector cannot tell the global from a local binding, and this codebase has plenty of callable
+// locals named `open` (zustand setters like `set(state => ({ open: open(state.open) }))`), which a
+// selector flags and scope analysis correctly ignores.
+//
+// NOT covered (and deliberately so): the string form `vi.spyOn(window, 'open')`, which tests use
+// to prove the helper does NOT reach for it.
+const WINDOW_OPEN_MESSAGE =
+  'Use openInNewTab() from @client/app/utils/externalLinks instead of window.open: window.open ' +
+  'spawns a popup WINDOW rather than a tab in Safari, and in all browsers as soon as any feature ' +
+  'string is passed. If a popup is genuinely intended (an OAuth flow, a print view), add an ' +
+  'eslint-disable with a comment saying why.';
+const noWindowOpenInClientUi = [
+  // `window.open(url)` / `globalThis.open(url)` / `self.open(url)`
+  {
+    selector: `CallExpression[callee.object.name=/^(window|globalThis|self)$/][callee.property.name='open']`,
+    message: WINDOW_OPEN_MESSAGE,
+  },
+];
 const noTreeWalkInPagesTests = [
   // bare call: `readdirSync(dir)` (named/destructured import)
   { selector: `CallExpression[callee.name=/${TREE_WALK_NAMES}/]`, message: WALK_MESSAGE },
@@ -517,6 +548,19 @@ export default defineConfig([
     files: ['apps/client/pages/**/*.{test,spec}.{ts,tsx}'],
     rules: {
       'no-restricted-syntax': ['error', ...noTreeWalkInPagesTests],
+    },
+  },
+
+  // Ban window.open in the SPA's UI code - see noWindowOpenInClientUi above for the Safari
+  // popup-window rationale. Glob is disjoint from the pages-tests block above, so flat-config
+  // last-rule-wins on no-restricted-syntax leaves that rule intact.
+  {
+    files: ['apps/client/app/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-syntax': ['error', ...noWindowOpenInClientUi],
+      // Catches the bare `open(url)` form the selectors above cannot safely match. Scope-aware,
+      // so a local/parameter named `open` is untouched.
+      'no-restricted-globals': ['error', { name: 'open', message: WINDOW_OPEN_MESSAGE }],
     },
   },
 ]);

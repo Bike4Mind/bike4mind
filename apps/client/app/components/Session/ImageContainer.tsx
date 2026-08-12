@@ -26,6 +26,7 @@ import ImageMaskerFlux from './ImageMaskerFlux';
 import { ImageModerationPlaceholder } from './ImageModerationPlaceholder';
 import { SendMessageOptions } from '@client/app/utils/llm';
 import { blackAlpha, whiteAlpha } from '@client/app/utils/themes/colors';
+import { openInNewTab } from '@client/app/utils/externalLinks';
 
 // Add FabAPI interface
 interface FabAPI {
@@ -306,7 +307,7 @@ const ImageContainer: FC<ImageContainerProps> = ({
 
         // Fallback - open in new tab
         const url = URL.createObjectURL(blob);
-        window.open(url, '_blank');
+        openInNewTab(url);
         toast.success('Image opened in a new tab. Right-click and select "Copy Image" to copy it.');
       }
     } catch (error) {
