@@ -1,4 +1,4 @@
-import { ISession, SessionEvents, redactSessionForClient } from '@bike4mind/common';
+import { SessionEvents, redactSessionForClient, sessionUpdateContract } from '@bike4mind/common';
 import { sessionService } from '@bike4mind/services';
 import {
   projectRepository,
@@ -8,12 +8,18 @@ import {
   cacheRepository,
 } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
+import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { NotFoundError } from '@server/utils/errors';
 import { logEvent } from '@server/utils/analyticsLog';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import { getFilesStorage } from '@server/utils/storage';
 
-const handler = baseApi()
+// baseApi() here and nextRouteForContract(sessionUpdateContract) below build two
+// independent router instances (see the dispatcher at the bottom of this file) - both
+// currently use default auth/rate-limit options, so keep them that way in lockstep;
+// a future option change to one (maxBodySize, exemptReadsFromDailyRateLimit, ...)
+// needs the same change made deliberately to the other, not assumed to apply.
+const getAndDeleteHandler = baseApi()
   /**
    * Get a session by its ID
    */
@@ -27,48 +33,6 @@ const handler = baseApi()
     );
 
     return res.json(redactSessionForClient(session));
-  })
-  /**
-   * Update a session
-   */
-  .put(async (req: Request<{}, {}, Partial<ISession>, { id?: string }>, res) => {
-    // Extract and handle lastUsedModel to prevent null values
-    const { lastUsedModel, ...restBody } = req.body;
-
-    const updatedSession = await sessionService.updateSession(
-      req.user!,
-      {
-        ...restBody,
-        id: req.query.id!,
-        // Only include lastUsedModel if it's not null
-        ...(lastUsedModel !== null ? { lastUsedModel } : {}),
-      },
-      {
-        db: {
-          sessions: sessionRepository,
-          projects: projectRepository,
-          fabFiles: fabFileRepository,
-          caches: cacheRepository,
-        },
-        storage: getFilesStorage(),
-      }
-    );
-
-    await logEvent(
-      {
-        userId: req.user.id,
-        type: SessionEvents.UPDATE_SESSION,
-        metadata: {
-          sessionId: req.query.id!,
-          sessionName: updatedSession.name,
-          knowledgeIds: updatedSession.knowledgeIds ?? [],
-          agentIds: updatedSession.agentIds ?? [],
-        },
-      },
-      { ability: req.ability }
-    );
-
-    return res.json(redactSessionForClient(updatedSession));
   })
   /**
    * Delete a session
@@ -97,10 +61,57 @@ const handler = baseApi()
     return res.json({ newLastNotebookId: newLastNotebook?.id || null });
   });
 
+// Auth mode and request/path-param validation come from sessionUpdateContract (the single
+// source of truth also driving the OpenAPI spec). `req.validated` / `req.validatedParams`
+// are the parsed, typed body/id. sessionUpdateContract declares no scopes, matching this
+// route's pre-existing unscoped behavior (any valid API key or JWT).
+const putHandler = nextRouteForContract(sessionUpdateContract).put(async (req, res) => {
+  const { id } = req.validatedParams;
+
+  const updatedSession = await sessionService.updateSession(
+    req.user!,
+    { ...req.validated, id },
+    {
+      db: {
+        sessions: sessionRepository,
+        projects: projectRepository,
+        fabFiles: fabFileRepository,
+        caches: cacheRepository,
+      },
+      storage: getFilesStorage(),
+    }
+  );
+
+  await logEvent(
+    {
+      userId: req.user.id,
+      type: SessionEvents.UPDATE_SESSION,
+      metadata: {
+        sessionId: id,
+        sessionName: updatedSession.name,
+        knowledgeIds: updatedSession.knowledgeIds ?? [],
+        agentIds: updatedSession.agentIds ?? [],
+      },
+    },
+    { ability: req.ability }
+  );
+
+  return res.json(redactSessionForClient(updatedSession));
+});
+
+// sessionUpdateContract only declares PUT, and nextRouteForContract's router rejects any
+// other verb registered on it - so GET/DELETE stay on their own plain baseApi() router and
+// this file dispatches by method instead of chaining every verb on one router instance.
+export default function handler(req: Request, res: Response) {
+  // putHandler's declared param type carries the contract's validated req/params fields,
+  // which only exist once its own prelude has run - a plain incoming Request satisfies
+  // that at runtime but not structurally, hence the cast.
+  if (req.method === 'PUT') return putHandler(req as Parameters<typeof putHandler>[0], res);
+  return getAndDeleteHandler(req, res);
+}
+
 export const config = {
   api: {
     externalResolver: true,
   },
 };
-
-export default handler;

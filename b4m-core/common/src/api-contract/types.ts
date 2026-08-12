@@ -55,6 +55,15 @@ export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
   /** The schema the handlers validate the request body with (all transports). */
   request?: ReqSchema;
   /**
+   * Schema for dynamic path segments (e.g. `{id}` in `/api/sessions/{id}`).
+   * Values arrive via Next.js's file-based routing convention as `req.query`
+   * (Next merges route params into `query`, it does not populate `req.params`),
+   * so the adapter validates `req.query` against this schema, not `req.params`.
+   * Field names must match the `{name}` placeholders in `path`. Must be a plain
+   * ZodObject - that is what zod-to-openapi's `request.params` accepts.
+   */
+  pathParams?: z.ZodObject;
+  /**
    * Optional OpenAPI-representable projection of `request`, used ONLY for the
    * generated spec. Needed when `request` carries wrappers zod-to-openapi cannot
    * introspect (`.catch()`, `.transform()`, `.pipe()`). Its INPUT shape must

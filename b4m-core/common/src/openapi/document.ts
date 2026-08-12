@@ -100,18 +100,24 @@ export function toPythonLiteral(value: unknown, indent = 1): string {
  */
 const CURL_HEREDOC_DELIMITER = 'B4M_REQUEST_BODY';
 
-function codeSamples(path: string, body: unknown, streaming: boolean, authToken: string) {
-  const url = `${prodUrl()}${path}`;
+function codeSamples(path: string, body: unknown, streaming: boolean, authToken: string, method: string) {
+  // A raw OpenAPI path template (`/api/sessions/{id}`) is not a runnable URL - swap each
+  // `{param}` for a `<param>` placeholder, matching this file's existing `<key>`/`<fabFileId>`
+  // convention for "substitute your own value here", so a copy-pasted sample doesn't 404.
+  const url = `${prodUrl()}${path.replace(/\{(\w+)\}/g, '<$1>')}`;
   const pretty = JSON.stringify(body, null, 2);
   const curlFlags = streaming ? '-sN' : '-s';
   const pyStream = streaming ? '\n    stream=True,' : '';
   const d = CURL_HEREDOC_DELIMITER;
+  // `requests` exposes one function per verb (requests.get/post/put/patch/delete/...),
+  // matching the lowercase HTTP method name exactly.
+  const pyMethod = method.toLowerCase();
   return [
     {
       lang: 'curl',
       label: 'curl',
       source:
-        `curl ${curlFlags} -X POST "${url}" \\\n` +
+        `curl ${curlFlags} -X ${method.toUpperCase()} "${url}" \\\n` +
         `  -H "Authorization: Bearer ${authToken}" \\\n` +
         `  -H "Content-Type: application/json" \\\n` +
         `  --data-binary @- <<'${d}'\n${pretty}\n${d}`,
@@ -121,7 +127,7 @@ function codeSamples(path: string, body: unknown, streaming: boolean, authToken:
       label: 'fetch',
       source:
         `const res = await fetch("${url}", {\n` +
-        `  method: "POST",\n` +
+        `  method: "${method.toUpperCase()}",\n` +
         `  headers: {\n    "Authorization": "Bearer ${authToken}",\n    "Content-Type": "application/json",\n  },\n` +
         `  body: JSON.stringify(${pretty}),\n});`,
     },
@@ -130,7 +136,7 @@ function codeSamples(path: string, body: unknown, streaming: boolean, authToken:
       label: 'requests',
       source:
         `import requests\n\n` +
-        `res = requests.post(\n    "${url}",\n` +
+        `res = requests.${pyMethod}(\n    "${url}",\n` +
         `    headers={"Authorization": "Bearer ${authToken}"},\n` +
         `    json=${toPythonLiteral(body)},${pyStream}\n)`,
     },
@@ -217,7 +223,10 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     servers: servers(),
   });
 
-  doc.tags = [{ name: 'AI', description: 'Completions and server-side tool execution.' }];
+  doc.tags = [
+    { name: 'AI', description: 'Completions and server-side tool execution.' },
+    { name: 'Sessions', description: 'Read and update a session (called a "notebook" in the product UI).' },
+  ];
 
   // Attach per-operation vendor extensions + headers by operationId. Restrict to
   // HTTP verbs: a Path Item can also carry summary/description/parameters/servers.
@@ -233,7 +242,7 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       const scopes = REQUIRED_SCOPES_BY_OP[opId];
       if (scopes) op['x-required-scopes'] = scopes;
       const sample = CODE_SAMPLES_BY_OP[opId];
-      if (sample) op['x-codeSamples'] = codeSamples(pathKey, sample.body, sample.streaming, sample.authToken);
+      if (sample) op['x-codeSamples'] = codeSamples(pathKey, sample.body, sample.streaming, sample.authToken, method);
 
       for (const status of Object.keys(op.responses ?? {})) {
         const response = op.responses[status];

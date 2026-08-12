@@ -786,6 +786,145 @@
           "message": "How do I reset my password?",
           "toolMode": "smart"
         }
+      },
+      "updateSessionResponse200": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "knowledgeIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "artifactIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "strength": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "name",
+                "strength"
+              ]
+            }
+          },
+          "forceKnowledgeRetrieval": {
+            "type": "boolean"
+          },
+          "lastUsedModel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "firstCreated": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastUpdated": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "userId",
+          "firstCreated",
+          "lastUpdated"
+        ]
+      },
+      "updateSessionResponse404": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "updateSessionRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "knowledgeIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "artifactIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "strength": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "name",
+                "strength"
+              ]
+            }
+          },
+          "lastUsedModel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pin a specific model id, or omit/send null to leave the current pin unchanged. Sending null does NOT clear it."
+          },
+          "forceKnowledgeRetrieval": {
+            "type": "boolean"
+          },
+          "propagateToProjects": {
+            "type": "boolean"
+          }
+        },
+        "example": {
+          "knowledgeIds": [
+            "<fabFileId>"
+          ],
+          "forceKnowledgeRetrieval": true
+        }
       }
     },
     "parameters": {}
@@ -964,6 +1103,135 @@
             "lang": "Python",
             "label": "requests",
             "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/chat\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"message\": \"How do I reset my password?\",\n        \"toolMode\": \"smart\"\n    },\n)"
+          }
+        ]
+      }
+    },
+    "/api/sessions/{id}": {
+      "put": {
+        "operationId": "updateSession",
+        "summary": "Update a session",
+        "description": "Updates a session (called a \"notebook\" in the product UI): its name, attached knowledge files, tags, or retrieval settings. Set `knowledgeIds` and `forceKnowledgeRetrieval: true` together to enable grounded retrieval for `POST /api/chat` against this session - retrieval is gated by these session fields, not by the chat request. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "tags": [
+          "Sessions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/updateSessionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/updateSessionResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No session exists with the given id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/updateSessionResponse404"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request body failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X PUT \"https://your-deployment.example.com/api/sessions/<id>\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"knowledgeIds\": [\n    \"<fabFileId>\"\n  ],\n  \"forceKnowledgeRetrieval\": true\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/sessions/<id>\", {\n  method: \"PUT\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"knowledgeIds\": [\n    \"<fabFileId>\"\n  ],\n  \"forceKnowledgeRetrieval\": true\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.put(\n    \"https://your-deployment.example.com/api/sessions/<id>\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"knowledgeIds\": [\n            \"<fabFileId>\"\n        ],\n        \"forceKnowledgeRetrieval\": True\n    },\n)"
           }
         ]
       }
@@ -1285,6 +1553,10 @@
     {
       "name": "AI",
       "description": "Completions and server-side tool execution."
+    },
+    {
+      "name": "Sessions",
+      "description": "Read and update a session (called a \"notebook\" in the product UI)."
     }
   ]
 }

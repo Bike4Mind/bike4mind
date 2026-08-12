@@ -1,5 +1,6 @@
 import type { EndpointContract } from '../types';
 import { chatContract } from './chat.contract';
+import { sessionUpdateContract } from './sessionUpdate.contract';
 
 /**
  * Every endpoint migrated to the contract abstraction. The OpenAPI generator
@@ -8,7 +9,7 @@ import { chatContract } from './chat.contract';
  * operations (createCompletion, executeTool) still live in openapi/operations.ts
  * during migration - the two coexist.
  */
-export const CONTRACTS: readonly EndpointContract[] = [chatContract];
+export const CONTRACTS: readonly EndpointContract[] = [chatContract, sessionUpdateContract];
 
 // Duplicate-operation detection (operationId / method+path collisions, including
 // against the hand-registered ops) runs at spec-generation time via

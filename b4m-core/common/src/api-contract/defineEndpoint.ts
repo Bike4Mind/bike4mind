@@ -18,3 +18,8 @@ export function defineEndpoint<const C extends EndpointContract<z.ZodTypeAny>>(c
 export type RequestBodyOf<C extends EndpointContract> = C['request'] extends z.ZodTypeAny
   ? z.infer<C['request']>
   : unknown;
+
+/** The validated path-params type for a contract (or `unknown` if it declares none). */
+export type PathParamsOf<C extends EndpointContract> = C['pathParams'] extends z.ZodTypeAny
+  ? z.infer<C['pathParams']>
+  : unknown;

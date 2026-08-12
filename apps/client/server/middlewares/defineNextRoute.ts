@@ -1,5 +1,5 @@
 import { baseApi } from './baseApi';
-import type { EndpointContract, RequestBodyOf } from '@bike4mind/common';
+import type { EndpointContract, PathParamsOf, RequestBodyOf } from '@bike4mind/common';
 import type { NextFunction, Request, Response } from 'express';
 
 /**
@@ -26,7 +26,7 @@ export function nextRouteForContract<C extends EndpointContract>(
   contract: C,
   options: { maxBodySize?: number; exemptReadsFromDailyRateLimit?: boolean } = {}
 ) {
-  type ValidatedReq = Request & { validated: RequestBodyOf<C> };
+  type ValidatedReq = Request & { validated: RequestBodyOf<C>; validatedParams: PathParamsOf<C> };
   type Handler = (req: ValidatedReq, res: Response, next: NextFunction) => unknown;
 
   const router = baseApi<ValidatedReq, Response>({
@@ -46,6 +46,16 @@ export function nextRouteForContract<C extends EndpointContract>(
   if (requestSchema) {
     prelude.push((req, _res, next) => {
       req.validated = requestSchema.parse(req.body) as RequestBodyOf<C>;
+      next();
+    });
+  }
+
+  // Next's file-based routing merges dynamic segments into req.query, not req.params
+  // (there is no req.params in a Next.js API route) - see the pathParams doc comment.
+  const pathParamsSchema = contract.pathParams;
+  if (pathParamsSchema) {
+    prelude.push((req, _res, next) => {
+      req.validatedParams = pathParamsSchema.parse(req.query) as PathParamsOf<C>;
       next();
     });
   }

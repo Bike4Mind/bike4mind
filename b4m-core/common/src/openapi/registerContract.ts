@@ -65,6 +65,7 @@ export function registerContract(contract: EndpointContract): void {
   }
 
   const requestSchema = contract.requestDoc ?? contract.request;
+  const params = contract.pathParams?.openapi(`${contract.operationId}Params`);
 
   registry.registerPath({
     method: contract.method,
@@ -74,20 +75,24 @@ export function registerContract(contract: EndpointContract): void {
     description: contract.description,
     tags: contract.tags,
     security,
-    request: requestSchema
-      ? {
-          body: {
-            required: true,
-            content: {
-              'application/json': {
-                schema: requestSchema.openapi(`${contract.operationId}Request`, {
-                  ...(contract.requestExample !== undefined && { example: contract.requestExample }),
-                }),
+    request:
+      requestSchema || params
+        ? {
+            ...(params && { params }),
+            ...(requestSchema && {
+              body: {
+                required: true,
+                content: {
+                  'application/json': {
+                    schema: requestSchema.openapi(`${contract.operationId}Request`, {
+                      ...(contract.requestExample !== undefined && { example: contract.requestExample }),
+                    }),
+                  },
+                },
               },
-            },
-          },
-        }
-      : undefined,
+            }),
+          }
+        : undefined,
     responses,
   });
 }
