@@ -284,6 +284,10 @@ describe('feature-to-source reconciliation', () => {
   // feature that is dutifully added to every table but never spread into the literal would pass the
   // check above while reproducing #1344/#1404 exactly. This reads the real assembly source instead
   // of trusting the tables as a stand-in for it.
+  //
+  // Trade-off: this matches a literal substring, so it is brittle to a purely cosmetic reformat of
+  // the spread line (quote style, wrapping) that does not change the actual wiring. A failure here
+  // is worth a quick look at the diff before assuming a real drop.
   it('actually spreads every content-producing feature key into the ChatCompletionProcess assembly', () => {
     const assemblySource = readFileSync(join(__dirname, 'ChatCompletionProcess.ts'), 'utf-8');
     const notWired = contentProducingFeatures.filter(

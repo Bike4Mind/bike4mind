@@ -198,6 +198,7 @@ const ALL_FEATURE_NAMES_MAP: Record<featureNames, true> = {
   skills: true,
 };
 export const ALL_FEATURE_NAMES = Object.keys(ALL_FEATURE_NAMES_MAP) as featureNames[];
+
 export interface IChatCompletionServiceOptions {
   db: DatabaseAdapters & GetEffectiveApiKeyAdapters['db'];
   storage: BaseStorage;
