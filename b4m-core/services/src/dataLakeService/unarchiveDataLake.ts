@@ -27,9 +27,10 @@ interface UnarchiveDataLakeAdapters {
  * the lake was archived, the live copy wins and the archived duplicate is discarded
  * (not restored). Owner or admin only. Uses transitional 'restoring' state.
  *
- * The reversal is bounded by `filesArchivedAt`, this lake's own archive stamp: it stops
- * unarchiving from also freeing a prefix-sharing sibling lake's independently-archived files (see
- * `unarchiveByDataLakeTag`'s own doc for the meta-tag-vs-prefix-arm split that makes this safe).
+ * Both the dedup read and the reversal are bounded by `filesArchivedAt`, this lake's own archive
+ * stamp: it stops the dedup pass from reading (and, on a hash match, soft-deleting) a sibling or
+ * co-owning lake's own archived member, and stops the reversal from freeing it (see
+ * `unarchiveByDataLakeTag`'s own doc for why a meta-tag match is not exempt from the bound).
  */
 export const unarchiveDataLake = async (
   actor: { userId: string; isAdmin: boolean },
@@ -52,10 +53,13 @@ export const unarchiveDataLake = async (
   await db.dataLakes.update({ id: dataLakeId, status: 'restoring' });
 
   const scope = lakeMembershipScope(existing);
+  // undefined for a lake archived before `filesArchivedAt` existed, which keeps both the dedup
+  // read and the reversal unbounded - the pre-this-field behavior.
+  const stampedAt = existing.filesArchivedAt ?? undefined;
 
   // Dedup pass: a LIVE (non-archived, non-deleted) file with the same hash means the
   // file was re-uploaded while archived - the live copy wins.
-  const archived = await db.fabFiles.findArchivedByDataLakeTag(scope);
+  const archived = await db.fabFiles.findArchivedByDataLakeTag(scope, stampedAt);
   const archivedHashes = archived.map(f => f.contentHash).filter((h): h is string => !!h);
 
   let skippedDuplicates = 0;
@@ -75,9 +79,8 @@ export const unarchiveDataLake = async (
     }
   }
 
-  // Restore the remaining archived files (the non-duplicates). undefined for a lake archived
-  // before `filesArchivedAt` existed, which keeps the prefix arm's old unbounded reversal.
-  const restoredCount = await db.fabFiles.unarchiveByDataLakeTag(scope, existing.filesArchivedAt ?? undefined);
+  // Restore the remaining archived files (the non-duplicates).
+  const restoredCount = await db.fabFiles.unarchiveByDataLakeTag(scope, stampedAt);
 
   // Explicit null, not undefined (mongoose drops undefined): a later re-archive claims a FRESH
   // stamp via claimFilesArchivedAt's set-if-unset, rather than reusing this spent one.

@@ -30,42 +30,25 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
  * is not a member - it survives the teardown and stays in that admin's Files, the safe direction.
  */
 export function buildDataLakeMembershipFilter(scope: DataLakeMembershipScope): Record<string, unknown> {
-  const metaArm = buildDataLakeMetaTagFilter(scope);
-  const prefixArm = buildDataLakePrefixArmFilter(scope);
-  return prefixArm ? { $or: [metaArm, prefixArm] } : metaArm;
-}
-
-/**
- * The meta-tag arm alone: an exact match on the lake's own unique tag. Unlike the prefix arm
- * below, no other lake's document can ever carry this tag, so a file reached ONLY through this
- * arm is unambiguously this lake's own - split out for a caller (unarchiveByDataLakeTag) that
- * needs to tell that apart from the prefix arm's shared, sibling-collidable membership.
- */
-export function buildDataLakeMetaTagFilter(
-  scope: Pick<DataLakeMembershipScope, 'datalakeTag'>
-): Record<string, unknown> {
-  return { 'tags.name': scope.datalakeTag };
-}
-
-/**
- * The prefix arm alone, or null when this scope has no usable prefix arm (same fail-closed rule
- * as buildDataLakeMembershipFilter: no prefix, a reserved namespace, or no creator to anchor it).
- * The ownership conjunct means only a SAME-creator sibling can ever match the same file here - a
- * unique index plus a create-time overlap check now block a fresh same-creator collision, but a
- * legacy pair predating those guards still can, and its files are a permanent liability: a file
- * reached only through this arm cannot be attributed to one lake over that sibling.
- */
-export function buildDataLakePrefixArmFilter(scope: DataLakeMembershipScope): Record<string, unknown> | null {
+  const metaArm = { 'tags.name': scope.datalakeTag };
   const prefix = normalizeTagPrefix(scope.fileTagPrefix);
+  // Fail closed to the meta-tag alone. A reserved-namespace prefix is dropped because it would
+  // match every OTHER lake's membership tag, and a scope with no creator has nothing to anchor
+  // the prefix arm to - in both cases matching less is the safe direction.
   if (!prefix || isReservedTagPrefix(prefix) || !scope.creatorUserId) {
-    return null;
+    return metaArm;
   }
   return {
-    $and: [
-      // Anchored so the index on `tags.name` still bounds the scan; escaped because a
-      // user-chosen prefix can carry regex metacharacters.
-      { 'tags.name': { $regex: new RegExp(`^${escapeRegex(prefix)}`) } },
-      { userId: scope.creatorUserId },
+    $or: [
+      metaArm,
+      {
+        $and: [
+          // Anchored so the index on `tags.name` still bounds the scan; escaped because a
+          // user-chosen prefix can carry regex metacharacters.
+          { 'tags.name': { $regex: new RegExp(`^${escapeRegex(prefix)}`) } },
+          { userId: scope.creatorUserId },
+        ],
+      },
     ],
   };
 }

@@ -696,9 +696,11 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   // matches every stamped row: the pre-mark behavior, and the fallback for a lake torn down before
   // the mark existed. The archive axis is stamped the same way (`at`, `filesArchivedAt`) so restore
   // can also clear `archivedAt` for exactly the batch this lake's own archive wrote, without
-  // freeing a prefix-sharing sibling's independently-archived files. `unarchiveByDataLakeTag`'s own
-  // reversal uses this same equality bound, but only on the prefix arm - see its own doc for why the
-  // meta-tag arm is unconditional instead of stamp-keyed.
+  // freeing a prefix-sharing sibling's independently-archived files. `unarchiveByDataLakeTag` and
+  // `findArchivedByDataLakeTag` use this same equality bound over the WHOLE membership filter, not
+  // just the prefix arm - a meta-tag match is not exempt, because `addFileToLake` lets one file
+  // carry more than one lake's meta-tag with no exclusivity check, so a meta-tagged row can belong
+  // to a co-owning lake's own archive just as a prefix-tagged row can belong to a sibling's.
 
   /**
    * Soft-archive (reversible) all live member files, stamped `at`. Returns affected count.
@@ -707,17 +709,16 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   archiveByDataLakeTag(scope: DataLakeMembershipScope, at?: Date): Promise<number>;
   /**
-   * Reverse archive for all archived member files. Split by arm, not one unbounded match: the
-   * meta-tag arm is unarchived in full unconditionally (no other lake can carry this lake's own
-   * tag, so ownership needs no stamp to prove); the prefix arm - shared by any lake registering
-   * the same `fileTagPrefix` - is bounded to `stampedAt` by equality, and left untouched (not
-   * "fall back to unbounded") when `stampedAt` is given but names nothing, so a sibling's own
-   * differently-stamped prefix rows are never freed. `stampedAt` omitted still unarchives the
-   * prefix arm unbounded, for a lake archived before `filesArchivedAt` existed.
+   * Reverse archive for member files stamped `stampedAt`, by equality - a sibling or a co-owning
+   * lake's own differently-stamped member is never freed. `stampedAt` omitted unarchives
+   * unbounded, for a lake archived before `filesArchivedAt` existed.
    */
   unarchiveByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<number>;
-  /** Archived member files - used by the unarchive dedup pass. */
-  findArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]>;
+  /**
+   * Archived member files stamped `stampedAt` - used by the unarchive dedup pass. Omitting
+   * `stampedAt` matches every archived row, same as before this parameter existed.
+   */
+  findArchivedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]>;
   /** Existence-only form of findArchivedByDataLakeTag, for a caller that just needs "any?". */
   hasArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<boolean>;
   /** Soft-deleted member files stamped `stampedAt` - used by the deleted->active restore dedup pass. */
