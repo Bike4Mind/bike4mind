@@ -42,6 +42,7 @@ import {
   lakeMemoryQueue,
   lakeMemoryQueueDLQ,
   driveLakeIngestQueue,
+  driveLakeIngestQueueDLQ,
   whatsNewGenerationQueue,
   whatsNewHighlightsQueue,
   notebookCurationQueue,
@@ -127,6 +128,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'data-lake-cleanup': dataLakeCleanupQueueDLQ.url,
     'data-lake-taxonomy': dataLakeTaxonomyQueueDLQ.url,
     'lake-memory': lakeMemoryQueueDLQ.url,
+    'drive-lake-ingest': driveLakeIngestQueueDLQ.url,
   },
 });
 

@@ -210,6 +210,28 @@ describe('driveLakeIngest consumer', () => {
     expect(h.updateHealth).toHaveBeenCalledWith('conn1', expect.objectContaining({ status: 'connected' }));
   });
 
+  it('refuses a folder over the candidate cap before creating any batch or FabFile', async () => {
+    // A folder too large to finish in one 10-min run would time out mid-loop every attempt and, since
+    // the retry re-creates the un-uploaded tail, accumulate duplicates. Refuse up front - no batch, no
+    // FabFile, a guiding error - so no partial state is ever written.
+    const tooMany = Array.from({ length: 1501 }, (_, i) => ({
+      id: `d${i}`,
+      name: `f${i}.txt`,
+      mimeType: 'text/plain',
+      relativePath: `f${i}.txt`,
+    }));
+    h.walkFolder.mockResolvedValue(tooMany);
+
+    await run();
+
+    expect(h.batchCreate).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
+    expect(h.updateHealth).toHaveBeenCalledWith(
+      'conn1',
+      expect.objectContaining({ status: 'connected', lastError: expect.stringContaining('limit for a single sync') })
+    );
+  });
+
   it('releases the syncing claim (guarded) when the run throws mid-ingest', async () => {
     h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
     h.fetchDriveFileContent.mockResolvedValue(okBytes());

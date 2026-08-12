@@ -763,7 +763,10 @@ const driveLakeIngestQueueSubscription = driveLakeIngestQueue.subscribe(
     vpc: lambdaVpc,
     // fabFileBucket: the handler streams fetched Drive bytes into the FabFile bucket via
     // getFilesStorage().upload, which fires the existing objectCreated -> chunk -> vectorize pipeline.
-    link: [...allSecrets, fabFileBucket],
+    // driveLakeIngestQueue: this handler self-re-enqueues to defer a concurrent second sync behind the
+    // one in flight, so it needs Resource.driveLakeIngestQueue.url and the sqs:SendMessage grant that
+    // linking the queue confers (mirrors lakeMemoryQueue above).
+    link: [...allSecrets, fabFileBucket, driveLakeIngestQueue],
     logging: {
       retention: '3 days',
     },
@@ -1412,6 +1415,7 @@ export {
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
   lakeMemoryQueueDLQ,
+  driveLakeIngestQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,

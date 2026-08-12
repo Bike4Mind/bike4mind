@@ -38,6 +38,16 @@ const INGEST_REDRIVE_DELAY_SECONDS = 90;
 // genuinely large files is the "very large folders" follow-up.
 const MAX_INGEST_FILE_BYTES = 50 * 1024 * 1024;
 
+// Per-sync candidate cap. A folder whose new-file count can't be fetched+uploaded within the queue
+// Lambda's hard 10-minute ceiling would time out mid-loop EVERY run - a deterministic (not transient)
+// failure - and since the retry re-creates FabFiles for the un-uploaded tail (dedup excludes `pending`),
+// the duplicates accumulate without the ingest ever converging. Refuse such a folder up front, BEFORE
+// any batch or FabFile exists, so no partial state is ever created. Full support for very large folders
+// (batch adoption / a streaming path) is the documented #1589 follow-up; until then this fails fast with
+// a clear message instead of spiralling. Sized well under the ~600-1800 files a 10-min sequential run
+// could realistically move.
+const MAX_INGEST_CANDIDATES = 1500;
+
 /**
  * Background ingest of an org Google Drive folder into a data lake (#1589). Walks the folder, then
  * fetches and uploads ONE file at a time - creating a lake-tagged FabFile and its batch-manifest
@@ -153,6 +163,23 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
       await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
         status: 'connected',
         lastPolledAt: new Date(),
+      });
+      return;
+    }
+
+    // A folder too large to finish in one run would time out mid-loop every attempt and accumulate
+    // duplicates (see MAX_INGEST_CANDIDATES). Refuse it here, before any batch/FabFile is created, and
+    // record a guiding error - a deterministic condition, so return cleanly rather than DLQ-ing a retry.
+    if (candidates.length > MAX_INGEST_CANDIDATES) {
+      logger.warn('[driveLakeIngest] folder exceeds single-sync ingest cap; refusing', {
+        connectionId,
+        candidates: candidates.length,
+        cap: MAX_INGEST_CANDIDATES,
+      });
+      await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
+        status: 'connected',
+        lastPolledAt: new Date(),
+        lastError: `Folder has ${candidates.length} new files, over the ${MAX_INGEST_CANDIDATES}-file limit for a single sync. Split it into subfolders and connect them separately.`,
       });
       return;
     }
