@@ -8,6 +8,7 @@ export * from './AgentModel';
 export * from './AgentOpsSettingsModel';
 export * from './CodeAgentEventModel';
 export * from './DataLakeModel';
+export * from './DataLakeAccessGrantModel';
 export * from './EmbeddingCacheModel';
 export * from './LatticeModel';
 export * from './McpServerModel';
