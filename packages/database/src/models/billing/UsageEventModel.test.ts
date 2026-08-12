@@ -559,4 +559,120 @@ describe('UsageEventRepository', () => {
       expect(belongs).toBe(false);
     });
   });
+
+  describe('spendSummary', () => {
+    it('rolls up totals, models, accounts, and daily cost in one pass', async () => {
+      await record({
+        ownerId: 'org-1',
+        ownerType: CreditHolderType.Organization,
+        model: 'opus',
+        costUsd: 2,
+        creditsCharged: 200,
+      });
+      await record({
+        ownerId: 'org-1',
+        ownerType: CreditHolderType.Organization,
+        model: 'opus',
+        costUsd: 1,
+        creditsCharged: 100,
+      });
+      await record({
+        ownerId: 'user-9',
+        ownerType: CreditHolderType.User,
+        model: 'sonnet',
+        costUsd: 1,
+        creditsCharged: 100,
+      });
+
+      const summary = await usageEventRepository.spendSummary();
+
+      expect(summary.totals).toEqual({ requests: 3, cogsUsd: 4, creditsCharged: 400 });
+      expect(summary.activeAccounts).toBe(2);
+
+      // Descending by creditsCharged: opus (300) before sonnet (100).
+      expect(summary.byModel.map(m => m.model)).toEqual(['opus', 'sonnet']);
+      expect(summary.byModel[0]).toMatchObject({ model: 'opus', requests: 2, cogsUsd: 3, creditsCharged: 300 });
+
+      expect(summary.byAccount.map(a => a.ownerId)).toEqual(['org-1', 'user-9']);
+      expect(summary.byAccount[0]).toMatchObject({
+        ownerId: 'org-1',
+        ownerType: CreditHolderType.Organization,
+        requests: 2,
+        cogsUsd: 3,
+        creditsCharged: 300,
+      });
+
+      // Every event shares baseEvent's default createdAt day, so one daily bucket.
+      expect(summary.dailyCost).toHaveLength(1);
+      expect(summary.dailyCost[0].cogsUsd).toBe(4);
+    });
+
+    it('computes p50/p95 latency and error/timeout/refusal counts', async () => {
+      // Latencies 100..500; p50 ~= 300, p95 ~= 500 under approximate percentile.
+      for (const latencyMs of [100, 200, 300, 400, 500]) {
+        await record({ latencyMs, status: 'ok' });
+      }
+      await record({ status: 'error', latencyMs: 600 });
+      await record({ status: 'timeout', latencyMs: 700 });
+      await record({ status: 'refusal', latencyMs: 800 });
+
+      const summary = await usageEventRepository.spendSummary();
+
+      expect(summary.status).toEqual({ total: 8, errors: 1, timeouts: 1, refusals: 1 });
+      expect(summary.latency.p50).toBeGreaterThanOrEqual(200);
+      expect(summary.latency.p50).toBeLessThanOrEqual(500);
+      expect(summary.latency.p95).toBeGreaterThanOrEqual(summary.latency.p50);
+    });
+
+    it('honors the date window and the user/model filters', async () => {
+      // timestamps:true governs createdAt through Mongoose, so age this row via the raw driver.
+      const oldDoc = await record({ userId: 'u-a', model: 'opus' });
+      await UsageEvent.collection.updateOne(
+        { _id: oldDoc!._id },
+        { $set: { createdAt: new Date('2020-01-01T00:00:00Z') } }
+      );
+      await record({ userId: 'u-a', model: 'opus' });
+      await record({ userId: 'u-b', model: 'opus' });
+      await record({ userId: 'u-a', model: 'sonnet' });
+
+      const from = new Date('2024-01-01T00:00:00Z');
+      const byUser = await usageEventRepository.spendSummary({ from, userId: 'u-a' });
+      // Excludes the 2020 row (out of window) and the u-b row (other user).
+      expect(byUser.totals.requests).toBe(2);
+
+      const byModel = await usageEventRepository.spendSummary({ from, userId: 'u-a', model: 'opus' });
+      expect(byModel.totals.requests).toBe(1);
+    });
+
+    it('treats the window as half-open [from, to): excludes an event at exactly `to`', async () => {
+      const boundary = new Date('2024-06-01T00:00:00Z');
+      const inside = await record();
+      await UsageEvent.collection.updateOne(
+        { _id: inside!._id },
+        { $set: { createdAt: new Date('2024-05-31T23:59:59Z') } }
+      );
+      const onBoundary = await record();
+      await UsageEvent.collection.updateOne({ _id: onBoundary!._id }, { $set: { createdAt: boundary } });
+
+      // The prior window's upper bound abuts the current window's `from`; an event
+      // on that instant must land in exactly one window, not both.
+      const summary = await usageEventRepository.spendSummary({
+        from: new Date('2024-05-01T00:00:00Z'),
+        to: boundary,
+      });
+      expect(summary.totals.requests).toBe(1);
+    });
+
+    it('returns zeroed structure for an empty window', async () => {
+      const summary = await usageEventRepository.spendSummary({ from: new Date('2099-01-01T00:00:00Z') });
+
+      expect(summary.totals).toEqual({ requests: 0, cogsUsd: 0, creditsCharged: 0 });
+      expect(summary.activeAccounts).toBe(0);
+      expect(summary.latency).toEqual({ p50: 0, p95: 0 });
+      expect(summary.status).toEqual({ total: 0, errors: 0, timeouts: 0, refusals: 0 });
+      expect(summary.byModel).toEqual([]);
+      expect(summary.byAccount).toEqual([]);
+      expect(summary.dailyCost).toEqual([]);
+    });
+  });
 });

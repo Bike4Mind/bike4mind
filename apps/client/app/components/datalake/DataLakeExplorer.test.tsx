@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { toast } from 'sonner';
@@ -7,6 +7,7 @@ import { getThemeConfig } from '@client/app/utils/themes';
 // way the KnowledgeViewer's close button does.
 import useSessionLayoutStore from '@client/app/hooks/useSessionLayout';
 import DataLakeExplorer from './DataLakeExplorer';
+import { DataLakeSurfaceProvider } from './surfaceTokens';
 
 // Browsing the tree must not mutate the chat on its own: writes come only from the row actions,
 // and an external-chat host must never have its `layout` touched. setSessionLayout is spied to
@@ -36,10 +37,19 @@ vi.mock('@client/app/hooks/useSessionLayout', async importOriginal => ({
   setSessionLayout,
 }));
 
+// Mutable so a test can supply a real tag tree to navigate into; empty by default, which is
+// what every other test here expects.
+const { tagCountsState } = vi.hoisted(() => ({
+  tagCountsState: { tagCounts: [] as { tag: string; count: number }[], total: 0 },
+}));
+
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   activeOrgId: () => undefined,
   useGetDataLakeTagCounts: () => ({
-    data: { tagCounts: [], uniqueArticleCounts: { total: 0 } },
+    data: {
+      tagCounts: tagCountsState.tagCounts,
+      uniqueArticleCounts: { total: tagCountsState.total },
+    },
     isLoading: false,
     isError: false,
   }),
@@ -489,5 +499,39 @@ describe('DataLakeExplorer - drag-and-drop discoverability (#839)', () => {
     });
 
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/^2 files /)));
+  });
+});
+
+describe('DataLakeExplorer - depth trail reads the injected taxonomy (#1077)', () => {
+  beforeEach(() => {
+    tagCountsState.tagCounts = [{ tag: 'books:business', count: 4 }];
+    tagCountsState.total = 4;
+  });
+  afterEach(() => {
+    tagCountsState.tagCounts = [];
+    tagCountsState.total = 0;
+  });
+
+  it('humanizes each depth-stat crumb like the tree instead of showing the raw segment', () => {
+    render(
+      <TestWrapper>
+        <DataLakeSurfaceProvider
+          tokens={{
+            taxonomy: { prefixLabels: { books: 'Library' }, categoryLabels: { business: 'Business Strategy' } },
+          }}
+        >
+          <DataLakeExplorer source="datalakes" onBack={vi.fn()} />
+        </DataLakeSurfaceProvider>
+      </TestWrapper>
+    );
+
+    // Depth 0 -> prefixLabels, so the trail must not read the raw 'books'.
+    fireEvent.click(screen.getByTestId('datalake-node-books'));
+    expect(screen.getByText('Library')).toBeInTheDocument();
+    expect(screen.queryByText('books')).not.toBeInTheDocument();
+
+    // Depth 1 -> categoryLabels; each crumb is humanized at its own depth.
+    fireEvent.click(screen.getByTestId('datalake-node-business'));
+    expect(screen.getByText('Library : Business Strategy')).toBeInTheDocument();
   });
 });

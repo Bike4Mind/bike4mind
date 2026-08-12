@@ -70,4 +70,23 @@ describe('buildUserActivityRequest', () => {
 
     expect(request.metadataFilters).toBeUndefined();
   });
+
+  it('drops a metadata filter whose field the server allowlist rejects', () => {
+    // Same allowlist as server/analytics/metadataFilterContract.ts: leading digit is not allowed.
+    const request = buildUserActivityRequest({ ...state, metadataFilters: [{ field: '2fa', operator: 'exists' }] });
+
+    expect(request.metadataFilters).toBeUndefined();
+  });
+
+  it('keeps only the allowlisted fields out of a mixed list', () => {
+    const request = buildUserActivityRequest({
+      ...state,
+      metadataFilters: [
+        { field: '_id', operator: 'exists' },
+        { field: 'model.name', operator: 'exists' },
+      ],
+    });
+
+    expect(request.metadataFilters).toEqual([{ field: 'model.name', operator: 'exists' }]);
+  });
 });

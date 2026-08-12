@@ -88,7 +88,7 @@ const handler = baseApi()
         // Mirror the service's owner/admin + soft-deleted guards synchronously so a non-owner or
         // a not-deleted request gets an immediate 4xx rather than a 202 for a message the consumer
         // would just drop (the consumer re-checks the same guards, so a stale message is still safe).
-        if (!actor.isAdmin && lake.createdByUserId !== actor.userId) {
+        if (!dataLakeService.canManageLake(lake, actor)) {
           return res.status(403).json({ error: 'Only the creator can clean up this data lake' });
         }
         if (lake.status !== 'deleted') {

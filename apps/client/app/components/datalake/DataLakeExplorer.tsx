@@ -22,7 +22,7 @@ import DataLakeRailViewer from './DataLakeRailViewer';
 import { resolveManageableLake } from './resolveManageableLake';
 import { DataLakeNavProvider } from './dataLakeNavContext';
 import { StatTicker, inkFor, surfaceBackground } from '@client/app/components/datalake/surfaceChrome';
-import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
+import { humanizeSegment, useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
 import { ManageKnowledgeButton } from '@client/app/components/datalake/manageKnowledge';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import useSetDataLakeMode from '@client/app/hooks/useSetDataLakeMode';
@@ -133,7 +133,7 @@ export default function DataLakeExplorer({
   const chatMode = chatSlot != null;
   const muiTheme = useTheme();
   const isDark = muiTheme.palette.mode === 'dark';
-  const { theme, copy } = useDataLakeSurface();
+  const { theme, copy, taxonomy } = useDataLakeSurface();
   const acceptedHint = copy.dropAcceptedHint;
   const accentInk = inkFor(theme.accent, isDark);
   const [breadcrumb, setBreadcrumb] = useState<string[]>([]);
@@ -538,7 +538,12 @@ export default function DataLakeExplorer({
                 {
                   label: copy.statDepthLabel,
                   value: String(breadcrumb.length),
-                  sub: breadcrumb.length === 0 ? copy.depthRootLabel : breadcrumb.join(' : '),
+                  // Humanized like the tree beside it - a raw segment here would disagree with
+                  // the branch label whenever a taxonomy is injected. Index = depth.
+                  sub:
+                    breadcrumb.length === 0
+                      ? copy.depthRootLabel
+                      : breadcrumb.map((segment, depth) => humanizeSegment(segment, depth, taxonomy)).join(' : '),
                 },
               ]}
               isDark={isDark}
