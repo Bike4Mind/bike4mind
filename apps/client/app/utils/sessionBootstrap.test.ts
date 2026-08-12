@@ -7,6 +7,8 @@ import {
   revalidateSessionOnFocus,
   probeIdentity,
   resetProbeGuardForTests,
+  nextRevalidationDelayMs,
+  scheduleSessionRevalidation,
 } from './sessionBootstrap';
 
 /** A macrotask flush - long enough for a settled promise's .catch().finally() chain to run. */
@@ -180,6 +182,103 @@ describe('revalidateSessionOnFocus - guard gating the shared probe', () => {
     revalidateSessionOnFocus(makeQueryClient(setQueryData));
     await flush();
 
+    expect(apiGet).not.toHaveBeenCalled();
+  });
+});
+
+describe('nextRevalidationDelayMs - pure delay predicate for scheduleSessionRevalidation', () => {
+  const nowMs = 1_700_000_000_000;
+
+  it('returns null when there is no token to schedule against', () => {
+    expect(nextRevalidationDelayMs(null, nowMs)).toBeNull();
+  });
+
+  it('schedules near the exp claim, minus the same buffer shouldRevalidateOnFocus uses', () => {
+    const token = makeToken({ exp: Math.floor(nowMs / 1000) + 600 }); // 10 minutes out
+    expect(nextRevalidationDelayMs(token, nowMs)).toBe(600_000 - 30_000);
+  });
+
+  it('floors at a minimum delay for an already-expired token, instead of a near-zero hot loop', () => {
+    const token = makeToken({ exp: Math.floor(nowMs / 1000) - 60 });
+    expect(nextRevalidationDelayMs(token, nowMs)).toBe(5_000);
+  });
+
+  it('falls back to a fixed interval when the exp claim is unreadable (malformed/legacy token)', () => {
+    expect(nextRevalidationDelayMs('not-a-jwt', nowMs)).toBe(5 * 60_000);
+  });
+});
+
+describe('scheduleSessionRevalidation - expiry-driven timer for a tab that never blurs', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    resetProbeGuardForTests();
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('probes once the token nears its exp claim, with no focus event', async () => {
+    const nowMs = Date.now();
+    const token = makeToken({ exp: Math.floor(nowMs / 1000) + 60 }); // 60s out; buffer is 30s
+    useAccessToken.setState({ accessToken: token, expired: false, expiredReason: null, mfaPending: false });
+    const apiGet = vi.spyOn(api, 'get').mockResolvedValue({ data: { user: {}, accessToken: token } });
+
+    const dispose = scheduleSessionRevalidation(makeQueryClient(vi.fn()));
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(apiGet).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(apiGet).toHaveBeenCalledWith('/api/identify', { timeout: 10000 });
+
+    dispose();
+  });
+
+  it('re-arms after a failed probe instead of permanently stopping', async () => {
+    useAccessToken.setState({ accessToken: 'not-a-jwt', expired: false, expiredReason: null, mfaPending: false });
+    const apiGet = vi.spyOn(api, 'get').mockRejectedValue(new Error('Network Error'));
+
+    const dispose = scheduleSessionRevalidation(makeQueryClient(vi.fn()));
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000 + 1_000); // unreadable-exp fallback interval; probe fails
+    expect(apiGet).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000 + 1_000); // re-armed rather than dead after the failure
+    expect(apiGet).toHaveBeenCalledTimes(2);
+
+    dispose();
+  });
+
+  it('re-arms immediately against a token change from another path, not the stale timer', async () => {
+    const nowMs = Date.now();
+    const farToken = makeToken({ exp: Math.floor(nowMs / 1000) + 60 * 30 }); // 30 minutes out
+    useAccessToken.setState({ accessToken: farToken, expired: false, expiredReason: null, mfaPending: false });
+    const apiGet = vi.spyOn(api, 'get').mockResolvedValue({ data: { user: {}, accessToken: 'x' } });
+
+    const dispose = scheduleSessionRevalidation(makeQueryClient(vi.fn()));
+
+    // A reactive 401 refresh (or any other path) lands a fresh token with a much sooner exp -
+    // the stale 30-minute timer must not be the one still running.
+    const soonToken = makeToken({ exp: Math.floor(nowMs / 1000) + 60 });
+    useAccessToken.setState({ accessToken: soonToken });
+
+    await vi.advanceTimersByTimeAsync(35_000);
+    expect(apiGet).toHaveBeenCalledWith('/api/identify', { timeout: 10000 });
+
+    dispose();
+  });
+
+  it('disposes cleanly: no probe fires after the returned disposer is called', async () => {
+    const nowMs = Date.now();
+    const token = makeToken({ exp: Math.floor(nowMs / 1000) + 60 });
+    useAccessToken.setState({ accessToken: token, expired: false, expiredReason: null, mfaPending: false });
+    const apiGet = vi.spyOn(api, 'get').mockResolvedValue({ data: { user: {}, accessToken: token } });
+
+    scheduleSessionRevalidation(makeQueryClient(vi.fn()))();
+
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(apiGet).not.toHaveBeenCalled();
   });
 });

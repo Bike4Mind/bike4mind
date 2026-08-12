@@ -238,3 +238,63 @@ describe('WebsocketProvider - refocus reconnect pulse', () => {
     expect(h.capturedUrls).not.toContain(null);
   });
 });
+
+describe('WebsocketProvider - reconnect recovery on a token change (no focus event needed)', () => {
+  beforeEach(() => {
+    h.probeIdentity.mockReset();
+    h.probeIdentity.mockResolvedValue(undefined);
+    h.capturedOptions.current = null as unknown as Record<string, (arg: unknown) => void>;
+    h.capturedUrls = [];
+    h.readyState = 1;
+    h.accessTokenState.accessToken = 'tok';
+    h.accessTokenState.mfaPending = false;
+    stubVisibility('visible');
+  });
+
+  // A tab that never blurs never sends the visibilitychange/focus event the pulse above
+  // relies on - a token refresh (from ANY path: probeIdentity, the 401 interceptor, this
+  // provider's own onReconnectStop probe) is the only signal such a tab can produce. This
+  // covers the FP-1 fix: once the reconnect budget is exhausted, a token change alone must
+  // still reset it.
+  it('pulses the reconnect budget when the access token changes after exhaustion, with zero focus events', async () => {
+    const rendered = render(
+      React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div'))
+    );
+    const opts = h.capturedOptions.current;
+    await act(async () => {
+      opts.onReconnectStop(20);
+    });
+    h.capturedUrls = [];
+
+    h.accessTokenState.accessToken = 'tok-2';
+    await act(async () => {
+      rendered.rerender(
+        React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div'))
+      );
+    });
+
+    // The pulse dips the url to null for one commit (resetting react-use-websocket's own
+    // reconnectCount) then straight back, carrying the fresh token in queryParams.
+    expect(h.capturedUrls).toContain(null);
+    expect(h.capturedUrls[h.capturedUrls.length - 1]).toBe('wss://example/ws');
+    expect((h.capturedOptions.current as unknown as { queryParams: { token: string } }).queryParams.token).toBe(
+      'tok-2'
+    );
+  });
+
+  it('does not pulse on a genuine token change while the budget is not exhausted', async () => {
+    const rendered = render(
+      React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div'))
+    );
+    h.capturedUrls = [];
+
+    h.accessTokenState.accessToken = 'tok-2';
+    await act(async () => {
+      rendered.rerender(
+        React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div'))
+      );
+    });
+
+    expect(h.capturedUrls).not.toContain(null);
+  });
+});

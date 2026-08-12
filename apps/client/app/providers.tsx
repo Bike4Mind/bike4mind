@@ -23,7 +23,7 @@ import { CookieConsentBanner } from '@client/app/components/CookieConsentBanner'
 import { TranslationProvider } from '@client/app/contexts/TranslationProvider';
 import { QuestPreparationOverlay } from '@client/app/components/QuestPreparationOverlay';
 import { runLocalStorageCleanup } from '@client/app/utils/localStorageCleanup';
-import { revalidateSessionOnFocus } from '@client/app/utils/sessionBootstrap';
+import { revalidateSessionOnFocus, scheduleSessionRevalidation } from '@client/app/utils/sessionBootstrap';
 
 // Lazy load DevTools only when needed (development only)
 const ReactQueryDevtools = lazy(() =>
@@ -167,6 +167,13 @@ export function ClientProviders({ children }: { children: ReactNode }) {
       window.removeEventListener('focus', handleVisibility);
     };
   }, []);
+
+  // The focus/visibilitychange listener above only ever fires for a tab that blurs and comes
+  // back - a tab that stays focused the whole time its token expires never sends either event,
+  // and an already-established WebSocket carries no further auth check once open. This timer
+  // is the belt to that listener's braces: it probes near the token's actual exp claim
+  // regardless of focus, so recovery doesn't depend on the tab ever having lost focus at all.
+  useEffect(() => scheduleSessionRevalidation(queryClient), []);
 
   return (
     <CoreProviders>

@@ -167,6 +167,22 @@ export const WebsocketProvider = ({ children, url }: Props) => {
     onReconnectStop(numAttempts) {
       console.log('ws reconnect stopped after', numAttempts, 'attempts');
       reconnectExhaustedRef.current = true;
+
+      // Exhaustion itself is an auth signal for a focused tab: nothing else will probe (no
+      // refocus is coming if the tab never blurred), so treat "ran out of reconnect attempts"
+      // the same as a failed connect attempt. If the token really did expire, this refreshes
+      // it - which the accessToken effect below turns into a reconnect pulse, closing the loop
+      // with no polling and no dependency on a focus event ever firing.
+      if (
+        shouldProbeOnFailedWsConnect({
+          openedThisAttempt: false,
+          accessToken,
+          mfaPending: useAccessToken.getState().mfaPending,
+          pathname: window.location.pathname,
+        })
+      ) {
+        void probeIdentity(queryClient);
+      }
     },
 
     onMessage: event => {
@@ -238,20 +254,25 @@ export const WebsocketProvider = ({ children, url }: Props) => {
     };
   }, []);
 
-  // On refocus, pulse forceDisconnected to force a fresh reconnect attempt with a reset
-  // backoff budget - but ONLY once reconnectExhaustedRef is set (onReconnectStop already
-  // fired, so there is no pending backoff timer left to cancel). Gating on readyState alone
-  // (e.g. "not OPEN") would also pulse mid-backoff: react-use-websocket's own
-  // reconnectInterval below deliberately staggers reconnects with jitter to avoid a
-  // thundering herd after an outage, and cancelling that on every refocus would defeat it -
-  // plus the library never clears its own pending reconnect timer on a url change, so a
-  // mid-backoff pulse leaves a second, stale reconnect attempt to fire later. Once genuinely
-  // exhausted there is no such timer left, so this has neither problem.
+  // Pulse forceDisconnected to force a fresh reconnect attempt with a reset backoff budget -
+  // but ONLY once reconnectExhaustedRef is set (onReconnectStop already fired, so there is no
+  // pending backoff timer left to cancel). Gating on readyState alone (e.g. "not OPEN") would
+  // also pulse mid-backoff: react-use-websocket's own reconnectInterval below deliberately
+  // staggers reconnects with jitter to avoid a thundering herd after an outage, and cancelling
+  // that on every trigger would defeat it - plus the library never clears its own pending
+  // reconnect timer on a url change, so a mid-backoff pulse leaves a second, stale reconnect
+  // attempt to fire later. Once genuinely exhausted there is no such timer left, so this has
+  // neither problem. Shared by both triggers below (refocus, and a post-exhaustion token
+  // refresh) - see each effect's own comment for why a single trigger isn't enough.
+  const pulseReconnect = useCallback(() => {
+    if (!reconnectExhaustedRef.current) return;
+    setForceDisconnected(true);
+  }, []);
+
   useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState !== 'visible') return;
-      if (!reconnectExhaustedRef.current) return;
-      setForceDisconnected(true);
+      pulseReconnect();
     };
     document.addEventListener('visibilitychange', handleVisibility);
     window.addEventListener('focus', handleVisibility);
@@ -260,6 +281,21 @@ export const WebsocketProvider = ({ children, url }: Props) => {
       window.removeEventListener('focus', handleVisibility);
     };
   }, []);
+
+  // A token refresh alone changes the socket's queryParams (a new url -> a brand new
+  // WebSocket, per create-or-join.ts's per-url sharedWebSockets map) but never resets the
+  // library's own reconnectCount - so once the budget is exhausted, the fresh connection gets
+  // exactly one attempt and immediately re-exhausts, forever, with no focus event to save it.
+  // That's the focused-tab gap: nothing ever blurs, so the visibilitychange pulse above never
+  // fires. Treat a post-exhaustion token change as the second trigger for the same pulse.
+  // prevAccessTokenRef skips the mount's own token (nothing has exhausted yet at mount).
+  const prevAccessTokenRef = useRef(accessToken);
+  useEffect(() => {
+    const changed = prevAccessTokenRef.current !== accessToken;
+    prevAccessTokenRef.current = accessToken;
+    if (!changed) return;
+    pulseReconnect();
+  }, [accessToken, pulseReconnect]);
 
   // The other half of the pulse: flip back on the next commit so shouldConnect's dip to
   // false was only momentary - enough for react-use-websocket to see url turn null (see

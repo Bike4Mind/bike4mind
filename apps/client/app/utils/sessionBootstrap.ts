@@ -196,3 +196,58 @@ export function revalidateSessionOnFocus(queryClient: QueryClient): void {
   }
   void probeIdentity(queryClient);
 }
+
+/** Floor on the delay below so an already-expired token can't schedule a near-zero-delay,
+ *  tight polling loop if a probe is slow to land or fails without changing the token. */
+const MIN_REVALIDATE_DELAY_MS = 5_000;
+
+/** Fallback polling interval when the token's exp claim is unreadable (malformed/legacy) -
+ *  matches the fail-safe direction of shouldRevalidateOnFocus's own exp-claim handling above,
+ *  just as a bounded interval instead of an unconditional probe. */
+const UNREADABLE_EXP_FALLBACK_MS = 5 * 60_000;
+
+/**
+ * Pure: how long until the current access token is worth a liveness probe. `null` when there
+ * is no token to schedule against. Mirrors shouldRevalidateOnFocus's exp-claim buffer, but as
+ * a delay to arm a timer with rather than a yes/no gate for an event that already happened.
+ */
+export function nextRevalidationDelayMs(token: string | null, nowMs: number = Date.now()): number | null {
+  if (!token) return null;
+  const expMs = decodeTokenExpiryMs(token);
+  if (expMs === null) return UNREADABLE_EXP_FALLBACK_MS;
+  return Math.max(MIN_REVALIDATE_DELAY_MS, expMs - REVALIDATE_EXPIRY_BUFFER_MS - nowMs);
+}
+
+/**
+ * Self-re-arming timer that keeps a focused tab's session fresh even when nothing else ever
+ * probes: revalidateSessionOnFocus (above) only fires from a focus/visibilitychange event,
+ * which an always-visible tab never sends, and an established WebSocket carries no further
+ * auth check once open. Fires probeIdentity near the token's exp claim, then re-arms against
+ * whatever the current token is afterward - regardless of whether that probe changed it, so a
+ * single failed round trip can't permanently stop the loop. A token change from any other path
+ * (a reactive 401 refresh, logout) also re-arms immediately rather than waiting for the stale
+ * timer. Returns a disposer; call once per app lifetime (see providers.tsx).
+ */
+export function scheduleSessionRevalidation(queryClient: QueryClient): () => void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const arm = () => {
+    if (timer !== undefined) clearTimeout(timer);
+    const delay = nextRevalidationDelayMs(useAccessToken.getState().accessToken);
+    if (delay === null) return;
+    timer = setTimeout(() => {
+      void probeIdentity(queryClient).then(arm);
+    }, delay);
+  };
+
+  arm();
+  const unsubscribe = useAccessToken.subscribe((state, prevState) => {
+    if (state.accessToken === prevState.accessToken) return;
+    arm();
+  });
+
+  return () => {
+    if (timer !== undefined) clearTimeout(timer);
+    unsubscribe();
+  };
+}
