@@ -379,6 +379,18 @@ describe('DataLakeTreeView cross-tree article search (#1693)', () => {
     // No debounce wait here - clearing bypasses it, so the stale section must be gone right away.
     expect(screen.queryByTestId('datalake-search-articles')).toBeNull();
   });
+
+  it('clears the results immediately when the query shrinks below the minimum length, without waiting out the debounce', async () => {
+    mockGetDataLakeArticles.mockReturnValue({ data: { data: [deepMatch] }, isLoading: false });
+    renderTree({ source: 'datalakes' });
+    const searchInput = screen.getByTestId('datalake-search').querySelector('input')!;
+    await userEvent.type(searchInput, 'deep');
+    await waitFor(() => expect(screen.getByTestId('datalake-search-articles')).toBeTruthy());
+    await userEvent.clear(searchInput);
+    await userEvent.type(searchInput, 'd');
+    // No debounce wait here - dropping below MIN_SEARCH_LENGTH bypasses it too, same as clearing.
+    expect(screen.queryByTestId('datalake-search-articles')).toBeNull();
+  });
 });
 
 // "books" is tagged directly on one file AND is the parent of "books:war"/"books:peace" - that

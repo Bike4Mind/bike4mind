@@ -128,10 +128,11 @@ export default function DataLakeTreeView({
     const handle = setTimeout(() => setDebouncedSearch(trimmed), SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(handle);
   }, [searchQuery]);
-  // Clearing the box reflects immediately rather than through the debounce above - otherwise
-  // the stale "Articles" section would linger for up to SEARCH_DEBOUNCE_MS after the folder
-  // tree has already reappeared underneath it.
-  const effectiveSearch = searchQuery.trim() ? debouncedSearch : '';
+  // Dropping below MIN_SEARCH_LENGTH (including clearing entirely) reflects immediately rather
+  // than through the debounce above - otherwise a stale "Articles" section from a longer prior
+  // query would linger for up to SEARCH_DEBOUNCE_MS after what's currently typed no longer
+  // qualifies for a search at all.
+  const effectiveSearch = searchQuery.trim().length >= MIN_SEARCH_LENGTH ? debouncedSearch : '';
 
   // The synthetic bucket intercepts before leaf-tag resolution: its key is not a real tag.
   const isUncategorized = !!uncategorized && breadcrumb.length === 1 && breadcrumb[0] === UNCATEGORIZED_KEY;
