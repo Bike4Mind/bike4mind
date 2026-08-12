@@ -35,6 +35,8 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
+import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
 import {
@@ -65,7 +67,9 @@ import {
   useRestoreDeletedDataLake,
   useUnarchiveDataLake,
 } from '@client/app/hooks/data/dataLakes';
+import { toast } from 'sonner';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import useStartChatWithLake from '@client/app/hooks/useStartChatWithLake';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import DataLakeEmptyState from '@client/app/components/datalake/DataLakeEmptyState';
 import DataLakeArticlePanel from './DataLakeArticlePanel';
@@ -162,6 +166,8 @@ export default function DataLakeManagerPanel() {
           // '' both when unset and when the server withheld it (non-editors never receive
           // the text); the modal renders the field off canManage, never off this value.
           systemPrompt: l.systemPrompt ?? '',
+          // Same as systemPrompt: '' when unset OR withheld from a non-editor; rendered off canManage.
+          preferredSystemPromptId: l.preferredSystemPromptId ?? '',
           canManage: !!l.canManage,
         }
       : null;
@@ -555,6 +561,26 @@ function ManagerNav({
                                   {lake.name}
                                 </Typography>
                               </ListItemContent>
+                              {/* Owner marker in the LIST itself, not just the detail pane: the
+                                  row otherwise shows only a name, so an admin (who sees every
+                                  tenant's lakes, even private) can't tell whose is whose without
+                                  opening each one. The owner name is already on the row, so this
+                                  costs no extra request. */}
+                              {lake.isOwn === false && (
+                                <Tooltip
+                                  title={
+                                    lake.ownerDisplayName
+                                      ? `Owned by ${lake.ownerDisplayName}`
+                                      : 'Owned by another user'
+                                  }
+                                  size="sm"
+                                >
+                                  <PersonOutlineIcon
+                                    data-testid={`datalake-manager-owner-icon-${lake.id}`}
+                                    sx={{ fontSize: 14, color: 'warning.400', flexShrink: 0 }}
+                                  />
+                                </Tooltip>
+                              )}
                               {/* Background AI-tag suggestion indicator - an independent clock
                                   from ingest, so this can appear well after the lake's files
                                   are already fully uploaded/searchable. */}
@@ -1013,6 +1039,8 @@ function LakeInfoPanel({
 }) {
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
   const archiveLake = useArchiveDataLake();
+  const startChatWithLake = useStartChatWithLake();
+  const [startingChat, setStartingChat] = useState(false);
   const visibility = lake.isPublic ? 'Public' : lake.organizationId ? 'Organization' : 'Private';
 
   return (
@@ -1026,6 +1054,32 @@ function LakeInfoPanel({
           <Typography level="h4" sx={{ flex: 1, minWidth: 0 }}>
             {lake.name}
           </Typography>
+          {/* Start chat is available to ANY user who can reach the lake (not manage-gated): it
+              opens a session scoped to this lake, applying the lake's preferred prompt server-side.
+              Minimal placement for now - see useStartChatWithLake's note; polish is a design follow-up. */}
+          <Button
+            size="sm"
+            variant="soft"
+            color="primary"
+            startDecorator={<ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />}
+            data-testid={`datalake-startchat-btn-${lake.id}`}
+            loading={startingChat}
+            onClick={async () => {
+              setStartingChat(true);
+              try {
+                await startChatWithLake(lake.id);
+              } catch {
+                toast.error('Could not start a chat with this lake');
+              } finally {
+                // Reset in finally, not only on error: a success that does not unmount this panel
+                // (e.g. navigation interrupted) would otherwise leave the spinner stuck forever.
+                setStartingChat(false);
+              }
+            }}
+            sx={{ flexShrink: 0, fontSize: '13px' }}
+          >
+            Start chat
+          </Button>
           {/* Add files / Settings / Archive are owner-or-admin only (the backend enforces the
               same rule). The nav surfaces other users' read-only public lakes too. */}
           {lake.canManage && (
@@ -1079,6 +1133,22 @@ function LakeInfoPanel({
           )}
         </Box>
         <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+          {/* Not-your-lake marker: the sidebar lists lakes the caller can REACH, not only ones
+              they own (org lakes, others' public lakes, and - for an admin - every tenant's, even
+              private). Flagged here, next to Add files / Settings / Archive, so someone else's
+              lake can't be mistaken for your own and managed by accident. */}
+          {lake.isOwn === false && (
+            <Chip
+              size="sm"
+              variant="soft"
+              color="warning"
+              startDecorator={<PersonOutlineIcon sx={{ fontSize: 12 }} />}
+              sx={{ fontSize: '11px' }}
+              data-testid={`datalake-manager-owner-chip-${lake.id}`}
+            >
+              {lake.ownerDisplayName ? `Owner: ${lake.ownerDisplayName}` : 'Owned by another user'}
+            </Chip>
+          )}
           <Chip size="sm" variant="soft" color="neutral" sx={{ fontSize: '11px' }}>
             {lake.fileTagPrefix}
           </Chip>

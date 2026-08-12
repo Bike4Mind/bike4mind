@@ -753,6 +753,76 @@ describe('ChatCompletionProcess', () => {
         expect(savedQuest.promptMeta?.context?.systemPromptDetails?.map(d => d.name)).toContain('date_time_context');
       });
 
+      it('exposes the disclosure on the process when the caller asked for it', async () => {
+        mockTextModel();
+        const body = {
+          ...startQuestParams,
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+          includeSystemPrompt: true,
+        };
+
+        await service.process({ body, logger: mockLogger });
+
+        // Row-level only: buildAndSortMessages is stubbed to a fixed payload here, so nothing
+        // counts as delivered and no text is disclosed. The text itself is covered against a real
+        // delivered set in systemPromptDisclosure.test.ts.
+        expect(service.systemPromptText?.blocks.map(b => b.name)).toContain('date_time_context');
+      });
+
+      // The two lists are documented as joinable on `name`, and the always-on floor is where that
+      // is easiest to break: a gate-excluded floor source contributes no message to the stack, yet
+      // buildAlwaysOnFloorDetails still inventories it.
+      it('emits a prompt-text row for every breakdown row even when a floor source is gated off', async () => {
+        mockTextModel();
+        const body = {
+          ...startQuestParams,
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+          enableArtifacts: false,
+          includeSystemPrompt: true,
+        };
+
+        await service.process({ body, logger: mockLogger });
+
+        const savedQuest = vi.mocked(mockDb.quests.update).mock.calls.at(-1)?.[0] as {
+          promptMeta?: { context?: { systemPromptDetails?: { name: string; wasIncluded: boolean }[] } };
+        };
+        const details = savedQuest.promptMeta?.context?.systemPromptDetails ?? [];
+        expect(details.find(d => d.name === 'artifact_emission')?.wasIncluded).toBe(false);
+
+        const disclosedNames = service.systemPromptText?.blocks.map(b => b.name) ?? [];
+        expect(disclosedNames).toContain('artifact_emission');
+        expect(details.map(d => d.name).filter(name => !disclosedNames.includes(name))).toEqual([]);
+      });
+
+      it('builds no prompt text unless the caller asked, so the default response carries none', async () => {
+        mockTextModel();
+        const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+        await service.process({ body, logger: mockLogger });
+
+        expect(service.systemPromptText).toBeUndefined();
+      });
+
+      it('never persists the disclosed text, which would hand it to every reader of the session', async () => {
+        mockTextModel();
+        const body = {
+          ...startQuestParams,
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+          includeSystemPrompt: true,
+        };
+
+        await service.process({ body, logger: mockLogger });
+
+        const savedQuest = vi.mocked(mockDb.quests.update).mock.calls.at(-1)?.[0];
+        expect(JSON.stringify(savedQuest)).not.toContain('Current date:');
+      });
+
       it('hands an EMPTY system stack to the builder under raw, and skips the admin templates', async () => {
         mockTextModel();
         const body = {

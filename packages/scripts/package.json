@@ -43,6 +43,7 @@
     "help:regenerate": "pnpm help:build-index && pnpm help:bundle-content && pnpm help:vectorize",
     "test:seed-context-summary": "tsx seedContextSummary.ts",
     "migrate:encrypt-tokens": "tsx migrate/encrypt-tokens-at-rest.ts",
+    "migrate:encrypt-admin-secrets": "tsx migrate/encrypt-admin-settings-and-apikeys.ts",
     "backfill:pending-free-credits": "tsx backfillPendingFreeCredits.ts",
     "backfill:fabfile-moderation-status": "tsx src/backfill-fabfile-moderation-status.ts",
     "tavern:upload-icons": "tsx src/uploadTavernIcons.ts"

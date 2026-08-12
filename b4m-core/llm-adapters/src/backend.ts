@@ -14,6 +14,7 @@ import {
   type CacheUsageStats,
   type ResponseFormat,
 } from '@bike4mind/common';
+import type { DegenerateStreamGuardOptions } from './degenerateStreamGuard';
 
 /** Maximum number of recursive tool calls to prevent infinite loops */
 export const DEFAULT_MAX_TOOL_CALLS = 10;
@@ -165,6 +166,13 @@ export interface ICompletionOptions {
     enableIdleTimeout?: boolean; // Enable idle timeout detection for streaming (Anthropic only)
     enableRequestTimeout?: boolean; // Enable request-level timeout for API calls that hang before streaming (Anthropic only)
     idleTimeoutMs?: number; // Custom idle timeout in milliseconds (defaults to 90s standard, 180s thinking)
+    /**
+     * Tuning/kill-switch for the degeneration guard, which aborts a stream that
+     * has stopped making progress and is repeating itself (Anthropic only so
+     * far). ON by default with conservative thresholds - see
+     * degenerateStreamGuard.ts. Pass `{ enabled: false }` to opt a surface out.
+     */
+    degenerateStreamGuard?: DegenerateStreamGuardOptions;
     /**
      * Multi-turn token accumulators threaded through recursive complete() calls.
      * Each provider API call (every tool round-trip) is billed independently;

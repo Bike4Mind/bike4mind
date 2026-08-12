@@ -86,6 +86,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   archiveByDataLakeTag: vi.fn(),
   unarchiveByDataLakeTag: vi.fn(),
   findArchivedByDataLakeTag: vi.fn(),
+  hasArchivedByDataLakeTag: vi.fn(),
   findDeletedByDataLakeTag: vi.fn(),
   undeleteByDataLakeTag: vi.fn(),
   softDeleteByDataLakeTag: vi.fn(),

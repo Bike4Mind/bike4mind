@@ -33,6 +33,18 @@ describe('isForeignEmbeddingModel', () => {
     // ada-002 and 3-small are both 1536 dims, so only the label can tell them apart.
     expect(isForeignEmbeddingModel(SMALL_3, ADA)).toBe(true);
   });
+
+  // Pins the DELIBERATE choice not to case-fold, so adding a `.toLowerCase()` here has to be a
+  // conscious decision rather than a tidy-up that silently changes what gets excluded. Folding
+  // would hide a malformed label, and an unrecognized id already fails CLOSED further down the
+  // stack (fab-pipeline's ALL_MODEL_DIMENSIONS is a Map, so an unknown key degrades to the
+  // brute-force scan rather than a bogus index target). The write path is what keeps a mis-cased
+  // label out of the database in the first place - see chunkFileSchema in fabFileService/chunk.ts,
+  // the only writer of FabFile.embeddingModel.
+  it('treats a case variant as foreign - the label is compared verbatim, never folded', () => {
+    expect(isForeignEmbeddingModel('Text-Embedding-Ada-002', ADA)).toBe(true);
+    expect(isForeignEmbeddingModel(ADA, 'TEXT-EMBEDDING-ADA-002')).toBe(true);
+  });
 });
 
 describe('classifyLoadedChunk', () => {

@@ -42,6 +42,11 @@ export const CreateSessionRequestSchema = z.object({
   artifactIds: z.array(z.string()).optional(),
   projectId: z.string().optional(),
   systemPromptText: z.string().optional(),
+  systemPromptId: z.string().optional(),
+  // Create a session "for" this data lake: the route resolves the lake's session defaults
+  // (forced retrieval scoped to it + its preferred prompt id) server-side. Consumed at the route
+  // and NOT persisted as a session field (core's createSessionParametersSchema strips it).
+  dataLakeId: z.string().optional(),
   surface: z.string().optional(),
   enabledTools: z.array(z.string()).optional(),
   disabledTools: z.array(z.string()).optional(),

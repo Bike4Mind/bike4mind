@@ -1,11 +1,13 @@
 import { Request, Response } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
 import { OllamaBackend } from '@bike4mind/llm-adapters';
-import { AdminSettings } from '@bike4mind/database';
+import { adminSettingsRepository } from '@bike4mind/database';
 
 const handler = baseApi({ auth: false }).get(async (req: Request, res: Response) => {
   try {
-    const ollamaSettings = await AdminSettings.find({ settingName: { $in: ['EnableOllama', 'ollamaBackend'] } });
+    // ollamaBackend is isSensitive (stored encrypted at rest); read through the repository so
+    // it is decrypted, not the raw model which would hand OllamaBackend the ciphertext.
+    const ollamaSettings = await adminSettingsRepository.findBySettingNames(['EnableOllama', 'ollamaBackend']);
     const ollamaBackend = ollamaSettings.find(setting => setting.settingName === 'ollamaBackend')?.settingValue;
     const enableOllama =
       !!ollamaBackend &&

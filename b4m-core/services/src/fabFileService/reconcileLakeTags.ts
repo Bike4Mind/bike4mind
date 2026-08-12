@@ -182,14 +182,18 @@ export const reconcileLakeTags = async (
   leaves.push(...prefixArmLeaves.map(l => l.lake));
   // The mirror case: a write that newly satisfies a lake's prefix arm is automatic MEMBERSHIP
   // (today's accepted model for content tags - the read-side predicate grants it purely on the
-  // tag, with no permission check either). But recomputeLakeStats's side effect is stronger than
-  // membership: it also flips a draft lake to active (recomputeLakeStats -> activateIfDraft),
-  // a one-way, publication-visibility change. `owner` is the FILE's owner, not the acting user -
-  // a caller merely SHARED on that file (findAccessibleById admits a read/write share) could
-  // otherwise force-publish a lake they have no relationship to. Gate the stats/activation side
-  // effect on canManageLake; an unmanaged join just leaves the recompute for later rather than
-  // silently publishing someone else's unfinished lake.
-  joins.push(...prefixArmJoins.filter(j => canManageLake(j.lake, actor)).map(j => j.lake));
+  // tag, with no permission check either). But recomputeLakeStats's activation side effect is
+  // stronger than membership: it also flips a draft lake to active (activateIfDraft), a one-way,
+  // publication-visibility change. `owner` is the FILE's owner, not the acting user - a caller
+  // merely SHARED on that file (findAccessibleById admits a read/write share) could otherwise
+  // force-publish a lake they have no relationship to. Gate the ACTIVATION on canManageLake; an
+  // unmanaged join still gets its stats corrected via statsOnlyJoins below (see commit()), rather
+  // than drifting until some other door happens to touch the same lake.
+  const statsOnlyJoins: MembershipLake[] = [];
+  for (const j of prefixArmJoins) {
+    if (canManageLake(j.lake, actor)) joins.push(j.lake);
+    else statsOnlyJoins.push(j.lake);
+  }
 
   // Force-carried, mirroring metaTagsToPersist above: removeFileFromLake checks membership
   // against the STORED document, so if the persisted array already dropped every prefix tag it
@@ -227,8 +231,14 @@ export const reconcileLakeTags = async (
       // Joins need no write here: the caller has already persisted the canonical meta-tag (or,
       // for a prefix-arm join, the qualifying content tag) as part of `tagsToPersist`, and their
       // gate (where one applies) ran above, before that write. They still need stats.
+      const recomputed = new Set<string>();
       for (const lake of [...leaves, ...joins]) {
         await recomputeLakeStats(lake, { db });
+        recomputed.add(lake.id);
+      }
+      // An unmanaged prefix-arm join: stats only, activation stays gated - see the comment above.
+      for (const lake of statsOnlyJoins) {
+        if (!recomputed.has(lake.id)) await recomputeLakeStats(lake, { db }, { skipActivation: true });
       }
     },
   };

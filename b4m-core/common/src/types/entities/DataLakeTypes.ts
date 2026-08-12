@@ -56,6 +56,22 @@ export interface IDataLake {
    * uncapped, matching the other system prompts in the codebase. Absent/empty = no per-lake prompt.
    */
   systemPrompt?: string;
+  /**
+   * Optional preferred registry system prompt for this lake, by `promptId` (e.g. 'triage_router').
+   * When a session is created FOR this lake (see resolveLakeSessionDefaults), this seeds the
+   * session's `systemPromptId` unless the caller set one explicitly - so a corpus ships with the
+   * prompt it was tuned against, and the router's "pair it with a lake" precondition holds by
+   * construction.
+   *
+   * DELIBERATELY DISTINCT from `systemPrompt` above, because the two are opposite kinds of thing:
+   * `systemPrompt` is free-text answering guidance injected ADDITIVELY at request time (plural -
+   * every trusted, retrieved lake contributes a block); this is a SINGULAR session-mode prompt id
+   * that suppresses the generic identity prompt, so it is resolved ONCE at create time (a request-
+   * time, multi-lake resolution would have no sound tie-break and would flicker the session's system
+   * message turn to turn). Validated against the session-activatable allowlist at the write boundary.
+   * Editor-only (see LAKE_FIELD_VISIBILITY); absent/empty = no preferred prompt.
+   */
+  preferredSystemPromptId?: string;
   /** Tag prefix for all files in this data lake, must end with ":" (e.g. "acme:") */
   fileTagPrefix: string;
   /** Auto-computed meta-tag: "datalake:<slug>" */
@@ -108,6 +124,32 @@ export interface IDataLake {
    * behavior) rather than restoring nothing.
    */
   filesDeletedAt?: Date | null;
+  /**
+   * The exact `archivedAt` stamp archive wrote on this lake's members, so restore (after a
+   * delete of an already-archived lake) can clear that batch's archive marker and nothing
+   * else's - mirrors `filesDeletedAt` but on the archive axis. Matched by EQUALITY: a
+   * prefix-sharing sibling lake's own archive of that same file (a different stamp) is never
+   * touched, provided the sibling archived first - `archiveByDataLakeTag` only ever stamps
+   * `archivedAt: null` rows, so whichever lake archives a shared file first owns its marker.
+   * Claimed set-if-unset; cleared by unarchive (so a later re-archive gets a fresh stamp, not a
+   * stale reused one) and by a restore that clears it.
+   *
+   * The key is a wall-clock `Date`, not a unique token - equality is a best-effort ownership test,
+   * not a guarantee, and two lakes claiming in the same millisecond would collide (same design as
+   * `filesDeletedAt`, not new to this field). The same-millisecond collision also has a same-lake
+   * variant: two concurrent archive calls on ONE lake that happen to generate their claim's `Date`
+   * in the same millisecond both read as "freshly minted" to the loser, so its clear-back (see
+   * archiveDataLake) could wipe the winner's just-written stamp. Narrow (needs both a same-lake
+   * race AND a same-millisecond collision), not fixed by the `wasMinted` guard, which only
+   * distinguishes minted-from-echoed, not minted-at-the-same-instant-as-a-peer.
+   *
+   * Absent on a lake archived before this field existed (or one whose members already carry an
+   * unstamped `archivedAt` for any other reason): restore leaves that archive marker exactly as
+   * it is instead of guessing at a batch it cannot prove, and archive itself skips claiming a
+   * fresh stamp in that case too (see archiveDataLake) rather than recording a mark that would
+   * name none of the pre-existing archived rows.
+   */
+  filesArchivedAt?: Date | null;
   /**
    * Lake-memory producer (#1440) bookkeeping - server-managed, never client input.
    *
@@ -200,6 +242,8 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * caller sweeps unmarked and must say so, since that lake then restores unbounded.
    */
   claimFilesDeletedAt(id: string, at: Date): Promise<Date | null>;
+  /** Claim `filesArchivedAt` for an archive sweep - same set-if-unset contract as `claimFilesDeletedAt`. */
+  claimFilesArchivedAt(id: string, at: Date): Promise<Date | null>;
   /**
    * Per-lake concurrency claim for the memory producer (#1440): stamp `lakeMemoryExtractionAt = at` only
    * if no run currently holds the lease - the field is unset, OR its stamp is older than `staleBefore`

@@ -10,6 +10,7 @@ import { IAgent, IMessage } from '@bike4mind/common';
 import { NotFoundError, ForbiddenError, BadRequestError, getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
+import { assertSystemPromptGenerationAllowed } from '@client/server/agents/systemPromptRateLimit';
 
 interface GenerateSystemPromptResponse {
   success: boolean;
@@ -87,26 +88,6 @@ const createAgentMetadataForPrompt = (agent: IAgent): string => {
   return JSON.stringify(agentData, null, 2);
 };
 
-// Helper function to check rate limiting
-const checkRateLimit = async (agent: IAgent, rateLimitSeconds: number): Promise<void> => {
-  if (rateLimitSeconds <= 0) return; // No rate limiting
-
-  const lastGeneration = (agent as { systemPrompt?: string; updatedAt: Date }).systemPrompt
-    ? new Date(agent.updatedAt)
-    : null;
-  if (lastGeneration) {
-    const timeSinceLastGeneration = Date.now() - lastGeneration.getTime();
-    const timeRemainingMs = rateLimitSeconds * 1000 - timeSinceLastGeneration;
-
-    if (timeRemainingMs > 0) {
-      const timeRemainingSec = Math.ceil(timeRemainingMs / 1000);
-      throw new BadRequestError(
-        `Rate limit exceeded. Please wait ${timeRemainingSec} seconds before generating another system prompt.`
-      );
-    }
-  }
-};
-
 const handler = baseApi().post<Request<{ id: string }, GenerateSystemPromptResponse, {}>>(async (req, res) => {
   const { id } = req.query;
   const userId = req.user!.id;
@@ -138,7 +119,7 @@ const handler = baseApi().post<Request<{ id: string }, GenerateSystemPromptRespo
 
     // Check rate limiting
     const rateLimitSeconds = settings?.rateLimitSeconds || 60;
-    await checkRateLimit(agent, rateLimitSeconds);
+    assertSystemPromptGenerationAllowed(agent, rateLimitSeconds);
 
     // Get the active meta-prompt
     const metaPrompt = await agentOpsSettingsRepository.getActiveMetaPrompt();
@@ -184,7 +165,8 @@ Please create a detailed system prompt that captures this agent's personality, c
     // Get the configured model from settings, or default to Claude 4 Opus
     const preferredModelId = settings?.generationLlmModel || 'claude-opus-4-20250514';
     const modelInfo =
-      models.find(m => m.id === preferredModelId) ||
+      // Skip a pinned model the catalog now reports as disabled, matching the save-time guard.
+      models.find(m => m.id === preferredModelId && !m.disabled) ||
       models.find(m => m.id === 'claude-opus-4-20250514') ||
       models.find(m => m.id === 'claude-sonnet-4-6') ||
       models[0];
@@ -229,6 +211,7 @@ Please create a detailed system prompt that captures this agent's personality, c
     const updateData = {
       ...agent,
       systemPrompt: cleanSystemPrompt,
+      lastSystemPromptGeneratedAt: new Date(),
     };
 
     const updatedAgent = await agentRepository.update(updateData);

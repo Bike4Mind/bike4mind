@@ -91,7 +91,6 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
   const position = useSessionLayout(s => s.floatingChatPosition);
   const size = useSessionLayout(s => s.floatingChatSize);
   const isMinimized = useSessionLayout(s => s.floatingChatMinimized);
-  const previousLayout = useSessionLayout(s => s.previousLayout);
 
   // Prevent wheel events from bubbling out of the floating window to parent
   // JS scroll handlers (e.g. a docked landing page). Re-attaches after minimize/
@@ -300,15 +299,11 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
     }
   }, [isMinimized]);
 
-  // Handle close - return to previous layout
+  // Handle close - dismiss the panel entirely. Re-docking is a separate action
+  // (the dock-right/dock-bottom controls in ChatPanelControls), not this button's job.
   const handleClose = useCallback(() => {
-    const targetLayout = previousLayout && previousLayout !== 'floatingChat' ? previousLayout : 'vertical';
-    setSessionLayout({
-      layout: targetLayout,
-      floatingChatMinimized: false,
-      previousLayout: undefined,
-    });
-  }, [previousLayout]);
+    setSessionLayout({ layout: 'hide', floatingChatMinimized: false });
+  }, []);
 
   const bounds = {
     left: 0,

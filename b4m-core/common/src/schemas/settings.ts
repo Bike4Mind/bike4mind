@@ -291,6 +291,7 @@ export const SettingKeySchema = z.enum([
 
   // MFA SETTINGS
   'enforceMFA',
+  'allowTrustedDevices',
 
   // VOICE SESSION SETTINGS
   'enableVoiceSession',
@@ -3004,6 +3005,17 @@ export const settingsMap = {
     // A policy boolean - exposing it reveals nothing exploitable.
     publicSafe: true,
   }),
+  allowTrustedDevices: makeBooleanSetting({
+    key: 'allowTrustedDevices',
+    name: 'Allow "Remember This Device"',
+    description:
+      'Let users mark a device as trusted at the MFA prompt so a fresh login from it skips the TOTP challenge for 30 days. The emailed one-time code is still required every time. Turning this off stops new grants and ignores existing ones immediately.',
+    defaultValue: true,
+    category: 'Users',
+    // publicSafe: the login UI needs it before authentication to decide whether to
+    // render the checkbox. A policy boolean - it reveals nothing exploitable.
+    publicSafe: true,
+  }),
   FirecrawlApiKey: makeStringSetting({
     key: 'FirecrawlApiKey',
     name: 'Firecrawl API Key',
@@ -3853,6 +3865,24 @@ export function redactSettingSecrets(setting: AdminSettingDoc): AdminSettingDoc 
       })),
     },
   };
+}
+
+/**
+ * Redact a setting for a WebSocket / change-stream broadcast, where the payload is the RAW
+ * stored document. Post-encryption an isSensitive value is ciphertext the browser cannot
+ * decrypt, so it collapses to the bare mask with NO trailing characters: masking the
+ * ciphertext tail (as maskSensitiveSettingValue would) surfaces a wrong "last 4" and lets an
+ * admin watching a live cross-admin update mis-verify which credential is loaded. An unset
+ * value stays empty. The authoritative mask carrying the real last-4 still comes from
+ * /api/settings/fetch. Non-sensitive shapes (sreAgentConfig) fall through to redactSettingSecrets.
+ */
+export function redactSettingSecretsForBroadcast(setting: AdminSettingDoc): AdminSettingDoc {
+  const definition = (settingsMap as Record<string, { isSensitive?: boolean } | undefined>)[setting.settingName];
+  if (definition?.isSensitive) {
+    const hasValue = typeof setting.settingValue === 'string' && setting.settingValue.length > 0;
+    return { ...setting, settingValue: hasValue ? SENSITIVE_SETTING_MASK : '' };
+  }
+  return redactSettingSecrets(setting);
 }
 
 /** Setting keys explicitly tagged `publicSafe` - the only keys allowed in the public artifact. */

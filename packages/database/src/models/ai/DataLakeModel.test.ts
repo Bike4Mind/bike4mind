@@ -433,6 +433,38 @@ describe('DataLakeRepository.findPublicLakes — public discover catalog', () =>
     const { lakes } = await dataLakeRepository.findPublicLakes({ search: 'a.b' });
     expect(lakes.map(l => l.slug)).toEqual(['dotstar']);
   });
+
+  it('exposes the Load more boundary end to end at the real page size (>24 public lakes)', async () => {
+    // The QA gap this closes (issue #989 item 3): preview had only 2 public lakes, so the 24-item
+    // page threshold (the client's PUBLIC_LAKES_PAGE_SIZE, mirrored by this repo's default limit)
+    // never tripped and Load more could not be exercised. Seed just past it and drive the two
+    // pages the UI would, asserting every observable the button's presence keys off.
+    const PAGE = 24;
+    const TOTAL = PAGE + 1; // one past a full page, so page two holds exactly the remainder.
+    for (let i = 0; i < TOTAL; i++) {
+      const n = String(i).padStart(2, '0'); // zero-padded so name-sort matches seed order
+      await dataLakeRepository.create(baseLake({ slug: `lake-${n}`, name: `Lake ${n}`, isPublic: true }));
+    }
+
+    // Page 1 uses the repo default limit (24) - the same fixed size the client requests.
+    const page1 = await dataLakeRepository.findPublicLakes();
+    expect(page1.lakes).toHaveLength(PAGE);
+    expect(page1.total).toBe(TOTAL);
+    // loaded (24) < total (25) -> the client renders Load more.
+    expect(page1.lakes.length).toBeLessThan(page1.total);
+
+    // Page 2 at offset = how many are already loaded (what getNextPageParam feeds back).
+    const page2 = await dataLakeRepository.findPublicLakes({ offset: page1.lakes.length });
+    expect(page2.lakes).toHaveLength(TOTAL - PAGE); // the single remainder
+    expect(page2.total).toBe(TOTAL); // "Showing X of Y" - Y stays the full count across pages
+    // loaded (25) == total (25) -> Load more disappears.
+    expect(page1.lakes.length + page2.lakes.length).toBe(TOTAL);
+
+    // The two pages together cover every lake exactly once - nothing duplicated or skipped across
+    // the page boundary (the name+_id total order is what guarantees this).
+    const seen = [...page1.lakes, ...page2.lakes].map(l => l.slug);
+    expect(new Set(seen).size).toBe(TOTAL);
+  });
 });
 
 describe('DataLakeRepository — slug is unique per org', () => {
@@ -1373,5 +1405,66 @@ describe('DataLakeRepository teardown stamp', () => {
     await dataLakeRepository.update({ id: created.id, filesDeletedAt: null });
 
     expect((await dataLakeRepository.claimFilesDeletedAt(created.id, second))?.getTime()).toBe(second.getTime());
+  });
+});
+
+// Mirrors the delete-axis teardown stamp above, on the archive axis - same set-if-unset
+// concurrency guard, same round-trip contract, so restore can bound its archive-clear to the
+// batch this lake's own archive wrote.
+describe('DataLakeRepository archive stamp', () => {
+  setupMongoTest();
+
+  it('round-trips the stamp as a Date', async () => {
+    const stamp = new Date('2026-05-01T00:00:00.000Z');
+    const created = await dataLakeRepository.create(baseLake({ slug: 'archived-lake' }));
+
+    await dataLakeRepository.update({ id: created.id, filesArchivedAt: stamp });
+
+    const found = await dataLakeRepository.findById(created.id);
+    expect(found?.filesArchivedAt).toBeInstanceOf(Date);
+    expect(found?.filesArchivedAt?.getTime()).toBe(stamp.getTime());
+  });
+
+  it('clears a spent stamp back to null', async () => {
+    const created = await dataLakeRepository.create(
+      baseLake({ slug: 'unarchived', filesArchivedAt: new Date('2026-05-01T00:00:00.000Z') })
+    );
+
+    await dataLakeRepository.update({ id: created.id, filesArchivedAt: null });
+
+    expect((await dataLakeRepository.findById(created.id))?.filesArchivedAt ?? null).toBeNull();
+  });
+
+  it('leaves the stamp unset on a lake that was never archived', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'untouched-archive' }));
+    expect((await dataLakeRepository.findById(created.id))?.filesArchivedAt ?? null).toBeNull();
+  });
+
+  it('claims an unset stamp and echoes it back', async () => {
+    const at = new Date('2026-05-01T00:00:00.000Z');
+    const created = await dataLakeRepository.create(baseLake({ slug: 'claiming-archive' }));
+
+    expect((await dataLakeRepository.claimFilesArchivedAt(created.id, at))?.getTime()).toBe(at.getTime());
+    expect((await dataLakeRepository.findById(created.id))?.filesArchivedAt?.getTime()).toBe(at.getTime());
+  });
+
+  it('refuses to overwrite a claimed stamp and hands back the holder', async () => {
+    const first = new Date('2026-05-01T00:00:00.000Z');
+    const second = new Date('2026-05-02T00:00:00.000Z');
+    const created = await dataLakeRepository.create(baseLake({ slug: 'contended-archive' }));
+    await dataLakeRepository.claimFilesArchivedAt(created.id, first);
+
+    expect((await dataLakeRepository.claimFilesArchivedAt(created.id, second))?.getTime()).toBe(first.getTime());
+    expect((await dataLakeRepository.findById(created.id))?.filesArchivedAt?.getTime()).toBe(first.getTime());
+  });
+
+  it('claims again once an unarchive has cleared the stamp', async () => {
+    const first = new Date('2026-05-01T00:00:00.000Z');
+    const second = new Date('2026-05-02T00:00:00.000Z');
+    const created = await dataLakeRepository.create(baseLake({ slug: 'recycled-archive' }));
+    await dataLakeRepository.claimFilesArchivedAt(created.id, first);
+    await dataLakeRepository.update({ id: created.id, filesArchivedAt: null });
+
+    expect((await dataLakeRepository.claimFilesArchivedAt(created.id, second))?.getTime()).toBe(second.getTime());
   });
 });
