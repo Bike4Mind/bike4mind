@@ -245,6 +245,47 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
   async getAtlasIndexStatus(model: string): Promise<{ queryable: boolean; status: string } | null> {
     return getAtlasIndexStatusForModel(mongoose.connection, model);
   }
+
+  /**
+   * One page of chunk ids still missing `charLength`, ascending by `_id` - the char-length
+   * backfill's keyset cursor (packages/scripts/datalake/backfill-chunk-char-length.ts).
+   * `charLength: null` deliberately matches missing AND explicit null.
+   */
+  async findChunkIdsMissingCharLength(
+    options: { limit?: number; afterChunkId?: string } = {}
+  ): Promise<string[]> {
+    const { limit = 5_000, afterChunkId } = options;
+    const docs = await this.fabFileChunkModel
+      .find({ charLength: null, ...(afterChunkId ? { _id: { $gt: afterChunkId } } : {}) })
+      .select({ _id: 1 })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean();
+    return docs.map(d => String(d._id));
+  }
+
+  /**
+   * Stamp `charLength` on the given chunks server-side: a pipeline update computing $strLenCP
+   * over the stored text, so chunk text never leaves the database. Counts Unicode code points -
+   * the same number countCodePoints produces on the live write path (see that helper's comment
+   * for why the two must agree).
+   */
+  async backfillCharLengthByIds(chunkIds: string[]): Promise<number> {
+    if (chunkIds.length === 0) return 0;
+    const result = await this.fabFileChunkModel.updateMany({ _id: { $in: chunkIds } }, [
+      { $set: { charLength: { $strLenCP: '$text' } } },
+    ]);
+    return result.modifiedCount;
+  }
+
+  /** Sum of a file's chunks' charLength, unstamped chunks counted as 0 - backfill phase 2 input. */
+  async sumChunkCharLengthByFabFileId(fabFileId: string): Promise<number> {
+    const [agg] = await this.fabFileChunkModel.aggregate<{ total: number }>([
+      { $match: { fabFileId } },
+      { $group: { _id: null, total: { $sum: { $ifNull: ['$charLength', 0] } } } },
+    ]);
+    return agg?.total ?? 0;
+  }
 }
 
 const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
@@ -910,6 +951,32 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       { $project: { _id: 0, fileCount: 1, totalSizeBytes: 1, totalChunkedChars: 1 } },
     ]);
     return agg ?? { fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 };
+  }
+
+  /**
+   * One page of file ids that have chunks but no `chunkedCharCount` (missing or nulled by a
+   * content rewrite), ascending by `_id` - the char-length backfill's phase-2 cursor.
+   */
+  async findFileIdsMissingChunkedCharCount(
+    options: { limit?: number; afterFileId?: string } = {}
+  ): Promise<string[]> {
+    const { limit = 1_000, afterFileId } = options;
+    const docs = await this.fabFileModel
+      .find({
+        chunkedCharCount: null,
+        chunkCount: { $gt: 0 },
+        ...(afterFileId ? { _id: { $gt: afterFileId } } : {}),
+      })
+      .select({ _id: 1 })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean();
+    return docs.map(d => String(d._id));
+  }
+
+  /** Stamp a file's recomputed `chunkedCharCount` - the char-length backfill's phase-2 write. */
+  async setChunkedCharCount(id: string, chunkedCharCount: number): Promise<void> {
+    await this.fabFileModel.updateOne({ _id: id }, { $set: { chunkedCharCount } });
   }
 
   /**

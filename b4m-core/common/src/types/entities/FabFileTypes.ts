@@ -356,6 +356,12 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
   ): Promise<{ id: string; text: string }[]>;
   /** Every chunk of a file, vectorless included - lets a paging caller tell a whole file from a slice. */
   countByFabFileId(fabFileId: string): Promise<number>;
+  /** One page of chunk ids still missing `charLength`, ascending by `_id` - backfill's keyset cursor. */
+  findChunkIdsMissingCharLength(options?: { limit?: number; afterChunkId?: string }): Promise<string[]>;
+  /** Server-side $strLenCP stamp of `charLength` on the given chunks; chunk text never leaves the DB. */
+  backfillCharLengthByIds(chunkIds: string[]): Promise<number>;
+  /** Sum of a file's chunks' charLength, unstamped chunks counted as 0. */
+  sumChunkCharLengthByFabFileId(fabFileId: string): Promise<number>;
 }
 
 /**
@@ -703,6 +709,13 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   computeDataLakeStats(
     scope: DataLakeMembershipScope
   ): Promise<{ fileCount: number; totalSizeBytes: number; totalChunkedChars: number }>;
+  /**
+   * One page of file ids that have chunks but no `chunkedCharCount` (missing or nulled by a
+   * content rewrite), ascending by `_id` - the char-length backfill's phase-2 cursor.
+   */
+  findFileIdsMissingChunkedCharCount(options?: { limit?: number; afterFileId?: string }): Promise<string[]>;
+  /** Stamp a file's recomputed `chunkedCharCount` - the char-length backfill's phase-2 write. */
+  setChunkedCharCount(id: string, chunkedCharCount: number): Promise<void>;
   /**
    * Distinct live file count per lake, keyed by `datalakeTag`. Same predicate as
    * computeDataLakeStats, so what a browse surface displays cannot disagree with a lake's
