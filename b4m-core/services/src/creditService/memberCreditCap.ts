@@ -34,3 +34,19 @@ export function isMemberCreditCapExceeded(organization: MemberCapOrg, userId: st
   }
   return getMemberUsedCredits(organization, userId) + credits > organization.maxCreditsPerMember;
 }
+
+/**
+ * Whether `userId` is already at or over the org's per-member cap, with no
+ * charge estimate. This is the gate for spend paths that bill incrementally and
+ * have no single upfront cost (e.g. an agent run settling per-iteration): they
+ * can only refuse to START an already-capped member. Deliberately stricter than
+ * `isMemberCreditCapExceeded` - `>=` (at the cap blocks) rather than
+ * `used + estimate > cap` - because there is no estimate to add. Returns false
+ * when no cap is configured.
+ */
+export function isMemberAtOrOverCap(organization: MemberCapOrg, userId: string): boolean {
+  if (organization.maxCreditsPerMember == null) {
+    return false;
+  }
+  return getMemberUsedCredits(organization, userId) >= organization.maxCreditsPerMember;
+}

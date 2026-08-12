@@ -755,23 +755,22 @@ async function processExecution(
       return;
     }
 
-    // Org-billed per-member cap: coarse gate only. An agent run has no single upfront
-    // estimate (it bills per-iteration at settlement), so we can refuse to START a member
-    // who has already reached their cap, but a run that crosses the cap mid-execution is
-    // not stopped here (#1536, tracked as follow-up).
-    if (organization?.maxCreditsPerMember != null) {
-      const memberUsedCredits = creditService.getMemberUsedCredits(organization, execution.userId);
-      if (memberUsedCredits >= organization.maxCreditsPerMember) {
-        logger.warn('[Credits] Member credit cap reached; refusing to start execution', {
-          used: memberUsedCredits,
-          cap: organization.maxCreditsPerMember,
-        });
-        await agentExecutionRepository.markFailed(executionId, {
-          message: 'Organization member credit limit reached',
-        });
-        await sendWs('failed', { executionId, reason: 'insufficient_credits' });
-        return;
-      }
+    // Org-billed per-member cap. An agent run has no single upfront estimate (it bills
+    // per-iteration at settlement), so this gates on "already at/over cap" with no charge
+    // to add. It sits below the resume branch and re-reads `organization` each invocation,
+    // so it re-runs on every continuation/subagent-resume/DAG-wake: a run that crosses the
+    // cap mid-execution IS stopped, at its next handoff (like the pool gate above). Started,
+    // in-flight iterations still settle - this bounds the overshoot, it does not refund it.
+    if (organization && creditService.isMemberAtOrOverCap(organization, execution.userId)) {
+      logger.warn('[Credits] Member credit cap reached; refusing to start execution', {
+        used: creditService.getMemberUsedCredits(organization, execution.userId),
+        cap: organization.maxCreditsPerMember,
+      });
+      await agentExecutionRepository.markFailed(executionId, {
+        message: 'Organization member credit limit reached',
+      });
+      await sendWs('failed', { executionId, reason: 'insufficient_credits' });
+      return;
     }
 
     // Resolve the memory gates ONCE and persist them (#1525). The read path (first-iteration

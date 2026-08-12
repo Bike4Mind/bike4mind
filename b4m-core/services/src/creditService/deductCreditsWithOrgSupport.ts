@@ -161,15 +161,15 @@ export async function deductCreditsWithOrgSupport(
 
   if (organization) {
     const memberDetails = organization.userDetails?.find(u => u.id === user.id);
-
-    // No per-member cap check here: this is the settlement write, and the cap is
-    // enforced at reservation (see isMemberCreditCapExceeded, used by
-    // ChatCompletionProcess/cliCompletions pre-flight). Throwing here cannot block
-    // an already-served request - it only skips the usage tracking below, freezing
-    // `usedCredits` at 0 forever so the cap can never trip (#1536). Always track.
     ownerId = organization.id;
     ownerType = CreditHolderType.Organization;
     creditHolderMethods = adapters.db.organizations;
+
+    // No per-member cap check guards the tracking below: this is the settlement write, and
+    // the cap is enforced at reservation (see isMemberCreditCapExceeded, used by
+    // ChatCompletionProcess/cliCompletions pre-flight). Throwing here cannot block an
+    // already-served request - it only skips the usage tracking below, freezing `usedCredits`
+    // at 0 forever so the cap can never trip (#1536). Always track.
 
     // Self-heal a member with no `userDetails` row - one added before grant-point seeding existed
     // (see `ensureUserDetails`). The positional $inc below cannot create a missing row, so without
