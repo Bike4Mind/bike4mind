@@ -239,6 +239,10 @@ export default function DataLakeExplorer({
     source
   );
   const leafArticles = leafTag ? (leafArticlesResult?.data ?? []) : [];
+  // isLoading passed to the tree below only waits on leafLoading at a true leaf
+  // (currentNodes.length === 0): a branch node's subfolder list needs no fetch at all, so
+  // blocking it on the own-tagged-files fetch would blank an already-renderable folder list
+  // behind a skeleton every time a mixed node is opened.
 
   // Deep-link: fetch the specific article by ID when the URL param is present. Page mode shows
   // it in the inline reader; chat mode opens it in the viewer (effect below).
@@ -500,7 +504,7 @@ export default function DataLakeExplorer({
             onNavigate={handleNavigate}
             selectedFileId={viewerFileId}
             onSelectFile={handleSelectFile}
-            isLoading={tagCountsLoading || (!!leafTag && leafLoading)}
+            isLoading={tagCountsLoading || (!!leafTag && leafLoading && currentNodes.length === 0)}
             isError={tagCountsError}
             title={rootLabel ?? copy.rootLabel}
             onManage={onManage}
@@ -520,7 +524,7 @@ export default function DataLakeExplorer({
             onNavigate={handleNavigate}
             selectedFileId={selectedFile?.id ?? null}
             onSelectFile={handleSelectFile}
-            isLoading={tagCountsLoading || (!!leafTag && leafLoading)}
+            isLoading={tagCountsLoading || (!!leafTag && leafLoading && currentNodes.length === 0)}
             isError={tagCountsError}
           />
           <DataLakeArticle
