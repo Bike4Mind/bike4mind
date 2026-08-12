@@ -359,9 +359,12 @@ const handler = baseApi()
 
           await Promise.all([
             recordEmbeddingUsage(embedding_model, embeddingProvider),
-            ...(search.alternateModelsEmbedded ?? []).map(altModel =>
-              recordEmbeddingUsage(altModel, getProviderFromModel(altModel as SupportedEmbeddingModel))
-            ),
+            // Defensive: the planner (alternateModelAnn.ts) already only ever selects a
+            // registry-known model, so this filter should never actually drop anything. Mirrors
+            // the same guard in knowledgeBaseSearch/index.ts's recordAllEmbeddingUsage.
+            ...search.alternateModelsEmbedded
+              .filter(isSupportedEmbeddingModel)
+              .map(altModel => recordEmbeddingUsage(altModel, getProviderFromModel(altModel))),
           ]);
         }
       } catch (recordErr) {
