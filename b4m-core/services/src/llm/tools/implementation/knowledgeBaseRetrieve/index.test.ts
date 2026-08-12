@@ -14,6 +14,7 @@ vi.mock('../../../../dataLakeService/getDynamicDataLakeTags', () => ({
 
 import { knowledgeBaseRetrieveTool } from './index';
 import type { ToolContext } from '../../base/types';
+import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
 
 const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), info: vi.fn() } as never;
 
@@ -101,6 +102,10 @@ describe('retrieve_knowledge_content — by-id (Path A) retrieval exclusion', ()
 
     expect(out).toContain('Retrieved content from');
     expect(out).toContain('chunk body');
+    // This tool hands the model the largest block of raw document text and both search surfaces route
+    // it here for "more detail" - so it carries the same anti-invention rule, ahead of the content.
+    expect(out).toContain(GROUNDED_NO_INVENTION_RULE);
+    expect(out.indexOf(GROUNDED_NO_INVENTION_RULE)).toBeLessThan(out.indexOf('chunk body'));
   });
 
   it('OWNED branch: an unvectorized file is excluded when vectorizedOnly is set', async () => {

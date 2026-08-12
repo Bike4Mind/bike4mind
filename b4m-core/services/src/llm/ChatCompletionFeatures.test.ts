@@ -7,6 +7,7 @@ import {
   shouldSummarizeSession,
   SUMMARIZATION_CONFIG,
 } from './ChatCompletionFeatures';
+import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { UNLIMITED_HISTORY_COUNT } from '@bike4mind/common';
 import type { ISessionDocument, IChatHistoryItemDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
@@ -412,6 +413,17 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
     expect(content).toContain('### Cortes NEJM 2024.pdf (ID: fileB)');
     expect(content).toContain('cite documents by name');
     expect(content).not.toContain('### [1]');
+  });
+
+  it('both styles carry the anti-invention rule so a grounded turn cannot volunteer an unsourced customer/deal/figure', async () => {
+    const named = await runRetrieval();
+    const indexed = await runRetrieval('indexed');
+    expect(named.content).toContain(GROUNDED_NO_INVENTION_RULE);
+    expect(indexed.content).toContain(GROUNDED_NO_INVENTION_RULE);
+    // Ahead of the retrieved sections so it frames how to use them (see the injection comment):
+    // pin position, not just presence, so a trailing-append refactor cannot pass silently.
+    expect(named.content.indexOf(GROUNDED_NO_INVENTION_RULE)).toBeLessThan(named.content.indexOf('### NCCN'));
+    expect(indexed.content.indexOf(GROUNDED_NO_INVENTION_RULE)).toBeLessThan(indexed.content.indexOf('### [1] NCCN'));
   });
 
   it('indexed: numbers distinct documents in citables order, same file shares its number', async () => {
@@ -1036,10 +1048,12 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       rows: () => [{ id: 'c1', fabFileId: 'fileA', text: 'z'.repeat(20000), vector: [1, 0] }],
     });
     const { content } = await run(ctx);
-    // The contiguous run, not every `z` in the message: the surrounding framing is prose we own and
-    // any word containing a z (e.g. "organization") would otherwise inflate the count and fail a
-    // correctly-truncated chunk.
-    expect((content.match(/z+/) ?? [''])[0].length).toBe(12000);
+    // Pin the injected chunk to exactly the char budget. Match a contiguous 12000-z run rather than
+    // counting every 'z' in the message - the framing text we own (e.g. the "organization" in
+    // GROUNDED_NO_INVENTION_RULE) carries its own z's and sits ahead of the chunk, so a first-match
+    // /z+/ would read that stray z instead.
+    expect(content).toContain('z'.repeat(12000));
+    expect(content).not.toContain('z'.repeat(12001));
   });
 });
 
