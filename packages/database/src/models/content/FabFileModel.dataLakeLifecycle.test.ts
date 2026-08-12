@@ -185,9 +185,53 @@ describe('FabFile data lake lifecycle membership', () => {
       }
     });
 
-    it('restores everything it archived, so no member is stranded', async () => {
+    it('restores everything it archived when the stamp names both arms', async () => {
+      const rows = await seedLakeRows();
+      const STAMP = new Date('2026-06-01T00:00:00.000Z');
+
+      await fabFileRepository.archiveByDataLakeTag(scope, STAMP);
+      const restored = await fabFileRepository.unarchiveByDataLakeTag(scope, STAMP);
+
+      expect(restored).toBe(2);
+      for (const id of rows.memberIds) {
+        expect((await readRaw(id))?.archivedAt ?? null).toBeNull();
+      }
+    });
+
+    it('leaves a differently-stamped prefix member untouched - a sibling lake, or a self-drifted stamp the mechanism cannot tell apart from one', async () => {
+      const rows = await seedLakeRows();
+      const OWN_STAMP = new Date('2026-06-01T00:00:00.000Z');
+      const OTHER_STAMP = new Date('2026-05-01T00:00:00.000Z');
+      // prefixOwned carries no meta-tag, so it is reachable ONLY through the ambiguous prefix arm -
+      // exactly the row a prefix-sharing sibling's own archive could also have stamped this way.
+      await FabFile.updateOne({ _id: rows.prefixOwned._id }, { $set: { archivedAt: OTHER_STAMP } });
+
+      const restored = await fabFileRepository.unarchiveByDataLakeTag(scope, OWN_STAMP);
+
+      expect(restored).toBe(0);
+      expect((await readRaw(rows.prefixOwned._id.toString()))?.archivedAt?.getTime()).toBe(OTHER_STAMP.getTime());
+    });
+
+    it('unconditionally rescues a meta-tagged member regardless of stamp, so the split is not a zero-matched heuristic', async () => {
+      const rows = await seedLakeRows();
+      const OWN_STAMP = new Date('2026-06-01T00:00:00.000Z');
+      const FOREIGN_STAMP = new Date('2026-05-01T00:00:00.000Z');
+      // No other lake's document can ever carry this lake's own meta-tag, so it comes back even
+      // though its stamp does not match what we pass in - ownership needs no stamp to prove here.
+      await FabFile.updateOne({ _id: rows.metaTagged._id }, { $set: { archivedAt: FOREIGN_STAMP } });
+
+      const restored = await fabFileRepository.unarchiveByDataLakeTag(scope, OWN_STAMP);
+
+      expect(restored).toBe(1);
+      expect((await readRaw(rows.metaTagged._id.toString()))?.archivedAt ?? null).toBeNull();
+    });
+
+    it('falls back to unbounded on the prefix arm only when this lake has no stamp at all (legacy, pre-mark lake)', async () => {
       const rows = await seedLakeRows();
 
+      // archiveByDataLakeTag with no `at` still writes a real per-row timestamp (orphaned, no lake
+      // names it) - the lake itself passes `undefined` below, as it would for a lake torn down
+      // before `filesArchivedAt` existed.
       await fabFileRepository.archiveByDataLakeTag(scope);
       const restored = await fabFileRepository.unarchiveByDataLakeTag(scope);
 
@@ -195,6 +239,42 @@ describe('FabFile data lake lifecycle membership', () => {
       for (const id of rows.memberIds) {
         expect((await readRaw(id))?.archivedAt ?? null).toBeNull();
       }
+    });
+
+    it('sends the equality bound to the prefix arm and no bound at all to the meta arm, not just an end-state that could pass by luck', async () => {
+      await seedLakeRows();
+      const OWN_STAMP = new Date('2026-06-01T00:00:00.000Z');
+      const spy = vi.spyOn(FabFile, 'updateMany');
+
+      await fabFileRepository.unarchiveByDataLakeTag(scope, OWN_STAMP);
+
+      expect(spy).toHaveBeenCalledTimes(2);
+      const filters = spy.mock.calls.map(call => call[0] as Record<string, unknown>);
+      expect(
+        filters.some(
+          f => f['tags.name'] === DATALAKE_TAG && JSON.stringify(f.archivedAt) === JSON.stringify({ $ne: null })
+        )
+      ).toBe(true);
+      expect(filters.some(f => f.archivedAt === OWN_STAMP)).toBe(true);
+      spy.mockRestore();
+    });
+
+    it("is safe to retry after a completed sweep: a second call does not free a sibling's differently-stamped prefix member", async () => {
+      const rows = await seedLakeRows();
+      const OWN_STAMP = new Date('2026-06-01T00:00:00.000Z');
+      const SIBLING_STAMP = new Date('2026-05-01T00:00:00.000Z');
+      await fabFileRepository.archiveByDataLakeTag(scope, OWN_STAMP);
+      // Simulates a sibling lake's own archive on the shared prefix, stamped differently.
+      await FabFile.updateOne({ _id: rows.prefixOwned._id }, { $set: { archivedAt: SIBLING_STAMP } });
+
+      const first = await fabFileRepository.unarchiveByDataLakeTag(scope, OWN_STAMP);
+      // The retry a crash-then-re-entry would produce: the bounded prefix pass now matches nothing
+      // of ours (already cleared), which must NOT fall back to freeing the sibling's row.
+      const second = await fabFileRepository.unarchiveByDataLakeTag(scope, OWN_STAMP);
+
+      expect(first).toBe(1);
+      expect(second).toBe(0);
+      expect((await readRaw(rows.prefixOwned._id.toString()))?.archivedAt?.getTime()).toBe(SIBLING_STAMP.getTime());
     });
 
     it('finds archived members for the unarchive dedup pass', async () => {
