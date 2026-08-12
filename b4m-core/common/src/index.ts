@@ -31,6 +31,7 @@ export * from './constants/jupyter';
 export * from './constants/systemUsers';
 export * from './constants/agentExecutionStatus';
 export * from './constants/chunking';
+export * from './constants/lakeAccessAudit';
 export * from './constants/publish';
 export * from './constants/artifactElision';
 export * from './schemas/openai';

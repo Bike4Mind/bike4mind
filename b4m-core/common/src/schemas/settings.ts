@@ -1,6 +1,14 @@
 import { z } from 'zod';
 import { CREDITS_PER_USD_COST } from '../pricing';
 import { DEFAULT_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET } from '../constants/chunking';
+import {
+  LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS,
+  LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS,
+  LAKE_ACCESS_AUDIT_RETENTION_MAX_DAYS,
+  LAKE_ACCESS_QUERY_TEXT_RETENTION_DEFAULT_DAYS,
+  LAKE_ACCESS_QUERY_TEXT_RETENTION_MAX_DAYS,
+  LAKE_ACCESS_QUERY_TEXT_RETENTION_MIN_DAYS,
+} from '../constants/lakeAccessAudit';
 import { CHAT_MODELS, ChatModels } from '../models';
 import {
   BedrockEmbeddingModel,
@@ -270,6 +278,10 @@ export const SettingKeySchema = z.enum([
   'defaultEmbeddingModel',
   'dataLakeSearchMaxFiles',
   'dataLakeSearchMaxChunks',
+
+  // LAKE ACCESS AUDIT SETTINGS
+  'LakeAccessAuditRetentionDays',
+  'LakeAccessQueryTextRetentionDays',
 
   // New MaxContentLength setting
   'MaxContentLength',
@@ -1637,6 +1649,16 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiRateLimitProPerMin', order: 3 },
     ],
   },
+  DATA_LAKE_AUDIT: {
+    id: 'dataLakeAuditService',
+    name: 'Data Lake Access Audit',
+    description: 'Retention for the lake access audit trail and its opt-in query-text log',
+    icon: 'Security',
+    settings: [
+      { key: 'LakeAccessAuditRetentionDays', order: 1 },
+      { key: 'LakeAccessQueryTextRetentionDays', order: 2 },
+    ],
+  },
   // Note: CONTEXT_TELEMETRY settings are managed in the Context Inspector tab (Admin UI)
   // to keep all telemetry controls in one place
 } satisfies {
@@ -2972,6 +2994,37 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 3,
+  }),
+  LakeAccessAuditRetentionDays: makeNumberSetting({
+    key: 'LakeAccessAuditRetentionDays',
+    name: 'Lake Access Audit Retention (days)',
+    defaultValue: LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS,
+    // The enforced floor: the admin API rejects a save below this, and the write path
+    // (lakeAccessEventRepository.record) clamps to it unconditionally regardless of what is
+    // stored, so this control cannot be used to shorten the audit trail below the floor.
+    min: LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS,
+    max: LAKE_ACCESS_AUDIT_RETENTION_MAX_DAYS,
+    description:
+      'How long a lake access audit event (who read a lake, and when) is retained, in days. Has a ' +
+      'floor of 450 days (12 months live plus a Type II observation tail) - this is a platform-wide ' +
+      'value, not per-organization, until a scoped settings resolver exists.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.DATA_LAKE_AUDIT.id,
+    order: 1,
+  }),
+  LakeAccessQueryTextRetentionDays: makeNumberSetting({
+    key: 'LakeAccessQueryTextRetentionDays',
+    name: 'Lake Access Query Text Retention (days)',
+    defaultValue: LAKE_ACCESS_QUERY_TEXT_RETENTION_DEFAULT_DAYS,
+    min: LAKE_ACCESS_QUERY_TEXT_RETENTION_MIN_DAYS,
+    max: LAKE_ACCESS_QUERY_TEXT_RETENTION_MAX_DAYS,
+    description:
+      'How long the opt-in query-text log (the natural-language question behind a lake retrieval) ' +
+      'is retained, in days. Always resolved shorter than the audit event retention itself, ' +
+      'regardless of this value, since the query text is more sensitive than the event metadata.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.DATA_LAKE_AUDIT.id,
+    order: 2,
   }),
   // Analytics Bot (existing production bot - DO NOT CHANGE)
   slackSigningSecret: makeStringSetting({

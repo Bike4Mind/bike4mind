@@ -14,6 +14,10 @@ import {
   type AdminSettingDoc,
 } from './settings';
 import { DEFAULT_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET } from '../constants/chunking';
+import {
+  LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS,
+  LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS,
+} from '../constants/lakeAccessAudit';
 import { SRE_SECRET_PLACEHOLDER } from '../types/entities/SreTypes';
 
 describe('makeObjectSetting JSON preprocess', () => {
@@ -430,5 +434,29 @@ describe('DefaultChunkSize agrees with the chunker', () => {
     // makeNumberSetting does `prefault(config.defaultValue ?? 0)`, so a broken import resolves to
     // 0 silently instead of throwing. Pin it.
     expect(settingsMap.DefaultChunkSize.schema.parse(undefined)).toBe(DEFAULT_PASSAGE_TOKEN_TARGET);
+  });
+});
+
+describe('LakeAccessAuditRetentionDays cannot be configured below the floor', () => {
+  // Same drift class as DefaultChunkSize: the floor is enforced in two places (this schema's
+  // `min`, and the write path's unconditional clamp), and both must agree with the exported
+  // constant or an admin could save a value the write path silently overrides without complaint.
+  it('min matches the exported floor constant', () => {
+    expect(settingsMap.LakeAccessAuditRetentionDays.min).toBe(LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS);
+  });
+
+  it('rejects a save below the floor and accepts the floor itself', () => {
+    expect(() =>
+      settingsMap.LakeAccessAuditRetentionDays.schema.parse(LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS - 1)
+    ).toThrow();
+    expect(settingsMap.LakeAccessAuditRetentionDays.schema.parse(LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS)).toBe(
+      LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS
+    );
+  });
+
+  it('prefaults to the default constant rather than makeNumberSetting fallback 0', () => {
+    expect(settingsMap.LakeAccessAuditRetentionDays.schema.parse(undefined)).toBe(
+      LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS
+    );
   });
 });
