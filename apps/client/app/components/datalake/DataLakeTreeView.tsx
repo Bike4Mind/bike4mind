@@ -167,7 +167,9 @@ export default function DataLakeTreeView({
   }, [isUncategorized, bucketFiles, leafTag, articles, searchQuery]);
 
   // Cross-tree article search (#1693): while browsing folders, a query also reaches article
-  // titles/tags/notes anywhere in scope via the server - not just this level's segment names.
+  // titles/tags/notes across EVERY lake/tag the caller can access - not scoped to the current
+  // breadcrumb or folder, since the server search takes no tags/path filter. Intentional: the
+  // Explorer already merges multiple lakes into one tag tree, so this matches that merged scope.
   // Skipped at a leaf/bucket since `files` above already searches the (already-loaded) scope.
   const treeSearchActive = !showFiles && !!source && effectiveSearch.length >= MIN_SEARCH_LENGTH;
   const { data: treeSearchResult, isLoading: treeSearchLoading } = useGetDataLakeArticles(
