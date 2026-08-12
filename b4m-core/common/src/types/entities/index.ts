@@ -19,6 +19,7 @@ export * from './OrganizationTypes';
 export * from './SessionTypes';
 export * from './SessionAgentConfigTypes';
 export * from './SettingTypes';
+export * from './ScopedSettingTypes';
 export * from './TransformBatchTypes';
 export * from './ShareableDocumentTypes';
 export * from './ToolTypes';

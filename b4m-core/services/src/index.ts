@@ -27,6 +27,7 @@ export * as notebookExportService from './notebookExportService';
 export * as notebookImportService from './notebookImportService';
 export * as notebookCurationService from './notebookCurationService';
 export * as dataLakeService from './dataLakeService';
+export * as scopedSettingsService from './settings';
 export * as briefcaseService from './briefcaseService';
 export * as imageTemplateService from './imageTemplateService';
 export * as cheerioService from './lib/cheerio';

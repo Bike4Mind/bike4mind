@@ -11,6 +11,7 @@ import {
 } from './embedding';
 import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } from '../types/entities/SreTypes';
 import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
+import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/ScopedSettingTypes';
 
 /**
  * Default text for the artifact-emission system prompt. Single source of truth used BOTH as the
@@ -651,6 +652,14 @@ interface BaseSetting {
   publicSafe?: boolean;
   /** Parent setting key - this setting is hidden in admin UI when the parent is off. */
   dependsOn?: SettingKey;
+  /**
+   * Opt-in scoping (epic #1658 lane 0 / #1660). Absent = platform-only, the historical behavior:
+   * the value lives solely in `AdminSettings` and `resolveScopedSetting` returns it unchanged at
+   * every scope. Present, the setting also honors org/owner/lake OVERRIDES per `settableAt`, with
+   * the narrower scope winning. A setting is never silently scoped - it opts in here, which is why
+   * adding this field changes no existing consumer.
+   */
+  scope?: SettingScopeConfig;
 }
 
 function makeStringSetting(
@@ -2961,6 +2970,8 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 2,
+    // A scan budget an org/owner/lake may tighten below the platform ceiling (#1661 org/lake rungs).
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
   }),
   dataLakeSearchMaxChunks: makeNumberSetting({
     key: 'dataLakeSearchMaxChunks',
@@ -2972,6 +2983,7 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 3,
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
   }),
   // Analytics Bot (existing production bot - DO NOT CHANGE)
   slackSigningSecret: makeStringSetting({
