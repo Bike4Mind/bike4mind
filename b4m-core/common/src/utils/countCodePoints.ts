@@ -9,6 +9,7 @@
 export const countCodePoints = (text: string): number => {
   let count = 0;
   // for..of iterates by code point, so a surrogate pair advances once.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- for..of by code point; the binding itself is unused
   for (const _ch of text) count++;
   return count;
 };
