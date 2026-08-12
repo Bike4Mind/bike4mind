@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { useMFAStatus, useSetupMFA, useVerifyMFASetup } from '@client/app/hooks/data/mfa';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
 import MFAModal from '@client/app/components/common/MFAModal';
-import { Box, Typography, Alert, CircularProgress } from '@mui/joy';
+import { Box, Typography, Alert, CircularProgress, Button } from '@mui/joy';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 
@@ -45,6 +45,23 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
     isError: setupMFAIsError,
   } = setupMFA;
   const verifyMFASetup = useVerifyMFASetup();
+
+  // Shared by the auto-start effect and the manual retry button (see the enforced-block
+  // screen). Calling mutate() clears the mutation's error state, so a retry re-opens the path
+  // the `!setupMFAIsError` guard closes after a failure.
+  const startMfaSetup = useCallback(() => {
+    setupMFAMutate(undefined, {
+      onSuccess: () => {
+        setShowMFASetup(true);
+        toast.info('Please complete MFA setup to continue');
+      },
+      onError: (error: any) => {
+        // Extract the actual error message from axios response
+        const errorMessage = error.response?.data?.error || error.message || 'Failed to setup MFA';
+        toast.error(errorMessage);
+      },
+    });
+  }, [setupMFAMutate]);
 
   useEffect(() => {
     if (showMFASetup) {
@@ -96,17 +113,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
       // settle re-runs the effect and re-fires the mutation at network speed, forever. Firing
       // once and stopping (the user gets a toast; a reload remounts and retries) is correct.
       if (!showMFASetup && !setupMFAIsPending && !setupMFAData && !setupMFAIsError) {
-        setupMFAMutate(undefined, {
-          onSuccess: () => {
-            setShowMFASetup(true);
-            toast.info('Please complete MFA setup to continue');
-          },
-          onError: (error: any) => {
-            // Extract the actual error message from axios response
-            const errorMessage = error.response?.data?.error || error.message || 'Failed to setup MFA';
-            toast.error(errorMessage);
-          },
-        });
+        startMfaSetup();
       }
     }
   }, [
@@ -120,7 +127,7 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
     mfaStatusQuery.data,
     mfaQueryFailed,
     showMFASetup,
-    setupMFAMutate,
+    startMfaSetup,
     setupMFAIsPending,
     setupMFAData,
     setupMFAIsError,
@@ -235,9 +242,23 @@ const MFAEnforcementWrapper: React.FC<MFAEnforcementWrapperProps> = ({ children 
           access the application.
         </Alert>
 
-        <Typography level="body-md" textAlign="center" sx={{ color: 'text.secondary' }}>
-          We&apos;re setting up MFA for your account. Please wait...
-        </Typography>
+        {setupMFAIsError ? (
+          // A failed setup used to dead-end here on "please wait" forever (the auto-retry
+          // guard intentionally won't re-fire, and the only signal was a toast that has
+          // faded). Give the user an explicit way back in.
+          <>
+            <Typography level="body-md" textAlign="center" sx={{ color: 'text.secondary' }}>
+              We couldn&apos;t start MFA setup. Please try again.
+            </Typography>
+            <Button data-testid="mfa-enforcement-retry-btn" onClick={startMfaSetup} loading={setupMFAIsPending}>
+              Retry MFA setup
+            </Button>
+          </>
+        ) : (
+          <Typography level="body-md" textAlign="center" sx={{ color: 'text.secondary' }}>
+            We&apos;re setting up MFA for your account. Please wait...
+          </Typography>
+        )}
 
         {/* MFA Setup Modal */}
         {showMFASetup && setupMFAData && (

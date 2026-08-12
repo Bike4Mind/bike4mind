@@ -31,6 +31,7 @@ vi.mock('@client/app/hooks/data/user', () => ({
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { get: vi.fn() },
   isPublicPath: () => false,
+  getAxiosErrorStatus: (error: { response?: { status?: number } } | undefined) => error?.response?.status,
 }));
 
 // Minimal stand-in for a user record. The store actions only read `tags`,
@@ -115,10 +116,16 @@ describe('resolveIdentifyEffect — mfaPending gate + cross-tab guard + stale-ca
     ).toBe('clearUser');
   });
 
-  it('clears the user on identify error', () => {
-    expect(resolveIdentifyEffect({ mfaPending: false, hasToken: true, isSuccess: false, isError: true })).toBe(
-      'clearUser'
-    );
+  it('clears the user on a non-429 identify error', () => {
+    expect(
+      resolveIdentifyEffect({ mfaPending: false, hasToken: true, isSuccess: false, isError: true, errorStatus: 500 })
+    ).toBe('clearUser');
+  });
+
+  it('skips (keeps the user) on a 429 identify error - a rate-limit blip is not a dead session', () => {
+    expect(
+      resolveIdentifyEffect({ mfaPending: false, hasToken: true, isSuccess: false, isError: true, errorStatus: 429 })
+    ).toBe('skip');
   });
 
   it('skips while identify is still loading (neither success nor error)', () => {
@@ -230,13 +237,27 @@ describe('refreshUser single-flight guard', () => {
     expect(mockGet).toHaveBeenCalledTimes(1);
   });
 
-  it('allows a genuinely new refresh after the previous one settles', async () => {
-    mockGet.mockResolvedValue({ data: { user: fakeUser() } });
+  it('dedups while in flight, then clears the guard on settle so a later refresh re-requests', async () => {
+    // Interleaved (not sequential) so it actually probes the guard: a concurrent call MUST
+    // dedup to 1 while the first is in flight, and only AFTER the first settles may a new call
+    // make a second request. With the guard deleted the concurrent call would already be 2.
+    let resolveFirst!: (value: unknown) => void;
+    mockGet.mockReturnValueOnce(
+      new Promise(resolve => {
+        resolveFirst = resolve;
+      })
+    );
+    mockGet.mockResolvedValueOnce({ data: { user: fakeUser() } });
     const { refreshUser } = useUser.getState();
 
-    await refreshUser();
-    await refreshUser();
+    const first = refreshUser();
+    const concurrent = refreshUser();
+    expect(mockGet).toHaveBeenCalledTimes(1); // deduped while in flight
 
+    resolveFirst({ data: { user: fakeUser() } });
+    await Promise.all([first, concurrent]);
+
+    await refreshUser(); // guard cleared on settle -> a genuinely new request
     expect(mockGet).toHaveBeenCalledTimes(2);
   });
 

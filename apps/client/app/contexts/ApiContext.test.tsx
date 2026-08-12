@@ -166,6 +166,40 @@ describe('ApiProvider 401 interceptor -> login redirect', () => {
     expect(state.expiredReason).toBe('expired');
   });
 
+  it('does NOT tear down on a post-refresh 401 that carries a domain error code (e.g. Notion reconnect)', async () => {
+    // A 401 with an application-level `code` PASSED auth and failed for a domain reason (the
+    // fresh token is fine) - tearing the whole session down here would log the user out on a
+    // routine, scoped error. It must reject silently (pre-PR behavior), not redirect.
+    const make401WithCode = (config: InternalAxiosRequestConfig): AxiosError =>
+      new AxiosError('Unauthorized', 'ERR_BAD_REQUEST', config, {}, {
+        status: 401,
+        statusText: 'Unauthorized',
+        data: { error: 'Reconnect required', code: 'NOTION_RECONNECT_REQUIRED' },
+        headers: {},
+        config,
+      } as AxiosResponse);
+
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      if (config.url === '/api/auth/refreshToken') {
+        return Promise.resolve(ok(config, { accessToken: 'new-access', refreshToken: 'new-refresh' }));
+      }
+      return Promise.reject(make401WithCode(config));
+    }) as AxiosAdapter;
+
+    render(
+      <ApiProvider>
+        <div />
+      </ApiProvider>
+    );
+
+    await expect(api.get('/api/mcp-servers/notion/pages')).rejects.toBeTruthy();
+
+    // Session preserved: no redirect, token intact, not marked expired.
+    expect(replace).not.toHaveBeenCalled();
+    expect(useAccessToken.getState().accessToken).toBe('new-access');
+    expect(useAccessToken.getState().expired).toBe(false);
+  });
+
   it('does NOT log out when the refresh fails with a transient 5xx (cold Lambda / outage)', async () => {
     // The original request 401s (token expired) so a refresh is attempted, but the
     // refresh endpoint returns 503 - a transient outage, not a rejected refresh token.

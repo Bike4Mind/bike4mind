@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
-import { render, waitFor } from '@testing-library/react';
+import { render, waitFor, screen, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -79,5 +79,19 @@ describe('MFAEnforcementWrapper - auto-setup does not loop on persistent failure
 
     // The isError guard stops the re-fire: exactly one attempt, not an unbounded storm.
     expect(mfaSetupCalls()).toBe(1);
+  });
+
+  it('renders a retry button on failure, and clicking it fires a new setup attempt', async () => {
+    renderWrapper();
+
+    // The auto-attempt fails, so the dead-end "please wait" is replaced by a retry affordance.
+    const retry = await screen.findByTestId('mfa-enforcement-retry-btn');
+    await waitFor(() => expect(mfaSetupCalls()).toBe(1));
+
+    fireEvent.click(retry);
+
+    // The manual retry re-fires setup (calling mutate clears isError), so the user is not
+    // dead-ended - exactly what the auto-guard deliberately won't do on its own.
+    await waitFor(() => expect(mfaSetupCalls()).toBe(2));
   });
 });

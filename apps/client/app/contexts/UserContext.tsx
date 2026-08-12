@@ -4,7 +4,7 @@ import React, { ReactNode, useCallback, useEffect, useMemo, useRef } from 'react
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { userIsCustomer, userIsDeveloper } from '../utils/user';
-import { api, isPublicPath } from '@client/app/contexts/ApiContext';
+import { api, isPublicPath, getAxiosErrorStatus } from '@client/app/contexts/ApiContext';
 import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
 import ExpiredSession from '../components/ExpiredSession';
 import { useSubscribeCollection } from '../utils/react-query';
@@ -266,7 +266,11 @@ export const useUser = create<UserContextProps>()(
         if (refreshUserInFlight) return refreshUserInFlight;
         refreshUserInFlight = (async () => {
           try {
-            const response = await api.get<{ user: IUserDocument }>('/api/identify');
+            // 10s bound matches the two sibling single-flight guards (refreshPromise in
+            // ApiContext, probeInFlight in sessionBootstrap): without it a hung identify
+            // request would never settle, the finally below would never run, and every later
+            // refreshUser() would return the same never-resolving promise for the tab's life.
+            const response = await api.get<{ user: IUserDocument }>('/api/identify', { timeout: 10000 });
             set({
               currentUser: response.data.user,
               isHydrated: true,
@@ -321,7 +325,11 @@ export function shouldRevokeForTokenVersion(params: {
  * unit-testable without rendering the heavily-wired UserProvider.
  *
  * - local mfaPending (this tab is mid-MFA) -> skip; the MFA modal owns the flow.
- * - identify error -> clear the user.
+ * - identify 429 (rate limited) -> skip; a rate-limit blip says nothing about session
+ *   validity, and clearing the user bounces a perfectly valid session to /login (see
+ *   RestrictedPage). The identify limit is shared across a user's tabs, so a WS-reconnect /
+ *   focus-probe flap can exhaust it without the session being bad.
+ * - identify error (non-429) -> clear the user.
  * - identify success but NO live token -> clear the user. `useGetIdentify` retains
  *   its last success in cache after the token is cleared (MFA cancelled / logout),
  *   so without this a stale cache would log the user in with no valid token.
@@ -337,10 +345,13 @@ export function resolveIdentifyEffect(params: {
   hasToken: boolean;
   isSuccess: boolean;
   isError: boolean;
+  /** HTTP status of the identify error, when isError. A 429 is transient (rate limit) and
+   *  must NOT clear the user; any other error still does. */
+  errorStatus?: number;
   tokenMfaPending?: boolean;
 }): IdentifyEffectAction {
   if (params.mfaPending) return 'skip';
-  if (params.isError) return 'clearUser';
+  if (params.isError) return params.errorStatus === 429 ? 'skip' : 'clearUser';
   if (!params.isSuccess) return 'skip';
   // identify resolved, but tokens were cleared (MFA cancel / logout) - a stale
   // success cache must never promote to a logged-in state without a live token.
@@ -449,6 +460,7 @@ export const UserProvider: React.FC<UserProviderProps> = ({ children }) => {
       hasToken: !!accessToken,
       isSuccess: identity.isSuccess,
       isError: identity.isError,
+      errorStatus: getAxiosErrorStatus(identity.error),
       tokenMfaPending: decodeMfaPending(accessToken),
     });
     switch (action) {
@@ -472,6 +484,7 @@ export const UserProvider: React.FC<UserProviderProps> = ({ children }) => {
   }, [
     identity.isSuccess,
     identity.isError,
+    identity.error,
     identity.data,
     setCurrentUser,
     setAccessToken,
