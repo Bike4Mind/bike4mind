@@ -36,6 +36,23 @@ const treeProps = {
 
 const FILE = { id: 'f1', fileName: 'Ion traps.md', tags: [] } as unknown as IFabFileDocument;
 
+/** Quick dives are always second-level branches, so their segment is a depth-1 (category) key. */
+const DIVE = { path: ['books', 'business'], segment: 'business', count: 4 };
+
+/** Tree parked one level in, so the same 'business' segment renders at the dive's depth. */
+const nestedTreeProps = {
+  ...treeProps,
+  tree: [
+    {
+      segment: 'books',
+      fullPath: 'books',
+      fileCount: 4,
+      children: [{ segment: 'business', fullPath: 'books:business', fileCount: 4, children: [] }],
+    },
+  ],
+  breadcrumb: ['books'],
+};
+
 const StubLeafIcon = () => <span data-testid="stub-leaf-icon" />;
 
 /** Product-flavored wording the shared surface must never render on its own. */
@@ -78,6 +95,21 @@ describe('Data Lake surface - brand-agnostic defaults (#842)', () => {
     expect(screen.getByTestId('datalake-node-opti').textContent ?? '').not.toMatch(BRANDED);
     // De-slugged in place, not looked up in a product taxonomy.
     expect(screen.getByTestId('datalake-node-shared-notes')).toHaveTextContent('Shared notes');
+  });
+
+  it('labels quick-dive chips from the raw segment when no taxonomy is injected (#1077)', () => {
+    render(
+      <Wrapper>
+        <DataLakeArticle
+          file={null}
+          onAskAbout={vi.fn()}
+          quickDives={[{ path: ['books', 'shared-notes'], segment: 'shared-notes', count: 2 }]}
+          onDive={vi.fn()}
+        />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-dive-books-shared-notes')).toHaveTextContent('Shared notes');
   });
 });
 
@@ -140,5 +172,18 @@ describe('Data Lake surface - injected tokens (#842)', () => {
     const node = screen.getByTestId('datalake-node-opti');
     expect(node).toHaveTextContent('Optimization Knowledge');
     expect(node.querySelector('[data-testid="stub-leaf-icon"]')).not.toBeNull();
+  });
+
+  it('labels a quick-dive chip and its tree branch identically from the taxonomy (#1077)', () => {
+    render(
+      <Wrapper tokens={{ taxonomy: { categoryLabels: { business: 'Business Strategy' } } }}>
+        <DataLakeArticle file={null} onAskAbout={vi.fn()} quickDives={[DIVE]} onDive={vi.fn()} />
+        <DataLakeTree {...nestedTreeProps} />
+      </Wrapper>
+    );
+
+    // The two surfaces must agree on the injected label - the chip used to bypass the taxonomy.
+    expect(screen.getByTestId('datalake-dive-books-business')).toHaveTextContent('Business Strategy');
+    expect(screen.getByTestId('datalake-node-business')).toHaveTextContent('Business Strategy');
   });
 });
