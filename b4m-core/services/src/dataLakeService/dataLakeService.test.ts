@@ -706,6 +706,7 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
         'requiredUserTag',
         'slug',
         'status',
+        'totalChunkedChars',
         'totalSizeBytes',
         'updatedAt',
       ].sort()

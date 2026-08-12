@@ -883,8 +883,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * conjunct is not in that index, so a prefix-heavy lake fetches its candidate documents to
    * check ownership.
    */
-  async computeDataLakeStats(scope: DataLakeMembershipScope): Promise<{ fileCount: number; totalSizeBytes: number }> {
-    const [agg] = await this.fabFileModel.aggregate<{ fileCount: number; totalSizeBytes: number }>([
+  async computeDataLakeStats(
+    scope: DataLakeMembershipScope
+  ): Promise<{ fileCount: number; totalSizeBytes: number; totalChunkedChars: number }> {
+    const [agg] = await this.fabFileModel.aggregate<{
+      fileCount: number;
+      totalSizeBytes: number;
+      totalChunkedChars: number;
+    }>([
       {
         $match: {
           ...buildDataLakeMembershipFilter(scope),
@@ -893,10 +899,17 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           status: { $ne: 'pending' },
         },
       },
-      { $group: { _id: null, fileCount: { $sum: 1 }, totalSizeBytes: { $sum: { $ifNull: ['$fileSize', 0] } } } },
-      { $project: { _id: 0, fileCount: 1, totalSizeBytes: 1 } },
+      {
+        $group: {
+          _id: null,
+          fileCount: { $sum: 1 },
+          totalSizeBytes: { $sum: { $ifNull: ['$fileSize', 0] } },
+          totalChunkedChars: { $sum: { $ifNull: ['$chunkedCharCount', 0] } },
+        },
+      },
+      { $project: { _id: 0, fileCount: 1, totalSizeBytes: 1, totalChunkedChars: 1 } },
     ]);
-    return agg ?? { fileCount: 0, totalSizeBytes: 0 };
+    return agg ?? { fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 };
   }
 
   /**

@@ -700,7 +700,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Authoritative lake stats recomputed from source records via an aggregate (NOT
    * find().length). Counts only live files (not archived, not deleted).
    */
-  computeDataLakeStats(scope: DataLakeMembershipScope): Promise<{ fileCount: number; totalSizeBytes: number }>;
+  computeDataLakeStats(
+    scope: DataLakeMembershipScope
+  ): Promise<{ fileCount: number; totalSizeBytes: number; totalChunkedChars: number }>;
   /**
    * Distinct live file count per lake, keyed by `datalakeTag`. Same predicate as
    * computeDataLakeStats, so what a browse surface displays cannot disagree with a lake's
