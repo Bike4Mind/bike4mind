@@ -305,6 +305,21 @@ describe('reconcileLakeTags', () => {
       expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
     });
 
+    // Security-relevant: a sibling tag surviving hides this drop from findPrefixArmChanges
+    // entirely (it is not a "leave"), so it needs its own manage-rights check independent of the
+    // leave/join framing - otherwise an unmanaged file-share recipient could rewrite the lake's
+    // content tags one sibling at a time.
+    it('preserves a dropped sibling prefix tag when the actor cannot manage the lake', async () => {
+      const adapters = withPrefixLakes([tag('lk:a', 1), tag('lk:b', 1)], [lake()]);
+      const editor = { userId: 'editor', isAdmin: false };
+
+      const result = await reconcileLakeTags(editor, 'f1', ['lk:a', 'lk:b'], [tag('lk:b', 1)], adapters as any);
+      await result.commit();
+
+      expect(result.tagsToPersist).toEqual(expect.arrayContaining([tag('lk:a', 1), tag('lk:b', 1)]));
+      expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+    });
+
     it('force-carries the departing prefix tag into tagsToPersist, at its original strength', async () => {
       const adapters = withPrefixLakes([tag('lk:invoices', 3)], [lake()]);
 
@@ -460,5 +475,29 @@ describe('reconcileLakeTags - static-registry prefix (e.g. opti:), no owning lak
     await expect(run(adapters, ['opti:legacy'], [tag('opti:legacy'), tag('opti:new')])).rejects.toThrow(
       /only an admin can change this data lake/i
     );
+  });
+
+  // The headline bug, replayed for the static-registry namespace: no owning document means
+  // `findByDatalakeTag` returns null, but that must not make the meta-tag look like a plain,
+  // droppable string - it is real membership in a shared knowledge base every entitled user
+  // can see.
+  it('preserves a static-registry meta-tag dropped by a whole-array write', async () => {
+    const staticTag = DATA_LAKES[0].datalakeTag;
+    const adapters = makeAdapters([tag(staticTag, 1)], null);
+
+    const result = await run(adapters, [staticTag], [tag('note')]);
+    await result.commit();
+
+    expect(result.tagsToPersist).toEqual(expect.arrayContaining([tag('note'), tag(staticTag, 1)]));
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('preserves a dropped static-registry content tag the same way as a dynamic-lake prefix tag', async () => {
+    const prefix = DATA_LAKES[0].fileTagPrefix;
+    const adapters = makeAdapters([tag(`${prefix}legacy`, 1)], null);
+
+    const result = await run(adapters, [`${prefix}legacy`], []);
+
+    expect(result.tagsToPersist).toEqual([tag(`${prefix}legacy`, 1)]);
   });
 });

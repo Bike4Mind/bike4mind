@@ -6,10 +6,12 @@ import {
   assertCanWriteStaticRegistryTags,
   canManageLake,
   extractDataLakeMetaTags,
+  extractStaticRegistryPrefixedTags,
+  isStaticRegistryDatalakeTag,
 } from '../dataLakeService/authorizeLakeWrite';
 import { reconcileDataLakeFallbackTags } from '../dataLakeService/fallbackLakeTags';
 import type { MembershipActor, MembershipLake } from '../dataLakeService/lakeMembership';
-import { findPrefixArmChanges } from '../dataLakeService/prefixArmMembership';
+import { findPrefixArmChanges, loadPrefixArmCandidateLakes } from '../dataLakeService/prefixArmMembership';
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
 
 interface ReconcileLakeTagsAdapters {
@@ -47,21 +49,30 @@ const isMetaTag = (name: string): boolean => name.toLowerCase().startsWith(DATAL
  *
  * A whole array is not a reliable signal of intent to leave: a client holding a copy fetched
  * before the last membership change resends it on an unrelated edit and, read literally, that
- * looks identical to "the user removed this tag." So this door can only ever JOIN a Mongo-backed
- * lake or PRESERVE existing membership - never LEAVE one, for either mechanism (a `datalake:`
- * meta-tag, or a content tag matching a lake's `fileTagPrefix`). The only doors that can remove
- * that membership are the single-tag toggle (`POST /api/files/tags/toggle`, which never reaches
- * this function - it calls `findPrefixArmChanges` and the membership repository itself) and the
- * dedicated `DELETE /api/data-lakes/:id/files/:fileId` route. Both are unambiguous, explicit
- * actions with no staleness window. (The static-registry namespace below has no lake document to
- * preserve membership IN, so this invariant does not extend to it.)
+ * looks identical to "the user removed this tag." So this door can only ever JOIN a lake or
+ * PRESERVE existing membership - never LEAVE one, for either mechanism (a `datalake:` meta-tag,
+ * or a content tag matching a lake's `fileTagPrefix`), and for both a Mongo-backed lake and the
+ * static-registry namespace (see below - no owning document, but no DB round trip is needed to
+ * preserve one either). Through THIS door, the only ways to remove that membership are the
+ * single-tag toggle (`POST /api/files/tags/toggle`, which never reaches this function - it calls
+ * `findPrefixArmChanges` and the membership repository itself) and the dedicated
+ * `DELETE /api/data-lakes/:id/files/:fileId` route, both unambiguous explicit actions with no
+ * staleness window. (A user's own bulk tag-management doors - deleting or renaming a tag across
+ * every file they own - are a separate, already-gated mechanism outside this door's scope; see
+ * `tagService/remove.ts` and `tagService/update.ts`.)
  *
  * Preserving membership is not the same as leaving the CONTENT tags under it unprotected: an
  * actor who cannot manage a lake (no relation to it beyond a share on this one file) still gets
  * its meta-tag force-carried back, but any of that lake's content tags this write would otherwise
- * have dropped are force-carried too - see the `unmanagedPreservedLakes` force-carry below. Without
- * that, a mere file-share recipient could use this whole-array door to rewrite another user's
- * lake's curated tag taxonomy despite having no rights over the lake itself.
+ * have DROPPED are force-carried too - see the `unmanagedPreservedLakes` and
+ * `unmanagedDroppedPrefixNames` force-carries below. Without that, a mere file-share recipient
+ * could use this whole-array door to strip another user's lake's content tags despite having no
+ * rights over the lake itself. This protection is asymmetric by design and only covers REMOVAL:
+ * adding a new content tag under a lake's prefix, or resending an existing one at a different
+ * strength, stays ungated for any actor - that already was, and remains, today's "automatic
+ * membership" model for content tags (see the mirror-case comment below). An unmanaged "rename"
+ * (old name dropped, new name added) is therefore only half-blocked: the old tag is force-carried
+ * back rather than lost, but the new one is still added alongside it.
  *
  * Because a JOIN needs no write beyond persisting the array itself (the caller's `tagsToPersist`
  * already carries the canonical meta-tag or content tag), `commit()` only ever recomputes stats -
@@ -85,9 +96,12 @@ const isMetaTag = (name: string): boolean => name.toLowerCase().startsWith(DATAL
  * lake's prefix arm either, even if that was the caller's actual intent - the tag is force-carried
  * back in, silently, same as a meta-tag. Only the toggle and DELETE doors can end that membership.
  *
- * A THIRD, unrelated concern sits ahead of all of it: `ordinaryTags` is also checked against the
- * static-registry namespace (e.g. `opti:`), which has no owning lake document at all and so is
- * invisible to both mechanisms above.
+ * A THIRD concern sits ahead of all of it: `ordinaryTags` is also checked against the
+ * static-registry namespace (e.g. `opti:`), which has no owning lake document at all. Only ADDING
+ * a new static-registry-prefixed tag runs through `assertCanWriteStaticRegistryTags` (admin-only);
+ * preserving one already held needs no such gate, and is handled by the
+ * `droppedStaticRegistryNames` force-carry below, the content-tag mirror of the meta-tag preserve
+ * a few lines up.
  */
 export const reconcileLakeTags = async (
   actor: MembershipActor,
@@ -123,6 +137,11 @@ export const reconcileLakeTags = async (
       if (wanted) {
         throw new BadRequestError('Only the creator can add files to this data lake');
       }
+      // A static-registry meta-tag (e.g. `datalake:opti-knowledge`) has no owning document, so it
+      // hits this branch on every write, but it is still real membership and needs no DB round
+      // trip to identify - preserve it the same as a Mongo-backed lake's meta-tag. An orphaned
+      // meta-tag from a genuinely DELETED dynamic lake is the only case this door still drops.
+      if (isStaticRegistryDatalakeTag(key)) metaTagsToPersist.push(key);
       continue;
     }
 
@@ -190,28 +209,68 @@ export const reconcileLakeTags = async (
     else statsOnlyJoins.push(j.lake);
   }
 
-  // Force-carried, mirroring metaTagsToPersist above, for two cases: (a) a prefix-arm-only lake
-  // the array would otherwise have dropped the last qualifying tag for, and (b) any content tag
-  // under a META-TAG-preserved lake this actor cannot manage. (b) matters because the meta-tag
-  // preserve above only protects membership, not the lake's curated content-tag taxonomy - a mere
-  // file-share recipient (findAccessibleById admits a read/write share) could otherwise use this
-  // whole-array door to silently strip or rewrite another user's lake's content tags despite
-  // having no rights over that lake at all; only its creator/admin may edit those, whether through
-  // this door or any other. Restores each tag's ORIGINAL strength (a content tag's strength is
-  // user-meaningful, unlike a meta-tag's fixed DATALAKE_TAG_STRENGTH), so re-fetch the stored doc
-  // only on this rare path. Deduped by name: two lakes sharing one prefix both list the same tag
-  // as their signal, and it only needs carrying once.
+  // A DYNAMIC lake this actor cannot manage, reachable ONLY via a prefix content tag (no
+  // meta-tag), is invisible to the loop above and to `prefixArmLeaves` unless the write empties
+  // every one of its signal tags at once - a sibling tag surviving hides a partial drop from both.
+  // So a dropped content tag is checked independently: does it name a prefix arm on a lake owned
+  // by this file's owner that this actor cannot manage? If so it is force-carried below too, same
+  // as the meta-tag-preserved case - without this, that lake's OWN content-tag taxonomy would be
+  // rewritable by any file-share recipient, one sibling tag at a time.
+  const droppedContentNames = currentTagNames.filter(name => !resultingTagNames.includes(name) && !isMetaTag(name));
+  let unmanagedDroppedPrefixNames: string[] = [];
+  if (droppedContentNames.some(name => name.includes(':'))) {
+    const candidateLakes = await loadPrefixArmCandidateLakes([owner], { db });
+    unmanagedDroppedPrefixNames = droppedContentNames.filter(name => {
+      // .some(), not the first match: two lakes can share one fileTagPrefix, and this must force-
+      // carry the name if EITHER matching lake is unmanaged, not just whichever is found first.
+      const matchingLakes = candidateLakes.filter(l => prefixArmTagNames([name], l.fileTagPrefix).length > 0);
+      return matchingLakes.length > 0 && matchingLakes.some(l => !canManageLake(l, actor));
+    });
+  }
+
+  // Force-carried, mirroring metaTagsToPersist above, for three cases: (a) a prefix-arm-only lake
+  // the array would otherwise have dropped the last qualifying tag for, (b) any content tag under
+  // a META-TAG-preserved lake this actor cannot manage, and (c) `unmanagedDroppedPrefixNames`
+  // above. (b)/(c) matter because the meta-tag preserve only protects membership, not the lake's
+  // curated content-tag taxonomy - a mere file-share recipient (findAccessibleById admits a read/
+  // write share) could otherwise use this whole-array door to silently strip or rewrite another
+  // user's lake's content tags despite having no rights over that lake at all. (This does not
+  // extend to a NEW content tag under a lake's prefix - adding one is today's accepted "automatic
+  // membership" model for content tags, unchanged by this fix.) Restores each tag's ORIGINAL
+  // strength (a content tag's strength is user-meaningful, unlike a meta-tag's fixed
+  // DATALAKE_TAG_STRENGTH; a stored tag with none defaults to 0, matching every other content-tag
+  // write in this codebase - never the meta-tag constant), so re-fetch the stored doc only on this
+  // rare path. Deduped by name: two lakes sharing one prefix both list the same tag as their
+  // signal, and it only needs carrying once.
   const unmanagedLakeContentNames = unmanagedPreservedLakes.flatMap(lake =>
     prefixArmTagNames(currentTagNames, lake.fileTagPrefix).filter(name => !resultingTagNames.includes(name))
   );
+  // A static-registry content tag (e.g. `opti:report`) has no owning lake document either - see
+  // the meta-tag branch's equivalent preserve above.
+  const droppedStaticRegistryNames = extractStaticRegistryPrefixedTags(currentTagNames).filter(
+    name => !resultingTagNames.includes(name)
+  );
   let departingPrefixTags: { name: string; strength: number }[] = [];
-  if (prefixArmLeaves.length > 0 || unmanagedLakeContentNames.length > 0) {
+  if (
+    prefixArmLeaves.length > 0 ||
+    unmanagedLakeContentNames.length > 0 ||
+    unmanagedDroppedPrefixNames.length > 0 ||
+    droppedStaticRegistryNames.length > 0
+  ) {
     const storedFile = cachedFile ?? (await db.fabFiles.findById(fabFileId));
     const strengthByName = new Map((storedFile?.tags ?? []).map(t => [t.name, t.strength] as const));
-    const departingNames = new Set([...prefixArmLeaves.flatMap(l => l.signalTags), ...unmanagedLakeContentNames]);
+    const departingNames = new Set([
+      ...prefixArmLeaves.flatMap(l => l.signalTags),
+      ...unmanagedLakeContentNames,
+      ...unmanagedDroppedPrefixNames,
+      ...droppedStaticRegistryNames,
+    ]);
     departingPrefixTags = [...departingNames].map(name => ({
       name,
-      strength: strengthByName.get(name) ?? DATALAKE_TAG_STRENGTH,
+      // 0, not DATALAKE_TAG_STRENGTH: that constant is the meta-tag's fixed weight, not a
+      // sensible default for a content tag stored without one (matches pushTagsByFabFileId's own
+      // default elsewhere in this codebase).
+      strength: strengthByName.get(name) ?? 0,
     }));
   }
 
