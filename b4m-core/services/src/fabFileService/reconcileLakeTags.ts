@@ -189,10 +189,28 @@ export const reconcileLakeTags = async (
   // the pre-tagger array could force-carry a tag the persisted array already keeps.
   const cachedFile = fileOwnerUserId === undefined ? await db.fabFiles.findById(fabFileId) : undefined;
   const owner = fileOwnerUserId ?? cachedFile?.userId;
+  if (owner === undefined) {
+    // Not reachable from updateFabFile (resolves the file first) or the PUT route (authorizes it
+    // first) - both always supply one of the two owner signals. Logged, not thrown: a
+    // hypothetical future caller missing both should degrade to skipping prefix-arm
+    // preservation, not fail the whole write.
+    logger?.warn?.('reconcileLakeTags: could not resolve file owner; prefix-arm preservation skipped', fabFileId);
+  }
   const resultingTagNames = reconciledTags.map(t => t.name);
+  // Resolved once and reused for the unmanaged-prefix-drop check below - both need the same
+  // owner-scoped candidate set, and querying it twice per write was pure I/O waste (a dropped,
+  // non-meta content tag containing ':' is always already part of this diff too).
+  const currentNameSet = new Set(currentTagNames);
+  const resultingNameSet = new Set(resultingTagNames);
+  const changedTagNames = [...new Set([...currentTagNames, ...resultingTagNames])].filter(
+    name => !(currentNameSet.has(name) && resultingNameSet.has(name))
+  );
+  const prefixArmCandidateLakes = changedTagNames.some(name => name.includes(':'))
+    ? await loadPrefixArmCandidateLakes([owner], { db })
+    : [];
   const { leaves: prefixArmLeaves, joins: prefixArmJoins } = await findPrefixArmChanges(
     { fileOwnerUserId: owner, currentTagNames, resultingTagNames },
-    { db }
+    { db, candidateLakes: prefixArmCandidateLakes }
   );
   // The mirror case: a write that newly satisfies a lake's prefix arm is automatic MEMBERSHIP
   // (today's accepted model for content tags - the read-side predicate grants it purely on the
@@ -217,16 +235,15 @@ export const reconcileLakeTags = async (
   // as the meta-tag-preserved case - without this, that lake's OWN content-tag taxonomy would be
   // rewritable by any file-share recipient, one sibling tag at a time.
   const droppedContentNames = currentTagNames.filter(name => !resultingTagNames.includes(name) && !isMetaTag(name));
-  let unmanagedDroppedPrefixNames: string[] = [];
-  if (droppedContentNames.some(name => name.includes(':'))) {
-    const candidateLakes = await loadPrefixArmCandidateLakes([owner], { db });
-    unmanagedDroppedPrefixNames = droppedContentNames.filter(name => {
-      // .some(), not the first match: two lakes can share one fileTagPrefix, and this must force-
-      // carry the name if EITHER matching lake is unmanaged, not just whichever is found first.
-      const matchingLakes = candidateLakes.filter(l => prefixArmTagNames([name], l.fileTagPrefix).length > 0);
-      return matchingLakes.length > 0 && matchingLakes.some(l => !canManageLake(l, actor));
-    });
-  }
+  // Reuses `prefixArmCandidateLakes` resolved above instead of re-querying: any dropped, non-meta
+  // tag containing ':' is necessarily part of `changedTagNames`, so that candidate set already
+  // covers this check.
+  const unmanagedDroppedPrefixNames = droppedContentNames.filter(name => {
+    // .some(), not the first match: two lakes can share one fileTagPrefix, and this must force-
+    // carry the name if EITHER matching lake is unmanaged, not just whichever is found first.
+    const matchingLakes = prefixArmCandidateLakes.filter(l => prefixArmTagNames([name], l.fileTagPrefix).length > 0);
+    return matchingLakes.some(l => !canManageLake(l, actor));
+  });
 
   // Force-carried, mirroring metaTagsToPersist above, for three cases: (a) a prefix-arm-only lake
   // the array would otherwise have dropped the last qualifying tag for, (b) any content tag under
