@@ -110,6 +110,16 @@ describe('fetchAndParseURL redirect handling', () => {
     expect(second).toBeLessThanOrEqual(first);
   });
 
+  it('always requests bytes, so a cross-content-type redirect cannot be mis-decoded', async () => {
+    axiosGet.mockResolvedValueOnce(ok(PAGE));
+
+    await fetchAndParseURL(PUBLIC_URL, { logger });
+
+    // The response type used to be picked from the CALLER's url extension, before any redirect was
+    // known. Fetching bytes every time is what lets the parse decision wait for the real response.
+    expect(axiosGet.mock.calls[0][1]).toMatchObject({ responseType: 'arraybuffer' });
+  });
+
   it('treats a 3xx with no Location as the final response', async () => {
     axiosGet.mockResolvedValueOnce({ status: 302, data: PAGE, headers: {} });
 
@@ -117,5 +127,55 @@ describe('fetchAndParseURL redirect handling', () => {
 
     expect(axiosGet).toHaveBeenCalledTimes(1);
     expect(result.title).toBe('An Article');
+  });
+});
+
+/**
+ * Content typing and naming are decided from the FINAL response rather than the caller's URL. Both
+ * used to read the pasted URL, which is wrong the moment a redirect changes where we land.
+ */
+describe('fetchAndParseURL content typing and naming after redirects', () => {
+  const html = (body: string) => ({ status: 200, data: body, headers: { 'content-type': 'text/html' } });
+
+  it('does NOT parse as PDF when a .pdf URL redirects to an HTML page', async () => {
+    axiosGet.mockResolvedValueOnce(redirectTo('http://93.184.216.35/gateway')).mockResolvedValueOnce(html(PAGE));
+
+    const result = await fetchAndParseURL('http://93.184.216.34/report.pdf', { logger });
+
+    expect(result.mimeType).toBe('text/plain');
+    expect(result.title).toBe('An Article');
+  });
+
+  it('DOES parse as PDF when the server says so, even with no extension in the URL', async () => {
+    axiosGet.mockResolvedValueOnce({
+      status: 200,
+      data: Buffer.from('%PDF-1.4 fake'),
+      headers: { 'content-type': 'application/pdf' },
+    });
+
+    const result = await fetchAndParseURL('http://93.184.216.34/download?id=9', { logger });
+
+    expect(result.mimeType).toBe('application/pdf');
+    expect(Buffer.isBuffer(result.textContent)).toBe(true);
+  });
+
+  it('does not treat a .pdf in the QUERY STRING as a PDF', async () => {
+    // The old extension test split on '.' and looked at the last segment, so `?doc=report.pdf`
+    // matched and an HTML page was handed to the PDF branch.
+    axiosGet.mockResolvedValueOnce(ok(PAGE));
+
+    const result = await fetchAndParseURL('http://93.184.216.34/view?doc=report.pdf', { logger });
+
+    expect(result.mimeType).toBe('text/plain');
+  });
+
+  it('names an untitled page from the FINAL url, not the pasted one', async () => {
+    axiosGet
+      .mockResolvedValueOnce(redirectTo('http://93.184.216.35/final-document'))
+      .mockResolvedValueOnce(html('<html><body><p>no title element here</p></body></html>'));
+
+    const result = await fetchAndParseURL('http://93.184.216.34/pasted-link', { logger });
+
+    expect(result.title).toBe('final-document');
   });
 });
