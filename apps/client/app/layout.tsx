@@ -8,15 +8,8 @@ import { ColorSchemeScript } from './ColorSchemeScript';
 import { SerwistProvider } from './serwist';
 import { Metadata } from 'next';
 
-/**
- * Apex to pin the GA cookie to, so the marketing site and this app resolve to ONE
- * visitor across the subdomain hop. gtag defaults to `cookie_domain: 'auto'`,
- * which normally resolves to the same apex - but "normally" is doing a lot of work
- * in a funnel that has been hard to diagnose, so it is worth pinning explicitly.
- *
- * Env-only with NO brand fallback (the account-tied-id policy): unset simply
- * leaves gtag on 'auto', i.e. exactly today's behaviour.
- */
+// Pins the GA cookie to an apex instead of gtag's 'auto' default; unset is a
+// deliberate no-op. See infra/web.ts for why a wrong value is worse than unset.
 const GA_COOKIE_DOMAIN = process.env.NEXT_PUBLIC_GA_COOKIE_DOMAIN;
 
 const poppins = Poppins({
