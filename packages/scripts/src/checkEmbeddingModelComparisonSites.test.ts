@@ -79,12 +79,13 @@ const INLINE_COMPARISON = /[eE]mbeddingModel['"]?\s*(===|!==)|(===|!==)\s*[A-Za-
 
 /**
  * An embeddingModel key inside a search-filter clause, which is how the two vector backends express
- * the same comparison. Requires the filter context on the same line, so ordinary assignments
- * (`embeddingModel: defaultEmbeddingModel`) and type annotations do not trip it. Known limit: a
- * filter clause split across lines evades this, which is why the docstring stays the canonical
- * list - this test is a tripwire, not a proof.
+ * the same comparison. It is the same-line filter context, not the shape of the value, that keeps
+ * ordinary assignments (`embeddingModel: defaultEmbeddingModel`) and type annotations out - so the
+ * value pattern stays wide enough to cover a constant, a PascalCase binding or a quoted literal.
+ * Known limit: a filter clause split across lines evades this, which is why the docstring stays the
+ * canonical list - this test is a tripwire, not a proof.
  */
-const FILTER_CLAUSE = /['"]?(metadata\.)?embeddingModel['"]?\s*:\s*[a-z]\w*/;
+const FILTER_CLAUSE = /['"]?(metadata\.)?embeddingModel['"]?\s*:\s*['"]?[A-Za-z_][\w-]*/;
 const FILTER_CONTEXT = /\b(filter|term|terms|match)\b/;
 
 /**
