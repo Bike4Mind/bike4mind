@@ -27,6 +27,8 @@ const h = vi.hoisted(() => ({
   selfHostOpenSearchEnabled: vi.fn(() => false),
   enforceEmbeddingSpendGate: vi.fn(async () => undefined),
   batchFindById: vi.fn(async () => ({ id: 'batch-1', dataLakeId: 'lake-1' })),
+  batchReleaseSpend: vi.fn(async () => true),
+  lakeReleaseSpend: vi.fn(async () => true),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -38,8 +40,9 @@ vi.mock('@bike4mind/database', () => ({
     incrementCounters: h.incrementCounters,
     claimFileStatus: h.claimFileStatus,
     findById: h.batchFindById,
+    releaseEmbeddingSpend: h.batchReleaseSpend,
   },
-  dataLakeRepository: {},
+  dataLakeRepository: { releaseEmbeddingSpend: h.lakeReleaseSpend },
   cacheRepository: {},
   embeddingCacheRepository: {},
   fabFileChunkRepository: { findById: vi.fn(), countTerminalChunks: h.countTerminalChunks, update: h.chunkUpdate },
@@ -261,6 +264,36 @@ describe('fabFileVectorize handler - spend gate', () => {
     expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
     expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', expect.stringContaining('budget exhausted'));
     expect(h.getVector).not.toHaveBeenCalled();
+  });
+
+  it('releases the reservation from the run and lake meters when the provider call fails', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.getVector.mockRejectedValueOnce(new Error('openai 500'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('openai 500');
+
+    // getEmbeddingModelCost is mocked to 0.0001 USD -> ceil(100) microUSD for the message.
+    expect(h.batchReleaseSpend).toHaveBeenCalledWith('batch-1', 100);
+    expect(h.lakeReleaseSpend).toHaveBeenCalledWith('lake-1', 100);
+  });
+
+  it('does NOT release when embeddings succeeded and a later step fails (money truly spent)', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+    h.chunkUpdate.mockRejectedValueOnce(new Error('mongo write failed'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
+
+    expect(h.batchReleaseSpend).not.toHaveBeenCalled();
+    expect(h.lakeReleaseSpend).not.toHaveBeenCalled();
+  });
+
+  it('a release failure is logged, never masks the provider error', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.getVector.mockRejectedValueOnce(new Error('openai 500'));
+    h.batchReleaseSpend.mockRejectedValueOnce(new Error('mongo down'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('openai 500');
   });
 
   it('a retryable (rate-limit) denial keeps the normal SQS retry path', async () => {

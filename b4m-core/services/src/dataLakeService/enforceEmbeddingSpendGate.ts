@@ -12,8 +12,15 @@ export const EMBEDDING_SPEND_PERIOD_KEY = 'dataLakeEmbeddingSpend:period';
 export const EMBEDDING_SPEND_RATE_KEY = 'dataLakeEmbeddingSpend:rate';
 
 const MINUTE_MS = 60_000;
-/** Retries against the rate window before giving the message back to SQS. */
-const RATE_WAIT_MAX_ATTEMPTS = 3;
+/**
+ * Total wall-clock budget for waiting out a saturated rate window, across all attempts.
+ * Deliberately small relative to the handler's 5-minute Lambda timeout: the vectorize
+ * subscription runs on RESERVED concurrency, so during saturation every waiting slot is
+ * asleep-but-billed simultaneously, and whatever we sleep here is subtracted from the time
+ * left to embed the actual chunks. Beyond this budget the denial is retryable and the wait
+ * moves to SQS redelivery, which costs no compute.
+ */
+const RATE_WAIT_TOTAL_MS = 30_000;
 
 /**
  * Thrown when the spend gate denies a provider embedding call. The message is user-safe:
@@ -67,6 +74,16 @@ export interface SpendGateDb {
  * slightly high - never low. Bounded by one message's cost, and overcounting is the safe
  * direction for a spend meter.
  *
+ * That non-rollback argument covers DENIALS only. A granted reservation whose provider call
+ * then FAILS is a different case: the money was never spent, and under SQS redelivery the
+ * next attempt reserves again - on the per-lake LIFETIME meter that would accumulate forever.
+ * The caller therefore owns the compensation: fabFileVectorize releases the run and lake
+ * reservations (releaseEmbeddingSpend) when exactly the provider call throws. The release is
+ * best-effort - a hard crash between reserve and release still leaks - which is why the
+ * per-lake meter also has an admin reset (resetEmbeddingSpend). The estimate itself is
+ * Math.ceil'd upward by design and never reconciled against the provider invoice; that bias
+ * is noise on the windowed meters and one more reason the lifetime meter needs the reset.
+ *
  * Throws EmbeddingSpendDeniedError on any denial; returns void when the call may proceed.
  */
 export async function enforceEmbeddingSpendGate(params: {
@@ -89,9 +106,12 @@ export async function enforceEmbeddingSpendGate(params: {
   }
 
   // Rate limit: metered per provider call (a batch of chunks is one call), and 0 is a stop.
-  // On a full window, wait for it to close and retry rather than immediately failing the
+  // On a full window, wait briefly for it to close rather than immediately failing the
   // message - the SQS retry budget is only 3 deliveries and must be kept for real errors.
-  for (let attempt = 1; ; attempt++) {
+  // The wait is bounded by RATE_WAIT_TOTAL_MS across ALL attempts (see its comment for why
+  // sleeping on reserved concurrency is itself a cost); past that the denial is retryable
+  // and the remaining wait happens on the queue instead.
+  for (let waitedMs = 0; ;) {
     const rate = await db.cache.tryAddWithinLimitFixedWindow(
       EMBEDDING_SPEND_RATE_KEY,
       1,
@@ -102,16 +122,17 @@ export async function enforceEmbeddingSpendGate(params: {
     if (levers.maxCallsPerMinute <= 0) {
       throw new EmbeddingSpendDeniedError('the embedding rate limit is 0 (stopped)');
     }
-    if (attempt >= RATE_WAIT_MAX_ATTEMPTS) {
+    const waitMs = Math.min(Math.max(rate.expiresAt.getTime() - Date.now(), 250), MINUTE_MS);
+    if (waitedMs + waitMs > RATE_WAIT_TOTAL_MS) {
       // Retryable: the window drains on its own, so a later SQS delivery can be granted.
       throw new EmbeddingSpendDeniedError(
-        `the embedding rate limit (${levers.maxCallsPerMinute}/min) stayed exhausted after ${attempt} attempts`,
+        `the embedding rate limit (${levers.maxCallsPerMinute}/min) stayed exhausted after waiting ${waitedMs}ms`,
         { retryable: true }
       );
     }
-    const waitMs = Math.min(Math.max(rate.expiresAt.getTime() - Date.now(), 250), MINUTE_MS);
-    logger?.log?.(`[spendGate] rate window full (${rate.count}); waiting ${waitMs}ms (attempt ${attempt})`);
+    logger?.log?.(`[spendGate] rate window full (${rate.count}); waiting ${waitMs}ms (${waitedMs}ms waited so far)`);
     await sleep(waitMs);
+    waitedMs += waitMs;
   }
 
   if (batchId) {

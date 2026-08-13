@@ -118,14 +118,20 @@ describe('enforceEmbeddingSpendGate', () => {
     expect(sleep).toHaveBeenCalledTimes(1);
   });
 
-  it('denies after the rate window stays exhausted across all wait attempts', async () => {
+  it('denies (retryable) once the total wait budget is exhausted, instead of sleeping the Lambda out', async () => {
     const db = grantAll();
+    // Each probe reports the window closing 20s out: the first wait fits the 30s budget, the
+    // second would exceed it, so the gate hands the message back to SQS instead of sleeping.
     db.cache.tryAddWithinLimitFixedWindow.mockResolvedValue({
       success: false,
       count: 120,
-      expiresAt: new Date(Date.now() + 5_000),
+      expiresAt: new Date(Date.now() + 20_000),
     });
-    await expect(gate(db)).rejects.toThrow(/rate limit .*stayed exhausted/);
+    let denial: unknown;
+    await gate(db).catch(err => (denial = err));
+    expect(denial).toBeInstanceOf(EmbeddingSpendDeniedError);
+    expect((denial as EmbeddingSpendDeniedError).retryable).toBe(true);
+    expect((denial as Error).message).toMatch(/stayed exhausted after waiting/);
   });
 
   it('denies immediately on a rate limit of 0 (the STOP value) without waiting', async () => {

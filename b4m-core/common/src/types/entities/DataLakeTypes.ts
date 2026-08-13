@@ -281,6 +281,18 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    */
   tryAddEmbeddingSpend(id: string, amountMicroUsd: number, limitMicroUsd: number): Promise<boolean>;
   /**
+   * Return a reservation that never became a provider call (the call failed). Exact-inverse of
+   * ONE tryAddEmbeddingSpend grant, guarded so it cannot drive the meter negative; false means
+   * the meter was already below the amount (e.g. an admin reset raced it) and nothing changed.
+   */
+  releaseEmbeddingSpend(id: string, amountMicroUsd: number): Promise<boolean>;
+  /**
+   * Admin remedy: zero this lake's lifetime spend meter. Exists because releases are best-effort
+   * (a hard crash between reserve and release still leaks) and the levers are global - without a
+   * per-lake reset the only way to unstick a poisoned lake is a hand-written Mongo update.
+   */
+  resetEmbeddingSpend(id: string): Promise<boolean>;
+  /**
    * One-way draft -> active, the transition that makes a lake reachable from `findPublicLakes`
    * and the `findActive*` retrieval arms. Guarded inside the query, so a caller holding a stale
    * copy of the document cannot resurrect an archived or deleted lake. Returns whether this call
@@ -473,6 +485,8 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
   /** Per-run twin of IDataLakeRepository.tryAddEmbeddingSpend - same reserve-first,
    * all-or-nothing contract, metered against this batch's embeddingSpendMicroUsd. */
   tryAddEmbeddingSpend(batchId: string, amountMicroUsd: number, limitMicroUsd: number): Promise<boolean>;
+  /** Per-run twin of IDataLakeRepository.releaseEmbeddingSpend - same exact-inverse contract. */
+  releaseEmbeddingSpend(batchId: string, amountMicroUsd: number): Promise<boolean>;
   /** Atomic multi-field variant of incrementCounter - use when two+ counters must land together
    * (e.g. failedFiles + processingFailedFiles), so a crash between them can't leave one applied
    * and the other not. */

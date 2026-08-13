@@ -153,6 +153,27 @@ export const DataLakeModel =
  * BEFORE checking amount - 0 is the operator's "stop" value, and it must win even for a
  * zero-cost call so "stopped" reads unambiguously as "no provider calls at all".
  */
+/**
+ * Exact-inverse of a reservation made by tryAddSpendWithinLimit, for the caller that reserved
+ * and then watched the provider call fail: the money was never spent, so the meter must give it
+ * back or ordinary provider errors permanently poison a lifetime budget (x3 under SQS retries).
+ * Guarded on `spend >= amount` so a concurrent admin reset can never drive the meter negative;
+ * an unmatched release is logged by the caller and skipped - the meter is already lower than
+ * the reservation being returned.
+ */
+async function releaseSpend(
+  model: mongoose.Model<IDataLakeDocument> | mongoose.Model<IDataLakeBatchDocument>,
+  id: string,
+  amountMicroUsd: number
+): Promise<boolean> {
+  if (amountMicroUsd <= 0) return true;
+  const res = await (model as mongoose.Model<IDataLakeDocument>).updateOne(
+    { _id: id, embeddingSpendMicroUsd: { $gte: amountMicroUsd } },
+    { $inc: { embeddingSpendMicroUsd: -amountMicroUsd } }
+  );
+  return res.modifiedCount === 1;
+}
+
 async function tryAddSpendWithinLimit(
   model: mongoose.Model<IDataLakeDocument> | mongoose.Model<IDataLakeBatchDocument>,
   id: string,
@@ -478,6 +499,16 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return tryAddSpendWithinLimit(this.dataLakeModel, id, amountMicroUsd, limitMicroUsd);
   }
 
+  async releaseEmbeddingSpend(id: string, amountMicroUsd: number): Promise<boolean> {
+    return releaseSpend(this.dataLakeModel, id, amountMicroUsd);
+  }
+
+  /** Admin remedy for a poisoned meter (see resetEmbeddingSpend on the repository interface). */
+  async resetEmbeddingSpend(id: string): Promise<boolean> {
+    const res = await this.dataLakeModel.updateOne({ _id: id }, { $set: { embeddingSpendMicroUsd: 0 } });
+    return res.matchedCount === 1;
+  }
+
   async activateIfDraft(id: string): Promise<boolean> {
     // The status guard lives in the FILTER, not in a prior read: the membership doors that call
     // this hand over a lake document they fetched before their own status writes, so testing the
@@ -732,6 +763,10 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
   // reconciler just forced terminal must still meter (never lose) that spend.
   async tryAddEmbeddingSpend(batchId: string, amountMicroUsd: number, limitMicroUsd: number): Promise<boolean> {
     return tryAddSpendWithinLimit(this.batchModel, batchId, amountMicroUsd, limitMicroUsd);
+  }
+
+  async releaseEmbeddingSpend(batchId: string, amountMicroUsd: number): Promise<boolean> {
+    return releaseSpend(this.batchModel, batchId, amountMicroUsd);
   }
 
   /**
