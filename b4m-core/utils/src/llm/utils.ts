@@ -1975,6 +1975,23 @@ const processMessages = (
 };
 
 /**
+ * Truncation telemetry for one buildAndSortMessages call. Non-nullable here because
+ * ContextDebugInfo always carries a real value once assembled; buildAndSortMessages itself
+ * returns this or null on its non-positive-budget early exit.
+ */
+export interface MessageTruncationInfo {
+  wasTruncated: boolean;
+  originalMessageCount: number;
+  truncatedMessageCount: number;
+  truncationMethod?: 'priority' | 'token-budget' | 'history-limit';
+  removedMessages?: Array<{
+    role: string;
+    tokens: number;
+    priority: number;
+  }>;
+}
+
+/**
  * Context debug info return type.
  */
 export interface ContextDebugInfo {
@@ -1988,17 +2005,7 @@ export interface ContextDebugInfo {
     overflowDetected?: boolean;
     overflowAmount?: number;
   };
-  messageTruncation: {
-    wasTruncated: boolean;
-    originalMessageCount: number;
-    truncatedMessageCount: number;
-    truncationMethod?: 'priority' | 'token-budget' | 'history-limit';
-    removedMessages?: Array<{
-      role: string;
-      tokens: number;
-      priority: number;
-    }>;
-  };
+  messageTruncation: MessageTruncationInfo;
 }
 
 export async function buildAndSortMessages(
@@ -2042,12 +2049,12 @@ export async function buildAndSortMessages(
      */
     systemMessagePriority?: (message: IMessage) => number | undefined;
   } = { verbose: false }
-): Promise<IMessage[]> {
+): Promise<{ messages: IMessage[]; messageTruncation: MessageTruncationInfo | null }> {
   // Negated like processMessages' budget guard so a NaN lands here rather than sailing past every
   // comparison below.
   if (!(maxInputTokens > 0)) {
     logger.error(`Invalid maxInputTokens: ${maxInputTokens}. Must be greater than 0.`);
-    return [];
+    return { messages: [], messageTruncation: null };
   }
 
   const VERBOSE_CHAT_CONTEXT = process.env.VERBOSE_CHAT_CONTEXT !== 'false';
@@ -2561,19 +2568,17 @@ export async function buildAndSortMessages(
   // telemetry to history being windowed exactly as configured, which is why that bug went unnoticed
   // for so long. `contentSqueezed` is needed alongside allRemovedMessages because content cut
   // mid-message is a budget loss that drops no message and so leaves allRemovedMessages empty.
-  // Called on BOTH return paths: the overflow path below returns early, so assigning this only at
-  // the end left the worst-loss turn reporting the previous call's numbers from a warm container.
-  const recordDebugInfo = (finalContentMessages: IMessage[]) => {
+  // Called on BOTH return paths: the overflow path below returns early, so building this only at
+  // the end would report the wrong finalContentMessages for that path.
+  const buildDebugInfo = (finalContentMessages: IMessage[]): MessageTruncationInfo => {
     const historyWindowed = previousMessages.length > historyMessages.length;
     const budgetTruncated = allRemovedMessages.length > 0 || contentSqueezed || historyCutMidMessage;
-    (buildAndSortMessages as any).lastDebugInfo = {
-      messageTruncation: {
-        wasTruncated: budgetTruncated,
-        originalMessageCount: originalTotalMessageCount,
-        truncatedMessageCount: processedPreviousMessages.length + finalContentMessages.length,
-        truncationMethod: budgetTruncated ? 'token-budget' : historyWindowed ? 'history-limit' : undefined,
-        removedMessages: allRemovedMessages.length > 0 ? allRemovedMessages : undefined,
-      },
+    return {
+      wasTruncated: budgetTruncated,
+      originalMessageCount: originalTotalMessageCount,
+      truncatedMessageCount: processedPreviousMessages.length + finalContentMessages.length,
+      truncationMethod: budgetTruncated ? 'token-budget' : historyWindowed ? 'history-limit' : undefined,
+      removedMessages: allRemovedMessages.length > 0 ? allRemovedMessages : undefined,
     };
   };
 
@@ -2679,9 +2684,11 @@ export async function buildAndSortMessages(
       );
     }
 
-    recordDebugInfo(reducedContentMessages);
     // Ensure tool_use/tool_result pairing integrity after truncation
-    return ensureToolPairingIntegrity(assemble(reducedContentMessages, processedPreviousMessages), logger);
+    return {
+      messages: ensureToolPairingIntegrity(assemble(reducedContentMessages, processedPreviousMessages), logger),
+      messageTruncation: buildDebugInfo(reducedContentMessages),
+    };
   }
 
   const VERBOSE_MESSAGE_BUILDING = process.env.VERBOSE_MESSAGE_BUILDING === 'true';
@@ -2704,15 +2711,9 @@ export async function buildAndSortMessages(
     logger.log('=== End of Verbose Message Building Log ===');
   }
 
-  recordDebugInfo(processedContentMessages);
-
   // Ensure tool_use/tool_result pairing integrity after any truncation
-  return ensureToolPairingIntegrity(messages, logger);
-}
-
-/**
- * Returns the debug info populated by the most recent buildAndSortMessages call.
- */
-export function getLastBuildDebugInfo(): ContextDebugInfo['messageTruncation'] | null {
-  return (buildAndSortMessages as any).lastDebugInfo?.messageTruncation || null;
+  return {
+    messages: ensureToolPairingIntegrity(messages, logger),
+    messageTruncation: buildDebugInfo(processedContentMessages),
+  };
 }

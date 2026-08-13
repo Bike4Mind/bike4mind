@@ -41,6 +41,8 @@ import {
   dataLakeTaxonomyQueueDLQ,
   lakeMemoryQueue,
   lakeMemoryQueueDLQ,
+  driveLakeIngestQueue,
+  driveLakeIngestQueueDLQ,
   whatsNewGenerationQueue,
   whatsNewHighlightsQueue,
   notebookCurationQueue,
@@ -126,6 +128,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'data-lake-cleanup': dataLakeCleanupQueueDLQ.url,
     'data-lake-taxonomy': dataLakeTaxonomyQueueDLQ.url,
     'lake-memory': lakeMemoryQueueDLQ.url,
+    'drive-lake-ingest': driveLakeIngestQueueDLQ.url,
   },
 });
 
@@ -180,6 +183,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     dataLakeCleanupQueue: dataLakeCleanupQueue.url,
     dataLakeTaxonomyQueue: dataLakeTaxonomyQueue.url,
     lakeMemoryQueue: lakeMemoryQueue.url,
+    driveLakeIngestQueue: driveLakeIngestQueue.url,
   },
 });
 
@@ -232,6 +236,7 @@ export const web = new sst.aws.Nextjs(
       // without a web.ts <-> cron.ts circular import (web.ts already imports cron.ts
       // exports). Resource.dataLakeTaxonomyQueue.url resolves in both Lambdas this way.
       dataLakeTaxonomyQueue,
+      driveLakeIngestQueue,
       ...(whatsNewDistributionBucket ? [whatsNewDistributionBucket] : []),
       ...(whatsNewDistributionId ? [whatsNewDistributionId] : []),
     ],

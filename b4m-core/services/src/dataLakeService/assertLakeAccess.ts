@@ -90,6 +90,20 @@ export function assertLakeWritable(lake: Pick<IDataLakeDocument, 'id'>): void {
 }
 
 /**
+ * Refuse access-grant (membership) operations against a fallback lake. A hardcoded DATA_LAKES lake
+ * has no backing document, so there is nothing to hang a grant row on and no `createdByUserId` to
+ * seed an owner grant from - its access is curated config, granted to everyone via the list/read
+ * path. This is the explicit fallback carve-out issue #1667 calls for; every grant write path
+ * (add/remove/reprocess a member) must call it after the access gate, mirroring how
+ * `assertLakeWritable` guards the file-write paths.
+ */
+export function assertLakeGrantable(lake: Pick<IDataLakeDocument, 'id'>): void {
+  if (isFallbackLake(lake)) {
+    throw new BadRequestError('This data lake is built into the platform; its membership is managed by configuration');
+  }
+}
+
+/**
  * Resolve a hardcoded DATA_LAKES fallback as a synthetic read-only document, applying
  * the same access rule the list path uses for fallbacks (admin, or tag/entitlement
  * any-of via lakeMatchesAccess) plus the hard org prerequisite from canAccessLake.

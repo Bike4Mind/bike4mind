@@ -192,10 +192,27 @@ api.interceptors.response.use(
         return Promise.reject(error);
       }
 
-      // Prevent secondary loops: if this request was already retried after
-      // a successful refresh and still got 401, give up.
+      // A refresh already succeeded (_retryCount is only bumped after refreshPromise
+      // RESOLVES) and we retried once, yet this request STILL 401s. When it is a bare
+      // auth-layer rejection, the freshly minted token is being rejected, so the session is
+      // unrecoverable - e.g. a server-side token/session mismatch where /api/auth/refreshToken
+      // keeps returning 200 but the access verifier keeps rejecting the token it mints. Left
+      // un-torn-down, the session stays alive (expired: false) and every repeating trigger -
+      // WS reconnect probes, tab-focus probes, polling queries - re-drives another
+      // refresh+retry cycle forever (the "401 storm a reload can't fix, only re-login").
+      //
+      // BUT a 401 that carries an application-level error `code` PASSED auth (a fresh token
+      // would too) and failed for a DOMAIN reason - e.g. /api/mcp-servers/notion/pages returns
+      // 401 + code NOTION_RECONNECT_REQUIRED when a user's Notion OAuth is revoked, a routine
+      // event unrelated to the JWT session. Tearing the whole session down there would log the
+      // user out of the app on a scoped, expected error. So only tear down on a code-less
+      // rejection; a coded 401 falls through to the plain reject (the pre-PR behavior, letting
+      // the caller surface its own error).
       const retryCount = error.config?._retryCount || 0;
       if (retryCount >= 1) {
+        if (!error.response?.data?.code) {
+          await forceSessionExpiredRedirect();
+        }
         return Promise.reject(error);
       }
 

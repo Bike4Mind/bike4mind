@@ -35,6 +35,7 @@ export const READER_LAKE_FIELDS = [
   'status',
   'fileCount',
   'totalSizeBytes',
+  'totalChunkedChars',
   'lastSyncAt',
 ] as const satisfies readonly (keyof IDataLakeDocument)[];
 
@@ -62,6 +63,9 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   // Editor-only, like systemPrompt: a reader gets its EFFECT (the prompt activates on a session
   // created for the lake, resolved server-side) but never reads the binding itself.
   preferredSystemPromptId: 'withheld',
+  // Editor-only, same as the prompt fields: a reader gets its EFFECT (inline vs retrieve, resolved
+  // server-side when a session is created for the lake) but never reads the setting itself.
+  groundingMode: 'withheld',
   fileTagPrefix: 'reader',
   datalakeTag: 'reader',
   requiredUserTag: 'reader',
@@ -72,6 +76,7 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   status: 'reader',
   fileCount: 'reader',
   totalSizeBytes: 'reader',
+  totalChunkedChars: 'reader',
   lastSyncAt: 'reader',
   // Teardown bookkeeping: of no use to a reader, and it reports when the owner tore the lake down.
   filesDeletedAt: 'withheld',

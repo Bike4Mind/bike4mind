@@ -1,5 +1,12 @@
 # @bike4mind/mcp
 
+## 1.41.2
+
+### Patch Changes
+
+- Updated dependencies [[`abc90f5`](https://github.com/Bike4Mind/bike4mind/commit/abc90f562e15caa46428fc94afa3ffff410e5d5c)]:
+  - @bike4mind/common@4.0.1
+
 ## 1.41.1
 
 ### Patch Changes

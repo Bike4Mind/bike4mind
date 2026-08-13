@@ -125,4 +125,28 @@ describe('chunkFabfile', () => {
     expect(mockAdapter.db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
     expect(mockAdapter.db.fabFileChunks.bulkInsert).not.toHaveBeenCalled();
   });
+
+  it('stamps charLength (code points) on every inserted chunk and their sum on the file', async () => {
+    (SmartChunker as unknown as Mock).mockImplementation(function MockSmartChunker(this: unknown) {
+      return {
+        chunkFile: vi.fn().mockResolvedValue([
+          { text: 'chunk one', tokenCount: 2 }, // 9 code points
+          { text: 'four\u{1F600}', tokenCount: 2 }, // 5 code points, 6 UTF-16 units
+        ]),
+        freeEncoder: vi.fn(),
+      };
+    });
+
+    await chunkFabfile(
+      mockUser,
+      { fabFileId: 'file-1', embeddingModel: 'text-embedding-ada-002' },
+      mockAdapter as never
+    );
+
+    const inserted = mockAdapter.db.fabFileChunks.bulkInsert.mock.calls[0][0] as Array<{ charLength: number }>;
+    expect(inserted.map(c => c.charLength)).toEqual([9, 5]);
+
+    const updatedFile = mockAdapter.db.fabFiles.update.mock.calls[0][0] as { chunkedCharCount: number };
+    expect(updatedFile.chunkedCharCount).toBe(14);
+  });
 });

@@ -16,12 +16,14 @@ import {
 import { fabFilesService } from '@bike4mind/services';
 
 /**
- * End-to-end guard, against REAL Mongo rather than a mock, for #1263: a file whose ONLY lake
- * membership signal is a `fileTagPrefix` content tag (no `datalake:*` meta-tag) must be gated
- * and stats-recomputed on removal exactly like a meta-tag leave, through BOTH single-file write
- * doors. A mock can assert `removeFileFromLake` was called; only a real aggregate proves the
- * NotFoundError-swallow path it hits (the tag is already gone by the time it runs its own lookup)
- * is actually inert rather than silently skipping the recompute. Lives in apps/client because it
+ * End-to-end guard, against REAL Mongo rather than a mock, for a file whose ONLY lake membership
+ * signal is a `fileTagPrefix` content tag (no `datalake:*` meta-tag): removal is gated and stats-
+ * recomputed exactly like a meta-tag leave, but ONLY through the tag-toggle door
+ * (`fabFilesService.toggleTags`, an explicit single-tag action). The whole-array write door
+ * (`updateFabFile`, the shape `PUT /api/files/:id` sends) can never remove this membership at
+ * all - a whole array cannot distinguish an intentional drop from a stale client's copy, so it
+ * preserves the tag instead. A mock can assert `removeFileFromLake` was (or wasn't) called; only
+ * a real aggregate proves the actual persisted state and stats. Lives in apps/client because it
  * is the only package with both @bike4mind/services and @bike4mind/database as dependencies.
  * Consumes the built dist, so `pnpm turbo:core:build` must be current.
  */
@@ -81,7 +83,9 @@ const storage = {
 };
 
 describe('reconcileLakeTags (via updateFabFile) against real Mongo', () => {
-  it('drops the prefix tag, clears membership, and recomputes stats to 0', async () => {
+  // The headline bug this ticket fixes: a whole-array write (here, dropping every tag) must
+  // preserve prefix-arm membership rather than reading the absence as an intentional leave.
+  it('preserves the prefix tag and membership when the caller drops it via a whole-array write', async () => {
     const lake = await makeLake();
     const file = await makeFile(['lk:invoices']);
     const user = { id: ownerId, isAdmin: false } as any;
@@ -93,23 +97,21 @@ describe('reconcileLakeTags (via updateFabFile) against real Mongo', () => {
     );
 
     const persistedFile = await FabFile.findById(file.id);
-    expect(persistedFile?.tags ?? []).toEqual([]);
+    expect((persistedFile?.tags ?? []).map(t => t.name)).toEqual(['lk:invoices']);
     const persistedLake = await DataLakeModel.findById(lake.id);
-    expect(persistedLake?.fileCount).toBe(0);
+    expect(persistedLake?.fileCount).toBe(1);
   }, 30000);
 
-  it('refuses a shared editor who is not the lake creator, persisting nothing', async () => {
+  it('preserves membership on a whole-array drop regardless of manage rights', async () => {
     await makeLake();
     const file = await makeFile(['lk:invoices']);
     const editor = { id: editorId, isAdmin: false } as any;
 
-    await expect(
-      fabFilesService.updateFabFile(
-        editor,
-        { id: file.id as string, tags: [] },
-        { db: { fabFiles: fabFileRepository, dataLakes: dataLakeRepository }, storage }
-      )
-    ).rejects.toThrow(/only the creator can remove/i);
+    await fabFilesService.updateFabFile(
+      editor,
+      { id: file.id as string, tags: [] },
+      { db: { fabFiles: fabFileRepository, dataLakes: dataLakeRepository }, storage }
+    );
 
     const persistedFile = await FabFile.findById(file.id);
     expect((persistedFile?.tags ?? []).map(t => t.name)).toEqual(['lk:invoices']);
