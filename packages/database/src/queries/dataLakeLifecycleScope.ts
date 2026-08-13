@@ -95,11 +95,17 @@ export function buildLacksContentPrefixTagFilter(prefix: string): Record<string,
  * spreads this alongside a membership filter - see `hasArchivedMemberExclusiveToDataLakeTag`'s own
  * doc for why that distinction matters there.
  *
- * The namespace test is case-INSENSITIVE, matching `isDataLakeTagName` (@bike4mind/common) - a
- * `DATALAKE:other` tag is still another lake's membership however it is cased. The "other than
- * mine" test is exact and case-SENSITIVE, the same comparison `buildDataLakeMembershipFilter`'s
- * meta arm uses to decide a row is mine at all - both halves of a composed query must agree on
- * what "mine" is, or a mixed-case variant of this lake's own tag would count as a foreign one.
+ * The namespace test is case-INSENSITIVE, roughly matching `isDataLakeTagName` (@bike4mind/common)
+ * - a `DATALAKE:other` tag is still another lake's membership however it is cased (that helper
+ * also trims whitespace, which this regex does not; a legacy whitespace-padded tag is outside both
+ * this function's and the rest of this file's namespace checks alike).
+ *
+ * The "other than mine" test is exact and case-SENSITIVE, the same comparison
+ * `buildDataLakeMembershipFilter`'s meta arm uses to decide a row is mine at all - both sides must
+ * use the SAME exactness or they could disagree on what "mine" is. One deliberate consequence: a
+ * mixed-case variant of THIS lake's own tag is treated as another lake's (excluded from "mine"),
+ * not folded back to it - degenerate but safe, since no lake can hold a non-canonical meta-tag in
+ * the first place.
  *
  * A document with no `tags` at all matches ($not is true on a missing field), which is correct: it
  * carries no other lake's tag. It cannot widen anything, since every membership arm requires one.

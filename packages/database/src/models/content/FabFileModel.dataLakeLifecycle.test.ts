@@ -349,6 +349,21 @@ describe('FabFile data lake lifecycle membership', () => {
         expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(metaOnlyScope)).toBe(false);
       });
 
+      it('agrees with the meta-only call site when passed the full scope (meta + prefix arm), even though the real caller never does', async () => {
+        // archiveDataLake.ts always calls with the meta-tag alone (see its own comment on why the
+        // full scope would trip on every second archiver in a live collision) - this just confirms
+        // the exclusion is not accidentally meta-only-scope-specific, in case a future caller
+        // passes the full scope.
+        const coMember = await makeFile({
+          fileName: 'co-member-full-scope.txt',
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }, { name: SIBLING_TAG }],
+        });
+        await FabFile.updateOne({ _id: coMember._id }, { $set: { archivedAt: new Date('2026-05-01') } });
+
+        expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(scope)).toBe(false);
+      });
+
       it("still reports a row carrying ONLY this lake's meta-tag, the genuine legacy orphan the guard exists to protect", async () => {
         // The unrelated tag matters: it keeps this test from passing by accident if the namespace
         // regex were ever dropped entirely (which would exclude on ANY second tag, not just

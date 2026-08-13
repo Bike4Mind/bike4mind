@@ -99,12 +99,18 @@ export const archiveDataLake = async (
   // ratified as an accepted, disclosed limitation in #1729.
   //
   // Trade-off worth naming: a lake whose OWN pre-existing unstamped archive is entirely
-  // prefix-only (no meta-tagged member at all) no longer trips this guard either, so its next
-  // archive claims a real stamp and those old prefix-only rows stop being reachable by the
-  // (now-bounded) unbounded fallback once filesArchivedAt is no longer absent. Accepted
-  // deliberately: that population is fixed and shrinking (only lakes archived before this field
-  // existed), while the sibling-freeing bug this scoping closes is live for as long as prefix
-  // collisions exist.
+  // prefix-only (no meta-tagged member at all), OR whose only leftover unstamped member also
+  // carries a SECOND lake's meta-tag, no longer trips this guard either, so its next archive
+  // claims a real stamp and that leftover row stops being reachable by the (now-bounded) unbounded
+  // fallback once filesArchivedAt is no longer absent. For the co-tagged case this is only safe
+  // when the co-owning lake can itself still restore that row (an ordinary lake, with its own
+  // document, can); it is NOT safe for a leftover co-tagged with a hardcoded fallback/registry
+  // "lake" that has no backing document at all (see the fallback-lake registry) - such a lake can
+  // never run its own unarchive, so that row would go from "wrongly reachable by this lake's
+  // unbounded fallback" to permanently unreachable by anyone. Accepted deliberately: both leftover
+  // populations are fixed and shrinking (rows predating this field, or predating a since-tightened
+  // membership rule), while the sibling-freeing bug this scoping closes is live for as long as
+  // multi-membership or prefix collisions exist.
   const hasUnstampedArchive =
     !existing.filesArchivedAt &&
     (await db.fabFiles.hasArchivedMemberExclusiveToDataLakeTag({ datalakeTag: existing.datalakeTag }));
