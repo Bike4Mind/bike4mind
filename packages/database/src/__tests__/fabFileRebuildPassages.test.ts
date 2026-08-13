@@ -118,6 +118,7 @@ describe('FabFileRepository.claimFilesForRechunkByIds', () => {
 
     const after = await FabFile.findById(f._id).lean();
     expect(after?.isChunking).toBe(true); // claimed, so the rescue sweep can't grab it mid-flight
+    expect(after?.chunkClaimedAt).toBeInstanceOf(Date); // stamped so a lost claim is later reclaimable
     expect(after?.chunked).toBe(false);
     expect(after?.chunkCount).toBe(0);
     expect(after?.vectorized).toBe(false);

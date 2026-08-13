@@ -14,6 +14,12 @@ export const CHUNK_SCAN_MIN_AGE_MS = 2 * 60_000;
  * account's - is drained gradually without starving the run's time budget. */
 export const CHUNK_SCAN_BATCH = 50;
 
+/** A file claimed for chunking (isChunking:true) longer ago than this is treated as a stranded
+ * claim - a worker hard-killed (OOM/timeout/deploy) before its `finally` cleared the flag - and is
+ * eligible for rescue. Must exceed the chunk handler's 13-minute timeout (infra/queues.ts) so a
+ * legitimately in-flight large file is never reclaimed mid-run and double-processed. */
+export const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
+
 /**
  * Mongo filter selecting files the scan should re-enqueue for chunking.
  *
@@ -45,13 +51,19 @@ export const CHUNK_SCAN_BATCH = 50;
  */
 export const NO_EXTRACTABLE_TEXT_NOTE_PREFIX = 'No extractable text';
 
-export const buildFabFileChunkScanFilter = (cutoff: Date) => ({
+export const buildFabFileChunkScanFilter = (cutoff: Date, staleClaimBefore?: Date) => ({
   status: 'complete' as const,
   chunkCount: 0,
-  isChunking: { $ne: true },
   createdAt: { $lt: cutoff },
   deletedAt: null,
   mimeType: { $not: /^(audio|image|video)\// },
   notes: { $not: new RegExp(`^${NO_EXTRACTABLE_TEXT_NOTE_PREFIX}`) },
   error: { $in: [null, ''] },
+  // Normally exclude in-flight files (isChunking:true). When a stale-claim cutoff is supplied, ALSO
+  // rescue a claim older than it: a hard worker crash never runs the finally that clears isChunking,
+  // so without this the file stays claimed and invisible forever. A missing/fresh chunkClaimedAt is
+  // never matched here (a `$lt` skips missing fields), so a legitimately in-flight file is untouched.
+  ...(staleClaimBefore
+    ? { $or: [{ isChunking: { $ne: true } }, { isChunking: true, chunkClaimedAt: { $lt: staleClaimBefore } }] }
+    : { isChunking: { $ne: true } }),
 });

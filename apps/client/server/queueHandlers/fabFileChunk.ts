@@ -148,7 +148,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // Mark the file as actively chunking so the self-host safety-net scan (worker) doesn't
     // re-enqueue it mid-run - a duplicate would re-chunk and re-embed the whole file. Cleared
     // in `finally` on success AND failure so it can still be retried/reprocessed. Default: false.
-    await FabFile.updateOne({ _id: fabFileId }, { $set: { isChunking: true } });
+    // chunkClaimedAt stamps the claim so the rescue sweep can reclaim it if THIS run is hard-killed
+    // (OOM/timeout/deploy) before the finally clears isChunking - see buildFabFileChunkScanFilter.
+    await FabFile.updateOne({ _id: fabFileId }, { $set: { isChunking: true, chunkClaimedAt: new Date() } });
 
     // Tag data-lake chunk logs with the batch id for incident triage (the lake is derivable
     // from the batch). dataLakeId isn't on the FabFile and isn't worth an extra read here.

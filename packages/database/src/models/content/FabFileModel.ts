@@ -1084,6 +1084,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         {
           $set: {
             isChunking: true,
+            // Stamp the claim so a pre-claim whose chunk message is then lost is reclaimed by the
+            // rescue sweep's stale-claim arm instead of sitting isChunking:true forever.
+            chunkClaimedAt: new Date(),
             chunked: false,
             chunkCount: 0,
             vectorized: false,
@@ -1470,6 +1473,10 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     chunkedCharCount: { type: Number, required: false },
 
     isChunking: { type: Boolean, default: false },
+    // When isChunking was last set true (worker pickup or a Rebuild-passages pre-claim). Lets the
+    // rescue sweep recover a claim stranded by a hard worker crash (OOM/timeout/deploy) that never
+    // ran the finally - see buildFabFileChunkScanFilter's stale-claim arm.
+    chunkClaimedAt: { type: Date, default: null },
     chunked: { type: Boolean, default: false },
     // Chunk policy at file-owner altitude (#1662). chunkedPassageTokenTarget: the effective target
     // (post model-window clamp) the current chunks were built with, so a later lake-membership

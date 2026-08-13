@@ -179,6 +179,9 @@ export interface IFabFile {
 
   /** Whether this FabFile is currently being chunked. */
   isChunking?: boolean;
+  /** When `isChunking` was last set true - the rescue sweep uses this to reclaim a claim stranded
+   *  by a hard worker crash that never cleared it (see buildFabFileChunkScanFilter). */
+  chunkClaimedAt?: Date | null;
   /** Whether this FabFile has been chunked */
   chunked?: boolean;
   /**

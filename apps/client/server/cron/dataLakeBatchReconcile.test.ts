@@ -47,6 +47,7 @@ vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendTo
 vi.mock('@server/worker/chunkScan', () => ({
   buildFabFileChunkScanFilter: (cutoff: Date) => ({ chunkCount: 0, createdAt: { $lt: cutoff } }),
   CHUNK_SCAN_MIN_AGE_MS: 2 * 60_000,
+  CHUNK_CLAIM_STALE_MS: 30 * 60_000,
 }));
 vi.mock('@server/utils/cloudwatch', () => ({
   recordReconcilerForcedTerminal: (...a: unknown[]) => h.recordForced(...a),

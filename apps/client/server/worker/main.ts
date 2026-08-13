@@ -15,7 +15,12 @@ import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscove
 import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
-import { buildFabFileChunkScanFilter, CHUNK_SCAN_BATCH, CHUNK_SCAN_MIN_AGE_MS } from './chunkScan';
+import {
+  buildFabFileChunkScanFilter,
+  CHUNK_SCAN_BATCH,
+  CHUNK_SCAN_MIN_AGE_MS,
+  CHUNK_CLAIM_STALE_MS,
+} from './chunkScan';
 import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
 import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
@@ -138,8 +143,10 @@ async function main() {
   worker.registerScheduledTask('fabFileChunkScan', CHUNK_SCAN_INTERVAL_MS, async () => {
     if (!(await adminSettingsRepository.getSettingsValue('enableAutoChunk'))) return;
 
-    const cutoff = new Date(Date.now() - CHUNK_SCAN_MIN_AGE_MS);
-    const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff))
+    const now = Date.now();
+    const cutoff = new Date(now - CHUNK_SCAN_MIN_AGE_MS);
+    const staleClaimBefore = new Date(now - CHUNK_CLAIM_STALE_MS);
+    const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff, staleClaimBefore))
       .select('_id userId batchId')
       .limit(CHUNK_SCAN_BATCH)
       .lean();
