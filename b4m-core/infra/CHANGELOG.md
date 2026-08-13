@@ -1,5 +1,15 @@
 # @bike4mind/infra
 
+## 0.9.0
+
+### Minor Changes
+
+- [#1719](https://github.com/Bike4Mind/bike4mind/pull/1719) [`b98acf7`](https://github.com/Bike4Mind/bike4mind/commit/b98acf7bf967471089155ea3e2d7766791b2bfb7) Thanks [@biletskiy6](https://github.com/biletskiy6)! - persist chunk char length and per-file text length, with backfill
+
+### Patch Changes
+
+- [#1709](https://github.com/Bike4Mind/bike4mind/pull/1709) [`c0d796f`](https://github.com/Bike4Mind/bike4mind/commit/c0d796f274b8985f07fc46fe90980a1f741a0f11) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - preserve data-lake membership on whole-array writes
+
 ## 0.8.0
 
 ### Minor Changes

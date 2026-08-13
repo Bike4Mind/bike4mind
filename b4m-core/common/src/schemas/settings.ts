@@ -11,6 +11,7 @@ import {
 } from './embedding';
 import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } from '../types/entities/SreTypes';
 import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
+import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/ScopedSettingTypes';
 
 /**
  * Default text for the artifact-emission system prompt. Single source of truth used BOTH as the
@@ -108,11 +109,15 @@ export const HELP_CENTER_PROMPT = `HELP CENTER: Bike4Mind has a built-in Help Ce
  *
  * Counterweight to the completeness pressure the rest of the system prompt applies: without an
  * explicit licence to abstain, the model treats "answer fully" as unconditional and fills gaps with
- * invented specifics about the user or their data. Measured as the single largest quality gain on
- * questions whose correct answer is a refusal, so it ships on every completion rather than only on
- * the grounded surfaces. Kept short on purpose - it must be cheap and behaviorally light.
+ * invented specifics - including a named customer, competitor, deal or dollar figure a leading
+ * question implied but no source supports, volunteered with citation-like framing so it reads as
+ * sourced. In internal evaluation (a harness kept outside this repo) this was among the largest
+ * quality gains on questions whose correct answer is a refusal, so it ships on every completion
+ * rather than only on the grounded surfaces (it is also the only surface covering a turn that
+ * answers WITHOUT searching the knowledge base). Kept short
+ * on purpose - it must be cheap and behaviorally light.
  */
-export const ABSTENTION_PROMPT = `When a request is underspecified or your sources do not cover it, say so and name what is missing. "I do not have enough to answer that" is a correct, high-value answer. Never invent facts about the user, their business, or their data.`;
+export const ABSTENTION_PROMPT = `When a request is underspecified or your sources do not cover it, say so and name what is missing. "I do not have enough to answer that" is a correct, high-value answer. Never invent facts about the user, their business, or their data, and never state a specific customer, competitor, deal, or figure as fact - or cite a source for it - unless your sources support it, even when the question assumes it.`;
 
 /**
  * Default text for the formatting system message. Runtime fallback used by
@@ -168,6 +173,7 @@ export const SettingKeySchema = z.enum([
   'EnableDataLakes',
   'EnableDataLakesDefault',
   'EnableDataLakeSlackAdd',
+  'EnableDataLakeGroundingMode',
   'EnableLakeMemory',
   'EnableDataLakeVectorSearch',
   'EnableBriefcase',
@@ -651,6 +657,14 @@ interface BaseSetting {
   publicSafe?: boolean;
   /** Parent setting key - this setting is hidden in admin UI when the parent is off. */
   dependsOn?: SettingKey;
+  /**
+   * Opt-in scoping (epic #1658 lane 0 / #1660). Absent = platform-only, the historical behavior:
+   * the value lives solely in `AdminSettings` and `resolveScopedSetting` returns it unchanged at
+   * every scope. Present, the setting also honors org/owner/lake OVERRIDES per `settableAt`, with
+   * the narrower scope winning. A setting is never silently scoped - it opts in here, which is why
+   * adding this field changes no existing consumer.
+   */
+  scope?: SettingScopeConfig;
 }
 
 function makeStringSetting(
@@ -1771,6 +1785,17 @@ export const settingsMap = {
     order: 90,
     dependsOn: 'EnableDataLakes',
   }),
+  EnableDataLakeGroundingMode: makeBooleanSetting({
+    key: 'EnableDataLakeGroundingMode',
+    name: 'Data Lakes: Per-lake grounding mode',
+    defaultValue: true,
+    description:
+      "Global rollback lever for the per-lake grounding mode (inline vs retrieve vs auto-by-size). On by default. Turn OFF to ignore every lake's configured mode and fall back to pure size-only corpus deferral (CorpusRetrievalMinInlineTokensPerDoc), reverting the retrieve-by-default behavior for all lakes at once without editing each lake.",
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 92,
+    dependsOn: 'EnableDataLakes',
+  }),
   EnableLakeMemory: makeBooleanSetting({
     key: 'EnableLakeMemory',
     name: 'Data Lakes: Lake memory profile (extraction)',
@@ -2089,7 +2114,7 @@ export const settingsMap = {
     name: 'Abstention Prompt',
     defaultValue: ABSTENTION_PROMPT,
     description:
-      'Short system prompt licensing the model to say "I do not have enough to answer that" and to name what is missing instead of inventing facts about the user or their data. Injected on every chat completion. Live-editable; clearing it reverts to the built-in default.',
+      'Short system prompt licensing the model to say "I do not have enough to answer that" and to name what is missing instead of inventing facts about the user or their data. Injected on every chat completion. Live-editable; clearing it reverts to the built-in default. After an upgrade, diff a saved copy against that default: a saved copy pins the wording from whenever it was saved and will not pick up fixes made since.',
     category: 'AI',
     order: 11,
   }),
@@ -2961,6 +2986,8 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 2,
+    // A scan budget an org/owner/lake may tighten below the platform ceiling (#1661 org/lake rungs).
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
   }),
   dataLakeSearchMaxChunks: makeNumberSetting({
     key: 'dataLakeSearchMaxChunks',
@@ -2972,6 +2999,7 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 3,
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
   }),
   // Analytics Bot (existing production bot - DO NOT CHANGE)
   slackSigningSecret: makeStringSetting({

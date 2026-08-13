@@ -1,8 +1,17 @@
 packages:
   - apps/*
   - packages/*
-  # Premium overlay: private packages composed in by official CI; omitted from the fork's
-  # workspace.yaml. An empty packages/premium/ dir at clone time leaves the lockfile unchanged.
+  # Premium overlay: private packages mounted under packages/premium/<name> by the deploy
+  # pipeline before install. These globs stay active in EVERY checkout, on purpose - they are
+  # inert while packages/premium/ is empty (every public clone), and pnpm links overlay
+  # workspace:* deps only while they are live, so gating them behind a flag would mean
+  # preprocessing this file on every install for no gain.
+  #
+  # Consequence: an install WITH an overlay hydrated rewrites pnpm-lock.yaml to include the
+  # overlay's importer blocks. The tracked lockfile must always be generated with
+  # packages/premium/ empty - enforced by scripts/check-no-overlay-lockfile.sh (CI +
+  # pre-commit), cleared locally by `pnpm lockfile:restore`. See CONTRIBUTING.md
+  # "Premium overlays and the tracked lockfile".
   - packages/premium/*
   # cc-bridge ships nested inside the tavern overlay; surface it as a workspace
   # member so its workspace:* deps link whenever the overlay is present.

@@ -23,6 +23,7 @@ import {
   toContentLabel,
 } from '../../../../dataLakeService/renderRetrievedContentBlock';
 import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
+import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
 import {
   describeEmbeddingMismatch,
   PARTIAL_RESULTS_STATUS_SUFFIX,
@@ -94,6 +95,7 @@ function formatSemanticResults(
     formatSkipNotice(skipNotice) +
     partial +
     `Found ${results.length} relevant passage(s) in the knowledge base — the content is included below, so answer directly and only call retrieve_knowledge_content if you need MORE detail from a specific file:\n\n` +
+    `${GROUNDED_NO_INVENTION_RULE}\n\n` +
     renderRetrievedContentBlock(blocks)
   );
 }
