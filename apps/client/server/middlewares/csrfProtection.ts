@@ -105,13 +105,14 @@ export const csrfProtection = (): RequestHandler => {
     // In dev, allow any localhost origin (Next.js may start on any available port).
     // Reads the normalized origin, not the raw env value, so this branch cannot
     // disagree with the allow-list entry above about what APP_URL points at, and
-    // shares one predicate with the OAuth callback sites (isLocalAppUrl) so the
-    // three cannot drift on what counts as local.
+    // shares one predicate with the OAuth callback sites AND with the inner
+    // origin/referer match below (isLocalAppUrl), so none of them can drift on
+    // what counts as local.
     if (isLocalAppUrl(appOrigin)) {
       if (origin) {
         try {
           const url = new URL(origin);
-          if (url.hostname === 'localhost') {
+          if (isLocalAppUrl(url.origin)) {
             allowedOrigins.push(url.origin);
           }
         } catch {
@@ -121,7 +122,7 @@ export const csrfProtection = (): RequestHandler => {
       if (referer) {
         try {
           const url = new URL(referer);
-          if (url.hostname === 'localhost') {
+          if (isLocalAppUrl(url.origin)) {
             allowedOrigins.push(url.origin);
           }
         } catch {
