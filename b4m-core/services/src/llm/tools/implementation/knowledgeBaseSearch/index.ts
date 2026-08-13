@@ -59,6 +59,20 @@ function prettyFileName(fn: string): string {
 }
 
 /**
+ * Cut to a budget without splitting a character. `slice` counts UTF-16 code units, so a cut at an
+ * arbitrary index can land between the halves of a surrogate pair (emoji, supplementary-plane CJK)
+ * and emit a lone surrogate - a corrupted final character in the text the model reads, and one that
+ * survives into anything quoting the passage back. Dropping the orphaned half costs one character of
+ * an already-truncated passage.
+ */
+function clipToCodePointBoundary(text: string, maxChars: number): string {
+  const sliced = text.slice(0, maxChars);
+  const last = sliced.charCodeAt(sliced.length - 1);
+  const endsOnOrphanedHighSurrogate = last >= 0xd800 && last <= 0xdbff;
+  return endsOnOrphanedHighSurrogate ? sliced.slice(0, -1) : sliced;
+}
+
+/**
  * Format semantic passages WITH their content so the model can answer without retrieving.
  *
  * Passage text is untrusted: a lake can serve content its owner did not author (a shared source
@@ -82,13 +96,15 @@ function formatSemanticResults(
   let clippedCount = 0;
   let longestChars = 0;
   const blocks = results.map((r, i) => {
+    // Measured AFTER trim on purpose: the budget governs what this function emits, and the trimmed
+    // string is what it emits. A padded chunk that fits once trimmed is served whole, correctly.
     const text = r.chunkText.trim();
     longestChars = Math.max(longestChars, text.length);
     // Clip BEFORE defanging, never after: defang indents line-initial markers, so slicing the
     // defanged string would spend part of the content budget on the defense itself.
     const overBudget = text.length > maxChunkChars;
     if (overBudget) clippedCount++;
-    const clipped = overBudget ? `${text.slice(0, maxChunkChars)}\u2026` : text;
+    const clipped = overBudget ? `${clipToCodePointBoundary(text, maxChunkChars)}\u2026` : text;
     // The file name is content-adjacent and equally attacker-influenced: without toContentLabel a
     // crafted name carries a newline plus a forged marker into the label line.
     return (
