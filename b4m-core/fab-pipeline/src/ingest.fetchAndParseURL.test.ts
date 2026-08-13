@@ -159,6 +159,40 @@ describe('fetchAndParseURL content typing and naming after redirects', () => {
     expect(Buffer.isBuffer(result.textContent)).toBe(true);
   });
 
+  it.each(['application/octet-stream', 'binary/octet-stream', 'APPLICATION/OCTET-STREAM'])(
+    'treats a .pdf served as %s as a PDF, not text',
+    async ct => {
+      // The regression this guards: generic-binary carries no format signal, so keying the fallback on
+      // "Content-Type absent" alone sent PDF bytes through toString('utf8') into garbage that was then
+      // chunked and vectorized. S3 objects stored without an explicit ContentType and
+      // `Content-Disposition: attachment` links both arrive exactly this way.
+      axiosGet.mockResolvedValueOnce({
+        status: 200,
+        data: Buffer.from('%PDF-1.4 fake'),
+        headers: { 'content-type': ct },
+      });
+
+      const result = await fetchAndParseURL('http://93.184.216.34/report.pdf', { logger });
+
+      expect(result.mimeType).toBe('application/pdf');
+      expect(Buffer.isBuffer(result.textContent)).toBe(true);
+    }
+  );
+
+  it('still parses a NON-pdf url served as octet-stream as text', async () => {
+    // The fallback is extension-gated, so generic-binary alone must not promote anything to PDF.
+    axiosGet.mockResolvedValueOnce({
+      status: 200,
+      data: PAGE,
+      headers: { 'content-type': 'application/octet-stream' },
+    });
+
+    const result = await fetchAndParseURL('http://93.184.216.34/article', { logger });
+
+    expect(result.mimeType).toBe('text/plain');
+    expect(result.title).toBe('An Article');
+  });
+
   it('does not treat a .pdf in the QUERY STRING as a PDF', async () => {
     // The old extension test split on '.' and looked at the last segment, so `?doc=report.pdf`
     // matched and an HTML page was handed to the PDF branch.
@@ -167,6 +201,28 @@ describe('fetchAndParseURL content typing and naming after redirects', () => {
     const result = await fetchAndParseURL('http://93.184.216.34/view?doc=report.pdf', { logger });
 
     expect(result.mimeType).toBe('text/plain');
+  });
+
+  it('NEVER logs embedded URL credentials, on success or on failure', async () => {
+    // `https://user:pass@host/doc` is a legitimate paste and this function is reached from Slack and
+    // from the LLM chat path, so the raw URL must not survive into a log record that outlives the
+    // message. The fetch itself still uses the credentialed URL.
+    const credentialed = 'http://alice:s3cret@93.184.216.34/private';
+    axiosGet.mockResolvedValueOnce(html(PAGE));
+
+    await fetchAndParseURL(credentialed, { logger });
+
+    const logged = (logger.log as unknown as ReturnType<typeof vi.fn>).mock.calls.flat().join(' ');
+    expect(logged).not.toContain('s3cret');
+    expect(logged).toContain('93.184.216.34');
+
+    // The fetch used the ORIGINAL url, credentials included - redaction is for the record only.
+    expect(axiosGet.mock.calls[0][0]).toBe(credentialed);
+
+    axiosGet.mockRejectedValueOnce(new Error('boom'));
+    await expect(fetchAndParseURL(credentialed, { logger })).rejects.toThrow();
+    const meta = (logger.updateMetadata as unknown as ReturnType<typeof vi.fn>).mock.calls.flat();
+    expect(JSON.stringify(meta)).not.toContain('s3cret');
   });
 
   it('names an untitled page from the FINAL url, not the pasted one', async () => {
