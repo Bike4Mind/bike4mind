@@ -49,6 +49,27 @@ const MAX_REDIRECTS = 5;
 const URL_MAX_RESPONSE_BYTES = 50 * 1024 * 1024;
 
 /**
+ * PDF test against the URL's PATH only. The previous form (`url.split('.').pop().startsWith('pdf')`)
+ * also matched a query string, so `?doc=report.pdf` on an HTML page was fetched as a PDF.
+ */
+function isPdfUrl(url: string): boolean {
+  try {
+    return new URL(url).pathname.toLowerCase().endsWith('.pdf');
+  } catch {
+    return url.split('.')?.pop()?.toLowerCase().startsWith('pdf') ?? false;
+  }
+}
+
+/** Last path segment, used only as a display-name fallback when a page has no `<title>`. */
+function lastPathSegment(url: string): string {
+  try {
+    return new URL(url).pathname.split('/').filter(Boolean).pop() ?? url;
+  } catch {
+    return url.split('/')?.pop() ?? url;
+  }
+}
+
+/**
  * Fetch one URL without following redirects, so the caller can SSRF-validate each hop itself.
  *
  * SECURITY: this is why `maxRedirects: 0` is set rather than left at axios's default. Validating
@@ -59,9 +80,13 @@ const URL_MAX_RESPONSE_BYTES = 50 * 1024 * 1024;
  * `timeoutMs` is the budget REMAINING for the whole operation, not a fresh per-hop allowance - see
  * the deadline in `fetchAndParseURL`.
  */
-async function fetchWithoutRedirects(url: string, responseType: 'arraybuffer' | 'text', timeoutMs: number) {
+async function fetchWithoutRedirects(url: string, timeoutMs: number) {
   return axios.get(url, {
-    responseType,
+    // ALWAYS bytes. The response type cannot be chosen from the caller's URL, because a redirect can
+    // land on a different content type entirely - a `.pdf` URL that 302s to an HTML gateway page, or
+    // an extensionless URL that 302s to a PDF. Fetching bytes and deciding how to parse AFTERWARDS,
+    // from the final response's own Content-Type, removes the guess and the mis-parse it caused.
+    responseType: 'arraybuffer',
     timeout: timeoutMs, // Prevent Lambda timeout exhaustion
     maxRedirects: 0,
     maxContentLength: URL_MAX_RESPONSE_BYTES,
@@ -75,16 +100,6 @@ async function fetchWithoutRedirects(url: string, responseType: 'arraybuffer' | 
 export async function fetchAndParseURL(url: string, { logger }: { logger: Logger }): Promise<ParsedContent> {
   logger.updateMetadata({ failedUrl: null });
   try {
-    let urlMimeType = 'text/plain';
-
-    // Decided from the URL the CALLER passed, not the post-redirect one, so this heuristic behaves
-    // exactly as it did before per-hop validation was introduced.
-    if (url.split('.')?.pop()?.startsWith('pdf')) {
-      urlMimeType = 'application/pdf';
-    }
-
-    const responseType = ['application/pdf'].includes(urlMimeType) ? ('arraybuffer' as const) : ('text' as const);
-
     // Follow redirects MANUALLY so the SSRF guard runs against every address we actually fetch,
     // including the first. See `fetchWithoutRedirects`.
     let currentUrl = url;
@@ -110,7 +125,7 @@ export async function fetchAndParseURL(url: string, { logger }: { logger: Logger
         throw new Error('Timed out while following redirects for URL');
       }
 
-      response = await fetchWithoutRedirects(currentUrl, responseType, remainingMs);
+      response = await fetchWithoutRedirects(currentUrl, remainingMs);
 
       const isRedirect = response.status >= 300 && response.status < 400;
       if (!isRedirect) break;
@@ -134,28 +149,40 @@ export async function fetchAndParseURL(url: string, { logger }: { logger: Logger
       throw new Error('URL fetch produced no response');
     }
 
-    const cheerio = await import('cheerio');
-    const htmlContent = response.data;
-    const $ = cheerio.load(htmlContent);
-    const title = $('title').text() || (url.split('/')?.pop() as string);
-    let urlContent = null;
+    // Type decided from what we ACTUALLY received, not from the URL the caller passed: the server's
+    // Content-Type when it states one, otherwise the FINAL url's extension. `currentUrl` is the
+    // post-redirect address, so a chain that changes content type is classified correctly.
+    const contentType = String(response.headers?.['content-type'] ?? '');
+    const urlMimeType =
+      contentType.includes('application/pdf') || (!contentType && isPdfUrl(currentUrl))
+        ? 'application/pdf'
+        : 'text/plain';
 
-    switch (urlMimeType) {
-      case 'application/pdf': {
-        const pdfbuffer = Buffer.from(response.data);
-        urlContent = pdfbuffer;
-        break;
-      }
-      default: {
-        let textContent = '';
-        $('body')
-          .find('p')
-          .each((index, element) => {
-            textContent += $(element).text() + '\n';
-          });
-        urlContent = textContent || htmlContent;
-        break;
-      }
+    // `responseType: 'arraybuffer'` gives a Buffer in Node; be tolerant of a string so a caller (or
+    // a test) handing back already-decoded data still works.
+    const body: Buffer = Buffer.isBuffer(response.data) ? response.data : Buffer.from(response.data as never);
+
+    let title: string;
+    let urlContent: Buffer | string;
+
+    if (urlMimeType === 'application/pdf') {
+      urlContent = body;
+      // No HTML to read a <title> from, so name it from the final url directly.
+      title = lastPathSegment(currentUrl);
+    } else {
+      const cheerio = await import('cheerio');
+      const htmlContent = body.toString('utf8');
+      const $ = cheerio.load(htmlContent);
+      // Fallback names the page from the FINAL url rather than the pasted one - after a redirect the
+      // caller's last path segment describes a different document than the one actually fetched.
+      title = $('title').text() || lastPathSegment(currentUrl);
+      let textContent = '';
+      $('body')
+        .find('p')
+        .each((index, element) => {
+          textContent += $(element).text() + '\n';
+        });
+      urlContent = textContent || htmlContent;
     }
 
     logger.log(`Fetched ${title} with mimetype ${urlMimeType} and parsed ${url}`);
