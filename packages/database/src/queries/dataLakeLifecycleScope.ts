@@ -71,6 +71,11 @@ export function buildDataLakeMembershipFilter(scope: DataLakeMembershipScope): R
  * matching the predicate.
  *
  * Returns a top-level filter fragment; spread it alongside the meta-tag arm.
+ *
+ * Shares its top-level `tags` key with `buildNoOtherLakeMetaTagFilter` below - spreading both
+ * together silently keeps only the last one (see that function's own test for the collision).
+ * No caller composes them today; if one ever needs to, compose their $elemMatch conditions
+ * directly instead of spreading both objects.
  */
 export function buildLacksContentPrefixTagFilter(prefix: string): Record<string, unknown> {
   return {
@@ -109,6 +114,13 @@ export function buildLacksContentPrefixTagFilter(prefix: string): Record<string,
  *
  * A document with no `tags` at all matches ($not is true on a missing field), which is correct: it
  * carries no other lake's tag. It cannot widen anything, since every membership arm requires one.
+ *
+ * A bare `datalake:` element (no suffix) would also satisfy the namespace regex and count as
+ * "another lake's" - unreachable in practice, since the write paths that mint a meta-tag always
+ * append a real identifier after the prefix, never the bare prefix alone.
+ *
+ * Shares its top-level `tags` key with `buildLacksContentPrefixTagFilter` above - see that
+ * function's own doc for the composition hazard this creates for a future caller of both.
  */
 export function buildNoOtherLakeMetaTagFilter(datalakeTag: string): Record<string, unknown> {
   return {
