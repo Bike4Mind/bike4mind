@@ -14,7 +14,7 @@ import {
   deriveServeCharBudget,
 } from '@bike4mind/common';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
-import { resolveSearchBudgets } from './resolveSearchBudgets';
+import { resetServeCeilingWarnLimiter, resolveSearchBudgets } from './resolveSearchBudgets';
 
 function makeDb(
   platform: Record<string, string>,
@@ -68,6 +68,8 @@ beforeEach(() => {
   // stored values and passes or fails for the wrong reason.
   invalidateSettingsCache();
   invalidateScopedSettingsCache();
+  // The ceiling warn is throttled by module state, so without this a later case sees it already spent.
+  resetServeCeilingWarnLimiter();
 });
 
 describe('resolveSearchBudgets - platform path (unchanged behavior)', () => {
@@ -208,6 +210,36 @@ describe('resolveSearchBudgets - serve budget', () => {
     expect(budgets.maxChunkChars).toBe(SERVE_CHUNK_CHARS_CEILING);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('6554'));
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('clipped'));
+  });
+
+  it('warns once per chunk target, not on every search', async () => {
+    const logger = loggerStub();
+    const db = makeDb({ DefaultChunkSize: '6554' });
+    const ceilingWarn = expect.stringContaining('exceeds the per-passage serve ceiling');
+
+    await resolveSearchBudgets(db, logger);
+    await resolveSearchBudgets(db, logger);
+    await resolveSearchBudgets(db, logger);
+
+    // Search runs up to MAX_SEARCHES times a turn for every user, so a per-call warn buries the
+    // signal in its own repetition. The fact is about the config, not about any one request.
+    expect(logger.warn.mock.calls.filter(([msg]) => typeof msg === 'string' && msg.includes('ceiling'))).toHaveLength(
+      1
+    );
+    expect(logger.warn).toHaveBeenCalledWith(ceilingWarn);
+  });
+
+  it('warns again when the chunk target changes to another ceiling-bound value', async () => {
+    const logger = loggerStub();
+
+    await resolveSearchBudgets(makeDb({ DefaultChunkSize: '6554' }), logger);
+    invalidateSettingsCache();
+    await resolveSearchBudgets(makeDb({ DefaultChunkSize: '7000' }), logger);
+
+    // Throttling must not silence a NEW misconfiguration - that would be the "silent" failure this
+    // whole change removes, reintroduced in the warn itself.
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('6554'));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('7000'));
   });
 
   it('still resolves the scan budgets alongside the serve budget', async () => {
