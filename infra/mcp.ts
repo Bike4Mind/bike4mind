@@ -4,11 +4,11 @@ import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { router, appUrlForLambdaEnv } from './router';
 import { secrets } from './secrets';
 
-// Calculate content hash from git tree - changes immediately when MCP/Common code changes
+// Calculate content hash from git tree - changes immediately when MCP/Common/Hearth code changes
 // Matches the content hash pattern used in ci.yml for caching
 // This is a workaround for SST not detecting copyFiles content changes
 const MCP_CONTENT_HASH = execSync(
-  "git ls-tree -r HEAD b4m-core/mcp b4m-core/common | awk '{print $3}' | sort | md5sum | awk '{print $1}'"
+  "git ls-tree -r HEAD b4m-core/mcp b4m-core/common b4m-core/hearth | awk '{print $3}' | sort | md5sum | awk '{print $1}'"
 )
   .toString()
   .trim()
@@ -71,6 +71,17 @@ export const mcpHandler = new sst.aws.Function('mcpHandler', {
     {
       from: 'b4m-core/common/package.json',
       to: 'node_modules/@bike4mind/common/package.json',
+    },
+    // Copied, not installed: hearth is workspace:*, so `install` cannot fetch it. The common
+    // barrel imports it at module load, and an unresolvable import kills the child before the
+    // stdio handshake - surfacing only as `MCP error -32000: Connection closed`.
+    {
+      from: 'b4m-core/hearth/dist',
+      to: 'node_modules/@bike4mind/hearth/dist',
+    },
+    {
+      from: 'b4m-core/hearth/package.json',
+      to: 'node_modules/@bike4mind/hearth/package.json',
     },
   ],
 });
