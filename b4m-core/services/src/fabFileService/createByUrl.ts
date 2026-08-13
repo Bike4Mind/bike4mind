@@ -51,18 +51,29 @@ type CreateFabFileByUrlAdapters = {
   tags?: Array<{ name: string; strength: number }>;
   /** Where this file came from, stamped by the server that fetched it. See `CreateFabFileAdapters`. */
   provenance?: CreateFabFileAdapters['provenance'];
+  /**
+   * Compensating delete, invoked ONLY when the upload that follows the create fails. See the upload
+   * below for what it prevents.
+   *
+   * Optional because the web URL door (`pages/api/files/createFabFileURL.ts`) wraps this call in
+   * `withTransaction`, so its create already rolls back on a throw. The Slack link path is
+   * deliberately un-transactioned (a transaction there would span an outbound fetch) and so has no
+   * rollback of its own - it supplies this instead.
+   */
+  deleteCreatedFile?: (id: string) => Promise<unknown>;
 };
 
 export const createFabFileByUrl = async (
   userId: string,
   parameters: CreateFabFileByUrlParameters,
-  { db, storage, tags, provenance }: CreateFabFileByUrlAdapters
+  { db, storage, tags, provenance, deleteCreatedFile }: CreateFabFileByUrlAdapters
 ) => {
+  const logger = new Logger();
   const params = secureParameters(parameters, createFabFileByUrlSchema);
   const user = await db.users.findById(userId);
   if (!user) throw new BadRequestError('User not found');
 
-  const { textContent, mimeType, title } = await fetchAndParseURL(params.url, { logger: new Logger() });
+  const { textContent, mimeType, title } = await fetchAndParseURL(params.url, { logger });
 
   const fileSize = typeof textContent === 'string' ? Buffer.byteLength(textContent) : textContent.length;
 
@@ -86,7 +97,22 @@ export const createFabFileByUrl = async (
   );
 
   if (fabFile.filePath) {
-    await storage.upload(fabFile.filePath, textContent, { ContentType: mimeType });
+    try {
+      await storage.upload(fabFile.filePath, textContent, { ContentType: mimeType });
+    } catch (uploadError) {
+      // The row now exists with a `filePath` whose object does not, and nothing will ever reconcile
+      // that: chunk/vectorize is driven by the S3 ObjectCreated event, so the file would sit in lake
+      // and file queries permanently unindexable. Undo the create, then rethrow so the caller still
+      // reports a failure rather than a success with a missing file.
+      try {
+        await deleteCreatedFile?.(fabFile.id);
+      } catch (cleanupError) {
+        // Best effort only. The upload error is the one worth surfacing, so this is logged and
+        // swallowed rather than allowed to mask it.
+        logger.debug('Failed to clean up FabFile after a failed URL upload:', cleanupError);
+      }
+      throw uploadError;
+    }
   }
 
   return fabFile;
