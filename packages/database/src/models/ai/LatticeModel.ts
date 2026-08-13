@@ -482,11 +482,10 @@ const LatticeModelSchema = new Schema<ILatticeModelDocument, ILatticeModelModel>
 
 // INDEXES
 
-// User + name uniqueness (within non-deleted models)
-LatticeModelSchema.index(
-  { userId: 1, name: 1 },
-  { unique: true, partialFilterExpression: { deletedAt: { $exists: false } } }
-);
+// User + name uniqueness (within non-deleted models). Keyed on `deletedAt: null`
+// (not `$exists: false`, which Mongo rejects in a partial filter): softDeletePlugin
+// defaults deletedAt to null on every live row, so this indexes live models.
+LatticeModelSchema.index({ userId: 1, name: 1 }, { unique: true, partialFilterExpression: { deletedAt: null } });
 
 // Session-based queries
 LatticeModelSchema.index({ sessionId: 1, updatedAt: -1 });

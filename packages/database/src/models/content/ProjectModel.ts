@@ -134,12 +134,15 @@ ProjectSchema.index({ userId: 1, deletedAt: 1, name: 'text', updatedAt: -1 });
 // is indexed).
 ProjectSchema.index({ 'users.userId': 1 });
 
-// Unique constraint on project name per user (excluding soft-deleted projects)
+// Unique constraint on project name per user (excluding soft-deleted projects).
+// Keyed on `deletedAt: null` (not `$exists: false`, which Mongo rejects in a
+// partial filter): softDeletePlugin defaults deletedAt to null on every live
+// row, so this indexes live projects and lets a soft-deleted name be reused.
 ProjectSchema.index(
   { userId: 1, name: 1 },
   {
     unique: true,
-    partialFilterExpression: { deletedAt: { $exists: false } },
+    partialFilterExpression: { deletedAt: null },
   }
 );
 
