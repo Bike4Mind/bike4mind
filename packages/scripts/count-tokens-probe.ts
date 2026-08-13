@@ -34,9 +34,10 @@ const SYSTEM_PROMPT = [ARTIFACT_EMISSION_PROMPT, HELP_CENTER_PROMPT, ABSTENTION_
 
 const USER_MESSAGE = 'What is the capital of France?';
 
-// The four tools auto-added to every chat today per issue #810 (skill always;
-// blog_* for an admin with blog integration). Only `.toolSchema` is read
-// below - `.toolFn` is never invoked - so an empty stub context is safe here.
+// The four tools this ticket made conditional (skill, and blog_* for an admin) - see
+// autoAddedToolGating.ts. Held constant here regardless of live gating, since the probe measures
+// the fixed cost of attaching this tool set, not whether a given turn would actually get it.
+// Only `.toolSchema` is read below - `.toolFn` is never invoked - so an empty stub context is safe.
 const stubContext = {} as unknown as ToolContext;
 
 function buildToolSchemas(apiKey: string) {
