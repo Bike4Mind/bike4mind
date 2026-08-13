@@ -3,11 +3,14 @@ import {
   DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
   DEFAULT_PASSAGE_TOKEN_TARGET,
   IAdminSettingsRepository,
+  IScopedSettingsRepository,
+  SettingScope,
   deriveServeCharBudget,
 } from '@bike4mind/common';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import type { SemanticSearchBudgets } from './semanticDataLakeSearch';
+import { resolveScopedSettingValues } from '../settings/resolveScopedSetting';
 
 /**
  * The scan budgets the search engine consumes, plus the SERVE budget its callers need.
@@ -41,11 +44,54 @@ export type ResolvedSearchBudgets = SemanticSearchBudgets & {
  * Never throws: a settings outage falls back to the coded defaults and warns. The warn matters
  * because the symptom of a bad value would otherwise be "retrieval quietly covers less than the
  * admin configured", which is indistinguishable from a small corpus.
+ *
+ * Scope (epic #1658 lane 0 / #1660): callers that know the org/owner/lake a search runs for may pass
+ * a `scope` (and the `scopedSettings` overlay repo) to let a narrower rung tighten the budget below
+ * the platform ceiling. Omitting both - every caller today - takes the byte-identical platform path
+ * below, so this change is additive. Chunk-policy rungs ride this same seam when #1662 gives
+ * `DefaultChunkSize` its `scope.settableAt`; the serve budget below picks them up with no edit here.
  */
 export async function resolveSearchBudgets(
-  db: { adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'> },
-  logger?: Logger
+  db: {
+    adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'>;
+    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
+  },
+  logger?: Logger,
+  scope?: SettingScope
 ): Promise<ResolvedSearchBudgets> {
+  // Scoped path: only when a caller both supplies rungs and wires the overlay store. The resolver
+  // falls back to the platform value per key, so an un-overridden budget matches the platform path.
+  if (scope && db.scopedSettings && scopeHasRung(scope)) {
+    try {
+      const values = await resolveScopedSettingValues(
+        // DefaultChunkSize rides along deliberately. It declares no `scope.settableAt`, so
+        // computeCandidateRefs yields no rungs for it and it resolves to exactly the platform value -
+        // this adds no org/lake lever (that is #1662), it only keeps ONE derivation for both paths.
+        // Omitting it here instead would make the scoped path serve a different budget than the
+        // platform path for the same lake, which is the disagreement this whole change removes.
+        ['dataLakeSearchMaxFiles', 'dataLakeSearchMaxChunks', 'DefaultChunkSize'],
+        scope,
+        db,
+        {
+          logger,
+        }
+      );
+      return {
+        maxFiles: positiveIntOr(values.dataLakeSearchMaxFiles, DATA_LAKE_SEARCH_MAX_FILES_DEFAULT, 'maxFiles', logger),
+        maxChunks: positiveIntOr(
+          values.dataLakeSearchMaxChunks,
+          DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT,
+          'maxChunks',
+          logger
+        ),
+        maxChunkChars: resolveServeBudget(values.DefaultChunkSize, logger),
+      };
+    } catch (err) {
+      logger?.warn?.('[semanticSearch] scoped budget resolution failed; falling back to platform', err);
+      // fall through to the platform path
+    }
+  }
+
   try {
     const values = await getSettingsByNames(
       ['dataLakeSearchMaxFiles', 'dataLakeSearchMaxChunks', 'DefaultChunkSize'],
@@ -77,8 +123,14 @@ export async function resolveSearchBudgets(
  * Turn the configured chunk token target into the serve character budget, warning when the safety
  * ceiling leaves the cap below the configured chunk size - the residual case where the two still
  * disagree, and the one an operator has to be told about rather than discover as truncated answers.
+ *
+ * Takes `number` as well as `string` because the two paths hand it different shapes: the platform
+ * read yields the raw stored string, while the scoped resolver has already parsed the value through
+ * the setting's schema. One consequence worth knowing: on the scoped path an unusable stored value is
+ * coerced to the coded default before it reaches here, so the set-but-unusable warn below fires only
+ * on the platform path. Closing that belongs with the scoped seam itself (#1662), not here.
  */
-function resolveServeBudget(rawChunkSize: string | null | undefined, logger?: Logger): number {
+function resolveServeBudget(rawChunkSize: string | number | null | undefined, logger?: Logger): number {
   // Same parse-and-warn contract as the scan budgets: unset is normal and silent, set-but-unusable
   // warns and falls back to the chunker's own default - which is what the chunker does with it too.
   const target = positiveIntOr(rawChunkSize, DEFAULT_PASSAGE_TOKEN_TARGET, 'DefaultChunkSize', logger);
@@ -92,8 +144,17 @@ function resolveServeBudget(rawChunkSize: string | null | undefined, logger?: Lo
   return budget.maxChunkChars;
 }
 
+function scopeHasRung(scope: SettingScope): boolean {
+  return !!(scope.organizationId || scope.owner?.id || scope.lakeId);
+}
+
 /** An unset setting is normal and silent; a set-but-unusable one is a misconfiguration worth saying. */
-function positiveIntOr(raw: string | null | undefined, fallback: number, label: string, logger?: Logger): number {
+function positiveIntOr(
+  raw: string | number | null | undefined,
+  fallback: number,
+  label: string,
+  logger?: Logger
+): number {
   if (raw === null || raw === undefined || raw === '') return fallback;
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed < 1) {

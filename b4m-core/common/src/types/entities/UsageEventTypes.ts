@@ -336,10 +336,12 @@ export interface ISessionUsageSummary {
 }
 
 /**
- * Filters for the admin Spend rollup. Date bounds map to `createdAt` (inclusive);
- * omitting a field spans all. `userId`/`model` mirror the ModelMetrics user/model
- * filters. Status is intentionally not a filter here: it would distort the
- * error-rate KPI, which is derived from the same event set.
+ * Filters for the admin Spend rollup. Date bounds map to `createdAt` as the half-open
+ * window `[from, to)` - the upper bound is exclusive so a window and the equal-length
+ * prior window before it (whose `to` is this window's `from`) don't both count an event
+ * at the shared instant. Omitting a field spans all. `userId`/`model` mirror the
+ * ModelMetrics user/model filters. Status is intentionally not a filter here: it would
+ * distort the error-rate KPI, which is derived from the same event set.
  */
 export interface ISpendSummaryFilters {
   from?: Date;
@@ -381,10 +383,11 @@ export interface ISpendStatusCounts {
 /**
  * One window's spend rolled up every way the admin Spend tab needs it, in a
  * single aggregation so all cuts reconcile against the same event set. `byModel`
- * and `byAccount` are descending by creditsCharged; `dailyCost` is ascending by
- * day. p50/p95 latency and status counts are not available from the margin
- * rollups, hence this dedicated summary. The API layer adds vs-prior deltas,
- * owner-name resolution, and the client SpendData shape on top.
+ * and `byAccount` are descending by cogsUsd (both are capped, and the tab ranks
+ * and truncates them by cost); `dailyCost` is ascending by day. p50/p95 latency
+ * and status counts are not available from the margin rollups, hence this
+ * dedicated summary. The API layer adds vs-prior deltas, owner-name resolution,
+ * and the client SpendData shape on top.
  */
 export interface ISpendSummary {
   totals: IUsageSpendBucket;

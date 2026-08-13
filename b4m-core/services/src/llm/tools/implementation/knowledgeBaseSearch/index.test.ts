@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
 
 // Keyword-fallback path calls getDynamicDataLakeAccess; stub it. Semantic path is forced to
 // bail (no fabfilechunks/adminSettings/apiKeys on db), so these tests exercise the keyword arm.
@@ -342,6 +343,22 @@ describe('search_knowledge_base partial-corpus disclosure', () => {
 
     expect(out).not.toContain('covered only');
     expect(out).not.toContain('NOTE:');
+  });
+
+  it('semantic results carry the anti-invention rule so the model cannot top off an answer with an unsourced specific', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [hit],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      scan: scanOf({}),
+    });
+
+    const out = await run(semanticContext());
+
+    expect(out).toContain(GROUNDED_NO_INVENTION_RULE);
+    // Ahead of the passages, not trailing them: the rule must frame how to read the content, and a
+    // refactor that appends it behind a large payload would still pass a bare toContain.
+    expect(out.indexOf(GROUNDED_NO_INVENTION_RULE)).toBeLessThan(out.indexOf('pto accrues monthly'));
   });
 
   it('scoped (agent kbScope) arm gets the same disclosure - neither surface may hide it', async () => {
