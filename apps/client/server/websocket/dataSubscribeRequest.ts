@@ -30,6 +30,7 @@ import pLimit from 'p-limit';
 import ability from '../auth/ability';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { Resource } from 'sst';
+import { resolveFieldLimits } from './dataSubscribeFieldLimits';
 
 const HARD_LIMIT = 200;
 
@@ -104,18 +105,17 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     }[collectionName];
   }
 
-  const fieldLimits = {
-    users: {
-      password: false,
-      stripeCustomerId: false,
-      resetPasswordToken: false,
-    },
-  }[collectionName];
+  const fieldLimits = resolveFieldLimits(collectionName, Quest.collection.collectionName);
 
-  let scopedFields: undefined | Record<string, boolean | number> = (fields || fieldLimits) && {
-    ...fields,
-    ...fieldLimits,
-  };
+  let scopedFields: undefined | Record<string, boolean | number> =
+    (fields || fieldLimits) &&
+    ({
+      ...fields,
+      ...fieldLimits,
+      // fields is z.looseObject({}) (arbitrary caller-supplied keys), so the spread widens to an
+      // index signature regardless of fieldLimits' own type - both sides are actually boolean/
+      // number Mongo projection flags.
+    } as Record<string, boolean | number>);
 
   if (scopedFields) {
     const inclusions = pickBy(scopedFields, v => v);

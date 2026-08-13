@@ -3,7 +3,13 @@ import { accessibleBy } from '@casl/mongoose';
 import { mongoose, Quest, Session } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { NotFoundError } from '@server/utils/errors';
-import { Permission, ISessionDocument, IChatHistoryItem, IUserDocument } from '@bike4mind/common';
+import {
+  Permission,
+  ISessionDocument,
+  IChatHistoryItem,
+  IUserDocument,
+  redactFunctionCallsForViewer,
+} from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { Session as SessionModel, sessionRepository } from '@bike4mind/database/auth';
 import { createSession } from './sessionCrud';
@@ -61,8 +67,29 @@ export const getMessagesFromSession = async (
   const hasMore = result.length === pagination.limit + 1;
   if (hasMore) result.pop();
 
+  // A share grant authorizes reading the conversation, not re-reading whatever the owner's
+  // tools touched on the owner's behalf - see redactFunctionCallsForViewer. Owner reads are
+  // untouched; only the returnValue/error fields are stripped, name/parameters/success survive.
+  // The redacted shape is intentionally narrower than a full functionCalls entry (it is going
+  // straight to res.json, not back into the domain model), hence the cast at the boundary -
+  // same pattern redactSessionForClient uses for its own polymorphic return type.
+  const isOwner = session.userId === user.id;
+  const data = isOwner
+    ? result
+    : result.map(quest => {
+        const plain = quest.toJSON();
+        if (!plain.promptMeta?.functionCalls) return plain;
+        return {
+          ...plain,
+          promptMeta: {
+            ...plain.promptMeta,
+            functionCalls: redactFunctionCallsForViewer(plain.promptMeta.functionCalls),
+          },
+        } as typeof plain;
+      });
+
   return {
-    data: result,
+    data,
     hasMore,
   };
 };
