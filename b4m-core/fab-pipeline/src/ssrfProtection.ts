@@ -83,8 +83,21 @@ function isPrivateIPv4(ip: string): boolean {
 /**
  * Check if an IPv6 address is in a private/internal range.
  */
+/**
+ * Strip the brackets WHATWG URL keeps on an IPv6 hostname: `new URL('http://[::1]/').hostname` is
+ * `'[::1]'`, not `'::1'`. Every literal check below compares against unbracketed forms, so without
+ * this a bracketed address matched nothing and fell through as safe.
+ *
+ * Same treatment as the sibling guards in this repo - `ssrfGuard.ts` and `external-image.ts` both
+ * strip brackets before their literal checks.
+ */
+function stripIpv6Brackets(hostname: string): string {
+  const h = hostname.toLowerCase();
+  return h.startsWith('[') && h.endsWith(']') ? h.slice(1, -1) : h;
+}
+
 function isPrivateIPv6(ip: string): boolean {
-  const normalized = ip.toLowerCase();
+  const normalized = stripIpv6Brackets(ip);
 
   // ::1 - Loopback
   if (normalized === '::1' || normalized === '0:0:0:0:0:0:0:1') return true;
@@ -107,10 +120,17 @@ function isPrivateIPv6(ip: string): boolean {
   // ff00::/8 - Multicast
   if (normalized.startsWith('ff')) return true;
 
-  // ::ffff:0:0/96 - IPv4-mapped IPv6 addresses (check the embedded IPv4)
-  const ipv4MappedMatch = normalized.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
-  if (ipv4MappedMatch) {
-    return isPrivateIPv4(ipv4MappedMatch[1]);
+  // ::ffff:0:0/96 - IPv4-mapped IPv6. These dial the underlying IPv4, so they must be judged by it.
+  //
+  // Matched by SUBSTRING rather than the dotted form alone: Node normalises `::ffff:169.254.169.254`
+  // to the hex form `::ffff:a9fe:a9fe`, which the old anchored dotted-quad regex missed entirely - and
+  // that is the cloud metadata endpoint, i.e. instance credentials. When the tail is dotted we can
+  // judge the embedded IPv4 exactly; when it is hex we refuse rather than decode, which is what the
+  // sibling `ssrfGuard.ts` does too. A public `::ffff:` address is vanishingly rare and losing it is
+  // the right side of this trade.
+  if (normalized.includes('ffff:')) {
+    const tail = normalized.split(':').pop() ?? '';
+    return tail.includes('.') ? isPrivateIPv4(tail) : true;
   }
 
   // 2001:db8::/32 - Documentation
@@ -147,7 +167,9 @@ export function isPrivateIP(ip: string): boolean {
  * This catches obvious cases before DNS resolution.
  */
 export function isPrivateOrInternalHostname(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
+  // Brackets stripped FIRST: every comparison below is against an unbracketed form, so `[::1]` used
+  // to match none of them and be reported as safe.
+  const normalized = stripIpv6Brackets(hostname);
 
   // Block localhost variations
   if (
@@ -212,23 +234,32 @@ export async function validateUrlForFetch(url: string): Promise<{ valid: boolean
       return { valid: false, error: 'URL must use HTTP or HTTPS protocol' };
     }
 
+    // Unbracketed once, then used for BOTH decisions below. Keeping `parsed.hostname` here was the
+    // bug: a bracketed IPv6 literal failed the private check AND still counted as an IP for the
+    // DNS-skip, so `http://[::1]/` and `http://[::ffff:169.254.169.254]/` fell through as valid.
+    const hostname = stripIpv6Brackets(parsed.hostname);
+
     // First check hostname directly (catches localhost, explicit IPs, etc.)
-    if (isPrivateOrInternalHostname(parsed.hostname)) {
+    if (isPrivateOrInternalHostname(hostname)) {
       return { valid: false, error: 'URL points to a private or internal network' };
     }
 
     // For non-IP hostnames, resolve DNS and validate all resolved IPs
     // This prevents DNS rebinding attacks where hostname resolves to private IP
-    const isIPv4Address = /^(\d{1,3}\.){3}\d{1,3}$/.test(parsed.hostname);
-    const isIPv6Address = parsed.hostname.includes(':');
+    // `\d+`, matching the dispatch gates in `isPrivateIP` and `isPrivateOrInternalHostname`. A
+    // non-canonical literal like `0177.0.0.1` is already refused by the check above, so this is
+    // consistency rather than a second line of defence - but three gates that disagree about what
+    // counts as IPv4 is how the bracketed-IPv6 hole happened, so they are kept identical on purpose.
+    const isIPv4Address = /^(\d+\.){3}\d+$/.test(hostname);
+    const isIPv6Address = hostname.includes(':');
 
     if (!isIPv4Address && !isIPv6Address) {
       try {
         // Try to resolve IPv4 addresses
-        const ipv4Addresses = await dnsResolve4(parsed.hostname).catch(() => [] as string[]);
+        const ipv4Addresses = await dnsResolve4(hostname).catch(() => [] as string[]);
 
         // Try to resolve IPv6 addresses
-        const ipv6Addresses = await dnsResolve6(parsed.hostname).catch(() => [] as string[]);
+        const ipv6Addresses = await dnsResolve6(hostname).catch(() => [] as string[]);
 
         const allAddresses = [...ipv4Addresses, ...ipv6Addresses];
 
