@@ -64,6 +64,7 @@ import {
   renderRetrievedContentBlock,
   toContentLabel,
 } from '../dataLakeService/renderRetrievedContentBlock';
+import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { getRelevantMementos } from '../mementoService';
 import {
   BaseStorage,
@@ -2039,7 +2040,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // `\n\n---\n\n` join this used to do inline, so the separator is unchanged.
       const retrievedContext: IMessage = {
         role: 'system' as const,
-        content: header + capabilityNote + coverageNote + renderRetrievedContentBlock(sections),
+        content:
+          header +
+          `${GROUNDED_NO_INVENTION_RULE}\n\n` +
+          capabilityNote +
+          coverageNote +
+          renderRetrievedContentBlock(sections),
       };
 
       // Retrieval-scoped lake-prompt injection (#1108): attach the operating instructions of ONLY

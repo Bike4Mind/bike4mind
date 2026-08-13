@@ -9,6 +9,11 @@ import BaseRepository from '@bike4mind/db-core';
 
 const MAX_LAST_ERROR_LEN = 500;
 
+// A 'syncing' claim older than this is treated as abandoned and is reclaimable. The ingest queue's
+// Lambda has a hard 10-minute timeout (visibility 12 min - see infra/queues.ts), so a run that dies
+// without releasing cannot legitimately hold a claim past this bound; anything older is a dead owner.
+const SYNC_CLAIM_STALE_MS = 20 * 60 * 1000; // 20 min, comfortably past the 10-min Lambda ceiling
+
 /**
  * lastError is client-visible (a response-DTO member, no select:false) and its predictable writer is
  * `lastError: err.message` from a provider (Gaxios) failure, which can carry URLs, query strings, or
@@ -53,12 +58,14 @@ const OrgGoogleDriveConnectionSchema = new Schema<IOrgGoogleDriveConnectionDocum
     // Health tracking
     status: {
       type: String,
-      enum: ['connected', 'needs_reconnect', 'credential_error'],
+      enum: ['connected', 'syncing', 'needs_reconnect', 'credential_error'],
       default: 'connected',
     },
     lastError: { type: String },
     lastUsedAt: { type: Date },
     lastPolledAt: { type: Date },
+    // When the current 'syncing' claim was taken; a stale one is reclaimable (see claimForSync).
+    syncClaimedAt: { type: Date },
 
     // Incremental-sync resumption (Drive changes pageToken)
     syncCursor: { type: String },
@@ -160,6 +167,44 @@ class OrgGoogleDriveConnectionRepository
     polledAt: Date
   ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
     return this.model.findByIdAndUpdate(id, { $set: { syncCursor, lastPolledAt: polledAt } }, { new: true });
+  }
+
+  /**
+   * Guarded ingest lock: atomically flip status to 'syncing' (stamping `syncClaimedAt`) only when the
+   * connection is idle ('connected') OR its existing 'syncing' claim is STALE. A single atomic
+   * compare-and-set - a losing concurrent caller matches nothing and gets `null`, so exactly one run
+   * proceeds. Returns whether THIS caller claimed it.
+   *
+   * Deliberately NOT `$ne: 'syncing'`: that also claimed OVER a `credential_error`/`needs_reconnect`
+   * connection, and a later release would erase the real error state (leaving it reading healthy with
+   * a broken credential). And a plain equality on 'syncing' could never recover a claim left by a
+   * process that died past the Lambda timeout without releasing - the connection would be wedged in
+   * 'syncing' forever with no operator path back. The stale-claim arm makes that failure degrade to
+   * "one ingest was lost" (reclaimable next run) instead of "this connection can never sync again".
+   */
+  async claimForSync(id: string): Promise<boolean> {
+    const staleBefore = new Date(Date.now() - SYNC_CLAIM_STALE_MS);
+    const claimed = await this.model.findOneAndUpdate(
+      {
+        _id: id,
+        $or: [{ status: 'connected' }, { status: 'syncing', syncClaimedAt: { $lt: staleBefore } }],
+      },
+      { $set: { status: 'syncing', syncClaimedAt: new Date() } }
+    );
+    return claimed !== null;
+  }
+
+  /**
+   * Guarded release for the failure path: 'syncing' -> 'connected' only. The `status: 'syncing'`
+   * conjunct means it no-ops if a terminal status (e.g. credential_error) was set underneath, so a
+   * failed run never overwrites a real error state.
+   */
+  async releaseSyncClaim(id: string): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
+    return this.model.findOneAndUpdate(
+      { _id: id, status: 'syncing' },
+      { $set: { status: 'connected' } },
+      { new: true }
+    );
   }
 }
 

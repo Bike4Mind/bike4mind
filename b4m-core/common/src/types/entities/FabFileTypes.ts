@@ -240,6 +240,18 @@ export interface IFabFile {
   /** Original relative path from folder upload (preserves directory structure) */
   relativePath?: string;
 
+  // Google Drive ingest provenance (#1589). Populated when sourceType === GOOGLE_DRIVE.
+  /** Drive file id this FabFile was ingested from - the stable dedup key within a lake. */
+  driveFileId?: string;
+  /** Drive modifiedTime captured at ingest, for change detection on re-sync. */
+  driveModifiedTime?: Date;
+  /** Drive md5Checksum captured at ingest (native binaries only), for change detection. */
+  driveMd5Checksum?: string;
+  /** The data lake this file was ingested into (provenance). */
+  sourceLakeId?: string;
+  /** The OrgGoogleDriveConnection that ingested this file (provenance). */
+  driveConnectionId?: string;
+
   sessionId?: string; // For session summaries
 
   /** Soft-archive marker set when the file's data lake is archived (reversible). */
@@ -691,11 +703,17 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   /**
    * Files in a lake matching any hash, by META-TAG ONLY - deliberately narrower than the
    * `DataLakeMembershipScope` the rest of the lifecycle family takes. Its callers act on the
-   * answer destructively (the unarchive dedup hard-deletes the losing copy) or by skipping a
-   * caller's upload, and every re-upload path that matters writes the meta-tag, so admitting a
-   * prefix match here would risk the wrong file for no gain.
+   * answer destructively (the unarchive dedup soft-deletes, recoverably, the losing copy) or by
+   * skipping a caller's upload, and every re-upload path that matters writes the meta-tag, so
+   * admitting a prefix match here would risk the wrong file for no gain.
    */
   findByContentHashesInDataLake(hashes: string[], datalakeTag: string): Promise<IFabFileDocument[]>;
+  /**
+   * Files in a lake ingested from any of the given Google Drive file ids (META-TAG ONLY,
+   * mirroring findByContentHashesInDataLake). driveFileId is the Drive re-sync dedup key:
+   * it is stable across edits where contentHash is not, so it decides create-vs-skip-vs-update.
+   */
+  findByDriveFileIdsInDataLake(driveFileIds: string[], datalakeTag: string): Promise<IFabFileDocument[]>;
   markFailedIfNotAlready(fabFileId: string, errorMessage: string): Promise<boolean>;
 
   // ── Data lake lifecycle. Scoped by DataLakeMembershipScope - the lake's meta-tag OR a
@@ -731,7 +749,11 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   // matches every stamped row: the pre-mark behavior, and the fallback for a lake torn down before
   // the mark existed. The archive axis is stamped the same way (`at`, `filesArchivedAt`) so restore
   // can also clear `archivedAt` for exactly the batch this lake's own archive wrote, without
-  // freeing a prefix-sharing sibling's independently-archived files.
+  // freeing a prefix-sharing sibling's independently-archived files. `unarchiveByDataLakeTag` and
+  // `findArchivedByDataLakeTag` use this same equality bound over the WHOLE membership filter, not
+  // just the prefix arm - a meta-tag match is not exempt, because `addFileToLake` lets one file
+  // carry more than one lake's meta-tag with no exclusivity check, so a meta-tagged row can belong
+  // to a co-owning lake's own archive just as a prefix-tagged row can belong to a sibling's.
 
   /**
    * Soft-archive (reversible) all live member files, stamped `at`. Returns affected count.
@@ -739,11 +761,22 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * absent. See archiveDataLake's `hasUnstampedArchive` guard for when that's intentional.
    */
   archiveByDataLakeTag(scope: DataLakeMembershipScope, at?: Date): Promise<number>;
-  /** Reverse archive for all archived member files. Unbounded - matches on archivedAt alone. */
-  unarchiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number>;
-  /** Archived member files - used by the unarchive dedup pass. */
-  findArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]>;
-  /** Existence-only form of findArchivedByDataLakeTag, for a caller that just needs "any?". */
+  /**
+   * Reverse archive for member files stamped `stampedAt`, by equality - a sibling or a co-owning
+   * lake's own differently-stamped member is never freed. `stampedAt` omitted unarchives
+   * unbounded, for a lake archived before `filesArchivedAt` existed.
+   */
+  unarchiveByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<number>;
+  /**
+   * Archived member files stamped `stampedAt` - used by the unarchive dedup pass. Omitting
+   * `stampedAt` matches every archived row, same as before this parameter existed.
+   */
+  findArchivedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]>;
+  /**
+   * Existence-only probe, unbounded by any stamp (unlike findArchivedByDataLakeTag) - a caller
+   * deciding whether to claim a fresh stamp needs to know if ANY member is already archived,
+   * stamped or not.
+   */
   hasArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<boolean>;
   /** Soft-deleted member files stamped `stampedAt` - used by the deleted->active restore dedup pass. */
   findDeletedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]>;

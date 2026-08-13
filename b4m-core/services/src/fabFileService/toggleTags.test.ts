@@ -170,11 +170,19 @@ describe('toggleTags - data lake meta-tags', () => {
   it('recomputes the lake stats in both directions', async () => {
     const leaving = makeAdapters([file('f1', [{ name: 'datalake:lake', strength: 1 }])]);
     await run(leaving, { ids: ['f1'], tags: ['datalake:lake'] });
-    expect(leaving.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 3, totalSizeBytes: 99, totalChunkedChars: 0 });
+    expect(leaving.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
+      fileCount: 3,
+      totalSizeBytes: 99,
+      totalChunkedChars: 0,
+    });
 
     const joining = makeAdapters([file('f1')]);
     await run(joining, { ids: ['f1'], tags: ['datalake:lake'] });
-    expect(joining.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 3, totalSizeBytes: 99, totalChunkedChars: 0 });
+    expect(joining.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
+      fileCount: 3,
+      totalSizeBytes: 99,
+      totalChunkedChars: 0,
+    });
   });
 
   it('activates a draft lake the toggle just added a file to (#1342)', async () => {
@@ -394,7 +402,11 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
     await run(adapters, { ids: ['f1'], tags: ['lk:invoices'] });
 
     expect(adapters.store.get('f1')?.tags).toEqual([]);
-    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 3, totalSizeBytes: 99, totalChunkedChars: 0 });
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
+      fileCount: 3,
+      totalSizeBytes: 99,
+      totalChunkedChars: 0,
+    });
   });
 
   it('refuses a non-manager actor before any write in the batch', async () => {
@@ -447,7 +459,11 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
     // 'owner' both owns the file (file()'s default) and manages the lake (lake()'s default).
     await run(adapters, { ids: ['f1'], tags: ['lk:invoices'] });
 
-    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 3, totalSizeBytes: 99, totalChunkedChars: 0 });
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
+      fileCount: 3,
+      totalSizeBytes: 99,
+      totalChunkedChars: 0,
+    });
   });
 
   // MEMBERSHIP needs no gate (the read-side predicate grants it purely on the tag), but the
@@ -463,7 +479,11 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
     const runAs = (userId: string, params: unknown) => toggleTags(userId, params, adapters as any);
     await runAs('editor', { ids: ['f1'], tags: ['lk:invoices'] });
 
-    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 3, totalSizeBytes: 99, totalChunkedChars: 0 });
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
+      fileCount: 3,
+      totalSizeBytes: 99,
+      totalChunkedChars: 0,
+    });
     expect(adapters.db.dataLakes.activateIfDraft).not.toHaveBeenCalled();
   });
 
@@ -508,7 +528,11 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
 
     await runAs('admin', adapters, { ids: ['f1'], tags: ['lk:invoices'] });
 
-    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 3, totalSizeBytes: 99, totalChunkedChars: 0 });
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
+      fileCount: 3,
+      totalSizeBytes: 99,
+      totalChunkedChars: 0,
+    });
   });
 
   it('issues no extra dataLakes.find when no requested tag has a colon', async () => {
@@ -535,7 +559,11 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
     // leave prediction - the lake's prefix tag is still the thing being evaluated.
     await run(adapters, { ids: ['f1'], tags: ['FOO', 'lk:invoices'] });
 
-    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 3, totalSizeBytes: 99, totalChunkedChars: 0 });
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
+      fileCount: 3,
+      totalSizeBytes: 99,
+      totalChunkedChars: 0,
+    });
     expect(adapters.store.get('f1')?.tags.map(t => t.name)).toEqual([]);
   });
 
@@ -550,7 +578,11 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
     });
 
     await expect(run(adapters, { ids: ['f1'], tags: ['lk:invoices'] })).resolves.toBeDefined();
-    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', { fileCount: 3, totalSizeBytes: 99, totalChunkedChars: 0 });
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
+      fileCount: 3,
+      totalSizeBytes: 99,
+      totalChunkedChars: 0,
+    });
   });
 });
 

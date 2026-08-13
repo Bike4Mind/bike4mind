@@ -68,6 +68,12 @@ const parseDate = (value?: string): Date | undefined => {
  * prior window of equal length (for the vs-prior KPI deltas). With no dates the
  * window defaults to the last 30 days. Human period labels are formatted on the
  * client (see spendPeriodLabels) since they depend on the viewer's timezone.
+ *
+ * @see apps/client/app/components/admin/ModelMetrics/utils/spendPeriodLabels.ts - the
+ * client re-derives these same bounds to label them, and the two must stay in sync.
+ * They already diverge on the dateTo-only path: the client subtracts 30 days with a
+ * calendar-aware dayjs subtract while the fixed 30 * DAY_MS below is not, so across a
+ * DST transition the label can name a different day than the one queried here.
  */
 function resolveWindows(dateFrom?: string, dateTo?: string) {
   const now = new Date();

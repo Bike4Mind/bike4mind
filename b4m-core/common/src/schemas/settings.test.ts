@@ -12,6 +12,7 @@ import {
   maskSensitiveSettingValue,
   isMaskedSensitiveSettingValue,
   type AdminSettingDoc,
+  ABSTENTION_PROMPT,
 } from './settings';
 import { DEFAULT_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET } from '../constants/chunking';
 import {
@@ -458,5 +459,28 @@ describe('LakeAccessAuditRetentionDays cannot be configured below the floor', ()
     expect(settingsMap.LakeAccessAuditRetentionDays.schema.parse(undefined)).toBe(
       LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS
     );
+  });
+});
+
+describe('AbstentionPrompt default carries the anti-invention licence', () => {
+  // The always-on backstop is the ONLY anti-invention text on a normal turn that answers WITHOUT
+  // searching the knowledge base. (A promptMode session strips it like any authored prompt, so that
+  // surface is an uncovered gap by design - not something this backstop routes around.) Guard that
+  // its default still both licenses abstention AND bars volunteering a specific unsourced fact. The
+  // grounded-surface half ships two tests; without this, blanking this clause would pass unnoticed.
+  it('licenses saying "not enough to answer" instead of inventing', () => {
+    expect(ABSTENTION_PROMPT).toContain('I do not have enough to answer that');
+    expect(ABSTENTION_PROMPT).toMatch(/never invent facts/i);
+  });
+
+  it('bars stating - or citing a source for - a specific customer/competitor/deal/figure', () => {
+    for (const noun of ['customer', 'competitor', 'deal', 'figure']) {
+      expect(ABSTENTION_PROMPT.toLowerCase()).toContain(noun);
+    }
+    expect(ABSTENTION_PROMPT).toMatch(/cite a source/i);
+  });
+
+  it('ships as the AbstentionPrompt setting default (no drift between const and setting)', () => {
+    expect(settingsMap.AbstentionPrompt.defaultValue).toBe(ABSTENTION_PROMPT);
   });
 });

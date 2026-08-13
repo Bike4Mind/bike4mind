@@ -9,6 +9,7 @@ import {
   toContentLabel,
 } from '../../../../dataLakeService/renderRetrievedContentBlock';
 import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
+import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
 
 interface KnowledgeBaseRetrieveParams {
   file_id?: string;
@@ -367,7 +368,12 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           // without a prior search, so the delimiter matters more here than on the search path.
           // The count line is ours and stays outside the block.
           const header = `Retrieved content from ${retrievedFiles.length} of ${files.length} document(s):\n`;
-          const result = header + '\n' + renderRetrievedContentBlock(sections);
+          // Anti-invention rule ahead of the raw document text so it frames how to use it: this tool
+          // returns the largest, unclipped block of chunk content, and both patched search surfaces
+          // route the model here for "more detail" - the exact moment a leading question tempts it to
+          // top off the answer with an unsupported specific. Same shared const as the other surfaces.
+          // The rule is our framing and stays outside the delimited content block.
+          const result = header + '\n' + `${GROUNDED_NO_INVENTION_RULE}\n\n` + renderRetrievedContentBlock(sections);
 
           // Retrieval-scoped lake-prompt injection (#1108): prepend the operating instructions of
           // the trusted lakes this content came from. Skipped for the agent-scoped branch, which

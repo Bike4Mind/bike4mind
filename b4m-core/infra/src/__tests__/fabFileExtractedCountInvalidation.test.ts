@@ -86,8 +86,6 @@ describe('every FabFile content rewrite clears the cached extracted length', () 
 
   it('the shared patch also clears the chunk-derived length (chunkedCharCount)', () => {
     const source = read('b4m-core/common/src/types/entities/FabFileTypes.ts');
-    expect(source).toContain(
-      'FAB_FILE_CONTENT_REWRITE_PATCH = { extractedCharCount: null, chunkedCharCount: null }'
-    );
+    expect(source).toContain('FAB_FILE_CONTENT_REWRITE_PATCH = { extractedCharCount: null, chunkedCharCount: null }');
   });
 });
