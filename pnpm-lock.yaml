@@ -2048,6 +2048,9 @@ importers:
 
   packages/scripts:
     dependencies:
+      '@anthropic-ai/sdk':
+        specifier: ^0.111.0
+        version: 0.111.0(zod@4.4.3)
       '@aws-sdk/client-lambda':
         specifier: ^3.1080.0
         version: 3.1080.0

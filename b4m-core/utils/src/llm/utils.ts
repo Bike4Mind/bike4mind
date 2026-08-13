@@ -111,6 +111,26 @@ export const IMAGE_PROMPT_PRIORITY = 50;
 export const FORMAT_PROMPT_PRIORITY = 60;
 
 /**
+ * The two always-on blocks this function injects itself, downstream of the caller's own
+ * systemPromptDetails assembly - so a caller reporting per-source token telemetry (see
+ * ChatCompletionProcess) cannot see them without reading this list back off the return value.
+ */
+export const BUILDER_INJECTED_BLOCK_IDS = ['formatPrompt', 'imagePrompt'] as const;
+export type BuilderInjectedBlockId = (typeof BUILDER_INJECTED_BLOCK_IDS)[number];
+
+export interface BuilderInjectedBlock {
+  id: BuilderInjectedBlockId;
+  /** The exact string prepended, read back off the injected message - never re-derived. */
+  content?: string;
+  /** The gate let the injector run and it prepended a message. */
+  injected: boolean;
+  /** That message survived the system-token cap into the returned payload. */
+  delivered: boolean;
+  /** Why the injector did not run or declined, when `injected` is false. */
+  reason?: 'mode_skipped' | 'setting_disabled' | 'not_triggered';
+}
+
+/**
  * Rounds the final safety pass may spend shrinking the payload. It has to re-measure between rounds
  * (see the pass for why one shot overshoots), and each round costs two real tokenizer calls, so this
  * bounds the work. Converges in one or two rounds in practice.
@@ -496,6 +516,16 @@ export async function fetchAndProcessPreviousMessages(
       excludedOlderQuestCount?: number;
       /** Recently generated images (bare storage keys + originating prompt), newest first. */
       recentGeneratedImages?: { key: string; prompt: string }[];
+      /**
+       * Names of tools actually invoked across the returned window, read straight off each
+       * turn's `promptMeta.functionCalls` rather than the reconstructed IMessage history: neither
+       * of `convertedMessages`' two tool_use-replay paths fires in production today (Priority 1
+       * needs `structuredReplies`, which nothing writes; Priority 2 needs a recorded
+       * `returnValue`, which nothing writes either - see replayableToolCalls), so a caller that
+       * scanned `convertedMessages` for a prior tool call would never find one. This reads the
+       * raw field instead, at no extra DB cost since chatHistoryItems is already in hand.
+       */
+      priorToolNames?: string[];
     },
   ]
 > {
@@ -660,6 +690,12 @@ export async function fetchAndProcessPreviousMessages(
     }
   }
 
+  // Real tool-usage signal for this window - see the field's own doc comment above for why the
+  // reconstructed message history cannot answer "was this tool used earlier in the conversation".
+  const priorToolNames = chatHistoryItems
+    .flatMap(item => (item.promptMeta?.functionCalls ?? []).map(fc => fc.name))
+    .filter((name): name is string => Boolean(name));
+
   return [
     convertedMessages,
     chatHistoryItems.length,
@@ -670,6 +706,7 @@ export async function fetchAndProcessPreviousMessages(
       oldestIncludedQuestId,
       excludedOlderQuestCount,
       recentGeneratedImages,
+      priorToolNames,
     },
   ];
 }
@@ -2096,12 +2133,16 @@ export async function buildAndSortMessages(
      */
     systemMessagePriority?: (message: IMessage) => number | undefined;
   } = { verbose: false }
-): Promise<{ messages: IMessage[]; messageTruncation: MessageTruncationInfo | null }> {
+): Promise<{
+  messages: IMessage[];
+  messageTruncation: MessageTruncationInfo | null;
+  injectedBlocks: BuilderInjectedBlock[];
+}> {
   // Negated like processMessages' budget guard so a NaN lands here rather than sailing past every
   // comparison below.
   if (!(maxInputTokens > 0)) {
     logger.error(`Invalid maxInputTokens: ${maxInputTokens}. Must be greater than 0.`);
-    return { messages: [], messageTruncation: null };
+    return { messages: [], messageTruncation: null, injectedBlocks: [] };
   }
 
   const VERBOSE_CHAT_CONTEXT = process.env.VERBOSE_CHAT_CONTEXT !== 'false';
@@ -2161,15 +2202,30 @@ export async function buildAndSortMessages(
   // only handle on a message this function created itself; identified by length because each injector
   // either prepends exactly one message or returns its input untouched.
   const builderInjectedPriorities = new Map<IMessage, number>();
+  // Gate/injection outcome per block, resolved into BuilderInjectedBlock[] once admittedSystemMessages
+  // is known below (delivery cannot be decided until then). `message` set means the injector prepended
+  // it; absent means declined, with `reason` saying why.
+  const injectedBlockGateResults = new Map<
+    BuilderInjectedBlockId,
+    { message?: IMessage; reason?: BuilderInjectedBlock['reason'] }
+  >();
 
-  if (!options.skipAdminPromptTemplates) {
+  if (options.skipAdminPromptTemplates) {
+    injectedBlockGateResults.set('formatPrompt', { reason: 'mode_skipped' });
+    injectedBlockGateResults.set('imagePrompt', { reason: 'mode_skipped' });
+  } else {
     if (getSettingsValue('UseFormatPrompt', settings)) {
       const formatPromptTemplate = settings.FormatPromptTemplate;
       const withFormatPrompt = includeHardcodedSystemMessage(fabMessages, formatPromptTemplate);
       if (withFormatPrompt.length > fabMessages.length) {
         builderInjectedPriorities.set(withFormatPrompt[0], FORMAT_PROMPT_PRIORITY);
+        injectedBlockGateResults.set('formatPrompt', { message: withFormatPrompt[0] });
+      } else {
+        injectedBlockGateResults.set('formatPrompt', { reason: 'not_triggered' });
       }
       fabMessages = withFormatPrompt;
+    } else {
+      injectedBlockGateResults.set('formatPrompt', { reason: 'setting_disabled' });
     }
 
     if (getSettingsValue('UseImagePrompt', settings)) {
@@ -2180,8 +2236,13 @@ export async function buildAndSortMessages(
       );
       if (withImagePrompt.length > fabMessages.length) {
         builderInjectedPriorities.set(withImagePrompt[0], IMAGE_PROMPT_PRIORITY);
+        injectedBlockGateResults.set('imagePrompt', { message: withImagePrompt[0] });
+      } else {
+        injectedBlockGateResults.set('imagePrompt', { reason: 'not_triggered' });
       }
       fabMessages = withImagePrompt;
+    } else {
+      injectedBlockGateResults.set('imagePrompt', { reason: 'setting_disabled' });
     }
   }
 
@@ -2308,6 +2369,21 @@ export async function buildAndSortMessages(
   // Re-filtering the original array is what restores assembly order, so the cached-prefix ordering
   // cannot drift away from the selection logic above.
   systemMessages.push(...systemCandidates.filter(message => admittedSystemMessages.has(message)));
+
+  // Resolved now that delivery is known. Iterates the fixed id list, not injectedBlockGateResults, so
+  // a caller-facing consumer always gets a complete two-row inventory even if a gate above never ran.
+  const injectedBlocks: BuilderInjectedBlock[] = BUILDER_INJECTED_BLOCK_IDS.map(id => {
+    const gateResult = injectedBlockGateResults.get(id);
+    if (!gateResult?.message) {
+      return { id, injected: false, delivered: false, ...(gateResult?.reason ? { reason: gateResult.reason } : {}) };
+    }
+    return {
+      id,
+      injected: true,
+      delivered: admittedSystemMessages.has(gateResult.message),
+      ...(typeof gateResult.message.content === 'string' ? { content: gateResult.message.content } : {}),
+    };
+  });
 
   if (systemCandidates.length > 0 && systemMessages.length === 0) {
     // The one new failure mode this cap introduces, and silence would make it look like a turn that
@@ -2735,6 +2811,7 @@ export async function buildAndSortMessages(
     return {
       messages: ensureToolPairingIntegrity(assemble(reducedContentMessages, processedPreviousMessages), logger),
       messageTruncation: buildDebugInfo(reducedContentMessages),
+      injectedBlocks,
     };
   }
 
@@ -2762,5 +2839,6 @@ export async function buildAndSortMessages(
   return {
     messages: ensureToolPairingIntegrity(messages, logger),
     messageTruncation: buildDebugInfo(processedContentMessages),
+    injectedBlocks,
   };
 }

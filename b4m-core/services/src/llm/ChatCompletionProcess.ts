@@ -124,7 +124,7 @@ import {
   featureNames,
 } from './ChatCompletionFeatures';
 import { AgentDetectionFeature } from './features/AgentDetectionFeature';
-import { SkillsFeature } from './features/SkillsFeature';
+import { SkillsFeature, type QuestWithSkillCatalog } from './features/SkillsFeature';
 import { StatusManager } from './StatusManager';
 import { buildContextOverflowMessage } from './contextOverflowMessage';
 import {
@@ -155,8 +155,9 @@ import {
   aggregateWebFetchContentTelemetry,
 } from '../telemetry';
 import type { ToolTelemetry, ToolErrorCategory, SystemPromptDetail, DataLakeGroundingMode } from '@bike4mind/common';
-import { buildAlwaysOnFloorDetails } from './systemPromptFloorTelemetry';
+import { buildAlwaysOnFloorDetails, buildInjectedBlockDetails } from './systemPromptFloorTelemetry';
 import { resolveArtifactsEnabled } from './artifactGating';
+import { shouldOfferBlogTools, shouldOfferSkillTool } from './autoAddedToolGating';
 import { resolveMementoGates } from './mementoGating';
 import {
   ContextTelemetryAlertsSchema,
@@ -435,7 +436,6 @@ interface ProcessInitContext {
   sessionFabFileIds: string[];
   params: z.infer<typeof QuestStartBodySchema>['params'];
   enabledTools: (z.infer<typeof b4mLLMTools> | string)[];
-  hasContentTransform?: boolean;
   projectId?: string;
   organizationId?: string | null;
   questMaster?: z.infer<typeof QuestStartBodySchema>['questMaster'];
@@ -695,11 +695,13 @@ export function attachmentHasIndexedContent(
 }
 
 /**
- * Tools this process auto-adds server-side regardless of user selection. Two auto-add sites feed
- * this: the request-parse method (blog_publish/blog_edit/blog_draft for admins, navigate_view,
- * skill) and `resolveEnabledTools` (the attached-knowledge offer). Small local (Ollama) models get
- * confused by tools they didn't ask for, so the names in this list are trimmed for that backend
- * unless the user explicitly enabled them. Keep this list in sync with those auto-add sites.
+ * Tools this process auto-adds server-side regardless of user selection. Three auto-add sites
+ * feed this: the request-parse method (navigate_view), the conditional blog/skill gate in
+ * `process()` (blog_publish/blog_edit/blog_draft, skill - each on its own intent/catalog signal,
+ * see `shouldOfferBlogTools`/`shouldOfferSkillTool`), and `resolveEnabledTools` (the
+ * attached-knowledge offer). Small local (Ollama) models get confused by tools they didn't ask
+ * for, so the names in this list are trimmed for that backend unless the user explicitly enabled
+ * them. Keep this list in sync with those auto-add sites.
  *
  * Deliberately NOT listed: search_knowledge_base / retrieve_knowledge_content. Attaching a
  * document is itself an explicit user signal that the docs should be used, unlike the genuinely
@@ -1183,42 +1185,21 @@ export class ChatCompletionProcess {
     // tools get paired too. Here we only copy the request selection so the auto-adds below
     // don't mutate `parsedBody.tools`.
     const finalEnabledTools: string[] = [...enabledTools];
-    let hasContentTransform = false;
 
     // Auto-added capabilities are OUR additions, not the caller's, so a prompt mode skips this
     // whole block - and not only for prompt hygiene: attaching any tool also pulls the provider's
     // server-side tool-use preamble into the request (observed live: a completion whose only tools
     // were auto-added knew the current date on a fresh raw-mode session). Tools the caller sent
     // explicitly are caller intent and stay, mode or not.
+    //
+    // blog_publish/blog_edit/blog_draft and `skill` are NOT auto-added here even though they are
+    // OUR additions too: both need signals not yet available at this point in the request (an
+    // intent-or-continuation check needs the fetched history; `skill` needs the invocable-skill
+    // catalog SkillsFeature populates later) - see the conditional auto-add in process(), after
+    // previous messages are fetched and the feature loop has run.
     if (!parsedBody.promptMode) {
-      // Auto-add blog_publish tool if user has blog integration configured (admin-only for now)
-      if (this.user.isAdmin && this.user.blogIntegration && !enabledTools.includes('blog_publish')) {
-        finalEnabledTools.push('blog_publish');
-      }
-
-      // Auto-add blog_edit tool if user has blog integration configured (admin-only for now)
-      if (this.user.isAdmin && this.user.blogIntegration && !enabledTools.includes('blog_edit')) {
-        finalEnabledTools.push('blog_edit');
-      }
-
-      // Auto-add blog_draft tool for admin users (used by Content Publishing Studio)
-      if (this.user.isAdmin && !enabledTools.includes('blog_draft')) {
-        finalEnabledTools.push('blog_draft');
-        hasContentTransform = true;
-      }
-
       if (!enabledTools.includes('navigate_view') && shouldAutoEnableNavigateView(parsedBody.extraContextMessages)) {
         finalEnabledTools.push('navigate_view');
-      }
-
-      // Auto-add the `skill` LLM tool when the host has wired a skill repository.
-      // Skills are user-defined instruction templates and there's no separate
-      // toggle for them in the UI - gating purely on db.skills being present
-      // keeps callers without skill support unaffected. SkillsFeature still
-      // surfaces the catalog into the system prompt so the LLM knows what's
-      // invocable.
-      if (this.db.skills && !finalEnabledTools.includes('skill')) {
-        finalEnabledTools.push('skill');
       }
     }
 
@@ -1256,7 +1237,6 @@ export class ChatCompletionProcess {
       sessionFabFileIds,
       params,
       enabledTools: finalEnabledTools,
-      hasContentTransform,
       projectId,
       organizationId,
       questMaster,
@@ -1319,7 +1299,6 @@ export class ChatCompletionProcess {
       sessionFabFileIds,
       params,
       enabledTools,
-      hasContentTransform,
       projectId,
       organizationId,
       questMaster,
@@ -2081,7 +2060,14 @@ export class ChatCompletionProcess {
       // where a lean one did not. The tokenizer isn't run here (that would be N async
       // calls over the whole history on every turn); char/4 estimates keep boundary
       // selection synchronous and are only a conservative floor. enabledTools here
-      // undercounts MCP-expanded tools, which the overflow-guard safety net catches.
+      // undercounts MCP-expanded tools, which the overflow-guard safety net catches - and, as of
+      // the conditional blog/skill auto-add below (which needs the history this budget sizes, so
+      // it cannot run any earlier), also undercounts by up to 4 tools on a turn that ends up
+      // getting one or more of them. Same backstop: the final tokenizer-accurate safety pass in
+      // buildAndSortMessages sheds history until the real payload fits regardless of how this
+      // estimate was sized, so the cost of the undercount is one extra shed round at most, never
+      // an overflow - the cost of under-reserving here is a slower approach to the right size
+      // (more shed rounds), never a payload that ships oversized.
       const estTokens = (text: string | undefined | null): number => (text ? Math.ceil(text.length / 4) : 0);
       const nonHistoryOverhead =
         SYSTEM_PROMPT_RESERVE_TOKENS +
@@ -2097,6 +2083,52 @@ export class ChatCompletionProcess {
       const [previousMessages, totalMessageCount, cacheInfo] = previousMessagesResult;
       const oldestIncludedQuestId = cacheInfo.oldestIncludedQuestId ?? null;
       const verbatimExcludedCount = cacheInfo.excludedOlderQuestCount ?? 0;
+      // Real tool-usage signal for this window - see fetchAndProcessPreviousMessages's own doc
+      // comment on this field for why `previousMessages` itself cannot answer "was this tool used
+      // earlier in the conversation" (neither of its tool_use-replay paths fires in production).
+      const priorToolNames = cacheInfo.priorToolNames ?? [];
+
+      // blog_publish/blog_edit/blog_draft and `skill` are auto-added HERE rather than at the
+      // request-parse site (initializeProcessContext) because each needs a signal that isn't
+      // available that early: the intent-or-continuation check needs this fetched history, and
+      // `skill` needs the invocable-skill catalog SkillsFeature populated in the feature loop
+      // above. No session.disabledTools check needed here - the final denylist pass on the built
+      // tool list (below, near buildTools) already strips any session-forbidden tool regardless
+      // of when it was added to enabledTools.
+      let hasContentTransform = false;
+      if (!promptMode) {
+        const blogGates = shouldOfferBlogTools({
+          isAdmin: this.user.isAdmin,
+          hasBlogIntegration: Boolean(this.user.blogIntegration),
+          message,
+          priorToolNames,
+        });
+        if (blogGates.publish && !enabledTools.includes('blog_publish')) {
+          enabledTools.push('blog_publish');
+        }
+        if (blogGates.edit && !enabledTools.includes('blog_edit')) {
+          enabledTools.push('blog_edit');
+        }
+        if (blogGates.draft && !enabledTools.includes('blog_draft')) {
+          enabledTools.push('blog_draft');
+        }
+        hasContentTransform = blogGates.draft;
+
+        // The only honest gate for `skill` is whether this user has a model-invocable skill - a
+        // user with zero skills used to pay ~161 tokens for a tool whose every call returns "you
+        // have no LLM-invocable skills defined", with no catalog in the prompt to name one.
+        if (
+          !enabledTools.includes('skill') &&
+          shouldOfferSkillTool({
+            hasSkillRepository: Boolean(this.db.skills),
+            invocableSkillCount: (quest as QuestWithSkillCatalog)._skillCatalog?.length ?? 0,
+            message,
+            priorToolNames,
+          })
+        ) {
+          enabledTools.push('skill');
+        }
+      }
 
       // Local (Ollama) models run on modest hardware with small context budgets and
       // are easily derailed by prose that isn't about the task. Give them a leaner
@@ -2482,7 +2514,7 @@ export class ChatCompletionProcess {
 
       const toolPromptMessage = await toolBuilder.buildToolPrompt({
         toolPromptId,
-        hasContentTransform: (hasContentTransform ?? false) && blogDraftAvailable,
+        hasContentTransform: hasContentTransform && blogDraftAvailable,
         hasChessEngine: enabledTools.includes('chess_engine'),
         hasCurrentDateTime: enabledTools.includes('current_datetime'),
         userTimezone,
@@ -2702,6 +2734,11 @@ export class ChatCompletionProcess {
       );
       let messages = firstBuild.messages;
       const messageTruncationInfo = firstBuild.messageTruncation;
+      // Unlike messageTruncationInfo, this DOES get refreshed by the overflow-recovery rebuild below -
+      // that rebuild produces fresh message identities, so pinning to the first build would report
+      // both blocks as token_limit-excluded on every turn that overflows. `?? []` covers a test mock
+      // stubbing buildAndSortMessages without this field - the real function always returns it.
+      let injectedBlocks = firstBuild.injectedBlocks ?? [];
       // The length check is the part that matters: buildAndSortMessages returns an EMPTY messages
       // array when the input budget is non-positive, and `!messages` is false for `[]`, so an empty
       // prompt used to reach the model. It then answers confidently from nothing, which reads to the
@@ -2839,7 +2876,7 @@ export class ChatCompletionProcess {
             if (!trimmed) break; // only the most-recent turn left: system/tools/prompt itself is oversized
             recoveryHistory = trimmed;
             // messageTruncationInfo is deliberately not refreshed here - it stays pinned to the first build.
-            const { messages: rebuilt } = await buildAndSortMessages(
+            const { messages: rebuilt, injectedBlocks: rebuiltBlocks } = await buildAndSortMessages(
               recoveryHistory,
               contextAndSystemMessages,
               currentUserPromptMessages,
@@ -2852,6 +2889,10 @@ export class ChatCompletionProcess {
             );
             if (!rebuilt || rebuilt.length === 0) break; // keep the last good build; guard below decides
             messages = rebuilt;
+            // Unlike messageTruncationInfo, refreshed here: the rebuild produces fresh message
+            // identities, so the first build's injectedBlocks would misreport delivery against this
+            // payload.
+            injectedBlocks = rebuiltBlocks ?? [];
             shedTurns++;
             [effectiveTotalTokens, effectiveHistoryTokens] = await Promise.all([
               calculateTotalTokenLength(messages, tokenCalcOptions),
@@ -2909,12 +2950,14 @@ export class ChatCompletionProcess {
       // from (see systemPromptSources) rather than re-listed by hand here. The hand-written
       // version this replaces covered a third of the sources and reported a `session_summary`
       // row built from `session.summary`, a field the assembled prompt never carried - it
-      // carries `session.contextSummary`. Sources appended downstream by buildAndSortMessages
-      // (FormatPromptTemplate, image prompt) are still not represented here. The two always-on
-      // floor sources come from systemPromptFloorTelemetry, which owns those rows outright -
+      // carries `session.contextSummary`. The two always-on floor sources come from
+      // systemPromptFloorTelemetry's buildAlwaysOnFloorDetails, which owns those rows outright -
       // including the wasIncluded:false inventory rows a derivation from the admitted stack
       // cannot produce; inclusion is read off the admitted stack rather than the raw settings
-      // gates, so a promptMode that strips a block reports it excluded instead of billed (#810).
+      // gates, so a promptMode that strips a block reports it excluded instead of billed.
+      // The two blocks buildAndSortMessages appends downstream of this stack (FormatPromptTemplate,
+      // image prompt) are itemized separately below via buildInjectedBlockDetails, reading
+      // injectedBlocks back off that call rather than re-deriving the same gates a second time here.
       //
       // Persisted on the quest for every completion - unlike contextTelemetry, which exists
       // only when enhanced telemetry is on - so the API layer can report which prompts fed a
@@ -2942,6 +2985,8 @@ export class ChatCompletionProcess {
         );
       }
 
+      const countSystemBlockTokens = (content: string) =>
+        calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions);
       let systemPromptDetails: SystemPromptDetail[] | undefined;
       try {
         systemPromptDetails = await toPromptDetails(
@@ -2967,12 +3012,22 @@ export class ChatCompletionProcess {
               artifactEmissionDelivered: delivered('artifactEmission'),
               helpCenterDelivered: delivered('helpCenter'),
             },
-            content => calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions)
+            countSystemBlockTokens
           ))
         );
-        quest.promptMeta!.context!.systemPromptDetails = systemPromptDetails;
       } catch (detailsError) {
         logger.warn(`📊 Failed to derive system prompt details:`, detailsError);
+      }
+
+      // Isolated from the try above: buildInjectedBlockDetails is new, so a throw here must not
+      // drop the floor rows toPromptDetails/buildAlwaysOnFloorDetails already computed.
+      if (systemPromptDetails) {
+        try {
+          systemPromptDetails.push(...(await buildInjectedBlockDetails(injectedBlocks, countSystemBlockTokens)));
+        } catch (injectedDetailsError) {
+          logger.warn(`📊 Failed to itemize injected format/image prompt blocks:`, injectedDetailsError);
+        }
+        quest.promptMeta!.context!.systemPromptDetails = systemPromptDetails;
       }
 
       // Opt-in only, and built from the same tagged stack the breakdown above is derived from, so
@@ -2980,7 +3035,12 @@ export class ChatCompletionProcess {
       // written to the quest.
       if (parsedBody.includeSystemPrompt) {
         try {
-          this.systemPromptText = buildSystemPromptText(admittedContextMessages, deliveredMessages);
+          this.systemPromptText = buildSystemPromptText(
+            admittedContextMessages,
+            deliveredMessages,
+            undefined,
+            injectedBlocks
+          );
         } catch (promptTextError) {
           logger.warn(`📊 Failed to itemize the effective system prompt:`, promptTextError);
         }
