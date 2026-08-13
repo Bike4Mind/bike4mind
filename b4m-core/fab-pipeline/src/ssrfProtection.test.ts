@@ -22,6 +22,28 @@ describe('SSRF - bracketed IPv6 literals', () => {
     await expect(validateUrlForFetch(url)).resolves.toMatchObject({ valid: false });
   });
 
+  // IPv4-COMPATIBLE IPv6 (`::x.y.z.w`), the deprecated sibling of the mapped form. Node compresses the
+  // dotted spelling to hex, so `[::169.254.169.254]` arrives as `[::a9fe:a9fe]` and matched none of the
+  // family prefixes. Narrower exploitability than the mapped form (modern Linux does not translate it
+  // to the underlying IPv4), so this is hardening rather than a live path - but it is the same shape.
+  it.each([
+    ['metadata endpoint, dotted', 'http://[::169.254.169.254]/latest/meta-data/'],
+    ['metadata endpoint, hex', 'http://[::a9fe:a9fe]/latest/meta-data/'],
+    ['loopback, dotted', 'http://[::127.0.0.1]/'],
+    ['loopback, hex', 'http://[::7f00:1]/'],
+    ['RFC1918, dotted', 'http://[::10.0.0.5]/'],
+    ['fully expanded', 'http://[0:0:0:0:0:0:169.254.169.254]/'],
+  ])('refuses IPv4-compatible IPv6: %s', async (_label, url) => {
+    await expect(validateUrlForFetch(url)).resolves.toMatchObject({ valid: false });
+  });
+
+  it('keeps judging the MAPPED form by its embedded IPv4, not the compatible branch', () => {
+    // Ordering guard: `::ffff:1.2.3.4` also starts with `::`, so if the compatible branch ran first it
+    // would take `ffff:1.2.3.4` as the tail and miss the embedded address entirely.
+    expect(isPrivateIP('::ffff:169.254.169.254')).toBe(true);
+    expect(isPrivateIP('::ffff:10.0.0.1')).toBe(true);
+  });
+
   it('blocks the bracketed forms at the hostname level too', () => {
     expect(isPrivateOrInternalHostname('[::1]')).toBe(true);
     expect(isPrivateOrInternalHostname('[fd00::1]')).toBe(true);
