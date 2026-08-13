@@ -44,10 +44,12 @@ const OrgGoogleDriveConnectionSchema = new Schema<IOrgGoogleDriveConnectionDocum
     folderName: { type: String },
     targetDataLakeId: { type: String, required: true },
 
-    // OAuth refresh token. select:false so it never leaks into default reads or toJSON. NO writer
-    // exists yet - the org-owned connect flow that persists this (and MUST encryptToken it first)
-    // lands with issue D. Encryption is call-site convention here, as with the sibling Org*
-    // connections and User.googleDrive; a pre-save encrypt guard should land with that first writer.
+    // OAuth refresh token. select:false so it never leaks into default reads or toJSON. Written by
+    // the connect flow (POST /api/data-lakes/drive-sync), which copies the connecting user's
+    // already-encrypted refresh token. Encryption is CALL-SITE convention (as with the sibling Org*
+    // connections and User.googleDrive) because the crypto helpers live in apps/client and are not
+    // reachable from packages/database - so the encrypt/isEncrypted guard lives at that writer, not a
+    // pre-save hook here. A pre-save hook cannot encrypt without the key it has no access to.
     oauthRefreshToken: { type: String, select: false },
 
     // Metadata
@@ -78,11 +80,13 @@ const OrgGoogleDriveConnectionSchema = new Schema<IOrgGoogleDriveConnectionDocum
 );
 
 // FIRST-CLAIM-WINS on the Drive folder id: the unique index rejects a SECOND row for a folder
-// already claimed. It does NOT verify the first claimant actually owns the folder - that ownership
-// check (a files.get capabilities lookup with the connecting user's credential) lands with the
-// connect flow (issue D). This is a NEW pattern, not sibling precedent: the sibling Org* connections
-// scope uniqueness to the org and never make a third-party resource id globally unique; making
-// driveFolderId global is a deliberate anti-double-claim choice.
+// already claimed. The index alone does NOT verify the claimant owns the folder; that ownership check
+// - a files.get read probe with the connecting user's own credential (getFolderAccess) - runs BEFORE
+// the claim in drive-sync.ts, so a folder can only be claimed by someone who can actually read it
+// (without it, a manager could squat a folder id they don't own and lock out its real owner). This is
+// a NEW pattern, not sibling precedent: the sibling Org* connections scope uniqueness to the org and
+// never make a third-party resource id globally unique; making driveFolderId global is a deliberate
+// anti-double-claim choice.
 OrgGoogleDriveConnectionSchema.index({ driveFolderId: 1 }, { unique: true, name: 'org_gdrive_conn_folder_id' });
 
 // A lake is fed by at most one Drive folder (v1: one-folder-per-lake).
@@ -146,6 +150,40 @@ class OrgGoogleDriveConnectionRepository
     return result?.toJSON() || null;
   }
 
+  /**
+   * (Re)write the org-owned encrypted refresh token and re-stamp `connectedBy` to the re-syncing user
+   * (the identity ingest runs as - see driveLakeIngest), org-scoped so one org can't overwrite
+   * another's. The value must already be encrypted by the caller (crypto is not reachable from
+   * packages/database).
+   *
+   * The credential + connectedBy are written UNCONDITIONALLY, but status/lastError are healed to
+   * 'connected' only from a NON-'syncing' state (pipeline `$cond`): a Re-sync issued while an ingest
+   * is in flight must not flip 'syncing' -> 'connected', or claimForSync would let the re-triggered
+   * run claim ON TOP of the live one and both would walk the folder (duplicate FabFiles). Leaving the
+   * status 'syncing' makes the new run defer behind the running one instead.
+   */
+  async updateCredential(
+    id: string,
+    organizationId: string,
+    encryptedRefreshToken: string,
+    connectedBy: string
+  ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
+    return this.model.findOneAndUpdate(
+      { _id: id, organizationId },
+      [
+        {
+          $set: {
+            oauthRefreshToken: encryptedRefreshToken,
+            connectedBy,
+            status: { $cond: [{ $eq: ['$status', 'syncing'] }, '$status', 'connected'] },
+            lastError: { $cond: [{ $eq: ['$status', 'syncing'] }, '$lastError', null] },
+          },
+        },
+      ],
+      { new: true }
+    );
+  }
+
   /** Update health state; clears `lastError` on a healthy update (mirrors OrgGitHubConnection.updateHealthInfo). */
   async updateHealth(
     id: string,
@@ -205,6 +243,15 @@ class OrgGoogleDriveConnectionRepository
       { $set: { status: 'connected' } },
       { new: true }
     );
+  }
+
+  /**
+   * Delete a connection (org-scoped), releasing its global Drive-folder claim. HARD delete on purpose:
+   * a soft-deleted/disabled row would keep the unique driveFolderId index populated and block re-claim.
+   */
+  async release(id: string, organizationId: string): Promise<boolean> {
+    const res = await this.model.deleteMany({ _id: id, organizationId }, { hardDelete: true });
+    return (res?.deletedCount ?? 0) > 0;
   }
 }
 

@@ -1,6 +1,11 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
-import { dataLakeBatchRepository, dataLakeRepository, fabFileRepository } from '@bike4mind/database';
+import {
+  dataLakeBatchRepository,
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+  fabFileRepository,
+} from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { CreateBatchRequestInput } from '@bike4mind/common';
 import { Request } from 'express';
@@ -69,7 +74,7 @@ const handler = baseApi()
     // don't own. Not-found-style denial when the lake isn't even readable; manage-denied when
     // readable but not owned.
     const dataLake = await dataLakeService.assertLakeWriteAccess(data.dataLakeId, await toAccessContext(req), {
-      db: { dataLakes: dataLakeRepository },
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
     // Don't accept new uploads into an archived/deleted (or transitional) lake - only

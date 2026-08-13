@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { buildAlwaysOnFloorDetails, type AlwaysOnFloorInput } from './systemPromptFloorTelemetry';
+import type { BuilderInjectedBlock } from '@bike4mind/utils';
+import {
+  buildAlwaysOnFloorDetails,
+  buildInjectedBlockDetails,
+  type AlwaysOnFloorInput,
+} from './systemPromptFloorTelemetry';
 
 // Deterministic stand-in for the real tiktoken counter: token count == char length.
 const lengthCounter = (content: string) => Promise.resolve(content.length);
@@ -88,5 +93,88 @@ describe('buildAlwaysOnFloorDetails', () => {
     expect(counter).toHaveBeenCalledTimes(2);
     expect(counter).toHaveBeenCalledWith('ARTIFACT');
     expect(counter).toHaveBeenCalledWith('HELP');
+  });
+});
+
+describe('buildInjectedBlockDetails', () => {
+  const delivered = (id: 'formatPrompt' | 'imagePrompt', content: string): BuilderInjectedBlock => ({
+    id,
+    injected: true,
+    delivered: true,
+    content,
+  });
+
+  it('itemizes both rows in stable order for a normal turn', async () => {
+    const blocks = [delivered('formatPrompt', 'FORMAT'), delivered('imagePrompt', 'IMAGE')];
+    const details = await buildInjectedBlockDetails(blocks, lengthCounter);
+    expect(details.map(d => d.name)).toEqual(['format_prompt', 'image_prompt']);
+    expect(details).toEqual([
+      { source: 'admin', name: 'format_prompt', tokenCount: 6, wasIncluded: true },
+      { source: 'hardcoded', name: 'image_prompt', tokenCount: 5, wasIncluded: true },
+    ]);
+  });
+
+  it('marks a not-injected block excluded (0 tokens, disabled)', async () => {
+    const blocks: BuilderInjectedBlock[] = [
+      { id: 'formatPrompt', injected: false, delivered: false, reason: 'setting_disabled' },
+      delivered('imagePrompt', 'IMAGE'),
+    ];
+    const details = await buildInjectedBlockDetails(blocks, lengthCounter);
+    expect(details.find(d => d.name === 'format_prompt')).toEqual({
+      source: 'admin',
+      name: 'format_prompt',
+      tokenCount: 0,
+      wasIncluded: false,
+      exclusionReason: 'disabled',
+    });
+  });
+
+  it('blames the token limit when the block was injected but the budget dropped it', async () => {
+    const blocks: BuilderInjectedBlock[] = [
+      { id: 'formatPrompt', injected: true, delivered: false, content: 'FORMAT' },
+      delivered('imagePrompt', 'IMAGE'),
+    ];
+    const details = await buildInjectedBlockDetails(blocks, lengthCounter);
+    expect(details.find(d => d.name === 'format_prompt')).toEqual({
+      source: 'admin',
+      name: 'format_prompt',
+      tokenCount: 0,
+      wasIncluded: false,
+      exclusionReason: 'token_limit',
+    });
+  });
+
+  it('still emits both rows for an empty input array (complete inventory, not just what was passed)', async () => {
+    const details = await buildInjectedBlockDetails([], lengthCounter);
+    expect(details.map(d => d.name)).toEqual(['format_prompt', 'image_prompt']);
+    expect(details.every(d => !d.wasIncluded && d.exclusionReason === 'disabled')).toBe(true);
+  });
+
+  it('still emits a disabled row for an id missing from the input array', async () => {
+    const details = await buildInjectedBlockDetails([delivered('imagePrompt', 'IMAGE')], lengthCounter);
+    expect(details.find(d => d.name === 'format_prompt')).toEqual({
+      source: 'admin',
+      name: 'format_prompt',
+      tokenCount: 0,
+      wasIncluded: false,
+      exclusionReason: 'disabled',
+    });
+  });
+
+  it('does not count tokens for an excluded row', async () => {
+    const counter = vi.fn(lengthCounter);
+    await buildInjectedBlockDetails(
+      [{ id: 'formatPrompt', injected: false, delivered: false, reason: 'mode_skipped' }],
+      counter
+    );
+    expect(counter).not.toHaveBeenCalled();
+  });
+
+  it('counts each included row exactly once, with its own content', async () => {
+    const counter = vi.fn(lengthCounter);
+    await buildInjectedBlockDetails([delivered('formatPrompt', 'FORMAT'), delivered('imagePrompt', 'IMAGE')], counter);
+    expect(counter).toHaveBeenCalledTimes(2);
+    expect(counter).toHaveBeenCalledWith('FORMAT');
+    expect(counter).toHaveBeenCalledWith('IMAGE');
   });
 });

@@ -1,18 +1,30 @@
-import type { AccessContext, IDataLakeDocument } from '@bike4mind/common';
-
-/** The acting principal for a write/manage decision - resolved from auth, never the body. */
-export type ManageActor = Pick<AccessContext, 'userId' | 'isAdmin'>;
+import type { AccessContext, IDataLakeAccessGrant, IDataLakeDocument } from '@bike4mind/common';
+import { normalizeId } from '@bike4mind/utils';
 
 /**
- * Truthy-guarded creator match, shared by `canManageLake` and every site that needs the SAME
- * ownership check WITHOUT the admin bypass (`setLakeVisibility`'s owner-only expose gate, and
- * the `isOwn` display label in `browsePublicDataLakes`/`listDataLakes`). The truthiness guard
- * makes it fail closed on a blank identity: without it, a lake with no `createdByUserId` (the
- * synthetic fallback document) would match an actor with no `userId`, since
- * `undefined === undefined` and `'' === ''`. Unreachable
- * today - the schema requires the field and `AccessContext.userId` is a required string - but this
- * predicate now gates prompt DISCLOSURE as well as writes, so it should not depend on those
- * invariants holding elsewhere. Mirrors the same guard in `getDataLakePrompts.ts`.
+ * The acting principal for a write/manage decision - resolved from auth, never the body.
+ * `administeredOrgIds` is the set of orgs the actor holds admin rights in, pre-resolved app-side
+ * (see AccessContext.administeredOrgIds); it powers the org-manageable rung. Optional so a caller
+ * that has not threaded it yet still compiles - the org rung simply does not fire (back-compat).
+ */
+export type ManageActor = Pick<AccessContext, 'userId' | 'isAdmin' | 'administeredOrgIds'>;
+
+/**
+ * The slice of a lake's access grant a manage decision needs. The caller pre-fetches the lake's
+ * ACTIVE (expiry-filtered) grants and passes them in, keeping this rule pure/sync/testable - the
+ * same seam as pre-resolved `entitlementKeys`.
+ */
+export type LakeGrant = Pick<IDataLakeAccessGrant, 'principalType' | 'principalId' | 'role'>;
+
+/**
+ * Truthy-guarded CREATOR match - the immutable provenance identity, NOT necessarily the current
+ * owner. `createdByUserId` never changes (it anchors the membership prefix arm); ownership is
+ * transferred by an owner-role grant that supersedes it (see `resolveEffectiveOwnerIds`). Use this
+ * only where creator provenance is genuinely wanted (prefix-collision scope, the owner-exemption in
+ * getDynamicDataLakeTags); use `isEffectiveOwner` for an ownership decision.
+ *
+ * The truthiness guard fails closed on a blank identity: without it, a lake with no `createdByUserId`
+ * (the synthetic fallback document) would match an actor with no `userId` (`'' === ''`).
  */
 export function isLakeCreator(
   lake: Pick<IDataLakeDocument, 'createdByUserId'>,
@@ -22,18 +34,76 @@ export function isLakeCreator(
 }
 
 /**
- * The single WRITE/MANAGE decision for a lake: platform admin, or the lake's creator. This is
- * the exact rule the remove path (`removeFileFromDataLake`) and the visibility change already
- * enforce inline - centralized here so every mutating path agrees on who may write.
- *
- * Deliberately narrower than `canAccessLake` (read): a tag/entitlement/org grant lets a member
- * READ a lake but NOT write into it. Injecting a file (applying the lake's meta-tag) is a write,
- * so it must clear this gate, closing the read-can-write asymmetry.
- *
- * Lives in its own module (not `authorizeLakeWrite.ts`, which re-exports it for existing callers)
- * because `canAccessLake` (in `assertLakeAccess.ts`) also needs it, and `authorizeLakeWrite.ts`
- * already imports FROM `assertLakeAccess.ts` - importing back would cycle.
+ * The lake's EFFECTIVE owner ids: the holders of an `owner`-role USER grant if any exist, otherwise
+ * the immutable creator. This is the one place "who owns this lake" is resolved, so a transfer
+ * (which upserts an owner grant) supersedes the creator everywhere without ever mutating
+ * `createdByUserId`. Existing lakes carry no grants, so they resolve to `[createdByUserId]` exactly
+ * as before - no backfill needed.
  */
-export function canManageLake(lake: Pick<IDataLakeDocument, 'createdByUserId'>, actor: ManageActor): boolean {
-  return actor.isAdmin || isLakeCreator(lake, actor);
+export function resolveEffectiveOwnerIds(
+  lake: Pick<IDataLakeDocument, 'createdByUserId'>,
+  grants: readonly LakeGrant[] = []
+): string[] {
+  const ownerUserIds = grants
+    .filter(g => g.principalType === 'user' && g.role === 'owner' && !!g.principalId)
+    .map(g => g.principalId);
+  if (ownerUserIds.length > 0) return Array.from(new Set(ownerUserIds));
+  return lake.createdByUserId ? [lake.createdByUserId] : [];
+}
+
+/**
+ * True when the actor is an effective owner (grant-superseded creator). Deliberately excludes the
+ * platform-admin bypass and the curator/org rungs - it is the "the OWNER, not merely a manager"
+ * predicate used at owner-only gates (the visibility expose gate, the `isOwn` display label).
+ */
+export function isEffectiveOwner(
+  lake: Pick<IDataLakeDocument, 'createdByUserId'>,
+  actor: Pick<ManageActor, 'userId'>,
+  grants: readonly LakeGrant[] = []
+): boolean {
+  return !!actor.userId && resolveEffectiveOwnerIds(lake, grants).includes(actor.userId);
+}
+
+/**
+ * The single WRITE/MANAGE decision for a lake, in ascending rungs (none weakens the gate; each only
+ * ADDS a manager):
+ *   1. platform admin;
+ *   2. effective owner - an `owner`-grant holder, or the creator when no owner grant exists;
+ *   3. a `curator` USER grant - full routine management (add/remove/reprocess members) short of
+ *      ownership transfer and the visibility expose gate, which stay effective-owner-only;
+ *   4. an admin of the lake's org (`lake.organizationId in actor.administeredOrgIds`) - the
+ *      org-manageable rung: org lakes survive their creator because org admins manage them by role;
+ *   5. an `owner`/`curator` ORG grant for an org the actor administers.
+ *
+ * Deliberately narrower than `canAccessLake` (read): a tag/entitlement/org-READ grant lets a member
+ * read a lake but not write into it. `canAccessLake` calls THIS first, so every rung here also
+ * grants read - correct, a manager can always read what they manage.
+ *
+ * `grants` is the lake's active grant set, pre-fetched by the caller; omitted -> `[]`, so a caller
+ * that has not threaded grants yet still gets rungs 1, 2 (via creator) and 4.
+ */
+export function canManageLake(
+  lake: Pick<IDataLakeDocument, 'createdByUserId' | 'organizationId'>,
+  actor: ManageActor,
+  grants: readonly LakeGrant[] = []
+): boolean {
+  if (actor.isAdmin) return true;
+  if (!actor.userId) return false;
+
+  if (isEffectiveOwner(lake, actor, grants)) return true;
+
+  if (grants.some(g => g.principalType === 'user' && g.principalId === actor.userId && g.role === 'curator')) {
+    return true;
+  }
+
+  const administeredOrgIds = actor.administeredOrgIds ?? [];
+  const lakeOrg = normalizeId(lake.organizationId);
+  if (lakeOrg && administeredOrgIds.includes(lakeOrg)) return true;
+
+  return grants.some(
+    g =>
+      g.principalType === 'organization' &&
+      (g.role === 'owner' || g.role === 'curator') &&
+      administeredOrgIds.includes(g.principalId)
+  );
 }

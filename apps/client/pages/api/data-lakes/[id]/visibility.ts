@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository } from '@bike4mind/database';
+import { dataLakeRepository, dataLakeAccessGrantRepository, organizationRepository } from '@bike4mind/database';
 import { type AccessContext } from '@bike4mind/common';
 import { Request } from 'express';
 import { z } from 'zod';
@@ -40,15 +40,19 @@ const handler = baseApi()
     // become a promotion target. On demotion to private this is a no-op (org ignored).
     const activeOrg = await resolveActiveOrg(req, organizationId);
     const ctx = toCtx(req, activeOrg);
+    // Org-admin set for the org-manageable manage rung (admins bypass; skip the read for them).
+    const administeredOrgIds = ctx.isAdmin ? [] : await organizationRepository.findIdsWithAdminRights(ctx.userId);
 
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, { db: { dataLakes: dataLakeRepository } });
+    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+    });
     dataLakeService.assertLakeWritable(lake);
 
     const result = await dataLakeService.setLakeVisibility(
-      { userId: ctx.userId, isAdmin: ctx.isAdmin, organizationId: ctx.organizationId },
+      { userId: ctx.userId, isAdmin: ctx.isAdmin, organizationId: ctx.organizationId, administeredOrgIds },
       lake.id,
       visibility,
-      { db: { dataLakes: dataLakeRepository } }
+      { db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository } }
     );
 
     return res.json(result);

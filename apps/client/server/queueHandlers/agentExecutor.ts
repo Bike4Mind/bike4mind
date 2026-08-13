@@ -66,6 +66,7 @@ import {
 import { usdToCreditsStochastic } from '@bike4mind/utils';
 import {
   buildSharedTools,
+  resolveToolAvailability,
   ServerAgentStore,
   ServerSubagentOrchestrator,
   PARENT_DEADLINE_BUFFER_MS,
@@ -732,7 +733,20 @@ async function processExecution(
       getSettingsByNames,
     });
 
-    const models = await getAvailableModels(apiKeyTable as ApiKeyTable);
+    // Availability overlaps the models fetch rather than the key fetch above, so the key table can
+    // be handed over instead of re-read inside the resolver. Never rejects (see its doc comment).
+    // Fail-closed here (unlike the Tools picker UI's fail-open default): an agent run has nobody in
+    // the loop to add a missing key, so a tool this lookup couldn't confirm works should not reach
+    // the model. Resolved per-user because that is the identity the tools themselves use for their
+    // keys at call time (toolDeps.userId below).
+    const [models, toolAvailability] = await Promise.all([
+      getAvailableModels(apiKeyTable as ApiKeyTable),
+      resolveToolAvailability(
+        execution.userId,
+        { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } },
+        { onLookupError: 'unavailable', logger, llmKeys: apiKeyTable }
+      ),
+    ]);
     // Upgrade a deprecated/retired model id to its modern equivalent before lookup. getAvailableModels
     // filters retired ids out, so an agent/session still pinned to a sunset snapshot would otherwise
     // miss the lookup and throw instead of running on the mapped replacement.
@@ -750,6 +764,24 @@ async function processExecution(
       logger.warn('[Credits] Insufficient credits to start execution', { availableCredits });
       await agentExecutionRepository.markFailed(executionId, {
         message: 'Insufficient credits to run agent execution',
+      });
+      await sendWs('failed', { executionId, reason: 'insufficient_credits' });
+      return;
+    }
+
+    // Org-billed per-member cap. An agent run has no single upfront estimate (it bills
+    // per-iteration at settlement), so this gates on "already at/over cap" with no charge
+    // to add. It sits below the resume branch and re-reads `organization` each invocation,
+    // so it re-runs on every continuation/subagent-resume/DAG-wake: a run that crosses the
+    // cap mid-execution IS stopped, at its next handoff (like the pool gate above). Started,
+    // in-flight iterations still settle - this bounds the overshoot, it does not refund it.
+    if (organization && creditService.isMemberAtOrOverCap(organization, execution.userId)) {
+      logger.warn('[Credits] Member credit cap reached; refusing to start execution', {
+        used: creditService.getMemberUsedCredits(organization, execution.userId),
+        cap: organization.maxCreditsPerMember,
+      });
+      await agentExecutionRepository.markFailed(executionId, {
+        message: 'Organization member credit limit reached',
       });
       await sendWs('failed', { executionId, reason: 'insufficient_credits' });
       return;
@@ -1367,7 +1399,12 @@ async function processExecution(
     // even when the parent run didn't enable it — and Lattice never leaks into the
     // parent's own toolbelt because this pool is kept out of `tools`. See
     // `buildSubagentLatticeToolPool` and `ServerOrchestratorDeps.optInTools`.
-    const subagentLatticeTools = buildSubagentLatticeToolPool(toolDeps, toolCallbacks, subagentToolConfig);
+    const subagentLatticeTools = buildSubagentLatticeToolPool(
+      toolDeps,
+      toolCallbacks,
+      subagentToolConfig,
+      toolAvailability
+    );
 
     // Durable opti plan ledger (#680): ONE state object, rehydrated from the persisted execution so
     // the opti-loop guards survive a continuation Lambda -- a repeat decompose or a re-solve of a
@@ -1417,6 +1454,10 @@ async function processExecution(
       config: subagentToolConfig,
       mcpToolsByServer,
       agentOnlyMcpServers,
+      // Additive to, not a replacement for, the profile's allowedTools gating: that already narrowed
+      // `enabledTools` upstream (pickEffectiveEnabledTools -> resolvedToolNames), and this drops
+      // whatever survived that has no working key. A tool must be both allowed AND offerable.
+      toolAvailability,
     });
     if (!tools) throw new Error('Failed to build tools');
 
@@ -2517,7 +2558,17 @@ async function processSubagentDispatch(
       db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
       getSettingsByNames,
     });
-    const models = await getAvailableModels(apiKeyTable as ApiKeyTable);
+    // Resolved for the CHILD's user, the identity its tools use for their own keys at call time
+    // (toolDeps.userId below), and handed the key table above so it is not read twice. Fail-closed
+    // for the same reason as the parent path: nobody is in the loop to add a missing key mid-run.
+    const [models, toolAvailability] = await Promise.all([
+      getAvailableModels(apiKeyTable as ApiKeyTable),
+      resolveToolAvailability(
+        child.userId,
+        { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } },
+        { onLookupError: 'unavailable', logger, llmKeys: apiKeyTable }
+      ),
+    ]);
     const modelInfo = models.find((m: { id: string }) => m.id === child.model);
     const llm = getLlmByModel(apiKeyTable as ApiKeyTable, { modelInfo, logger, endUserId: child.userId });
     if (!llm) throw new Error(`Failed to create LLM backend for model "${child.model}"`);
@@ -2643,7 +2694,12 @@ async function processSubagentDispatch(
     // to). Built unconditionally and granted only when the agent's `allowedTools`
     // names `lattice_*`; mirrors the top-level path so Lattice availability is
     // identical whether a subagent runs in-process or in its own Lambda.
-    const subagentLatticeTools = buildSubagentLatticeToolPool(toolDeps, toolCallbacks, subagentToolConfig);
+    const subagentLatticeTools = buildSubagentLatticeToolPool(
+      toolDeps,
+      toolCallbacks,
+      subagentToolConfig,
+      toolAvailability
+    );
 
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
       config: subagentToolConfig,
@@ -2655,6 +2711,11 @@ async function processSubagentDispatch(
       // them. Marking them agent-only here would hide them and reproduce the
       // 0-tools bug.
       agentOnlyMcpServers: [],
+      // Wired for parity with the parent path, but inert as long as this call passes no
+      // `enabledTools`: buildSharedTools applies the offerable filter only to that list, so today
+      // this site materializes MCP tools plus delegate/coordinate and nothing key-gated. Kept so a
+      // future change that gives this path native tools cannot silently bypass the filter.
+      toolAvailability,
     });
     if (!tools) throw new Error('Failed to build tools for dispatched subagent');
 

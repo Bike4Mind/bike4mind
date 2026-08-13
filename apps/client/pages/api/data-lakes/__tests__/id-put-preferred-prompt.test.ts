@@ -30,6 +30,15 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
   dataLakeBatchRepository: {},
   fabFileRepository: {},
+  dataLakeAccessGrantRepository: {
+    listByLake: vi.fn().mockResolvedValue([]),
+    listActiveByLakes: vi.fn().mockResolvedValue([]),
+    listByPrincipal: vi.fn().mockResolvedValue([]),
+    findGrant: vi.fn().mockResolvedValue(null),
+    upsertGrant: vi.fn().mockResolvedValue({}),
+    removeGrant: vi.fn().mockResolvedValue(true),
+    removeAllForLake: vi.fn().mockResolvedValue(0),
+  },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 // Real allowlist predicate on purpose - the whole point is which ids pass.
@@ -72,7 +81,7 @@ describe('PUT /api/data-lakes/[id] - preferredSystemPromptId allowlist is enforc
     const { res, json } = makeRes();
     await run(put({ name: 'L', preferredSystemPromptId: 'triage_router' }), res);
     expect(h.updateDataLake).toHaveBeenCalledWith(
-      { userId: 'owner', isAdmin: false },
+      expect.objectContaining({ userId: 'owner', isAdmin: false }),
       'lake1',
       expect.objectContaining({ preferredSystemPromptId: 'triage_router' }),
       expect.anything()

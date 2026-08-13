@@ -1,8 +1,15 @@
-import type { AccessContext, IDataLakeBatchDocument, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
+import type {
+  AccessContext,
+  IDataLakeAccessGrantRepository,
+  IDataLakeBatchDocument,
+  IDataLakeDocument,
+  IDataLakeRepository,
+} from '@bike4mind/common';
 import { DATA_LAKES, DATALAKE_TAG_PREFIX, normalizeTagPrefix } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { assertLakeAccess, assertLakeWritable } from './assertLakeAccess';
-import { canManageLake, type ManageActor } from './manageRule';
+import { type ManageActor } from './manageRule';
+import { resolveCanManageLake } from './authorizeLakeManage';
 
 export { canManageLake, type ManageActor } from './manageRule';
 
@@ -16,14 +23,21 @@ export { canManageLake, type ManageActor } from './manageRule';
 export const assertLakeWriteAccess = async (
   lakeIdOrSlug: string,
   ctx: AccessContext,
-  { db }: { db: { dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug'> } }
+  {
+    db,
+  }: {
+    db: {
+      dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug'>;
+      dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+    };
+  }
 ): Promise<IDataLakeDocument> => {
   const lake = await assertLakeAccess(lakeIdOrSlug, ctx, { db });
   // Fallback lakes are read-only for EVERYONE (even admins, who pass canManageLake):
   // there is no document to attach files to.
   assertLakeWritable(lake);
-  if (!canManageLake(lake, ctx)) {
-    throw new BadRequestError('Only the creator can add files to this data lake');
+  if (!(await resolveCanManageLake(lake, ctx, { db }))) {
+    throw new BadRequestError('You do not have permission to add files to this data lake');
   }
   return lake;
 };
@@ -83,7 +97,17 @@ export const isStaticRegistryDatalakeTag = (tag: string): boolean =>
 export const assertCanWriteDataLakeTags = async (
   actor: ManageActor,
   tagNames: readonly unknown[],
-  { db }: { db: { dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'> } }
+  {
+    db,
+  }: {
+    db: {
+      dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'>;
+      // Optional: absent -> manage falls back to createdByUserId + org-admin (no grant supersession).
+      // The file-create fan-in (email/url/generated/research) applies only its own/hardcoded tags,
+      // so it need not wire the grant repo; user-facing tag doors that do, get full grant-awareness.
+      dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+    };
+  }
 ): Promise<void> => {
   const metaTags = extractDataLakeMetaTags(tagNames);
   for (const tag of metaTags) {
@@ -94,11 +118,11 @@ export const assertCanWriteDataLakeTags = async (
       continue;
     }
     const lake = await db.dataLakes.findByDatalakeTag(tag);
-    if (!lake || !canManageLake(lake, actor)) {
+    if (!lake || !(await resolveCanManageLake(lake, actor, { db }))) {
       // Direction-neutral wording: this gate sees a tag payload, not an intent, so the same
       // refusal covers adding a file to the lake and removing one from it. Saying "add" here
       // told a caller their removal was refused for the wrong reason.
-      throw new BadRequestError("Only the creator can change this data lake's files");
+      throw new BadRequestError("You do not have permission to change this data lake's files");
     }
   }
 };

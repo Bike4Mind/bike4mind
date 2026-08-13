@@ -50,6 +50,15 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   dataLakeBatchRepository: { findById: h.batchFindById, appendFiles: h.appendFiles },
   dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag, find: h.lakeFind },
+  dataLakeAccessGrantRepository: {
+    listByLake: vi.fn().mockResolvedValue([]),
+    listActiveByLakes: vi.fn().mockResolvedValue([]),
+    listByPrincipal: vi.fn().mockResolvedValue([]),
+    findGrant: vi.fn().mockResolvedValue(null),
+    upsertGrant: vi.fn().mockResolvedValue({}),
+    removeGrant: vi.fn().mockResolvedValue(true),
+    removeAllForLake: vi.fn().mockResolvedValue(0),
+  },
 }));
 
 // Partial: only the lake-authorization collaborators are stubbed. The fallback tagger is the

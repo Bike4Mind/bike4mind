@@ -1,5 +1,5 @@
 import { DATALAKE_TAG_PREFIX, DATALAKE_TAG_STRENGTH, prefixArmTagNames } from '@bike4mind/common';
-import type { IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
+import type { IDataLakeAccessGrantRepository, IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { assertLakeWritable } from '../dataLakeService/assertLakeAccess';
 import {
@@ -9,6 +9,7 @@ import {
   extractStaticRegistryPrefixedTags,
   isStaticRegistryDatalakeTag,
 } from '../dataLakeService/authorizeLakeWrite';
+import { makeLakeGrantResolver } from '../dataLakeService/authorizeLakeManage';
 import { reconcileDataLakeFallbackTags } from '../dataLakeService/fallbackLakeTags';
 import type { MembershipActor, MembershipLake } from '../dataLakeService/lakeMembership';
 import { findPrefixArmChanges, loadPrefixArmCandidateLakes } from '../dataLakeService/prefixArmMembership';
@@ -18,6 +19,11 @@ interface ReconcileLakeTagsAdapters {
   db: {
     fabFiles: Pick<IFabFileRepository, 'findById' | 'computeDataLakeStats'>;
     dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
+    // Grant-aware manage gates: consult a lake's active grants so a curator / org-admin /
+    // transferred owner is honored (and a superseded creator is not). Optional -> absent degrades
+    // to createdByUserId + org rung (grant supersession not honored on this door then). Batched via
+    // makeLakeGrantResolver so the many per-lake gates below cost one query.
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes'>;
   };
   /** Forwarded to the fallback tagger's skip-path diagnostics; never fails the write on its own. */
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };
@@ -125,11 +131,17 @@ export const reconcileLakeTags = async (
   const desiredKeys = new Set(extractDataLakeMetaTags(desiredTags.map(tag => tag.name)));
   const currentKeys = new Set(extractDataLakeMetaTags(currentTagNames));
 
+  // Grant-aware manage gates below consult each lake's active grants, batched + cached across the
+  // meta-tag and prefix-arm passes so the per-lake checks cost one query (see makeLakeGrantResolver).
+  const grantResolver = makeLakeGrantResolver({ db });
+  const canManage = (lake: MembershipLake) => canManageLake(lake, actor, grantResolver.get(lake.id));
+
   const joins: MembershipLake[] = [];
   const metaTagsToPersist: string[] = [];
-  // Lakes whose meta-tag is preserved above but whose CONTENT tags this actor has no standing to
-  // touch - see the force-carry below, right after `resultingTagNames` is known.
-  const unmanagedPreservedLakes: MembershipLake[] = [];
+  // Every lake whose meta-tag is preserved because the file already carries it (regardless of
+  // `wanted`). The subset this actor cannot manage (`unmanagedPreservedLakes`, below) is derived
+  // after the grants are primed - its content tags are then force-carried, see far below.
+  const preservedMemberLakes: MembershipLake[] = [];
 
   for (const key of new Set([...desiredKeys, ...currentKeys])) {
     const wanted = desiredKeys.has(key);
@@ -140,7 +152,7 @@ export const reconcileLakeTags = async (
       // static-registry meta-tag it already carries must not look like an illegitimate "add"
       // just because that namespace has no owning document to look up.
       if (wanted && !currentKeys.has(key)) {
-        throw new BadRequestError('Only the creator can add files to this data lake');
+        throw new BadRequestError('You do not have permission to add files to this data lake');
       }
       // A static-registry meta-tag (e.g. `datalake:opti-knowledge`) has no owning document, so it
       // hits this branch on every write, but it is still real membership and needs no DB round
@@ -160,16 +172,21 @@ export const reconcileLakeTags = async (
       // intentional removal from a stale client's copy predating the last membership change, so
       // this door never leaves a lake on its own - see the toggle/DELETE doors for that.
       metaTagsToPersist.push(lake.datalakeTag);
-      if (!canManageLake(lake, actor)) unmanagedPreservedLakes.push(lake);
+      preservedMemberLakes.push(lake);
     } else if (wanted) {
       metaTagsToPersist.push(lake.datalakeTag);
       joins.push(lake);
     }
   }
 
+  // Prime grants for every meta-tag lake in one query, then derive the unmanaged-preserved subset
+  // (its content taxonomy is protected below) and gate the joins - all grant-aware.
+  await grantResolver.prime([...preservedMemberLakes, ...joins]);
+  const unmanagedPreservedLakes: MembershipLake[] = preservedMemberLakes.filter(lake => !canManage(lake));
+
   for (const lake of joins) {
-    if (!canManageLake(lake, actor)) {
-      throw new BadRequestError('Only the creator can add files to this data lake');
+    if (!canManage(lake)) {
+      throw new BadRequestError('You do not have permission to add files to this data lake');
     }
     assertLakeWritable(lake);
   }
@@ -230,9 +247,12 @@ export const reconcileLakeTags = async (
   // force-publish a lake they have no relationship to. Gate the ACTIVATION on canManageLake; an
   // unmanaged join still gets its stats corrected via statsOnlyJoins below (see commit()), rather
   // than drifting until some other door happens to touch the same lake.
+  // Prime grants for the prefix-arm lakes (the activation gate below + the unmanaged-dropped-prefix
+  // check further down both consult them), reusing the cached meta-tag lakes.
+  await grantResolver.prime([...prefixArmJoins.map(j => j.lake), ...prefixArmCandidateLakes]);
   const statsOnlyJoins: MembershipLake[] = [];
   for (const j of prefixArmJoins) {
-    if (canManageLake(j.lake, actor)) joins.push(j.lake);
+    if (canManage(j.lake)) joins.push(j.lake);
     else statsOnlyJoins.push(j.lake);
   }
 
@@ -251,7 +271,7 @@ export const reconcileLakeTags = async (
     // .some(), not the first match: two lakes can share one fileTagPrefix, and this must force-
     // carry the name if EITHER matching lake is unmanaged, not just whichever is found first.
     const matchingLakes = prefixArmCandidateLakes.filter(l => prefixArmTagNames([name], l.fileTagPrefix).length > 0);
-    return matchingLakes.some(l => !canManageLake(l, actor));
+    return matchingLakes.some(l => !canManageLake(l, actor, grantResolver.get(l.id)));
   });
 
   // Force-carried, mirroring metaTagsToPersist above, for three cases: (a) a prefix-arm-only lake

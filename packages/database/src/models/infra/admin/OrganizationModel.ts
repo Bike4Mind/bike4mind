@@ -158,9 +158,13 @@ OrganizationSchema.plugin(softDeletePlugin);
 // Per CLAUDE.md MongoDB guideline: performance indexes declared together here,
 // never as `index: true` on field definitions. `userId` (billing owner) and
 // `managerId` back `findIdsAdministeredBy`'s `$or`, which is on the hot path of
-// every `/api/skills` list call.
+// every `/api/skills` list call. `adminUserIds` backs the third arm of
+// `findIdsWithAdminRights`'s `$or` (#1668) - Mongo index-unions an `$or` only when EVERY
+// branch is index-supported, so without this the org-admin resolution `toAccessContext` runs
+// on every non-admin data-lake request would plan a full `organizations` collscan.
 OrganizationSchema.index({ userId: 1 });
 OrganizationSchema.index({ managerId: 1 });
+OrganizationSchema.index({ adminUserIds: 1 });
 
 export const Organization =
   (mongoose.models.Organization as IOrganizationModel) ??
@@ -393,6 +397,18 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
     return orgs.map(org => org._id.toString());
   }
 
+  async findIdsWithAdminRights(userId: string): Promise<string[]> {
+    // Billing owner OR team manager OR an appointed org admin (adminUserIds). Broader than
+    // findIdsAdministeredBy, which omits appointed admins - see the interface doc for why this is a
+    // separate method. Matches the org-admin semantics of assertCanManageOrgGroups (billing owner +
+    // adminUserIds), extended with managerId for parity with findIdsAdministeredBy.
+    const orgs = await this.organizationModel
+      .find({ $or: [{ userId }, { managerId: userId }, { adminUserIds: userId }] })
+      .select('_id')
+      .lean();
+    return orgs.map(org => org._id.toString());
+  }
+
   async incrementCurrentStorage(organizationId: string, count: number): Promise<void> {
     await this.organizationModel.findByIdAndUpdate(organizationId, [
       {
@@ -407,10 +423,13 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   /**
-   * Seed a zero-usage `userDetails` row for a member if one is not already present. Idempotent by
-   * construction: the `userDetails.id != member.id` guard means a member who already has a row
-   * matches no document and the `$push` is skipped, so this is safe to call on every membership
-   * grant and as a self-heal before a spend.
+   * Seed a zero-usage `userDetails` row for a member if one is not already present. Safe to call on
+   * every membership grant and as a self-heal before a spend: the `userDetails.id != member.id`
+   * guard means a member who already has a row matches no document and the `$push` is skipped.
+   * Not fully atomic - two concurrent calls for the same brand-new member can both pass the `$ne`
+   * guard and push, leaving a duplicate row (the positional `$inc` then tracks only the first). The
+   * window is a single member's first-ever spend and the downside is undercounting, not overcharge,
+   * so it is accepted rather than guarded with a unique index (same tradeoff as `addMember`'s `$ne`).
    *
    * WHY THIS EXISTS: `updateUserDetails` increments via the positional `$` operator, which can only
    * update an element that already exists - it cannot create the row it positions on. A member with

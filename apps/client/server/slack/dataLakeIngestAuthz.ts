@@ -1,4 +1,9 @@
-import { type AccessContext, type IDataLakeDocument, type IDataLakeRepository } from '@bike4mind/common';
+import {
+  type AccessContext,
+  type IDataLakeAccessGrantRepository,
+  type IDataLakeDocument,
+  type IDataLakeRepository,
+} from '@bike4mind/common';
 import { SLACK_MOCK_USER_ID } from '@bike4mind/slack';
 import { dataLakeService } from '@bike4mind/services';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
@@ -39,6 +44,13 @@ export interface LakeWriteRefusal {
 export interface LakeAuthzDeps {
   // `find` is required by the fallback tagger, the others by the write gate.
   dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug' | 'findByDatalakeTag' | 'find'>;
+  /**
+   * The lake's access grants, which `assertLakeWriteAccess` resolves so a CURATOR or a transferred
+   * owner may ingest and not only the original creator. Declared on the shared prologue rather than
+   * on one ingest path, so FILE and LINK cannot diverge on who is allowed to write - the same reason
+   * this module exists at all.
+   */
+  dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
   /** Entitlement keys for the actor; admins skip resolution, mirroring `toAccessContext`. */
   resolveEntitlementKeys(actor: SlackIngestActor): Promise<string[]>;
   logger: {
@@ -105,7 +117,9 @@ export async function authorizeLakeForWrite(
 
   let lake: IDataLakeDocument;
   try {
-    lake = await dataLakeService.assertLakeWriteAccess(lakeSlug, ctx, { db: { dataLakes: deps.dataLakes } });
+    lake = await dataLakeService.assertLakeWriteAccess(lakeSlug, ctx, {
+      db: { dataLakes: deps.dataLakes, dataLakeAccessGrants: deps.dataLakeAccessGrants },
+    });
   } catch (err) {
     // Branch on the error CLASS, not the message. Matching /not found/i sent two reachable cases
     // down the wrong arm: a built-in lake (BadRequestError "...built into the platform and is

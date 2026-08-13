@@ -11,7 +11,12 @@ import {
 } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { createFabFile } from '@server/managers/fabFileManager';
-import { adminSettingsRepository, dataLakeBatchRepository, dataLakeRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  dataLakeBatchRepository,
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+} from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { checkStorageLimit, getSettingsMap, resolveSupportedMimeType } from '@bike4mind/utils';
 import { BadRequestError } from '@server/utils/errors';
@@ -41,10 +46,11 @@ const handler = baseApi().post(async (req: Request, res) => {
   // Look up data lake for meta-tag injection. Uploading into a lake is a WRITE, so enforce the
   // creator/admin gate (not just read access) - otherwise a read-only member could inject files.
   // Not-found-style denial when unreadable; manage-denied when readable but not owned.
+  const ctx = await toAccessContext(req);
   let dataLake: IDataLakeDocument | undefined;
   if (data.dataLakeSlug) {
-    dataLake = await dataLakeService.assertLakeWriteAccess(data.dataLakeSlug, await toAccessContext(req), {
-      db: { dataLakes: dataLakeRepository },
+    dataLake = await dataLakeService.assertLakeWriteAccess(data.dataLakeSlug, ctx, {
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
     // Same rule as the batch-create door: only a draft (first batch) or active lake takes new
     // files, so an archived/deleting one cannot be topped up through this entrance either.
@@ -57,8 +63,8 @@ const handler = baseApi().post(async (req: Request, res) => {
   // Defense-in-depth: a caller could also smuggle a `datalake:*` meta-tag for a DIFFERENT lake
   // through per-file tags. Gate every such tag with the same write check.
   const clientMetaTags = data.files.flatMap(f => (f.tags ?? []).map(t => t.name));
-  await dataLakeService.assertCanWriteDataLakeTags({ userId, isAdmin: !!req.user.isAdmin }, clientMetaTags, {
-    db: { dataLakes: dataLakeRepository },
+  await dataLakeService.assertCanWriteDataLakeTags(ctx, clientMetaTags, {
+    db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
   });
   // This route creates each FabFile through the manager's direct FabFile.create(), not the
   // fabFileService.createFabFile door that gates the static-registry namespace centrally - so

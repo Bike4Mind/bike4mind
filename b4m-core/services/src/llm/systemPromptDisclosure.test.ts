@@ -2,6 +2,7 @@ import type { IMessage } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
 import { buildSystemPromptText, SYSTEM_PROMPT_TEXT_MAX_CHARS } from './systemPromptDisclosure';
 import { buildTaggedContextMessages, PROMPT_SOURCE_METADATA } from './systemPromptSources';
+import { INJECTED_BLOCK_METADATA } from './systemPromptFloorTelemetry';
 
 const sys = (content: string): IMessage => ({ role: 'system' as const, content });
 const user = (content: string): IMessage => ({ role: 'user' as const, content });
@@ -11,6 +12,9 @@ const blockNamed = (disclosure: ReturnType<typeof buildSystemPromptText>, name: 
 
 /** Inventoried on every disclosure whether they contributed or not - see ALWAYS_ON_FLOOR_SOURCES. */
 const FLOOR_NAMES = ['artifact_emission', 'help_center'];
+
+/** Inventoried on every disclosure too, appended after the main loop - see BUILDER_INJECTED_BLOCK_IDS. */
+const INJECTED_NAMES = ['format_prompt', 'image_prompt'];
 
 describe('buildSystemPromptText', () => {
   it('returns the text of each contributing source, tagged with that source name and origin', () => {
@@ -25,6 +29,8 @@ describe('buildSystemPromptText', () => {
       { source: 'hardcoded', name: 'date_time_context', text: 'today is tuesday', redacted: false },
       { source: 'admin', name: 'artifact_emission', redacted: false },
       { source: 'admin', name: 'help_center', text: 'the help center exists', redacted: false },
+      { source: 'admin', name: 'format_prompt', redacted: false },
+      { source: 'hardcoded', name: 'image_prompt', redacted: false },
     ]);
   });
 
@@ -38,6 +44,7 @@ describe('buildSystemPromptText', () => {
       'date_time_context',
       ...FLOOR_NAMES,
       'attached_files',
+      ...INJECTED_NAMES,
     ]);
   });
 
@@ -50,7 +57,11 @@ describe('buildSystemPromptText', () => {
   it('reports nothing for a non-floor source that contributed no messages', () => {
     const tagged = buildTaggedContextMessages({ dateContext: [sys('today')], mementos: [] });
 
-    expect(buildSystemPromptText(tagged).blocks.map(b => b.name)).toEqual(['date_time_context', ...FLOOR_NAMES]);
+    expect(buildSystemPromptText(tagged).blocks.map(b => b.name)).toEqual([
+      'date_time_context',
+      ...FLOOR_NAMES,
+      ...INJECTED_NAMES,
+    ]);
   });
 
   it('keeps a row for a gate-excluded floor source, which the breakdown inventories regardless', () => {
@@ -61,7 +72,7 @@ describe('buildSystemPromptText', () => {
 
     const { blocks } = buildSystemPromptText(tagged);
 
-    expect(blocks.map(b => b.name)).toEqual(['date_time_context', ...FLOOR_NAMES]);
+    expect(blocks.map(b => b.name)).toEqual(['date_time_context', ...FLOOR_NAMES, ...INJECTED_NAMES]);
     expect(blockNamed({ blocks, sizeCapped: false }, 'artifact_emission')).toEqual({
       source: 'admin',
       name: 'artifact_emission',
@@ -99,7 +110,7 @@ describe('buildSystemPromptText', () => {
     const { blocks } = buildSystemPromptText(tagged, new Set([kept]));
 
     // The row survives so the payload still joins to the breakdown, which is where wasIncluded lives.
-    expect(blocks.map(b => b.name)).toEqual(['date_time_context', ...FLOOR_NAMES, 'mementos']);
+    expect(blocks.map(b => b.name)).toEqual(['date_time_context', ...FLOOR_NAMES, 'mementos', ...INJECTED_NAMES]);
     expect(blockNamed({ blocks, sizeCapped: false }, 'mementos')).toEqual({
       source: 'user',
       name: 'mementos',
@@ -131,6 +142,7 @@ describe('buildSystemPromptText', () => {
       'date_time_context',
       ...FLOOR_NAMES,
       'mementos',
+      ...INJECTED_NAMES,
     ]);
   });
 
@@ -168,6 +180,52 @@ describe('buildSystemPromptText', () => {
     expect(SYSTEM_PROMPT_TEXT_MAX_CHARS).toBeGreaterThan(0);
   });
 
+  it('discloses the text of a delivered injected block', () => {
+    const tagged = buildTaggedContextMessages({ dateContext: [sys('today')] });
+
+    const { blocks } = buildSystemPromptText(tagged, undefined, undefined, [
+      { id: 'formatPrompt', injected: true, delivered: true, content: 'Formatting only.' },
+      { id: 'imagePrompt', injected: false, delivered: false, reason: 'not_triggered' },
+    ]);
+
+    expect(blockNamed({ blocks, sizeCapped: false }, 'format_prompt')).toEqual({
+      source: 'admin',
+      name: 'format_prompt',
+      text: 'Formatting only.',
+      redacted: false,
+    });
+    expect(blockNamed({ blocks, sizeCapped: false }, 'image_prompt')).toEqual({
+      source: 'hardcoded',
+      name: 'image_prompt',
+      redacted: false,
+    });
+  });
+
+  it('returns no text for an injected block the budget dropped, though it was injected', () => {
+    const tagged = buildTaggedContextMessages({ dateContext: [sys('today')] });
+
+    const { blocks } = buildSystemPromptText(tagged, undefined, undefined, [
+      { id: 'formatPrompt', injected: true, delivered: false, content: 'Formatting only.' },
+    ]);
+
+    expect(blockNamed({ blocks, sizeCapped: false }, 'format_prompt')).toEqual({
+      source: 'admin',
+      name: 'format_prompt',
+      redacted: false,
+    });
+  });
+
+  it('applies the same char cap to a delivered injected block as any other source', () => {
+    const tagged = buildTaggedContextMessages({ dateContext: [sys('a'.repeat(30))] });
+
+    const disclosure = buildSystemPromptText(tagged, undefined, 40, [
+      { id: 'formatPrompt', injected: true, delivered: true, content: 'b'.repeat(30) },
+    ]);
+
+    expect(disclosure.sizeCapped).toBe(true);
+    expect(blockNamed(disclosure, 'format_prompt')).toEqual({ source: 'admin', name: 'format_prompt', redacted: true });
+  });
+
   it('names every source the way the breakdown does, so the two can be joined', () => {
     const everySource = Object.keys(PROMPT_SOURCE_METADATA) as (keyof typeof PROMPT_SOURCE_METADATA)[];
     const tagged = buildTaggedContextMessages(
@@ -176,11 +234,17 @@ describe('buildSystemPromptText', () => {
 
     const { blocks } = buildSystemPromptText(tagged);
 
-    expect(blocks.map(b => b.name).sort()).toEqual(everySource.map(s => PROMPT_SOURCE_METADATA[s].name).sort());
+    const expectedNames = [
+      ...everySource.map(s => PROMPT_SOURCE_METADATA[s].name),
+      ...Object.values(INJECTED_BLOCK_METADATA).map(m => m.name),
+    ];
+    expect(blocks.map(b => b.name).sort()).toEqual(expectedNames.sort());
     for (const block of blocks) {
-      expect(block.source).toBe(
-        PROMPT_SOURCE_METADATA[everySource.find(s => PROMPT_SOURCE_METADATA[s].name === block.name)!].origin
-      );
+      const promptSource = everySource.find(s => PROMPT_SOURCE_METADATA[s].name === block.name);
+      const expectedOrigin = promptSource
+        ? PROMPT_SOURCE_METADATA[promptSource].origin
+        : Object.values(INJECTED_BLOCK_METADATA).find(m => m.name === block.name)?.source;
+      expect(block.source).toBe(expectedOrigin);
     }
   });
 });

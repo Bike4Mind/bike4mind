@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
     (lake: { createdByUserId?: string }, actor: { userId?: string; isAdmin: boolean }) =>
       actor.isAdmin || (!!actor.userId && !!lake.createdByUserId && lake.createdByUserId === actor.userId)
   ),
+  loadActiveLakeGrants: vi.fn().mockResolvedValue([]),
   openSearchRetrievalIndex: vi.fn(() => ({ removeForDataLake: vi.fn() })),
   sendToQueue: vi.fn(),
   getSourceQueueUrl: vi.fn(() => 'https://sqs.example.com/data-lake-cleanup'),
@@ -40,11 +41,21 @@ vi.mock('@bike4mind/services', () => ({
     cleanupDeletedDataLake: h.cleanupDeletedDataLake,
     canManageLake: h.canManageLake,
     openSearchRetrievalIndex: h.openSearchRetrievalIndex,
+    loadActiveLakeGrants: h.loadActiveLakeGrants,
   },
 }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
   dataLakeBatchRepository: {},
+  dataLakeAccessGrantRepository: {
+    listByLake: vi.fn().mockResolvedValue([]),
+    listActiveByLakes: vi.fn().mockResolvedValue([]),
+    listByPrincipal: vi.fn().mockResolvedValue([]),
+    findGrant: vi.fn().mockResolvedValue(null),
+    upsertGrant: vi.fn().mockResolvedValue({}),
+    removeGrant: vi.fn().mockResolvedValue(true),
+    removeAllForLake: vi.fn().mockResolvedValue(0),
+  },
   fabFileRepository: {},
   fabFileChunkRepository: {},
 }));

@@ -20,6 +20,7 @@ import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import { HEADER_ICON_BUTTON_SX } from '@client/app/components/Session/AISettings/headerIconButtonSx';
 import type { TagNode } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
+import FileIndexingAlert from './FileIndexingAlert';
 import DataLakeTreeView, { type DataLakeTreeChrome } from './DataLakeTreeView';
 import TreeRowLabel from './TreeRowLabel';
 import { RowActionsMenu, RowMenuItem } from './rowActionsMenu';
@@ -309,11 +310,18 @@ export default function DataLakeChatTree({
           }}
         >
           {/* Icon and label stay constant across selection, as in the sidebar - the ground and
-              the left bar carry the state on their own. */}
-          <ArticleOutlinedIcon sx={{ fontSize: 16, color: 'text.tertiary', flexShrink: 0 }} />
+              the left bar carry the state on their own. A processing failure overrides both to
+              danger so an unfindable file reads as failed at a glance. */}
+          <ArticleOutlinedIcon
+            sx={{ fontSize: 16, color: file.error ? 'danger.500' : 'text.tertiary', flexShrink: 0 }}
+          />
           <ListItemContent>
-            <TreeRowLabel label={file.fileName.replace(/\.[^/.]+$/, '')} />
+            <TreeRowLabel
+              label={file.fileName.replace(/\.[^/.]+$/, '')}
+              color={file.error ? 'danger.500' : undefined}
+            />
           </ListItemContent>
+          <FileIndexingAlert file={file} />
           {/* The row itself is the View action, so an actions click must not also fire it.
               Caught here rather than on the trigger: MenuButton owns its own onClick. */}
           <Box

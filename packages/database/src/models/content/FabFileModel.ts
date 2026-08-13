@@ -1,6 +1,7 @@
 import {
   DATALAKE_TAG_PREFIX,
   DataLakeMembershipScope,
+  FabFileChunkPolicyConflict,
   IFabFileChunkDocument,
   IFabFileChunkRepository,
   IFabFileDocument,
@@ -16,7 +17,7 @@ import BaseRepository from '@bike4mind/db-core';
 import { addLowercaseField } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
 import { buildFabFileSearchQuery, buildOwnershipConditions, escapeRegex } from '../../queries/fabFileSearchQuery';
-import { buildDataLakeMembershipFilter } from '../../queries/dataLakeLifecycleScope';
+import { buildDataLakeMembershipFilter, buildNoOtherLakeMetaTagFilter } from '../../queries/dataLakeLifecycleScope';
 
 /**
  * "not a lake membership tag", derived from the one constant rather than spelled out, so a change
@@ -891,6 +892,19 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result !== null;
   }
 
+  async setChunkPolicyConflict(
+    fabFileId: string,
+    chunkedPassageTokenTarget: number,
+    conflict: FabFileChunkPolicyConflict | null
+  ): Promise<void> {
+    // One atomic $set so the recorded target and the conflict decided from it can never disagree
+    // (#1662). `null` clears a now-resolved conflict; the target is always recorded.
+    await this.fabFileModel.updateOne(
+      { _id: fabFileId },
+      { $set: { chunkedPassageTokenTarget, chunkPolicyConflict: conflict } }
+    );
+  }
+
   async findByContentHashes(userId: string, hashes: string[]): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({
       userId,
@@ -1090,10 +1104,19 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   // guard) needs to know whether ANY member is already archived, stamped or not, to decide
   // whether claiming a fresh stamp would strand a pre-existing one; scoping it by a stamp that
   // does not exist yet would defeat the check.
-  async hasArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<boolean> {
+  //
+  // EXCLUSIVE to this lake's own meta-tag: a row also carrying another lake's meta-tag is that
+  // lake's under that lake's own stamp, not this lake's orphan (addFileToLake has no exclusivity
+  // check, so one file can carry more than one lake's tag). Counting it here would make this
+  // lake skip claiming its own stamp, stay permanently unstamped, and fall back to the pre-fix
+  // unbounded restore on every one of its OWN future unarchive calls - freeing the co-owner's
+  // legitimately-archived row. Says nothing about a prefix-ARM collision, which carries no lake
+  // attribution at all and remains a known, accepted limitation (#1729).
+  async hasArchivedMemberExclusiveToDataLakeTag(scope: DataLakeMembershipScope): Promise<boolean> {
     return (
       (await this.fabFileModel.exists({
         ...buildDataLakeMembershipFilter(scope),
+        ...buildNoOtherLakeMetaTagFilter(scope.datalakeTag),
         deletedAt: null,
         archivedAt: { $ne: null },
       })) != null
@@ -1358,6 +1381,13 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
 
     isChunking: { type: Boolean, default: false },
     chunked: { type: Boolean, default: false },
+    // Chunk policy at file-owner altitude (#1662). chunkedPassageTokenTarget: the effective target
+    // (post model-window clamp) the current chunks were built with, so a later lake-membership
+    // change can check a lake's requirement without re-chunking. chunkPolicyConflict: the cross-lake
+    // conflict report (Mixed, like sourceMetadata; null when no conflict). A report, not a failure -
+    // the file stays chunked at its owner-altitude policy.
+    chunkedPassageTokenTarget: { type: Number, required: false },
+    chunkPolicyConflict: { type: Schema.Types.Mixed, required: false, default: null },
     isVectorizing: { type: Boolean, default: false },
     vectorized: { type: Boolean, default: false },
     embeddingModel: { type: String, required: false },

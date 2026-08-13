@@ -2,8 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { EntitlementRequest } from '@server/entitlements';
 
 // Hoisted so the vi.mock factory (hoisted above imports) can reference it.
-const { mockGetRequestEntitlements } = vi.hoisted(() => ({ mockGetRequestEntitlements: vi.fn() }));
+const { mockGetRequestEntitlements, mockFindIdsWithAdminRights } = vi.hoisted(() => ({
+  mockGetRequestEntitlements: vi.fn(),
+  mockFindIdsWithAdminRights: vi.fn(),
+}));
 vi.mock('@server/entitlements', () => ({ getRequestEntitlements: mockGetRequestEntitlements }));
+// toAccessContext now resolves the caller's org-admin set (#1668), which reaches Mongoose - mock it
+// so these pure org-id-normalization tests don't hit a real DB.
+vi.mock('@bike4mind/database', () => ({
+  organizationRepository: { findIdsWithAdminRights: mockFindIdsWithAdminRights },
+}));
 
 import { toAccessContext } from './toAccessContext';
 
@@ -14,6 +22,8 @@ describe('toAccessContext - organizationId normalization (#1109 production fix s
   beforeEach(() => {
     mockGetRequestEntitlements.mockReset();
     mockGetRequestEntitlements.mockResolvedValue([]);
+    mockFindIdsWithAdminRights.mockReset();
+    mockFindIdsWithAdminRights.mockResolvedValue([]);
   });
 
   it('coerces an ObjectId organizationId to its hex string (the real, reachable bug shape)', async () => {
