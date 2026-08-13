@@ -3217,7 +3217,6 @@ export class ChatCompletionProcess {
           global: globalSystemFileIds,
           userEnabled: enabledSystemFileIds,
           project: projectFileIds,
-          session: sessionFabFileIds,
         }
       );
 

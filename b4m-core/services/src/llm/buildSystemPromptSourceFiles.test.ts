@@ -6,21 +6,18 @@ describe('buildSystemPromptSourceFiles', () => {
     const fabFileNameById = new Map([
       ['file-admin', 'admin-prompt.md'],
       ['file-user', 'user-prompt.md'],
-      ['file-session', 'session-prompt.md'],
     ]);
 
     const result = buildSystemPromptSourceFiles(fabFileNameById, {
       global: ['file-admin'],
       userEnabled: ['file-user'],
       project: ['file-project'],
-      session: ['file-session'],
     });
 
     expect(result).toEqual([
       { fileId: 'file-admin', fileName: 'admin-prompt.md', source: 'admin', enabled: true },
       { fileId: 'file-user', fileName: 'user-prompt.md', source: 'user', enabled: true },
       { fileId: 'file-project', fileName: undefined, source: 'project', enabled: true },
-      { fileId: 'file-session', fileName: 'session-prompt.md', source: 'session', enabled: true },
     ]);
   });
 
@@ -29,13 +26,12 @@ describe('buildSystemPromptSourceFiles', () => {
       global: ['file-1'],
       userEnabled: [],
       project: [],
-      session: [],
     });
     expect(result[0]).not.toHaveProperty('content');
   });
 
   it('returns an empty array when every bucket is empty', () => {
-    const result = buildSystemPromptSourceFiles(new Map(), { global: [], userEnabled: [], project: [], session: [] });
+    const result = buildSystemPromptSourceFiles(new Map(), { global: [], userEnabled: [], project: [] });
     expect(result).toEqual([]);
   });
 
@@ -43,9 +39,17 @@ describe('buildSystemPromptSourceFiles', () => {
     const result = buildSystemPromptSourceFiles(new Map(), {
       global: [],
       userEnabled: [],
-      project: [],
-      session: ['deleted-file-id'],
+      project: ['deleted-file-id'],
     });
-    expect(result).toEqual([{ fileId: 'deleted-file-id', fileName: undefined, source: 'session', enabled: true }]);
+    expect(result).toEqual([{ fileId: 'deleted-file-id', fileName: undefined, source: 'project', enabled: true }]);
+  });
+
+  it('does not include a session bucket - session-scoped file ids are workbench attachments, not system prompts', () => {
+    const result = buildSystemPromptSourceFiles(new Map(), {
+      global: [],
+      userEnabled: [],
+      project: [],
+    });
+    expect(result.every(entry => entry.source !== ('session' as never))).toBe(true);
   });
 });
