@@ -53,11 +53,16 @@ const URL_MAX_RESPONSE_BYTES = 50 * 1024 * 1024;
  * also matched a query string, so `?doc=report.pdf` on an HTML page was fetched as a PDF.
  */
 function isPdfUrl(url: string): boolean {
-  try {
-    return new URL(url).pathname.toLowerCase().endsWith('.pdf');
-  } catch {
-    return url.split('.')?.pop()?.toLowerCase().startsWith('pdf') ?? false;
-  }
+  // Deliberately NO try/catch. An unparseable URL cannot reach here - `fetchAndParseURL` only calls
+  // this after `validateUrlForFetch(currentUrl)` accepted the address, and anything that parses for
+  // the guard parses for `new URL` here. If that ever stops being true, letting the throw propagate
+  // is the behaviour we want: `fetchAndParseURL`'s outer catch records `failedUrl` and rethrows, so it
+  // surfaces as an ordinary fetch failure instead of being silently classified as not-a-PDF.
+  //
+  // The tempting fallback - split on '.' and test the last segment - is exactly the behaviour this
+  // function replaced, so keeping it as an unreachable safety net would quietly reintroduce the
+  // `?doc=report.pdf` mis-parse in the one branch nobody ever reads.
+  return new URL(url).pathname.toLowerCase().endsWith('.pdf');
 }
 
 /** Last path segment, used only as a display-name fallback when a page has no `<title>`. */
