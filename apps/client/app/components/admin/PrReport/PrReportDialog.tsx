@@ -106,6 +106,12 @@ export function PrReportDialog({ open, onClose }: PrReportDialogProps) {
 
   const onTextChange = (next: string) => {
     setText(next);
+    // While a delivery is unconfirmed the gate stays shut: only confirmResendAfterUnknown
+    // (a deliberate acknowledgement) may leave 'deliveryUnknown', and it mints its own
+    // key. Re-arming here on a keystroke - or rotating the key - would let an edit silently
+    // bypass the "check the channel" warning AND discard the key the server dedupe uses to
+    // absorb an accidental identical retry. So leave text editable but state untouched.
+    if (sendState === 'deliveryUnknown') return;
     // Edited text is a DIFFERENT digest, so it must not be absorbed as a duplicate of
     // the previous one. Re-keying on edit is what keeps the dedupe scoped to genuine
     // retries (a double-click, which does not change the text).
@@ -151,9 +157,16 @@ export function PrReportDialog({ open, onClose }: PrReportDialogProps) {
   const sendDisabled = !text.trim() || sendState === 'sending' || finished || unknownDelivery;
 
   return (
-    <Modal open={open} onClose={onClose}>
-      <ModalDialog sx={{ width: 'min(860px, 96vw)', maxHeight: '92vh', overflow: 'auto' }}>
-        <DialogTitle>PR Status Digest</DialogTitle>
+    // A send in flight must not be abandoned by Escape/backdrop: the mutation continuation
+    // would be lost on unmount, and if the post actually landed the next open mints a fresh
+    // key and re-enables Send - the double-post this dialog is meant to prevent. An
+    // undefined onClose makes Joy's Modal non-dismissable for the duration of the send.
+    <Modal open={open} onClose={sendState === 'sending' ? undefined : onClose}>
+      <ModalDialog
+        aria-labelledby="pr-report-dialog-title"
+        sx={{ width: 'min(860px, 96vw)', maxHeight: '92vh', overflow: 'auto' }}
+      >
+        <DialogTitle id="pr-report-dialog-title">PR Status Digest</DialogTitle>
         <DialogContent>
           <Typography level="body-sm" sx={{ mb: 1 }}>
             Review and edit the draft below, then send it. Nothing is posted until you press Send.
@@ -203,7 +216,7 @@ export function PrReportDialog({ open, onClose }: PrReportDialogProps) {
                 </Alert>
               )}
 
-              <Tabs defaultValue="edit" size="sm">
+              <Tabs defaultValue="edit" size="sm" aria-label="PR report edit and preview">
                 <TabList>
                   <Tab value="edit">Edit</Tab>
                   <Tab value="preview">Preview mentions</Tab>
@@ -248,7 +261,14 @@ export function PrReportDialog({ open, onClose }: PrReportDialogProps) {
                   The post was sent but Slack did not confirm it, so it may or may not have landed. Open the channel and
                   look. Only re-send if the digest is genuinely absent.
                 </Typography>
-                <Button size="sm" variant="outlined" color="warning" sx={{ mt: 1 }} onClick={confirmResendAfterUnknown}>
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  color="warning"
+                  sx={{ mt: 1 }}
+                  onClick={confirmResendAfterUnknown}
+                  data-testid="pr-report-confirm-resend-btn"
+                >
                   I checked the channel - allow re-send
                 </Button>
               </Box>
@@ -275,13 +295,33 @@ export function PrReportDialog({ open, onClose }: PrReportDialogProps) {
           <Divider sx={{ my: 1.5 }} />
 
           <Stack direction="row" spacing={1} justifyContent="flex-end">
-            <Button variant="plain" color="neutral" onClick={onClose}>
+            <Button
+              variant="plain"
+              color="neutral"
+              onClick={onClose}
+              disabled={sendState === 'sending'}
+              data-testid="pr-report-close-btn"
+            >
               Close
             </Button>
-            <Button variant="outlined" onClick={runGenerate} loading={generate.isPending}>
+            {/* Regenerate is locked while a send is in flight (its onSuccess would race the
+                send continuation) and while a delivery is unconfirmed (it would reset to
+                'idle' with a fresh key, bypassing the check-the-channel gate). */}
+            <Button
+              variant="outlined"
+              onClick={runGenerate}
+              loading={generate.isPending}
+              disabled={generate.isPending || sendState === 'sending' || unknownDelivery}
+              data-testid="pr-report-regenerate-btn"
+            >
               Regenerate
             </Button>
-            <Button onClick={runSend} disabled={sendDisabled} loading={sendState === 'sending'}>
+            <Button
+              onClick={runSend}
+              disabled={sendDisabled}
+              loading={sendState === 'sending'}
+              data-testid="pr-report-send-btn"
+            >
               Send to Slack
             </Button>
           </Stack>
