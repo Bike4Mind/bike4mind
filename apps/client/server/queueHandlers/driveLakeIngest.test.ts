@@ -13,7 +13,9 @@ const h = vi.hoisted(() => ({
   updateHealth: vi.fn(),
   lakeFindById: vi.fn(),
   userFindById: vi.fn(),
-  findByDriveFileIdsInDataLake: vi.fn(),
+  findByDriveConnectionIdInDataLake: vi.fn(),
+  removeFileFromLake: vi.fn(),
+  recomputeLakeStats: vi.fn(),
   batchCreate: vi.fn(),
   batchFindById: vi.fn(),
   appendFiles: vi.fn(),
@@ -37,7 +39,7 @@ vi.mock('@bike4mind/database', () => ({
     appendFiles: h.appendFiles,
     incrementCounter: h.incrementCounter,
   },
-  fabFileRepository: { findByDriveFileIdsInDataLake: h.findByDriveFileIdsInDataLake },
+  fabFileRepository: { findByDriveConnectionIdInDataLake: h.findByDriveConnectionIdInDataLake },
   orgGoogleDriveConnectionRepository: {
     findById: h.connFindById,
     claimForSync: h.claimForSync,
@@ -46,7 +48,11 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 vi.mock('@bike4mind/services', () => ({
-  dataLakeService: { createDataLakeFallbackTagger: () => async (tags: unknown) => tags },
+  dataLakeService: {
+    createDataLakeFallbackTagger: () => async (tags: unknown) => tags,
+    removeFileFromLake: h.removeFileFromLake,
+    recomputeLakeStats: h.recomputeLakeStats,
+  },
 }));
 vi.mock('@server/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
 vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
@@ -88,9 +94,16 @@ describe('driveLakeIngest consumer', () => {
     h.claimForSync.mockResolvedValue(true);
     h.releaseSyncClaim.mockResolvedValue(null);
     h.updateHealth.mockResolvedValue(null);
-    h.lakeFindById.mockResolvedValue({ id: 'lake1', datalakeTag: 'lake-tag' });
+    h.lakeFindById.mockResolvedValue({
+      id: 'lake1',
+      datalakeTag: 'lake-tag',
+      fileTagPrefix: 'demo:',
+      createdByUserId: 'creator1',
+    });
     h.userFindById.mockResolvedValue({ id: 'user1' });
-    h.findByDriveFileIdsInDataLake.mockResolvedValue([]);
+    h.findByDriveConnectionIdInDataLake.mockResolvedValue([]);
+    h.removeFileFromLake.mockResolvedValue(undefined);
+    h.recomputeLakeStats.mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 });
     h.batchCreate.mockResolvedValue({ id: 'batch1' });
     h.batchFindById.mockResolvedValue({
       id: 'batch1',
@@ -185,12 +198,14 @@ describe('driveLakeIngest consumer', () => {
     expect(h.upload).toHaveBeenCalledTimes(1);
   });
 
-  it('excludes already-ingested Drive files via the dedup lookup', async () => {
+  it('ingests only the genuinely-new file, skipping one already in the lake (unchanged)', async () => {
     h.walkFolder.mockResolvedValue([
       { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' },
       { id: 'd2', name: 'b.txt', mimeType: 'text/plain', relativePath: 'b.txt' },
     ]);
-    h.findByDriveFileIdsInDataLake.mockResolvedValue([{ driveFileId: 'd1' }]);
+    // d1 is already ingested with no md5/modifiedTime; the walked d1 also carries none, so it is
+    // UNCHANGED (not an update) and must be skipped. d2 is new.
+    h.findByDriveConnectionIdInDataLake.mockResolvedValue([{ id: 'ff-d1', driveFileId: 'd1' }]);
     h.fetchDriveFileContent.mockResolvedValue(okBytes());
 
     await run();
@@ -198,14 +213,77 @@ describe('driveLakeIngest consumer', () => {
     expect(h.batchCreate).toHaveBeenCalledWith(expect.objectContaining({ totalFiles: 1 }));
     expect(h.createFabFile).toHaveBeenCalledTimes(1);
     expect(h.createFabFile).toHaveBeenCalledWith(expect.objectContaining({ driveFileId: 'd2' }), expect.anything());
+    expect(h.removeFileFromLake).not.toHaveBeenCalled();
   });
 
-  it('creates no batch and releases the claim when nothing is new', async () => {
+  it('creates no batch and releases the claim when nothing has changed', async () => {
     h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
-    h.findByDriveFileIdsInDataLake.mockResolvedValue([{ driveFileId: 'd1' }]);
+    h.findByDriveConnectionIdInDataLake.mockResolvedValue([{ id: 'ff-d1', driveFileId: 'd1' }]);
 
     await run();
 
+    expect(h.batchCreate).not.toHaveBeenCalled();
+    expect(h.removeFileFromLake).not.toHaveBeenCalled();
+    expect(h.updateHealth).toHaveBeenCalledWith('conn1', expect.objectContaining({ status: 'connected' }));
+  });
+
+  it('re-ingests an EDITED file: pulls the stale copy from the lake, then recreates it fresh', async () => {
+    // Same driveFileId, but the Drive md5 moved -> the stored copy is stale.
+    h.walkFolder.mockResolvedValue([
+      { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt', md5Checksum: 'NEW' },
+    ]);
+    h.findByDriveConnectionIdInDataLake.mockResolvedValue([
+      { id: 'ff-old', driveFileId: 'd1', driveMd5Checksum: 'OLD' },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+    await run();
+
+    // Stale copy leaves the lake (membership pull) before the fresh ingest, and stats recompute once.
+    expect(h.removeFileFromLake).toHaveBeenCalledTimes(1);
+    expect(h.removeFileFromLake).toHaveBeenCalledWith(
+      expect.objectContaining({ isAdmin: true }),
+      expect.objectContaining({ id: 'lake1', datalakeTag: 'lake-tag' }),
+      'ff-old',
+      expect.anything()
+    );
+    expect(h.recomputeLakeStats).toHaveBeenCalledTimes(1);
+    expect(h.batchCreate).toHaveBeenCalledWith(expect.objectContaining({ totalFiles: 1 }));
+    expect(h.createFabFile).toHaveBeenCalledWith(
+      expect.objectContaining({ driveFileId: 'd1', driveMd5Checksum: 'NEW' }),
+      expect.anything()
+    );
+  });
+
+  it('removes a file from the lake when it is gone from the folder (no re-ingest)', async () => {
+    // d1 still present (unchanged); d2 vanished from the folder -> prune its lake membership.
+    h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+    h.findByDriveConnectionIdInDataLake.mockResolvedValue([
+      { id: 'ff-d1', driveFileId: 'd1' },
+      { id: 'ff-d2', driveFileId: 'd2' },
+    ]);
+
+    await run();
+
+    expect(h.removeFileFromLake).toHaveBeenCalledTimes(1);
+    expect(h.removeFileFromLake).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'ff-d2', expect.anything());
+    expect(h.recomputeLakeStats).toHaveBeenCalledTimes(1);
+    expect(h.batchCreate).not.toHaveBeenCalled();
+    expect(h.updateHealth).toHaveBeenCalledWith('conn1', expect.objectContaining({ status: 'connected' }));
+  });
+
+  it('refuses to prune the whole lake when the folder walk comes back empty (transient-glitch guard)', async () => {
+    // An empty walk while the lake still holds files is treated as a Drive hiccup, not a real
+    // empty-out: no removals, no batch, just a clean health update.
+    h.walkFolder.mockResolvedValue([]);
+    h.findByDriveConnectionIdInDataLake.mockResolvedValue([
+      { id: 'ff-d1', driveFileId: 'd1' },
+      { id: 'ff-d2', driveFileId: 'd2' },
+    ]);
+
+    await run();
+
+    expect(h.removeFileFromLake).not.toHaveBeenCalled();
     expect(h.batchCreate).not.toHaveBeenCalled();
     expect(h.updateHealth).toHaveBeenCalledWith('conn1', expect.objectContaining({ status: 'connected' }));
   });

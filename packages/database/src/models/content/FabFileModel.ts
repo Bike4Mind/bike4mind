@@ -1055,6 +1055,20 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return results;
   }
 
+  async findByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<IFabFileDocument[]> {
+    const docs = await this.fabFileModel.find({
+      driveConnectionId,
+      deletedAt: null,
+      archivedAt: null,
+      tags: { $elemMatch: { name: datalakeTag } },
+      // Exclude in-flight rows: a 'pending' file from a sync still mid-upload is not yet a
+      // durable member, so it must not be mistaken for a delete (absent from the fresh walk it
+      // has not finished ingesting) nor for a stale copy.
+      status: { $ne: 'pending' },
+    });
+    return docs.map(d => d.toJSON());
+  }
+
   // Data lake lifecycle. Membership is the two-signal rule in buildDataLakeMembershipFilter
   // (meta-tag OR a fileTagPrefix match on a file the lake's creator owns), shared with the
   // single-lake browse so a read and a whole-lake write never disagree about who is a member.

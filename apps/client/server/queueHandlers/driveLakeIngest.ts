@@ -24,10 +24,10 @@ import { z, ZodError } from 'zod';
 const Payload = z.object({ connectionId: z.string(), redriveCount: z.number().int().min(0).default(0) });
 
 // A claim loser re-enqueues itself (with a delay) so a GENUINE second sync - files added to the
-// folder while a long run is mid-loop - isn't silently dropped until some later sync (there is no
-// re-sync cron yet, issue E). Bounded so a permanently-losing message can't spin: past this many
-// redrives we give up and let the next real sync pick the files up. Delay x max stays comfortably
-// past the handler's 10-minute in-flight ceiling.
+// folder while a long run is mid-loop - isn't silently dropped until the next scheduled poll.
+// Bounded so a permanently-losing message can't spin: past this many redrives we give up and let
+// the next real sync pick the files up. Delay x max stays comfortably past the handler's 10-minute
+// in-flight ceiling.
 const MAX_INGEST_REDRIVES = 12;
 const INGEST_REDRIVE_DELAY_SECONDS = 90;
 
@@ -49,11 +49,34 @@ const MAX_INGEST_FILE_BYTES = 50 * 1024 * 1024;
 const MAX_INGEST_CANDIDATES = 1500;
 
 /**
- * Background ingest of an org Google Drive folder into a data lake (#1589). Walks the folder, then
- * fetches and uploads ONE file at a time - creating a lake-tagged FabFile and its batch-manifest
- * entry BEFORE the bytes land - and lets the existing S3 objectCreated -> chunk -> vectorize ->
- * finalize pipeline do the rest. Idempotent across re-runs: files already ingested (by driveFileId)
- * are skipped, so a redelivery is safe.
+ * Has a Drive file changed since it was ingested? `md5Checksum` is exact, but Google Editors files
+ * (Docs/Sheets/Slides) carry no md5, so fall back to `modifiedTime` for those. Conservative by
+ * design: when neither signal can be compared (a pre-provenance row, or a file Drive reports with
+ * neither field) it returns false, so a re-sync never churns a file it cannot PROVE is stale.
+ * modifiedTime uses strict-newer so a re-listed-but-unedited file (same timestamp) is unchanged.
+ */
+function hasDriveFileChanged(
+  prior: { driveMd5Checksum?: string; driveModifiedTime?: Date | string },
+  fresh: { md5Checksum?: string; modifiedTime?: string }
+): boolean {
+  if (fresh.md5Checksum && prior.driveMd5Checksum) {
+    return fresh.md5Checksum !== prior.driveMd5Checksum;
+  }
+  if (fresh.modifiedTime && prior.driveModifiedTime) {
+    return new Date(fresh.modifiedTime).getTime() > new Date(prior.driveModifiedTime).getTime();
+  }
+  return false;
+}
+
+/**
+ * Background reconcile of an org Google Drive folder against a data lake (#1589, #1591). Walks the
+ * folder, diffs it against the files this connection has already ingested, and applies the delta:
+ * ADD a new file, RE-INGEST an edited one (its stale copy leaves the lake first), and REMOVE from
+ * the lake one that is gone from the folder. Adds/re-ingests fetch and upload ONE file at a time -
+ * creating a lake-tagged FabFile and its batch-manifest entry BEFORE the bytes land - and let the
+ * existing S3 objectCreated -> chunk -> vectorize -> finalize pipeline do the rest. Both the manual
+ * Re-sync button and the scheduled poll cron (driveLakeResyncPoll) enqueue onto this one handler,
+ * so there is a single delta-aware apply path.
  *
  * Ordering is load-bearing. `storage.upload` fires `objectCreated` synchronously, which walks
  * objectCreated -> chunk -> vectorize; each stage advances batch progress by claiming its manifest
@@ -61,10 +84,10 @@ const MAX_INGEST_CANDIDATES = 1500;
  * vectorizedFiles never increments and the batch never crosses its finalize threshold. Hence the
  * per-file `appendFiles` AHEAD of `storage.upload`, not a single append after the loop.
  *
- * totalFiles is seeded with the candidate count; a skip (oversized / unsupported / transient fetch
- * error) is folded into `skippedFiles` as it happens, so `vectorized + failed + skipped` still
- * reaches totalFiles exactly (finalizeBatchIfComplete's gate) without the ingestable count being
- * known up front.
+ * totalFiles is seeded with the candidate count (adds + re-ingests); a skip (oversized / unsupported
+ * / transient fetch error) is folded into `skippedFiles` as it happens, so `vectorized + failed +
+ * skipped` still reaches totalFiles exactly (finalizeBatchIfComplete's gate) without the ingestable
+ * count being known up front. Removals happen outside the batch (immediate lake-membership pulls).
  *
  * KNOWN GAP (#1589 follow-up): a throw part-way through the loop is rethrown for SQS retry, and the
  * retry re-walks and re-creates FabFiles for files it had not uploaded yet (the dedup excludes
@@ -145,20 +168,74 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
     // 1) Walk the folder tree (one level per Drive call, recursed).
     const walked = await walkFolder(drive, connection.driveFolderId);
 
-    // 2) Dedup by the stable driveFileId - skip files already ingested into this lake (idempotent
-    //    re-runs). Re-ingesting an EDITED file is re-sync's job (issue E), not this full ingest.
+    // 2) Diff the walk against everything THIS connection has in the lake, keyed by the stable
+    //    driveFileId, and split into ADD (new), UPDATE (same id, moved md5/modifiedTime), and
+    //    REMOVE (in the lake, gone from the folder). The stored set is the connection's own files
+    //    so a re-sync never touches files added by other means.
     const datalakeTag = lake.datalakeTag;
-    const existing = await fabFileRepository.findByDriveFileIdsInDataLake(
-      walked.map(f => f.id),
-      datalakeTag
-    );
-    const alreadyIngested = new Set(existing.map(f => f.driveFileId));
-    const candidates = walked.filter(f => !alreadyIngested.has(f.id));
+    const existingDocs = await fabFileRepository.findByDriveConnectionIdInDataLake(connectionId, datalakeTag);
+    const existingByDriveId = new Map<string, (typeof existingDocs)[number]>();
+    for (const doc of existingDocs) {
+      if (doc.driveFileId) existingByDriveId.set(doc.driveFileId, doc);
+    }
+    const walkedIds = new Set(walked.map(f => f.id));
+
+    const pureAdds = walked.filter(f => !existingByDriveId.has(f.id));
+    const changed = walked.filter(f => {
+      const prior = existingByDriveId.get(f.id);
+      return prior != null && hasDriveFileChanged(prior, f);
+    });
+    let removed = existingDocs.filter(doc => doc.driveFileId != null && !walkedIds.has(doc.driveFileId));
+
+    // Transient-glitch guard: an EMPTY walk while the lake still holds this connection's files is
+    // far likelier a permission blip or a Drive hiccup than a real empty-out. walkFolder throws on a
+    // listing error (so an empty result is a genuine "no children", not a truncated one), but
+    // pruning an entire lake on one empty pass is too destructive to trust - refuse it. A real
+    // empty-out still reconciles once even one file remains to anchor the walk as trustworthy.
+    if (walked.length === 0 && existingDocs.length > 0) {
+      logger.warn('[driveLakeIngest] folder walk returned empty while lake holds files; skipping prune', {
+        connectionId,
+        existing: existingDocs.length,
+      });
+      removed = [];
+    }
+
+    // 3) Apply removals FIRST: the deletes, plus the stale copy of every edited file (re-added
+    //    below with fresh content). Pull lake membership through the shared door, then recompute the
+    //    lake's stats ONCE. A trusted system reconcile acts as admin (canManageLake) - the connection
+    //    was authorized by an org owner/manager at connect time (verifyOrgAccess) - and this only
+    //    UNPICKS lake membership: the FabFile stays in the owner's Files and its chunks are untouched.
+    const staleCopies = changed
+      .map(f => existingByDriveId.get(f.id))
+      .filter((doc): doc is (typeof existingDocs)[number] => doc != null);
+    const toRemove = [...removed, ...staleCopies];
+    if (toRemove.length > 0) {
+      const membershipActor = { userId: connection.connectedBy, isAdmin: true };
+      const membershipLake = {
+        id: lake.id,
+        datalakeTag: lake.datalakeTag,
+        fileTagPrefix: lake.fileTagPrefix,
+        createdByUserId: lake.createdByUserId,
+      };
+      for (const doc of toRemove) {
+        await dataLakeService.removeFileFromLake(membershipActor, membershipLake, doc.id, {
+          db: { fabFiles: fabFileRepository },
+        });
+      }
+      await dataLakeService.recomputeLakeStats(membershipLake, {
+        db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
+      });
+    }
+
+    // Adds and edited files both ingest fresh (an edited file's stale copy left the lake above).
+    const candidates = [...pureAdds, ...changed];
 
     if (candidates.length === 0) {
-      logger.info('[driveLakeIngest] nothing new to ingest', {
+      logger.info('[driveLakeIngest] reconciled; no files to ingest', {
         walked: walked.length,
-        alreadyIngested: alreadyIngested.size,
+        existing: existingDocs.length,
+        removed: removed.length,
+        updated: changed.length,
       });
       await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
         status: 'connected',
@@ -184,7 +261,7 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
       return;
     }
 
-    // 3) Create the batch. totalFiles is the candidate count; a per-file skip is folded into
+    // 4) Create the batch. totalFiles is the candidate count; a per-file skip is folded into
     //    skippedFiles as it happens (see step 4), so the finalize gate is still reached exactly.
     //    totalSizeBytes is best-effort - Google Editors files carry no size at list time.
     const batch = await dataLakeBatchRepository.create({
@@ -222,7 +299,7 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
       logger.info('[driveLakeIngest] skipping file', { driveFileId, reason, ...extra });
     };
 
-    // 4) One file at a time: size-gate -> fetch -> create FabFile -> append its manifest entry ->
+    // 5) One file at a time: size-gate -> fetch -> create FabFile -> append its manifest entry ->
     //    upload. Only one file's bytes are ever live, and the manifest entry precedes the upload so
     //    the objectCreated/chunk/vectorize claims the upload fires can find it (see header).
     for (const file of candidates) {
@@ -291,7 +368,9 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
       connectionId,
       batchId: batch.id,
       walked: walked.length,
-      alreadyIngested: alreadyIngested.size,
+      existing: existingDocs.length,
+      removed: removed.length,
+      updated: changed.length,
       uploaded,
       skipped,
     });
