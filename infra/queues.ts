@@ -12,7 +12,7 @@ import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
 import { mcpHandler } from './mcp';
-import { router, whatsNewDistributionId } from './router';
+import { router, whatsNewDistributionId, appUrlForLambdaEnv } from './router';
 
 // Data Lake Taxonomy Analysis Queue - declared before the chunk/vectorize queues below
 // because both of those Lambdas now need to link it too (finalizeBatchIfComplete, which they
@@ -1056,7 +1056,7 @@ const sreFixQueueSubscription = sreFixQueue.subscribe(
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
-      APP_URL: $dev ? 'http://localhost:3000' : router.url,
+      APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
     },
   },
   SINGLE_RECORD_BATCH
