@@ -97,6 +97,10 @@ export function PrReportDialog({ open, onClose }: PrReportDialogProps) {
   // twice to see it adds nothing.
   useEffect(() => {
     if (open && !report && !generate.isPending) runGenerate();
+    // Keyed on `open` alone, deliberately. The effect closes over
+    // runGenerate/report/generate.isPending, but listing them (what exhaustive-deps
+    // wants) re-runs it as they change and re-fires generation; the guard above is the
+    // correctness check, not the dep array. This must fire once per open transition.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
