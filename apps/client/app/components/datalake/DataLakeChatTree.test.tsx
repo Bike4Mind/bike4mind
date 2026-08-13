@@ -5,6 +5,13 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import type { IFabFileDocument } from '@bike4mind/common';
 import DataLakeChatTree from './DataLakeChatTree';
 
+// DataLakeChatTree's underlying DataLakeTreeView always calls this (cross-tree search, #1693);
+// no `source` is passed in these tests so the query stays disabled, but the hook itself still
+// needs a stub since these tests render without a QueryClientProvider.
+vi.mock('@client/app/hooks/data/dataLakes', () => ({
+  useGetDataLakeArticles: () => ({ data: undefined, isLoading: false }),
+}));
+
 const appTheme = extendTheme({ ...getThemeConfig() });
 
 const article = {
@@ -19,7 +26,7 @@ const baseProps = {
   articles: [article],
   breadcrumb: ['books'],
   onNavigate: vi.fn(),
-  selectedFileId: null,
+  selectedFileIds: new Set<string>(),
   isLoading: false,
   onAttachFile: vi.fn(),
   onViewFile: vi.fn(),

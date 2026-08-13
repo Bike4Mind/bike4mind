@@ -1205,15 +1205,33 @@ export async function processFabFilesServer(
     resizeImageForModel?: ResizeImageForModel;
   },
   progressCallback?: (progress: number, total: number) => Promise<void>
-): Promise<{ userMessages: IMessage[]; errorMessages: IExtendedMessage[] }> {
+): Promise<{
+  userMessages: IMessage[];
+  errorMessages: IExtendedMessage[];
+  deliveredFileIds: string[];
+  fullyDeliveredFileIds: string[];
+}> {
   if (!fabFiles || fabFiles.length === 0) {
-    return { userMessages: [], errorMessages: [] };
+    return { userMessages: [], errorMessages: [], deliveredFileIds: [], fullyDeliveredFileIds: [] };
   }
 
   const fileProcessingStartTime = Date.now();
   let systemContent = '';
   const userMessages: IMessage[] = [];
   const errorMessages: IExtendedMessage[] = [];
+  // Ids that actually contributed content below - NOT every id in `fabFiles`. A file can be
+  // silently skipped (audio, an unserveable/oversized/unsupported-backend image, an unsupported
+  // file type, a corrupted/404 read) with no content ever reaching a message. Callers that need
+  // to tell a caller-facing consumer "this file's content is already in the prompt" must use this
+  // set, not the input list (see #1163 - a caller claiming inclusion for a silently-skipped file
+  // asserts something false).
+  const deliveredFileIds = new Set<string>();
+  // Subset of deliveredFileIds whose ENTIRE content reached the prompt - excludes a cosine
+  // excerpt, a scan that never reached every chunk, or a raw-content read truncated to fit the
+  // token budget. A caller claiming "you have everything, no need to search further" for a file
+  // that is only in `deliveredFileIds` (delivered, but not fully) asserts something false (#1163
+  // review: partial delivery was being described with wording that implied completeness).
+  const fullyDeliveredFileIds = new Set<string>();
 
   // Collect non-system file contents to combine into a single context message
   const contextFiles: { fileName: string; content: string }[] = [];
@@ -1283,6 +1301,13 @@ export async function processFabFilesServer(
   const fileContentCache = new Map<string, string>();
 
   const processFileInParallel = async (file: IFabFileDocument): Promise<void> => {
+    // Set true only at an actual content-adding site below; read once at the end of the try
+    // block. Local per-invocation state, so concurrent files in the same batch never interfere.
+    let delivered = false;
+    // Set alongside `delivered` only when the WHOLE file (not an excerpt/truncated head) reached
+    // the prompt. Defaults to true at each image site (always delivered whole) and is narrowed to
+    // false explicitly on the two text paths that can partially deliver.
+    let fullyDelivered = false;
     try {
       // Audio (generated TTS / sound effects) is never LLM input: no model
       // accepts audio, and the non-image branch below would otherwise try to
@@ -1337,6 +1362,8 @@ export async function processFabFilesServer(
               type: 'text',
               text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}" — do not rename based on image content.`,
             });
+            delivered = true;
+            fullyDelivered = true; // images are always delivered whole
             break;
           }
 
@@ -1390,6 +1417,8 @@ export async function processFabFilesServer(
                 type: 'text',
                 text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}" — do not rename based on image content.`,
               });
+              delivered = true;
+              fullyDelivered = true; // images are always delivered whole
             } else if (modelInfo.id.startsWith('moonshot')) {
               // Bedrock-served Kimi speaks OpenAI on the Invoke path, so it takes
               // the base64 `image_url` block rather than the Anthropic `source`
@@ -1426,6 +1455,8 @@ export async function processFabFilesServer(
                 type: 'text',
                 text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}" — do not rename based on image content.`,
               });
+              delivered = true;
+              fullyDelivered = true; // images are always delivered whole
             } else {
               logger.warn(
                 `Vision support for the model ${modelInfo.id} is not implemented. Skipping image processing.`
@@ -1469,6 +1500,8 @@ export async function processFabFilesServer(
               type: 'text',
               text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}". Do not rename based on image content.`,
             });
+            delivered = true;
+            fullyDelivered = true; // images are always delivered whole
             break;
           }
 
@@ -1556,6 +1589,7 @@ export async function processFabFilesServer(
 
           if (truncatedResults.length > 0) {
             deliveredViaCosine = true;
+            delivered = true;
             // Results arrive in file order, so every chunk with none cut is the whole file and needs
             // no notice. Every chunk WITH a cut is still contiguous, and the excerpt wording ("parts
             // between them were not sent") would misdescribe it - that is a head slice reached by
@@ -1570,6 +1604,9 @@ export async function processFabFilesServer(
             // `usedUnranked` cannot claim the whole file on its own: the head is capped at the same
             // top-K, so it is only the whole file when the count agrees, which the comparison covers.
             const deliveredEveryChunk = !scanTruncated && totalChunks === truncatedResults.length;
+            // Every chunk AND none cut is the only case with no notice below - that is the actual
+            // "nothing missing" claim fullyDeliveredFileIds needs to make.
+            fullyDelivered = deliveredEveryChunk && !anyChunkCut;
             let notice = '';
             if (!deliveredEveryChunk) notice = excerptNotice(file.fileName);
             else if (anyChunkCut) notice = CONTENT_TRUNCATION_NOTICE;
@@ -1619,6 +1656,8 @@ export async function processFabFilesServer(
             logger.log(`[processFabFilesServer] Final max file size: ${finalMaxFileSize}`);
 
             sendStatusUpdate('Adding file content to prompt...');
+            // Captured before the truncation branch below mutates fabContent to the sliced head.
+            fullyDelivered = fabContent.length <= finalMaxFileSize;
             if (fabContent.length > finalMaxFileSize) {
               await sendStatusUpdate('File is too large, truncating...');
               const originalFileSize = fabContent.length;
@@ -1644,6 +1683,7 @@ export async function processFabFilesServer(
               errorMsg = null;
             }
 
+            delivered = true;
             if (file.system) {
               systemContent += fabContent;
             } else {
@@ -1679,6 +1719,8 @@ export async function processFabFilesServer(
           }
         }
       }
+      if (delivered) deliveredFileIds.add(file.id);
+      if (fullyDelivered) fullyDeliveredFileIds.add(file.id);
     } catch (error) {
       logger.updateMetadata({ fileId: file.id });
       logger.error(`🕐 [processFabFilesServer] Error processing file ${file.fileName}: ${error}`);
@@ -1738,7 +1780,12 @@ export async function processFabFilesServer(
   }
   const fileProcessingTime = Date.now() - fileProcessingStartTime;
   logger.info(`📁 File processing completed in ${fileProcessingTime}ms for ${fabFiles.length} files`);
-  return { userMessages, errorMessages };
+  return {
+    userMessages,
+    errorMessages,
+    deliveredFileIds: Array.from(deliveredFileIds),
+    fullyDeliveredFileIds: Array.from(fullyDeliveredFileIds),
+  };
 }
 
 /**
