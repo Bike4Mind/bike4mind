@@ -36,7 +36,15 @@ export const generateTools = (
     db,
     retrievalFilter,
     kbScope,
-  }: { db: ToolContext['db']; retrievalFilter?: ToolContext['retrievalFilter']; kbScope?: ToolContext['kbScope'] },
+    inlinedAttachmentIds,
+    fullyInlinedAttachmentIds,
+  }: {
+    db: ToolContext['db'];
+    retrievalFilter?: ToolContext['retrievalFilter'];
+    kbScope?: ToolContext['kbScope'];
+    inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
+    fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
+  },
   storage: BaseStorage,
   imageGenerateStorage: BaseStorage,
   statusUpdate: (q: Partial<IChatHistoryItemDocument>, status?: string) => Promise<void>,
@@ -76,6 +84,8 @@ export const generateTools = (
     entitlementKeys,
     retrievalFilter,
     kbScope,
+    inlinedAttachmentIds,
+    fullyInlinedAttachmentIds,
     codeMinifier,
     availableModels,
     onToolLlmUsage,

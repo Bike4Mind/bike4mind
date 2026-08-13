@@ -125,6 +125,95 @@ describe('search_knowledge_base keyword fallback retrieval exclusion', () => {
   });
 });
 
+/**
+ * attachmentInlineNotice (#1163): a still-chunking attachment must not read as inaccessible when
+ * its raw content is already inlined elsewhere in the prompt. Exercises the keyword-fallback path
+ * (the same one every other test in this file drives via bare makeContext()).
+ */
+describe('search_knowledge_base attachmentInlineNotice for inlined attachments (#1163)', () => {
+  it('zero hits + a FULLY inlined attachment: notes it may not be searchable yet but is already in the conversation', async () => {
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      inlinedAttachmentIds: ['f1'],
+      fullyInlinedAttachmentIds: ['f1'],
+    });
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [], total: 0 });
+
+    const out = await run(ctx);
+
+    // Hedged ("may") rather than asserted: deferral to retrieval is the exception, so most
+    // inlined attachments here are ordinary, fully-searchable files where a zero-hit result
+    // just means the query missed (#1163 review).
+    expect(out).toContain('may not be indexed for search yet');
+    expect(out).toContain('Their content was already included directly in the conversation above');
+    expect(out).not.toContain('PART of their content');
+  });
+
+  it('zero hits + a PARTIALLY inlined attachment: does not claim the whole document is already above', async () => {
+    // inlinedAttachmentIds without a matching fullyInlinedAttachmentIds entry: delivered as a
+    // cosine excerpt or a truncated head (#1163 review, bot round 3 nit).
+    const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: ['f1'] });
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [], total: 0 });
+
+    const out = await run(ctx);
+
+    expect(out).toContain('may not be indexed for search yet');
+    expect(out).toContain('PART of their content was already included directly in the conversation above');
+    expect(out).not.toContain('Their content was already included');
+  });
+
+  it('zero hits + no inlinedAttachmentIds: baseline message with no added suffix (regression)', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined });
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [], total: 0 });
+
+    const out = await run(ctx);
+
+    expect(out).toBe('No documents found matching your search query in your knowledge base.');
+  });
+
+  it('a hit that IS fully inlined: notes retrieve_knowledge_content is unnecessary for it', async () => {
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      inlinedAttachmentIds: ['m'],
+      fullyInlinedAttachmentIds: ['m'],
+    });
+
+    const out = await run(ctx);
+
+    expect(out).toContain('"MARK - retired.pdf" are attached to this conversation');
+    expect(out).toContain('do not need retrieve_knowledge_content');
+  });
+
+  it('a hit that is inlined but only PARTIALLY (excerpt/truncated head): does not claim retrieval is unneeded', async () => {
+    // inlinedAttachmentIds without a matching fullyInlinedAttachmentIds entry: delivered as a
+    // cosine excerpt or a truncated head, not the whole file (#1163 review).
+    const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: ['m'] });
+
+    const out = await run(ctx);
+
+    expect(out).toContain('"MARK - retired.pdf" are attached to this conversation');
+    expect(out).toContain('may still surface additional passages');
+    expect(out).not.toContain('do not need retrieve_knowledge_content');
+  });
+
+  it('a hit that is NOT inlined: no note is appended', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: ['not-a-match'] });
+
+    const out = await run(ctx);
+
+    expect(out).not.toContain('are attached to this conversation');
+  });
+
+  it('the empty-kbScope early return stays byte-identical even with inlinedAttachmentIds set', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, kbScope: { fileIds: [] }, inlinedAttachmentIds: ['f1'] });
+
+    const out = await run(ctx);
+
+    expect(out).toBe('No documents found matching your search query in your knowledge base.');
+    expect(ctx.db.fabfiles!.search).not.toHaveBeenCalled();
+  });
+});
+
 describe('search_knowledge_base semantic fallback logging', () => {
   // fabfiles + fabfilechunks must both be wired to reach resolveEmbeddingContext at all -
   // trySemanticKbSearch bails (silently, no log) before that if either is missing.
@@ -515,6 +604,32 @@ describe('search_knowledge_base scoped lake-prompt injection (#1108)', () => {
     // The passage content still follows the injected prompt.
     expect(out).toContain('pto accrues monthly');
     expect(out.indexOf('[Data Lake - Lake X]')).toBeLessThan(out.indexOf('pto accrues monthly'));
+  });
+
+  it('#1163: appends the inlined-attachment note on the SEMANTIC arm too, not just the keyword fallback', async () => {
+    // A lake-accessible user with a still-chunking attachment now un-short-circuits
+    // userHasAccessibleKnowledgeLake (ChatCompletionProcess.ts), so this arm - not just the
+    // keyword one - is exactly where such a user lands. Ground-truth review caught this arm
+    // returning early with no notice at all.
+    semanticDataLakeSearchMock.mockResolvedValue({ results: [lakeHit(['datalake:x'])], scan });
+    const out = await run(semCtx([makeLake()], { inlinedAttachmentIds: ['f1'] }));
+    expect(out).toContain('pto accrues monthly');
+    expect(out).toContain('"Handbook.pdf"');
+    expect(out).toContain('already included above');
+  });
+
+  it('#1163 (bot round 4 nit): names an inlined file once even when multiple ranked passages come from it', async () => {
+    // rankedResults is per-PASSAGE, so a top-K hit can carry several chunks from the same file -
+    // the notice must not repeat that file's name once per passage.
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [
+        lakeHit(['datalake:x']),
+        { ...lakeHit(['datalake:x']), chunkId: 'c2', chunkText: 'sick leave accrues separately' },
+      ],
+      scan,
+    });
+    const out = await run(semCtx([makeLake()], { inlinedAttachmentIds: ['f1'] }));
+    expect(out.split('"Handbook.pdf"').length - 1).toBe(1);
   });
 
   it('injects nothing when the grounded files carry no lake tag', async () => {

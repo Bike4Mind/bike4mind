@@ -410,6 +410,14 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   findByUserId(userId: string): Promise<IFabFileDocument[]>;
 
   /**
+   * Sum the `fileSize` of every non-deleted file a user owns, via an aggregate
+   * so no documents are hydrated. A missing or null `fileSize` counts as 0.
+   * @param userId - The ID of the user.
+   * @returns A promise that resolves to the total size in bytes.
+   */
+  sumFileSizeByUserId(userId: string): Promise<number>;
+
+  /**
    * Find a file by its ID and the user's ID.
    * @param id - The ID of the file.
    * @param userId - The ID of the user.
