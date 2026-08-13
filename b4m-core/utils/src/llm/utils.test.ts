@@ -1726,6 +1726,40 @@ describe('Context Management Tests', () => {
       });
     });
 
+    describe('priorToolNames', () => {
+      const makeToolCallItem = (n: number, names: string[]) =>
+        makeItem(n, { promptMeta: { functionCalls: names.map((name, i) => ({ id: `${n}-${i}`, name })) } });
+
+      it('collects tool names from promptMeta.functionCalls across the returned window', async () => {
+        // Item 4 is the current prompt (popped, per the newest-first/pop-current convention
+        // established above); history after pop = [1, 2, 3].
+        const items = [makeItem(4), makeToolCallItem(3, ['blog_draft']), makeToolCallItem(2, ['skill']), makeItem(1)];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(meta.priorToolNames).toEqual(['skill', 'blog_draft']);
+      });
+
+      it('returns an empty array when no turn recorded a function call', async () => {
+        const items = [makeItem(2), makeItem(1)];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(meta.priorToolNames).toEqual([]);
+      });
+
+      it('drops a call with no recorded name rather than pushing undefined', async () => {
+        const items = [makeItem(1, { promptMeta: { functionCalls: [{ id: 'x' }] } })];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(meta.priorToolNames).toEqual([]);
+      });
+    });
+
     // Priority 2 rebuilds tool_use/tool_result pairs from promptMeta.functionCalls when
     // structuredReplies is absent. It was unreachable for as long as the Mongoose subschema
     // dropped functionCalls[].id, so these pin the shape Anthropic requires.

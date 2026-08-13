@@ -1,18 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import type { IMessage } from '@bike4mind/common';
 import {
   BLOG_REQUEST_PATTERN,
   hasPriorToolUse,
   shouldOfferBlogTools,
   shouldOfferSkillTool,
 } from './autoAddedToolGating';
-
-const toolUse = (name: string): IMessage => ({
-  role: 'assistant',
-  content: [{ type: 'tool_use', id: 't1', name, input: {} }] as never,
-});
-const assistantText = (text: string): IMessage => ({ role: 'assistant', content: text });
-const userText = (text: string): IMessage => ({ role: 'user', content: text });
 
 describe('BLOG_REQUEST_PATTERN', () => {
   // Pinned verbatim: this is the one surface found to proactively send a message expecting the
@@ -35,30 +27,21 @@ describe('BLOG_REQUEST_PATTERN', () => {
 });
 
 describe('hasPriorToolUse', () => {
-  it('finds a tool_use block in an assistant message', () => {
-    expect(hasPriorToolUse([userText('hi'), toolUse('blog_draft')], ['blog_draft', 'blog_publish'])).toBe(true);
+  it('finds a matching name in the prior-tool-names list', () => {
+    expect(hasPriorToolUse(['blog_draft'], ['blog_draft', 'blog_publish'])).toBe(true);
   });
 
   it('does not match a tool name outside the given list', () => {
-    expect(hasPriorToolUse([toolUse('skill')], ['blog_draft', 'blog_publish', 'blog_edit'])).toBe(false);
+    expect(hasPriorToolUse(['skill'], ['blog_draft', 'blog_publish', 'blog_edit'])).toBe(false);
   });
 
-  it('does not match plain text mentioning the tool name', () => {
-    expect(hasPriorToolUse([assistantText('I could use blog_draft here')], ['blog_draft'])).toBe(false);
-  });
-
-  it('ignores a user-role message even with array content', () => {
-    const fakeToolUse: IMessage = { role: 'user', content: [{ type: 'tool_use', name: 'blog_draft' }] as never };
-    expect(hasPriorToolUse([fakeToolUse], ['blog_draft'])).toBe(false);
-  });
-
-  it('returns false for empty history', () => {
+  it('returns false for an empty prior-tool-names list', () => {
     expect(hasPriorToolUse([], ['blog_draft'])).toBe(false);
   });
 });
 
 describe('shouldOfferBlogTools', () => {
-  const base = { isAdmin: true, hasBlogIntegration: true, message: 'Hello', previousMessages: [] as IMessage[] };
+  const base = { isAdmin: true, hasBlogIntegration: true, message: 'Hello', priorToolNames: [] as string[] };
 
   it('offers nothing for a non-admin, even with blog intent', () => {
     expect(shouldOfferBlogTools({ ...base, isAdmin: false, message: 'blog this conversation' })).toEqual({
@@ -94,11 +77,11 @@ describe('shouldOfferBlogTools', () => {
 
   // The multi-turn continuation rescue: a follow-up with no blog keyword still gets the tools
   // when an earlier turn already used one, so a "write a blog post" -> "now publish it" workflow
-  // does not silently lose blog_publish mid-conversation.
+  // does not silently lose blog_publish mid-conversation. priorToolNames is read straight off
+  // promptMeta.functionCalls (see fetchAndProcessPreviousMessages) - not derived from message
+  // content, which is why this test passes a plain name list rather than a fake IMessage shape.
   it('offers all three on a follow-up turn that used blog_draft earlier, even with no blog keyword', () => {
-    expect(
-      shouldOfferBlogTools({ ...base, message: 'now publish it', previousMessages: [toolUse('blog_draft')] })
-    ).toEqual({
+    expect(shouldOfferBlogTools({ ...base, message: 'now publish it', priorToolNames: ['blog_draft'] })).toEqual({
       draft: true,
       publish: true,
       edit: true,
@@ -111,7 +94,7 @@ describe('shouldOfferSkillTool', () => {
     hasSkillRepository: true,
     invocableSkillCount: 0,
     message: 'Hello',
-    previousMessages: [] as IMessage[],
+    priorToolNames: [] as string[],
   };
 
   it('never offers it when the host has no skill repository, whatever else is true', () => {
@@ -137,8 +120,8 @@ describe('shouldOfferSkillTool', () => {
     expect(shouldOfferSkillTool({ ...base, message: '/Summarize the thread' })).toBe(true);
   });
 
-  it('rescues an empty catalog via a prior skill tool_use this conversation', () => {
-    expect(shouldOfferSkillTool({ ...base, message: 'and now?', previousMessages: [toolUse('skill')] })).toBe(true);
+  it('rescues an empty catalog via a prior skill invocation this conversation', () => {
+    expect(shouldOfferSkillTool({ ...base, message: 'and now?', priorToolNames: ['skill'] })).toBe(true);
   });
 
   it('empty message does not throw', () => {

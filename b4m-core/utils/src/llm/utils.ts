@@ -516,6 +516,16 @@ export async function fetchAndProcessPreviousMessages(
       excludedOlderQuestCount?: number;
       /** Recently generated images (bare storage keys + originating prompt), newest first. */
       recentGeneratedImages?: { key: string; prompt: string }[];
+      /**
+       * Names of tools actually invoked across the returned window, read straight off each
+       * turn's `promptMeta.functionCalls` rather than the reconstructed IMessage history: neither
+       * of `convertedMessages`' two tool_use-replay paths fires in production today (Priority 1
+       * needs `structuredReplies`, which nothing writes; Priority 2 needs a recorded
+       * `returnValue`, which nothing writes either - see replayableToolCalls), so a caller that
+       * scanned `convertedMessages` for a prior tool call would never find one. This reads the
+       * raw field instead, at no extra DB cost since chatHistoryItems is already in hand.
+       */
+      priorToolNames?: string[];
     },
   ]
 > {
@@ -680,6 +690,12 @@ export async function fetchAndProcessPreviousMessages(
     }
   }
 
+  // Real tool-usage signal for this window - see the field's own doc comment above for why the
+  // reconstructed message history cannot answer "was this tool used earlier in the conversation".
+  const priorToolNames = chatHistoryItems
+    .flatMap(item => (item.promptMeta?.functionCalls ?? []).map(fc => fc.name))
+    .filter((name): name is string => Boolean(name));
+
   return [
     convertedMessages,
     chatHistoryItems.length,
@@ -690,6 +706,7 @@ export async function fetchAndProcessPreviousMessages(
       oldestIncludedQuestId,
       excludedOlderQuestCount,
       recentGeneratedImages,
+      priorToolNames,
     },
   ];
 }

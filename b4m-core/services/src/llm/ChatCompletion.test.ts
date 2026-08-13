@@ -977,6 +977,34 @@ describe('ChatCompletionProcess', () => {
         }
       });
 
+      // Wiring test: proves process() actually reads cacheInfo.priorToolNames off
+      // fetchAndProcessPreviousMessages and threads it into the gate, rather than the pure-function
+      // coverage in autoAddedToolGating.test.ts alone.
+      it('offers blog_publish/edit on a follow-up turn that used blog_draft earlier, with no blog keyword', async () => {
+        (service as any).user.isAdmin = true;
+        (service as any).user.blogIntegration = true;
+        try {
+          mockTextModel();
+          mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, { priorToolNames: ['blog_draft'] }]);
+          const body = {
+            ...startQuestParams,
+            message: 'now publish it',
+            tools: [],
+            projectId: undefined,
+            organizationId: undefined,
+          };
+
+          await service.process({ body, logger: mockLogger });
+          const tools = vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools;
+          const names = tools?.map((t: { toolSchema: { name: string } }) => t.toolSchema.name) ?? [];
+          expect(names).toContain('blog_publish');
+          expect(names).toContain('blog_edit');
+        } finally {
+          delete (service as any).user.isAdmin;
+          delete (service as any).user.blogIntegration;
+        }
+      });
+
       it('suppresses auto-added tools under a mode even with blog intent in the message', async () => {
         (service as any).user.isAdmin = true;
         try {

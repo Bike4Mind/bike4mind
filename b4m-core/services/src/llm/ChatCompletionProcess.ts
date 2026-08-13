@@ -2055,7 +2055,14 @@ export class ChatCompletionProcess {
       // where a lean one did not. The tokenizer isn't run here (that would be N async
       // calls over the whole history on every turn); char/4 estimates keep boundary
       // selection synchronous and are only a conservative floor. enabledTools here
-      // undercounts MCP-expanded tools, which the overflow-guard safety net catches.
+      // undercounts MCP-expanded tools, which the overflow-guard safety net catches - and, as of
+      // the conditional blog/skill auto-add below (which needs the history this budget sizes, so
+      // it cannot run any earlier), also undercounts by up to 4 tools on a turn that ends up
+      // getting one or more of them. Same backstop: the final tokenizer-accurate safety pass in
+      // buildAndSortMessages sheds history until the real payload fits regardless of how this
+      // estimate was sized, so the cost of the undercount is one extra shed round at most, never
+      // an overflow - the cost of under-reserving here is a slower approach to the right size
+      // (more shed rounds), never a payload that ships oversized.
       const estTokens = (text: string | undefined | null): number => (text ? Math.ceil(text.length / 4) : 0);
       const nonHistoryOverhead =
         SYSTEM_PROMPT_RESERVE_TOKENS +
@@ -2071,6 +2078,10 @@ export class ChatCompletionProcess {
       const [previousMessages, totalMessageCount, cacheInfo] = previousMessagesResult;
       const oldestIncludedQuestId = cacheInfo.oldestIncludedQuestId ?? null;
       const verbatimExcludedCount = cacheInfo.excludedOlderQuestCount ?? 0;
+      // Real tool-usage signal for this window - see fetchAndProcessPreviousMessages's own doc
+      // comment on this field for why `previousMessages` itself cannot answer "was this tool used
+      // earlier in the conversation" (neither of its tool_use-replay paths fires in production).
+      const priorToolNames = cacheInfo.priorToolNames ?? [];
 
       // blog_publish/blog_edit/blog_draft and `skill` are auto-added HERE rather than at the
       // request-parse site (initializeProcessContext) because each needs a signal that isn't
@@ -2085,7 +2096,7 @@ export class ChatCompletionProcess {
           isAdmin: this.user.isAdmin,
           hasBlogIntegration: Boolean(this.user.blogIntegration),
           message,
-          previousMessages,
+          priorToolNames,
         });
         if (blogGates.publish && !enabledTools.includes('blog_publish')) {
           enabledTools.push('blog_publish');
@@ -2107,7 +2118,7 @@ export class ChatCompletionProcess {
             hasSkillRepository: Boolean(this.db.skills),
             invocableSkillCount: (quest as { _skillCatalog?: unknown[] })._skillCatalog?.length ?? 0,
             message,
-            previousMessages,
+            priorToolNames,
           })
         ) {
           enabledTools.push('skill');
