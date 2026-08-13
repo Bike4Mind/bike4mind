@@ -86,6 +86,7 @@ import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
 import { settleToolCallCredits } from './settleToolCredits';
 import { toolsUsedToFunctionCalls } from './toolsUsedToFunctionCalls';
+import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { LATTICE_TOOL_NAMES } from './tools';
 import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
 import {
@@ -3125,6 +3126,18 @@ export class ChatCompletionProcess {
         : [];
       quest.promptMeta!.context!.projectSystemFileIds = projectFileIds;
 
+      // File-level breakdown of every system-prompt source, by bucket - see
+      // buildSystemPromptSourceFiles for why fileName is absent for project-sourced entries.
+      quest.promptMeta!.context!.systemPromptSources = buildSystemPromptSourceFiles(
+        new Map(convertedFabFiles.map(file => [file.id, file.fileName])),
+        {
+          global: globalSystemFileIds,
+          userEnabled: enabledSystemFileIds,
+          project: projectFileIds,
+          session: sessionFabFileIds,
+        }
+      );
+
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] === CONTEXT RETRIEVAL PHASE COMPLETED in ${
           Date.now() - processStartTime
@@ -5496,7 +5509,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     urlMessages: IMessage[];
     remainingUserPrompt: string;
     fabMessages: IMessage[];
-    convertedFabFiles: Array<{ fileName: string; mimeType: string; fileSize?: number }>;
+    convertedFabFiles: Array<{ id: string; fileName: string; mimeType: string; fileSize?: number }>;
     globalSystemFileIds: string[];
     enabledSystemFileIds: string[];
     allFileIdsBeforeDedup: string[];
@@ -5571,7 +5584,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     const dedupedFileIds = Array.from(new Set(allFileIdsBeforeDedup));
 
     let fabMessages: IMessage[] = [];
-    let convertedFabFiles: Array<{ fileName: string; mimeType: string; fileSize?: number }> = [];
+    let convertedFabFiles: Array<{ id: string; fileName: string; mimeType: string; fileSize?: number }> = [];
     let fabResultPromise: Promise<Awaited<ReturnType<typeof this.fabFilesToMessages>> | undefined> =
       Promise.resolve(undefined);
 
