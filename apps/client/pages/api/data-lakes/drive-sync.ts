@@ -1,10 +1,16 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
-import { dataLakeRepository, orgGoogleDriveConnectionRepository } from '@bike4mind/database';
-import { dataLakeService } from '@bike4mind/services';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
-import { isValidDriveFolderId } from '@server/integrations/google/drive/driveClient';
-import { BadRequestError } from '@server/utils/errors';
+import { dataLakeRepository, orgGoogleDriveConnectionRepository, User } from '@bike4mind/database';
+import { verifyOrgAccess } from '@server/utils/orgAccess';
+import {
+  isValidDriveFolderId,
+  createDriveClient,
+  getFolderAccess,
+} from '@server/integrations/google/drive/driveClient';
+import { getValidUserDriveAccessToken } from '@server/integrations/google/drive/common';
+import { decryptToken } from '@server/security/tokenEncryption';
+import { isEncrypted } from '@server/security/secretEncryption';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { sendToQueue } from '@server/utils/sqs';
 import { Request } from 'express';
 import { Resource } from 'sst';
@@ -17,12 +23,43 @@ const Body = z.object({
 });
 
 /**
+ * Capture the connecting user's Drive refresh token as the connection's OWN durable credential.
+ *
+ * The token is copied verbatim from `User.googleDrive.refreshToken` (already encrypted at rest with
+ * the same key/scheme), so ingest survives the user later disconnecting their personal Drive or
+ * leaving the org - the connection no longer depends on `User.googleDrive` (see
+ * getValidConnectionDriveAccessToken). Fails fast if the credential is missing, not encrypted, or
+ * unreadable, so we never persist a connection that cannot actually sync. This is also the isEncrypted
+ * guard the model relies on (crypto is not reachable from packages/database).
+ */
+async function captureOrgCredential(userId: string): Promise<string> {
+  const user = await User.findById(userId, 'googleDrive');
+  const encryptedRefresh = user?.googleDrive?.refreshToken;
+  if (!encryptedRefresh) {
+    throw new BadRequestError(
+      'Connect your Google Drive before connecting a folder (reconnect to grant offline access).'
+    );
+  }
+  if (!isEncrypted(encryptedRefresh)) {
+    throw new BadRequestError(
+      'Your Google Drive credential is not stored securely - reconnect Google Drive and try again.'
+    );
+  }
+  try {
+    if (!decryptToken(encryptedRefresh)) throw new Error('empty credential');
+  } catch {
+    throw new BadRequestError('Your Google Drive credential is unreadable - reconnect Google Drive and try again.');
+  }
+  return encryptedRefresh;
+}
+
+/**
  * Connect a Google Drive folder to a data lake and enqueue a background ingest (#1589).
  *
- * INTERIM: this also creates the OrgGoogleDriveConnection binding. The full org-owned connect flow
- * (OAuth token persistence, folder picker, verifyOrgAccess owner/manager gate) is issue D; until
- * then the ingest job uses the connecting user's own Drive credential (see
- * getValidConnectionDriveAccessToken). Enqueues by connectionId and returns 202.
+ * Creates (or refreshes) the OrgGoogleDriveConnection binding with an org-owned credential and
+ * enqueues by connectionId (202). Binding an org-wide credential and globally claiming a Drive folder
+ * is an org-administrative act, so this gates on org owner/manager (verifyOrgAccess), NOT merely the
+ * lake's creator. The folder picker that supplies driveFolderId lands in the same PR's UI commit.
  */
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableDataLakes'))
@@ -32,14 +69,38 @@ const handler = baseApi()
       throw new BadRequestError('driveFolderId is not a valid Drive folder id');
     }
 
-    // Connecting a source into a lake is a WRITE - gate on write access (creator/admin), not read.
-    const lake = await dataLakeService.assertLakeWriteAccess(dataLakeId, await toAccessContext(req), {
-      db: { dataLakes: dataLakeRepository },
-    });
-
+    const lake = await dataLakeRepository.findById(dataLakeId);
+    if (!lake) {
+      throw new NotFoundError('Data lake not found');
+    }
     if (!lake.organizationId) {
-      // The connection model is org-scoped (organizationId required). Personal-lake support is a follow-up.
+      // The connection model is org-scoped (organizationId required); a fallback/personal lake has
+      // no org and so is excluded here. Personal-lake support is a follow-up.
       throw new BadRequestError('Google Drive ingest currently requires an organization-scoped data lake');
+    }
+
+    // Org owner/manager (or platform admin) only - not the lake creator (see the handler note).
+    await verifyOrgAccess(req.user, lake.organizationId);
+
+    const oauthRefreshToken = await captureOrgCredential(req.user.id);
+
+    // Verify the connecting user can actually READ the folder before claiming it. The claim is GLOBAL
+    // (one folder -> one lake, ever), so without this any org owner/manager could squat a folder id
+    // they don't own - ids appear in shared Drive URLs - and permanently lock out its real owner. Drive
+    // 404s a folder the caller can't see, so a successful read IS the ownership proof (uses the user's
+    // own credential, not the org copy).
+    const folderAccess = await getFolderAccess(
+      createDriveClient(await getValidUserDriveAccessToken(req.user.id)),
+      driveFolderId
+    );
+    if (!folderAccess.exists) {
+      throw new ForbiddenError('That Google Drive folder does not exist or you do not have access to it.');
+    }
+    if (!folderAccess.isFolder) {
+      throw new BadRequestError('That Drive item is not a folder.');
+    }
+    if (!folderAccess.canRead) {
+      throw new ForbiddenError('You do not have permission to read that Google Drive folder.');
     }
 
     // A Drive folder is claimable by at most one lake, and a lake is fed by at most one folder
@@ -51,7 +112,20 @@ const handler = baseApi()
       if (byFolder.targetDataLakeId !== dataLakeId) {
         return res.status(409).json({ error: 'This Drive folder is already connected to another data lake' });
       }
-      // Same folder + lake: reuse the connection and re-ingest (the handler dedups by driveFileId).
+      // Same folder + lake: refresh the stored credential (a reconnect is often to fix a broken one)
+      // and re-stamp connectedBy to this user, then re-ingest (the handler dedups by driveFileId). Set
+      // connectedBy so ingest runs as a still-present user even if the original connector was deleted.
+      const updated = await orgGoogleDriveConnectionRepository.updateCredential(
+        byFolder.id,
+        lake.organizationId,
+        oauthRefreshToken,
+        req.user.id
+      );
+      if (!updated) {
+        // Org-scoped update matched nothing: the folder's existing connection belongs to another org
+        // (findByDriveFolderId is global). Don't 202 a success that changed nothing.
+        return res.status(409).json({ error: 'This Drive folder is already connected to another data lake' });
+      }
       connectionId = byFolder.id;
     } else {
       try {
@@ -61,6 +135,7 @@ const handler = baseApi()
           driveFolderId,
           folderName,
           targetDataLakeId: dataLakeId,
+          oauthRefreshToken,
           connectedBy: req.user.id,
           enabled: true,
           status: 'connected',

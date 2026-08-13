@@ -23,7 +23,11 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   projectRepository: {},
   userRepository: {},
-  organizationRepository: { findMembershipOrgIds: mockFindMembershipOrgIds },
+  // toAccessContext resolves the membership set (#1674) and the org-admin set (#1668) here.
+  organizationRepository: {
+    findMembershipOrgIds: mockFindMembershipOrgIds,
+    findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
+  },
 }));
 vi.mock('@server/entitlements', () => ({ getRequestEntitlements: mockGetRequestEntitlements }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn() }) }));

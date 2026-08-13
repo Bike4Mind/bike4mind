@@ -41,6 +41,13 @@ export interface DataLakePrompt {
  * rendered by renderDataLakePromptSection at each retrieval-scoped injection site (forced
  * retrieval + the model-driven knowledge tools).
  *
+ * NOTE (#1668): the owner arm keys on `createdByUserId`, so a lake whose ownership was TRANSFERRED to
+ * a new user (an owner grant supersedes the creator for management, but createdByUserId is immutable)
+ * is not injection-trusted for that new owner unless the org arm covers it. Folding grants into this
+ * READ-time trust decision is #1673's job (read-time grant resolution, with its report-only cutover);
+ * wiring the grant repo through the ChatCompletion db here for that narrow edge is deliberately
+ * deferred. Org-scoped lakes - the productization case - are covered by the org arm regardless.
+ *
  * The lake side is normalized through normalizeId (which yields undefined for an absent value, so
  * it never becomes the string "undefined"). The schema stores this as a String today, but an
  * ObjectId- or populated-document org would fail the membership-set `includes` SILENTLY - denying

@@ -1,11 +1,20 @@
-import type { AccessContext, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
+import type {
+  AccessContext,
+  IDataLakeAccessGrantRepository,
+  IDataLakeDocument,
+  IDataLakeRepository,
+} from '@bike4mind/common';
 import { DATA_LAKES, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, normalizeId } from '@bike4mind/utils';
-import { canManageLake } from './manageRule';
+import { canManageLake, type LakeGrant } from './manageRule';
 
 interface AssertLakeAccessAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug'>;
+    // Optional: when wired, a transferred/delegated owner or curator reaches the lake through the
+    // single read gate too (canAccessLake delegates to the grant-aware canManageLake). Absent ->
+    // read access falls back to createdByUserId + org/tag/public, the pre-grant behavior.
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
   };
 }
 
@@ -35,9 +44,10 @@ export function canAccessLake(
     IDataLakeDocument,
     'createdByUserId' | 'organizationId' | 'requiredUserTag' | 'requiredEntitlement' | 'isPublic'
   >,
-  ctx: AccessContext
+  ctx: AccessContext,
+  grants: readonly LakeGrant[] = []
 ): boolean {
-  if (canManageLake(lake, ctx)) return true;
+  if (canManageLake(lake, ctx, grants)) return true;
 
   const normalizedTags = ctx.userTags.map(t => t.toLowerCase());
   const normalizedKeys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
@@ -152,7 +162,17 @@ export const assertLakeAccess = async (
     (await db.dataLakes.findById(lakeIdOrSlug).catch(() => null)) ??
     (await db.dataLakes.findBySlug(lakeIdOrSlug, ctx.organizationIds));
   if (lake) {
-    if (!canAccessLake(lake, ctx)) throw new NotFoundError('Data lake not found');
+    // A persisted lake may carry grants; a fallback lake never does. Fetch only when the repo is
+    // wired, so callers that have not threaded it keep the createdByUserId + org/tag/public behavior.
+    const grants: LakeGrant[] =
+      db.dataLakeAccessGrants && !isFallbackLake(lake)
+        ? (await db.dataLakeAccessGrants.listByLake(lake.id, { activeAsOf: new Date() })).map(g => ({
+            principalType: g.principalType,
+            principalId: g.principalId,
+            role: g.role,
+          }))
+        : [];
+    if (!canAccessLake(lake, ctx, grants)) throw new NotFoundError('Data lake not found');
     return lake;
   }
   const fallback = resolveFallbackLake(lakeIdOrSlug, ctx);

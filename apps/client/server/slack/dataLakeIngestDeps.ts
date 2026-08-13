@@ -1,6 +1,7 @@
 import {
   adminSettingsRepository,
   dataLakeRepository,
+  dataLakeAccessGrantRepository,
   fabFileRepository,
   organizationRepository,
   withTransaction,
@@ -28,6 +29,7 @@ export function buildSlackLakeIngestDeps(args: {
 }): SlackLakeIngestDeps & { dataLakes: DataLakeCommandRepo } {
   return {
     dataLakes: dataLakeRepository,
+    dataLakeAccessGrants: dataLakeAccessGrantRepository,
     fabFiles: fabFileRepository,
     downloadFile: args.downloadFile,
     logger: args.logger,

@@ -1,6 +1,7 @@
 import {
   DATALAKE_TAG_PREFIX,
   DataLakeMembershipScope,
+  FabFileChunkPolicyConflict,
   IFabFileChunkDocument,
   IFabFileChunkRepository,
   IFabFileDocument,
@@ -891,6 +892,19 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result !== null;
   }
 
+  async setChunkPolicyConflict(
+    fabFileId: string,
+    chunkedPassageTokenTarget: number,
+    conflict: FabFileChunkPolicyConflict | null
+  ): Promise<void> {
+    // One atomic $set so the recorded target and the conflict decided from it can never disagree
+    // (#1662). `null` clears a now-resolved conflict; the target is always recorded.
+    await this.fabFileModel.updateOne(
+      { _id: fabFileId },
+      { $set: { chunkedPassageTokenTarget, chunkPolicyConflict: conflict } }
+    );
+  }
+
   async findByContentHashes(userId: string, hashes: string[]): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({
       userId,
@@ -1367,6 +1381,13 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
 
     isChunking: { type: Boolean, default: false },
     chunked: { type: Boolean, default: false },
+    // Chunk policy at file-owner altitude (#1662). chunkedPassageTokenTarget: the effective target
+    // (post model-window clamp) the current chunks were built with, so a later lake-membership
+    // change can check a lake's requirement without re-chunking. chunkPolicyConflict: the cross-lake
+    // conflict report (Mixed, like sourceMetadata; null when no conflict). A report, not a failure -
+    // the file stays chunked at its owner-altitude policy.
+    chunkedPassageTokenTarget: { type: Number, required: false },
+    chunkPolicyConflict: { type: Schema.Types.Mixed, required: false, default: null },
     isVectorizing: { type: Boolean, default: false },
     vectorized: { type: Boolean, default: false },
     embeddingModel: { type: String, required: false },

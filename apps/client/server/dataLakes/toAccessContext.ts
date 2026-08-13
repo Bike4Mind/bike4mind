@@ -20,8 +20,12 @@ import { getRequestEntitlements, type EntitlementRequest } from '@server/entitle
  * from multiple handlers within one request costs a single subscription query.
  *
  * Admins skip the resolution entirely: the gates (`canAccessLake`/`findAccessible`) grant an
- * admin immediately and never consult `entitlementKeys`, so the subscription read would be
- * pure overhead on every admin data-lake request.
+ * admin immediately and never consult `entitlementKeys` or `administeredOrgIds`, so the extra reads
+ * would be pure overhead on every admin data-lake request.
+ *
+ * `administeredOrgIds` is the caller's org-admin set (billing owner / manager / appointed admin),
+ * the input to the org-manageable rung in `canManageLake`: an org admin may manage any lake scoped
+ * to one of these orgs. Resolved once here (non-admins only) so every management gate agrees.
  */
 export async function toAccessContext(req: EntitlementRequest): Promise<AccessContext> {
   const user = req.user!;
@@ -36,5 +40,6 @@ export async function toAccessContext(req: EntitlementRequest): Promise<AccessCo
     // admins as well, unlike the entitlement gates below.
     organizationIds: await organizationRepository.findMembershipOrgIds(user.id),
     entitlementKeys: isAdmin ? [] : await getRequestEntitlements(req),
+    administeredOrgIds: isAdmin ? [] : await organizationRepository.findIdsWithAdminRights(user.id),
   };
 }

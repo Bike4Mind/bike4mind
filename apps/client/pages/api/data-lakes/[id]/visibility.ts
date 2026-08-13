@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository } from '@bike4mind/database';
+import { dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/database';
 import { Request } from 'express';
 import { z } from 'zod';
 import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
@@ -34,16 +34,24 @@ const handler = baseApi()
     const activeOrg = await resolveActiveOrg(req, organizationId);
     const ctx = await toAccessContext(req);
 
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, { db: { dataLakes: dataLakeRepository } });
+    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+    });
     dataLakeService.assertLakeWritable(lake);
 
     const result = await dataLakeService.setLakeVisibility(
       // The promotion TARGET stays the per-request validated active org - a write input,
-      // not an authorization read (#1674 keeps the write path as-is).
-      { userId: ctx.userId, isAdmin: ctx.isAdmin, organizationId: activeOrg },
+      // not an authorization read (#1674). administeredOrgIds rides the shared context
+      // (toAccessContext resolves it once) for the org-manageable manage rung (#1668).
+      {
+        userId: ctx.userId,
+        isAdmin: ctx.isAdmin,
+        organizationId: activeOrg,
+        administeredOrgIds: ctx.administeredOrgIds,
+      },
       lake.id,
       visibility,
-      { db: { dataLakes: dataLakeRepository } }
+      { db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository } }
     );
 
     return res.json(result);

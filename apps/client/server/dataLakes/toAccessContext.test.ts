@@ -2,13 +2,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { EntitlementRequest } from '@server/entitlements';
 
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
-const { mockGetRequestEntitlements, mockFindMembershipOrgIds } = vi.hoisted(() => ({
+const { mockGetRequestEntitlements, mockFindMembershipOrgIds, mockFindIdsWithAdminRights } = vi.hoisted(() => ({
   mockGetRequestEntitlements: vi.fn(),
   mockFindMembershipOrgIds: vi.fn(),
+  mockFindIdsWithAdminRights: vi.fn(),
 }));
 vi.mock('@server/entitlements', () => ({ getRequestEntitlements: mockGetRequestEntitlements }));
+// toAccessContext resolves the membership set (#1674) and the org-admin set (#1668), both of
+// which reach Mongoose - mock them so these tests don't hit a real DB.
 vi.mock('@bike4mind/database', () => ({
-  organizationRepository: { findMembershipOrgIds: mockFindMembershipOrgIds },
+  organizationRepository: {
+    findMembershipOrgIds: mockFindMembershipOrgIds,
+    findIdsWithAdminRights: mockFindIdsWithAdminRights,
+  },
 }));
 
 import { toAccessContext } from './toAccessContext';
@@ -21,6 +27,8 @@ describe('toAccessContext - organization membership (#1674)', () => {
     mockGetRequestEntitlements.mockResolvedValue([]);
     mockFindMembershipOrgIds.mockReset();
     mockFindMembershipOrgIds.mockResolvedValue([]);
+    mockFindIdsWithAdminRights.mockReset();
+    mockFindIdsWithAdminRights.mockResolvedValue([]);
   });
 
   it('builds organizationIds from findMembershipOrgIds(user.id), NOT from user.organizationId', async () => {

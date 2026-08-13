@@ -139,6 +139,16 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
   findMembershipOrgIds(userId: string): Promise<string[]>;
 
   /**
+   * IDs of every organization where the user holds admin RIGHTS: billing owner (`userId`), team
+   * manager (`managerId`), OR an appointed org admin (`adminUserIds`). Broader than
+   * `findIdsAdministeredBy` (which omits appointed admins) - deliberately a separate method so its
+   * existing consumers keep their narrower semantics. This is the org-admin set data-lake management
+   * consults: an org admin may manage any lake scoped to that org (see `canManageLake`). Returns a
+   * bare id list, suitable for an `$in` filter or membership test.
+   */
+  findIdsWithAdminRights(userId: string): Promise<string[]>;
+
+  /**
    * Find an organization by its ID and user ID
    * @param id - The ID of the organization
    * @param userId - The ID of the user

@@ -34,6 +34,15 @@ export interface AccessContext {
    */
   organizationIds: string[];
   /**
+   * Orgs the caller holds admin RIGHTS in (billing owner / manager / appointed admin), resolved
+   * app-side via `organizationRepository.findIdsWithAdminRights` and injected here (same pre-resolved
+   * seam as `entitlementKeys`; core never imports the Organization model). An org admin may MANAGE any
+   * lake scoped to one of these orgs - the org-manageable rung in `canManageLake`. Distinct from the
+   * singular `organizationId` above, which is the caller's selected-org display preference, never an
+   * authorization input on its own. Optional - absent -> no org-admin rung (back-compat).
+   */
+  administeredOrgIds?: string[];
+  /**
    * Caller's resolved entitlement keys (subscription- + tag-derived), resolved app-side
    * and injected here - core never imports the resolver or the Subscription model (same
    * seam as the retrieval path's `DataLakeAccessContext.entitlementKeys`). The management
@@ -93,6 +102,17 @@ export interface IDataLake {
    * LAKE_FIELD_VISIBILITY): a reader gets its EFFECT, never reads the setting.
    */
   groundingMode?: DataLakeGroundingMode;
+  /**
+   * The chunk passage target in TOKENS this lake REQUIRES of its member files (#1662). This is a
+   * CONSTRAINT, not an override: chunk policy is resolved at file-OWNER altitude (see the scoped
+   * `DefaultChunkSize` setting), because chunks are keyed per FabFile and shared by every consumer
+   * of that file. A file whose effective chunk target does not equal this - including a file tagged
+   * into two lakes whose requirements disagree - is REPORTED as a conflict (see IFabFile.
+   * chunkPolicyConflict), never silently re-chunked to satisfy one lake at another's or a
+   * non-member's expense. Absent/`null` = the lake imposes no chunk requirement (the common case);
+   * `null` is the explicit clear sentinel written by updateDataLake, undefined is never-set.
+   */
+  requiredPassageTokenTarget?: number | null;
   /** Tag prefix for all files in this data lake, must end with ":" (e.g. "acme:") */
   fileTagPrefix: string;
   /** Auto-computed meta-tag: "datalake:<slug>" */
@@ -150,6 +170,13 @@ export interface IDataLake {
    * fileCount/totalSizeBytes by recomputeLakeStats; never incremented in place.
    */
   totalChunkedChars?: number;
+  /**
+   * Lifetime embedding spend attributed to this lake, in integer micro-USD (1e-6 USD - a
+   * single chunk can cost well under a cent). Reserved atomically BEFORE each provider
+   * embedding call via tryAddEmbeddingSpend, so it can slightly overcount on a crash between
+   * reserve and call, never undercount. Enforces the dataLakeEmbeddingBudgetPerLakeUsd lever.
+   */
+  embeddingSpendMicroUsd?: number;
   /** Last time files were synced/uploaded to this data lake */
   lastSyncAt?: Date;
   /**
@@ -255,7 +282,7 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    */
   findAccessible(
     ctx: AccessContext,
-    opts?: { statuses?: DataLakeStatus[]; includePublic?: boolean }
+    opts?: { statuses?: DataLakeStatus[]; includePublic?: boolean; grantedLakeIds?: string[] }
   ): Promise<IDataLakeDocument[]>;
   /**
    * The discover/browse catalog: active, PUBLIC, gate-less lakes for the public-browse surface,
@@ -275,6 +302,25 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     id: string,
     stats: { fileCount: number; totalSizeBytes: number; totalChunkedChars: number }
   ): Promise<IDataLakeDocument | null>;
+  /**
+   * Atomically reserve `amountMicroUsd` of embedding spend against this lake, but only if
+   * the running total stays within `limitMicroUsd`. All-or-nothing; false means the caller
+   * must NOT make the provider call. Call BEFORE spending, so a crash can only overcount.
+   * `limitMicroUsd <= 0` always denies (0 is the operator's "stop" value).
+   */
+  tryAddEmbeddingSpend(id: string, amountMicroUsd: number, limitMicroUsd: number): Promise<boolean>;
+  /**
+   * Return a reservation that never became a provider call (the call failed). Exact-inverse of
+   * ONE tryAddEmbeddingSpend grant, guarded so it cannot drive the meter negative; false means
+   * the meter was already below the amount (e.g. an admin reset raced it) and nothing changed.
+   */
+  releaseEmbeddingSpend(id: string, amountMicroUsd: number): Promise<boolean>;
+  /**
+   * Admin remedy: zero this lake's lifetime spend meter. Exists because releases are best-effort
+   * (a hard crash between reserve and release still leaks) and the levers are global - without a
+   * per-lake reset the only way to unstick a poisoned lake is a hand-written Mongo update.
+   */
+  resetEmbeddingSpend(id: string): Promise<boolean>;
   /**
    * One-way draft -> active, the transition that makes a lake reachable from `findPublicLakes`
    * and the `findActive*` retrieval arms. Guarded inside the query, so a caller holding a stale
@@ -390,6 +436,10 @@ export interface IDataLakeBatch {
   totalSizeBytes: number;
   uploadedSizeBytes: number;
 
+  /** Embedding spend metered against this run, integer micro-USD - same reserve-first
+   * contract as IDataLake.embeddingSpendMicroUsd. Enforces the per-run budget lever. */
+  embeddingSpendMicroUsd?: number;
+
   // File manifest
   files: IDataLakeBatchFile[];
 
@@ -461,6 +511,11 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    */
   claimFileStatus(batchId: string, fabFileId: string, from: BatchFileStatus[], to: BatchFileStatus): Promise<boolean>;
   incrementCounter(batchId: string, field: BatchCounterField, amount?: number): Promise<IDataLakeBatchDocument | null>;
+  /** Per-run twin of IDataLakeRepository.tryAddEmbeddingSpend - same reserve-first,
+   * all-or-nothing contract, metered against this batch's embeddingSpendMicroUsd. */
+  tryAddEmbeddingSpend(batchId: string, amountMicroUsd: number, limitMicroUsd: number): Promise<boolean>;
+  /** Per-run twin of IDataLakeRepository.releaseEmbeddingSpend - same exact-inverse contract. */
+  releaseEmbeddingSpend(batchId: string, amountMicroUsd: number): Promise<boolean>;
   /** Atomic multi-field variant of incrementCounter - use when two+ counters must land together
    * (e.g. failedFiles + processingFailedFiles), so a crash between them can't leave one applied
    * and the other not. */

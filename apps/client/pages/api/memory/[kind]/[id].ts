@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import {
   agentRepository,
+  dataLakeAccessGrantRepository,
   dataLakeRepository,
   deepAgentCharterRepository,
   memoryLedgerRepository,
@@ -52,7 +53,9 @@ async function resolveLakeMemoryTarget(
   id: string
 ): Promise<{ principal: Principal; ownerUserId: string } | null> {
   const ctx = await toAccessContext(req);
-  const lake = await dataLakeService.assertLakeAccess(id, ctx, { db: { dataLakes: dataLakeRepository } });
+  const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+    db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+  });
   if (!lake.createdByUserId) return null;
   return { principal: { kind: 'lake', id: lake.datalakeTag }, ownerUserId: lake.createdByUserId };
 }

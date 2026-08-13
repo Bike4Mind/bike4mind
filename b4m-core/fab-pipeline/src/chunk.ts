@@ -52,6 +52,54 @@ const isEmbeddingModel = <T extends SupportedEmbeddingModel>(
   return Object.values(modelEnum).includes(model as T);
 };
 
+/**
+ * The embedding model's context window in tokens - the HARD ceiling an embedding call accepts.
+ * Extracted from SmartChunker so a caller (the chunk queue handler, #1662) can compute the same
+ * effective passage limit for owner-altitude policy resolution and cross-lake conflict reporting
+ * without constructing a chunker. Throws on an unsupported model, exactly as the chunker does.
+ */
+export function embeddingModelContextWindow(model: string): number {
+  if (isEmbeddingModel(model, OpenAIEmbeddingModel)) return OPENAI_EMBEDDING_MODEL_MAP[model].contextWindow;
+  if (isEmbeddingModel(model, VoyageAIEmbeddingModel)) return VOYAGEAI_EMBEDDING_MODEL_MAP[model].contextWindow;
+  if (isEmbeddingModel(model, BedrockEmbeddingModel)) return BEDROCK_EMBEDDING_MODEL_MAP[model].contextWindow;
+  if (isEmbeddingModel(model, OllamaEmbeddingModel)) return OLLAMA_EMBEDDING_MODEL_MAP[model].contextWindow;
+  throw new Error(`Unsupported embedding model: ${model}`);
+}
+
+/**
+ * The buffer subtracted from the model window to absorb cross-provider tokenizer differences
+ * (char/4 approximations can undercount by ~8-10% vs tiktoken). A value < 1 is a percent of the
+ * window (floored to >= 32 tokens); a value >= 1 is an absolute token count.
+ */
+export function embeddingWindowBuffer(maxTokens: number, bufferPercentOrValue = 0.2): number {
+  return bufferPercentOrValue < 1
+    ? Math.max(Math.floor(maxTokens * bufferPercentOrValue), 32)
+    : Math.floor(bufferPercentOrValue);
+}
+
+/**
+ * The effective per-chunk token limit the chunker will actually use: the SOFT passage target
+ * (retrieval granularity) hard-capped to the buffered model window (an oversized chunk fails the
+ * embedding call). THE single source of truth for that clamp - SmartChunker's constructor and the
+ * chunk handler's conflict/observability logic (#1662) both derive from it, so a resolved policy
+ * value can never drift from the granularity it actually produces. An omitted/invalid target falls
+ * back to DEFAULT_PASSAGE_TOKEN_TARGET; a supplied one is floored to MIN_PASSAGE_TOKEN_TARGET.
+ */
+export function effectiveChunkTokenLimit(opts: {
+  model: string;
+  passageTokenTarget?: number;
+  bufferPercentOrValue?: number;
+}): number {
+  const maxTokens = embeddingModelContextWindow(opts.model);
+  const hardLimit = maxTokens - embeddingWindowBuffer(maxTokens, opts.bufferPercentOrValue ?? 0.2);
+  const { passageTokenTarget } = opts;
+  const target =
+    passageTokenTarget !== undefined && Number.isFinite(passageTokenTarget) && passageTokenTarget > 0
+      ? Math.max(Math.floor(passageTokenTarget), MIN_PASSAGE_TOKEN_TARGET)
+      : DEFAULT_PASSAGE_TOKEN_TARGET;
+  return Math.min(hardLimit, target);
+}
+
 // The SmartChunker class handles chunking of various file types into smaller pieces suitable for processing by an embedding model
 export class SmartChunker {
   private model: string;
@@ -78,37 +126,19 @@ export class SmartChunker {
     const { bufferPercentOrValue, passageTokenTarget } =
       typeof options === 'number' ? { bufferPercentOrValue: options, passageTokenTarget: undefined } : (options ?? {});
     this.model = model;
-
-    if (isEmbeddingModel(model, OpenAIEmbeddingModel)) {
-      this.maxTokens = OPENAI_EMBEDDING_MODEL_MAP[model].contextWindow;
-    } else if (isEmbeddingModel(model, VoyageAIEmbeddingModel)) {
-      this.maxTokens = VOYAGEAI_EMBEDDING_MODEL_MAP[model].contextWindow;
-    } else if (isEmbeddingModel(model, BedrockEmbeddingModel)) {
-      this.maxTokens = BEDROCK_EMBEDDING_MODEL_MAP[model].contextWindow;
-    } else if (isEmbeddingModel(model, OllamaEmbeddingModel)) {
-      this.maxTokens = OLLAMA_EMBEDDING_MODEL_MAP[model].contextWindow;
-    } else {
-      throw new Error(`Unsupported embedding model: ${model}`);
-    }
+    this.maxTokens = embeddingModelContextWindow(model);
 
     // 20% buffer absorbs cross-provider tokenizer differences: char/4 approximations
-    // (Bedrock, Voyage) can undercount by ~8-10% vs actual OpenAI tiktoken.
+    // (Bedrock, Voyage) can undercount by ~8-10% vs actual OpenAI tiktoken. The buffered model
+    // limit is the HARD cap (an oversized chunk fails the embedding call); the passage target is a
+    // SOFT cap for retrieval granularity. effectiveChunkTokenLimit is the shared source of truth
+    // for that clamp so the handler's owner-altitude resolution can't drift from it (#1662).
     this.bufferPercentOrValue = bufferPercentOrValue ?? 0.2;
-    let buffer: number;
-    if (this.bufferPercentOrValue < 1) {
-      buffer = Math.max(Math.floor(this.maxTokens * this.bufferPercentOrValue), 32);
-    } else {
-      buffer = Math.floor(this.bufferPercentOrValue);
-    }
-    // The buffered model limit is the HARD cap (an oversized chunk fails the embedding call);
-    // the passage target is a SOFT cap for retrieval granularity. The effective limit is the
-    // smaller of the two, so a caller can never configure a chunk the model would reject.
-    const hardLimit = this.maxTokens - buffer;
-    const target =
-      passageTokenTarget !== undefined && Number.isFinite(passageTokenTarget) && passageTokenTarget > 0
-        ? Math.max(Math.floor(passageTokenTarget), MIN_PASSAGE_TOKEN_TARGET)
-        : DEFAULT_PASSAGE_TOKEN_TARGET;
-    this.chunkTokenLimit = Math.min(hardLimit, target);
+    this.chunkTokenLimit = effectiveChunkTokenLimit({
+      model,
+      passageTokenTarget,
+      bufferPercentOrValue: this.bufferPercentOrValue,
+    });
 
     this.storage = storage;
 
@@ -117,7 +147,7 @@ export class SmartChunker {
       maxTokens: this.maxTokens,
       chunkTokenLimit: this.chunkTokenLimit,
       bufferPercentOrValue: this.bufferPercentOrValue,
-      passageTokenTarget: target,
+      passageTokenTarget,
     });
   }
 

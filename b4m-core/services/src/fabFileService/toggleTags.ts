@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { DATALAKE_TAG_PREFIX } from '@bike4mind/common';
 import {
+  IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFabFileDocument,
   IFabFileRepository,
@@ -9,7 +10,9 @@ import {
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from '../dataLakeService/assertLakeAccess';
-import { assertCanWriteStaticRegistryTags, canManageLake } from '../dataLakeService/authorizeLakeWrite';
+import { assertCanWriteStaticRegistryTags } from '../dataLakeService/authorizeLakeWrite';
+import { canManageLake } from '../dataLakeService/manageRule';
+import { makeLakeGrantResolver } from '../dataLakeService/authorizeLakeManage';
 import { createDataLakeFallbackTagger } from '../dataLakeService/fallbackLakeTags';
 import { addFileToLake, removeFileFromLake, type MembershipLake } from '../dataLakeService/lakeMembership';
 import {
@@ -32,6 +35,8 @@ interface FabFileToggleTagsAdapters {
     >;
     fileTags: Pick<IFileTagRepository, 'touchLastActivityBy'>;
     dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
+    // Optional: absent -> manage falls back to createdByUserId + org rung (see loadActiveLakeGrants).
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listActiveByLakes'>;
     users: { findById: (id: string) => Promise<IUserDocument | null> };
   };
   /** Forwarded to the fallback tagger's skip-path diagnostics; never fails the write on its own. */
@@ -102,6 +107,11 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
   }
 
   const actor = { userId, isAdmin: !!user.isAdmin };
+  // Grant-aware manage gates below: consult each lake's active grants so a transferred lake's
+  // superseded creator does not still pass. Batched + cached across both prefix-arm gate passes.
+  // (This file-tag door is file-owner-centric and does not resolve the org-admin rung; org admins
+  // manage lakes through the dedicated data-lake endpoints.)
+  const grantResolver = makeLakeGrantResolver({ db });
 
   // A lake a file belongs to ONLY via its prefix arm (no meta-tag) is invisible to
   // toggleLakeMembership above, which only recognizes `datalake:*` names - so dropping that
@@ -151,10 +161,13 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
         if (joins.length > 0) prefixJoinsByFile.set(file.id, joins);
       })
     );
+    const gatedLeaveLakes = [...prefixLeavesByFile.values()].flat().map(({ lake }) => lake);
+    const gatedJoinLakes = [...prefixJoinsByFile.values()].flat().map(({ lake }) => lake);
+    await grantResolver.prime([...gatedLeaveLakes, ...gatedJoinLakes]);
     for (const leaves of prefixLeavesByFile.values()) {
       for (const { lake } of leaves) {
-        if (!canManageLake(lake, actor)) {
-          throw new BadRequestError('Only the creator can remove files from this data lake');
+        if (!canManageLake(lake, actor, grantResolver.get(lake.id))) {
+          throw new BadRequestError('You do not have permission to remove files from this data lake');
         }
         assertLakeWritable(lake);
       }
@@ -273,7 +286,7 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
     // relationship to. Gated on canManageLake; an unmanaged join still gets its stats corrected
     // via statsOnlyLakes, just never the activation.
     for (const { lake } of prefixJoinsByFile.get(file.id) ?? []) {
-      if (canManageLake(lake, actor)) touchedLakes.set(lake.id, lake);
+      if (canManageLake(lake, actor, grantResolver.get(lake.id))) touchedLakes.set(lake.id, lake);
       else statsOnlyLakes.set(lake.id, lake);
     }
   };

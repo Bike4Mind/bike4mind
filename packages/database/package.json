@@ -63,6 +63,7 @@
     "@bike4mind/fab-pipeline": "workspace:*",
     "@bike4mind/hearth": "workspace:*",
     "@bike4mind/llm-adapters": "workspace:*",
+    "@bike4mind/resource": "workspace:*",
     "@bike4mind/utils": "workspace:*",
     "@casl/ability": "^6.8.1",
     "@casl/mongoose": "^8.0.5",

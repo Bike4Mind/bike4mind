@@ -8,7 +8,7 @@ import {
   type IOrganizationRepository,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { buildDatalakeTag } from './createDataLake';
+import { isDatalakeTagWellFormed } from './createDataLake';
 import { lakeMembershipScope } from './lakeMembershipScope';
 
 /**
@@ -195,9 +195,8 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   // this runtime can see (the premium half arrives through an env seam). Requiring
   // self-consistency keeps a second, environment-independent check on the privileged path.
   const accessibleIds = new Set(accessibleLakes.map(dl => dl.id));
-  const isWellFormed = (dl: DataLakeConfig) => dl.datalakeTag === buildDatalakeTag(dl.slug, dl.organizationId);
   const ownedGatedLakes = (dynamicDataLakes ?? []).filter(
-    dl => ownedDynamicIds.has(dl.id) && !accessibleIds.has(dl.id) && isWellFormed(dl)
+    dl => ownedDynamicIds.has(dl.id) && !accessibleIds.has(dl.id) && isDatalakeTagWellFormed(dl)
   );
   const resolvedLakes = [...accessibleLakes, ...ownedGatedLakes];
   // Split prefixes by provenance: static-registry lakes are OPEN (shared KB - ownership

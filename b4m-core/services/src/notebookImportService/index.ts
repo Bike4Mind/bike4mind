@@ -1,3 +1,4 @@
+/* eslint @typescript-eslint/no-explicit-any: "error" */
 import {
   NotebookExportFormat,
   ExportedNotebook,
@@ -13,22 +14,58 @@ import {
 } from '../notebookExportService/types';
 import { isValidEnumValue, KnowledgeType } from '@bike4mind/common';
 import type { IChatHistoryItem } from '@bike4mind/common';
+import type { ILogger } from '@bike4mind/observability';
+
+/** A notebook the import can address: found by name, or just created. */
+interface NotebookRef {
+  id: string;
+  userId: string;
+}
+
+/**
+ * Write-only: the created document is discarded and the locally generated id recorded instead.
+ * `Record<string, unknown>` states no shape because the payloads do not currently match the
+ * schemas behind them - typing them is a behaviour fix, not a typing one.
+ */
+interface AttachmentRepository {
+  create: (data: Record<string, unknown>) => Promise<unknown>;
+}
 
 export interface NotebookImportAdapters {
-  sessionRepository: any; // SessionRepository
+  // Property syntax throughout, not method shorthand: methods are compared bivariantly, so an
+  // implementation demanding a narrower argument than the service passes would still compile.
+  sessionRepository: {
+    /**
+     * `Record<string, unknown>` rather than the notebook shape, and that hides a real mismatch:
+     * `BaseRepository.create` declares `Omit<T, 'id' | ...>` while this service always passes `id`.
+     * `id` is not a SessionSchema path - it is Mongoose's getter-only `_id` virtual - so the field
+     * is dropped and `preserveIds` does not preserve a notebook's id. Confirmed on a deployed
+     * worker: importing with preserveIds on created a notebook under a freshly minted id, not the
+     * exported one. Typing the payload would make that a compile error, which is a behaviour fix
+     * and not this change.
+     */
+    create: (data: Record<string, unknown>) => Promise<NotebookRef>;
+    find: (query: { userId: string; name: string }) => Promise<NotebookRef[]>;
+    updateById: (id: string, data: Record<string, unknown>) => Promise<unknown>;
+  };
   /** Typed because the caller's implementation of these two carries the insert-never-upsert rule. */
   chatHistoryRepository: {
-    bulkCreate(items: IChatHistoryItem[]): Promise<unknown>;
-    deleteMany(filter: { sessionId: string }): Promise<unknown>;
+    bulkCreate: (items: IChatHistoryItem[]) => Promise<unknown>;
+    deleteMany: (filter: { sessionId: string }) => Promise<unknown>;
   };
-  knowledgeRepository: any; // KnowledgeRepository
-  artifactRepository: any; // ArtifactRepository
-  toolRepository: any; // ToolRepository
-  agentRepository: any; // AgentRepository
-  fileStorageService: any; // FileStorageService
-  userRepository: any; // UserRepository
-  logger: any; // Logger
-  generateId: () => string; // ID generation function
+  knowledgeRepository: AttachmentRepository;
+  artifactRepository: AttachmentRepository;
+  toolRepository: AttachmentRepository;
+  agentRepository: AttachmentRepository;
+  fileStorageService: {
+    uploadFile: (path: string, content: Buffer) => Promise<unknown>;
+  };
+  /** Only checked for existence - the import never reads a field off the user. */
+  userRepository: {
+    findById: (id: string) => Promise<unknown>;
+  };
+  logger: ILogger;
+  generateId: () => string;
 }
 
 /** Unknown or absent types degrade to FILE: the store enum-validates this, so a value it does not
@@ -36,6 +73,23 @@ export interface NotebookImportAdapters {
 function toKnowledgeType(raw: string | undefined): KnowledgeType {
   return raw && isValidEnumValue(raw, KnowledgeType) ? raw : KnowledgeType.FILE;
 }
+
+// Declared here rather than imported: `types.ts` is re-exported wholesale from the package entry
+// point, so exporting it there would put a one-word generic name in this package's public API.
+type Expect<T extends true> = T;
+
+/**
+ * Fails typecheck if a whole slot is re-loosened to `any` - every one of them used to be. Lives in
+ * src, not a test: tsconfig excludes *.test.ts, so only `turbo:typecheck` enforces it. Sibling
+ * guard: notebookExportService's NotebookExportTypesStayNarrowed.
+ *
+ * It only sees the slot type, so a nested `any` (say a method parameter) slips past it. The
+ * file-level `no-explicit-any: error` at the top covers that case; the rule is repo-wide `warn`,
+ * and `lint:check` runs `--quiet`, so warnings alone would print nothing.
+ */
+export type NotebookImportAdaptersStayNarrowed = Expect<
+  0 extends 1 & NotebookImportAdapters[keyof NotebookImportAdapters] ? false : true
+>;
 
 export class NotebookImportService {
   constructor(private adapters: NotebookImportAdapters) {}
@@ -213,7 +267,7 @@ export class NotebookImportService {
     notebook: ExportedNotebook,
     targetUserId: string,
     options: NotebookImportOptions
-  ): Promise<any> {
+  ): Promise<NotebookRef | null> {
     // Try to find by exact name match
     const existingSessions = await this.adapters.sessionRepository.find({
       userId: targetUserId,
@@ -224,7 +278,7 @@ export class NotebookImportService {
   }
 
   private async handleExistingSession(
-    existingSession: any,
+    existingSession: NotebookRef,
     notebook: ExportedNotebook,
     options: NotebookImportOptions
   ): Promise<string | null> {
