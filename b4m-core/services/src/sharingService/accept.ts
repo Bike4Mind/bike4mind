@@ -70,8 +70,22 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
     throw new UnprocessableEntityError('Invite has no remaining users');
   }
 
+  // Checked before the pending-membership gate below: a user who already accepted has moved
+  // out of `pending` into `accepted`, so on a multi-recipient invite where others are still
+  // pending, checking membership first would misreport a re-accept as "not sent to your
+  // account" instead of "already accepted".
   if ((invite.recipients?.accepted || []).includes(user.email)) {
     throw new UnprocessableEntityError('User has already accepted the invite');
+  }
+
+  // A By-Users invite names specific recipients in `pending`; only they may consume a slot,
+  // or `remaining` (now sized to the recipient count, not a flat 1) lets an unintended
+  // accepter claim a share meant for someone else while a named recipient still hasn't
+  // accepted. A link-only invite never populates `pending`, so this never applies to one -
+  // and once every named recipient has accepted, `pending` is empty and `remaining <= 0`
+  // above already blocks further accepts regardless of who is asking.
+  if ((invite.recipients?.pending?.length ?? 0) > 0 && !invite.recipients?.pending?.includes(user.email)) {
+    throw new ForbiddenError('This invite was not sent to your account');
   }
 
   if (invite.recipients) {
@@ -273,6 +287,17 @@ export const pushShareable = (
   if (userIndex === -1) {
     entity.users.push({ userId: data.userId, permissions: data.permissions, projectId: data.projectId });
   } else {
-    entity.users[userIndex] = data;
+    // Merge, don't replace: pushShareable's callers are this file's own invite-accept arms plus
+    // projectService's addFiles/addSessions/addSystemPrompts (propagating a member's current
+    // project access onto a newly-added file/session) - every one of them grants or refreshes
+    // access, none narrows it, so an update here must never silently drop the existing entry's
+    // projectId/extraData or narrow permissions it already carries down to just this grant.
+    const existing = entity.users[userIndex];
+    entity.users[userIndex] = {
+      ...existing,
+      userId: data.userId,
+      projectId: data.projectId ?? existing.projectId,
+      permissions: Array.from(new Set([...(existing.permissions ?? []), ...data.permissions])),
+    };
   }
 };

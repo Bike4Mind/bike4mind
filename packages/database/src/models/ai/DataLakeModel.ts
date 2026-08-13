@@ -21,6 +21,8 @@ import {
   TAXONOMY_NON_TERMINAL_STATUSES,
   TAXONOMY_ATTENTION_STATUSES,
   normalizeEntitlementKey,
+  DATA_LAKE_GROUNDING_MODES,
+  DEFAULT_DATA_LAKE_GROUNDING_MODE,
 } from '@bike4mind/common';
 
 const DATA_LAKE_STATUSES: DataLakeStatus[] = [
@@ -46,6 +48,20 @@ const DataLakeSchema = new mongoose.Schema(
     // Per-lake system prompt (see IDataLake.systemPrompt). Not yet consumed; a later PR (#843)
     // injects it at answer time. Stored uncapped, matching the other system-prompt fields.
     systemPrompt: { type: String },
+    // Preferred registry system-prompt id for sessions created for this lake (see
+    // IDataLake.preferredSystemPromptId). Validated against the session-activatable allowlist at
+    // the write boundary; resolved to session.systemPromptId once at create time.
+    preferredSystemPromptId: { type: String },
+    // Per-lake grounding mode (see IDataLake.groundingMode). Resolved to session.corpusGroundingMode
+    // once at create time and enforced by the completion path's corpus defer plan. The default sets
+    // the value on NEW lakes; lakes predating this field read back undefined and the resolver
+    // applies the same default, so both ground identically. Spread to a mutable array - mongoose's
+    // enum option types reject the `as const` readonly tuple.
+    groundingMode: {
+      type: String,
+      enum: [...DATA_LAKE_GROUNDING_MODES],
+      default: DEFAULT_DATA_LAKE_GROUNDING_MODE,
+    },
     fileTagPrefix: { type: String, required: true },
     datalakeTag: { type: String, required: true },
     requiredUserTag: { type: String },
@@ -69,6 +85,7 @@ const DataLakeSchema = new mongoose.Schema(
     status: { type: String, enum: DATA_LAKE_STATUSES, default: 'draft' },
     fileCount: { type: Number, default: 0 },
     totalSizeBytes: { type: Number, default: 0 },
+    totalChunkedChars: { type: Number, default: 0 },
     lastSyncAt: { type: Date },
     // Teardown batch key (see IDataLake.filesDeletedAt): the exact stamp phase-1 delete wrote on
     // the lake's member files, matched by equality on restore. Set only through
@@ -76,6 +93,9 @@ const DataLakeSchema = new mongoose.Schema(
     // no sweep ever wrote, and the restore keyed to it reverses nothing. Restore clears it to null.
     // No index - the lakes collection is tiny, and it is only ever read from a lake already in hand.
     filesDeletedAt: { type: Date },
+    // Archive batch key (see IDataLake.filesArchivedAt): mirrors filesDeletedAt but on the
+    // archive axis. Set only through claimFilesArchivedAt; cleared by unarchive and by restore.
+    filesArchivedAt: { type: Date },
     // Lake-memory producer (#1440) bookkeeping - server-managed, never client-writable. No index
     // (tiny collection, only read from a lake already in hand, same rationale as filesDeletedAt).
     // lakeMemoryExtractionAt is a concurrency lease; lakeMemoryCursor is the bounded-continuation
@@ -382,10 +402,32 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return holder?.filesDeletedAt ?? null;
   }
 
-  async setStats(id: string, stats: { fileCount: number; totalSizeBytes: number }): Promise<IDataLakeDocument | null> {
+  async claimFilesArchivedAt(id: string, at: Date): Promise<Date | null> {
+    // Same set-if-unset contract as claimFilesDeletedAt (see its comment above).
+    const claimed = await this.dataLakeModel.findOneAndUpdate(
+      { _id: id, $or: [{ filesArchivedAt: null }, { filesArchivedAt: { $exists: false } }] },
+      { $set: { filesArchivedAt: at } },
+      { new: true }
+    );
+    if (claimed) return claimed.filesArchivedAt ?? null;
+    const holder = await this.dataLakeModel.findById(id);
+    return holder?.filesArchivedAt ?? null;
+  }
+
+  async setStats(
+    id: string,
+    stats: { fileCount: number; totalSizeBytes: number; totalChunkedChars: number }
+  ): Promise<IDataLakeDocument | null> {
     const doc = await this.dataLakeModel.findByIdAndUpdate(
       id,
-      { $set: { fileCount: stats.fileCount, totalSizeBytes: stats.totalSizeBytes, lastSyncAt: new Date() } },
+      {
+        $set: {
+          fileCount: stats.fileCount,
+          totalSizeBytes: stats.totalSizeBytes,
+          totalChunkedChars: stats.totalChunkedChars,
+          lastSyncAt: new Date(),
+        },
+      },
       { new: true }
     );
     return (doc?.toJSON() as IDataLakeDocument) ?? null;

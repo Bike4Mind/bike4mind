@@ -194,3 +194,36 @@ describe('CacheRepository.tryIncrementWithinLimitFixedWindow', () => {
     failures.forEach(r => expect(r.count).toBe(limit));
   });
 });
+
+describe('CacheRepository.findByKey', () => {
+  it('returns a live entry', async () => {
+    const key = `cache:live:${Date.now()}`;
+    await Cache.create({ key, result: { value: 'fresh' }, expiresAt: new Date(Date.now() + 60_000) });
+
+    const doc = await cacheRepository.findByKey(key);
+
+    expect(doc?.result).toEqual({ value: 'fresh' });
+  });
+
+  it('does not return an entry that has expired but is awaiting TTL cleanup', async () => {
+    // Mongo's TTL monitor sweeps about once a minute, so a row can outlive its own expiresAt by
+    // that long. Before the expiresAt guard, findByKey handed those out as hits - which meant a
+    // stale analytics report served as fresh and a closed rate-limit window reading as open.
+    const key = `cache:stale:${Date.now()}`;
+    await Cache.create({ key, result: { value: 'stale' }, expiresAt: new Date(Date.now() - 1000) });
+
+    // Falsy, not null: the underlying findOne yields undefined for a miss.
+    expect(await cacheRepository.findByKey(key)).toBeFalsy();
+    // Still physically present - the guard is what excludes it, not a deletion.
+    expect(await Cache.findOne({ key })).not.toBeNull();
+  });
+
+  it('returns an entry written with no expiresAt', async () => {
+    // createOrUpdate upserts without running validators, so rows with no expiry exist. The TTL
+    // index skips those, so they never expire and the guard must not hide them.
+    const key = `cache:noexpiry:${Date.now()}`;
+    await Cache.collection.insertOne({ key, result: { value: 'permanent' } });
+
+    expect(await cacheRepository.findByKey(key)).toBeTruthy();
+  });
+});

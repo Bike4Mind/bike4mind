@@ -6,14 +6,22 @@ vi.mock('@server/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...a: unknown[]) => unknown) => fn,
 }));
 
-const h = vi.hoisted(() => ({ cleanup: vi.fn() }));
+const h = vi.hoisted(() => ({
+  cleanup: vi.fn(),
+  openSearchRetrievalIndex: vi.fn(() => ({ removeForDataLake: vi.fn() })),
+  selfHostOpenSearchEnabled: vi.fn(() => false),
+}));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
   dataLakeBatchRepository: {},
   fabFileRepository: {},
   fabFileChunkRepository: {},
 }));
-vi.mock('@bike4mind/services', () => ({ dataLakeService: { cleanupDeletedDataLake: h.cleanup } }));
+vi.mock('@bike4mind/services', () => ({
+  dataLakeService: { cleanupDeletedDataLake: h.cleanup, openSearchRetrievalIndex: h.openSearchRetrievalIndex },
+}));
+vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
+vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpenSearchEnabled }));
 
 import { dispatch } from './dataLakeCleanup';
 
@@ -34,6 +42,32 @@ describe('dataLakeCleanup consumer', () => {
         db: expect.objectContaining({ dataLakes: expect.anything(), fabFileChunks: expect.anything() }),
         logger,
       })
+    );
+  });
+
+  // Only self-host OpenSearch needs this port wired (see ports.ts) - Atlas's vector index lives
+  // on the FabFileChunk collection itself, so the chunk sweep already removes it there.
+  it('passes retrievalIndex: undefined when self-host OpenSearch is off', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(false);
+    h.cleanup.mockResolvedValue(undefined);
+    await dispatch(makeEvent(payload), {} as never, logger);
+    expect(h.openSearchRetrievalIndex).not.toHaveBeenCalled();
+    expect(h.cleanup).toHaveBeenCalledWith(
+      expect.anything(),
+      'lake1',
+      expect.objectContaining({ retrievalIndex: undefined })
+    );
+  });
+
+  it('wires a real retrievalIndex when self-host OpenSearch is on', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.cleanup.mockResolvedValue(undefined);
+    await dispatch(makeEvent(payload), {} as never, logger);
+    expect(h.openSearchRetrievalIndex).toHaveBeenCalled();
+    expect(h.cleanup).toHaveBeenCalledWith(
+      expect.anything(),
+      'lake1',
+      expect.objectContaining({ retrievalIndex: expect.objectContaining({ removeForDataLake: expect.anything() }) })
     );
   });
 

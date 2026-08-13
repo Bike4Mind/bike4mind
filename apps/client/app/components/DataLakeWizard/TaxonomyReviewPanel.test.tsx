@@ -163,4 +163,90 @@ describe('TaxonomyReviewPanel', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(dismissMutate).not.toHaveBeenCalled();
   });
+
+  it('gives the icon-only Edit and Delete buttons an accessible name', () => {
+    render(
+      <Wrapper>
+        <TaxonomyReviewPanel batch={readyBatch()} prefix="acme:" onClose={() => {}} />
+      </Wrapper>
+    );
+
+    expect(screen.getAllByRole('button', { name: 'Edit' })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'Delete' })).toHaveLength(2);
+  });
+
+  it('gives the icon-only Save and Cancel buttons an accessible name while editing', () => {
+    render(
+      <Wrapper>
+        <TaxonomyReviewPanel batch={readyBatch()} prefix="acme:" onClose={() => {}} />
+      </Wrapper>
+    );
+
+    fireEvent.click(screen.getAllByTestId('taxonomy-tag-edit')[0]);
+
+    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+  });
+
+  it('keeps in-progress edits when taxonomySuggestions gets a new object reference but the same tag content', () => {
+    // Simulates the batches-list response rebuilding a new array/object on every poll (Map +
+    // spread) even when nothing about THIS batch's suggestions actually changed - e.g. because
+    // some other batch left the list and shifted everyone after it. React Query's default
+    // structural sharing would otherwise hand back a new reference here.
+    const batch = readyBatch();
+    const { rerender } = render(
+      <Wrapper>
+        <TaxonomyReviewPanel batch={batch} prefix="acme:" onClose={() => {}} />
+      </Wrapper>
+    );
+
+    fireEvent.click(screen.getAllByTestId('taxonomy-tag-delete')[0]);
+    expect(screen.getAllByTestId('taxonomy-tag-card')).toHaveLength(1);
+
+    const sameContentNewObject = { ...batch, taxonomySuggestions: { ...batch.taxonomySuggestions } };
+    rerender(
+      <Wrapper>
+        <TaxonomyReviewPanel batch={sameContentNewObject} prefix="acme:" onClose={() => {}} />
+      </Wrapper>
+    );
+
+    expect(screen.getAllByTestId('taxonomy-tag-card')).toHaveLength(1); // the delete survived
+  });
+
+  it('re-seeds and drops in-progress edits when tag content genuinely changes (e.g. a completed re-analyze)', () => {
+    const batch = readyBatch();
+    const { rerender } = render(
+      <Wrapper>
+        <TaxonomyReviewPanel batch={batch} prefix="acme:" onClose={() => {}} />
+      </Wrapper>
+    );
+
+    fireEvent.click(screen.getAllByTestId('taxonomy-tag-delete')[0]);
+    expect(screen.getAllByTestId('taxonomy-tag-card')).toHaveLength(1);
+
+    const reanalyzed = {
+      ...batch,
+      taxonomySuggestions: {
+        tags: [
+          {
+            suffix: 'type:invoice',
+            originalName: 'acme:type:invoice',
+            strength: 0.92,
+            source: 'ai',
+            matchingFolders: ['finance'],
+            deleted: false,
+          },
+        ],
+        fileAssignments: [],
+      },
+    };
+    rerender(
+      <Wrapper>
+        <TaxonomyReviewPanel batch={reanalyzed} prefix="acme:" onClose={() => {}} />
+      </Wrapper>
+    );
+
+    expect(screen.getAllByTestId('taxonomy-tag-card')).toHaveLength(1);
+    expect(screen.getByText(/type:invoice/)).toBeInTheDocument(); // the freshly re-analyzed tag, not the pre-edit deleted one
+  });
 });

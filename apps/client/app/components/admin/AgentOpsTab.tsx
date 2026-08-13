@@ -30,6 +30,8 @@ import {
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
+import { agentOpsModelOptions } from '@client/app/utils/agentOpsModels';
 
 interface MetaPromptVersion {
   versionNumber: number;
@@ -50,28 +52,6 @@ interface AgentOpsSettings {
   lastGenerationAt: string | null;
   isEnabled: boolean;
 }
-
-// Must stay in sync with AGENT_OPS_VALID_MODELS in pages/api/admin/agent-ops-settings.ts --
-// anything offered here that the endpoint does not accept becomes a 400 on save. Exported so a
-// test can pin the two lists together.
-export const LLM_MODELS = [
-  { value: 'claude-opus-5', label: 'Claude 5 Opus (SOTA Recommended)' },
-  { value: 'claude-opus-4-8', label: 'Claude 4.8 Opus (Previous)' },
-  { value: 'claude-opus-4-7', label: 'Claude 4.7 Opus' },
-  { value: 'claude-opus-4-6', label: 'Claude 4.6 Opus' },
-  { value: 'claude-sonnet-5', label: 'Claude 5 Sonnet (SOTA Sonnet)' },
-  { value: 'claude-sonnet-4-6', label: 'Claude 4.6 Sonnet' },
-  { value: 'claude-opus-4-20250514', label: 'Claude 4 Opus' },
-  // claude-sonnet-4-20250514 retired upstream, dropped from the picker; resolveDeprecatedModelId
-  // remaps any existing config still pinned to it (use claude-sonnet-4-6 instead).
-  { value: 'claude-sonnet-4-5-20250929', label: 'Claude 4.5 Sonnet' },
-  { value: 'claude-haiku-4-5-20251001', label: 'Claude 4.5 Haiku (Fast)' },
-  { value: 'o3-2025-04-16', label: 'OpenAI O3 (Reasoning)' },
-  { value: 'gpt-4.1-2025-04-14', label: 'GPT-4.1 (Latest)' },
-  { value: 'grok-4.5', label: 'Grok 4.5 (xAI Latest)' },
-  { value: 'gpt-4o', label: 'GPT-4o' },
-  { value: 'gpt-4o-mini', label: 'GPT-4o Mini (Fast)' },
-];
 
 const DEFAULT_META_PROMPT = `You are the **PromptCrafter**, an expert at creating rich, personality-driven system prompts for AI agents that have REAL AGENCY, PURPOSE, and MISSIONS. These are not simple chatbots - they are beings with their own burning goals, active projects, and authentic motivations.
 
@@ -108,6 +88,10 @@ const AgentOpsTab: React.FC = () => {
   const [versions, setVersions] = useState<MetaPromptVersion[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  const { data: catalogModels } = useModelInfo();
+  const modelOptions = React.useMemo(() => agentOpsModelOptions(catalogModels ?? []), [catalogModels]);
+  const modelLabel = (modelId?: string) => modelOptions.find(m => m.id === modelId)?.name ?? modelId ?? 'Unknown';
 
   // Modal states
   const [isCreateVersionModalOpen, setIsCreateVersionModalOpen] = useState(false);
@@ -300,7 +284,7 @@ const AgentOpsTab: React.FC = () => {
                   LLM Model
                 </Typography>
                 <Typography level="body-sm" fontWeight="bold">
-                  {LLM_MODELS.find(m => m.value === settings?.generationLlmModel)?.label || 'Unknown'}
+                  {modelLabel(settings?.generationLlmModel)}
                 </Typography>
               </Box>
             </Stack>
@@ -487,9 +471,18 @@ const AgentOpsTab: React.FC = () => {
                 value={settingsForm.generationLlmModel}
                 onChange={(_, value) => value && setSettingsForm(prev => ({ ...prev, generationLlmModel: value }))}
               >
-                {LLM_MODELS.map(model => (
-                  <Option key={model.value} value={model.value}>
-                    {model.label}
+                {/* A pin the catalog no longer lists (retired upstream) still needs an Option, or
+                    the Select renders blank and the admin cannot see what is currently saved. */}
+                {settingsForm.generationLlmModel &&
+                  !modelOptions.some(m => m.id === settingsForm.generationLlmModel) && (
+                    <Option value={settingsForm.generationLlmModel} disabled>
+                      {settingsForm.generationLlmModel} (no longer available)
+                    </Option>
+                  )}
+                {modelOptions.map(model => (
+                  <Option key={model.id} value={model.id} disabled={model.disabled}>
+                    {model.name}
+                    {model.disabled ? ' (unavailable)' : ''}
                   </Option>
                 ))}
               </Select>

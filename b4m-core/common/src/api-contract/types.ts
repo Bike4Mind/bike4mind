@@ -11,12 +11,11 @@ import type { ApiKeyScope } from '../types/entities/UserApiKeyTypes';
  * `extendZodWithOpenApi` runs, which the runtime handlers never do - calling it
  * here would crash the endpoint at import; see openapi/registry.ts).
  *
- * One contract is consumed by independent derivations:
+ * One contract is consumed by three independent derivations:
  *   1. the OpenAPI registrar (openapi/registerContract.ts) -> the spec + docs,
- *   2. the Next.js route adapter (server/middlewares/defineNextRoute.ts).
+ *   2. the Next.js route adapter (server/middlewares/defineNextRoute.ts),
+ *   3. the Lambda route adapter (server/cli/defineLambdaRoute.ts).
  * Define once; derive everything. Nothing can drift because there is one source.
- * A Function-URL adapter joins them when the first Lambda-served endpoint migrates;
- * keeping this type transport-free is what makes that a pure addition.
  */
 export type HttpMethod = 'get' | 'post' | 'put' | 'patch' | 'delete';
 
@@ -32,6 +31,14 @@ export type AuthMode = 'apiKeyOrJwt' | 'jwtOnly' | 'public';
 export type ResponseSpec = {
   description: string;
   schema: z.ZodTypeAny;
+  /**
+   * Response media type, default `application/json`. Set to `text/event-stream`
+   * for an SSE endpoint so the generated spec advertises the stream shape rather
+   * than a JSON body (the schema then documents a single stream event).
+   */
+  contentType?: string;
+  /** Example response body, attached to the generated component. */
+  example?: unknown;
 };
 
 /** curl/JS/Python sample body for the docs (attached as x-codeSamples). */

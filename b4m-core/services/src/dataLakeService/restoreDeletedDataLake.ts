@@ -1,5 +1,6 @@
 import type { IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { canManageLake } from './manageRule';
 import { recomputeLakeStats } from './recomputeLakeStats';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import type { UnarchiveResult } from './unarchiveDataLake';
@@ -24,6 +25,12 @@ interface RestoreDeletedDataLakeAdapters {
  * member the creator deleted on their own - before the teardown or while the lake sat deleted -
  * carries a different stamp and stays deleted. A lake torn down before that field existed has no
  * mark and restores unbounded, which is the old behavior and errs toward a file reappearing.
+ *
+ * Also clears `archivedAt` on the restored batch, bounded by `filesArchivedAt`: every UI-driven
+ * delete goes active -> archive -> delete (there is no delete-without-archiving control), so
+ * without this an archive->delete->restore lake comes back active but with its files still
+ * archived and invisible. A lake with no `filesArchivedAt` stamp leaves archivedAt untouched -
+ * the pre-existing, known behavior for a lake archived before that field existed.
  */
 export const restoreDeletedDataLake = async (
   actor: { userId: string; isAdmin: boolean },
@@ -34,7 +41,7 @@ export const restoreDeletedDataLake = async (
   if (!existing) {
     throw new NotFoundError('Data lake not found');
   }
-  if (!actor.isAdmin && existing.createdByUserId !== actor.userId) {
+  if (!canManageLake(existing, actor)) {
     throw new BadRequestError('Only the creator can restore this data lake');
   }
   // Allow re-entry from the transitional 'restoring' state so a crashed prior attempt
@@ -66,10 +73,13 @@ export const restoreDeletedDataLake = async (
     skippedDuplicates = duplicateIds.length;
   }
 
-  const restoredCount = await db.fabFiles.undeleteByDataLakeTag(scope, duplicateIds, stampedAt);
+  // The batch this lake's own archive recorded, if any. undefined for a lake with no mark
+  // (archived before the field existed, or never archived), which leaves archivedAt untouched.
+  const archiveStampToClear = existing.filesArchivedAt ?? undefined;
+  const restoredCount = await db.fabFiles.undeleteByDataLakeTag(scope, duplicateIds, stampedAt, archiveStampToClear);
 
   // Explicit null, not undefined, which mongoose would drop and leave the spent mark in place.
-  await db.dataLakes.update({ id: dataLakeId, status: 'active', filesDeletedAt: null });
+  await db.dataLakes.update({ id: dataLakeId, status: 'active', filesDeletedAt: null, filesArchivedAt: null });
   await recomputeLakeStats(existing, { db });
 
   return { restoredCount, skippedDuplicates };

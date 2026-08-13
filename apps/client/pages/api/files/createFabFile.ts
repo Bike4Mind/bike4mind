@@ -70,6 +70,7 @@ const handler = baseApi()
               adminSettings: adminSettingsRepository,
               fabFiles: FabFile,
               users: User,
+              dataLakes: dataLakeRepository,
             },
             storage: {
               upload: async (filepath, content, option) => {

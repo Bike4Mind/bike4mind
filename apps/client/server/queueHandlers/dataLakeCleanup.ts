@@ -7,6 +7,8 @@ import {
   memoryPrincipalKeyRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
+import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
+import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { shredPrincipalMemory } from '@server/memory/ledgerMemoryStore';
 import { createKeyProvider } from '@server/memory/factCipher';
@@ -37,6 +39,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         fabFiles: fabFileRepository,
         fabFileChunks: fabFileChunkRepository,
       },
+      // Undefined everywhere except self-host OpenSearch - Atlas's vector index lives on the
+      // FabFileChunk collection itself, so the chunk-sweep two steps below already removes it.
+      retrievalIndex: selfHostOpenSearchEnabled()
+        ? dataLakeService.openSearchRetrievalIndex({
+            db: { fabFileChunks: fabFileChunkRepository },
+            searchIndex: FabFileChunkSearchIndex,
+          })
+        : undefined,
       // Crypto-shred the lake's memory profile as part of the purge (#1440) - destroy the DEK and mark
       // the ledger shredded, so a deleted lake leaves no readable belief ledger behind.
       //

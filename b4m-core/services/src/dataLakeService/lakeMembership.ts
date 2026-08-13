@@ -54,6 +54,11 @@ export const removeFileFromLake = async (
   // lake. Other lake readers (the aggregate browse, semantic search, chat KB tools) still match
   // the prefix within the VIEWER's own access - that is ownership of the file, not membership in
   // this lake, and unaffected by this write.
+  //
+  // This is also why #1040 (a prefix-only file reached through a share or a group looked listed
+  // but unremovable) cannot happen: the same anchor excludes such a file from the single-lake
+  // browse (buildDataLakeMembershipFilter) too, so it is never listed in the first place. See the
+  // #1040 tests in lakeMembership.test.ts and FabFileModel.dataLakeLifecycle.test.ts.
   const ownsFile = !!file?.userId && file.userId === lake.createdByUserId;
   // Gated on ownsFile, not just prefix: a file admitted to inLake via the META-TAG arm (e.g. an
   // admin added a stranger's file with addFileToLake, which checks only the ACTOR's access, not

@@ -137,6 +137,40 @@ describe('DataLakeWizardModal — handleStartUpload offline pre-check', () => {
     expect(batchUploadMutate).not.toHaveBeenCalled();
   });
 
+  // Mirrors the server's blank-segment schema refine: without this gate the user runs
+  // hashing/dedup and only then gets a 422 at the final step.
+  it('disables Start Upload when the tag prefix has a blank segment, and clicking it is a no-op', () => {
+    useDataLakeWizardStore.setState(state => ({ config: { ...state.config, tagPrefix: 'legal::' } }));
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    const btn = screen.getByTestId('wizard-start-upload-btn') as HTMLButtonElement;
+    expect(btn).toBeDisabled();
+    btn.click();
+    expect(batchUploadMutate).not.toHaveBeenCalled();
+  });
+
+  // The inverse gate: append mode inherits a stored prefix the user cannot edit on the
+  // Config step, so a legacy lake predating the blank-segment rule must keep accepting
+  // uploads rather than being locked out with no way to clear the error.
+  it('leaves Start Upload enabled in append mode even when the inherited prefix has a blank segment', () => {
+    useDataLakeWizardStore.setState(state => ({
+      targetLake: { id: 'lake-1', name: 'Legacy Lake', fileTagPrefix: 'legal::' } as never,
+      config: { ...state.config, tagPrefix: 'legal::' },
+    }));
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    const btn = screen.getByTestId('wizard-start-upload-btn') as HTMLButtonElement;
+    expect(btn).not.toBeDisabled();
+  });
+
   it('leaves Start Upload enabled when the prefix is free', () => {
     render(
       <TestWrapper>

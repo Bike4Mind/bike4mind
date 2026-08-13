@@ -1,4 +1,5 @@
 import { IBaseRepository, type IMongoDocument } from '.';
+import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 
 // ── Data Lake Status ────────────────────────────────────────────────────────
 
@@ -56,6 +57,36 @@ export interface IDataLake {
    * uncapped, matching the other system prompts in the codebase. Absent/empty = no per-lake prompt.
    */
   systemPrompt?: string;
+  /**
+   * Optional preferred registry system prompt for this lake, by `promptId` (e.g. 'triage_router').
+   * When a session is created FOR this lake (see resolveLakeSessionDefaults), this seeds the
+   * session's `systemPromptId` unless the caller set one explicitly - so a corpus ships with the
+   * prompt it was tuned against, and the router's "pair it with a lake" precondition holds by
+   * construction.
+   *
+   * DELIBERATELY DISTINCT from `systemPrompt` above, because the two are opposite kinds of thing:
+   * `systemPrompt` is free-text answering guidance injected ADDITIVELY at request time (plural -
+   * every trusted, retrieved lake contributes a block); this is a SINGULAR session-mode prompt id
+   * that suppresses the generic identity prompt, so it is resolved ONCE at create time (a request-
+   * time, multi-lake resolution would have no sound tie-break and would flicker the session's system
+   * message turn to turn). Validated against the session-activatable allowlist at the write boundary.
+   * Editor-only (see LAKE_FIELD_VISIBILITY); absent/empty = no preferred prompt.
+   */
+  preferredSystemPromptId?: string;
+  /**
+   * How this lake's attached corpus is grounded into a chat turn - a DELIBERATE product choice
+   * (`inline` | `retrieve` | `auto-by-size`), not a side effect of who is asking. This exists
+   * because inline-vs-retrieve otherwise falls out of a per-file CASL read: a lake OWNER gets the
+   * corpus inlined while an entitlement-only READER matches no read arm and gets retrieval-only -
+   * the same lake, opposite behavior. Resolved ONCE when a session is created FOR this lake
+   * (resolveLakeSessionDefaults -> session.corpusGroundingMode) and enforced by the completion
+   * path's corpus defer plan, which generalizes the size-only #1438 rule to honor this mode.
+   *
+   * Absent = the default (DEFAULT_DATA_LAKE_GROUNDING_MODE = 'retrieve'), applied at the resolver
+   * so lakes predating this field ground the same as new ones. Editor-only (see
+   * LAKE_FIELD_VISIBILITY): a reader gets its EFFECT, never reads the setting.
+   */
+  groundingMode?: DataLakeGroundingMode;
   /** Tag prefix for all files in this data lake, must end with ":" (e.g. "acme:") */
   fileTagPrefix: string;
   /** Auto-computed meta-tag: "datalake:<slug>" */
@@ -95,6 +126,12 @@ export interface IDataLake {
   fileCount?: number;
   /** Cached total size in bytes (updated on upload/delete) */
   totalSizeBytes?: number;
+  /**
+   * Cached sum of member files' chunkedCharCount (Unicode code points of chunked text) -
+   * the retrievable-content denominator for lake health (#1666). Recomputed with
+   * fileCount/totalSizeBytes by recomputeLakeStats; never incremented in place.
+   */
+  totalChunkedChars?: number;
   /** Last time files were synced/uploaded to this data lake */
   lastSyncAt?: Date;
   /**
@@ -108,6 +145,36 @@ export interface IDataLake {
    * behavior) rather than restoring nothing.
    */
   filesDeletedAt?: Date | null;
+  /**
+   * The exact `archivedAt` stamp archive wrote on this lake's members, so restore (after a
+   * delete of an already-archived lake) can clear that batch's archive marker and nothing
+   * else's - mirrors `filesDeletedAt` but on the archive axis. Matched by EQUALITY: a
+   * prefix-sharing sibling lake's own archive of that same file (a different stamp) is never
+   * touched, provided the sibling archived first - `archiveByDataLakeTag` only ever stamps
+   * `archivedAt: null` rows, so whichever lake archives a shared file first owns its marker.
+   * Claimed set-if-unset; cleared by unarchive (so a later re-archive gets a fresh stamp, not a
+   * stale reused one) and by a restore that clears it.
+   *
+   * The key is a wall-clock `Date`, not a unique token - equality is a best-effort ownership test,
+   * not a guarantee, and two lakes claiming in the same millisecond would collide (same design as
+   * `filesDeletedAt`, not new to this field). A stamp that ends up naming zero rows (an empty lake,
+   * or a concurrent sibling/same-lake claim that swept the shared rows first) is kept, not cleared
+   * back to null - clearing it would read downstream as "pre-field legacy" and unarchive that lake
+   * unbounded, freeing whatever a sibling or a co-owning lake legitimately holds under its own
+   * stamp. An orphaned stamp naming nothing is the safe value: bounding a later unarchive to it
+   * also matches nothing, which is correct for a lake with nothing of its own to restore.
+   *
+   * Absent on a lake archived before this field existed (or one whose members already carry an
+   * unstamped `archivedAt` for any other reason). `restoreDeletedDataLake` (the delete axis)
+   * leaves that archive marker exactly as it is instead of guessing at a batch it cannot prove.
+   * `unarchiveDataLake` cannot do the same - unarchiving IS the operation that clears `archivedAt`
+   * - so an absent stamp there falls back to the pre-this-field behavior of unarchiving every
+   * member in scope unbounded; a prefix- or meta-tag-sharing sibling's own archived member is only
+   * safe from that fallback once both lakes carry a real stamp. `archiveDataLake` skips claiming a
+   * fresh stamp in the legacy case too (see its own `hasUnstampedArchive` guard) rather than
+   * recording a mark that would name none of the pre-existing archived rows.
+   */
+  filesArchivedAt?: Date | null;
   /**
    * Lake-memory producer (#1440) bookkeeping - server-managed, never client input.
    *
@@ -183,7 +250,10 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     offset?: number;
   }): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
   /** Persist recomputed stats (source via IFabFileRepository.computeDataLakeStats). */
-  setStats(id: string, stats: { fileCount: number; totalSizeBytes: number }): Promise<IDataLakeDocument | null>;
+  setStats(
+    id: string,
+    stats: { fileCount: number; totalSizeBytes: number; totalChunkedChars: number }
+  ): Promise<IDataLakeDocument | null>;
   /**
    * One-way draft -> active, the transition that makes a lake reachable from `findPublicLakes`
    * and the `findActive*` retrieval arms. Guarded inside the query, so a caller holding a stale
@@ -200,6 +270,8 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * caller sweeps unmarked and must say so, since that lake then restores unbounded.
    */
   claimFilesDeletedAt(id: string, at: Date): Promise<Date | null>;
+  /** Claim `filesArchivedAt` for an archive sweep - same set-if-unset contract as `claimFilesDeletedAt`. */
+  claimFilesArchivedAt(id: string, at: Date): Promise<Date | null>;
   /**
    * Per-lake concurrency claim for the memory producer (#1440): stamp `lakeMemoryExtractionAt = at` only
    * if no run currently holds the lease - the field is unset, OR its stamp is older than `staleBefore`

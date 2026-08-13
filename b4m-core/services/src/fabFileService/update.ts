@@ -107,9 +107,8 @@ export const updateFabFile = async (
     Object.assign(fabFile, FAB_FILE_CONTENT_REWRITE_PATCH);
   }
 
-  // A tag replacement can join or leave a data lake, which is more than an array write: leaving
-  // has to clear the lake's prefixed content tags as well, and both directions have to leave the
-  // lake's stats correct. Resolved (and gated) BEFORE the write below, applied after it.
+  // A tag replacement can join a data lake but can never leave one - see reconcileLakeTags for
+  // why. Resolved (and gated) BEFORE the write below, applied after it.
   const lakeTags =
     params.tags === undefined
       ? undefined
@@ -143,15 +142,11 @@ export const updateFabFile = async (
 
   await db.fabFiles.update(updatedFabFile);
 
-  // Membership writes land on the persisted array, so they cannot be clobbered by the write
-  // above.
+  // A whole-array write can never leave a lake (see reconcileLakeTags), so tagsToPersist - already
+  // assigned into updatedFabFile above - is always the true final array; commit() only needs to
+  // recompute stats for any new join.
   if (lakeTags) {
     await lakeTags.commit();
-    // Leaving a lake also clears its prefixed content tags, so the array assembled above is no
-    // longer what is stored. Report what a subsequent GET would: a caller trusting a response
-    // that still lists tags this call just removed draws the wrong conclusion.
-    const persisted = await db.fabFiles.findById(id);
-    if (persisted) updatedFabFile.tags = persisted.tags;
   }
 
   return updatedFabFile;

@@ -19,6 +19,12 @@ import { executeFacetCompatible, convertPipelineForDocumentDB } from '../../../u
 
 export interface ICounterLogModel extends mongoose.Model<ICounterLogDocument, {}, {}>, ICounterLogRepository {}
 
+// CounterLog.userId is a free-form string and real rows carry non-ObjectId values such as
+// 'SYSTEM'. Every user $lookup below therefore derives userObjectId with
+// `$convert ... onError: null` rather than `$toObjectId`: one such row makes $toObjectId abort the
+// whole aggregation, while $convert yields null and that single row simply fails to join. Keep any
+// new user join in this file on the same form.
+
 class CounterLogRepository extends BaseRepository<ICounterLogDocument> implements ICounterLogRepository {
   constructor(model: ICounterLogModel) {
     super(model);
@@ -45,7 +51,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
       },
       {
         $addFields: {
-          userObjectId: { $toObjectId: '$userId' },
+          userObjectId: { $convert: { input: '$userId', to: 'objectId', onError: null } },
         },
       },
       {
@@ -90,7 +96,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
       },
       {
         $addFields: {
-          userObjectId: { $toObjectId: '$userId' },
+          userObjectId: { $convert: { input: '$userId', to: 'objectId', onError: null } },
         },
       },
       {
@@ -246,7 +252,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
         },
         {
           $addFields: {
-            userObjectId: { $toObjectId: '$userId' },
+            userObjectId: { $convert: { input: '$userId', to: 'objectId', onError: null } },
           },
         },
         {
@@ -462,7 +468,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
             },
             {
               $addFields: {
-                userObjectId: { $toObjectId: '$userId' },
+                userObjectId: { $convert: { input: '$userId', to: 'objectId', onError: null } },
               },
             },
             {
@@ -596,7 +602,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
             },
             {
               $addFields: {
-                userObjectId: { $toObjectId: '$userId' },
+                userObjectId: { $convert: { input: '$userId', to: 'objectId', onError: null } },
               },
             },
             {
@@ -1040,7 +1046,7 @@ const CounterLogSchema = new mongoose.Schema<ICounterLog>(
           },
           {
             $addFields: {
-              userObjectId: { $toObjectId: '$userId' },
+              userObjectId: { $convert: { input: '$userId', to: 'objectId', onError: null } },
             },
           },
           {
@@ -1080,7 +1086,7 @@ const CounterLogSchema = new mongoose.Schema<ICounterLog>(
           },
           {
             $addFields: {
-              userObjectId: { $toObjectId: '$userId' },
+              userObjectId: { $convert: { input: '$userId', to: 'objectId', onError: null } },
             },
           },
           {

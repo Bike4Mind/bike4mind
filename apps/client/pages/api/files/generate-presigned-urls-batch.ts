@@ -60,6 +60,10 @@ const handler = baseApi().post(async (req: Request, res) => {
   await dataLakeService.assertCanWriteDataLakeTags({ userId, isAdmin: !!req.user.isAdmin }, clientMetaTags, {
     db: { dataLakes: dataLakeRepository },
   });
+  // This route creates each FabFile through the manager's direct FabFile.create(), not the
+  // fabFileService.createFabFile door that gates the static-registry namespace centrally - so
+  // it needs its own check, same as the meta-tag one above.
+  dataLakeService.assertCanWriteStaticRegistryTags({ userId, isAdmin: !!req.user.isAdmin }, clientMetaTags);
 
   // A meta-tag the client sent must name the lake this upload is joining, not merely some lake
   // the caller may write to - which, for an admin, is all of them.

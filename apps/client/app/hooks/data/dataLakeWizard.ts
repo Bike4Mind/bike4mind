@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { IMessageDataToClient } from '@bike4mind/common';
-import { isSupportedFabFileMimeType, folderTagForFile } from '@bike4mind/common';
+import { isSupportedFabFileMimeType, folderTagForFile, hasBlankTagPrefixSegment } from '@bike4mind/common';
 import type { CreateDataLakeRequestInputType } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
@@ -211,6 +211,13 @@ function classifyUploadError(error: unknown): { kind: UploadErrorKind; message: 
         return {
           kind: 'validation',
           message: 'The tag prefix is too short. Use at least 2 characters ending in ":" (e.g. "legal:").',
+        };
+      }
+      if (hasBlankTagPrefixSegment(prefix)) {
+        return {
+          kind: 'validation',
+          message:
+            'The tag prefix has a blank ":" segment. Give every segment a visible character (e.g. "legal:" or "legal:contracts:").',
         };
       }
     }

@@ -1,6 +1,6 @@
 import { baseApi } from './baseApi';
 import type { EndpointContract, RequestBodyOf } from '@bike4mind/common';
-import type { NextFunction, Request, Response } from 'express';
+import type { NextFunction, Request, RequestHandler, Response } from 'express';
 
 /**
  * EVERY registrar next-connect 0.13 exposes - patch all of them, not just the
@@ -19,15 +19,23 @@ const METHODS = ['all', 'get', 'head', 'post', 'put', 'patch', 'delete', 'option
  * `req.validated`. Returns the usual `baseApi` router, so callers chain
  * `.use(...)` / `.post(...)` exactly as before.
  *
+ * Rate limiting is passed as `options.rateLimit` (rather than the caller chaining
+ * its own `.use(...)`) so the adapter can order it correctly - auth -> rate limit
+ * -> validation - as a hard guarantee: the limiter is prepended to the prelude, so
+ * a flood of malformed bodies still counts against the limiter instead of 422ing
+ * for free ahead of it.
+ *
  * The SAME contract drives the OpenAPI spec (openapi/registerContract.ts):
  * define once, derive both.
  */
 export function nextRouteForContract<C extends EndpointContract>(
   contract: C,
-  options: { maxBodySize?: number; exemptReadsFromDailyRateLimit?: boolean } = {}
+  options: { maxBodySize?: number; exemptReadsFromDailyRateLimit?: boolean; rateLimit?: RequestHandler } = {}
 ) {
   type ValidatedReq = Request & { validated: RequestBodyOf<C> };
   type Handler = (req: ValidatedReq, res: Response, next: NextFunction) => unknown;
+
+  const { rateLimit, ...baseOptions } = options;
 
   const router = baseApi<ValidatedReq, Response>({
     // 'jwtOnly' is enforced in baseApi by not installing the api-key chain at all,
@@ -37,10 +45,16 @@ export function nextRouteForContract<C extends EndpointContract>(
     // empty `requiredScopes.some(...)` in apiKeyAuth is always false and would 403
     // every key. Collapse it to undefined.
     requiredScopes: contract.scopes?.length ? [...contract.scopes] : undefined,
-    ...options,
+    ...baseOptions,
   });
 
   const prelude: Handler[] = [];
+
+  // Prepended first so it runs BEFORE validation: a malformed body still counts
+  // against the limiter (see the function-doc note on ordering).
+  if (rateLimit) {
+    prelude.push(rateLimit as unknown as Handler);
+  }
 
   const requestSchema = contract.request;
   if (requestSchema) {
@@ -79,14 +93,12 @@ export function nextRouteForContract<C extends EndpointContract>(
   // `router.use(...)`. Two reasons:
   //
   //  1. Ordering. A construction-time `router.use(validate)` always runs ahead of the
-  //     caller's own `.use(rateLimit(...))`, so a flood of malformed bodies would 422
-  //     without ever touching the limiter. Registering per method puts validation
-  //     right before the terminal handler, so the idiomatic `.use(rateLimit(...))
-  //     .post(handler)` orders correctly with no special option to remember. NOTE:
-  //     next-connect/Trouter still runs handlers in INSERTION order, so this is not a
-  //     hard guarantee - `.post(handler).use(rateLimit(...))` (terminal handler mounted
-  //     first) would still run the limiter after the handler. It just makes the correct
-  //     order the natural one for the normal call shape.
+  //     caller's own `.use(...)`, so a flood of malformed bodies would 422 without
+  //     ever touching a caller-mounted limiter. Registering per method puts the
+  //     prelude right before the terminal handler, so caller `.use(...)` middleware
+  //     runs ahead of validation. (The `rateLimit` option instead lives at the FRONT
+  //     of the prelude, so it beats validation without a caller having to remember the
+  //     ordering.)
   //  2. next-connect only falls through to its 404 when no non-`USE` handler matches
   //     the method. A `use`-mounted validator matches every method, so GET on a
   //     POST-only contract would 422 instead of 404.

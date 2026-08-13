@@ -34,6 +34,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { __repo: 'fabFiles' },
   fileTagRepository: { __repo: 'fileTags' },
   dataLakeRepository: { __repo: 'dataLakes' },
+  userRepository: { __repo: 'users' },
 }));
 
 import handler from '../[id]';
@@ -56,6 +57,7 @@ describe('PUT /api/files/tags/[id]', () => {
     expect(adapters.db.fabFiles).toEqual({ __repo: 'fabFiles' });
     expect(adapters.db.tags).toEqual({ __repo: 'fileTags' });
     expect(adapters.db.dataLakes).toEqual({ __repo: 'dataLakes' });
+    expect(adapters.db.users).toEqual({ __repo: 'users' });
   });
 
   it('acts as the authenticated user, never a userId supplied in the body', async () => {

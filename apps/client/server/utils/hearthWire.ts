@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { humanSessionActorName, sanitizeSessionLabel, reasonForHookEvent, type HearthEvent } from '@bike4mind/hearth';
+import {
+  presencePayloadSchema,
+  humanSessionActorName,
+  sanitizeSessionLabel,
+  reasonForHookEvent,
+  type HearthEvent,
+} from '@bike4mind/hearth';
 import {
   hearthRepository,
   MAX_PRESENCE_FIELD_LENGTH,
@@ -94,32 +100,6 @@ export function assertHearthWriteScope(req: { apiKeyInfo?: { scopes?: string[] }
 type ActorParam = z.infer<typeof HearthActorParamSchema>;
 type SessionParam = z.infer<typeof HearthSessionParamSchema>;
 
-/**
- * Machine payload the roster projects from: the body written by the Claude Code
- * hook (packages/cli/bin/hearth-hook.mjs, schema 'hearth.claude-code-hook@1').
- * Every field is optional and unknown keys are dropped, so a presence event
- * posted by hand - or by a low-disclosure hook tier that forwards no activity -
- * still refreshes lastSeen; it just carries no detail. No length caps here on
- * purpose: an over-long value is truncated rather than rejected, because losing
- * a whole presence update over a long workspace name is the worse failure.
- */
-const PresencePayloadSchema = z.object({
-  hook_event_name: z.string().nullish(),
-  session_id: z.string().nullish(),
-  slug: z.string().nullish(),
-  workspace: z.string().nullish(),
-  activity: z
-    .object({
-      reason: z.string().nullish(),
-      tool: z.string().nullish(),
-      permission_mode: z.string().nullish(),
-      effort: z.string().nullish(),
-      subagent: z.string().nullish(),
-      background_tasks: z.number().int().min(0).nullish(),
-    })
-    .nullish(),
-});
-
 function clamp(value: string | null | undefined): string | undefined {
   if (!value) return undefined;
   return value.slice(0, MAX_PRESENCE_FIELD_LENGTH);
@@ -129,13 +109,19 @@ function clamp(value: string | null | undefined): string | undefined {
  * Map a presence event onto the roster row it projects. Returns null when the
  * payload is not a shape we recognize at all, so the caller can skip the write
  * instead of stamping a contentless row.
+ *
+ * THE ONLY writer of a presence roster row, deliberately: every reporter's live
+ * write goes through here, so the live row and a row rebuilt by replaying the
+ * log cannot disagree. The bridge used to build its own UpsertPresenceInput
+ * instead, which is how it kept a correct live roster while every one of its
+ * events replayed to `running`.
  */
 export function toPresenceProjection(args: {
   event: HearthEvent;
   userId: string;
   payload: unknown;
 }): UpsertPresenceInput | null {
-  const parsed = PresencePayloadSchema.safeParse(args.payload ?? {});
+  const parsed = presencePayloadSchema.safeParse(args.payload ?? {});
   if (!parsed.success) return null;
   const { activity } = parsed.data;
 

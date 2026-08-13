@@ -191,7 +191,9 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
       $lookup: {
         from: 'users',
         let: {
-          ownerId: { $toObjectId: '$ownerId' },
+          // $convert, not $toObjectId: ownerId is a plain string, so one malformed row would
+          // abort the whole aggregation. onError: null leaves that row's owner unjoined.
+          ownerId: { $convert: { input: '$ownerId', to: 'objectId', onError: null } },
           ownerType: '$ownerType',
         },
         pipeline: [
@@ -211,7 +213,7 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
       $lookup: {
         from: 'organizations',
         let: {
-          ownerId: { $toObjectId: '$ownerId' },
+          ownerId: { $convert: { input: '$ownerId', to: 'objectId', onError: null } },
           ownerType: '$ownerType',
         },
         pipeline: [

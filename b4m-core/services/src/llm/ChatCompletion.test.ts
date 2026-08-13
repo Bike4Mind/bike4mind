@@ -73,7 +73,6 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
   usdToCredits: vi.fn(),
   usdToCreditsStochastic: vi.fn(),
   processUrlsFromPrompt: vi.fn(),
-  getLastBuildDebugInfo: vi.fn().mockReturnValue({}),
   isOverloadedError: vi.fn().mockReturnValue(false),
   shouldTriggerFallback: vi.fn().mockReturnValue(false),
   getLlmWithFallback: vi.fn().mockResolvedValue(null),
@@ -686,7 +685,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -702,6 +704,54 @@ describe('ChatCompletionProcess', () => {
           type: 'message',
         })
       );
+    });
+
+    // Every other test in this file mocks messageTruncation: null, which never exercises the
+    // `if (messageTruncationInfo)` persist branch below - this is the one test that does.
+    it('persists a non-null messageTruncation onto quest.promptMeta.context', async () => {
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Hi!']);
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      const messageTruncation = {
+        wasTruncated: true,
+        originalMessageCount: 10,
+        truncatedMessageCount: 6,
+        truncationMethod: 'token-budget' as const,
+      };
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const logger = mockLogger;
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+      await service.process({ body, logger });
+
+      const updateCall = mockDb.quests.update.mock.calls.find(
+        ([arg]: [any]) => arg?.promptMeta?.context?.messageTruncation !== undefined
+      );
+      expect(updateCall).toBeDefined();
+      expect(updateCall[0].promptMeta.context.messageTruncation).toEqual(messageTruncation);
     });
 
     // The promptMode wiring, asserted at the boundary the prompt actually crosses: the
@@ -730,7 +780,10 @@ describe('ChatCompletionProcess', () => {
             supportsImageVariation: false,
           },
         ]);
-        mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
         mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
         mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
       };
@@ -752,6 +805,76 @@ describe('ChatCompletionProcess', () => {
           promptMeta?: { context?: { systemPromptDetails?: { name: string }[] } };
         };
         expect(savedQuest.promptMeta?.context?.systemPromptDetails?.map(d => d.name)).toContain('date_time_context');
+      });
+
+      it('exposes the disclosure on the process when the caller asked for it', async () => {
+        mockTextModel();
+        const body = {
+          ...startQuestParams,
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+          includeSystemPrompt: true,
+        };
+
+        await service.process({ body, logger: mockLogger });
+
+        // Row-level only: buildAndSortMessages is stubbed to a fixed payload here, so nothing
+        // counts as delivered and no text is disclosed. The text itself is covered against a real
+        // delivered set in systemPromptDisclosure.test.ts.
+        expect(service.systemPromptText?.blocks.map(b => b.name)).toContain('date_time_context');
+      });
+
+      // The two lists are documented as joinable on `name`, and the always-on floor is where that
+      // is easiest to break: a gate-excluded floor source contributes no message to the stack, yet
+      // buildAlwaysOnFloorDetails still inventories it.
+      it('emits a prompt-text row for every breakdown row even when a floor source is gated off', async () => {
+        mockTextModel();
+        const body = {
+          ...startQuestParams,
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+          enableArtifacts: false,
+          includeSystemPrompt: true,
+        };
+
+        await service.process({ body, logger: mockLogger });
+
+        const savedQuest = vi.mocked(mockDb.quests.update).mock.calls.at(-1)?.[0] as {
+          promptMeta?: { context?: { systemPromptDetails?: { name: string; wasIncluded: boolean }[] } };
+        };
+        const details = savedQuest.promptMeta?.context?.systemPromptDetails ?? [];
+        expect(details.find(d => d.name === 'artifact_emission')?.wasIncluded).toBe(false);
+
+        const disclosedNames = service.systemPromptText?.blocks.map(b => b.name) ?? [];
+        expect(disclosedNames).toContain('artifact_emission');
+        expect(details.map(d => d.name).filter(name => !disclosedNames.includes(name))).toEqual([]);
+      });
+
+      it('builds no prompt text unless the caller asked, so the default response carries none', async () => {
+        mockTextModel();
+        const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+        await service.process({ body, logger: mockLogger });
+
+        expect(service.systemPromptText).toBeUndefined();
+      });
+
+      it('never persists the disclosed text, which would hand it to every reader of the session', async () => {
+        mockTextModel();
+        const body = {
+          ...startQuestParams,
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+          includeSystemPrompt: true,
+        };
+
+        await service.process({ body, logger: mockLogger });
+
+        const savedQuest = vi.mocked(mockDb.quests.update).mock.calls.at(-1)?.[0];
+        expect(JSON.stringify(savedQuest)).not.toContain('Current date:');
       });
 
       it('hands an EMPTY system stack to the builder under raw, and skips the admin templates', async () => {
@@ -821,7 +944,7 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([]);
+      mockedBuildAndSortMessages.mockResolvedValue({ messages: [], messageTruncation: null });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -856,7 +979,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'a duck on a bicycle' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'a duck on a bicycle' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'a duck on a bicycle' });
 
@@ -927,7 +1053,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1033,7 +1162,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1163,7 +1295,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1258,7 +1393,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1338,7 +1476,10 @@ describe('ChatCompletionProcess', () => {
             supportsImageVariation: false,
           },
         ]);
-        mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: `hi ${FORCE_FALLBACK_TEST_MARKER}` }]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: `hi ${FORCE_FALLBACK_TEST_MARKER}` }],
+          messageTruncation: null,
+        });
         mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
         mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'hi' });
 
@@ -1427,7 +1568,10 @@ describe('ChatCompletionProcess', () => {
             supportsImageVariation: false,
           },
         ]);
-        mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: `hi ${FORCE_FALLBACK_TEST_MARKER}` }]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: `hi ${FORCE_FALLBACK_TEST_MARKER}` }],
+          messageTruncation: null,
+        });
         mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
         mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'hi' });
 
@@ -1479,7 +1623,10 @@ describe('ChatCompletionProcess', () => {
             supportsImageVariation: false,
           },
         ]);
-        mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: `hi ${FORCE_FALLBACK_TEST_MARKER}` }]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: `hi ${FORCE_FALLBACK_TEST_MARKER}` }],
+          messageTruncation: null,
+        });
         mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
         mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'hi' });
 
@@ -1522,7 +1669,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1571,7 +1721,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1620,7 +1773,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1688,7 +1844,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1749,7 +1908,10 @@ describe('ChatCompletionProcess', () => {
             supportsImageVariation: false,
           },
         ]);
-        mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
         mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
         mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
 
@@ -1986,7 +2148,10 @@ describe('ChatCompletionProcess', () => {
         },
       ] as any);
       mockedBuildAndSortMessages.mockClear();
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }] as any);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
@@ -2076,7 +2241,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: params.message }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: params.message }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: params.message });
 
@@ -2167,7 +2335,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ] as any);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }] as any);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
@@ -2233,7 +2404,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: params.message }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: params.message }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: params.message });
 
@@ -2373,7 +2547,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ] as any);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }] as any);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
@@ -2594,7 +2771,10 @@ describe('ChatCompletionProcess', () => {
 
     function setupTimeoutMocks() {
       mockedGetAvailableModels.mockResolvedValue([modelInfo]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
       // Timeout errors are retryable
@@ -2767,7 +2947,10 @@ describe('ChatCompletionProcess', () => {
 
     function setupStreamIdleTimeoutMocks() {
       mockedGetAvailableModels.mockResolvedValue([modelInfo]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
       mockedShouldTriggerFallback.mockReturnValue(true);
@@ -3070,6 +3253,54 @@ describe('shouldDeferCorpusToRetrieval (per-doc even-split depth floor)', () => 
     expect(
       shouldDeferCorpusToRetrieval({ retrievableCount: 0, attachedFileTokenBudget: 4000, minInlineTokensPerDoc: 500 })
     ).toBe(false);
+  });
+
+  describe('per-lake grounding mode overrides the size heuristic', () => {
+    it("'inline' never defers, even when the size rule alone would (large corpus)", () => {
+      // 4000 / 40 = 100 < 500 would defer under auto-by-size; inline suppresses that.
+      expect(
+        shouldDeferCorpusToRetrieval({
+          retrievableCount: 40,
+          attachedFileTokenBudget: 4000,
+          minInlineTokensPerDoc: 500,
+          groundingMode: 'inline',
+        })
+      ).toBe(false);
+    });
+
+    it("'retrieve' always defers the retrievable subset, even with the size feature OFF", () => {
+      // minInlineTokensPerDoc: 0 is the size off-switch; retrieve defers by policy regardless.
+      expect(
+        shouldDeferCorpusToRetrieval({
+          retrievableCount: 3,
+          attachedFileTokenBudget: 4000,
+          minInlineTokensPerDoc: 0,
+          groundingMode: 'retrieve',
+        })
+      ).toBe(true);
+    });
+
+    it("'retrieve' still never defers when nothing is retrievable (anti-strand wins over the mode)", () => {
+      expect(
+        shouldDeferCorpusToRetrieval({
+          retrievableCount: 0,
+          attachedFileTokenBudget: 4000,
+          minInlineTokensPerDoc: 0,
+          groundingMode: 'retrieve',
+        })
+      ).toBe(false);
+    });
+
+    it("'auto-by-size' matches the absent-mode size behavior exactly", () => {
+      const size = { retrievableCount: 40, attachedFileTokenBudget: 4000, minInlineTokensPerDoc: 500 };
+      expect(shouldDeferCorpusToRetrieval({ ...size, groundingMode: 'auto-by-size' })).toBe(
+        shouldDeferCorpusToRetrieval(size)
+      );
+      const small = { retrievableCount: 3, attachedFileTokenBudget: 4000, minInlineTokensPerDoc: 500 };
+      expect(shouldDeferCorpusToRetrieval({ ...small, groundingMode: 'auto-by-size' })).toBe(
+        shouldDeferCorpusToRetrieval(small)
+      );
+    });
   });
 });
 
