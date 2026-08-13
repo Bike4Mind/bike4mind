@@ -107,7 +107,9 @@ async function handleAdd(
   // other's security gate - the whole reason `dataLakeIngestAuthz` exists - and it is bounded (one
   // extra lake lookup, only when a single message carries both a file and a link). The user-visible
   // half of the cost, a refusal printed twice, is handled where the replies are joined below.
-  const replies: string[] = [];
+  //
+  // `ok` is carried alongside the text because only REFUSALS are de-duplicated - see the join.
+  const replies: Array<{ text: string; ok: boolean }> = [];
 
   if (params.files.length > 0) {
     const outcome = await ingestSlackFilesIntoLake(
@@ -120,7 +122,10 @@ async function handleAdd(
       },
       params.deps
     );
-    replies.push(formatIngestOutcome(outcome, { autoChunkEnabled: params.autoChunkEnabled }));
+    replies.push({
+      text: formatIngestOutcome(outcome, { autoChunkEnabled: params.autoChunkEnabled }),
+      ok: outcome.ok,
+    });
   }
 
   if (parsed.link) {
@@ -134,7 +139,7 @@ async function handleAdd(
       },
       params.deps
     );
-    replies.push(formatLinkOutcome(outcome, { autoChunkEnabled: params.autoChunkEnabled }));
+    replies.push({ text: formatLinkOutcome(outcome, { autoChunkEnabled: params.autoChunkEnabled }), ok: outcome.ok });
   }
 
   if (replies.length === 0) {
@@ -143,9 +148,22 @@ async function handleAdd(
 
   // Both halves authorize independently (see the note on the paired calls above), so an actor who is
   // refused gets the SAME refusal sentence from each - which reads as a stutter rather than as two
-  // half-outcomes. Collapse exact duplicates while preserving order: two genuine outcomes always
-  // differ, because each names its own file or link.
-  return [...new Set(replies)].join('\n');
+  // half-outcomes. Collapse those, preserving order.
+  //
+  // REFUSALS ONLY, deliberately. Two successes could in principle format identically - same lake, and
+  // a file whose name happens to match the link's page title - and collapsing one of those would
+  // under-report a write that really happened. A duplicated refusal is cosmetic; a swallowed success
+  // is a lie about what is in the lake.
+  const seenRefusals = new Set<string>();
+  return replies
+    .filter(reply => {
+      if (reply.ok) return true;
+      if (seenRefusals.has(reply.text)) return false;
+      seenRefusals.add(reply.text);
+      return true;
+    })
+    .map(reply => reply.text)
+    .join('\n');
 }
 
 /**
