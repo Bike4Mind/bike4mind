@@ -21,6 +21,20 @@ const dnsResolve6 = promisify(dns.resolve6);
  * Check if an IPv4 address is in a private/internal range.
  */
 function isPrivateIPv4(ip: string): boolean {
+  // Ambiguity check FIRST, and against a looser shape than the canonical pattern below. A
+  // non-canonical octet - one with a leading zero, e.g. `0177.0.0.1` - is treated as BLOCKED rather
+  // than parsed: `Number('0177')` is 177 decimal, but an inet_aton-style parser reads it as octal and
+  // gets 127, so the very same string can look public here and resolve to loopback in whatever stack
+  // eventually dials it. We cannot know which reading the downstream resolver takes, so the ambiguity
+  // itself is refused.
+  //
+  // It must be a SEPARATE, wider regex: `0177` is four digits, so it never matches the `\d{1,3}`
+  // pattern below and would otherwise fall through as "not an IPv4 address at all" - which is exactly
+  // how it slipped past. Canonical addresses never carry a leading zero, and a bare `0` octet still
+  // does (length 1), so nothing legitimate is refused.
+  const nonCanonical = ip.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (nonCanonical && nonCanonical.slice(1).some(octet => octet.length > 1 && octet.startsWith('0'))) return true;
+
   const ipv4Match = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (!ipv4Match) return false;
 
@@ -116,8 +130,11 @@ function isPrivateIPv6(ip: string): boolean {
  * Check if an IP address (IPv4 or IPv6) is in a private/internal range.
  */
 export function isPrivateIP(ip: string): boolean {
-  // Check if it's IPv4
-  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(ip)) {
+  // Check if it's IPv4. Deliberately `\d+` rather than `\d{1,3}`: a non-canonical octet like the
+  // `0177` in `0177.0.0.1` is four digits, so a `\d{1,3}` gate here would route an ambiguous IPv4
+  // literal into the IPv6 branch, which returns false for it. `isPrivateIPv4` is what decides whether
+  // the form is acceptable; this only decides which family to hand it to.
+  if (/^(\d+\.){3}\d+$/.test(ip)) {
     return isPrivateIPv4(ip);
   }
 
@@ -163,8 +180,10 @@ export function isPrivateOrInternalHostname(hostname: string): boolean {
     return true;
   }
 
-  // Check if it's an IP address in private ranges
-  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(normalized)) {
+  // Check if it's an IP address in private ranges. `\d+` not `\d{1,3}` for the same reason as in
+  // `isPrivateIP`: a non-canonical octet can be longer than three digits, and this gate decides only
+  // which family to dispatch to, never whether the literal is acceptable.
+  if (/^(\d+\.){3}\d+$/.test(normalized)) {
     return isPrivateIPv4(normalized);
   }
 
