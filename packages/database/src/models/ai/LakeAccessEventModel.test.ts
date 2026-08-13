@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import * as fs from 'fs';
+import { execFileSync } from 'child_process';
 import * as path from 'path';
 import type { RecordLakeAccessEventInput } from '@bike4mind/common';
 import { LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS, LAKE_ACCESS_AUDIT_RETENTION_MAX_DAYS } from '@bike4mind/common';
@@ -341,34 +341,34 @@ describe('LakeAccessEventModel / lakeAccessEventRepository.record', () => {
 
     it('no other source file writes to LakeAccessEventModel/LakeAccessQueryTextModel outside their own repository methods', () => {
       const repoRoot = path.resolve(__dirname, '../../../../..');
-      const thisFile = path.resolve(__dirname, 'LakeAccessEventModel.test.ts');
+      const relFromRoot = (p: string) => path.relative(repoRoot, p).split(path.sep).join('/');
       const allowedFiles = new Set([
-        thisFile,
-        path.resolve(__dirname, 'LakeAccessEventModel.ts'),
-        path.resolve(__dirname, 'LakeAccessQueryTextModel.ts'),
+        relFromRoot(path.resolve(__dirname, 'LakeAccessEventModel.test.ts')),
+        relFromRoot(path.resolve(__dirname, 'LakeAccessEventModel.ts')),
+        relFromRoot(path.resolve(__dirname, 'LakeAccessQueryTextModel.ts')),
       ]);
-      const skipDirs = new Set(['node_modules', '.git', 'dist', '.turbo', '.next', 'coverage', '.claude']);
-      // Covers the ordinary query-update verbs AND the raw-driver/collection escape hatch and
-      // overwriteImmutable, on BOTH models - the two prior gaps this test used to have. Grep
-      // cannot catch an aliased import (`import { LakeAccessEventModel as X }`), which is a real
-      // limit of a text-pattern guard, not a claim this test makes.
+      // `git grep` only searches TRACKED files (no explicit node_modules/.git/dist skip-list
+      // needed) and is dramatically faster than a synchronous fs walk of the whole monorepo -
+      // the walk this replaced timed out CI's 15s default even though it ran in well under a
+      // second locally. Covers the ordinary query-update verbs AND the raw-driver/collection
+      // escape hatch and overwriteImmutable, on BOTH models. Cannot catch an aliased import
+      // (`import { LakeAccessEventModel as X }`), a real limit of a text-pattern guard.
       const pattern =
-        /(LakeAccessEventModel|LakeAccessQueryTextModel)\s*\.\s*(updateOne|updateMany|findOneAndUpdate|bulkWrite|replaceOne|collection)\s*[.(]/;
-      const offenders: string[] = [];
-
-      const walk = (dir: string) => {
-        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-          if (entry.isDirectory()) {
-            if (skipDirs.has(entry.name)) continue;
-            walk(path.join(dir, entry.name));
-          } else if (entry.isFile() && (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx'))) {
-            const full = path.join(dir, entry.name);
-            if (allowedFiles.has(full)) continue;
-            if (pattern.test(fs.readFileSync(full, 'utf-8'))) offenders.push(full);
-          }
-        }
-      };
-      walk(repoRoot);
+        '(LakeAccessEventModel|LakeAccessQueryTextModel)\\s*\\.\\s*(updateOne|updateMany|findOneAndUpdate|bulkWrite|replaceOne|collection)\\s*[.(]';
+      let output = '';
+      try {
+        output = execFileSync('git', ['grep', '-lP', pattern, '--', '*.ts', '*.tsx'], {
+          cwd: repoRoot,
+          encoding: 'utf-8',
+        });
+      } catch (err) {
+        // Exit code 1 from `git grep` means "no matches" - not a real error.
+        if ((err as { status?: number }).status !== 1) throw err;
+      }
+      const offenders = output
+        .split('\n')
+        .filter(Boolean)
+        .filter(file => !allowedFiles.has(file));
 
       expect(offenders).toEqual([]);
     });
