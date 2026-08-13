@@ -1,4 +1,5 @@
 import type { IMessage } from '@bike4mind/common';
+import type { BuilderInjectedBlock } from '@bike4mind/utils';
 import {
   ALWAYS_ON_FLOOR_SOURCES,
   PROMPT_SOURCE_METADATA,
@@ -6,6 +7,7 @@ import {
   type PromptSourceId,
   type TaggedSystemMessage,
 } from './systemPromptSources';
+import { INJECTED_BLOCK_METADATA } from './systemPromptFloorTelemetry';
 
 /**
  * The system prompt TEXT a completion was assembled from, per source.
@@ -68,11 +70,17 @@ const wasDelivered = (message: IMessage, includedMessages?: ReadonlySet<IMessage
  * `includedMessages` is the set that reached the model, by reference. Passing it keeps the
  * disclosure honest about the budget dropping a block: text the model never saw is not returned
  * as though it had been.
+ *
+ * `injectedBlocks` covers the two blocks `buildAndSortMessages` injects itself (format/image
+ * prompt) - a 4th param rather than folding them into `PromptSourceId`/`PROMPT_SOURCE_ORDER`,
+ * which would force entries across four other tables in systemPromptSources.ts and collide with
+ * the deliberate utils/services import-boundary split documented there.
  */
 export function buildSystemPromptText(
   tagged: TaggedSystemMessage[],
   includedMessages?: ReadonlySet<IMessage>,
-  maxTextChars: number = SYSTEM_PROMPT_TEXT_MAX_CHARS
+  maxTextChars: number = SYSTEM_PROMPT_TEXT_MAX_CHARS,
+  injectedBlocks: readonly BuilderInjectedBlock[] = []
 ): SystemPromptTextDisclosure {
   const blocks: SystemPromptTextBlock[] = [];
   let charsUsed = 0;
@@ -122,6 +130,24 @@ export function buildSystemPromptText(
 
     charsUsed += text.length;
     blocks.push({ source: origin, name, text, redacted: false });
+  }
+
+  // Same complete-inventory contract as the loop above: a row per id regardless of gate/delivery,
+  // text only when the block actually reached the model.
+  for (const id of ['formatPrompt', 'imagePrompt'] as const) {
+    const block = injectedBlocks.find(b => b.id === id);
+    const { source, name } = INJECTED_BLOCK_METADATA[id];
+    if (!block?.injected || !block.delivered || !block.content) {
+      blocks.push({ source, name, redacted: false });
+      continue;
+    }
+    if (charsUsed + block.content.length > maxTextChars) {
+      sizeCapped = true;
+      blocks.push({ source, name, redacted: true });
+      continue;
+    }
+    charsUsed += block.content.length;
+    blocks.push({ source, name, text: block.content, redacted: false });
   }
 
   return { blocks, sizeCapped };

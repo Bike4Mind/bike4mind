@@ -149,7 +149,7 @@ import {
   aggregateWebFetchContentTelemetry,
 } from '../telemetry';
 import type { ToolTelemetry, ToolErrorCategory, SystemPromptDetail, DataLakeGroundingMode } from '@bike4mind/common';
-import { buildAlwaysOnFloorDetails } from './systemPromptFloorTelemetry';
+import { buildAlwaysOnFloorDetails, buildInjectedBlockDetails } from './systemPromptFloorTelemetry';
 import { resolveArtifactsEnabled } from './artifactGating';
 import { resolveMementoGates } from './mementoGating';
 import {
@@ -2614,6 +2614,11 @@ export class ChatCompletionProcess {
       );
       let messages = firstBuild.messages;
       const messageTruncationInfo = firstBuild.messageTruncation;
+      // Unlike messageTruncationInfo, this DOES get refreshed by the overflow-recovery rebuild below -
+      // that rebuild produces fresh message identities, so pinning to the first build would report
+      // both blocks as token_limit-excluded on every turn that overflows. `?? []` covers a test mock
+      // stubbing buildAndSortMessages without this field - the real function always returns it.
+      let injectedBlocks = firstBuild.injectedBlocks ?? [];
       // The length check is the part that matters: buildAndSortMessages returns an EMPTY messages
       // array when the input budget is non-positive, and `!messages` is false for `[]`, so an empty
       // prompt used to reach the model. It then answers confidently from nothing, which reads to the
@@ -2751,7 +2756,7 @@ export class ChatCompletionProcess {
             if (!trimmed) break; // only the most-recent turn left: system/tools/prompt itself is oversized
             recoveryHistory = trimmed;
             // messageTruncationInfo is deliberately not refreshed here - it stays pinned to the first build.
-            const { messages: rebuilt } = await buildAndSortMessages(
+            const { messages: rebuilt, injectedBlocks: rebuiltBlocks } = await buildAndSortMessages(
               recoveryHistory,
               contextAndSystemMessages,
               currentUserPromptMessages,
@@ -2764,6 +2769,10 @@ export class ChatCompletionProcess {
             );
             if (!rebuilt || rebuilt.length === 0) break; // keep the last good build; guard below decides
             messages = rebuilt;
+            // Unlike messageTruncationInfo, refreshed here: the rebuild produces fresh message
+            // identities, so the first build's injectedBlocks would misreport delivery against this
+            // payload.
+            injectedBlocks = rebuiltBlocks ?? [];
             shedTurns++;
             [effectiveTotalTokens, effectiveHistoryTokens] = await Promise.all([
               calculateTotalTokenLength(messages, tokenCalcOptions),
@@ -2821,12 +2830,14 @@ export class ChatCompletionProcess {
       // from (see systemPromptSources) rather than re-listed by hand here. The hand-written
       // version this replaces covered a third of the sources and reported a `session_summary`
       // row built from `session.summary`, a field the assembled prompt never carried - it
-      // carries `session.contextSummary`. Sources appended downstream by buildAndSortMessages
-      // (FormatPromptTemplate, image prompt) are still not represented here. The two always-on
-      // floor sources come from systemPromptFloorTelemetry, which owns those rows outright -
+      // carries `session.contextSummary`. The two always-on floor sources come from
+      // systemPromptFloorTelemetry's buildAlwaysOnFloorDetails, which owns those rows outright -
       // including the wasIncluded:false inventory rows a derivation from the admitted stack
       // cannot produce; inclusion is read off the admitted stack rather than the raw settings
-      // gates, so a promptMode that strips a block reports it excluded instead of billed (#810).
+      // gates, so a promptMode that strips a block reports it excluded instead of billed.
+      // The two blocks buildAndSortMessages appends downstream of this stack (FormatPromptTemplate,
+      // image prompt) are itemized separately below via buildInjectedBlockDetails, reading
+      // injectedBlocks back off that call rather than re-deriving the same gates a second time here.
       //
       // Persisted on the quest for every completion - unlike contextTelemetry, which exists
       // only when enhanced telemetry is on - so the API layer can report which prompts fed a
@@ -2882,9 +2893,23 @@ export class ChatCompletionProcess {
             content => calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions)
           ))
         );
-        quest.promptMeta!.context!.systemPromptDetails = systemPromptDetails;
       } catch (detailsError) {
         logger.warn(`📊 Failed to derive system prompt details:`, detailsError);
+      }
+
+      // Isolated from the try above: buildInjectedBlockDetails is new, so a throw here must not
+      // drop the floor rows toPromptDetails/buildAlwaysOnFloorDetails already computed.
+      if (systemPromptDetails) {
+        try {
+          systemPromptDetails.push(
+            ...(await buildInjectedBlockDetails(injectedBlocks, content =>
+              calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions)
+            ))
+          );
+        } catch (injectedDetailsError) {
+          logger.warn(`📊 Failed to itemize injected format/image prompt blocks:`, injectedDetailsError);
+        }
+        quest.promptMeta!.context!.systemPromptDetails = systemPromptDetails;
       }
 
       // Opt-in only, and built from the same tagged stack the breakdown above is derived from, so
@@ -2892,7 +2917,12 @@ export class ChatCompletionProcess {
       // written to the quest.
       if (parsedBody.includeSystemPrompt) {
         try {
-          this.systemPromptText = buildSystemPromptText(admittedContextMessages, deliveredMessages);
+          this.systemPromptText = buildSystemPromptText(
+            admittedContextMessages,
+            deliveredMessages,
+            undefined,
+            injectedBlocks
+          );
         } catch (promptTextError) {
           logger.warn(`📊 Failed to itemize the effective system prompt:`, promptTextError);
         }

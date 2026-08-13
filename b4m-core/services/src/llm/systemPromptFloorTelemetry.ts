@@ -1,4 +1,5 @@
 import type { SystemPromptDetail } from '@bike4mind/common';
+import type { BuilderInjectedBlock, BuilderInjectedBlockId } from '@bike4mind/utils';
 
 /**
  * Resolved inputs for the always-on system-prompt floor. Content strings are
@@ -76,6 +77,57 @@ export async function buildAlwaysOnFloorDetails(
     wasIncluded: helpCenterIncluded,
     ...(helpCenterReason ? { exclusionReason: helpCenterReason } : {}),
   });
+
+  return details;
+}
+
+/**
+ * Which source/name each injected block reports as, for the Context Inspector join. Exported so
+ * systemPromptDisclosure's text-side row for the same two blocks uses the identical source/name -
+ * a second copy of this table would let the breakdown and the disclosure disagree.
+ */
+export const INJECTED_BLOCK_METADATA: Record<
+  BuilderInjectedBlockId,
+  { source: SystemPromptDetail['source']; name: string }
+> = {
+  // FormatPromptTemplate is an admin-editable setting; the image nudge's wording is hardcoded and only
+  // its on/off condition (UseImagePrompt, IMAGE_REQUEST_PATTERN, imageGenerationAvailable) is settings-driven.
+  formatPrompt: { source: 'admin', name: 'format_prompt' },
+  imagePrompt: { source: 'hardcoded', name: 'image_prompt' },
+};
+
+/**
+ * Itemize the two always-on blocks `buildAndSortMessages` injects itself (see BuilderInjectedBlock),
+ * downstream of where the caller assembles its own systemPromptDetails - closing the gap where their
+ * real, billed tokens previously landed in the opaque `tokensBySource` residual instead of a named row.
+ *
+ * Mirrors buildAlwaysOnFloorDetails: iterates the fixed id list rather than the input array, so a
+ * caller passing an empty/incomplete `blocks` array still gets a complete two-row inventory, and never
+ * counts tokens for a row that was not delivered.
+ */
+export async function buildInjectedBlockDetails(
+  blocks: readonly BuilderInjectedBlock[],
+  countTokens: (content: string) => Promise<number>
+): Promise<SystemPromptDetail[]> {
+  const details: SystemPromptDetail[] = [];
+
+  for (const id of ['formatPrompt', 'imagePrompt'] as const) {
+    const block = blocks.find(b => b.id === id);
+    const metadata = INJECTED_BLOCK_METADATA[id];
+    const wasIncluded = (block?.injected ?? false) && (block?.delivered ?? false);
+    const exclusionReason = !block?.injected
+      ? ('disabled' as const)
+      : wasIncluded
+        ? undefined
+        : ('token_limit' as const);
+    details.push({
+      source: metadata.source,
+      name: metadata.name,
+      tokenCount: wasIncluded && block?.content ? await countTokens(block.content) : 0,
+      wasIncluded,
+      ...(exclusionReason ? { exclusionReason } : {}),
+    });
+  }
 
   return details;
 }

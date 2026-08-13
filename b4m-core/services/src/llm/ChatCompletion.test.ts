@@ -851,6 +851,42 @@ describe('ChatCompletionProcess', () => {
         expect(details.map(d => d.name).filter(name => !disclosedNames.includes(name))).toEqual([]);
       });
 
+      // Proves the ChatCompletionProcess wiring itself: buildAndSortMessages's injectedBlocks reaches
+      // both the persisted breakdown and the opt-in disclosure, joined on the same name.
+      it('itemizes a delivered injected block into both systemPromptDetails and the disclosure', async () => {
+        mockTextModel();
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [
+            { role: 'system', content: 'Formatting only.' },
+            { role: 'user', content: 'Hello' },
+          ],
+          messageTruncation: null,
+          injectedBlocks: [
+            { id: 'formatPrompt', injected: true, delivered: true, content: 'Formatting only.' },
+            { id: 'imagePrompt', injected: false, delivered: false, reason: 'not_triggered' },
+          ],
+        });
+        const body = {
+          ...startQuestParams,
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+          includeSystemPrompt: true,
+        };
+
+        await service.process({ body, logger: mockLogger });
+
+        const savedQuest = vi.mocked(mockDb.quests.update).mock.calls.at(-1)?.[0] as {
+          promptMeta?: { context?: { systemPromptDetails?: { name: string; wasIncluded: boolean }[] } };
+        };
+        const details = savedQuest.promptMeta?.context?.systemPromptDetails ?? [];
+        expect(details.find(d => d.name === 'format_prompt')).toEqual(expect.objectContaining({ wasIncluded: true }));
+        expect(details.find(d => d.name === 'image_prompt')).toEqual(
+          expect.objectContaining({ wasIncluded: false, exclusionReason: 'disabled' })
+        );
+        expect(service.systemPromptText?.blocks.find(b => b.name === 'format_prompt')?.text).toBe('Formatting only.');
+      });
+
       it('builds no prompt text unless the caller asked, so the default response carries none', async () => {
         mockTextModel();
         const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
