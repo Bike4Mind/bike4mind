@@ -135,13 +135,27 @@ function resolveServeBudget(rawChunkSize: string | number | null | undefined, lo
   // warns and falls back to the chunker's own default - which is what the chunker does with it too.
   const target = positiveIntOr(rawChunkSize, DEFAULT_PASSAGE_TOKEN_TARGET, 'DefaultChunkSize', logger);
   const budget = deriveServeCharBudget(target);
-  if (budget.ceilingBound) {
+  if (budget.ceilingBound && !ceilingWarnedTargets.has(budget.chunkTokenTarget)) {
+    ceilingWarnedTargets.add(budget.chunkTokenTarget);
     logger?.warn?.(
       `[semanticSearch] chunk target ${budget.chunkTokenTarget} tokens exceeds the per-passage serve ceiling; ` +
         `serving ${budget.maxChunkChars} chars per chunk, so large chunks will be clipped`
     );
   }
   return budget.maxChunkChars;
+}
+
+/**
+ * The ceiling warn states a CONFIG fact, not a per-request one, and this resolver sits on the hot chat
+ * path (search runs up to MAX_SEARCHES times a turn, for every user). Warning on every call would bury
+ * the signal in its own repetition, so it fires once per distinct token target per process. A config
+ * change to a new value warns again, which is the only transition an operator needs to see.
+ */
+const ceilingWarnedTargets = new Set<number>();
+
+/** Test-only: the limiter above is module state, so a test asserting it has to start from a clean slate. */
+export function resetServeCeilingWarnLimiter(): void {
+  ceilingWarnedTargets.clear();
 }
 
 function scopeHasRung(scope: SettingScope): boolean {
