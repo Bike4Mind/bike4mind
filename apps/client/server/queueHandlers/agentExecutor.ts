@@ -725,27 +725,28 @@ async function processExecution(
     }
 
     // Get API keys and LLM backend
-    const [apiKeyTable, toolAvailability] = await Promise.all([
-      apiKeyService.getEffectiveLLMApiKeys(execution.userId, {
-        db: {
-          apiKeys: apiKeyRepository,
-          adminSettings: adminSettingsRepository,
-        },
-        getSettingsByNames,
-      }),
-      // Never rejects (see resolveToolAvailability's doc comment), so it's safe alongside the key
-      // fetch above. Fail-closed here (unlike the Tools picker UI's fail-open default): an agent
-      // run has nobody in the loop to add a missing key, so a tool this lookup couldn't confirm
-      // works should not reach the model. Resolved per-user because that is the identity the tools
-      // themselves use for their keys at call time (toolDeps.userId below).
+    const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(execution.userId, {
+      db: {
+        apiKeys: apiKeyRepository,
+        adminSettings: adminSettingsRepository,
+      },
+      getSettingsByNames,
+    });
+
+    // Availability overlaps the models fetch rather than the key fetch above, so the key table can
+    // be handed over instead of re-read inside the resolver. Never rejects (see its doc comment).
+    // Fail-closed here (unlike the Tools picker UI's fail-open default): an agent run has nobody in
+    // the loop to add a missing key, so a tool this lookup couldn't confirm works should not reach
+    // the model. Resolved per-user because that is the identity the tools themselves use for their
+    // keys at call time (toolDeps.userId below).
+    const [models, toolAvailability] = await Promise.all([
+      getAvailableModels(apiKeyTable as ApiKeyTable),
       resolveToolAvailability(
         execution.userId,
         { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } },
-        { onLookupError: 'unavailable', logger }
+        { onLookupError: 'unavailable', logger, llmKeys: apiKeyTable }
       ),
     ]);
-
-    const models = await getAvailableModels(apiKeyTable as ApiKeyTable);
     // Upgrade a deprecated/retired model id to its modern equivalent before lookup. getAvailableModels
     // filters retired ids out, so an agent/session still pinned to a sunset snapshot would otherwise
     // miss the lookup and throw instead of running on the mapped replacement.
@@ -2535,21 +2536,21 @@ async function processSubagentDispatch(
     }
 
     // Resolve LLM + models.
-    const [apiKeyTable, toolAvailability] = await Promise.all([
-      apiKeyService.getEffectiveLLMApiKeys(child.userId, {
-        db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
-        getSettingsByNames,
-      }),
-      // Resolved for the CHILD's user, the identity its tools use for their own keys at call time
-      // (toolDeps.userId below). Fail-closed for the same reason as the parent path: nobody is in
-      // the loop to add a missing key mid-run. Never rejects, so it is safe in this Promise.all.
+    const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(child.userId, {
+      db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
+      getSettingsByNames,
+    });
+    // Resolved for the CHILD's user, the identity its tools use for their own keys at call time
+    // (toolDeps.userId below), and handed the key table above so it is not read twice. Fail-closed
+    // for the same reason as the parent path: nobody is in the loop to add a missing key mid-run.
+    const [models, toolAvailability] = await Promise.all([
+      getAvailableModels(apiKeyTable as ApiKeyTable),
       resolveToolAvailability(
         child.userId,
         { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } },
-        { onLookupError: 'unavailable', logger }
+        { onLookupError: 'unavailable', logger, llmKeys: apiKeyTable }
       ),
     ]);
-    const models = await getAvailableModels(apiKeyTable as ApiKeyTable);
     const modelInfo = models.find((m: { id: string }) => m.id === child.model);
     const llm = getLlmByModel(apiKeyTable as ApiKeyTable, { modelInfo, logger, endUserId: child.userId });
     if (!llm) throw new Error(`Failed to create LLM backend for model "${child.model}"`);
