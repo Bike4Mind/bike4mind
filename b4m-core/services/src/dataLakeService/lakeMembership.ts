@@ -1,25 +1,36 @@
 import { DATALAKE_TAG_PREFIX, DATALAKE_TAG_STRENGTH, prefixArmTagNames } from '@bike4mind/common';
-import type { IDataLakeDocument, IFabFileRepository } from '@bike4mind/common';
+import type { IDataLakeAccessGrantRepository, IDataLakeDocument, IFabFileRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from './assertLakeAccess';
-import { canManageLake } from './authorizeLakeWrite';
+import { type ManageActor } from './manageRule';
+import { resolveCanManageLake } from './authorizeLakeManage';
 
 /** The acting principal for a membership write - resolved from auth, never from the body. */
-export type MembershipActor = { userId: string; isAdmin: boolean };
+export type MembershipActor = ManageActor;
 
 /**
  * The lake fields a membership write needs. Taking the resolved document rather than an id lets
  * a caller that already holds the lake (or resolved it by meta-tag rather than by id) reuse it
- * instead of refetching.
+ * instead of refetching. `organizationId` feeds the org-manageable manage rung.
  */
-export type MembershipLake = Pick<IDataLakeDocument, 'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId'>;
+export type MembershipLake = Pick<
+  IDataLakeDocument,
+  'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId' | 'organizationId'
+>;
 
 interface RemoveMembershipAdapters {
-  db: { fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId'> };
+  db: {
+    fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId'>;
+    // Optional: absent -> manage falls back to createdByUserId + org rung (see loadActiveLakeGrants).
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+  };
 }
 
 interface AddMembershipAdapters {
-  db: { fabFiles: Pick<IFabFileRepository, 'pushTagsByFabFileId'> };
+  db: {
+    fabFiles: Pick<IFabFileRepository, 'pushTagsByFabFileId'>;
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+  };
 }
 
 /**
@@ -39,8 +50,8 @@ export const removeFileFromLake = async (
   fabFileId: string,
   { db }: RemoveMembershipAdapters
 ): Promise<void> => {
-  if (!canManageLake(lake, actor)) {
-    throw new BadRequestError('Only the creator can remove files from this data lake');
+  if (!(await resolveCanManageLake(lake, actor, { db }))) {
+    throw new BadRequestError('You do not have permission to remove files from this data lake');
   }
   // A fallback lake has no document to hold membership, so there is nothing to remove from.
   assertLakeWritable(lake);
@@ -101,8 +112,8 @@ export const addFileToLake = async (
   fabFileId: string,
   { db }: AddMembershipAdapters
 ): Promise<void> => {
-  if (!canManageLake(lake, actor)) {
-    throw new BadRequestError('Only the creator can add files to this data lake');
+  if (!(await resolveCanManageLake(lake, actor, { db }))) {
+    throw new BadRequestError('You do not have permission to add files to this data lake');
   }
   assertLakeWritable(lake);
 

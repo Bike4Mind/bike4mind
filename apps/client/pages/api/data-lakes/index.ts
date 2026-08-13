@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository, userRepository } from '@bike4mind/database';
+import { dataLakeRepository, dataLakeAccessGrantRepository, userRepository } from '@bike4mind/database';
 import { CreateDataLakeRequestInput } from '@bike4mind/common';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
@@ -16,7 +16,12 @@ const handler = baseApi()
     // manager list is "lakes I can reach", not "lakes I own" (org lakes, others' public lakes,
     // and - for an admin - every tenant's lakes surface here), so a not-own lake is marked to
     // prevent an admin from managing someone else's by mistake.
-    const db = { dataLakes: dataLakeRepository, users: userRepository };
+    const db = {
+      dataLakes: dataLakeRepository,
+      users: userRepository,
+      // Grant repo: makes isOwn/canManage labels grant-aware and surfaces a transferred/granted lake.
+      dataLakeAccessGrants: dataLakeAccessGrantRepository,
+    };
     // Admins see all data lakes; non-admins see only those they can access (owner/org/tag).
     const dataLakes = ctx.isAdmin
       ? await dataLakeService.listAllDataLakes(ctx, { db })
@@ -36,7 +41,10 @@ const handler = baseApi()
     const dataLake = await dataLakeService.createDataLake(
       userId,
       params,
-      { db: { dataLakes: dataLakeRepository } },
+      {
+        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+        logger: req.logger,
+      },
       organizationId
     );
 

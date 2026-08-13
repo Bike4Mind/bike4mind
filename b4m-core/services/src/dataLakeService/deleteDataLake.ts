@@ -1,11 +1,13 @@
 import type {
+  IDataLakeAccessGrantRepository,
   IDataLakeDocument,
   IDataLakeRepository,
   IDataLakeBatchRepository,
   IFabFileRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { canManageLake } from './manageRule';
+import { type ManageActor } from './manageRule';
+import { resolveCanManageLake } from './authorizeLakeManage';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
 import { bestEffortIndexRemove, type RetrievalIndexPort } from './ports';
@@ -13,6 +15,7 @@ import { bestEffortIndexRemove, type RetrievalIndexPort } from './ports';
 interface DeleteDataLakeAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'find' | 'claimFilesDeletedAt'>;
+    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
     batches: Pick<IDataLakeBatchRepository, 'findActiveByDataLakeId' | 'markTerminalIfActive'>;
     fabFiles: Pick<IFabFileRepository, 'softDeleteByDataLakeTag' | 'findIdsByDataLakeTag'>;
   };
@@ -28,7 +31,7 @@ interface DeleteDataLakeAdapters {
  * is a separate, explicit phase 2 (cleanupDeletedDataLake). Owner or admin only.
  */
 export const deleteDataLake = async (
-  actor: { userId: string; isAdmin: boolean },
+  actor: ManageActor,
   dataLakeId: string,
   { db, retrievalIndex, logger }: DeleteDataLakeAdapters
 ): Promise<IDataLakeDocument> => {
@@ -36,8 +39,8 @@ export const deleteDataLake = async (
   if (!existing) {
     throw new NotFoundError('Data lake not found');
   }
-  if (!canManageLake(existing, actor)) {
-    throw new BadRequestError('Only the creator can delete this data lake');
+  if (!(await resolveCanManageLake(existing, actor, { db }))) {
+    throw new BadRequestError('You do not have permission to delete this data lake');
   }
   // Only short-circuit on the terminal state. A lake stuck in transitional 'deleting'
   // from a crashed prior attempt must be able to re-run; the phase-1 side effects

@@ -3,6 +3,7 @@ import {
   FabFileSourceType,
   KnowledgeType,
   type AccessContext,
+  type IDataLakeAccessGrantRepository,
   type IDataLakeDocument,
   type IDataLakeRepository,
   type IFabFileDocument,
@@ -64,6 +65,9 @@ export interface CreateLakeFileParams {
 export interface SlackLakeIngestDeps {
   // `find` is required by the fallback tagger, the others by the write gate.
   dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug' | 'findByDatalakeTag' | 'find'>;
+  // The write gate (assertLakeWriteAccess) resolves the lake's grants so a curator / transferred
+  // owner may ingest, not just the creator.
+  dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
   fabFiles: {
     findByContentHashesInDataLake(hashes: string[], datalakeTag: string): Promise<IFabFileDocument[]>;
   };
@@ -162,7 +166,9 @@ export async function ingestSlackFilesIntoLake(
   // Authorization first: resolve + write-gate the lake before any download or create.
   let lake: IDataLakeDocument;
   try {
-    lake = await dataLakeService.assertLakeWriteAccess(lakeSlug, ctx, { db: { dataLakes: deps.dataLakes } });
+    lake = await dataLakeService.assertLakeWriteAccess(lakeSlug, ctx, {
+      db: { dataLakes: deps.dataLakes, dataLakeAccessGrants: deps.dataLakeAccessGrants },
+    });
   } catch (err) {
     // Branch on the error CLASS, not the message. Matching /not found/i sent two reachable cases
     // down the wrong arm: a built-in lake (BadRequestError "...built into the platform and is

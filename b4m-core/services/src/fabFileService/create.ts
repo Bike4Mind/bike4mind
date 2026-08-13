@@ -1,5 +1,6 @@
 import {
   IAdminSettingsRepository,
+  IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFabFileDocument,
   IUserDocument,
@@ -62,6 +63,9 @@ export interface CreateFabFileAdapters {
       findById: (id: string) => Promise<IOrganizationDocument | null>;
     };
     dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'>;
+    // Optional: the file-create fan-in applies only its own/hardcoded datalake tags, so it need not
+    // wire the grant repo; assertCanWriteDataLakeTags degrades to the createdByUserId + org rung.
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
   };
   storage: {
     generateSignedUrl: (path: string, expireInSeconds: number, type?: 'get' | 'put') => Promise<string>;

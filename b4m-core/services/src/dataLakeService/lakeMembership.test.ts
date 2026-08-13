@@ -45,7 +45,7 @@ describe('addFileToLake', () => {
     const adapters = makeAdapters();
 
     await expect(addFileToLake({ userId: 'stranger', isAdmin: false }, lake(), 'f1', adapters)).rejects.toThrow(
-      /only the creator can add files/i
+      /do not have permission to add files/i
     );
     expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
   });
@@ -98,7 +98,7 @@ describe('removeFileFromLake', () => {
     const adapters = makeAdapters();
 
     await expect(removeFileFromLake({ userId: 'stranger', isAdmin: false }, lake(), 'f1', adapters)).rejects.toThrow(
-      /only the creator can remove files/i
+      /do not have permission to remove files/i
     );
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
   });

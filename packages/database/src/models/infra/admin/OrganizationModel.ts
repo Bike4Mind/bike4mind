@@ -158,9 +158,13 @@ OrganizationSchema.plugin(softDeletePlugin);
 // Per CLAUDE.md MongoDB guideline: performance indexes declared together here,
 // never as `index: true` on field definitions. `userId` (billing owner) and
 // `managerId` back `findIdsAdministeredBy`'s `$or`, which is on the hot path of
-// every `/api/skills` list call.
+// every `/api/skills` list call. `adminUserIds` backs the third arm of
+// `findIdsWithAdminRights`'s `$or` (#1668) - Mongo index-unions an `$or` only when EVERY
+// branch is index-supported, so without this the org-admin resolution `toAccessContext` runs
+// on every non-admin data-lake request would plan a full `organizations` collscan.
 OrganizationSchema.index({ userId: 1 });
 OrganizationSchema.index({ managerId: 1 });
+OrganizationSchema.index({ adminUserIds: 1 });
 
 export const Organization =
   (mongoose.models.Organization as IOrganizationModel) ??
@@ -388,6 +392,18 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   async findIdsAdministeredBy(userId: string): Promise<string[]> {
     const orgs = await this.organizationModel
       .find({ $or: [{ userId }, { managerId: userId }] })
+      .select('_id')
+      .lean();
+    return orgs.map(org => org._id.toString());
+  }
+
+  async findIdsWithAdminRights(userId: string): Promise<string[]> {
+    // Billing owner OR team manager OR an appointed org admin (adminUserIds). Broader than
+    // findIdsAdministeredBy, which omits appointed admins - see the interface doc for why this is a
+    // separate method. Matches the org-admin semantics of assertCanManageOrgGroups (billing owner +
+    // adminUserIds), extended with managerId for parity with findIdsAdministeredBy.
+    const orgs = await this.organizationModel
+      .find({ $or: [{ userId }, { managerId: userId }, { adminUserIds: userId }] })
       .select('_id')
       .lean();
     return orgs.map(org => org._id.toString());

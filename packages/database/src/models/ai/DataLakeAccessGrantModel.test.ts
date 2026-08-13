@@ -85,6 +85,32 @@ describe('DataLakeAccessGrantRepository', () => {
     expect(aliceLakes).toEqual(['lake-1', 'lake-2']);
   });
 
+  describe('listActiveByLakes - batched per-lake read for list-label resolution', () => {
+    it('returns grants for the given lakes in one call, and nothing for lakes not asked for', async () => {
+      await repo.upsertGrant(grant({ dataLakeId: 'lake-1', principalId: 'alice' }));
+      await repo.upsertGrant(grant({ dataLakeId: 'lake-2', principalId: 'bob' }));
+      await repo.upsertGrant(grant({ dataLakeId: 'lake-3', principalId: 'carol' }));
+
+      const rows = await repo.listActiveByLakes(['lake-1', 'lake-2']);
+      expect(rows.map(r => r.dataLakeId).sort()).toEqual(['lake-1', 'lake-2']);
+    });
+
+    it('returns [] without querying for an empty id list', async () => {
+      await repo.upsertGrant(grant({ dataLakeId: 'lake-1' }));
+      expect(await repo.listActiveByLakes([])).toEqual([]);
+    });
+
+    it('drops grants expired by activeAsOf', async () => {
+      const asOf = new Date('2026-06-01T00:00:00Z');
+      await repo.upsertGrant(grant({ dataLakeId: 'lake-1', principalId: 'live', expiresAt: null }));
+      await repo.upsertGrant(
+        grant({ dataLakeId: 'lake-1', principalId: 'lapsed', expiresAt: new Date('2026-01-01T00:00:00Z') })
+      );
+      const live = (await repo.listActiveByLakes(['lake-1'], { activeAsOf: asOf })).map(g => g.principalId);
+      expect(live).toEqual(['live']);
+    });
+  });
+
   describe('expiry filtering (activeAsOf)', () => {
     const asOf = new Date('2026-06-01T00:00:00Z');
     const past = new Date('2026-01-01T00:00:00Z');

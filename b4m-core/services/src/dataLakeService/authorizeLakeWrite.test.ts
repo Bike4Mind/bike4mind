@@ -62,7 +62,7 @@ describe('assertCanWriteDataLakeTags - the same rule at the write gate', () => {
   it('rejects the file owner applying a meta-tag for a lake they did not create', async () => {
     await expect(
       assertCanWriteDataLakeTags({ userId: 'file-owner', isAdmin: false }, [LAKE.datalakeTag], dbWith(LAKE))
-    ).rejects.toThrow("Only the creator can change this data lake's files");
+    ).rejects.toThrow("You do not have permission to change this data lake's files");
   });
 
   it('accepts the lake creator', async () => {
@@ -74,7 +74,7 @@ describe('assertCanWriteDataLakeTags - the same rule at the write gate', () => {
   it('rejects a meta-tag that resolves to no lake', async () => {
     await expect(
       assertCanWriteDataLakeTags({ userId: 'lake-creator', isAdmin: false }, [LAKE.datalakeTag], dbWith(null))
-    ).rejects.toThrow("Only the creator can change this data lake's files");
+    ).rejects.toThrow("You do not have permission to change this data lake's files");
   });
 
   it('ignores ordinary tags, so an unrelated write never reaches a lake lookup', async () => {

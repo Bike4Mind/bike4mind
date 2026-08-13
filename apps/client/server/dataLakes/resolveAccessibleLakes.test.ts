@@ -20,6 +20,8 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   projectRepository: {},
   userRepository: {},
+  // toAccessContext resolves the caller's org-admin set (#1668) through this repo.
+  organizationRepository: { findIdsWithAdminRights: vi.fn().mockResolvedValue([]) },
 }));
 vi.mock('@server/entitlements', () => ({ getRequestEntitlements: mockGetRequestEntitlements }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn() }) }));

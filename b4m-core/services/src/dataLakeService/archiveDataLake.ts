@@ -1,11 +1,13 @@
 import type {
+  IDataLakeAccessGrantRepository,
   IDataLakeDocument,
   IDataLakeRepository,
   IDataLakeBatchRepository,
   IFabFileRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { canManageLake } from './manageRule';
+import { type ManageActor } from './manageRule';
+import { resolveCanManageLake } from './authorizeLakeManage';
 import { recomputeLakeStats } from './recomputeLakeStats';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
@@ -17,6 +19,7 @@ interface ArchiveDataLakeAdapters {
       IDataLakeRepository,
       'findById' | 'update' | 'setStats' | 'activateIfDraft' | 'find' | 'claimFilesArchivedAt'
     >;
+    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
     batches: Pick<IDataLakeBatchRepository, 'findActiveByDataLakeId' | 'markTerminalIfActive'>;
     fabFiles: Pick<
       IFabFileRepository,
@@ -37,7 +40,7 @@ interface ArchiveDataLakeAdapters {
  * Owner or admin only. Uses transitional 'archiving' state for crash visibility.
  */
 export const archiveDataLake = async (
-  actor: { userId: string; isAdmin: boolean },
+  actor: ManageActor,
   dataLakeId: string,
   { db, retrievalIndex, logger }: ArchiveDataLakeAdapters
 ): Promise<IDataLakeDocument> => {
@@ -46,8 +49,8 @@ export const archiveDataLake = async (
     throw new NotFoundError('Data lake not found');
   }
 
-  if (!canManageLake(existing, actor)) {
-    throw new BadRequestError('Only the creator can archive this data lake');
+  if (!(await resolveCanManageLake(existing, actor, { db }))) {
+    throw new BadRequestError('You do not have permission to archive this data lake');
   }
 
   // Only short-circuit on the terminal state. A lake left in the transitional

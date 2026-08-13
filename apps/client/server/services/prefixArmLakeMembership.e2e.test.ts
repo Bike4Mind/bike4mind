@@ -197,7 +197,7 @@ describe('toggleTags against real Mongo', () => {
           },
         }
       )
-    ).rejects.toThrow(/only the creator can remove/i);
+    ).rejects.toThrow(/do not have permission to remove/i);
 
     const persistedFile = await FabFile.findById(file.id);
     expect((persistedFile?.tags ?? []).map(t => t.name)).toEqual(['lk:invoices']);
