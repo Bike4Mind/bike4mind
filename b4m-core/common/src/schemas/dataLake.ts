@@ -92,6 +92,8 @@ export const UpdateDataLakeRequestInput = z.object({
         ),
     ])
     .optional(),
+  // Per-lake opt-in to query-text audit logging (see IDataLake.auditQueryTextEnabled).
+  auditQueryTextEnabled: z.boolean().optional(),
   // NOTE: status is intentionally NOT updatable here. Lifecycle transitions
   // (archive/unarchive/delete/cleanup) go through their dedicated endpoints so the
   // required side effects (cancel in-flight batch, archive/soft-delete files, stat

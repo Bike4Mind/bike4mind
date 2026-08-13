@@ -13,7 +13,7 @@ import { type MigrationFile } from './index';
  * pre-existing declared indexes if an environment somehow lacks them.
  */
 const migration: MigrationFile = {
-  id: 20260813000000,
+  id: 20260813000001,
   name: 'ensure organization member index',
 
   up: async () => {

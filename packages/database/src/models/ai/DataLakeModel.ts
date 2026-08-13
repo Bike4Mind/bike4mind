@@ -82,6 +82,9 @@ const DataLakeSchema = new mongoose.Schema(
     // bypassing the org prerequisite + Private-by-default. No dedicated index (tiny collection,
     // same rationale as requiredEntitlement); the public arm in the access filters keys off it.
     isPublic: { type: Boolean, default: false },
+    // Per-lake opt-in to query-text audit logging (see IDataLake.auditQueryTextEnabled). No
+    // dedicated index - same rationale as isPublic/requiredEntitlement (tiny collection).
+    auditQueryTextEnabled: { type: Boolean, default: false },
     status: { type: String, enum: DATA_LAKE_STATUSES, default: 'draft' },
     fileCount: { type: Number, default: 0 },
     totalSizeBytes: { type: Number, default: 0 },
