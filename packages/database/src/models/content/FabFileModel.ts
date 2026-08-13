@@ -527,6 +527,22 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.map(d => d.toJSON());
   }
 
+  /**
+   * Total `fileSize` of a user's non-deleted files, summed in the database so no
+   * documents are hydrated - the only thing recalculateUserStorage needs is the
+   * integer. `$ifNull` makes a missing/non-numeric `fileSize` count as 0, matching
+   * the `|| 0` the load-all-and-reduce caller used to apply. Same live-file filter
+   * as findByUserId; mirrors the aggregate shape in computeDataLakeStats.
+   */
+  async sumFileSizeByUserId(userId: string): Promise<number> {
+    const [row] = await this.fabFileModel.aggregate<{ total: number }>([
+      { $match: { userId, deletedAt: null } },
+      { $group: { _id: null, total: { $sum: { $ifNull: ['$fileSize', 0] } } } },
+      { $project: { _id: 0, total: 1 } },
+    ]);
+    return row?.total ?? 0;
+  }
+
   async findByBatchId(batchId: string): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({ batchId, deletedAt: null });
     return result.map(d => d.toJSON());
