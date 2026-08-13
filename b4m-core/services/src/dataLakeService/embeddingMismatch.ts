@@ -190,7 +190,7 @@ export interface EmbeddingLabeledFile {
  *
  * Client badges - divergence misleads rather than loses, prompting a reprocess for a healthy file:
  *  - apps/client/app/components/Session/AISettings/FilesSection.tsx (per-file affordance),
- *  - apps/client/app/hooks/useEmbeddingMismatchStatus.ts (session-toolbar dot).
+ *  - apps/client/app/hooks/useEmbeddingMismatchStatus.ts (reddens the session-toolbar file count).
  *
  * The first two retrieval sites are deliberately STRICTER than this predicate (they count an
  * unlabeled file as unreachable where this one scores it), and their own comments explain why they
