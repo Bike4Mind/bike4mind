@@ -65,7 +65,7 @@ const handler = baseApi().post<Request<{}, {}, SendBody>>(async (req, res) => {
   // compliance requirement.
   req.logger.info('[PrReport] send attempted', {
     audit: true,
-    actingUserId: req.user?.id ?? req.user?._id ?? null,
+    actingUserId: req.user?.id ?? null,
     actingUserEmail: req.user?.email ?? null,
     repo: config.repo,
     channel: config.destination?.channel ?? null,

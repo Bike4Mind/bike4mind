@@ -56,4 +56,8 @@ export { safeCompareTokens } from './utils/crypto';
 export { SreAgentService, type SrePatternLookup } from './sreAgentService';
 export { RATE_LIMITED_SENTINEL } from './sreAgentService/tools';
 export * from './audienceVariants';
+// Flat exports for the client components/hooks (which import the contract types
+// directly, per the package's dominant convention) plus the `prReportService`
+// namespace the server-side adapters in context.ts/send.ts/generate.ts consume.
+export * from './prReportService';
 export * as prReportService from './prReportService';
