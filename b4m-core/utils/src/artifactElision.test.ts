@@ -18,32 +18,40 @@ import { parseArtifacts } from './artifactParser';
  *
  * Each size is sampled 3x and the minimum is used: noise (a GC pause, a scheduler preemption) only
  * ever adds delay, so the fastest sample is the one closest to the true cost, and taking the min
- * survives a stray spike landing on any one sample instead of the whole measurement.
+ * survives a stray spike landing on any one sample instead of the whole measurement. The small and
+ * large samples are INTERLEAVED (small, large, small, large, ...) rather than run as two separate
+ * blocks - a contention burst confined to one block would otherwise hit only one size's samples,
+ * defeating the cancellation the ratio depends on.
  */
 function assertScansLinearly<T>(run: (size: number) => T, smallSize: number, largeSize: number) {
   const sizeRatio = largeSize / smallSize;
 
-  const fastestOf = (size: number) => {
-    let minElapsed = Infinity;
-    let minResult: T | undefined;
-    for (let sample = 0; sample < 3; sample++) {
-      const started = Date.now();
-      const result = run(size);
-      const elapsed = Date.now() - started;
-      if (elapsed < minElapsed) {
-        minElapsed = elapsed;
-        minResult = result;
-      }
+  let smallElapsed = Infinity;
+  let smallResult: T | undefined;
+  let largeElapsed = Infinity;
+  let largeResult: T | undefined;
+
+  for (let sample = 0; sample < 3; sample++) {
+    const smallStarted = Date.now();
+    const thisSmallResult = run(smallSize);
+    const thisSmallElapsed = Date.now() - smallStarted;
+    if (thisSmallElapsed < smallElapsed) {
+      smallElapsed = thisSmallElapsed;
+      smallResult = thisSmallResult;
     }
-    return { elapsed: minElapsed, result: minResult as T };
-  };
 
-  const small = fastestOf(smallSize);
-  const large = fastestOf(largeSize);
+    const largeStarted = Date.now();
+    const thisLargeResult = run(largeSize);
+    const thisLargeElapsed = Date.now() - largeStarted;
+    if (thisLargeElapsed < largeElapsed) {
+      largeElapsed = thisLargeElapsed;
+      largeResult = thisLargeResult;
+    }
+  }
 
-  expect(large.elapsed).toBeLessThan(small.elapsed * sizeRatio * 2.5 + 200);
+  expect(largeElapsed).toBeLessThan(smallElapsed * sizeRatio * 2.5 + 200);
 
-  return { smallResult: small.result, largeResult: large.result };
+  return { smallResult: smallResult as T, largeResult: largeResult as T };
 }
 
 /** Verbatim shape of the artifact from the originating bug report: correct data, stubbed behaviour. */
