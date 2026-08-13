@@ -38,6 +38,7 @@ import {
   treeRowSx,
 } from '@client/app/components/datalake/treeChrome';
 import type { IFabFileDocument } from '@bike4mind/common';
+import type { DataLakeBrowseSource } from '@client/app/hooks/data/dataLakes';
 import { gray } from '@client/app/utils/themes/colors';
 
 interface DataLakeChatTreeProps {
@@ -46,7 +47,9 @@ interface DataLakeChatTreeProps {
   articles: IFabFileDocument[];
   breadcrumb: string[];
   onNavigate: (breadcrumb: string[]) => void;
-  selectedFileId: string | null;
+  /** Threaded to DataLakeTreeView's cross-tree article search. */
+  source?: DataLakeBrowseSource;
+  selectedFileIds: ReadonlySet<string>;
   /** Menu action: attach the file to the chat session. */
   onAttachFile: (file: IFabFileDocument) => void;
   /** Open the file. Runs from the row's own click as well as the menu's View item. */
@@ -77,7 +80,8 @@ export default function DataLakeChatTree({
   articles,
   breadcrumb,
   onNavigate,
-  selectedFileId,
+  source,
+  selectedFileIds,
   onAttachFile,
   onViewFile,
   canDeleteFile,
@@ -358,7 +362,8 @@ export default function DataLakeChatTree({
       articles={articles}
       breadcrumb={breadcrumb}
       onNavigate={onNavigate}
-      selectedFileId={selectedFileId}
+      source={source}
+      selectedFileIds={selectedFileIds}
       onSelectFile={() => {}}
       isLoading={isLoading}
       isError={isError}
