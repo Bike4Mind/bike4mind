@@ -67,6 +67,9 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   // Editor-only, same as the prompt fields: a reader gets its EFFECT (inline vs retrieve, resolved
   // server-side when a session is created for the lake) but never reads the setting itself.
   groundingMode: 'withheld',
+  // Operator-facing chunk-policy CONSTRAINT (#1662): an editor lever, not something a reader needs.
+  // A reader sees its effect (a file's conflict report), never the lake's required target itself.
+  requiredPassageTokenTarget: 'withheld',
   fileTagPrefix: 'reader',
   datalakeTag: 'reader',
   requiredUserTag: 'reader',

@@ -1,17 +1,19 @@
 import {
   adminSettingsRepository,
   dataLakeBatchRepository,
+  dataLakeRepository,
   fabFileChunkRepository,
   fabFileRepository,
+  scopedSettingsRepository,
   FabFile,
   User,
   withTransaction,
 } from '@bike4mind/database';
 import { sendToClient } from '@server/websocket/utils';
 import { z } from 'zod';
-import { dataLakeService, fabFilesService } from '@bike4mind/services';
+import { dataLakeService, fabFilesService, scopedSettingsService } from '@bike4mind/services';
 import { DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT } from '@bike4mind/common';
-import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
+import { effectiveChunkTokenLimit, FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { getFilesStorage } from '@server/utils/storage';
 import { sendToQueue } from '@server/utils/sqs';
@@ -77,6 +79,36 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     return;
   }
 
+  // Chunk policy at file-owner altitude (#1662). Resolve the owner's DefaultChunkSize (falling
+  // through to the platform default) UNLESS this delivery carried an explicit chunkSize override -
+  // only the UI reprocess door (/api/files/chunk) sends one; every automatic door omits it and now
+  // inherits the owner-altitude policy. The resolver never throws (degrades to the platform value).
+  // The chunker re-derives the same effective limit internally; we compute it here via the shared
+  // helper for the cross-lake conflict check below and to log when a lever exceeds the model window.
+  const ownerScope = scopedSettingsService.scopeForFileOwner({ userId: fabFile.userId });
+  const resolvedChunkPolicy = await scopedSettingsService.resolveScopedSetting(
+    'DefaultChunkSize',
+    ownerScope,
+    { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository },
+    { logger }
+  );
+  const requestedPassageTokenTarget = chunkSize ?? resolvedChunkPolicy.value;
+  const effectivePassageTokenTarget = effectiveChunkTokenLimit({
+    model: defaultEmbeddingModel,
+    passageTokenTarget: requestedPassageTokenTarget,
+  });
+  logger.log(
+    `Chunk policy for ${fabFileId}: requested=${requestedPassageTokenTarget} ` +
+      `(source=${chunkSize !== undefined ? 'payload' : resolvedChunkPolicy.source}) ` +
+      `effective=${effectivePassageTokenTarget} model=${defaultEmbeddingModel}`
+  );
+  if (effectivePassageTokenTarget !== requestedPassageTokenTarget) {
+    logger.warn(
+      `Chunk policy ${requestedPassageTokenTarget} for ${fabFileId} exceeds the ${defaultEmbeddingModel} ` +
+        `embedding window; reduced to ${effectivePassageTokenTarget}.`
+    );
+  }
+
   // Mark the file as actively chunking so the self-host safety-net scan (worker) doesn't
   // re-enqueue it mid-run - a duplicate would re-chunk and re-embed the whole file. Cleared
   // in `finally` on success AND failure so it can still be retried/reprocessed. Default: false.
@@ -93,7 +125,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         {
           fabFileId,
           embeddingModel: defaultEmbeddingModel,
-          passageTokenTarget: chunkSize,
+          passageTokenTarget: requestedPassageTokenTarget,
         },
         {
           db: {
@@ -250,6 +282,26 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         }
       }
       return;
+    }
+
+    // Cross-lake chunk-policy conflict (#1662): record the effective target these chunks were built
+    // with and report any member lake whose REQUIRED policy they do not satisfy. A report, not a
+    // failure - the file stays chunked at its owner-altitude policy; a lake is only a constraint, so
+    // we never re-chunk to satisfy one lake (which would rewrite shared chunks for non-members and
+    // oscillate a file in two disagreeing lakes). Best-effort: a detection failure must not fail an
+    // otherwise-successful chunk and force a wasted re-chunk on redelivery.
+    try {
+      await dataLakeService.recomputeFileChunkPolicyConflict(
+        { id: fabFileId, userId: fabFile.userId, tags: fabFile.tags },
+        effectivePassageTokenTarget,
+        {
+          db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
+          embeddingModel: defaultEmbeddingModel,
+          logger,
+        }
+      );
+    } catch (err) {
+      logger.error(`Error computing chunk-policy conflict for ${fabFileId}: ${err}`);
     }
 
     const queueUrl = Resource.fabFileVectorizeQueue.url;

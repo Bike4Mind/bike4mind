@@ -5,6 +5,7 @@ import {
   isReservedTagPrefix,
   DATA_LAKE_GROUNDING_MODES,
 } from '../constants/dataLakes';
+import { MAX_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET } from '../constants/chunking';
 
 // Slug validation
 
@@ -94,6 +95,20 @@ export const UpdateDataLakeRequestInput = z.object({
     .optional(),
   // Per-lake opt-in to query-text audit logging (see IDataLake.auditQueryTextEnabled).
   auditQueryTextEnabled: z.boolean().optional(),
+  // The chunk passage target (TOKENS) this lake REQUIRES of its member files (#1662). A
+  // CONSTRAINT the chunk handler checks, never an override of the file-owner-altitude policy: a
+  // member file whose effective target differs is reported as a conflict, not re-chunked. Bounded
+  // to the same [MIN, MAX] the scoped DefaultChunkSize setting uses. `null` is the explicit clear
+  // sentinel (remove the requirement); omitting the field leaves it unchanged ($set strips
+  // undefined). Setting it does NOT re-chunk existing files - it only changes what future conflict
+  // checks compare against.
+  requiredPassageTokenTarget: z
+    .number()
+    .int()
+    .min(MIN_PASSAGE_TOKEN_TARGET)
+    .max(MAX_PASSAGE_TOKEN_TARGET)
+    .nullable()
+    .optional(),
   // NOTE: status is intentionally NOT updatable here. Lifecycle transitions
   // (archive/unarchive/delete/cleanup) go through their dedicated endpoints so the
   // required side effects (cancel in-flight batch, archive/soft-delete files, stat
