@@ -117,6 +117,9 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   // of this context - the chat tools, the retrieval scope, semantic search - cannot disagree
   // about what "my orgs" means (#1674). Id-less callers are members of nothing.
   const organizationIds = userId ? await context.db.organizations.findMembershipOrgIds(userId) : [];
+  // Membership is resolved OUTSIDE the degrade path on purpose - an authorization input must
+  // not silently degrade; a transient failure throws (fails closed) rather than resolving to
+  // "member of nothing".
   let dynamicDataLakes: DataLakeConfig[] | undefined;
   // Ids of fetched lakes whose PERSISTED createdByUserId is this caller. Read off the raw
   // documents because toDataLakeConfig drops createdByUserId - and that projection is also what

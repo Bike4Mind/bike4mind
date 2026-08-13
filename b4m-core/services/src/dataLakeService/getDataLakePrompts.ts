@@ -101,6 +101,9 @@ export async function getAccessibleDataLakePrompts(
   // Same membership resolution as getDynamicDataLakeAccess - resolved from `db.organizations`,
   // never from a selected-org pointer (#1674).
   const organizationIds = userId ? await context.db.organizations.findMembershipOrgIds(userId) : [];
+  // Membership is resolved OUTSIDE the degrade path on purpose - an authorization input must
+  // not silently degrade; a transient failure throws (fails closed) rather than resolving to
+  // "member of nothing".
 
   let lakes: IDataLakeDocument[];
   try {

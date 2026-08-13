@@ -10,11 +10,11 @@
 
 ## Global Constraints
 
-- **Membership predicate** (one definition everywhere): user is the org's owner (`userId` field) OR appears in `users[]` with `permissions: { $in: ['read', 'write'] }` — the same arms `ShareableDocumentRepository.findAllAccessible` uses (minus the groups arm, which org membership deliberately does not include).
+- **Membership predicate** (one definition everywhere): user is the org's owner (`userId` field) OR appears in `users[]` with `permissions: { $in: ['read', 'write'] }`  -  the same arms `ShareableDocumentRepository.findAllAccessible` uses (minus the groups arm, which org membership deliberately does not include).
 - **Ids are normalized strings** the moment they enter a context; empty array = member of no org.
 - **Empty-set semantics:** only org-less (and public/owner/admin-reachable) lakes pass; an empty set must never widen access.
 - **Access widening is intended:** a member of N orgs reads org lakes of all N. Removal from an org revokes immediately regardless of `user.organizationId`.
-- The old fields are REMOVED (`AccessContext.organizationId`, `DataLakeAccessContext.user.organizationId`) — fix type fallout by threading the set/repository, never by loosening types or re-adding the pointer.
+- The old fields are REMOVED (`AccessContext.organizationId`, `DataLakeAccessContext.user.organizationId`)  -  fix type fallout by threading the set/repository, never by loosening types or re-adding the pointer.
 - The write path is untouched: `resolveActiveOrg` + `setLakeVisibility`'s single validated target org stay as they are.
 - **No `index: true`** on fields; the new `{ 'users.userId': 1 }` index is declared via `schema.index()` at the bottom of OrganizationModel plus an ensure-index migration (precedent: `20260728000000_ensure-fabfilechunk-keyset-index.ts`).
 - ASCII only on added lines; no `any` without documented reason; DB tests use `setupMongoTest()`.
@@ -36,7 +36,7 @@
 
 **Interfaces:**
 - Consumes: existing `OrganizationSchema` / `BaseRepository`.
-- Produces: `organizationRepository.findMembershipOrgIds(userId: string): Promise<string[]>` — Tasks 2 and 3 call it; the same signature lands on `IOrganizationRepository`.
+- Produces: `organizationRepository.findMembershipOrgIds(userId: string): Promise<string[]>`  -  Tasks 2 and 3 call it; the same signature lands on `IOrganizationRepository`.
 
 - [ ] **Step 0: Workspace setup (once per worktree)**
 
@@ -87,12 +87,12 @@ describe('OrganizationRepository.findMembershipOrgIds', () => {
 });
 ```
 
-If `Organization.create` demands more required fields (check the schema's `required` fields and the existing `OrganizationModel.integration.test.ts` for the minimal valid shape), extend `makeOrg` accordingly — do not weaken the assertions.
+If `Organization.create` demands more required fields (check the schema's `required` fields and the existing `OrganizationModel.integration.test.ts` for the minimal valid shape), extend `makeOrg` accordingly  -  do not weaken the assertions.
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `PATH="$HOME/.nvm/versions/node/v24.16.0/bin:$PATH" pnpm --filter @bike4mind/database exec vitest run src/models/infra/admin/OrganizationModel.membershipOrgIds.test.ts`
-Expected: FAIL — `findMembershipOrgIds` is not a function.
+Expected: FAIL  -  `findMembershipOrgIds` is not a function.
 
 - [ ] **Step 3: Implement**
 
@@ -129,7 +129,7 @@ In `packages/database/src/models/infra/admin/OrganizationModel.ts`, on `Organiza
   }
 ```
 
-(Use the actual model property name the class uses — check its other methods; if the class's Mongoose model field is named differently, e.g. `this.model`, follow it.)
+(Use the actual model property name the class uses  -  check its other methods; if the class's Mongoose model field is named differently, e.g. `this.model`, follow it.)
 
 Index block at the bottom of the file (with the existing two):
 
@@ -190,7 +190,7 @@ git commit -m "feat(database): org membership reverse lookup for lake authorizat
 
 ---
 
-### Task 2: management side — `AccessContext.organizationIds` through gate, listing, and constructors
+### Task 2: management side  -  `AccessContext.organizationIds` through gate, listing, and constructors
 
 **Files:**
 - Modify: `b4m-core/common/src/types/entities/DataLakeTypes.ts` (`AccessContext`, ~line 25)
@@ -198,9 +198,9 @@ git commit -m "feat(database): org membership reverse lookup for lake authorizat
 - Modify: `packages/database/src/models/ai/DataLakeModel.ts` (`findAccessible` org constraint ~line 287; `findBySlug` ~line 144)
 - Modify: `b4m-core/common/src/types/entities/DataLakeTypes.ts` `IDataLakeRepository.findBySlug` contract (search the interface for `findBySlug`)
 - Modify: `apps/client/server/dataLakes/toAccessContext.ts`
-- Modify: `apps/client/server/slack/dataLakeFileIngest.ts` (`buildSlackAccessContext` ~line 119; the `SlackLakeIngestDeps` type it Picks from; the site that constructs those deps — find via typecheck)
+- Modify: `apps/client/server/slack/dataLakeFileIngest.ts` (`buildSlackAccessContext` ~line 119; the `SlackLakeIngestDeps` type it Picks from; the site that constructs those deps  -  find via typecheck)
 - Modify: `apps/client/pages/api/data-lakes/[id]/visibility.ts` (drop the local `toCtx`)
-- Modify: `b4m-core/services/src/dataLakeService/getDataLakePrompts.ts` (`isTrustedForInjection`, ~line 100) — the actor side only; the retrieval-context side is Task 3
+- Modify: `b4m-core/services/src/dataLakeService/getDataLakePrompts.ts` (`isTrustedForInjection`, ~line 100)  -  the actor side only; the retrieval-context side is Task 3
 - Tests: `b4m-core/services/src/dataLakeService/dataLakeService.test.ts`, `packages/database/src/models/ai/DataLakeModel.test.ts`, `apps/client/server/dataLakes/toAccessContext.test.ts`, plus whatever typecheck surfaces
 
 **Interfaces:**
@@ -209,7 +209,7 @@ git commit -m "feat(database): org membership reverse lookup for lake authorizat
 
 - [ ] **Step 1: Write the failing gate tests**
 
-In `b4m-core/services/src/dataLakeService/dataLakeService.test.ts`, locate the `canAccessLake` org cases (~lines 84-238); add to that describe (adapting the file's existing ctx-builder helpers — read them first; the shapes below show the required semantics):
+In `b4m-core/services/src/dataLakeService/dataLakeService.test.ts`, locate the `canAccessLake` org cases (~lines 84-238); add to that describe (adapting the file's existing ctx-builder helpers  -  read them first; the shapes below show the required semantics):
 
 ```ts
 it('grants an org lake to a member of that org regardless of any other memberships', () => {
@@ -413,13 +413,13 @@ function isTrustedForInjection(
 }
 ```
 
-Update its callers within the file to pass `organizationIds` (in Task 2 that may mean threading from the context field that Task 3 renames — if this file will not compile until Task 3's context change, move ONLY this `isTrustedForInjection` edit into Task 3 and note it in your report; do not leave the branch uncompilable at commit time).
+Update its callers within the file to pass `organizationIds` (in Task 2 that may mean threading from the context field that Task 3 renames  -  if this file will not compile until Task 3's context change, move ONLY this `isTrustedForInjection` edit into Task 3 and note it in your report; do not leave the branch uncompilable at commit time).
 
 - [ ] **Step 8: Sweep the type fallout**
 
 Run: `PATH="$HOME/.nvm/versions/node/v24.16.0/bin:$PATH" pnpm --filter @bike4mind/common build && PATH="$HOME/.nvm/versions/node/v24.16.0/bin:$PATH" pnpm turbo:typecheck`
 
-Every error is a reader/constructor of the old field: migrate each to `organizationIds` (constructors resolve or thread the set; readers do set membership). Known fallout beyond the files above: `toAccessContext.test.ts` (its normalization tests become membership-resolution tests — mock `@bike4mind/database`'s `organizationRepository.findMembershipOrgIds`), `resolveAccessibleLakes.test.ts`, the archived/deleted list views, and any service test building an `AccessContext` literal. Do not loosen types; do not re-introduce a singular org field.
+Every error is a reader/constructor of the old field: migrate each to `organizationIds` (constructors resolve or thread the set; readers do set membership). Known fallout beyond the files above: `toAccessContext.test.ts` (its normalization tests become membership-resolution tests  -  mock `@bike4mind/database`'s `organizationRepository.findMembershipOrgIds`), `resolveAccessibleLakes.test.ts`, the archived/deleted list views, and any service test building an `AccessContext` literal. Do not loosen types; do not re-introduce a singular org field.
 
 - [ ] **Step 9: Update and extend the affected suites; run them**
 
@@ -442,7 +442,7 @@ git commit -m "fix(data-lake): management access context carries the org members
 
 ---
 
-### Task 3: retrieval side — resolver-internal membership
+### Task 3: retrieval side  -  resolver-internal membership
 
 **Files:**
 - Modify: `b4m-core/services/src/dataLakeService/getDynamicDataLakeTags.ts` (`DataLakeAccessContext` ~lines 32-53; `getDynamicDataLakeAccess` ~lines 111-145)
@@ -483,9 +483,9 @@ Expected: the new test FAILS.
 
 - [ ] **Step 3: Implement the context + resolver change**
 
-`getDynamicDataLakeTags.ts` — `DataLakeAccessContext`:
+`getDynamicDataLakeTags.ts`  -  `DataLakeAccessContext`:
 
-- `db` gains `organizations: Pick<IOrganizationRepository, 'findMembershipOrgIds'>;` (required — an absent resolver would silently drop org lakes).
+- `db` gains `organizations: Pick<IOrganizationRepository, 'findMembershipOrgIds'>;` (required  -  an absent resolver would silently drop org lakes).
 - `user` loses `organizationId`; update the interface doc comment: membership is resolved internally from `user.id`, `user.organizationId` was the selected-org pointer and is no longer an input (#1674).
 
 `getDynamicDataLakeAccess` (~line 123): replace `const organizationId = normalizeId(context.user.organizationId);` with:
@@ -548,7 +548,7 @@ and fix every surfaced construction site by threading the organizations reposito
 
 - [ ] **Step 6: Update and run the affected suites**
 
-- `getDynamicDataLakeTags.test.ts`: existing org cases move from `user.organizationId` to a mocked `db.organizations.findMembershipOrgIds`; the normalization-of-org-id tests become obsolete on the user side (the set is strings by contract) — repurpose them to assert the resolver passes the set through unchanged.
+- `getDynamicDataLakeTags.test.ts`: existing org cases move from `user.organizationId` to a mocked `db.organizations.findMembershipOrgIds`; the normalization-of-org-id tests become obsolete on the user side (the set is strings by contract)  -  repurpose them to assert the resolver passes the set through unchanged.
 - `getDataLakePrompts.test.ts`: same treatment; `isTrustedForInjection` org case becomes set-membership.
 - `resolveRetrievalLakeScope.test.ts` (~lines 153-237): the org-normalization-at-the-seam tests (#1343) become "threads `organizationRepository` and no longer forwards `user.organizationId`".
 
@@ -579,7 +579,7 @@ Expected: clean.
 - [ ] **Step 2: Full test suite**
 
 Run: `PATH="$HOME/.nvm/versions/node/v24.16.0/bin:$PATH" VITEST_MAX_WORKERS=2 pnpm turbo:test`
-Expected: PASS. Known flakes in untouched packages (`artifactElision` perf, `retry` HTTP-date timing) pass in isolation — retry the failing file alone before treating it as real.
+Expected: PASS. Known flakes in untouched packages (`artifactElision` perf, `retry` HTTP-date timing) pass in isolation  -  retry the failing file alone before treating it as real.
 
 - [ ] **Step 3: Lint**
 
