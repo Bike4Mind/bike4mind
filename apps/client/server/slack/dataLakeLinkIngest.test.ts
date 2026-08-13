@@ -38,10 +38,12 @@ const LINK = 'https://example.com/article';
 let deps: SlackLinkIngestDeps;
 let createLakeFileFromUrl: ReturnType<typeof vi.fn>;
 let resolveEntitlementKeys: ReturnType<typeof vi.fn>;
+let listByLake: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
 
+  listByLake = vi.fn().mockResolvedValue([]);
   createLakeFileFromUrl = vi.fn().mockResolvedValue({ id: 'fab-1', fileName: 'An Article' });
   resolveEntitlementKeys = vi.fn().mockResolvedValue(['ent-a']);
 
@@ -54,6 +56,11 @@ beforeEach(() => {
 
   deps = {
     dataLakes: {} as never,
+    // Required by the write gate so a curator or transferred owner can ingest, not only the creator.
+    // Supplied as a real object rather than left off: `apps/client/tsconfig.json` excludes
+    // `**/*.test.ts`, so a missing adapter here is invisible to typecheck AND to a mocked runtime -
+    // which is exactly how this went unguarded after the merge that made the field required.
+    dataLakeAccessGrants: { listByLake } as never,
     createLakeFileFromUrl,
     resolveEntitlementKeys,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -154,6 +161,22 @@ describe('link validation', () => {
 });
 
 describe('successful ingest', () => {
+  it('passes the access-grant repo to the write gate, so a curator is not refused', async () => {
+    // The gate resolves the lake's grants to decide whether a CURATOR or a transferred owner may
+    // ingest. Nothing else guards that wiring: the field is only structurally required, and
+    // `apps/client/tsconfig.json` excludes test files, so unwiring it would pass typecheck and pass a
+    // mocked runtime while silently narrowing authorization back to the creator alone.
+    await run();
+
+    expect(assertLakeWriteAccess).toHaveBeenCalledWith(
+      'sales',
+      expect.anything(),
+      expect.objectContaining({
+        db: expect.objectContaining({ dataLakeAccessGrants: expect.objectContaining({ listByLake }) }),
+      })
+    );
+  });
+
   it('stamps the lake tag, the fallback tag and the Slack + URL provenance', async () => {
     const outcome = await run();
 
