@@ -101,6 +101,12 @@ async function handleAdd(
   // Attachments and a link are both ingested now (M3), so a message carrying both gets both done
   // and both reported. This replaces M2's "Ignored the link" note, which existed only because LINK
   // ingest did not exist yet - keeping it would now under-report what actually happened.
+  //
+  // NOTE, deliberate: on a mixed message each ingest runs its OWN authorize-first prologue, so the
+  // lake is resolved and gated twice. That duplication is the price of neither path owning the
+  // other's security gate - the whole reason `dataLakeIngestAuthz` exists - and it is bounded (one
+  // extra lake lookup, only when a single message carries both a file and a link). The user-visible
+  // half of the cost, a refusal printed twice, is handled where the replies are joined below.
   const replies: string[] = [];
 
   if (params.files.length > 0) {
@@ -135,7 +141,11 @@ async function handleAdd(
     return 'Attach a file or include a link to add something to a data lake.';
   }
 
-  return replies.join('\n');
+  // Both halves authorize independently (see the note on the paired calls above), so an actor who is
+  // refused gets the SAME refusal sentence from each - which reads as a stutter rather than as two
+  // half-outcomes. Collapse exact duplicates while preserving order: two genuine outcomes always
+  // differ, because each names its own file or link.
+  return [...new Set(replies)].join('\n');
 }
 
 /**
