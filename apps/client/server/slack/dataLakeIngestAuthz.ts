@@ -156,9 +156,10 @@ export async function authorizeLakeForWrite(
   // Mapped like the gate above rather than left to throw: this is a permission decision, and an
   // escaped throw would reach the orchestrator's catch and tell the user "something went wrong".
   // It is reachable even though `datalakeTag` is globally unique: the gate lowercases the tag
-  // before an exact-match lookup, and nothing enforces that stored tags are lowercase (see the
-  // same caveat on `assertMetaTagsMatchLake`), so a mixed-case tag resolves to no lake. A lake
-  // soft-deleted between this gate and the one above lands here too.
+  // before an exact-match lookup (see the same caveat on `assertMetaTagsMatchLake`), so a
+  // mixed-case stored tag resolves to no lake. `createDataLake` now lowercases the slug at the mint
+  // point, so no NEW lake can land in that state - the residual exposure is lakes persisted before
+  // that change. A lake soft-deleted between this gate and the one above lands here too.
   try {
     await dataLakeService.assertCanWriteDataLakeTags({ userId: ctx.userId, isAdmin: ctx.isAdmin }, [datalakeTag], {
       db: { dataLakes: deps.dataLakes },
