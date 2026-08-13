@@ -278,3 +278,68 @@ describe('OrgGoogleDriveConnectionModel - sync claim (per-connection serializati
     expect((await OrgGoogleDriveConnection.findById(created.id))?.status).toBe('credential_error');
   });
 });
+
+describe('OrgGoogleDriveConnectionModel - findDueForPoll (re-sync scan)', () => {
+  const anHourAgo = () => new Date(Date.now() - 60 * 60 * 1000);
+
+  it('returns never-polled and stale-polled connections, oldest-first, and honors the cap', async () => {
+    // never polled
+    const a = await OrgGoogleDriveConnection.create({ ...base, driveFolderId: 'f-a', targetDataLakeId: 'l-a' });
+    // polled long ago (stale)
+    const b = await OrgGoogleDriveConnection.create({
+      ...base,
+      driveFolderId: 'f-b',
+      targetDataLakeId: 'l-b',
+      lastPolledAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
+    });
+    // polled just now (fresh) - must be excluded
+    await OrgGoogleDriveConnection.create({
+      ...base,
+      driveFolderId: 'f-c',
+      targetDataLakeId: 'l-c',
+      lastPolledAt: new Date(),
+    });
+
+    const due = await orgGoogleDriveConnectionRepository.findDueForPoll(anHourAgo(), 10);
+    const ids = due.map(d => d.id);
+    expect(ids).toHaveLength(2);
+    expect(ids).toContain(a.id);
+    expect(ids).toContain(b.id);
+    // oldest-first: the never-polled (null sorts first) leads the stale one.
+    expect(ids[0]).toBe(a.id);
+
+    const capped = await orgGoogleDriveConnectionRepository.findDueForPoll(anHourAgo(), 1);
+    expect(capped).toHaveLength(1);
+    expect(capped[0].id).toBe(a.id);
+  });
+
+  it('excludes disabled connections and any not in a healthy connected state', async () => {
+    await OrgGoogleDriveConnection.create({
+      ...base,
+      driveFolderId: 'f-disabled',
+      targetDataLakeId: 'l-disabled',
+      enabled: false,
+    });
+    await OrgGoogleDriveConnection.create({
+      ...base,
+      driveFolderId: 'f-syncing',
+      targetDataLakeId: 'l-syncing',
+      status: 'syncing',
+    });
+    await OrgGoogleDriveConnection.create({
+      ...base,
+      driveFolderId: 'f-error',
+      targetDataLakeId: 'l-error',
+      status: 'credential_error',
+    });
+    const healthy = await OrgGoogleDriveConnection.create({
+      ...base,
+      driveFolderId: 'f-ok',
+      targetDataLakeId: 'l-ok',
+      status: 'connected',
+    });
+
+    const due = await orgGoogleDriveConnectionRepository.findDueForPoll(anHourAgo(), 10);
+    expect(due.map(d => d.id)).toEqual([healthy.id]);
+  });
+});

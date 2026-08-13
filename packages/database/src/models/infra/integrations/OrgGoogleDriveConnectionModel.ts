@@ -138,6 +138,27 @@ class OrgGoogleDriveConnectionRepository
   }
 
   /**
+   * Enabled connections due for a scheduled re-sync poll: never polled, or last polled before the
+   * cutoff. Restricted to `status: 'connected'` so the poll never enqueues over an in-flight sync
+   * ('syncing'), a broken credential ('credential_error'), or a folder that needs reconnecting
+   * ('needs_reconnect') - the ingest handler's claimForSync is the ultimate race guard, but filtering
+   * here keeps a dead connection from being re-enqueued every run. Capped and oldest-first (a null
+   * lastPolledAt sorts first) so a large fleet drains fairly across runs. Mirrors
+   * dataLakeBatchRepository.findStuck (the cron scan-and-cap precedent).
+   */
+  async findDueForPoll(cutoff: Date, limit: number): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument)[]> {
+    return this.model
+      .find({
+        enabled: true,
+        status: 'connected',
+        $or: [{ lastPolledAt: null }, { lastPolledAt: { $exists: false } }, { lastPolledAt: { $lt: cutoff } }],
+      })
+      .sort({ lastPolledAt: 1 })
+      .limit(limit)
+      .then(docs => docs.map(d => d.toJSON()));
+  }
+
+  /**
    * Load a connection WITH its encrypted credential, scoped to an org.
    * SECURITY: org-scoped so it cannot hand one org's `oauthRefreshToken` to another. Decrypt
    * server-side only; never expose it.

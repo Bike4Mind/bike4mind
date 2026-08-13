@@ -190,6 +190,7 @@ export const SettingKeySchema = z.enum([
   'EnableDataLakeVectorSearch',
   'PauseLakeConvergence',
   'EnforceLakeReadGrants',
+  'EnableDataLakeDrivePoll',
   'EnableBriefcase',
   'EnableBriefcaseDefault',
   'EnableImageTemplates',
@@ -1924,6 +1925,17 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 94,
+    dependsOn: 'EnableDataLakes',
+  }),
+  EnableDataLakeDrivePoll: makeBooleanSetting({
+    key: 'EnableDataLakeDrivePoll',
+    name: 'Data Lakes: Google Drive auto re-sync poll',
+    defaultValue: false,
+    description:
+      'Server-side gate for the scheduled poll that keeps connected Google Drive folders in sync with their data lakes (adds/edits/removals). Off by default - a connected folder still syncs on demand via the Re-sync button; turn this on to also reconcile it automatically on a schedule.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 95,
     dependsOn: 'EnableDataLakes',
   }),
   EnableBriefcase: makeBooleanSetting({
