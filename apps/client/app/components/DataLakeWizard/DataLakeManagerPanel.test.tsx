@@ -84,6 +84,11 @@ const lakeFiles = [
   // Tagged with "genre" itself, not a deeper child - "genre" is ALSO the parent of war/peace
   // above, so this file must stay reachable once genre has subfolders.
   { id: 'f5', fileName: 'genre-overview.md', tags: [{ name: 'lk:genre' }] },
+  // Bracket-prefixed source names, all under one leaf - group by category then title, not the
+  // raw leading "[" (which would put every one of these in the same "no signal" bucket).
+  { id: 'f6', fileName: '[Marketing] Zebra Plan.md', tags: [{ name: 'lk:briefs:x' }] },
+  { id: 'f7', fileName: '[Marketing] Apple Plan.md', tags: [{ name: 'lk:briefs:x' }] },
+  { id: 'f8', fileName: '[Sales] Intro.md', tags: [{ name: 'lk:briefs:x' }] },
 ];
 
 const useGetDataLakes = vi.fn(() => ({ data: [] as unknown[], isLoading: false }));
@@ -378,6 +383,20 @@ describe('DataLakeManagerPanel - lake navigation', () => {
     // Selecting it opens the file directly - no extra navigation hop.
     await user.click(screen.getByTestId('datalake-manager-file-f5'));
     expect(screen.getByTestId('mock-article')).toHaveTextContent('genre-overview.md');
+  });
+
+  it('sorts bracket-prefixed file names by category then title, not the raw leading "["', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-manager-node-briefs'));
+    await user.click(screen.getByTestId('datalake-manager-node-x'));
+
+    // Marketing group (Apple before Zebra within it) sorts before Sales - a raw-name sort would
+    // instead tiebreak on the shared "[" and give a different, meaningless order.
+    const fileRows = screen.getAllByTestId(/^datalake-manager-file-/).map(el => el.getAttribute('data-testid'));
+    expect(fileRows).toEqual(['datalake-manager-file-f7', 'datalake-manager-file-f6', 'datalake-manager-file-f8']);
   });
 
   it('opens the Uncategorized bucket and lists the untagged file', async () => {
