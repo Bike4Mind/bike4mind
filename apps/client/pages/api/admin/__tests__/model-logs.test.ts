@@ -80,12 +80,12 @@ describe('GET /api/admin/model-logs', () => {
       type: 'message',
       timestamp: new Date(),
       prompt: 'hey',
-
       promptMeta: {
         session: { id: 'session-3', userId: 'user-1' },
         model: { name: 'grok-3' },
         context: { systemPrompt: 'golden retriever facts', userPrompt: 'golden retriever facts' },
-      } as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any, // any: fixture deliberately writes fields the PromptMeta type excludes.
     });
   });
 
