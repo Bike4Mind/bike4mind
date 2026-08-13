@@ -176,17 +176,26 @@ export interface EmbeddingLabeledFile {
  * layer down: fab-pipeline keys its Atlas index registry with a Map, so an unknown model yields
  * no index target and the search degrades to the brute-force scan instead of querying a bogus one.
  *
- * CANONICAL LIST - three other readers compare this same field to the query's as an exact string,
- * and each holds its OWN copy of the rule rather than calling this function:
- *  - the corpus defer gate (llm/ChatCompletionProcess.ts),
- *  - isFabFileCitable (apps/client/server/memory/lakeSourceReachability.ts),
- *  - the Atlas `$vectorSearch` `filter: { embeddingModel }` clause (packages/database
- *    FabFileChunkRepository.vectorSearch).
+ * CANONICAL LIST - six other readers compare this same field to the query's as an exact string, and
+ * each holds its OWN copy of the rule rather than calling this function. So relaxing the comparison
+ * HERE does not propagate to them - it makes them DIVERGE, which is the actual hazard: the rule
+ * moves across all seven in lockstep or not at all.
  *
- * So relaxing the comparison HERE does not propagate to them - it makes the four DIVERGE, which is
- * the actual hazard: the rule has to move in lockstep across all four or not at all. The first two
- * are also deliberately STRICTER than this predicate (they count an unlabeled file as unreachable
- * where this one scores it), and their own comments explain why the three must not be consolidated.
+ * Retrieval path - divergence drops content from results, silently:
+ *  - the corpus defer gate (b4m-core/services/src/llm/ChatCompletionProcess.ts),
+ *  - isFabFileCitable (apps/client/server/memory/lakeSourceReachability.ts),
+ *  - the Atlas `$vectorSearch` filter clause (packages/database/src/models/content/FabFileModel.ts),
+ *  - the self-host OpenSearch `term` clause, the same rule on the other backend
+ *    (b4m-core/services/src/dataLakeService/openSearchChunkAdapter.ts).
+ *
+ * Client badges - divergence misleads rather than loses, prompting a reprocess for a healthy file:
+ *  - apps/client/app/components/Session/AISettings/FilesSection.tsx (per-file affordance),
+ *  - apps/client/app/hooks/useEmbeddingMismatchStatus.ts (session-toolbar dot).
+ *
+ * The first two retrieval sites are deliberately STRICTER than this predicate (they count an
+ * unlabeled file as unreachable where this one scores it), and their own comments explain why they
+ * must not be consolidated onto it. packages/scripts/src/checkEmbeddingModelComparisonSites.test.ts
+ * fails when a site appears that is on neither list, so keep the two in step.
  */
 export function isForeignEmbeddingModel(parentModel: string | null | undefined, queryModel: string): boolean {
   const parent = parentModel?.trim();
