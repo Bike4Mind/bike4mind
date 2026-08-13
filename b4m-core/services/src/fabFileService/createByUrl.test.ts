@@ -131,3 +131,40 @@ describe('createFabFileByUrl', () => {
     expect(fetchAndParseURL).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The row is created BEFORE its bytes are uploaded. An un-transactioned caller (the Slack link path)
+ * therefore needs a compensating delete, or a failed upload strands a file that can never be indexed:
+ * chunk/vectorize runs off the S3 ObjectCreated event, which never fires for an object that was never
+ * written.
+ */
+describe('createFabFileByUrl upload failure', () => {
+  it('deletes the created file and rethrows the upload error', async () => {
+    storageUpload.mockRejectedValue(new Error('S3 unavailable'));
+    const deleteCreatedFile = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, { ...adapters(), deleteCreatedFile } as never)
+    ).rejects.toThrow(/S3 unavailable/);
+
+    expect(deleteCreatedFile).toHaveBeenCalledWith('fab-1');
+  });
+
+  it('still surfaces the UPLOAD error when the compensating delete also fails', async () => {
+    // The cleanup failure must not mask the real cause, or the caller reports the wrong thing.
+    storageUpload.mockRejectedValue(new Error('S3 unavailable'));
+    const deleteCreatedFile = vi.fn().mockRejectedValue(new Error('mongo unreachable'));
+
+    await expect(
+      createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, { ...adapters(), deleteCreatedFile } as never)
+    ).rejects.toThrow(/S3 unavailable/);
+  });
+
+  it('does not attempt cleanup when the upload succeeds', async () => {
+    const deleteCreatedFile = vi.fn();
+
+    await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, { ...adapters(), deleteCreatedFile } as never);
+
+    expect(deleteCreatedFile).not.toHaveBeenCalled();
+  });
+});
