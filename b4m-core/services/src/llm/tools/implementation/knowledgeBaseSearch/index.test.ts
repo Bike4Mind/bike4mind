@@ -1151,6 +1151,28 @@ describe('search_knowledge_base serve budget agrees with the chunk policy (#1661
     expect(budgetLogger.warn).toHaveBeenCalledWith(expect.stringContaining(`longest ${OVER_POLICY_CHARS}`));
   });
 
+  it('never cuts a surrogate pair in half at the clip boundary', async () => {
+    // The boundary lands INSIDE a 2-code-unit character: 3071 filler chars, then an emoji. A plain
+    // slice(0, 3072) keeps its leading half and emits a lone surrogate - a corrupted final character
+    // in what the model reads, which then survives into anything quoting the passage back.
+    const straddling = `${'a'.repeat(DERIVED_DEFAULT_CAP - 1)}\u{1F600}${'z'.repeat(200)}`;
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [hitOf(straddling)],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      scan,
+    });
+
+    const out = await run(semanticContext());
+
+    expect(straddling.length).toBeGreaterThan(DERIVED_DEFAULT_CAP);
+    expect(out).toContain(`truncated at ${DERIVED_DEFAULT_CAP} characters`);
+    // A high surrogate with no low surrogate after it is exactly the corruption; properly paired
+    // characters elsewhere in the output do not match this.
+    expect(out).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(out).not.toContain('\u{1F600}');
+  });
+
   it('keeps the truncation notice at column 0, outside the untrusted block', async () => {
     semanticDataLakeSearchMock.mockResolvedValue({
       results: [hitOf(passage(OVER_POLICY_CHARS))],
