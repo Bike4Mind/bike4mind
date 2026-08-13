@@ -45,6 +45,8 @@ const migration: MigrationFile = {
     // (surfaced to users as "Project <name> already exists", pages/api/projects/index.ts) was never
     // enforced. Duplicate live rows can therefore already exist; dedupe before rebuilding or the index
     // build fails with E11000. Raw collection throughout: the softDeletePlugin hooks rewrite these filters.
+    // Loads all live rows into memory (precedent-consistent with the SystemPrompt migration); fine for a
+    // one-shot migration, but if `projects` grows huge a $group-for-duplicates pass would bound it.
     const rows = (await Project.collection
       .find({ deletedAt: null }, { projection: { userId: 1, name: 1, updatedAt: 1, createdAt: 1 } })
       .toArray()) as unknown as LiveProjectRow[];
@@ -60,7 +62,10 @@ const migration: MigrationFile = {
     }
 
     // Same name as the schema declaration: a differently-named index on the same key pattern
-    // would collide with autoIndex (IndexKeySpecsConflict).
+    // would collide with autoIndex (IndexKeySpecsConflict). The drop->create window is briefly
+    // index-less; if a duplicate live pair is inserted in between, createIndex throws and the
+    // migration fails without recording (migrationManager records only on success), so the next
+    // run simply re-dedupes and recreates. safeDropIndex also tolerates an already-absent index.
     await safeDropIndex(Project.collection, 'userId_1_name_1');
     await Project.collection.createIndex(
       { userId: 1, name: 1 },

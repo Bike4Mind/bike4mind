@@ -16,17 +16,17 @@ afterAll(async () => {
   await mongod.stop();
 });
 
-// Regression for the per-user unique name index: the old `deletedAt: { $exists: false }`
+// Regression for the live userId+name index: the old `deletedAt: { $exists: false }`
 // filter is rejected by Mongo in a partialFilterExpression, so the index silently
-// never built. softDeletePlugin defaults deletedAt to null on live rows, so the
-// supported `deletedAt: null` form is what indexes them.
-describe('Lattice userId+name unique partial index', () => {
-  it('syncIndexes builds the unique partial index without rejection', async () => {
+// never built. `deletedAt: null` is the supported form. The index is intentionally
+// NOT unique (see LatticeModel.ts), so this guards that it builds and stays non-unique.
+describe('Lattice userId+name live-name index', () => {
+  it('syncIndexes builds the partial index without rejection', async () => {
     await expect(LatticeModel.syncIndexes()).resolves.toBeDefined();
     const indexes = await LatticeModel.collection.indexes();
-    const unique = indexes.find(i => i.name === 'userId_1_name_1');
-    expect(unique).toBeDefined();
-    expect(unique?.unique).toBe(true);
-    expect(unique?.partialFilterExpression).toEqual({ deletedAt: null });
+    const idx = indexes.find(i => i.name === 'userId_1_name_1');
+    expect(idx).toBeDefined();
+    expect(idx?.unique).toBeFalsy();
+    expect(idx?.partialFilterExpression).toEqual({ deletedAt: null });
   });
 });
