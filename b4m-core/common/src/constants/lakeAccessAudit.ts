@@ -11,9 +11,12 @@
  * and defeat the audit control the workstream exists to provide - so `resolveLakeAccessAuditRetentionDays`
  * is a one-way ratchet UP: no input path can produce fewer than `LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS`.
  *
- * This is a PLATFORM-level lever, not a per-org one - no scoped settings resolver
- * (platform -> org -> owner -> lake) exists yet. When one lands, the invariant to preserve is
- * `max(orgConfigured, PLATFORM_FLOOR)` - the floor belongs to the platform, never to the org.
+ * This is a PLATFORM-level lever, not a per-org one: `LakeAccessAuditRetentionDays` and
+ * `LakeAccessQueryTextRetentionDays` carry no `scope.settableAt` metadata, so #1660's scoped
+ * settings resolver (platform -> org -> owner -> lake) resolves them to their platform value at
+ * every scope, same as any other unscoped setting. Opting them in later is a metadata addition,
+ * not new infrastructure - the invariant to preserve when that happens is
+ * `max(orgConfigured, PLATFORM_FLOOR)`, since the floor belongs to the platform, never to the org.
  */
 
 /** ~15 months: 12 months live retention plus a ~3-month Type II observation-window tail. */
