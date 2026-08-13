@@ -32,13 +32,29 @@
 import type { Logger } from '@bike4mind/observability';
 import type { PrReportMetricName, PrReportMetrics } from '@bike4mind/services';
 
+/**
+ * The "alarm on ANY occurrence" subset. These are emitted at `error` level so the
+ * existing ERROR-only log subscription forwards them today, rather than staying silent
+ * until dedicated CloudWatch metric filters + alarms are wired for the full set. The
+ * remaining counters (approvalDataUnavailable, openPrListTruncated, prList*,
+ * mentionNamesUnavailable) alarm on a SUSTAINED/consecutive run, not a single hit, so
+ * they stay at `warn`, where only the count over time is actionable.
+ */
+const ALARM_ON_ANY_OCCURRENCE: ReadonlySet<PrReportMetricName> = new Set([
+  'prReport.deliveryUnknown',
+  'prReport.dedupeReserveUnavailable',
+  'prReport.dedupeWriteFailed',
+]);
+
 export function createPrReportMetrics(logger: Logger): PrReportMetrics {
   return {
     increment(name: PrReportMetricName, detail?: Record<string, string | number | boolean | null>) {
       // `metric` and `value` are the fields a metric filter keys on; `detail` carries
       // the non-sensitive context (retry advice, counts, cause) that makes an alarm
       // actionable. No credential or full URL is ever passed in here.
-      logger.warn('[PrReport] degradation', { metric: name, value: 1, ...detail });
+      const fields = { metric: name, value: 1, ...detail };
+      if (ALARM_ON_ANY_OCCURRENCE.has(name)) logger.error('[PrReport] degradation', fields);
+      else logger.warn('[PrReport] degradation', fields);
     },
   };
 }

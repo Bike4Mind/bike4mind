@@ -41,7 +41,12 @@ const handler = baseApi().post<Request<{}, {}, SendBody>>(async (req, res) => {
 
   const parsedBody = sendBodySchema.safeParse(req.body);
   if (!parsedBody.success) {
-    return res.status(400).json({ kind: 'invalidRequest', reason: 'text is required' });
+    // The endpoint's own validation message (Zod's), so it is safe to return - it names
+    // the actual field that failed (e.g. an over-long idempotencyKey) instead of always
+    // blaming `text`. Only upstream provider detail is prohibited from crossing the wire.
+    const issue = parsedBody.error.issues[0];
+    const reason = issue ? `${issue.path.join('.') || 'body'}: ${issue.message}` : 'invalid request body';
+    return res.status(400).json({ kind: 'invalidRequest', reason });
   }
 
   const config = await loadPrReportConfig();
