@@ -42,7 +42,7 @@ export type AlwaysOnFloorInput = {
  * here; sizing that needs a provider count_tokens probe - see
  * packages/scripts/count-tokens-probe.ts.
  *
- * DECISION (#810, real cl100k_base counts, not estimates): against a ~7,400-7,800
+ * DECISION (real cl100k_base counts, not estimates): against a ~7,400-7,800
  * token cold-turn target, artifact_emission is ~2,822 tokens (~38%) and help_center
  * ~178 (~2%). The two BuilderInjectedBlock rows below are far smaller - format_prompt
  * ~66 tokens, image_prompt ~38, combined ~1.4% of the target. format_prompt and
@@ -122,6 +122,15 @@ export const INJECTED_BLOCK_METADATA: Record<
  * Mirrors buildAlwaysOnFloorDetails: iterates the fixed id list rather than the input array, so a
  * caller passing an empty/incomplete `blocks` array still gets a complete two-row inventory, and never
  * counts tokens for a row that was not delivered.
+ *
+ * `exclusionReason: 'disabled'` is a lossy label here: it covers BOTH "the setting/mode turned this
+ * block off" AND "the block's own trigger condition (an image request pattern, a promptMode) simply
+ * did not fire this turn" - `BuilderInjectedBlock.reason` distinguishes these ('setting_disabled' vs
+ * 'not_triggered' vs 'mode_skipped') but `SystemPromptDetailSchema.exclusionReason` has no value for
+ * the latter two, so a reader (e.g. the Context Inspector) cannot tell "the admin turned this off"
+ * apart from "nothing this turn asked for it" from the persisted row alone. Widen the schema enum
+ * if that distinction ever needs to be user-visible; not done here to avoid a schema change riding
+ * on an unrelated perf PR.
  */
 export async function buildInjectedBlockDetails(
   blocks: readonly BuilderInjectedBlock[],

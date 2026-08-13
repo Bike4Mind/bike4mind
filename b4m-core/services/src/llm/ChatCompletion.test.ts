@@ -959,8 +959,8 @@ describe('ChatCompletionProcess', () => {
         }
       });
 
-      // The no-signal path #810 adds: an ordinary "Hello" carries no blog intent and continues no
-      // prior blog workflow, so blog_draft is not worth its tokens on this turn.
+      // The no-signal path: an ordinary "Hello" carries no blog intent and continues no prior
+      // blog workflow, so blog_draft is not worth its tokens on this turn.
       it('does not offer blog_draft on an ordinary message with no blog intent', async () => {
         (service as any).user.isAdmin = true;
         try {
@@ -1002,6 +1002,37 @@ describe('ChatCompletionProcess', () => {
         } finally {
           delete (service as any).user.isAdmin;
           delete (service as any).user.blogIntegration;
+        }
+      });
+
+      // Blog tools moved relative to resolveEnabledTools (they're now pushed after it, unlike
+      // skill's disabledTools case above which was already past that seam) - this pins that the
+      // final denylist pass on the built tool list still catches them regardless of the new
+      // position.
+      it('does not offer blog tools when the session explicitly disabled them, even with blog intent', async () => {
+        (service as any).user.isAdmin = true;
+        (service as any).user.blogIntegration = true;
+        mockSession.disabledTools = ['blog_draft', 'blog_publish', 'blog_edit'];
+        try {
+          mockTextModel();
+          const body = {
+            ...startQuestParams,
+            message: 'blog this conversation',
+            tools: [],
+            projectId: undefined,
+            organizationId: undefined,
+          };
+
+          await service.process({ body, logger: mockLogger });
+          const tools = vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools;
+          const names = tools?.map((t: { toolSchema: { name: string } }) => t.toolSchema.name) ?? [];
+          expect(names).not.toContain('blog_draft');
+          expect(names).not.toContain('blog_publish');
+          expect(names).not.toContain('blog_edit');
+        } finally {
+          delete (service as any).user.isAdmin;
+          delete (service as any).user.blogIntegration;
+          mockSession.disabledTools = undefined;
         }
       });
 
@@ -2556,10 +2587,10 @@ describe('ChatCompletionProcess', () => {
       expect(systemText).not.toContain('Skill Invoked');
     });
 
-    // #810: the `skill` LLM tool used to be offered unconditionally. These pin the conditional
-    // gate to the SAME catalog/session state runAndCaptureSystemText already exercises for the
+    // The `skill` LLM tool used to be offered unconditionally. These pin the conditional gate to
+    // the SAME catalog/session state runAndCaptureSystemText already exercises for the
     // system-prompt side, so the tool and the catalog it describes move together.
-    describe('conditional skill tool offer (#810)', () => {
+    describe('conditional skill tool offer', () => {
       const runAndCaptureTools = async (params: { message: string; catalog?: ISkill[]; resolved?: ISkill[] }) => {
         await runAndCaptureSystemText(params);
         return vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools as

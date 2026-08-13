@@ -1,11 +1,16 @@
 import { detectSkillMentions } from '@bike4mind/common';
 
 /**
- * Blog intent in the message itself. Deliberately narrow: bare `post`/`publish`/`article` fire on
- * ordinary chat, so a word-boundary match on `blog` and its close relatives is the whole gate.
- * Verified against the one product surface found to PROACTIVELY SEND a message expecting a blog
- * tool without the user's own wording naming it - the Content Publishing Studio's prompt is
- * literally "Transform this conversation into a blog post." - so this pattern covers it verbatim.
+ * Blog intent in the message itself. Two branches: a word-boundary match on `blog` and its close
+ * relatives (deliberately narrow - bare `post`/`publish`/`article` fire on ordinary chat), OR the
+ * Content Publishing Studio's own structural phrasing, "transform this conversation into a X
+ * post" - matched by shape rather than a hardcoded format list, so it covers all of the Studio's
+ * `OutputFormat` values (`blog`/`linkedin`/`twitter`/`newsletter`) including ones the client UI
+ * does not expose yet (the three non-blog radios render `disabled` today - "Coming Soon" - but the
+ * server-side `blog_draft` schema already accepts all four, and the client will presumably enable
+ * them without a corresponding server change). The first version of this pattern matched only the
+ * `blog` word and missed the other three formats - a human review caught it before any client-side
+ * enablement made it a live regression.
  * (Other blog_draft/publish/edit references in the client are consumers of the tool's result -
  * an artifact renderer, a preview card, a Settings help string - not message-sending triggers.)
  *
@@ -16,7 +21,8 @@ import { detectSkillMentions } from '@bike4mind/common';
  * skill rescue to exclude specific command names would couple this module to the client's slash
  * command list.
  */
-export const BLOG_REQUEST_PATTERN = /\b(?:blog|blogs|blogging|blogged|blogpost|substack|wordpress|ghost\s+cms)\b/i;
+export const BLOG_REQUEST_PATTERN =
+  /\b(?:blog|blogs|blogging|blogged|blogpost|substack|wordpress|ghost\s+cms)\b|transform\s+this\s+conversation\s+into\s+a\s+\S+\s+post\b/i;
 
 const BLOG_TOOL_NAMES = ['blog_draft', 'blog_publish', 'blog_edit'];
 

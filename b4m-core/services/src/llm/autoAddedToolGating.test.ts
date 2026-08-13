@@ -7,12 +7,17 @@ import {
 } from './autoAddedToolGating';
 
 describe('BLOG_REQUEST_PATTERN', () => {
-  // Pinned verbatim: this is the one surface found to proactively send a message expecting the
-  // blog tool without saying "blog" itself (ContentPublishingModal.tsx). If this stops matching,
-  // the Studio silently loses blog_draft.
-  it('matches the Content Publishing Studio prompt verbatim', () => {
-    expect(BLOG_REQUEST_PATTERN.test('Transform this conversation into a blog post.')).toBe(true);
-  });
+  // Pinned verbatim for every ContentPublishingModal.tsx OutputFormat, not just 'blog' - a
+  // human review caught that the first version of this pattern missed linkedin/twitter/newsletter
+  // (currently disabled "Coming Soon" radios in the client, but the server-side blog_draft schema
+  // already accepts all four). If this stops matching any of them, the Studio silently loses
+  // blog_draft the moment the client enables that format.
+  it.each(['blog', 'linkedin', 'twitter', 'newsletter'])(
+    'matches the Content Publishing Studio prompt for outputFormat=%s',
+    format => {
+      expect(BLOG_REQUEST_PATTERN.test(`Transform this conversation into a ${format} post.`)).toBe(true);
+    }
+  );
 
   it.each(['post this to slack', 'publish the artifact', 'what is a weblog', ''])('does not fire on %j', message => {
     expect(BLOG_REQUEST_PATTERN.test(message)).toBe(false);

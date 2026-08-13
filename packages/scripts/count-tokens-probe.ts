@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 
 /**
- * Provider count_tokens probe for issue #810 (cold-turn prompt footprint).
+ * Provider count_tokens probe for the always-on cold-turn prompt footprint.
  *
  * Sends the same representative basic-turn request to Anthropic's
  * `count_tokens` endpoint in three payload shapes - system-only, system+tools,
@@ -14,7 +14,7 @@
  *   ANTHROPIC_API_KEY=... pnpm --filter @bike4mind/scripts count-tokens-probe [model]
  *   Or: ANTHROPIC_API_KEY=... npx tsx packages/scripts/count-tokens-probe.ts [model]
  *
- * Paste the raw output into the issue/PR - see #810 acceptance item 1.
+ * Paste the raw output into the PR description as follow-up cost evidence.
  */
 
 import 'dotenv/config';
