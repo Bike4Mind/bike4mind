@@ -43,6 +43,7 @@ import {
   getNodesAtPath,
 } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
+import TreeRowLabel from '@client/app/components/datalake/TreeRowLabel';
 import {
   COUNT_CHIP_SX,
   FOOTER_BTN_SX,
@@ -98,6 +99,22 @@ const normalizePrefix = (fileTagPrefix: string) => (fileTagPrefix.endsWith(':') 
 /** The prefix's namespace segments, e.g. 'books' -> ['books']. Lake navigation seeds the
  *  path past these so clicking a lake lands directly on its categories. */
 const prefixSegments = (fileTagPrefix: string) => fileTagPrefix.replace(/:+$/, '').split(':').filter(Boolean);
+
+/** Splits "[Category] Title.ext" into [category, title] so files sharing a bracketed source
+ *  prefix sort by the group then the title instead of piling up on the shared leading "[".
+ *  Mirrors DataLakeTreeView's compareByCategoryThenTitle - this surface carries its own tag-tree
+ *  browsing logic rather than routing through DataLakeTreeView, so the two stay in sync by hand. */
+function categoryTitleKey(fileName: string): [string, string] {
+  const withoutExt = fileName.replace(/\.[^/.]+$/, '');
+  const match = withoutExt.match(/^\[(.*?)\]\s*(.*)$/);
+  return match ? [match[1], match[2]] : ['', withoutExt];
+}
+
+function compareByCategoryThenTitle(a: IFabFileDocument, b: IFabFileDocument): number {
+  const [categoryA, titleA] = categoryTitleKey(a.fileName);
+  const [categoryB, titleB] = categoryTitleKey(b.fileName);
+  return categoryA.localeCompare(categoryB) || titleA.localeCompare(titleB);
+}
 
 /**
  * Data Lakes management surface: one persistent two-pane layout. The left sidebar navigates
@@ -399,7 +416,7 @@ function ManagerNav({
             prefix
           )
       )
-      .sort((a, b) => a.fileName.localeCompare(b.fileName));
+      .sort(compareByCategoryThenTitle);
   }, [articles, activeLake]);
 
   const seedDepth = activeLake ? prefixSegments(activeLake.fileTagPrefix).length : 0;
@@ -413,9 +430,7 @@ function ManagerNav({
   const files = useMemo(() => {
     if (isUncategorized) return uncategorizedFiles;
     if (!leafTag) return [];
-    return articles
-      .filter(f => (f.tags ?? []).some(t => t.name === leafTag))
-      .sort((a, b) => a.fileName.localeCompare(b.fileName));
+    return articles.filter(f => (f.tags ?? []).some(t => t.name === leafTag)).sort(compareByCategoryThenTitle);
   }, [isUncategorized, uncategorizedFiles, leafTag, articles]);
 
   // A branch node (has children) can ALSO carry files tagged with its own exact path, not just a
@@ -424,9 +439,7 @@ function ManagerNav({
   const ownTag = activeLake && !isUncategorized && !leafTag && path.length > seedDepth ? path.join(':') : null;
   const ownFiles = useMemo(() => {
     if (!ownTag || !currentNode?.ownFileCount) return [];
-    return articles
-      .filter(f => (f.tags ?? []).some(t => t.name === ownTag))
-      .sort((a, b) => a.fileName.localeCompare(b.fileName));
+    return articles.filter(f => (f.tags ?? []).some(t => t.name === ownTag)).sort(compareByCategoryThenTitle);
   }, [ownTag, currentNode, articles]);
   const showOwnFiles = !searchQuery && ownFiles.length > 0;
 
@@ -778,12 +791,7 @@ function ManagerNav({
                       }}
                     />
                     <ListItemContent>
-                      <Typography
-                        noWrap
-                        sx={{ ...rowTypographySx, fontWeight: selectedFileId === file.id ? 'lg' : 400 }}
-                      >
-                        {file.fileName.replace(/\.[^/.]+$/, '')}
-                      </Typography>
+                      <TreeRowLabel label={file.fileName.replace(/\.[^/.]+$/, '')} />
                     </ListItemContent>
                   </ListItemButton>
                 </ListItem>
@@ -854,12 +862,7 @@ function ManagerNav({
                       }}
                     />
                     <ListItemContent>
-                      <Typography
-                        noWrap
-                        sx={{ ...rowTypographySx, fontWeight: selectedFileId === file.id ? 'lg' : 400 }}
-                      >
-                        {file.fileName.replace(/\.[^/.]+$/, '')}
-                      </Typography>
+                      <TreeRowLabel label={file.fileName.replace(/\.[^/.]+$/, '')} />
                     </ListItemContent>
                   </ListItemButton>
                 </ListItem>

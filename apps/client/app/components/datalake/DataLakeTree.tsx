@@ -4,6 +4,7 @@ import SortByAlphaIcon from '@mui/icons-material/SortByAlpha';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import type { TagNode } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import DataLakeTreeView, { type DataLakeTreeChrome } from './DataLakeTreeView';
+import TreeRowLabel from './TreeRowLabel';
 import { inkFor } from '@client/app/components/datalake/surfaceChrome';
 import type { Hue } from '@client/app/components/datalake/surfaceChrome';
 import { humanizeSegment, useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
@@ -137,11 +138,7 @@ export default function DataLakeTree(props: DataLakeTreeProps) {
               }}
             />
             <ListItemContent>
-              <Tooltip title={displayName} size="sm" enterDelay={500}>
-                <Typography level="body-xs" noWrap sx={{ fontWeight: selected ? 'lg' : undefined }}>
-                  {displayName}
-                </Typography>
-              </Tooltip>
+              <TreeRowLabel label={displayName} level="body-xs" />
             </ListItemContent>
           </ListItemButton>
         </ListItem>
