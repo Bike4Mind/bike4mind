@@ -186,7 +186,15 @@ const SidebarNav = ({
         const { Icon: SectionIcon } = section;
         const visibleItems = section.items.filter(item => !item.gate || gates[item.gate]);
         return (
-          <Accordion key={section.key} expanded={isExpanded(section.key)} onChange={() => toggleSection(section.key)}>
+          <Accordion
+            key={section.key}
+            expanded={isExpanded(section.key)}
+            onChange={() => toggleSection(section.key)}
+            // raise an expanded panel above its neighbors so a neighboring
+            // header cannot intercept clicks on this section's nav items. Joy
+            // elevates a summary to zIndex 1 on focus/hover, so beat that.
+            sx={{ position: 'relative', ...(isExpanded(section.key) && { zIndex: 2 }) }}
+          >
             <AccordionSummary>
               <SectionIcon color="primary" />
               <Typography color="primary" level="body-md">

@@ -16,10 +16,9 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
   GoneException: class GoneException extends Error {},
 }));
 
-vi.mock('@bike4mind/common', () => ({
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
   DataSubscribeRequestAction: { parse: (x: unknown) => x },
-  InviteType: {},
-  Permission: {},
 }));
 
 vi.mock('@bike4mind/database', () => ({

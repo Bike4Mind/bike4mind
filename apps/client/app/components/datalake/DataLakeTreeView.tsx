@@ -3,7 +3,7 @@ import { Box, Input, List, Skeleton, Typography } from '@mui/joy';
 import type { SxProps } from '@mui/joy/styles/types';
 import SearchIcon from '@mui/icons-material/Search';
 import type { TagNode } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
-import { getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
+import { getNodeAtPath, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import type { TreeSortMode } from './treeChrome';
 import type { IFabFileDocument } from '@bike4mind/common';
 
@@ -89,7 +89,10 @@ export default function DataLakeTreeView({
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<TreeSortMode>('count');
 
+  const isUncategorized = !!uncategorized && breadcrumb.length === 1 && breadcrumb[0] === UNCATEGORIZED_KEY;
+
   const currentNodes = useMemo(() => getNodesAtPath(tree, breadcrumb), [tree, breadcrumb]);
+  const currentNode = useMemo(() => getNodeAtPath(tree, breadcrumb), [tree, breadcrumb]);
 
   const filteredNodes = useMemo(() => {
     let nodes = currentNodes;
@@ -102,9 +105,6 @@ export default function DataLakeTreeView({
     );
   }, [currentNodes, searchQuery, sortBy]);
 
-  // The synthetic bucket intercepts before leaf-tag resolution: its key is not a real tag.
-  const isUncategorized = !!uncategorized && breadcrumb.length === 1 && breadcrumb[0] === UNCATEGORIZED_KEY;
-
   // At a leaf node (no children), files are filtered locally by the leaf tag.
   const leafTag = !isUncategorized && breadcrumb.length > 0 && currentNodes.length === 0 ? breadcrumb.join(':') : null;
   const showFiles = isUncategorized || !!leafTag;
@@ -112,14 +112,30 @@ export default function DataLakeTreeView({
   const files = useMemo(() => {
     if (isUncategorized) return bucketFiles!;
     if (!leafTag) return [];
-    return [...articles]
+    return articles
       .filter(f => (f.tags ?? []).some(t => t.name === leafTag))
       .sort((a, b) => a.fileName.localeCompare(b.fileName));
   }, [isUncategorized, bucketFiles, leafTag, articles]);
 
+  // A branch node (has children) can ALSO carry files tagged with its own exact path, not just
+  // a deeper child tag. Render those as file rows mixed into the folder list below, so the view
+  // reads like a normal file browser (folders + files together) instead of hiding them behind a
+  // folder that only ever contains itself.
+  const ownTag = !isUncategorized && !leafTag && breadcrumb.length > 0 ? breadcrumb.join(':') : null;
+  const ownFiles = useMemo(() => {
+    if (!ownTag || !currentNode?.ownFileCount) return [];
+    return articles
+      .filter(f => (f.tags ?? []).some(t => t.name === ownTag))
+      .sort((a, b) => a.fileName.localeCompare(b.fileName));
+  }, [ownTag, currentNode, articles]);
+  // Hidden while searching, matching the uncategorized bucket: search filters folder segments,
+  // not files, so a folder's own files are not "search results" either.
+  const showOwnFiles = !searchQuery && ownFiles.length > 0;
+
   const showBucketRow = !!uncategorized && breadcrumb.length === 0 && !searchQuery && uncategorized.files.length > 0;
-  // The bucket standing in for an empty root is still content - don't show "No categories" under it.
-  const showNodeEmpty = filteredNodes.length === 0 && !showBucketRow;
+  // The bucket / own-files rows standing in for an empty node list are still content - don't
+  // show "No categories" under them.
+  const showNodeEmpty = filteredNodes.length === 0 && !showBucketRow && !showOwnFiles;
 
   const backRow =
     breadcrumb.length > 0
@@ -187,6 +203,7 @@ export default function DataLakeTreeView({
             )}
             {showBucketRow &&
               uncategorized!.renderRow(uncategorized!.files.length, () => onNavigate([UNCATEGORIZED_KEY]))}
+            {showOwnFiles && ownFiles.map(f => chrome.renderFileRow(f, selectedFileId === f.id, () => onSelectFile(f)))}
             {showNodeEmpty && (
               <Box sx={{ p: 2, textAlign: 'center' }}>
                 <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>

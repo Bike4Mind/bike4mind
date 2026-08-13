@@ -68,6 +68,7 @@ const gatedLake = {
   isPublic: false,
   systemPrompt: '',
   preferredSystemPromptId: '',
+  groundingMode: 'retrieve' as const,
   canManage: true,
 };
 
@@ -81,6 +82,7 @@ const openLake = {
   isPublic: false,
   systemPrompt: '',
   preferredSystemPromptId: '',
+  groundingMode: 'retrieve' as const,
   canManage: true,
 };
 
@@ -94,6 +96,7 @@ const entitlementGatedLake = {
   isPublic: false,
   systemPrompt: '',
   preferredSystemPromptId: '',
+  groundingMode: 'retrieve' as const,
   canManage: true,
 };
 
@@ -481,5 +484,72 @@ describe('DataLakeSettingsModal \u2014 preferred prompt binding', () => {
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
     expect(updateMutate.mock.calls[0][0]).not.toHaveProperty('preferredSystemPromptId');
+  });
+});
+
+describe('DataLakeSettingsModal \u2014 grounding mode', () => {
+  // Seeded to a NON-default mode so the seed assertion proves it reads the lake, not the fallback.
+  const inlineLake = { ...openLake, id: 'lake-8', groundingMode: 'inline' as const };
+
+  beforeEach(() => {
+    updateMutate.mockReset();
+  });
+
+  it('renders the select for an editor and seeds it from the lake', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={inlineLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    const button = screen.getByTestId('datalake-grounding-mode-button');
+    expect(button).toBeInTheDocument();
+    // The Joy Select button renders the selected option's label.
+    expect(button).toHaveTextContent(/Inline into the prompt/i);
+  });
+
+  it('sends the chosen mode when an editor changes it', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-grounding-mode-button'));
+    await user.click(screen.getByTestId('datalake-grounding-mode-inline'));
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ groundingMode: 'inline' });
+  });
+
+  it('does not render the select for a non-editor', () => {
+    const readerLake = { ...inlineLake, id: 'lake-9', canManage: false };
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={readerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    // The modal opened (real negative), but the editor-only control is absent.
+    expect(screen.getByTestId('datalake-settings-modal')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-grounding-mode-select')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Grounding mode/i)).not.toBeInTheDocument();
+  });
+
+  it('never sends groundingMode from a non-editor save', async () => {
+    const readerLake = { ...inlineLake, id: 'lake-10', canManage: false };
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={readerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    expect(updateMutate.mock.calls[0][0]).not.toHaveProperty('groundingMode');
   });
 });

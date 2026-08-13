@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/cli",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "type": "module",
   "description": "Interactive CLI tool for Bike4Mind with ReAct agents",
   "license": "UNLICENSED",

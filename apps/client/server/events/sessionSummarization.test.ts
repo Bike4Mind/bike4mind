@@ -197,63 +197,32 @@ describe('sessionSummarization summary-file lookup', () => {
     );
   });
 
-  // Since #1263, a prefix-arm content tag is lake membership on its own (no meta-tag required),
-  // and reconcileLakeTags now gates losing it the same as a meta-tag leave. Re-summarizing must
-  // carry that tag through too, or it silently evicts the file from a lake it never left.
-  it('carries a prefix-arm-only membership tag through re-summarization', async () => {
+  // A stored meta-tag or prefix-arm content tag is never carried through by hand here -
+  // reconcileLakeTags (called inside updateFabFile) preserves existing membership regardless of
+  // what this door sends, so re-summarization can just pass the session's own tags through as-is
+  // without silently evicting a lake-indexed file it never actually left.
+  it("passes only the session's own tags to updateFabFile, relying on the callee to preserve lake membership", async () => {
+    // The session (h.session.tags, defaulted to [] in beforeEach) carries neither signal - the
+    // stored FabFile's existing meta-tag and prefix-arm tag are NOT manually carried through here.
     h.fabFileStore.push({
       id: 'fabfile-owner',
       userId: OWNER,
       sessionId: SESSION_ID,
       fileName: 'Notebook Summary.txt',
-      tags: [{ name: 'lk:invoices', strength: 1 }],
+      tags: [
+        { name: 'datalake:lake1', strength: 1 },
+        { name: 'lk:invoices', strength: 1 },
+      ],
     });
-    h.findPrefixArmLakes.mockResolvedValueOnce([
-      { createdByUserId: OWNER, fileTagPrefix: 'lk:', datalakeTag: 'datalake:lake1' },
-    ]);
 
     await run();
 
     expect(h.updateFabFile).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ tags: expect.arrayContaining([expect.objectContaining({ name: 'lk:invoices' })]) }),
+      expect.objectContaining({ tags: [] }),
       expect.anything()
     );
-  });
-
-  it('skips the candidate-lake query when no stored tag could carry a prefix arm', async () => {
-    h.fabFileStore.push({
-      id: 'fabfile-owner',
-      userId: OWNER,
-      sessionId: SESSION_ID,
-      fileName: 'Notebook Summary.txt',
-      tags: [{ name: 'plain', strength: 1 }],
-    });
-
-    await run();
-
     expect(h.findPrefixArmLakes).not.toHaveBeenCalled();
-  });
-
-  // The doc comment above the carry-through says the session's own tags never overlap a
-  // membership signal - true in the normal case, but not an invariant the code can lean on.
-  it('does not duplicate a membership tag the session itself also carries', async () => {
-    h.session = { id: SESSION_ID, _id: SESSION_ID, userId: OWNER, name: 'Notebook', tags: [{ name: 'lk:invoices' }] };
-    h.fabFileStore.push({
-      id: 'fabfile-owner',
-      userId: OWNER,
-      sessionId: SESSION_ID,
-      fileName: 'Notebook Summary.txt',
-      tags: [{ name: 'lk:invoices', strength: 1 }],
-    });
-    h.findPrefixArmLakes.mockResolvedValueOnce([
-      { createdByUserId: OWNER, fileTagPrefix: 'lk:', datalakeTag: 'datalake:lake1' },
-    ]);
-
-    await run();
-
-    const call = h.updateFabFile.mock.calls[0][1] as { tags: { name: string }[] };
-    expect(call.tags.filter(t => t.name === 'lk:invoices')).toHaveLength(1);
   });
 
   // createFabFile's new lake-tag gate (see fabFileService/create.ts) now throws for a datalake:

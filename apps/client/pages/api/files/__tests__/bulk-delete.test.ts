@@ -95,7 +95,7 @@ describe('bulk-delete - data-lake stats', () => {
     h.deleteManyByFabFileId.mockResolvedValue(undefined);
     h.findAllWithKnowledgeId.mockResolvedValue([]);
     h.findByDatalakeTag.mockResolvedValue(LAKE);
-    h.computeDataLakeStats.mockResolvedValue({ fileCount: 1, totalSizeBytes: 100 });
+    h.computeDataLakeStats.mockResolvedValue({ fileCount: 1, totalSizeBytes: 100, totalChunkedChars: 0 });
     h.setStats.mockResolvedValue(undefined);
   });
 

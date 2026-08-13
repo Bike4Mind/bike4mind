@@ -37,7 +37,11 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
-import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
+import {
+  buildTagTree,
+  getNodeAtPath,
+  getNodesAtPath,
+} from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
 import {
   COUNT_CHIP_SX,
@@ -72,6 +76,7 @@ import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStor
 import useStartChatWithLake from '@client/app/hooks/useStartChatWithLake';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import DataLakeEmptyState from '@client/app/components/datalake/DataLakeEmptyState';
+import { RowActionsMenu, RowMenuItem } from '@client/app/components/datalake/rowActionsMenu';
 import DataLakeArticlePanel from './DataLakeArticlePanel';
 import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
 import { DataLakeSettingsModal } from './DataLakeSettingsModal';
@@ -80,7 +85,7 @@ import TaxonomyReviewPanel from './TaxonomyReviewPanel';
 import FieldTooltip from '@client/app/components/help/FieldTooltip';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
 import type { IDataLakeBatchSummary, IFabFileDocument } from '@bike4mind/common';
-import { satisfiesTagPrefix } from '@bike4mind/common';
+import { satisfiesTagPrefix, DEFAULT_DATA_LAKE_GROUNDING_MODE } from '@bike4mind/common';
 
 type ManagerLake = NonNullable<ReturnType<typeof useGetDataLakes>['data']>[number];
 
@@ -168,6 +173,9 @@ export default function DataLakeManagerPanel() {
           systemPrompt: l.systemPrompt ?? '',
           // Same as systemPrompt: '' when unset OR withheld from a non-editor; rendered off canManage.
           preferredSystemPromptId: l.preferredSystemPromptId ?? '',
+          // Absent when withheld from a non-editor OR the lake predates the field; seed the default
+          // so the picker always shows a concrete mode (matching how the resolver treats absence).
+          groundingMode: l.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE,
           canManage: !!l.canManage,
         }
       : null;
@@ -186,13 +194,10 @@ export default function DataLakeManagerPanel() {
 
   // Discover swaps the right pane, but the activeLake branch below outranks it - so a click
   // while a lake was open changed nothing on screen, then surfaced later as the catalog
-  // appearing when the user pressed Back. Exit the lake on the way in. Toggling back out is
-  // the only exit that does not require owning a lake to click.
-  const toggleDiscover = () => {
-    if (managerTab === 'discover') {
-      openManager('mine');
-      return;
-    }
+  // appearing when the user pressed Back. Exit the lake on the way in. One-way by design: the
+  // catalog is a place you go, not a mode you hold, so the nav's Back row is the way out (which
+  // also means leaving never depends on owning a lake to click).
+  const openDiscover = () => {
     setLakeId(null);
     setPath([]);
     setSelectedFile(null);
@@ -232,8 +237,7 @@ export default function DataLakeManagerPanel() {
         }}
         onSelectFile={setSelectedFile}
         onCreateLake={openWizard}
-        isDiscovering={managerTab === 'discover'}
-        onDiscover={toggleDiscover}
+        onDiscover={openDiscover}
         onReviewTaxonomy={setReviewingBatchId}
       />
       {activeLake ? (
@@ -299,9 +303,7 @@ interface ManagerNavProps {
   onExitLake: () => void;
   onSelectFile: (file: IFabFileDocument) => void;
   onCreateLake: () => void;
-  /** True while the right pane shows the public catalog, so the footer button reads as pressed. */
-  isDiscovering: boolean;
-  /** Toggles the public-lake Discover catalog in the right pane. */
+  /** Opens the public-lake Discover catalog in the right pane. */
   onDiscover: () => void;
   /** Opens the review/apply panel for a batch whose taxonomy suggestions are ready or failed. */
   onReviewTaxonomy: (batchId: string) => void;
@@ -320,7 +322,6 @@ function ManagerNav({
   onExitLake,
   onSelectFile,
   onCreateLake,
-  isDiscovering,
   onDiscover,
   onReviewTaxonomy,
 }: ManagerNavProps) {
@@ -342,8 +343,10 @@ function ManagerNav({
   const restoreDeletedLake = useRestoreDeletedDataLake();
   const deleteLake = usePermanentDeleteDataLake();
   const cleanupLake = useCleanupDataLake();
-  const { data: archivedLakes } = useGetArchivedDataLakes(showArchived);
-  const { data: deletedLakes } = useGetDeletedDataLakes(showDeleted);
+  // Fetched up front rather than on first expand: an empty section renders as a single "No
+  // archived" row instead of an accordion, and that needs the count before anyone clicks.
+  const { data: archivedLakes } = useGetArchivedDataLakes();
+  const { data: deletedLakes } = useGetDeletedDataLakes();
 
   const { data: filesResult, isLoading: filesLoading, isError: filesError } = useDataLakeFiles(activeLake?.id ?? null);
   const articles = useMemo(() => filesResult?.data ?? [], [filesResult]);
@@ -364,6 +367,7 @@ function ManagerNav({
   }, [articles, activeLake]);
 
   const currentNodes = useMemo(() => getNodesAtPath(tree, path), [tree, path]);
+  const currentNode = useMemo(() => getNodeAtPath(tree, path), [tree, path]);
 
   const filteredNodes = useMemo(() => {
     let nodes = currentNodes;
@@ -404,10 +408,22 @@ function ManagerNav({
   const files = useMemo(() => {
     if (isUncategorized) return uncategorizedFiles;
     if (!leafTag) return [];
-    return [...articles]
+    return articles
       .filter(f => (f.tags ?? []).some(t => t.name === leafTag))
       .sort((a, b) => a.fileName.localeCompare(b.fileName));
   }, [isUncategorized, uncategorizedFiles, leafTag, articles]);
+
+  // A branch node (has children) can ALSO carry files tagged with its own exact path, not just a
+  // deeper child tag - shown as file rows mixed into the folder list below rather than a separate
+  // route, matching how DataLakeTreeView handles the same case for the standalone/chat surfaces.
+  const ownTag = activeLake && !isUncategorized && !leafTag && path.length > seedDepth ? path.join(':') : null;
+  const ownFiles = useMemo(() => {
+    if (!ownTag || !currentNode?.ownFileCount) return [];
+    return articles
+      .filter(f => (f.tags ?? []).some(t => t.name === ownTag))
+      .sort((a, b) => a.fileName.localeCompare(b.fileName));
+  }, [ownTag, currentNode, articles]);
+  const showOwnFiles = !searchQuery && ownFiles.length > 0;
 
   const filteredLakes = useMemo(() => {
     let list = lakes ?? [];
@@ -647,76 +663,57 @@ function ManagerNav({
               open={showArchived}
               onToggle={() => setShowArchived(v => !v)}
               testid="datalake-archived-section"
-              emptyText="No archived data lakes."
-              lakes={showArchived ? filterByName(archivedLakes) : undefined}
+              emptyLabel="No files"
+              lakes={archivedLakes ? filterByName(archivedLakes) : undefined}
               hoverBg={hoverBg}
-              renderActions={lake => (
-                <>
-                  <Tooltip title="Restore" size="sm">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="success"
-                      data-testid={`datalake-restore-btn-${lake.id}`}
-                      onClick={() => unarchiveLake.mutate(lake.id)}
-                      sx={{ '--IconButton-size': '24px' }}
-                    >
-                      <UnarchiveOutlinedIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title="Delete (recoverable)" size="sm">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="danger"
-                      data-testid={`datalake-delete-btn-${lake.id}`}
-                      onClick={() => deleteLake.mutate(lake.id)}
-                      sx={{ '--IconButton-size': '24px' }}
-                    >
-                      <DeleteOutlineIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
-                </>
-              )}
+              // An array, not a fragment: Joy's Menu clones its first child with data-first-child,
+              // which a Fragment rejects with a console error.
+              renderActions={lake => [
+                <RowMenuItem
+                  key="restore"
+                  testId={`datalake-restore-btn-${lake.id}`}
+                  icon={<UnarchiveOutlinedIcon sx={{ fontSize: 16 }} />}
+                  label="Restore"
+                  onClick={() => unarchiveLake.mutate(lake.id)}
+                />,
+                <RowMenuItem
+                  key="delete"
+                  testId={`datalake-delete-btn-${lake.id}`}
+                  icon={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
+                  label="Delete"
+                  onClick={() => deleteLake.mutate(lake.id)}
+                  danger
+                />,
+              ]}
             />
 
             {/* Deleted (recoverable until purged) */}
             <NavLifecycleSection
-              label="Deleted (recoverable)"
+              label="Deleted"
               open={showDeleted}
               onToggle={() => setShowDeleted(v => !v)}
               testid="datalake-deleted-section"
-              emptyText="No deleted data lakes."
-              lakes={showDeleted ? filterByName(deletedLakes) : undefined}
+              emptyLabel="No files"
+              lakes={deletedLakes ? filterByName(deletedLakes) : undefined}
               hoverBg={hoverBg}
-              renderActions={lake => (
-                <>
-                  <Tooltip title="Restore" size="sm">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="success"
-                      data-testid={`datalake-restore-deleted-btn-${lake.id}`}
-                      onClick={() => restoreDeletedLake.mutate(lake.id)}
-                      sx={{ '--IconButton-size': '24px' }}
-                    >
-                      <RestoreIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title="Purge permanently" size="sm">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="danger"
-                      data-testid={`datalake-purge-btn-${lake.id}`}
-                      onClick={() => setPurgeTarget({ id: lake.id, name: lake.name })}
-                      sx={{ '--IconButton-size': '24px' }}
-                    >
-                      <DeleteForeverIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
-                </>
-              )}
+              // Array for the same data-first-child reason as the archived section above.
+              renderActions={lake => [
+                <RowMenuItem
+                  key="restore"
+                  testId={`datalake-restore-deleted-btn-${lake.id}`}
+                  icon={<RestoreIcon sx={{ fontSize: 16 }} />}
+                  label="Restore"
+                  onClick={() => restoreDeletedLake.mutate(lake.id)}
+                />,
+                <RowMenuItem
+                  key="purge"
+                  testId={`datalake-purge-btn-${lake.id}`}
+                  icon={<DeleteForeverIcon sx={{ fontSize: 16 }} />}
+                  label="Purge permanently"
+                  onClick={() => setPurgeTarget({ id: lake.id, name: lake.name })}
+                  danger
+                />,
+              ]}
             />
 
             {/* Irreversible purge confirmation */}
@@ -834,28 +831,51 @@ function ManagerNav({
               </ListItem>
             )}
 
-            {filteredNodes.length === 0 && !(atLakeRoot && !searchQuery && uncategorizedFiles.length > 0) && (
-              <EmptyHint text={searchQuery ? 'No matches' : 'No categories'} />
-            )}
+            {/* Files tagged with this branch's own exact path, mixed in alongside its subfolders. */}
+            {showOwnFiles &&
+              ownFiles.map(file => (
+                <ListItem key={file.id}>
+                  <ListItemButton
+                    selected={selectedFileId === file.id}
+                    onClick={() => onSelectFile(file)}
+                    data-testid={`datalake-manager-file-${file.id}`}
+                    sx={treeRowSx(hoverBg)}
+                  >
+                    <ArticleOutlinedIcon
+                      sx={{
+                        fontSize: 16,
+                        color: selectedFileId === file.id ? inkFor(HUES.cyan, isDark) : 'text.tertiary',
+                        flexShrink: 0,
+                      }}
+                    />
+                    <ListItemContent>
+                      <Typography
+                        noWrap
+                        sx={{ ...rowTypographySx, fontWeight: selectedFileId === file.id ? 'lg' : 400 }}
+                      >
+                        {file.fileName.replace(/\.[^/.]+$/, '')}
+                      </Typography>
+                    </ListItemContent>
+                  </ListItemButton>
+                </ListItem>
+              ))}
+
+            {filteredNodes.length === 0 &&
+              !(atLakeRoot && !searchQuery && uncategorizedFiles.length > 0) &&
+              !showOwnFiles && <EmptyHint text={searchQuery ? 'No matches' : 'No categories'} />}
           </List>
         )}
       </Box>
 
       {/* Sticky bottom bar, same chrome as the in-chat tree footer. */}
       <Box sx={{ display: 'flex', gap: '8px', p: '12px', borderTop: '1px solid', borderColor }}>
-        <Tooltip
-          title={
-            isDiscovering
-              ? 'Showing public data lakes. Click to return to your own lakes.'
-              : 'Browse data lakes other people have published, from across the app.'
-          }
-          size="sm"
-        >
+        <Tooltip title="Browse data lakes other people have published, from across the app." size="sm">
+          {/* Navigates to the catalog; deliberately stateless - it never reads as pressed, because
+              it is not a mode you are holding. Leaving is the nav's Back row. */}
           <Button
-            variant={isDiscovering ? 'soft' : 'outlined'}
+            variant="outlined"
             color="neutral"
             onClick={onDiscover}
-            aria-pressed={isDiscovering}
             data-testid="datalake-manager-discover-btn"
             sx={FOOTER_BTN_SX}
           >
@@ -904,43 +924,66 @@ function NavSectionHeader({
   testid,
   hoverBg,
   infoTooltip,
+  trailing,
 }: {
   label: string;
-  open: boolean;
-  onToggle: () => void;
+  open?: boolean;
+  /** Omit to render a static row: no collapse, no chevron - for a section with nothing to open. */
+  onToggle?: () => void;
   testid: string;
   hoverBg: string;
   /** Persistent help affordance next to the label, e.g. explaining RAG for the Lakes section. */
   infoTooltip?: React.ReactNode;
+  /** Right-hand content replacing the chevron, e.g. "No files" on an empty section. */
+  trailing?: React.ReactNode;
 }) {
-  return (
-    <ListItemButton
-      onClick={onToggle}
-      data-testid={testid}
-      sx={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '8px',
-        px: '8px',
-        mb: '4px',
-        height: '32px',
-        minHeight: '32px',
-        borderRadius: '8px',
-        transition: 'background 0.15s',
-        '--variant-plainHoverBg': hoverBg,
-      }}
-    >
-      <Typography noWrap sx={{ flex: 1, minWidth: 0, fontSize: '14px', fontWeight: 400, color: 'text.primary' }}>
-        {label}
-      </Typography>
-      {/* Not part of the toggle - stop the click from also collapsing/expanding the section. */}
-      {infoTooltip && <Box onClick={e => e.stopPropagation()}>{infoTooltip}</Box>}
-      {open ? (
-        <ExpandLessIcon sx={{ fontSize: 18, color: 'text.tertiary', flexShrink: 0 }} />
-      ) : (
-        <ExpandMoreIcon sx={{ fontSize: 18, color: 'text.tertiary', flexShrink: 0 }} />
-      )}
+  const rowSx = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    px: '8px',
+    mb: '4px',
+    height: '32px',
+    minHeight: '32px',
+    borderRadius: '8px',
+    transition: 'background 0.15s',
+    '--variant-plainHoverBg': hoverBg,
+  } as const;
+
+  const content = (
+    <>
+      {/* Label and help sit as one group, so the icon stays beside the text instead of being
+          pushed across to the chevron by a stretching label. Same pairing as the tree header. */}
+      <Box sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <Typography noWrap sx={{ minWidth: 0, fontSize: '14px', fontWeight: 400, color: 'text.primary' }}>
+          {label}
+        </Typography>
+        {/* Not part of the toggle - stop the click from also collapsing/expanding the section. */}
+        {infoTooltip && (
+          <Box onClick={e => e.stopPropagation()} sx={{ display: 'flex', flexShrink: 0 }}>
+            {infoTooltip}
+          </Box>
+        )}
+      </Box>
+      {trailing ??
+        (open ? (
+          <ExpandLessIcon sx={{ fontSize: 18, color: 'text.tertiary', flexShrink: 0 }} />
+        ) : (
+          <ExpandMoreIcon sx={{ fontSize: 18, color: 'text.tertiary', flexShrink: 0 }} />
+        ))}
+    </>
+  );
+
+  // Nothing to expand means nothing to click: render the row as a statement rather than a
+  // control, so it neither highlights on hover nor offers a chevron that would do nothing.
+  return onToggle ? (
+    <ListItemButton onClick={onToggle} data-testid={testid} sx={rowSx}>
+      {content}
     </ListItemButton>
+  ) : (
+    <Box data-testid={testid} sx={rowSx}>
+      {content}
+    </Box>
   );
 }
 
@@ -951,13 +994,14 @@ interface LifecycleSectionLake {
 }
 
 /** Sidebar accordion for archived/deleted lakes: tree-style rows with restore/delete actions.
- *  `lakes` undefined -> loading skeleton (the query fires only once the section is expanded). */
+ *  `lakes` undefined -> still loading (header shows a chevron, body a skeleton). An empty list
+ *  collapses to a single static row stating so, since there is nothing to open. */
 function NavLifecycleSection({
   label,
   open,
   onToggle,
   testid,
-  emptyText,
+  emptyLabel,
   lakes,
   hoverBg,
   renderActions,
@@ -966,11 +1010,29 @@ function NavLifecycleSection({
   open: boolean;
   onToggle: () => void;
   testid: string;
-  emptyText: string;
+  /** Right-hand text on the static row when the section has nothing in it, e.g. "No files". */
+  emptyLabel: string;
   lakes: LifecycleSectionLake[] | undefined;
   hoverBg: string;
   renderActions: (lake: LifecycleSectionLake) => React.ReactNode;
 }) {
+  if (lakes?.length === 0) {
+    return (
+      <Box data-testid={testid} sx={{ mt: '8px' }}>
+        <NavSectionHeader
+          label={label}
+          testid={`${testid}-toggle`}
+          hoverBg={hoverBg}
+          trailing={
+            <Typography level="body-xs" noWrap sx={{ color: 'text.tertiary', flexShrink: 0 }}>
+              {emptyLabel}
+            </Typography>
+          }
+        />
+      </Box>
+    );
+  }
+
   return (
     <Box data-testid={testid} sx={{ mt: '8px' }}>
       <NavSectionHeader label={label} open={open} onToggle={onToggle} testid={`${testid}-toggle`} hoverBg={hoverBg} />
@@ -979,10 +1041,6 @@ function NavLifecycleSection({
           <Box sx={{ px: '8px', pb: 1 }}>
             <Skeleton variant="rectangular" height={28} sx={{ borderRadius: 'sm' }} />
           </Box>
-        ) : lakes.length === 0 ? (
-          <Typography level="body-xs" sx={{ color: 'text.tertiary', px: '8px', pb: 1 }}>
-            {emptyText}
-          </Typography>
         ) : (
           <List size="sm" sx={TREE_LIST_SX}>
             {lakes.map(lake => (
@@ -993,7 +1051,6 @@ function NavLifecycleSection({
                     display: 'flex',
                     alignItems: 'center',
                     gap: '8px',
-                    px: '8px',
                     minHeight: '28px',
                     width: '100%',
                   }}
@@ -1005,7 +1062,11 @@ function NavLifecycleSection({
                   >
                     {lake.name}
                   </Typography>
-                  {renderActions(lake)}
+                  {/* Folded behind one trigger, sharing the tree's row-menu recipe, so a lifecycle
+                      row reads the same as a file row instead of exposing two coloured buttons. */}
+                  <RowActionsMenu testId={`${testid}-menu-btn-${lake.id}`} ariaLabel={`${label} lake actions`}>
+                    {renderActions(lake)}
+                  </RowActionsMenu>
                 </Box>
               </ListItem>
             ))}
