@@ -203,9 +203,11 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    * (#1239). Concurrency-safe by construction:
    *  - the `users.userId != member` filter is idempotent (a racing duplicate add matches no
    *    doc and returns null), and
-   *  - `seats` is raised with `$max` to the real POST-add member count (`$size users + 1`,
-   *    the same `users.length` accounting `addMember` uses), never blindly incremented - so N
-   *    racing joins land N members with `seats` equal to that count, never a double-raise past it.
+   *  - `seats` is raised with `$max` to the POST-add owner-inclusive team size (`$size users + 2`:
+   *    the owner is not a `users[]` row but still holds a seat, plus the member being added), the
+   *    same owner-inclusive accounting `addMember`/`validateSeatChange` use (#1423). Never blindly
+   *    incremented - so N racing joins land N members with `seats` equal to that size, never a
+   *    double-raise past it.
    *
    * `deletedAt: null` keeps the write off a soft-deleted org: the softDeletePlugin only hooks
    * `find`/`findOne`, not `findOneAndUpdate`, so without this a delete landing between the caller's
@@ -222,9 +224,11 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    * force-reverted by the next `customer.subscription.updated` webhook. `applyPartnerRuleMembership`
    * routes Stripe-billed orgs to `addMemberIfUnderCeiling` instead.
    *
-   * CLAMP (#1424): the `$size(users) < MAX_SEATS` guard caps the raise at the ceiling. Without it a
-   * full org grew a `seats` floor above `ORGANIZATION_SUBSCRIPTION_MAX_SEATS`, wedging every later
-   * `setSeats` (floor `users.length + 1` > ceiling MAX, so no value satisfies both). At MAX the add
+   * CLAMP (#1424): the `$size(users) < MAX_SEATS - 1` guard caps the raise at the ceiling. MAX is an
+   * owner-inclusive ceiling (`validateSeatChange` clamps the owner+members+pending floor at it), so the
+   * post-add owner-inclusive size (`$size users + 2`) must stay <= MAX, i.e. pre-add members must be
+   * < MAX - 1 (#1423). Without a clamp a full org grew a `seats` floor above
+   * `ORGANIZATION_SUBSCRIPTION_MAX_SEATS`, wedging every later `setSeats`. At the ceiling the add
    * matches no doc and returns null - the caller routes that to the same 'at-capacity' outcome the
    * Stripe path already uses (an admin is alerted to add seats), rather than raising past the ceiling.
    */
@@ -237,13 +241,13 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
         _id: organizationId,
         deletedAt: null,
         'users.userId': { $ne: member.userId },
-        $expr: { $lt: [{ $size: '$users' }, ORGANIZATION_SUBSCRIPTION_MAX_SEATS] },
+        $expr: { $lt: [{ $size: '$users' }, ORGANIZATION_SUBSCRIPTION_MAX_SEATS - 1] },
       },
       [
         {
           $set: {
             users: { $concatArrays: ['$users', [member]] },
-            seats: { $max: ['$seats', { $add: [{ $size: '$users' }, 1] }] },
+            seats: { $max: ['$seats', { $add: [{ $size: '$users' }, 2] }] },
             updatedAt: '$$NOW',
           },
         },
@@ -259,8 +263,9 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    * webhook, so such an org keeps its ceiling and a candidate past it is rejected (the caller then
    * alerts an admin to add seats through the billing-aware path).
    *
-   * The `$expr` capacity guard (`$size users < seats`, the same `users.length < seats` accounting
-   * `addMember` uses) is evaluated inside the atomic match, so the fit check can't race the write.
+   * The `$expr` capacity guard (`$size users + 1 < seats`: owner + members must leave room for one
+   * more, the same owner-inclusive accounting `addMember`/`validateSeatChange` use, #1423) is
+   * evaluated inside the atomic match, so the fit check can't race the write.
    * Returns the PRE-image ({ new: false }); null means already a member, org gone, OR at capacity -
    * the caller re-reads to tell those apart.
    */
@@ -273,7 +278,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
         _id: organizationId,
         deletedAt: null,
         'users.userId': { $ne: member.userId },
-        $expr: { $lt: [{ $size: '$users' }, '$seats'] },
+        $expr: { $lt: [{ $add: [{ $size: '$users' }, 1] }, '$seats'] },
       },
       [
         {
