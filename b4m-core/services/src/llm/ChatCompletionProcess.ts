@@ -1,5 +1,6 @@
 import {
   IChatHistoryItemDocument,
+  IFabFileDocument,
   IMessage,
   IUserDocument,
   LLMEvents,
@@ -548,7 +549,13 @@ export interface ResolveEnabledToolsInput {
   sessionEnabledTools?: string[];
   /** `session.disabledTools` - tools a curated surface forbids. Wins over everything else. */
   sessionDisabledTools?: string[];
-  /** True when the session has documents attached (`session.knowledgeIds`). */
+  /**
+   * True when the session has a document attached (`session.knowledgeIds`) whose chunk text is
+   * actually readable by the knowledge tools right now - not merely present. The caller computes
+   * this (see `process()` and `attachmentHasIndexedContent`) so a file still chunking, whose
+   * content is already inlined elsewhere in the prompt, does not trigger an offer that can only
+   * return a zero-content reply.
+   */
   hasAttachedKnowledge: boolean;
   /**
    * True when the caller can retrieve from at least one data lake - their own, their org's, or a
@@ -666,6 +673,25 @@ export function shouldDeferCorpusToRetrieval(input: {
 }
 
 /**
+ * Whether an attached file's chunk TEXT is actually readable by the knowledge tools right now.
+ * `vectorized` is set true at CHUNKING completion, not embedding completion (see
+ * fabFileService/chunk.ts: `vectorized = chunks.length > 0`, written in the same update as
+ * `chunkCount`), and `retrieve_knowledge_content`'s zero-result path is a chunk-TEXT read
+ * (findTextsByFabFileId) with no embedding dependency. So this is deliberately looser than
+ * `resolveCorpusInlinePlan`'s fully-vectorized-and-same-embedding-space bar, which gates semantic
+ * RANKING quality, not whether the tool has any text to hand back at all. Do not tighten this to
+ * `vectorizedChunkCount >= chunkCount` - that would withhold the tool from files it can serve fine.
+ * The `!deletedAt && !archivedAt` liveness check mirrors `isLiveVisibleFile` in
+ * knowledgeBaseRetrieve (also re-derived at `resolveCorpusInlinePlan`'s `liveAndReachable`) rather
+ * than importing it - each site pairs the check with a different retrievability bar.
+ */
+export function attachmentHasIndexedContent(
+  file: Pick<IFabFileDocument, 'vectorized' | 'chunkCount' | 'deletedAt' | 'archivedAt'>
+): boolean {
+  return !file.deletedAt && !file.archivedAt && (Boolean(file.vectorized) || (file.chunkCount ?? 0) > 0);
+}
+
+/**
  * Tools this process auto-adds server-side regardless of user selection. Two auto-add sites feed
  * this: the request-parse method (blog_publish/blog_edit/blog_draft for admins, navigate_view,
  * skill) and `resolveEnabledTools` (the attached-knowledge offer). Small local (Ollama) models get
@@ -734,6 +760,13 @@ export class ChatCompletionProcess {
    */
   private accessibleDataLakeAccessMemo:
     { dataLakeTags: string[]; dataLakeTagPrefixes: string[]; scopedTagPrefixes: string[] } | undefined;
+  /**
+   * Per-turn memo for the session's attached-knowledge file docs (`session.knowledgeIds`), shared
+   * by the tool-offer gate (`hasAttachedKnowledge`, see `process()`) and `resolveCorpusInlinePlan`
+   * so the turn pays for this DB read at most once. `null` means the lookup failed this turn (see
+   * `getAttachedKnowledgeFiles`), distinct from `[]` (looked up, none accessible).
+   */
+  private attachedKnowledgeFilesMemo: IFabFileDocument[] | null | undefined;
   private storage: IChatCompletionServiceOptions['storage'];
   private imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
   private imageProcessorLambdaName?: string;
@@ -878,6 +911,30 @@ export class ChatCompletionProcess {
   }
 
   /**
+   * The session's attached-knowledge file docs (`session.knowledgeIds`), memoized per turn.
+   * Returns `null` on a lookup failure rather than throwing - callers decide their own fail
+   * direction (the tool-offer gate fails toward offering; `resolveCorpusInlinePlan` fails toward
+   * keeping content inline), so this method must not force one on them.
+   * The memo is NOT keyed on `ids` - every caller within a turn must pass `session.knowledgeIds`
+   * (both call sites do); a future caller passing a different subset would silently get the
+   * first call's cached result instead of its own.
+   */
+  private async getAttachedKnowledgeFiles(ids: string[]): Promise<IFabFileDocument[] | null> {
+    if (this.attachedKnowledgeFilesMemo === undefined) {
+      try {
+        const scope = this.getScopeFilter(this.user, Permission.read, 'FabFile');
+        this.attachedKnowledgeFilesMemo = await this.db.fabfiles.getAccessibleFiles(ids, scope);
+      } catch (err) {
+        this.logger.warn(
+          `[knowledge] attached-file lookup failed; treating attached knowledge as indexed (fail open): ${(err as Error)?.message}`
+        );
+        this.attachedKnowledgeFilesMemo = null;
+      }
+    }
+    return this.attachedKnowledgeFilesMemo;
+  }
+
+  /**
    * Decide which attached-knowledge documents to STOP inlining and leave to the offered
    * search_knowledge_base tool. Returns the deferred id subset plus telemetry. See
    * `shouldDeferCorpusToRetrieval` for the size rule and `CORPUS_RETRIEVAL_MIN_INLINE_TOKENS_PER_DOC`
@@ -986,8 +1043,8 @@ export class ChatCompletionProcess {
       if (access.dataLakeTags.length === 0) return noDefer; // no accessible lake -> nothing retrievable
 
       const accessibleTags = new Set(access.dataLakeTags);
-      const scope = this.getScopeFilter(this.user, Permission.read, 'FabFile');
-      const files = await this.db.fabfiles.getAccessibleFiles(sessionKnowledgeIds, scope);
+      const files = await this.getAttachedKnowledgeFiles(sessionKnowledgeIds);
+      if (files === null) return noDefer; // lookup failed -> never lose content over an optimization
 
       // Retrievability = tag membership AND real vector-search reachability. A lake-tagged doc is
       // deferrable only if search_knowledge_base's semantic arm can actually surface it: it must be
@@ -1496,15 +1553,61 @@ export class ChatCompletionProcess {
       }
       quest.status = 'running';
 
+      const hasAnyAttachment = (session.knowledgeIds?.length ?? 0) > 0;
+      // Any promptMode is an eval/passthrough that must not receive our server-side offers.
+      const skipAutoOffers = Boolean(promptMode);
+      // Kicked off here (not awaited yet) so its DB read overlaps with the models/admin-settings
+      // fetch below instead of serializing in front of it - folded into that Promise.all. Skips
+      // the lookup entirely when there's nothing to check (no attachment) or the offer is skipped
+      // anyway (promptMode).
+      const attachedKnowledgeFilesPromise: Promise<IFabFileDocument[] | null> =
+        hasAnyAttachment && !skipAutoOffers
+          ? this.getAttachedKnowledgeFiles(session.knowledgeIds!)
+          : Promise.resolve(null);
+
+      // Generic per-session integration isolation: a curated-surface session (e.g. /opti)
+      // can suppress the user's personal integrations so it runs only its server-owned
+      // toolset - no user MCP servers, no agent delegation. No product-specific branch in
+      // core; mirrors the generic `enabledTools`/`disabledTools` capability above.
+      if (session.disableUserIntegrations) {
+        enableAgents = false;
+        parsedBody.mcpServers = [];
+      }
+
+      // Start model info, admin settings, quest save, and the attached-knowledge lookup in parallel
+      const [, models, defaultAdminSettings, attachedKnowledgeFiles] = await Promise.all([
+        // Quest save can be async - don't block on it
+        timeCall('saveQuest', Promise.resolve(saveQuest(quest))),
+        // Get available models in parallel
+        timeCall('models', getAvailableModels(apiKeyTable)),
+        // Admin settings have NO dependency on models, load in parallel
+        timeCall('adminSettings', this.loadAdminSettingsAsync(logger, processStartTime)),
+        timeCall('attachedKnowledgeFiles', attachedKnowledgeFilesPromise),
+      ]);
+
+      logger.info(
+        `⏱️ [${Date.now() - processStartTime}ms] Essential data + API keys + models fetched in parallel in ${
+          Date.now() - essentialDataStartTime
+        }ms`
+      );
+
       // Finalize the tool-offer list in one place: union the session's forced tools, offer the
       // knowledge-base tool when the caller has retrievable knowledge (documents attached to this
       // session OR one of their own data lakes), pair companion tools, and apply the session
       // denylist last (so a curated "approved sources only" surface still wins). `enabledTools`
       // is the array reference handed to buildTools, so splice the result back in place rather
       // than reassigning the binding.
-      const hasAttachedKnowledge = (session.knowledgeIds?.length ?? 0) > 0;
-      // Any promptMode is an eval/passthrough that must not receive our server-side offers.
-      const skipAutoOffers = Boolean(promptMode);
+      //
+      // "Attached knowledge" for the offer means the caller has an attachment the tool can
+      // actually read RIGHT NOW - not merely an attachment. A file still chunking has its raw
+      // content already inlined by processFabFilesServer, so offering the tool for it can only
+      // return a zero-content reply that a tool-eager model reads as "I cannot access this file",
+      // discarding the content already in front of it. `attachedKnowledgeFiles` is `null` both
+      // when the lookup was skipped above and when it failed - fail toward offering rather than
+      // stranding a genuinely indexed corpus with no retrieval path (see getAttachedKnowledgeFiles).
+      const hasAttachedKnowledge =
+        hasAnyAttachment &&
+        (attachedKnowledgeFiles === null || attachedKnowledgeFiles.some(attachmentHasIndexedContent));
       // Only pay the accessible-lake lookup when it could change the offer: not skipped
       // (prompt-mode), and attached knowledge hasn't already triggered the offer anyway.
       const hasAccessibleDataLake =
@@ -1521,31 +1624,6 @@ export class ChatCompletionProcess {
 
       // The invisible-failure warning ("caller has knowledge but no knowledge tool offered")
       // moved to after buildTools, where the authoritative post-build tool list is known.
-
-      // Generic per-session integration isolation: a curated-surface session (e.g. /opti)
-      // can suppress the user's personal integrations so it runs only its server-owned
-      // toolset - no user MCP servers, no agent delegation. No product-specific branch in
-      // core; mirrors the generic `enabledTools`/`disabledTools` capability above.
-      if (session.disableUserIntegrations) {
-        enableAgents = false;
-        parsedBody.mcpServers = [];
-      }
-
-      // Start model info, admin settings, and quest save in parallel
-      const [, models, defaultAdminSettings] = await Promise.all([
-        // Quest save can be async - don't block on it
-        timeCall('saveQuest', Promise.resolve(saveQuest(quest))),
-        // Get available models in parallel
-        timeCall('models', getAvailableModels(apiKeyTable)),
-        // Admin settings have NO dependency on models, load in parallel
-        timeCall('adminSettings', this.loadAdminSettingsAsync(logger, processStartTime)),
-      ]);
-
-      logger.info(
-        `⏱️ [${Date.now() - processStartTime}ms] Essential data + API keys + models fetched in parallel in ${
-          Date.now() - essentialDataStartTime
-        }ms`
-      );
 
       const throttledSend = DISABLE_SERVER_THROTTLING
         ? () => this.sendStatusUpdate(quest, null) // No throttling - direct send
@@ -2161,6 +2239,8 @@ export class ChatCompletionProcess {
         allFileIdsBeforeDedup,
         dedupedFileIds,
         featureContextMessages,
+        actuallyInlinedKnowledgeIds,
+        fullyInlinedAttachmentIds,
       } = dataSources;
 
       // Step 5b: Build MCP tools and tool prompts before message assembly
@@ -2181,6 +2261,8 @@ export class ChatCompletionProcess {
         // Generic retrieval exclusion (opt-in per session) - keeps excluded/unvectorized lake files
         // out of the knowledge tools' search + retrieve arms, matching the surface's listing predicate.
         retrievalFilter: toRetrievalFilter(session),
+        inlinedAttachmentIds: actuallyInlinedKnowledgeIds,
+        fullyInlinedAttachmentIds,
         logger: this.logger,
         storage: this.storage,
         imageGenerateStorage: this.imageGenerateStorage,
@@ -2538,6 +2620,7 @@ export class ChatCompletionProcess {
         // data-context blocks below so an explicit invocation is not diluted by retrieval noise.
         skills: featureContextMessages['skills'],
         knowledgeRetrieval: featureContextMessages['knowledgeRetrieval'], // Forced data-lake retrieval (grounding + citations)
+        lakeMemory: featureContextMessages['lakeMemory'], // Lake-memory hot card: durable beliefs extracted from the session's entitled lakes
         // Add LLM-optimized context summary if available (covers messages before verbatim window)
         contextSummary: session.contextSummary
           ? [
@@ -5148,6 +5231,8 @@ export class ChatCompletionProcess {
     );
     const {
       userMessages: promptMessages,
+      deliveredFileIds,
+      fullyDeliveredFileIds,
       // errorMessages,
     } = await processFabFilesServer(
       embeddingFactory,
@@ -5189,7 +5274,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       });
     }
 
-    const result = { promptMessages, convertedFabFiles };
+    const result = { promptMessages, convertedFabFiles, deliveredFileIds, fullyDeliveredFileIds };
     return result;
   }
 
@@ -5515,6 +5600,16 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     allFileIdsBeforeDedup: string[];
     dedupedFileIds: string[];
     featureContextMessages: { [name: string]: IMessage[] };
+    /** The `sessionKnowledgeIds` subset NOT deferred to retrieval AND actually delivered into a
+     *  prompt message this turn (excludes a file silently dropped by processFabFilesServer -
+     *  audio, an unserveable image, an unsupported/corrupted file) - the set the knowledge tools
+     *  can truthfully call "already in the conversation above". */
+    actuallyInlinedKnowledgeIds: string[];
+    /** Subset of `actuallyInlinedKnowledgeIds` whose ENTIRE content is in the prompt, not a cosine
+     *  excerpt or a truncated-to-budget head - the set the knowledge tools can truthfully call
+     *  "you already have everything, no need to search/retrieve further" for (#1163 review: the
+     *  wording was claiming this for a merely-inlined file, which can still be a partial delivery). */
+    fullyInlinedAttachmentIds: string[];
   }> {
     // Load feature contexts in parallel with data sources
     const featureContextPromise = Promise.all(
@@ -5569,9 +5664,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     // offered search_knowledge_base tool fetches those on demand. Only knowledge IDs are affected -
     // message/session fab files and system files always inline.
     const deferred = new Set(deferredKnowledgeIds);
-    const inlineKnowledgeIds = deferred.size
-      ? sessionKnowledgeIds.filter(id => !deferred.has(id))
-      : sessionKnowledgeIds;
+    const inlineKnowledgeIds = sessionKnowledgeIds.filter(id => !deferred.has(id));
 
     // Pre-compute file dedup (synchronous) before deciding whether to skip
     const allFileIdsBeforeDedup = [
@@ -5654,6 +5747,16 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     }
     const featureContextMessages: { [name: string]: IMessage[] } = Object.fromEntries(featureContextResults);
 
+    // The intersection with `inlineKnowledgeIds` (not `fabResult.deliveredFileIds` alone) matters:
+    // `deliveredFileIds` covers every id `fabFilesToMessages` was given (session/message/system
+    // files too), and a knowledge id can be IN `inlineKnowledgeIds` but still end up undelivered
+    // (audio, an unserveable image, an unsupported/corrupted file - see processFabFilesServer).
+    // Only a knowledge id present in BOTH sets actually has its content in the prompt right now.
+    const deliveredKnowledgeIds = new Set(fabResult?.deliveredFileIds ?? []);
+    const actuallyInlinedKnowledgeIds = inlineKnowledgeIds.filter(id => deliveredKnowledgeIds.has(id));
+    const fullyDeliveredKnowledgeIds = new Set(fabResult?.fullyDeliveredFileIds ?? []);
+    const fullyInlinedAttachmentIds = actuallyInlinedKnowledgeIds.filter(id => fullyDeliveredKnowledgeIds.has(id));
+
     return {
       urlMessages: urlResult.userMessages,
       remainingUserPrompt: urlResult.remainingPrompt,
@@ -5664,6 +5767,8 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       allFileIdsBeforeDedup,
       dedupedFileIds,
       featureContextMessages,
+      actuallyInlinedKnowledgeIds,
+      fullyInlinedAttachmentIds,
     };
   }
 }

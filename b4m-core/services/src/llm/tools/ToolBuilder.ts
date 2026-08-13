@@ -96,6 +96,10 @@ export interface ToolBuilderConfig {
   entitlementKeys?: string[];
   /** Generic retrieval-exclusion filter, forwarded to the tool context (see ToolContext.retrievalFilter). */
   retrievalFilter?: ToolContext['retrievalFilter'];
+  /** Inlined-attachment ids, forwarded to the tool context (see ToolContext.inlinedAttachmentIds). */
+  inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
+  /** Fully-inlined-attachment ids, forwarded to the tool context (see ToolContext.fullyInlinedAttachmentIds). */
+  fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
   logger: Logger;
   storage: IChatCompletionServiceOptions['storage'];
   imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
@@ -679,6 +683,8 @@ export class ToolBuilder {
         db: this.deps.db,
         entitlementKeys: this.deps.entitlementKeys,
         retrievalFilter: this.deps.retrievalFilter,
+        inlinedAttachmentIds: this.deps.inlinedAttachmentIds,
+        fullyInlinedAttachmentIds: this.deps.fullyInlinedAttachmentIds,
         sessionRepository: this.deps.db.sessions,
         storage: this.deps.storage,
         imageGenerateStorage: this.deps.imageGenerateStorage,

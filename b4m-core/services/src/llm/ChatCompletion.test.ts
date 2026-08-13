@@ -4,6 +4,7 @@ import {
   addPairedTool,
   resolveEnabledTools,
   shouldDeferCorpusToRetrieval,
+  attachmentHasIndexedContent,
   computeSettlementDelta,
   clampFraction,
   dropOldestHistoryTurn,
@@ -37,7 +38,8 @@ import {
 import { ToolBuilder } from './tools/ToolBuilder';
 import { SYSTEM_PROMPT_PRIORITY } from './systemPromptSources';
 import { SkillsFeature } from './features/SkillsFeature';
-import type { ISkill } from '@bike4mind/common';
+import { LakeMemoryFeature } from './ChatCompletionFeatures';
+import type { ISkill, IDataLakeDocument } from '@bike4mind/common';
 import { runWithFakeTimers } from './__tests__/helpers/fakeTimers';
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
@@ -1940,6 +1942,182 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  // Proves the route branch, not just the pure predicate: the offer signal a still-chunking
+  // attachment produces at the `hasAttachedKnowledge` computation inside process() (#1163).
+  describe('knowledge-tool gating for a still-chunking attachment (#1163)', () => {
+    const knowledgeToolDefs: Record<string, { toolSchema: { name: string; description: string; parameters: object } }> =
+      {
+        search_knowledge_base: {
+          toolSchema: { name: 'search_knowledge_base', description: 'search', parameters: {} },
+        },
+        retrieve_knowledge_content: {
+          toolSchema: { name: 'retrieve_knowledge_content', description: 'retrieve', parameters: {} },
+        },
+      };
+
+    // Mirrors the real filter (buildSharedTools includes a tool iff its name is in enabledTools),
+    // so `enabledToolsArg` below is exactly what the model would actually be offered.
+    const runKnowledgeGatingCase = async (opts: {
+      knowledgeIds?: string[];
+      files?: Array<Partial<{ id: string; fileName: string; vectorized: boolean; chunkCount: number }>>;
+      getAccessibleFilesImpl?: () => Promise<unknown>;
+      dataLakeTags?: string[];
+      promptMode?: 'raw';
+      fabPromptMessages?: IMessage[];
+    }) => {
+      mockSession.knowledgeIds = opts.knowledgeIds ?? [];
+      const getAccessibleFiles = opts.getAccessibleFilesImpl
+        ? vi.fn().mockImplementation(opts.getAccessibleFilesImpl)
+        : vi.fn().mockResolvedValue(opts.files ?? []);
+      mockDb.fabfiles = { getAccessibleFiles };
+      // Seed the lake-access memo directly (same pattern as the resolveCorpusInlinePlan suite)
+      // so this test controls the lake signal without exercising the DB-backed resolver.
+      (service as any).accessibleDataLakeAccessMemo = {
+        dataLakeTags: opts.dataLakeTags ?? [],
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: [],
+      };
+      (service as any).getScopeFilter = vi.fn().mockReturnValue({});
+
+      if (opts.fabPromptMessages) {
+        vi.spyOn(service as any, 'fabFilesToMessages').mockResolvedValue({
+          promptMessages: opts.fabPromptMessages,
+          convertedFabFiles: [],
+        });
+      }
+
+      const buildToolsSpy = vi
+        .spyOn(ToolBuilder.prototype, 'buildTools')
+        .mockImplementation(
+          ({ enabledTools = [] }: { enabledTools?: string[] }) =>
+            enabledTools.filter(t => knowledgeToolDefs[t]).map(t => knowledgeToolDefs[t]) as any
+        );
+      const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => cb(['Hi!'])),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      mockedBuildAndSortMessages.mockClear();
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      const body = {
+        ...startQuestParams,
+        ...(opts.promptMode ? { promptMode: opts.promptMode } : {}),
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      };
+
+      await expect(service.process({ body, logger: mockLogger })).resolves.not.toThrow();
+
+      // Read the recorded call BEFORE restoring - mockRestore() also clears mock.calls.
+      const enabledToolsArg: string[] = (buildToolsSpy.mock.calls[0]?.[0] as any)?.enabledTools ?? [];
+      const contextAndSystemMessages: IMessage[] = mockedBuildAndSortMessages.mock.calls.at(-1)?.[1] ?? [];
+
+      buildToolsSpy.mockRestore();
+      buildToolPromptSpy.mockRestore();
+
+      return { enabledToolsArg, getAccessibleFiles, contextAndSystemMessages };
+    };
+
+    it('withholds both knowledge tools for an attachment with no readable chunk text yet', async () => {
+      const { enabledToolsArg, getAccessibleFiles } = await runKnowledgeGatingCase({
+        knowledgeIds: ['f1'],
+        files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: false, chunkCount: 0 }],
+      });
+      expect(enabledToolsArg).not.toContain('search_knowledge_base');
+      expect(enabledToolsArg).not.toContain('retrieve_knowledge_content');
+      // Shared with resolveCorpusInlinePlan's lookup (same turn, same memo) - one DB read, not two.
+      expect(getAccessibleFiles).toHaveBeenCalledTimes(1);
+      // The invisible-failure warning must stay silent: withholding here is deliberate, not a bug.
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringMatching(/search_knowledge_base is not offered/));
+    });
+
+    it('still offers both knowledge tools for a fully-indexed attachment (regression)', async () => {
+      const { enabledToolsArg, getAccessibleFiles } = await runKnowledgeGatingCase({
+        knowledgeIds: ['f1'],
+        files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: true, chunkCount: 2 }],
+      });
+      expect(enabledToolsArg).toContain('search_knowledge_base');
+      expect(enabledToolsArg).toContain('retrieve_knowledge_content');
+      expect(getAccessibleFiles).toHaveBeenCalledTimes(1);
+    });
+
+    it('offers both knowledge tools from an accessible lake with no attachment, and never reads files', async () => {
+      const { enabledToolsArg, getAccessibleFiles } = await runKnowledgeGatingCase({
+        knowledgeIds: [],
+        dataLakeTags: ['datalake:corpus'],
+      });
+      expect(enabledToolsArg).toContain('search_knowledge_base');
+      expect(enabledToolsArg).toContain('retrieve_knowledge_content');
+      expect(getAccessibleFiles).not.toHaveBeenCalled();
+    });
+
+    it('withholds the offer under promptMode and never reads files, even with a pending attachment', async () => {
+      const { enabledToolsArg, getAccessibleFiles } = await runKnowledgeGatingCase({
+        knowledgeIds: ['f1'],
+        promptMode: 'raw',
+        files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: false, chunkCount: 0 }],
+      });
+      expect(enabledToolsArg).not.toContain('search_knowledge_base');
+      expect(enabledToolsArg).not.toContain('retrieve_knowledge_content');
+      expect(getAccessibleFiles).not.toHaveBeenCalled();
+    });
+
+    it('fails OPEN (still offers the tools) and completes the turn when the file lookup throws', async () => {
+      const { enabledToolsArg } = await runKnowledgeGatingCase({
+        knowledgeIds: ['f1'],
+        getAccessibleFilesImpl: () => Promise.reject(new Error('db down')),
+      });
+      expect(enabledToolsArg).toContain('search_knowledge_base');
+      expect(enabledToolsArg).toContain('retrieve_knowledge_content');
+    });
+
+    it('offers neither knowledge tool with no attachment and no accessible lake (baseline)', async () => {
+      const { enabledToolsArg, getAccessibleFiles } = await runKnowledgeGatingCase({ knowledgeIds: [] });
+      expect(enabledToolsArg).not.toContain('search_knowledge_base');
+      expect(enabledToolsArg).not.toContain('retrieve_knowledge_content');
+      expect(getAccessibleFiles).not.toHaveBeenCalled();
+    });
+
+    // Withholding the TOOL must not also withhold the CONTENT: the file's raw text still reaches
+    // the model via the ordinary attachedFiles inline path (processFabFilesServer), regardless of
+    // whether the knowledge tool was offered for it.
+    it('still inlines the pending attachment content even though the tool is withheld', async () => {
+      const { enabledToolsArg, contextAndSystemMessages } = await runKnowledgeGatingCase({
+        knowledgeIds: ['f1'],
+        files: [{ id: 'f1', fileName: 'f1.pdf', vectorized: false, chunkCount: 0 }],
+        fabPromptMessages: [
+          { role: 'system', content: 'Here is the content from the attached file f1.pdf: PENDING_FILE_MARKER' },
+        ],
+      });
+      expect(enabledToolsArg).not.toContain('search_knowledge_base');
+      expect(
+        contextAndSystemMessages.some(m => typeof m.content === 'string' && m.content.includes('PENDING_FILE_MARKER'))
+      ).toBe(true);
+    });
+  });
+
   // A prompt block that describes a tool has to be gated on the BUILT tool list, not the requested
   // one: the two diverge for auto-added tools on local models, and for anything the session denylist
   // strips after the build. Asserted at this layer because neither the builder's own tests nor the
@@ -2307,6 +2485,116 @@ describe('ChatCompletionProcess', () => {
         expect(typeof options.systemMessagePriority).toBe('function');
         expect(options.systemMessagePriority!({ role: 'system', content: 'not from this assembly' })).toBeUndefined();
       });
+    });
+  });
+
+  // LakeMemoryFeature computes a real belief card (entitlement resolution, DB lake lookup, the
+  // recallLakeMemory call) but the drop was in the ASSEMBLY: 'lakeMemory' was never a
+  // PromptSourceId and never spread into contextAndSystemMessages, so the card silently vanished
+  // whenever a Data-Lake-mode turn ran it. Same assert-present/assert-absent shape as the
+  // SkillsFeature test above.
+  describe('LakeMemoryFeature context reaches the assembled system prompt (#1404)', () => {
+    const ownedLake = (id: string): IDataLakeDocument =>
+      ({
+        id,
+        name: id,
+        slug: id,
+        fileTagPrefix: `${id}:`,
+        datalakeTag: `datalake:${id}`,
+        createdByUserId: 'user1', // matches mockUser.id, so it resolves via the owner bypass
+        status: 'active',
+      }) as IDataLakeDocument;
+
+    const runAndCaptureSystemText = async (params: {
+      message: string;
+      beliefs?: { fact: string; relevance: number; sources: string[] }[];
+      recallLakeMemory?: (input: unknown) => Promise<unknown>;
+      retrievalTags?: string[];
+    }): Promise<string> => {
+      mockDb.dataLakes = { findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([ownedLake('corpus')]) };
+      (service as any).entitlementsResolved = true;
+      (service as any).entitlementKeys = [];
+      (service as any).recallLakeMemory = params.recallLakeMemory ?? vi.fn().mockResolvedValue(params.beliefs ?? []);
+      // buildOptimizedFeatures is stubbed in beforeEach, so register the real feature under the
+      // same key the assembly reads, mirroring the SkillsFeature test above.
+      service.features.set('lakeMemory', new LakeMemoryFeature(service, params.retrievalTags ?? [], {}));
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!'])),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: params.message }],
+        messageTruncation: null,
+      } as any);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: params.message });
+
+      const body = {
+        ...startQuestParams,
+        message: params.message,
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      };
+      await service.process({ body, logger: mockLogger });
+
+      const contextAndSystemMessages = (mockedBuildAndSortMessages.mock.calls[0]?.[1] ?? []) as IMessage[];
+      return contextAndSystemMessages
+        .map(m => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
+        .join('\n---\n');
+    };
+
+    it('spreads the hot-card belief text into the system messages', async () => {
+      const systemText = await runAndCaptureSystemText({
+        message: 'What is the warranty on the X-200 pump?',
+        beliefs: [{ fact: 'The X-200 pump has a 5-year warranty.', relevance: 0.9, sources: ['doc1'] }],
+      });
+
+      expect(systemText).toContain('Background reference facts');
+      expect(systemText).toContain('The X-200 pump has a 5-year warranty.');
+    });
+
+    it('emits no lake-memory block when recall returns nothing (assert-absent counterpart)', async () => {
+      const systemText = await runAndCaptureSystemText({ message: 'just chatting, no lake query' });
+
+      expect(systemText).not.toContain('Background reference facts');
+    });
+
+    it('degrades to no card, without failing the turn, when recall throws (fail-open contract)', async () => {
+      const systemText = await runAndCaptureSystemText({
+        message: 'What is the warranty?',
+        recallLakeMemory: vi.fn().mockRejectedValue(new Error('lake recall backend down')),
+      });
+
+      expect(systemText).not.toContain('Background reference facts');
+    });
+
+    it('emits no card when the session lake selection excludes every entitled lake', async () => {
+      // retrievalTags narrows to a lake the user does not actually have -- the intersection with
+      // entitledTags is empty, so the feature must return early rather than fall back to the
+      // full entitled set.
+      const systemText = await runAndCaptureSystemText({
+        message: 'What is the warranty?',
+        beliefs: [{ fact: 'should never be recalled', relevance: 0.9, sources: ['doc1'] }],
+        retrievalTags: ['datalake:other'],
+      });
+
+      expect(systemText).not.toContain('Background reference facts');
     });
   });
 
@@ -3127,6 +3415,31 @@ describe('shouldDeferCorpusToRetrieval (per-doc even-split depth floor)', () => 
         shouldDeferCorpusToRetrieval(small)
       );
     });
+  });
+});
+
+describe('attachmentHasIndexedContent (readable-chunk-text predicate, #1163)', () => {
+  it('is true once chunking completes, even before vectorizedChunkCount catches up', () => {
+    expect(attachmentHasIndexedContent({ vectorized: true, chunkCount: 0 })).toBe(true);
+  });
+
+  it('is true from chunk count alone, without waiting on the vectorized flag', () => {
+    expect(attachmentHasIndexedContent({ vectorized: false, chunkCount: 3 })).toBe(true);
+  });
+
+  it('is false for a freshly attached file with no chunks yet (the #1163 gap)', () => {
+    expect(attachmentHasIndexedContent({ vectorized: false, chunkCount: 0 })).toBe(false);
+  });
+
+  // chunkCount is bumped to a nonzero value here (the ticket's literal 0 can't exercise this
+  // guard - it would already read false without deletedAt) to prove deletedAt overrides an
+  // otherwise-truthy chunk signal.
+  it('is false for a soft-deleted file regardless of chunk count', () => {
+    expect(attachmentHasIndexedContent({ vectorized: false, chunkCount: 3, deletedAt: new Date() })).toBe(false);
+  });
+
+  it('is false for an archived file even when fully vectorized', () => {
+    expect(attachmentHasIndexedContent({ vectorized: true, chunkCount: 0, archivedAt: new Date() })).toBe(false);
   });
 });
 

@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
@@ -11,26 +12,52 @@ import { DataLakeSurfaceProvider } from './surfaceTokens';
 
 // Browsing the tree must not mutate the chat on its own: writes come only from the row actions,
 // and an external-chat host must never have its `layout` touched. setSessionLayout is spied to
-// assert both.
-const { setWorkBenchFiles, setSessionLayout, sessionState, removeFileMutate, removeFileLakeIds, lakesState } =
-  vi.hoisted(() => ({
-    setWorkBenchFiles: vi.fn(),
-    setSessionLayout: vi.fn(),
-    // Mutable so the /new (deferred creation, no session yet) case can null it per-test.
-    sessionState: { currentSessionId: 'sess-1' as string | null },
-    removeFileMutate: vi.fn(),
-    // Every lake id the removal hook was constructed with, so tests can assert the mutation
-    // is bound to the resolved lake (not a stale null) at the moment it fires.
-    removeFileLakeIds: [] as Array<string | null>,
-    // Mutable so delete-gating tests can vary the accessible-lake list per-test.
-    lakesState: {
-      value: [{ id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', canManage: true }] as unknown[],
-    },
-  }));
+// assert both. setWorkBenchFiles also mutates workBenchState and notifies subscribers, and the
+// mocked useWorkBenchFiles reads it back via useSyncExternalStore - like the real Zustand store,
+// which re-renders subscribers on its own regardless of whether the action that wrote to it also
+// did a local setState. Plain-function mocks don't get that for free (React has no way to know a
+// re-render is needed), which matters here because #1640 removed the local setState (old
+// viewerFileId) that used to trigger it as a side effect. The tree's persistent highlight
+// (#1693) is driven entirely by this read, so it must survive independent of whichever action
+// attached the file and of the viewer opening or closing afterward.
+const {
+  setWorkBenchFiles,
+  setSessionLayout,
+  sessionState,
+  removeFileMutate,
+  removeFileLakeIds,
+  lakesState,
+  workBenchState,
+} = vi.hoisted(() => ({
+  setWorkBenchFiles: vi.fn(),
+  setSessionLayout: vi.fn(),
+  // Mutable so the /new (deferred creation, no session yet) case can null it per-test.
+  sessionState: { currentSessionId: 'sess-1' as string | null },
+  removeFileMutate: vi.fn(),
+  // Every lake id the removal hook was constructed with, so tests can assert the mutation
+  // is bound to the resolved lake (not a stale null) at the moment it fires.
+  removeFileLakeIds: [] as Array<string | null>,
+  // Mutable so delete-gating tests can vary the accessible-lake list per-test.
+  lakesState: {
+    value: [{ id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', canManage: true }] as unknown[],
+  },
+  workBenchState: {
+    files: [] as { id: string; fileName: string }[],
+    listeners: new Set<() => void>(),
+  },
+}));
 vi.mock('@client/app/contexts/SessionsContext', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/contexts/SessionsContext')>()),
   useSessions: () => ({ currentSessionId: sessionState.currentSessionId }),
   useWorkBenchActions: () => ({ setWorkBenchFiles }),
+  useWorkBenchFiles: () =>
+    useSyncExternalStore(
+      listener => {
+        workBenchState.listeners.add(listener);
+        return () => workBenchState.listeners.delete(listener);
+      },
+      () => workBenchState.files
+    ),
 }));
 vi.mock('@client/app/hooks/useSessionLayout', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/hooks/useSessionLayout')>()),
@@ -120,14 +147,14 @@ vi.mock('./DataLakeChatTree', () => ({
     canDeleteFile: (f: { id: string; fileName: string }) => boolean;
     onDeleteFile: (f: { id: string; fileName: string }) => void;
     onNavigate: (breadcrumb: string[]) => void;
-    selectedFileId: string | null;
+    selectedFileIds: ReadonlySet<string>;
     onClose?: () => void;
   }) => {
     const file = { id: 'file-123', fileName: 'x.pdf', tags: [{ name: 'datalake:lake-a' }] };
     return (
       <div
         data-testid="mock-tree"
-        data-selected={props.selectedFileId ?? ''}
+        data-selected={Array.from(props.selectedFileIds).join(',')}
         data-can-delete={String(props.canDeleteFile(file))}
       >
         <button data-testid="mock-attach" onClick={() => props.onAttachFile(file)}>
@@ -179,11 +206,18 @@ describe('DataLakeExplorer chat-first surface', () => {
     sessionState.currentSessionId = 'sess-1';
     removeFileLakeIds.length = 0;
     lakesState.value = [{ id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', canManage: true }];
-    // Run the functional updater the way the real zustand store does (against an empty
-    // workbench), so the attach-vs-already-attached branch is exercised for real.
-    setWorkBenchFiles.mockImplementation((_id: string, updater: unknown) => {
-      if (typeof updater === 'function') (updater as (prev: unknown[]) => unknown)([]);
-    });
+    workBenchState.files = [];
+    // Re-applied each test since clearAllMocks only clears call history, not implementation -
+    // runs the functional updater the way the real zustand store does, persists the result, and
+    // notifies useSyncExternalStore subscribers (see the useWorkBenchFiles mock comment above),
+    // so the attach-vs-already-attached branch AND the tree's data-selected read are both
+    // exercised for real.
+    setWorkBenchFiles.mockImplementation(
+      (_sessionId: string, updater: (prev: typeof workBenchState.files) => typeof workBenchState.files) => {
+        workBenchState.files = updater(workBenchState.files);
+        workBenchState.listeners.forEach(listener => listener());
+      }
+    );
     // The store defaults to 'hide'; start from the docked layout an external-chat host runs, so
     // a close request is an actual transition rather than a no-op write.
     useSessionLayoutStore.setState({ layout: 'dockRight' });
@@ -219,6 +253,11 @@ describe('DataLakeExplorer chat-first surface', () => {
     await vi.waitFor(() => expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function)));
     expect(toastSuccess).toHaveBeenCalled();
     expect(setSessionLayout).not.toHaveBeenCalled();
+    // Attaching alone (no View, no viewer ever opened) still highlights the row: the highlight
+    // tracks workbench membership (#1693), not viewer state. waitFor (not vi.waitFor) because
+    // this depends on React actually flushing the mocked store's reactive update - see the
+    // useWorkBenchFiles mock comment above.
+    await waitFor(() => expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123'));
   });
 
   it('attach on /new with createSessionForFile mints the session, then attaches', async () => {
@@ -262,7 +301,8 @@ describe('DataLakeExplorer chat-first surface', () => {
       expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function));
       expect(setSessionLayout).toHaveBeenCalledWith({ layout: 'vertical', selectedArtifactId: 'file-123' });
     });
-    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
+    // waitFor (not vi.waitFor) - see the useWorkBenchFiles mock comment above.
+    await waitFor(() => expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123'));
     // The rail keeps the tree; the chat's own SessionContainer renders the viewer here.
     expect(screen.queryByTestId('datalake-rail-viewer')).toBeNull();
   });
@@ -312,8 +352,10 @@ describe('DataLakeExplorer chat-first surface', () => {
     expect(screen.queryByTestId('datalake-rail-viewer')).toBeNull();
     expect(screen.getByTestId('my-chat')).toBeVisible();
     expect(setSessionLayout).toHaveBeenCalledWith({ layout: 'dockRight' });
-    // Nothing is on screen any more, so the tree must not keep claiming a file is open.
-    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', '');
+    // Closing the viewer does not detach the file - View attaches it to the workbench as a side
+    // effect, and that attachment outlives the look (#1693: highlight tracks "in the prompt",
+    // not "currently open"), so the row must stay highlighted.
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
   });
 
   it('any other layout departure closes the viewer without fighting the write (overlay host)', async () => {
@@ -342,9 +384,7 @@ describe('DataLakeExplorer chat-first surface', () => {
   });
 
   it('view does not re-toast a file already in the workbench', async () => {
-    setWorkBenchFiles.mockImplementation((_id: string, updater: unknown) => {
-      if (typeof updater === 'function') (updater as (prev: unknown[]) => unknown)([{ id: 'file-123' }]);
-    });
+    workBenchState.files = [{ id: 'file-123', fileName: 'x.pdf' }];
     renderExplorer();
     fireEvent.click(screen.getByTestId('mock-view'));
     await vi.waitFor(() => expect(setSessionLayout).toHaveBeenCalled());
@@ -370,14 +410,17 @@ describe('DataLakeExplorer chat-first surface', () => {
     expect(setSessionLayout).not.toHaveBeenCalled();
   });
 
-  it('closing the viewer clears the row highlight on the embedded host too', async () => {
+  it('closing the viewer keeps the row highlighted on the embedded host too, since the file stays attached', async () => {
     renderExplorer();
     fireEvent.click(screen.getByTestId('mock-view'));
-    await vi.waitFor(() => expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123'));
+    // waitFor (not vi.waitFor) - see the useWorkBenchFiles mock comment above.
+    await waitFor(() => expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123'));
 
     act(() => useSessionLayoutStore.setState({ layout: 'hide' }));
 
-    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', '');
+    // Same reasoning as the overlay-host case above: View's attach is not undone by closing the
+    // viewer, so the highlight (driven by workbench membership, not viewer-open state) persists.
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
   });
 
   it('deep-linked articleId opens it the same way View does', async () => {

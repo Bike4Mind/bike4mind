@@ -41,7 +41,10 @@ export async function addMember(user: IUserDocument, parameters: AddMemberParame
 
   if (!organization) throw new NotFoundError('Organization not found');
 
-  if (!force && organization.users.length >= organization.seats) {
+  // Owner-inclusive team size: the owner is not a `users[]` row (see organizationService/create.ts)
+  // but still occupies a seat, so full means owner + members >= seats (#1423). This matches the
+  // canonical accounting in sharingService/accept.ts and validateSeatChange.
+  if (!force && organization.users.length + 1 >= organization.seats) {
     throw new UnprocessableEntityError('Organization is at full capacity');
   }
 
