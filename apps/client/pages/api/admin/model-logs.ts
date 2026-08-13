@@ -43,14 +43,27 @@ const handler = baseApi().get(
         query['promptMeta.model.name'] = model;
       }
 
-      // Add search filter
+      // Add search filter. promptMeta.context.systemPrompt/userPrompt are deliberately never
+      // persisted (see ChatCompletionProcess.ts's leak-avoidance comments), so those two arms
+      // can never match - dropped rather than fixed. executionTracking.steps is an array of
+      // objects, so a bare $regex against the array never matches either; $elemMatch is the
+      // correct way to regex a specific field inside each element (same pattern already used
+      // in fabFileSearchQuery.ts's tag search).
       if (search) {
         const escapedSearch = escapeRegex(search);
         query.$or = [
           { 'promptMeta.model.name': { $regex: escapedSearch, $options: 'i' } },
-          { 'promptMeta.context.systemPrompt': { $regex: escapedSearch, $options: 'i' } },
-          { 'promptMeta.context.userPrompt': { $regex: escapedSearch, $options: 'i' } },
-          { 'promptMeta.executionTracking.steps': { $regex: escapedSearch, $options: 'i' } },
+          {
+            'promptMeta.executionTracking.steps': {
+              $elemMatch: {
+                $or: [
+                  { name: { $regex: escapedSearch, $options: 'i' } },
+                  { result: { $regex: escapedSearch, $options: 'i' } },
+                  { error: { $regex: escapedSearch, $options: 'i' } },
+                ],
+              },
+            },
+          },
         ];
       }
 
