@@ -294,9 +294,12 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     const keys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
 
     // Org constraint: lake has no org OR the lake's org is one the caller is a MEMBER of.
+    // `?? []`: a runtime belt against a malformed ctx, not a widening of the declared (required)
+    // type - a missing set must deny org-scoped lakes, not throw or vacuously allow them.
+    const memberOrgIds = ctx.organizationIds ?? [];
     const orgConstraint =
-      ctx.organizationIds.length > 0
-        ? { $or: [{ organizationId: { $in: [null, ''] } }, { organizationId: { $in: ctx.organizationIds } }] }
+      memberOrgIds.length > 0
+        ? { $or: [{ organizationId: { $in: [null, ''] } }, { organizationId: { $in: memberOrgIds } }] }
         : { organizationId: { $in: [null, ''] } };
 
     // Requirement constraint (mirror of `lakeMatchesAccess`): the lake has NO restriction

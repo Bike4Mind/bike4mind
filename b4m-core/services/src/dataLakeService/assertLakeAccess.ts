@@ -64,7 +64,9 @@ export function canAccessLake(
   // tag/entitlement any-of so a non-member can never pass. Membership is the SET the
   // context resolved from the org ACLs (#1674); the lake side still normalizes because
   // a hydrated lake doc can carry an ObjectId.
-  if (lakeOrgId && !ctx.organizationIds.includes(lakeOrgId)) return false;
+  // `?? []`: a runtime belt against a malformed ctx, not a widening of the declared (required)
+  // type - a missing set must deny, not throw or vacuously allow.
+  if (lakeOrgId && !(ctx.organizationIds ?? []).includes(lakeOrgId)) return false;
 
   return lakeMatchesAccess(lake, normalizedTags, normalizedKeys);
 }
@@ -114,7 +116,8 @@ function resolveFallbackLake(lakeIdOrSlug: string, ctx: AccessContext): IDataLak
   const config = DATA_LAKES.find(dl => dl.id === lakeIdOrSlug || dl.slug === lakeIdOrSlug);
   if (!config) return null;
   const configOrgId = normalizeId(config.organizationId);
-  if (configOrgId && !ctx.organizationIds.includes(configOrgId)) return null;
+  // `?? []`: same runtime belt as canAccessLake above - a malformed ctx must deny, not throw.
+  if (configOrgId && !(ctx.organizationIds ?? []).includes(configOrgId)) return null;
   if (!ctx.isAdmin) {
     const normalizedTags = ctx.userTags.map(t => t.toLowerCase());
     const normalizedKeys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);

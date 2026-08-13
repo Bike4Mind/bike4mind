@@ -162,6 +162,33 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
     expect(res.scopedTagPrefixes).toEqual([]);
   });
 
+  it('propagates a membership-lookup failure instead of degrading to member-of-nothing', async () => {
+    // Pins the N1 fail-closed claim: unlike the dataLakes read above (caught, degrades to
+    // static-only), a failure resolving organizationIds is NOT caught by this resolver.
+    const findMembershipOrgIds = vi.fn().mockRejectedValue(new Error('mongo down'));
+    await expect(
+      getDynamicDataLakeAccess({
+        db: {
+          dataLakes: { findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]) } as never,
+          organizations: { findMembershipOrgIds },
+        },
+        user: { id: 'u1', tags: [] },
+      })
+    ).rejects.toThrow('mongo down');
+  });
+
+  it('throws a legible error when db.organizations.findMembershipOrgIds is not wired', async () => {
+    await expect(
+      getDynamicDataLakeAccess({
+        db: {
+          dataLakes: { findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]) } as never,
+          organizations: {} as never,
+        },
+        user: { id: 'u1', tags: [] },
+      })
+    ).rejects.toThrow(/findMembershipOrgIds/);
+  });
+
   it('keeps a normal DB lake tag - the drop targets registry collisions only', async () => {
     const res = await getDynamicDataLakeAccess(ctx([dbLake({ id: 'ordinary' })], { user: { tags: [] } }));
 

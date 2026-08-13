@@ -98,12 +98,23 @@ export async function getAccessibleDataLakePrompts(
   const userTags = context.user.tags || [];
   const entitlementKeys = context.entitlementKeys ?? [];
   const userId = context.user.id ? String(context.user.id) : undefined;
+  // Fail closed on the projected reader rather than a bare TypeError: an unwired host gets a
+  // legible error naming the missing adapter (mirrors getDynamicDataLakeAccess).
+  if (typeof context.db.organizations?.findMembershipOrgIds !== 'function') {
+    throw new Error(
+      'getAccessibleDataLakePrompts: context.db.organizations.findMembershipOrgIds is required to resolve lake access'
+    );
+  }
   // Same membership resolution as getDynamicDataLakeAccess - resolved from `db.organizations`,
   // never from a selected-org pointer (#1674).
+  //
+  // Resolved outside the try/catch below on purpose: within THIS resolver, a transient failure
+  // here propagates rather than being silently folded into "no prompts" by the fail-safe catch
+  // that guards the lake read. That guarantee is local to this function - top-level chat callers
+  // may still catch this throw and degrade to an empty scope, which is ALSO fail-closed (it
+  // denies, never grants). The placement buys observability into where a failure originated, not
+  // a stronger deny guarantee than returning [] outright would have given.
   const organizationIds = userId ? await context.db.organizations.findMembershipOrgIds(userId) : [];
-  // Membership is resolved OUTSIDE the degrade path on purpose - an authorization input must
-  // not silently degrade; a transient failure throws (fails closed) rather than resolving to
-  // "member of nothing".
 
   let lakes: IDataLakeDocument[];
   try {

@@ -113,13 +113,6 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   const userTags = context.user.tags || [];
   const entitlementKeys = context.entitlementKeys ?? [];
   const userId = context.user.id ? String(context.user.id) : undefined;
-  // Authoritative membership (owner + users[] ACL), resolved here so every construction site
-  // of this context - the chat tools, the retrieval scope, semantic search - cannot disagree
-  // about what "my orgs" means (#1674). Id-less callers are members of nothing.
-  const organizationIds = userId ? await context.db.organizations.findMembershipOrgIds(userId) : [];
-  // Membership is resolved OUTSIDE the degrade path on purpose - an authorization input must
-  // not silently degrade; a transient failure throws (fails closed) rather than resolving to
-  // "member of nothing".
   let dynamicDataLakes: DataLakeConfig[] | undefined;
   // Ids of fetched lakes whose PERSISTED createdByUserId is this caller. Read off the raw
   // documents because toDataLakeConfig drops createdByUserId - and that projection is also what
@@ -132,6 +125,28 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   // whole-lake queries (see ResolvedLakeAccess) cannot anchor a prefix arm without it.
   const creatorByDynamicId = new Map<string, string>();
   if (context.db.dataLakes) {
+    // Fail closed on the projected reader rather than a bare TypeError: an unwired host gets a
+    // legible error naming the missing adapter. Resolved only on this branch - a static-registry-
+    // only caller (no dataLakes repo) never consumes membership, so it must not pay for, or be
+    // able to throw on, a lookup whose result it can't use (a static-only caller previously ran
+    // this lookup unconditionally).
+    if (typeof context.db.organizations?.findMembershipOrgIds !== 'function') {
+      throw new Error(
+        'getDynamicDataLakeAccess: context.db.organizations.findMembershipOrgIds is required to resolve lake access'
+      );
+    }
+    // Authoritative membership (owner + users[] ACL), resolved here so every construction site
+    // of this context - the chat tools, the retrieval scope, semantic search - cannot disagree
+    // about what "my orgs" means (#1674). Id-less callers are members of nothing.
+    //
+    // Resolved outside the try/catch below on purpose: within THIS resolver, a transient failure
+    // here propagates rather than being silently folded into "member of nothing" by the dataLakes
+    // fail-safe below. That guarantee is local to this function - top-level chat callers
+    // (ChatCompletionProcess.getAccessibleDataLakeAccess, ChatCompletionFeatures) may still catch
+    // this throw and degrade to an empty scope, which is ALSO fail-closed (it denies, never
+    // grants). So the placement buys observability into where a failure originated, not a
+    // stronger deny guarantee than returning [] outright would have given.
+    const organizationIds = userId ? await context.db.organizations.findMembershipOrgIds(userId) : [];
     try {
       const dbLakes = await context.db.dataLakes.findActiveByUserTagsAndEntitlements(
         userTags,

@@ -34,4 +34,13 @@ describe('OrganizationRepository.findMembershipOrgIds', () => {
     });
     expect(await organizationRepository.findMembershipOrgIds('u1')).toEqual([String(both._id)]);
   });
+
+  it('excludes a soft-deleted org even though the user is still a member', async () => {
+    const deleted = await makeOrg('soft-deleted', { users: [{ userId: 'u1', permissions: ['read'] }] });
+    // Mirrors softDeletePlugin's own mechanism (raw-driver updateOne, see mongo.ts) rather than
+    // calling a model method, so this test exercises the plugin's `pre('find')` filter, not its
+    // own delete statics.
+    await Organization.collection.updateOne({ _id: deleted._id }, { $set: { deletedAt: new Date() } });
+    expect(await organizationRepository.findMembershipOrgIds('u1')).toEqual([]);
+  });
 });

@@ -560,6 +560,35 @@ describe('DataLakeRepository — slug is unique per org', () => {
   });
 });
 
+describe('DataLakeRepository.findBySlug', () => {
+  setupMongoTest();
+
+  it('resolves the lexicographically-lowest organizationId when two own orgs share a slug (N5)', async () => {
+    // Both lakes are equally "own-org" for this caller; the sort makes the tie-break
+    // deterministic rather than document-order-dependent. Input order is deliberately
+    // reversed from the expected winner so a naive "first in organizationIds" bug would fail.
+    await dataLakeRepository.create(
+      baseLake({
+        slug: 'shared-slug',
+        organizationId: 'org-a',
+        createdByUserId: 'ownerA',
+        datalakeTag: 'datalake:org-a:shared-slug',
+      })
+    );
+    await dataLakeRepository.create(
+      baseLake({
+        slug: 'shared-slug',
+        organizationId: 'org-b',
+        createdByUserId: 'ownerB',
+        datalakeTag: 'datalake:org-b:shared-slug',
+      })
+    );
+
+    const resolved = await dataLakeRepository.findBySlug('shared-slug', ['org-b', 'org-a']);
+    expect(resolved?.organizationId).toBe('org-a');
+  });
+});
+
 describe('DataLakeRepository - fileTagPrefix is unique per creator (DB backstop)', () => {
   setupMongoTest();
 
