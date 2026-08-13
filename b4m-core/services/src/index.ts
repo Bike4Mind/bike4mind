@@ -56,3 +56,4 @@ export { safeCompareTokens } from './utils/crypto';
 export { SreAgentService, type SrePatternLookup } from './sreAgentService';
 export { RATE_LIMITED_SENTINEL } from './sreAgentService/tools';
 export * from './audienceVariants';
+export * as prReportService from './prReportService';
