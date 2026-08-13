@@ -75,71 +75,81 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     return;
   }
 
-  const user = await User.findById(userId);
-  if (!user) throw new Error(`User not found for userId: ${userId}`);
-
-  logger.log('====================================');
-  logger.log(`Started chunk queue handler for fabFileId: ${fabFileId}`);
-  logger.log('====================================');
-
-  const defaultEmbeddingModel = await adminSettingsRepository.getSettingsValue('defaultEmbeddingModel');
-  if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) {
-    throw new BadRequestError('Default embedding model not found');
-  }
-
-  const fabFile = await fabFileRepository.shareable.findAccessibleById(user, fabFileId);
-  if (!fabFile) {
-    logger.log(`FabFile not found: ${fabFileId}, skipping chunking`);
-    return;
-  }
-
-  // Idempotency: skip a duplicate delivery once the file is already chunked. Without this,
-  // chunkFabfile's own deleteManyByFabFileId (called unconditionally on every run) would wipe out
-  // and replace chunks a prior successful delivery already created - possibly ones already
-  // vectorized - the exact destructive case the rescue sweep can trigger (a deferred, non-final
-  // attempt clears isChunking/leaves error unset for the whole retry window, matching the sweep's
-  // filter; see chunkScan.ts). Mirrors fabFileVectorize.ts's own early-return.
-  if (fabFile.chunked || fabFile.notes?.startsWith(NO_EXTRACTABLE_TEXT_NOTE_PREFIX)) {
-    logger.log(`FabFile ${fabFileId} already chunked, skipping duplicate message`);
-    return;
-  }
-
-  // Chunk policy at file-owner altitude (#1662). Resolve the owner's DefaultChunkSize (falling
-  // through to the platform default) UNLESS this delivery carried an explicit chunkSize override -
-  // only the UI reprocess door (/api/files/chunk) sends one; every automatic door omits it and now
-  // inherits the owner-altitude policy. The resolver never throws (degrades to the platform value).
-  // The chunker re-derives the same effective limit internally; we compute it here via the shared
-  // helper for the cross-lake conflict check below and to log when a lever exceeds the model window.
-  const ownerScope = scopedSettingsService.scopeForFileOwner({ userId: fabFile.userId });
-  const resolvedChunkPolicy = await scopedSettingsService.resolveScopedSetting(
-    'DefaultChunkSize',
-    ownerScope,
-    { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository },
-    { logger }
-  );
-  const requestedPassageTokenTarget = chunkSize ?? resolvedChunkPolicy.value;
-  const effectivePassageTokenTarget = effectiveChunkTokenLimit({
-    model: defaultEmbeddingModel,
-    passageTokenTarget: requestedPassageTokenTarget,
-  });
-  logger.log(
-    `Chunk policy for ${fabFileId}: requested=${requestedPassageTokenTarget} ` +
-      `(source=${chunkSize !== undefined ? 'payload' : resolvedChunkPolicy.source}) ` +
-      `effective=${effectivePassageTokenTarget} model=${defaultEmbeddingModel}`
-  );
-  if (effectivePassageTokenTarget !== requestedPassageTokenTarget) {
-    logger.warn(
-      `Chunk policy ${requestedPassageTokenTarget} for ${fabFileId} exceeds the ${defaultEmbeddingModel} ` +
-        `embedding window; reduced to ${effectivePassageTokenTarget}.`
-    );
-  }
-
-  // Mark the file as actively chunking so the self-host safety-net scan (worker) doesn't
-  // re-enqueue it mid-run - a duplicate would re-chunk and re-embed the whole file. Cleared
-  // in `finally` on success AND failure so it can still be retried/reprocessed. Default: false.
-  await FabFile.updateOne({ _id: fabFileId }, { $set: { isChunking: true } });
-
+  // The `try` wraps every step from here so the `finally` that clears isChunking runs on ALL exits,
+  // including the pre-flight throws/returns below. It used to start only after the isChunking set, so
+  // a claim (this handler's own, or a lake "Rebuild passages" pre-claim on the file) leaked forever
+  // whenever a pre-flight check threw - e.g. a missing/unsupported default embedding model, which
+  // throws identically for every file in a wave.
   try {
+    const user = await User.findById(userId);
+    if (!user) throw new Error(`User not found for userId: ${userId}`);
+
+    logger.updateMetadata({
+      fabFileId,
+      userId,
+    });
+
+    logger.log('====================================');
+    logger.log(`Started chunk queue handler for fabFileId: ${fabFileId}`);
+    logger.log('====================================');
+
+    const defaultEmbeddingModel = await adminSettingsRepository.getSettingsValue('defaultEmbeddingModel');
+    if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) {
+      throw new BadRequestError('Default embedding model not found');
+    }
+
+    const fabFile = await fabFileRepository.shareable.findAccessibleById(user, fabFileId);
+    if (!fabFile) {
+      logger.log(`FabFile not found: ${fabFileId}, skipping chunking`);
+      return;
+    }
+
+    // Idempotency: skip a duplicate delivery once the file is already chunked. Without this,
+    // chunkFabfile's own deleteManyByFabFileId (called unconditionally on every run) would wipe out
+    // and replace chunks a prior successful delivery already created - possibly ones already
+    // vectorized - the exact destructive case the rescue sweep can trigger (a deferred, non-final
+    // attempt clears isChunking/leaves error unset for the whole retry window, matching the sweep's
+    // filter; see chunkScan.ts). Mirrors fabFileVectorize.ts's own early-return.
+    if (fabFile.chunked || fabFile.notes?.startsWith(NO_EXTRACTABLE_TEXT_NOTE_PREFIX)) {
+      logger.log(`FabFile ${fabFileId} already chunked, skipping duplicate message`);
+      return;
+    }
+
+    // Chunk policy at file-owner altitude (#1662). Resolve the owner's DefaultChunkSize (falling
+    // through to the platform default) UNLESS this delivery carried an explicit chunkSize override -
+    // only the UI reprocess door (/api/files/chunk) sends one; every automatic door omits it and now
+    // inherits the owner-altitude policy. The resolver never throws (degrades to the platform value).
+    // The chunker re-derives the same effective limit internally; we compute it here via the shared
+    // helper for the cross-lake conflict check below and to log when a lever exceeds the model window.
+    const ownerScope = scopedSettingsService.scopeForFileOwner({ userId: fabFile.userId });
+    const resolvedChunkPolicy = await scopedSettingsService.resolveScopedSetting(
+      'DefaultChunkSize',
+      ownerScope,
+      { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository },
+      { logger }
+    );
+    const requestedPassageTokenTarget = chunkSize ?? resolvedChunkPolicy.value;
+    const effectivePassageTokenTarget = effectiveChunkTokenLimit({
+      model: defaultEmbeddingModel,
+      passageTokenTarget: requestedPassageTokenTarget,
+    });
+    logger.log(
+      `Chunk policy for ${fabFileId}: requested=${requestedPassageTokenTarget} ` +
+        `(source=${chunkSize !== undefined ? 'payload' : resolvedChunkPolicy.source}) ` +
+        `effective=${effectivePassageTokenTarget} model=${defaultEmbeddingModel}`
+    );
+    if (effectivePassageTokenTarget !== requestedPassageTokenTarget) {
+      logger.warn(
+        `Chunk policy ${requestedPassageTokenTarget} for ${fabFileId} exceeds the ${defaultEmbeddingModel} ` +
+          `embedding window; reduced to ${effectivePassageTokenTarget}.`
+      );
+    }
+
+    // Mark the file as actively chunking so the self-host safety-net scan (worker) doesn't
+    // re-enqueue it mid-run - a duplicate would re-chunk and re-embed the whole file. Cleared
+    // in `finally` on success AND failure so it can still be retried/reprocessed. Default: false.
+    await FabFile.updateOne({ _id: fabFileId }, { $set: { isChunking: true } });
+
     // Tag data-lake chunk logs with the batch id for incident triage (the lake is derivable
     // from the batch). dataLakeId isn't on the FabFile and isn't worth an extra read here.
     if (fabFile.batchId) logger.updateMetadata({ batchId: fabFile.batchId });

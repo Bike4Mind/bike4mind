@@ -811,13 +811,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   findChunkedFilesByScope(scope: DataLakeMembershipScope): Promise<{ id: string; userId: string }[]>;
   /**
-   * CLAIM the given files for re-chunking (isChunking:true) and reset their chunk/vector flags so a
-   * re-enqueued chunk job runs instead of hitting the "already chunked" idempotency guard. The claim
-   * hides the file from the background rescue sweep during the reset->worker-pickup window, so the
-   * sweep can't duplicate it. A claimed file whose enqueue then fails MUST be released
-   * (releaseChunkClaimByIds) or it stays stranded. Returns the number of files modified.
+   * Per-file compare-and-set CLAIM for re-chunking (isChunking:true, precondition isChunking:{$ne:
+   * true}) plus a reset of the chunk/vector flags so a re-enqueued job re-chunks instead of hitting
+   * the "already chunked" guard. Returns ONLY the ids actually claimed - a file a concurrent wave
+   * already claimed is skipped - and the caller must enqueue exactly that subset, never the pre-read
+   * set, so two waves can't double-process one file. The claim also hides the reset file from the
+   * rescue sweep during the reset->worker-pickup window; a claim whose enqueue fails MUST be released
+   * (releaseChunkClaimByIds).
    */
-  claimFilesForRechunkByIds(ids: string[]): Promise<number>;
+  claimFilesForRechunkByIds(ids: string[]): Promise<string[]>;
   /**
    * Undo a claim whose chunk message never reached the queue: restore chunked:true and clear
    * isChunking so the file is re-detectable and not stranded. Returns the number modified.

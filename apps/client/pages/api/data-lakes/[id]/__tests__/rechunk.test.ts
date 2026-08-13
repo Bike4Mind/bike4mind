@@ -69,7 +69,8 @@ beforeEach(() => {
   h.assertLakeAccess.mockResolvedValue(lake);
   h.assertLakeWriteAccess.mockResolvedValue(lake);
   h.countFailedLakeFiles.mockResolvedValue(0);
-  h.claimFilesForRechunkByIds.mockResolvedValue(0);
+  // By default the claim wins every id it's asked for (returns the same ids).
+  h.claimFilesForRechunkByIds.mockImplementation(async (ids: string[]) => ids);
   h.releaseChunkClaimByIds.mockResolvedValue(0);
   h.sendToQueue.mockResolvedValue(undefined);
 });
@@ -134,6 +135,33 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
     expect(h.claimFilesForRechunkByIds).toHaveBeenCalledWith(['ok', 'bad']);
     expect(h.releaseChunkClaimByIds).toHaveBeenCalledWith(['bad']); // un-strand the failed one
     expect(json).toHaveBeenCalledWith({ detected: 2, enqueued: 1, remaining: 1 });
+  });
+
+  it('enqueues only the ids the claim actually won (a concurrent wave took the rest)', async () => {
+    h.detectUnderChunkedFiles.mockResolvedValue([
+      { fabFileId: 'a', userId: 'u' },
+      { fabFileId: 'b', userId: 'u' },
+      { fabFileId: 'c', userId: 'u' },
+    ]);
+    // 'b' was already claimed by a concurrent wave, so the claim returns only a and c.
+    h.claimFilesForRechunkByIds.mockResolvedValue(['a', 'c']);
+    const { json } = await invoke('POST', {});
+    expect(h.sendToQueue).toHaveBeenCalledTimes(2);
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
+      fabFileId: 'a',
+      userId: 'u',
+    });
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
+      fabFileId: 'c',
+      userId: 'u',
+    });
+    expect(h.sendToQueue).not.toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
+      fabFileId: 'b',
+      userId: 'u',
+    });
+    expect(h.releaseChunkClaimByIds).not.toHaveBeenCalled();
+    // enqueued counts what THIS call put on the queue; the lost id stays in `remaining`.
+    expect(json).toHaveBeenCalledWith({ detected: 3, enqueued: 2, remaining: 1 });
   });
 
   it('is a no-op enqueue when nothing is under-chunked', async () => {

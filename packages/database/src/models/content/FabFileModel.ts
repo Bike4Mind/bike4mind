@@ -1067,45 +1067,46 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
   }
 
-  async claimFilesForRechunkByIds(ids: string[]): Promise<number> {
-    if (ids.length === 0) return 0;
-    // Sets isChunking:TRUE to CLAIM each file for the imminent re-enqueue. Between this reset and an
-    // SQS worker actually dequeuing the chunk message, the file is chunkCount:0/chunked:false - which
-    // matches the background rescue sweep's filter exactly (chunkScan.ts), so without the claim the
-    // sweep would re-enqueue it and race the wave's own worker (fabFileChunk.ts's idempotency guard
-    // only checks `chunked`, not `isChunking`, so a duplicate delivery would slip past and its
-    // unconditional deleteManyByFabFileId could wipe chunks the first delivery just wrote). The
-    // per-file reprocess/chunk routes guard the same window with `if (fabFile.isChunking) throw`.
-    // The worker sets isChunking:true again on pickup and clears it in `finally`; a send that never
-    // lands must be released (releaseChunkClaimByIds) or the file stays claimed and invisible forever.
-    const result = await this.fabFileModel.updateMany(
-      { _id: { $in: ids } },
-      {
-        $set: {
-          isChunking: true,
-          chunked: false,
-          chunkCount: 0,
-          vectorized: false,
-          vectorizedChunkCount: 0,
-          notes: '',
-          chunkEmbeddingModelStampedAt: null,
-        },
-      }
-    );
-    return result.modifiedCount;
+  async claimFilesForRechunkByIds(ids: string[]): Promise<string[]> {
+    if (ids.length === 0) return [];
+    // Per-file COMPARE-AND-SET claim. `isChunking:{$ne:true}` is the precondition, so if two rebuild
+    // waves (or a wave and the rescue sweep) both read the same file as detectable, only the first
+    // findOneAndUpdate matches - the second sees isChunking already true and returns null. The caller
+    // enqueues ONLY the ids returned here, never the pre-read set, which is what closes the
+    // concurrent double-claim -> double-`deleteManyByFabFileId` race. Setting isChunking:true also
+    // hides the reset (chunked:false/chunkCount:0) file from the background rescue sweep during the
+    // reset->worker-pickup window; the worker's `finally` clears it on every exit (its try wraps the
+    // pre-flight checks), and a send that never lands is released (releaseChunkClaimByIds).
+    const claimed: string[] = [];
+    for (const id of ids) {
+      const doc = await this.fabFileModel.findOneAndUpdate(
+        { _id: id, isChunking: { $ne: true } },
+        {
+          $set: {
+            isChunking: true,
+            chunked: false,
+            chunkCount: 0,
+            vectorized: false,
+            vectorizedChunkCount: 0,
+            notes: '',
+            chunkEmbeddingModelStampedAt: null,
+          },
+        }
+      );
+      if (doc) claimed.push(id);
+    }
+    return claimed;
   }
 
   async releaseChunkClaimByIds(ids: string[]): Promise<number> {
     if (ids.length === 0) return 0;
-    // Undo a claim whose chunk message never made it onto the queue: restore `chunked:true` (the old
-    // chunks were never deleted - the worker never ran) and clear `isChunking`, so the file is
-    // re-detectable by the next wave and no longer stranded outside both detection and the rescue
-    // sweep. chunkCount stays 0 until the next successful rebuild; detection keys off actual chunk
-    // token sizes, not this field, so the file is still correctly re-flagged as under-chunked.
-    const result = await this.fabFileModel.updateMany(
-      { _id: { $in: ids } },
-      { $set: { isChunking: false, chunked: true } }
-    );
+    // Undo a claim whose chunk message never made it onto the queue: clear ONLY isChunking, leaving
+    // the file in the reset state (chunked:false, chunkCount:0). That state matches "genuinely
+    // under-chunked", so it self-heals - the rescue sweep re-enqueues it and the worker actually
+    // re-chunks it (its idempotency guard skips only chunked:true files). Restoring chunked:true
+    // instead would leave chunkCount:0, which the sweep re-dispatches every pass only for the worker
+    // to no-op on the chunked guard - churning its fixed batch budget without ever resolving.
+    const result = await this.fabFileModel.updateMany({ _id: { $in: ids } }, { $set: { isChunking: false } });
     return result.modifiedCount;
   }
 
@@ -1113,11 +1114,13 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // Files whose re-chunk gave up (error set, no chunks). They are invisible to both
     // findChunkedFilesByScope (needs chunked:true) and the rescue sweep (needs empty error), so the
     // rebuild badge would read zero for them; surfaced separately so a manager can tell "done" from
-    // "some files failed and won't retry on their own".
+    // "some files failed and won't retry on their own". `status:{$ne:'pending'}` mirrors
+    // computeDataLakeStats: a still-uploading file isn't a failed re-chunk.
     return this.fabFileModel.countDocuments({
       ...buildDataLakeMembershipFilter(scope),
       deletedAt: null,
       archivedAt: null,
+      status: { $ne: 'pending' },
       chunkCount: { $lte: 0 },
       error: { $nin: [null, ''] },
     });

@@ -63,23 +63,26 @@ const handler = baseApi()
     if (wave.length > 0) {
       const queueUrl = getSourceQueueUrl('fabFileChunkQueue');
       if (!queueUrl) throw new Error('Chunk queue URL not found');
-      // Claim first (isChunking:true) so the rescue sweep can't duplicate a file in the reset->pickup
-      // window; the claim also flips `chunked` off so the re-enqueued job clears fabFileChunk.ts's
-      // idempotency guard. Enqueue under each file's OWNER userId (as /api/files/reprocess does).
-      const waveIds = wave.map(f => f.fabFileId);
-      await fabFileRepository.claimFilesForRechunkByIds(waveIds);
+      // Atomically CLAIM the wave and enqueue ONLY the files this call actually won: a file a
+      // concurrent wave already claimed isn't returned, so the two waves can't both enqueue it and
+      // double-process it. The claim flips `chunked` off (so the re-enqueued job clears
+      // fabFileChunk.ts's idempotency guard) and hides the file from the rescue sweep.
+      const claimedById = new Map(wave.map(f => [f.fabFileId, f.userId] as const));
+      const claimedIds = await fabFileRepository.claimFilesForRechunkByIds([...claimedById.keys()]);
       // allSettled, not all: one failed send must not fail the batch and strand the OTHER claimed
       // files with nothing on the queue. Release the claim on any file whose send didn't land so it
-      // is re-detectable next wave instead of stuck claimed-and-invisible.
+      // self-heals (re-detected / re-swept) instead of sitting claimed-and-invisible.
       const results = await Promise.allSettled(
-        wave.map(f => sendToQueue(queueUrl, { fabFileId: f.fabFileId, userId: f.userId }))
+        claimedIds.map(id => sendToQueue(queueUrl, { fabFileId: id, userId: claimedById.get(id)! }))
       );
-      const failedIds = wave.filter((_, i) => results[i].status === 'rejected').map(f => f.fabFileId);
+      const failedIds = claimedIds.filter((_, i) => results[i].status === 'rejected');
       if (failedIds.length > 0) {
-        req.logger?.error?.(`rechunk: ${failedIds.length}/${wave.length} sends failed for lake ${lake.id}, released`);
+        req.logger?.error?.(
+          `rechunk: ${failedIds.length}/${claimedIds.length} sends failed for lake ${lake.id}, released`
+        );
         await fabFileRepository.releaseChunkClaimByIds(failedIds);
       }
-      enqueued = wave.length - failedIds.length;
+      enqueued = claimedIds.length - failedIds.length;
     }
 
     return res.json({

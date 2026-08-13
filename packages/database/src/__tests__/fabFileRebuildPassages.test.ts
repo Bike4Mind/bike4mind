@@ -13,6 +13,9 @@ const makeFile = (over: Partial<Record<string, unknown>> = {}) => ({
   fileSize: 1000,
   mimeType: 'text/plain',
   type: 'FILE',
+  // 'complete' = fully uploaded (schema default is 'pending'); a real lake file has finished
+  // uploading before it can be chunked or fail a re-chunk.
+  status: 'complete',
   chunked: true,
   tags: [{ name: TAG, strength: 1 }],
   ...over,
@@ -99,7 +102,7 @@ describe('FabFileRepository.claimFilesForRechunkByIds', () => {
     await FabFile.deleteMany({});
   });
 
-  it('claims the file (isChunking:true) and resets the chunk/vector flags', async () => {
+  it('claims a free file (isChunking:true + reset flags) and returns its id', async () => {
     const [f] = await FabFile.create([
       makeFile({
         chunked: true,
@@ -111,7 +114,7 @@ describe('FabFileRepository.claimFilesForRechunkByIds', () => {
       }),
     ]);
 
-    expect(await fabFileRepository.claimFilesForRechunkByIds([f._id.toString()])).toBe(1);
+    expect(await fabFileRepository.claimFilesForRechunkByIds([f._id.toString()])).toEqual([f._id.toString()]);
 
     const after = await FabFile.findById(f._id).lean();
     expect(after?.isChunking).toBe(true); // claimed, so the rescue sweep can't grab it mid-flight
@@ -122,8 +125,21 @@ describe('FabFileRepository.claimFilesForRechunkByIds', () => {
     expect(after?.chunkEmbeddingModelStampedAt).toBeNull();
   });
 
+  it('does NOT claim a file already in-flight (compare-and-set), so concurrent waves cannot double-claim', async () => {
+    const [f] = await FabFile.create([makeFile({ chunked: false, isChunking: true })]);
+    // Second wave sees isChunking already set -> not returned -> caller never enqueues it again.
+    expect(await fabFileRepository.claimFilesForRechunkByIds([f._id.toString()])).toEqual([]);
+  });
+
+  it('returns only the subset it won when some ids are already claimed', async () => {
+    const [free, taken] = await FabFile.create([makeFile({ isChunking: false }), makeFile({ isChunking: true })]);
+    expect(await fabFileRepository.claimFilesForRechunkByIds([free._id.toString(), taken._id.toString()])).toEqual([
+      free._id.toString(),
+    ]);
+  });
+
   it('an empty id list is a no-op', async () => {
-    expect(await fabFileRepository.claimFilesForRechunkByIds([])).toBe(0);
+    expect(await fabFileRepository.claimFilesForRechunkByIds([])).toEqual([]);
   });
 });
 
@@ -133,14 +149,16 @@ describe('FabFileRepository.releaseChunkClaimByIds', () => {
     await FabFile.deleteMany({});
   });
 
-  it('releases the claim and restores chunked:true so the file is re-detectable', async () => {
+  it('clears only isChunking, leaving the file reset so the sweep re-chunks it rather than churns', async () => {
     const [f] = await FabFile.create([makeFile({ chunked: false, isChunking: true, chunkCount: 0 })]);
 
     expect(await fabFileRepository.releaseChunkClaimByIds([f._id.toString()])).toBe(1);
 
     const after = await FabFile.findById(f._id).lean();
     expect(after?.isChunking).toBe(false);
-    expect(after?.chunked).toBe(true);
+    // chunked stays false (NOT restored to true): the released file is genuinely under-chunked, so
+    // the rescue sweep picks it up and the worker actually re-chunks it instead of no-op churning.
+    expect(after?.chunked).toBe(false);
   });
 });
 
@@ -150,13 +168,14 @@ describe('FabFileRepository.countFailedFilesByScope', () => {
     await FabFile.deleteMany({});
   });
 
-  it('counts lake files with an error and no chunks, ignoring healthy / empty-error / deleted / non-member', async () => {
+  it('counts lake files with an error and no chunks, ignoring healthy / empty-error / deleted / pending / non-member', async () => {
     await FabFile.create([
       makeFile({ chunked: false, chunkCount: 0, error: 'corrupt pdf' }), // counts
       makeFile({ chunked: false, chunkCount: 0, error: 'unparseable' }), // counts
       makeFile({ chunked: true, chunkCount: 5 }), // healthy -> no
       makeFile({ chunked: false, chunkCount: 0, error: '' }), // empty error -> no
       makeFile({ chunked: false, chunkCount: 0, error: 'x', deletedAt: new Date() }), // deleted -> no
+      makeFile({ chunked: false, chunkCount: 0, error: 'mid-upload', status: 'pending' }), // still uploading -> no
       makeFile({ chunked: false, chunkCount: 0, error: 'y', tags: [{ name: 'datalake:other', strength: 1 }] }), // non-member -> no
     ]);
 
