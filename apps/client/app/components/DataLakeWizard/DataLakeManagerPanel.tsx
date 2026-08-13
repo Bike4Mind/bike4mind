@@ -43,6 +43,7 @@ import {
   getNodesAtPath,
 } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
+import TreeRowLabel from '@client/app/components/datalake/TreeRowLabel';
 import {
   COUNT_CHIP_SX,
   FOOTER_BTN_SX,
@@ -98,6 +99,22 @@ const normalizePrefix = (fileTagPrefix: string) => (fileTagPrefix.endsWith(':') 
 /** The prefix's namespace segments, e.g. 'books' -> ['books']. Lake navigation seeds the
  *  path past these so clicking a lake lands directly on its categories. */
 const prefixSegments = (fileTagPrefix: string) => fileTagPrefix.replace(/:+$/, '').split(':').filter(Boolean);
+
+/** Splits "[Category] Title.ext" into [category, title] so files sharing a bracketed source
+ *  prefix sort by the group then the title instead of piling up on the shared leading "[".
+ *  Mirrors DataLakeTreeView's compareByCategoryThenTitle - this surface carries its own tag-tree
+ *  browsing logic rather than routing through DataLakeTreeView, so the two stay in sync by hand. */
+function categoryTitleKey(fileName: string): [string, string] {
+  const withoutExt = fileName.replace(/\.[^/.]+$/, '');
+  const match = withoutExt.match(/^\[(.*?)\]\s*(.*)$/);
+  return match ? [match[1], match[2]] : ['', withoutExt];
+}
+
+function compareByCategoryThenTitle(a: IFabFileDocument, b: IFabFileDocument): number {
+  const [categoryA, titleA] = categoryTitleKey(a.fileName);
+  const [categoryB, titleB] = categoryTitleKey(b.fileName);
+  return categoryA.localeCompare(categoryB) || titleA.localeCompare(titleB);
+}
 
 /**
  * Data Lakes management surface: one persistent two-pane layout. The left sidebar navigates
@@ -260,6 +277,11 @@ export default function DataLakeManagerPanel() {
               setPath([]);
               setSelectedFile(null);
             }}
+            onDeleted={() => {
+              setLakeId(null);
+              setPath([]);
+              setSelectedFile(null);
+            }}
           />
         )
       ) : managerTab === 'discover' ? (
@@ -394,7 +416,7 @@ function ManagerNav({
             prefix
           )
       )
-      .sort((a, b) => a.fileName.localeCompare(b.fileName));
+      .sort(compareByCategoryThenTitle);
   }, [articles, activeLake]);
 
   const seedDepth = activeLake ? prefixSegments(activeLake.fileTagPrefix).length : 0;
@@ -408,9 +430,7 @@ function ManagerNav({
   const files = useMemo(() => {
     if (isUncategorized) return uncategorizedFiles;
     if (!leafTag) return [];
-    return articles
-      .filter(f => (f.tags ?? []).some(t => t.name === leafTag))
-      .sort((a, b) => a.fileName.localeCompare(b.fileName));
+    return articles.filter(f => (f.tags ?? []).some(t => t.name === leafTag)).sort(compareByCategoryThenTitle);
   }, [isUncategorized, uncategorizedFiles, leafTag, articles]);
 
   // A branch node (has children) can ALSO carry files tagged with its own exact path, not just a
@@ -419,9 +439,7 @@ function ManagerNav({
   const ownTag = activeLake && !isUncategorized && !leafTag && path.length > seedDepth ? path.join(':') : null;
   const ownFiles = useMemo(() => {
     if (!ownTag || !currentNode?.ownFileCount) return [];
-    return articles
-      .filter(f => (f.tags ?? []).some(t => t.name === ownTag))
-      .sort((a, b) => a.fileName.localeCompare(b.fileName));
+    return articles.filter(f => (f.tags ?? []).some(t => t.name === ownTag)).sort(compareByCategoryThenTitle);
   }, [ownTag, currentNode, articles]);
   const showOwnFiles = !searchQuery && ownFiles.length > 0;
 
@@ -773,12 +791,7 @@ function ManagerNav({
                       }}
                     />
                     <ListItemContent>
-                      <Typography
-                        noWrap
-                        sx={{ ...rowTypographySx, fontWeight: selectedFileId === file.id ? 'lg' : 400 }}
-                      >
-                        {file.fileName.replace(/\.[^/.]+$/, '')}
-                      </Typography>
+                      <TreeRowLabel label={file.fileName.replace(/\.[^/.]+$/, '')} />
                     </ListItemContent>
                   </ListItemButton>
                 </ListItem>
@@ -849,12 +862,7 @@ function ManagerNav({
                       }}
                     />
                     <ListItemContent>
-                      <Typography
-                        noWrap
-                        sx={{ ...rowTypographySx, fontWeight: selectedFileId === file.id ? 'lg' : 400 }}
-                      >
-                        {file.fileName.replace(/\.[^/.]+$/, '')}
-                      </Typography>
+                      <TreeRowLabel label={file.fileName.replace(/\.[^/.]+$/, '')} />
                     </ListItemContent>
                   </ListItemButton>
                 </ListItem>
@@ -1085,6 +1093,7 @@ function LakeInfoPanel({
   onOpenSettings,
   onReviewTaxonomy,
   onArchived,
+  onDeleted,
 }: {
   lake: ManagerLake;
   fileCount: number | undefined;
@@ -1097,9 +1106,14 @@ function LakeInfoPanel({
    *  derived activeLake re-binding to a lake that just left the list (and a later restore
    *  teleporting back in). */
   onArchived: () => void;
+  /** Same exit-to-root need as onArchived: a direct delete also removes the lake from the
+   *  active list, skipping the archive step entirely (the lifecycle 'delete' action has no
+   *  archived-status precondition). */
+  onDeleted: () => void;
 }) {
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
   const archiveLake = useArchiveDataLake();
+  const deleteLake = usePermanentDeleteDataLake();
   const startChatWithLake = useStartChatWithLake();
   const [startingChat, setStartingChat] = useState(false);
   const visibility = lake.isPublic ? 'Public' : lake.organizationId ? 'Organization' : 'Private';
@@ -1269,6 +1283,24 @@ function LakeInfoPanel({
             </Chip>
           )}
         </Box>
+        {lake.canManage && (
+          <Box sx={{ mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+            <Tooltip title="Delete (recoverable - restore from the Deleted section)" size="sm">
+              <Button
+                variant="outlined"
+                color="danger"
+                size="sm"
+                startDecorator={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
+                data-testid={`datalake-delete-active-btn-${lake.id}`}
+                loading={deleteLake.isPending}
+                onClick={() => deleteLake.mutate(lake.id, { onSuccess: onDeleted })}
+                sx={{ flexShrink: 0, fontSize: '13px' }}
+              >
+                Delete
+              </Button>
+            </Tooltip>
+          </Box>
+        )}
       </Box>
       <Box sx={{ ...TREE_SCROLL_SX, px: 3, py: 2 }}>
         {lake.description ? (

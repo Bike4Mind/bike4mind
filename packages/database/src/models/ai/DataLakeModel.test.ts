@@ -15,6 +15,22 @@ const baseLake = (overrides: Partial<IDataLake> & Pick<IDataLake, 'slug'>): Omit
     ...overrides,
   }) as Omit<IDataLake, 'id'>;
 
+describe('DataLakeRepository - auditQueryTextEnabled', () => {
+  setupMongoTest();
+
+  it('defaults to false on a lake created without it', async () => {
+    // A governance flag defaulting to true would silently start logging every query for every
+    // lake created before this ticket's opt-in existed - the worst possible failure mode here.
+    const created = await dataLakeRepository.create(baseLake({ slug: 'no-audit-opt-in' }));
+    expect(created.auditQueryTextEnabled).toBe(false);
+  });
+
+  it('persists an explicit true', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'audit-opt-in', auditQueryTextEnabled: true }));
+    expect(created.auditQueryTextEnabled).toBe(true);
+  });
+});
+
 describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
   setupMongoTest();
 
