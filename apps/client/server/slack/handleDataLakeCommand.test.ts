@@ -240,6 +240,51 @@ describe('handleDataLakeCommand', () => {
       expect(reply).toContain('"a.pdf"');
       expect(reply).toContain('Could not fetch that link.');
     });
+
+    it('does not print the SAME refusal twice on a mixed message', async () => {
+      // Both halves authorize independently, so an unauthorized actor is refused by each. Two
+      // identical sentences read as a stutter rather than as two half-outcomes.
+      parseDataLakeCommand.mockReturnValue({
+        subcommand: 'add',
+        lakeSlug: 'sales',
+        link: 'https://example.com/doc',
+        rawArgs: '',
+      });
+      const refusal = 'You do not have permission to add to *Sales*. Ask a lake admin.';
+      ingestSlackFilesIntoLake.mockResolvedValue({ ok: false, reason: 'not_authorized', message: refusal });
+      ingestSlackLinkIntoLake.mockResolvedValue({ ok: false, reason: 'not_authorized', message: refusal });
+
+      const reply = await handleDataLakeCommand(baseParams({ files: [{ id: 'F1', name: 'a.pdf' }] }));
+
+      expect(reply).toBe(refusal);
+      expect(reply.split(refusal).length - 1).toBe(1);
+    });
+
+    it('still reports two DIFFERENT outcomes separately', async () => {
+      // The de-duplication must not collapse genuine half-outcomes, which always differ because each
+      // names its own file or link.
+      parseDataLakeCommand.mockReturnValue({
+        subcommand: 'add',
+        lakeSlug: 'sales',
+        link: 'https://example.com/doc',
+        rawArgs: '',
+      });
+      ingestSlackFilesIntoLake.mockResolvedValue({
+        ok: false,
+        reason: 'link_fetch_failed',
+        message: 'First problem.',
+      });
+      ingestSlackLinkIntoLake.mockResolvedValue({
+        ok: false,
+        reason: 'link_fetch_failed',
+        message: 'Second problem.',
+      });
+
+      const reply = await handleDataLakeCommand(baseParams({ files: [{ id: 'F1', name: 'a.pdf' }] }));
+
+      expect(reply).toContain('First problem.');
+      expect(reply).toContain('Second problem.');
+    });
   });
 });
 
