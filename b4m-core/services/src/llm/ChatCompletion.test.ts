@@ -1114,7 +1114,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
       // enforceCredits gates the whole reservation block; leave every other setting off.
