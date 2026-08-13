@@ -133,6 +133,23 @@ function isPrivateIPv6(ip: string): boolean {
     return tail.includes('.') ? isPrivateIPv4(tail) : true;
   }
 
+  // ::/96 - IPv4-COMPATIBLE IPv6 (`::x.y.z.w`), the deprecated sibling of the mapped form above.
+  // Node compresses the dotted spelling, so `[::169.254.169.254]` arrives as `[::a9fe:a9fe]` and
+  // matches none of the family prefixes checked above.
+  //
+  // MUST stay below the `ffff:` branch: `::ffff:1.2.3.4` also starts with `::`, and judging it here
+  // would take `ffff:1.2.3.4` as the tail and fail to recognise the embedded IPv4 at all.
+  //
+  // Exploitability is narrower than the mapped form and worth stating honestly: modern Linux does not
+  // translate `::x.y.z.w` to the underlying IPv4 (RFC 4291 removed that), so this reaches an IPv6
+  // socket rather than a v4-only metadata service. It is closed anyway because it is the same shape as
+  // the bug above, the design intent stated for the mapped form applies identically, and an unusual
+  // dual-stack or CNI configuration can still translate. `::1` and `::` are handled earlier.
+  if (normalized.startsWith('::')) {
+    const tail = normalized.slice(2);
+    return tail.includes('.') ? isPrivateIPv4(tail) : true;
+  }
+
   // 2001:db8::/32 - Documentation
   if (normalized.startsWith('2001:db8:') || normalized.startsWith('2001:0db8:')) return true;
 
