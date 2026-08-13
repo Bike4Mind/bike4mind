@@ -407,10 +407,13 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   /**
-   * Seed a zero-usage `userDetails` row for a member if one is not already present. Idempotent by
-   * construction: the `userDetails.id != member.id` guard means a member who already has a row
-   * matches no document and the `$push` is skipped, so this is safe to call on every membership
-   * grant and as a self-heal before a spend.
+   * Seed a zero-usage `userDetails` row for a member if one is not already present. Safe to call on
+   * every membership grant and as a self-heal before a spend: the `userDetails.id != member.id`
+   * guard means a member who already has a row matches no document and the `$push` is skipped.
+   * Not fully atomic - two concurrent calls for the same brand-new member can both pass the `$ne`
+   * guard and push, leaving a duplicate row (the positional `$inc` then tracks only the first). The
+   * window is a single member's first-ever spend and the downside is undercounting, not overcharge,
+   * so it is accepted rather than guarded with a unique index (same tradeoff as `addMember`'s `$ne`).
    *
    * WHY THIS EXISTS: `updateUserDetails` increments via the positional `$` operator, which can only
    * update an element that already exists - it cannot create the row it positions on. A member with
