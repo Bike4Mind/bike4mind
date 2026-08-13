@@ -80,6 +80,18 @@ describe('GET /api/data-lakes/articles access-event audit (#1678)', () => {
     );
   });
 
+  it('narrows a repeated ?search= (Express hands back an array) to its first value', async () => {
+    mockQueryDataLakeArticles.mockResolvedValue({
+      data: [{ id: 'f1', tags: [{ name: 'datalake:lake1' }] }],
+      total: 1,
+      hasMore: false,
+    });
+
+    await route(makeReq({ search: ['onboarding', 'other'] as unknown as string }), makeRes().res);
+
+    expect(mockRecord).toHaveBeenCalledWith(expect.objectContaining({ queryText: 'onboarding' }));
+  });
+
   it('falls back to the full accessible-lake scope when no returned file carries a datalake tag', async () => {
     mockQueryDataLakeArticles.mockResolvedValue({
       data: [{ id: 'f1', tags: [{ name: 'opti:policy' }] }],

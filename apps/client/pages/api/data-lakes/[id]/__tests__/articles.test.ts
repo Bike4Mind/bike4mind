@@ -166,6 +166,16 @@ describe('GET /api/data-lakes/:id/articles access-event audit (#1678)', () => {
     );
   });
 
+  it('narrows a repeated ?search= (Express hands back an array) to its first value', async () => {
+    h.search.mockResolvedValue({ data: [{ id: 'f1' }], total: 1, hasMore: false });
+    const { res } = makeRes();
+    const req = { ...makeReq(), query: { id: 'lake1', search: ['onboarding', 'other'] } };
+
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+
+    expect(h.record).toHaveBeenCalledWith(expect.objectContaining({ queryText: 'onboarding' }));
+  });
+
   it('does not record an event when the lake has no meta-tag (no search ran)', async () => {
     h.assertLakeAccess.mockResolvedValue({ ...LAKE, datalakeTag: '' });
     const { res } = makeRes();

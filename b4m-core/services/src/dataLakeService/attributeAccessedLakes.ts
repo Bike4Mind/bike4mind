@@ -26,5 +26,8 @@ export function attributeAccessedLakeIds(fileTagLists: Iterable<string[]>, lakes
       if (id) ids.add(id);
     }
   }
+  // The fallback is bounded by `lakes`, not a global "log everything" - a caller with no scope to
+  // fall back to (e.g. an agent-scoped arm that passes []) correctly gets [] back, not a crash or
+  // a fabricated lake id.
   return ids.size > 0 ? [...ids] : lakes.map(lake => lake.id);
 }

@@ -822,4 +822,32 @@ describe('POST /api/data-lakes/semantic-search access-event audit (#1678)', () =
 
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ results: expect.any(Array) }));
   });
+
+  it('still records the event when the client disconnects right after the search resolves', async () => {
+    // The audit write happens as soon as search results are in hand, not after the later
+    // isAborted() gate - the read already happened server-side by then regardless of whether the
+    // client is still around to receive the response.
+    let closeCallback: (() => void) | undefined;
+    const req = {
+      user: { id: 'u1', tags: [] },
+      body: { query: 'pto policy' },
+      on: vi.fn((event: string, cb: () => void) => {
+        if (event === 'close') closeCallback = cb;
+      }),
+      logger: { warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
+    } as never;
+    mockSemanticSearch.mockImplementation(async () => {
+      // Simulate the client going away between the search resolving and the response being sent.
+      closeCallback?.();
+      return RESULT_WITH_LAKE_TAG;
+    });
+    const res = makeRes() as unknown as { json: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> };
+
+    await handler(req, res as never);
+
+    expect(mockRecordLakeAccessEvent).toHaveBeenCalledWith(expect.objectContaining({ resolvedLakeIds: ['lake-acme'] }));
+    // The abort still short-circuits the actual response, confirming the abort really fired.
+    expect(res.json).not.toHaveBeenCalled();
+    expect(res.end).toHaveBeenCalled();
+  });
 });

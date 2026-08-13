@@ -10,6 +10,7 @@ import {
   userRepository,
   withTransaction,
   User,
+  lakeAccessEventRepository,
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { NotFoundError } from '@bike4mind/utils';
@@ -17,7 +18,7 @@ import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
-import { findLakeAccessibleFabFile } from '@server/dataLakes';
+import { findLakeAccessibleFabFile, resolveAccessibleLakes } from '@server/dataLakes';
 import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
 import { getFilesStorage } from '@server/utils/storage';
 import { Request } from 'express';
@@ -55,9 +56,23 @@ const handler = baseApi()
       // so getFabFile 404s for entitled non-owner users. Re-authorize via the SAME lake gate the
       // browse endpoints use and, if granted, mint a fresh signed URL through the same path so
       // the shared file viewer (KnowledgeModal) can render it. (#836)
+      const lakes = await resolveAccessibleLakes(req);
       const lakeFile = await findLakeAccessibleFabFile(req, req.query.id);
       if (!lakeFile) throw error; // not lake-accessible either - preserve the original 404
       const fabFile = await fabFilesService.generateSignedUrl(lakeFile, adapter);
+      // Best-effort audit write - this is the same single-file metadata + URL read as the
+      // articles `?id=` deep link, just reached through the direct-fetch fallback door instead.
+      dataLakeService.recordLakeAccessEvent(
+        lakeAccessEventRepository,
+        {
+          principalKind: 'user',
+          principalId: req.user.id,
+          resolvedLakeIds: dataLakeService.attributeAccessedLakeIds([lakeFile.tags?.map(t => t.name) ?? []], lakes),
+          fileIds: [lakeFile.id],
+          surface: 'data-lake-articles',
+        },
+        req.logger
+      );
       return res.json(fabFile);
     }
   })

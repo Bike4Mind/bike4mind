@@ -22,10 +22,15 @@ const handler = baseApi().get(async (req: Request<{}, unknown, unknown, DataLake
   const lakes = await resolveAccessibleLakes(req);
   const result = await queryDataLakeArticles(req, lakes, req.query);
 
-  // Best-effort audit write (#1678), only when something was actually returned - an empty
+  // Best-effort audit write, only when something was actually returned - an empty
   // result (no accessible lakes, or a deep-link miss) reflects no lake content, so no event.
   const files = result.data as Array<{ id: string; tags?: { name: string }[] }>;
   if (files.length > 0) {
+    // Express hands back string[] for a repeated ?search=, but the type only promises string -
+    // narrow explicitly rather than let an array reach record()'s queryText.trim() and get
+    // silently swallowed by the fire-and-forget catch.
+    const rawSearch = req.query.search as string | string[] | undefined;
+    const searchTerm = Array.isArray(rawSearch) ? rawSearch[0] : rawSearch;
     dataLakeService.recordLakeAccessEvent(
       lakeAccessEventRepository,
       {
@@ -37,7 +42,7 @@ const handler = baseApi().get(async (req: Request<{}, unknown, unknown, DataLake
         ),
         fileIds: files.map(f => f.id),
         surface: 'data-lake-articles',
-        ...(req.query.search ? { queryText: req.query.search } : {}),
+        ...(searchTerm ? { queryText: searchTerm } : {}),
       },
       req.logger
     );

@@ -17,7 +17,7 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
 interface ArticlesQuery {
   id: string;
   tags?: string | string[];
-  search?: string;
+  search?: string | string[];
   page?: string;
   limit?: string;
   sortBy?: string;
@@ -48,7 +48,11 @@ const handler = baseApi()
 
     const rawTags = req.query.tags;
     const filterTags: string[] = rawTags ? (Array.isArray(rawTags) ? rawTags : [rawTags]) : [];
-    const search = req.query.search ?? '';
+    // Same array-vs-single narrowing as tags above - a repeated ?search= would otherwise reach
+    // record()'s queryText.trim() below as an array and get silently swallowed by the
+    // fire-and-forget catch.
+    const rawSearch = req.query.search;
+    const search = (Array.isArray(rawSearch) ? rawSearch[0] : rawSearch) ?? '';
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
     const sortBy = req.query.sortBy === 'createdAt' ? ('createdAt' as const) : ('fileName' as const);

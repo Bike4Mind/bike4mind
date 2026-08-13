@@ -317,6 +317,33 @@ const handler = baseApi()
         }
       );
 
+      // Best-effort audit write, only when something was actually returned - a zero-hit
+      // search reflects no lake content read (and would otherwise fall back to logging the WHOLE
+      // authorized scope as accessed, per attributeAccessedLakeIds's empty-attribution fallback).
+      // Attribute to a specific lake where the datalake tag is recoverable, falling back to the
+      // whole authorized scope otherwise (see the doc comment on resolvedLakeIds). Never awaited:
+      // an audit-write failure must not affect this response. Recorded here, right as the search
+      // results come back - NOT after the later isAborted() check - because the read already
+      // happened at this point regardless of whether the client is still there for the response.
+      if (search.results.length > 0) {
+        dataLakeService.recordLakeAccessEvent(
+          lakeAccessEventRepository,
+          {
+            principalKind: 'user',
+            principalId: req.user.id,
+            resolvedLakeIds: dataLakeService.attributeAccessedLakeIds(
+              search.results.map(r => r.fileTags),
+              lakes
+            ),
+            chunkIds: search.results.map(r => r.chunkId),
+            fileIds: [...new Set(search.results.map(r => r.fileId))],
+            surface: 'data-lake-semantic-search',
+            queryText: query,
+          },
+          req.logger
+        );
+      }
+
       // Record the query-embedding spend for the primary model plus every alternate model the
       // mixed-embeddingModel ANN cutover actually embedded under - each alternate embed ran (and
       // is billable) regardless of whether its ANN query then found anything. `user`/`organization`
@@ -378,31 +405,6 @@ const handler = baseApi()
       if (isAborted()) return res.end();
 
       const warning = dataLakeService.describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
-
-      // Best-effort audit write, only when something was actually returned - a zero-hit
-      // search reflects no lake content read (and would otherwise fall back to logging the WHOLE
-      // authorized scope as accessed, per attributeAccessedLakeIds's empty-attribution fallback).
-      // Attribute to a specific lake where the datalake tag is recoverable, falling back to the
-      // whole authorized scope otherwise (see the doc comment on resolvedLakeIds). Never awaited:
-      // an audit-write failure must not affect this response.
-      if (search.results.length > 0) {
-        dataLakeService.recordLakeAccessEvent(
-          lakeAccessEventRepository,
-          {
-            principalKind: 'user',
-            principalId: req.user.id,
-            resolvedLakeIds: dataLakeService.attributeAccessedLakeIds(
-              search.results.map(r => r.fileTags),
-              lakes
-            ),
-            chunkIds: search.results.map(r => r.chunkId),
-            fileIds: [...new Set(search.results.map(r => r.fileId))],
-            surface: 'data-lake-semantic-search',
-            queryText: query,
-          },
-          req.logger
-        );
-      }
 
       return res.json({
         results: search.results.map(r => ({
