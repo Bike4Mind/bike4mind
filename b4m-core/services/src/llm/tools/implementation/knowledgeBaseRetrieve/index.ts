@@ -382,7 +382,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             );
           }
 
-          // Best-effort audit write (#1678). The extra getDynamicDataLakeAccess call only runs
+          // Best-effort audit write. The extra getDynamicDataLakeAccess call only runs
           // when there's actually a recorder wired AND this isn't the agent-scoped branch (which
           // never consults lake access, same as the search tool's scoped arm) - otherwise it's a
           // wasted round trip for a lookup nothing will use.

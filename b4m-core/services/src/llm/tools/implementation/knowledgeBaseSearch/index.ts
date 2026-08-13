@@ -351,7 +351,7 @@ interface SemanticArmResult {
   /** Files this arm actually matched, for attachmentInlineNotice - see its call site. Empty
    *  whenever `output` is null (nothing matched, or the arm never ran). */
   fileHits: Array<{ id: string; fileName: string }>;
-  /** Lake ids attributed from the matched files' tags, for the access-event audit (#1678).
+  /** Lake ids attributed from the matched files' tags, for the access-event audit.
    *  Always empty for the agent-scoped arm, which never consults lake access at all. */
   lakeIds: string[];
   /** Chunk ids of the matched passages, for the same audit event. */
@@ -715,7 +715,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             semantic.datalakeTags,
             injectedLakeTags
           );
-          // Best-effort audit write (#1678). resolvedLakeIds stays empty for the agent-scoped
+          // Best-effort audit write. resolvedLakeIds stays empty for the agent-scoped
           // arm by design (semantic.lakeIds is always [] there) - it never consults lake access.
           recordLakeAccessEvent(
             context.db.lakeAccessEvents,
@@ -909,7 +909,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             );
           }
 
-          // Best-effort audit write (#1678), only when the keyword fallback actually found
+          // Best-effort audit write, only when the keyword fallback actually found
           // something - an empty rankedResults means nothing was read.
           if (rankedResults.length > 0) {
             recordLakeAccessEvent(

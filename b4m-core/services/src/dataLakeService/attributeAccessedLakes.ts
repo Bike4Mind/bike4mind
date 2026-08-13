@@ -7,7 +7,7 @@ export interface AttributableLake {
 }
 
 /**
- * Best-effort lake attribution for `LakeAccessEvent.resolvedLakeIds` (#1678): map each returned
+ * Best-effort lake attribution for `LakeAccessEvent.resolvedLakeIds`: map each returned
  * file's tags back to the lake(s) whose `datalake:<slug>` meta-tag it carries. Only the
  * tag-matched arm is recoverable this way - a content-tag-PREFIX match never identified a single
  * lake and cannot be reversed here.

@@ -107,7 +107,7 @@ export interface ToolContext {
     /** Owner lookup for usage attribution; findById is all the recorder needs. */
     organizations?: Pick<IOrganizationRepository, 'findById'>;
     /**
-     * Lake access audit sink (#1678). Optional - a host that hasn't wired it in degrades to a
+     * Lake access audit sink. Optional - a host that hasn't wired it in degrades to a
      * silent no-op (see recordLakeAccessEvent) rather than blocking retrieval.
      */
     lakeAccessEvents?: Pick<ILakeAccessEventRepository, 'record'>;

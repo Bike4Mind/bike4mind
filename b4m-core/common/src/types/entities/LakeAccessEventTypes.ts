@@ -4,13 +4,12 @@ import { IMongoDocument } from './common';
 // -- Lake Access Event ----------------------------------------------------------------------
 //
 // The audit trail a lake never had: one row per retrieval call, answering "who read this lake,
-// and when" (see #1658's "zero lake access records of any kind" finding). Types live here rather
-// than inline in the model (unlike MemoryLedgerEventModel) because the callers that will record
-// events (#1678's retrieval surfaces) live in b4m-core/services, which cannot import
+// and when". Types live here rather than inline in the model (unlike MemoryLedgerEventModel)
+// because the callers that record events live in b4m-core/services, which cannot import
 // @bike4mind/database - the same split DataLakeAccessGrantModel uses.
 //
-// SCOPE: this module is the event shape and vocabulary only. Nothing here calls `record()` yet -
-// instrumenting the retrieval surfaces is a separate ticket.
+// SCOPE: this module is the event shape and vocabulary. The write path lives on
+// LakeAccessEventModel.record(); the retrieval surfaces call it via recordLakeAccessEvent.
 
 /** Who performed the retrieval. Flat fields (not a nested object), mirroring
  * MemoryLedgerEventModel's principalKind/principalId shape. */
@@ -19,9 +18,9 @@ export type LakeAccessPrincipalKind = (typeof LAKE_ACCESS_PRINCIPAL_KINDS)[numbe
 
 /**
  * Which code path produced the retrieval. `rlm-answer` is reserved for the RLM answer endpoint's
- * own in-process retrieval - its loopback tool call to the semantic-search route must be recorded
- * under `data-lake-semantic-search` instead (whichever surface #1678 instruments), or one
- * user-visible retrieval double-counts as two events.
+ * own in-process retrieval - its loopback tool call to the semantic-search route is recorded
+ * under `data-lake-semantic-search` instead, or one user-visible retrieval double-counts as two
+ * events.
  */
 export const LAKE_ACCESS_SURFACES = [
   'data-lake-semantic-search',
@@ -57,7 +56,7 @@ export interface ILakeAccessEvent {
   organizationId?: string;
   /**
    * Best-effort attribution: lakes whose `datalake:<slug>` meta-tag appears on a returned
-   * result, narrowed from the full authorized scope where that tag is recoverable (#1678).
+   * result, narrowed from the full authorized scope where that tag is recoverable.
    * Falls back to the FULL authorized/searched scope when nothing in the result set carries a
    * recoverable tag (e.g. every match came from a content-tag-prefix arm, which cannot be
    * reversed to one lake) - callers must never drop a lake from its own audit trail just

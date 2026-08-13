@@ -67,7 +67,7 @@ const handler = baseApi()
       }
     }
 
-    // Best-effort audit write (#1678) - a hash match reveals a file's existence (id + name)
+    // Best-effort audit write - a hash match reveals a file's existence (id + name)
     // regardless of which policy branch then classifies it, so every matched hash counts here,
     // not only the skip/update arms.
     if (existingHashMap.size > 0) {

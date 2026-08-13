@@ -805,6 +805,14 @@ describe('POST /api/data-lakes/semantic-search access-event audit (#1678)', () =
     expect(mockRecordLakeAccessEvent).not.toHaveBeenCalled();
   });
 
+  it('does not record an event when the caller has accessible lakes but the search finds nothing', async () => {
+    mockSemanticSearch.mockResolvedValue({ ...RESULT_WITH_LAKE_TAG, results: [] });
+
+    await handler(makeReq({ query: 'pto policy' }), makeRes());
+
+    expect(mockRecordLakeAccessEvent).not.toHaveBeenCalled();
+  });
+
   it('still returns the search response when the audit write rejects', async () => {
     mockSemanticSearch.mockResolvedValue(RESULT_WITH_LAKE_TAG);
     mockRecordLakeAccessEvent.mockRejectedValueOnce(new Error('mongo blip'));

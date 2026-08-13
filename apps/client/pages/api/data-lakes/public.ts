@@ -27,7 +27,7 @@ const handler = baseApi()
       { db: { dataLakes: dataLakeRepository, users: userRepository } }
     );
 
-    // Best-effort audit write (#1678) - the browsed lakes themselves ARE the result, so no
+    // Best-effort audit write - the browsed lakes themselves ARE the result, so no
     // tag-attribution step is needed; every returned lake goes straight into resolvedLakeIds.
     if (result.data.length > 0) {
       dataLakeService.recordLakeAccessEvent(

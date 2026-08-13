@@ -170,7 +170,7 @@ interface DatabaseAdapters {
    */
   imageModerationIncidents?: { record(input: ImageModerationIncident): Promise<unknown> };
   /**
-   * Lake access audit sink (#1678). Optional - see recordLakeAccessEvent, which no-ops when
+   * Lake access audit sink. Optional - see recordLakeAccessEvent, which no-ops when
    * a host hasn't wired it in rather than blocking forced retrieval.
    */
   lakeAccessEvents?: Pick<ILakeAccessEventRepository, 'record'>;
@@ -2090,7 +2090,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // here degrades to no lake prompt and never drops the retrieved context.
       const lakePromptMessage = await this.resolveRetrievedLakePromptMessage(sourceFileIds, fileById);
 
-      // Best-effort audit write (#1678), attributed via the tags on the files this turn actually
+      // Best-effort audit write, attributed via the tags on the files this turn actually
       // grounded on (sourceFileIds), not the wider scanned candidate pool.
       recordLakeAccessEvent(
         this.chatCompletion.db.lakeAccessEvents,

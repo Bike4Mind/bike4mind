@@ -175,6 +175,15 @@ describe('GET /api/data-lakes/:id/articles access-event audit (#1678)', () => {
     expect(h.record).not.toHaveBeenCalled();
   });
 
+  it('does not record an event when the search ran but found no files', async () => {
+    h.search.mockResolvedValue({ data: [], total: 0, hasMore: false });
+    const { res } = makeRes();
+
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);
+
+    expect(h.record).not.toHaveBeenCalled();
+  });
+
   it('still returns the response when the audit write rejects', async () => {
     h.search.mockResolvedValue({ data: [{ id: 'f1' }], total: 1, hasMore: false });
     h.record.mockRejectedValueOnce(new Error('mongo blip'));

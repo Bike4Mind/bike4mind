@@ -2,7 +2,7 @@ import type { ILakeAccessEventRepository, RecordLakeAccessEventInput } from '@bi
 import type { Logger } from '@bike4mind/observability';
 
 /**
- * Fire-and-forget write to the lake access audit trail (#1678). `record()` throws on failure (a
+ * Fire-and-forget write to the lake access audit trail. `record()` throws on failure (a
  * bad enum, a transient Mongo blip) - never await this from a caller whose own response must not
  * depend on the audit write succeeding. `recorder` is optional because several call sites receive
  * it as an optional DI adapter (see ToolContext['db'].lakeAccessEvents); a host that never wired

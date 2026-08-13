@@ -112,19 +112,22 @@ const handler = baseApi()
       }
     );
 
-    // Best-effort audit write (#1678) - the lake is already resolved, so no attribution needed.
-    dataLakeService.recordLakeAccessEvent(
-      lakeAccessEventRepository,
-      {
-        principalKind: 'user',
-        principalId: userId,
-        resolvedLakeIds: [dataLake.id],
-        fileIds: (result.data as Array<{ id: string }>).map(f => f.id),
-        surface: 'data-lake-articles',
-        ...(search ? { queryText: search } : {}),
-      },
-      req.logger
-    );
+    // Best-effort audit write, only when something was actually returned - an empty
+    // page reflects no lake content read. The lake is already resolved, so no attribution needed.
+    if (result.data.length > 0) {
+      dataLakeService.recordLakeAccessEvent(
+        lakeAccessEventRepository,
+        {
+          principalKind: 'user',
+          principalId: userId,
+          resolvedLakeIds: [dataLake.id],
+          fileIds: (result.data as Array<{ id: string }>).map(f => f.id),
+          surface: 'data-lake-articles',
+          ...(search ? { queryText: search } : {}),
+        },
+        req.logger
+      );
+    }
 
     return res.json({ data: result.data, total: result.total, hasMore: result.hasMore });
   });
