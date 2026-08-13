@@ -42,15 +42,16 @@ function callArgumentTexts(source: string): string[] {
   const calls: string[] = [];
   const needle = 'buildSharedTools(';
   for (let i = source.indexOf(needle); i !== -1; i = source.indexOf(needle, i + 1)) {
-    // Skip the declaration itself, import/re-export mentions, and prose (these modules cite
-    // `buildSharedTools()` in doc comments, a zero-arg match no real call produces). Matched against
-    // the text BEFORE the call only: testing the whole line would skip a real call site that merely
-    // happens to sit on one, e.g. `export const tools = buildSharedTools({...})`.
+    // Skip only the declaration itself and prose (these modules cite `buildSharedTools()` in doc
+    // comments, a zero-arg match no real call produces). Deliberately NO import/export skip: the
+    // needle requires an open paren, so an import specifier (`buildSharedTools,`) and a re-export
+    // (`export { buildSharedTools } from ...`) can never match it - while an `import`/`export`
+    // line-skip WOULD swallow a real call site of the shape
+    // `export function f() { return buildSharedTools({...}) }`.
     const lineStart = source.lastIndexOf('\n', i) + 1;
     const line = source.slice(lineStart, source.indexOf('\n', i));
     const beforeCall = source.slice(lineStart, i);
     if (/\bfunction\s+$/.test(beforeCall)) continue;
-    if (/^\s*(import|export)\b[^=]*$/.test(beforeCall)) continue;
     if (/^\s*(\*|\/\/)/.test(line)) continue;
     if (source.startsWith('buildSharedTools()', i)) continue;
 
