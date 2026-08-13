@@ -113,12 +113,19 @@ async function enrichOrDegrade<T>(
   }
 }
 
-/** Member ids the rendered text actually mentions. */
+/**
+ * Member ids the rendered text actually mentions, across BOTH mention forms the
+ * renderer emits: `<@U.../W...>` for users and `<!subteam^S...>` for user groups.
+ *
+ * Bounds match MEMBER_ID_PATTERN in identityLookup (`{6,}`) so a stray short token can
+ * never be handed to the name-lookup port. Whether a concrete adapter can resolve a
+ * given id (users.info cannot resolve a group) is the adapter's concern, not this
+ * extractor's - the port is an abstraction.
+ */
 function mentionedMemberIds(text: string): ChatMemberId[] {
   const found = new Set<ChatMemberId>();
-  for (const match of text.matchAll(/<@([UWS][A-Z0-9]+)>/g)) {
-    found.add(match[1]);
-  }
+  for (const match of text.matchAll(/<@([UW][A-Z0-9]{6,})>/g)) found.add(match[1]);
+  for (const match of text.matchAll(/<!subteam\^(S[A-Z0-9]{6,})>/g)) found.add(match[1]);
   return [...found];
 }
 

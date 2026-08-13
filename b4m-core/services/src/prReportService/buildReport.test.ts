@@ -64,7 +64,7 @@ describe('buildReport - role roster gating', () => {
       pr({ number: 2, labels: ['awaiting review'], requestedReviewerLogins: ['wescarda'] }),
     ]);
 
-    expect(text).not.toContain('<@S0REVIEWERS>');
+    expect(text).not.toContain('<!subteam^S0REVIEWERS>');
     // The specifically-responsible person is still tagged, via the roster path.
     expect(text).toContain('<@U0WESCARD>');
   });
@@ -75,13 +75,16 @@ describe('buildReport - role roster gating', () => {
       pr({ number: 2, labels: ['awaiting review'], requestedReviewerLogins: [] }),
     ]);
 
-    expect(text).toContain('<@S0REVIEWERS>');
+    // The subteam form is what actually notifies the group; a bare `<@S...>` renders as
+    // inert text and would ping nobody - the exact failure this pins.
+    expect(text).toContain('<!subteam^S0REVIEWERS>');
+    expect(text).not.toContain('<@S0REVIEWERS>');
   });
 
   it('tags the devops pool independently of the general reviewer pool', () => {
     const text = render([pr({ labels: ['devops'], requestedReviewerLogins: [] })]);
-    expect(text).toContain('<@S0DEVOPS11>');
-    expect(text).not.toContain('<@S0REVIEWERS>');
+    expect(text).toContain('<!subteam^S0DEVOPS11>');
+    expect(text).not.toContain('<!subteam^S0REVIEWERS>');
   });
 
   it('omits the roster rather than rendering a broken mention when the roleKey is unmapped', () => {
@@ -123,7 +126,7 @@ describe('buildReport - role roster gating', () => {
         QA_ROSTER_SPECS
       );
 
-      expect(text).not.toContain('<@S0QAPOOL11>');
+      expect(text).not.toContain('<!subteam^S0QAPOOL11>');
       expect(text).toContain('<@U0QAPERS1>');
     });
 
@@ -140,7 +143,7 @@ describe('buildReport - role roster gating', () => {
         QA_ROSTER_SPECS
       );
 
-      expect(text).toContain('<@S0QAPOOL11>');
+      expect(text).toContain('<!subteam^S0QAPOOL11>');
     });
 
     it('would be permanently open on the reviewer field - the bug this config avoids', () => {
@@ -162,7 +165,7 @@ describe('buildReport - role roster gating', () => {
         REVIEWER_GATED
       );
 
-      expect(text).toContain('<@S0QAPOOL11>');
+      expect(text).toContain('<!subteam^S0QAPOOL11>');
     });
   });
 });

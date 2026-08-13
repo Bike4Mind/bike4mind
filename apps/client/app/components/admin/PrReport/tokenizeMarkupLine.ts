@@ -23,8 +23,11 @@ import type { MarkupToken } from '@bike4mind/services';
  */
 const TOKEN_PATTERN = new RegExp(
   [
-    // Mention: <@U01ABCDEF>
-    '<@(?<memberId>[UWS][A-Z0-9]+)>',
+    // User mention: <@U01ABCDEF> (U/W only; a group renders via the subteam form below,
+    // and a bare <@S...> is inert text in Slack, so it is deliberately NOT a mention).
+    '<@(?<memberId>[UW][A-Z0-9]{6,})>',
+    // Group mention: <!subteam^S01ABCDEF>
+    '<!subteam\\^(?<subteam>S[A-Z0-9]{6,})>',
     // Link: <https://…|label>
     '<(?<url>[^|>\\s]+)\\|(?<label>[^>]*)>',
     // Bold: *text*
@@ -70,8 +73,20 @@ export function tokenizeMarkupLine(line: string, mentionNames: Record<string, st
 
     if (groups.memberId) {
       tokens.push({ kind: 'mention', name: mentionNames[groups.memberId] ?? groups.memberId });
+    } else if (groups.subteam) {
+      // A user-group ping. users.info cannot resolve a group id, so mentionNames rarely
+      // carries a name here - the raw id is the honest fallback, exactly as for a user.
+      tokens.push({ kind: 'mention', name: mentionNames[groups.subteam] ?? groups.subteam });
     } else if (groups.url !== undefined) {
-      tokens.push({ kind: 'link', url: unescape(groups.url), label: unescape(groups.label ?? '') });
+      const url = unescape(groups.url);
+      // Defense-in-depth: only http(s) becomes a live link. Server text never carries
+      // another scheme, but this preview also renders admin-edited text, so a pasted
+      // `<javascript:...|label>` must render as inert text rather than a clickable link.
+      if (/^https?:\/\//i.test(url)) {
+        tokens.push({ kind: 'link', url, label: unescape(groups.label ?? '') });
+      } else {
+        pushText(tokens, groups.label ?? '');
+      }
     } else if (groups.bold !== undefined) {
       tokens.push({ kind: 'bold', text: unescape(groups.bold) });
     } else if (groups.italic !== undefined) {

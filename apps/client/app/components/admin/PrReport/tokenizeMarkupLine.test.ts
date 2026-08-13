@@ -23,6 +23,30 @@ describe('tokenizeMarkupLine - the constructs the renderer emits', () => {
     ]);
   });
 
+  it('resolves a user-group (subteam) mention', () => {
+    // The subteam form is how a group actually gets pinged; the preview must show it as
+    // a mention, not leave the raw `<!subteam^...>` markup on screen.
+    expect(tokenizeMarkupLine('review pool <!subteam^S0REVIEWERS>', NAMES)).toEqual([
+      { kind: 'text', text: 'review pool ' },
+      { kind: 'mention', name: 'Reviewers' },
+    ]);
+  });
+
+  it('falls back to the raw group id when the name is unknown', () => {
+    expect(tokenizeMarkupLine('<!subteam^S0UNKNOWN>', {})).toEqual([{ kind: 'mention', name: 'S0UNKNOWN' }]);
+  });
+
+  it('does not treat a bare <@S...> group id as a notifying mention', () => {
+    // Slack renders <@S...> as inert text, so the preview must not imply it pings.
+    const tokens = tokenizeMarkupLine('<@S0REVIEWERS>', NAMES);
+    expect(tokens.every(token => token.kind === 'text')).toBe(true);
+  });
+
+  it('renders a non-http(s) link target as inert text, never a clickable link', () => {
+    // Defense-in-depth against admin-pasted `javascript:` (self-XSS on the admin route).
+    expect(tokenizeMarkupLine('<javascript:alert(1)|Merge me>', NAMES)).toEqual([{ kind: 'text', text: 'Merge me' }]);
+  });
+
   it('reads bold and italic', () => {
     expect(tokenizeMarkupLine('*Awaiting review*', NAMES)).toEqual([{ kind: 'bold', text: 'Awaiting review' }]);
     expect(tokenizeMarkupLine('_standard_', NAMES)).toEqual([{ kind: 'italic', text: 'standard' }]);

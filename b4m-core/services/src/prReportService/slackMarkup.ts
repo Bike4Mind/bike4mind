@@ -23,8 +23,17 @@ export function escapeSlackText(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-/** A mention that actually notifies. `memberId` must be a real Slack member id. */
+/**
+ * A mention that actually notifies. `memberId` must be a real Slack member id.
+ *
+ * The id prefix is the discriminator (see MEMBER_ID_PATTERN in identityLookup): `U`/`W`
+ * are users, `S` is a user group. Slack notifies a group ONLY through the subteam form -
+ * `<@S...>` renders as inert text and pings nobody, which would silently defeat the
+ * whole role-roster gate. Ids are normalized upper-case by the parser, so a bare `S`
+ * check is sufficient.
+ */
 export function slackMention(memberId: string): string {
+  if (memberId.startsWith('S')) return `<!subteam^${memberId}>`;
   return `<@${memberId}>`;
 }
 

@@ -192,7 +192,13 @@ export function createFetchChatMemberNames(logger: Logger, token: string | null 
     const names: Record<ChatMemberId, string> = {};
     let degraded = false;
 
-    const queue = [...memberIds];
+    // User groups (S...) are pinged via the subteam form but cannot be resolved by
+    // users.info; querying one risks a spurious error that would falsely mark the whole
+    // lookup degraded. Resolving group display names needs usergroups.list (deferred), so
+    // group mentions render with their raw id in the preview - honest, like an unmapped
+    // user. Filtering here, not in the core extractor, keeps that knowledge with the
+    // adapter that actually calls users.info.
+    const queue = memberIds.filter(id => !id.startsWith('S'));
     const workers = Array.from({ length: Math.min(MEMBER_LOOKUP_CONCURRENCY, queue.length) }, async () => {
       for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
         try {

@@ -150,8 +150,11 @@ export function buildReport(
 
   // Header. When the list was truncated the count is a floor, and the header says
   // so rather than printing a total it cannot stand behind.
+  // The `+` only makes sense when at least one PR came back; upstream invariants keep
+  // truncated-with-zero from happening, but the label should not read "0+" if drift ever
+  // does.
   const countLabel = warnings.openPrListTruncated
-    ? `${prs.length}+ open PRs (list truncated)`
+    ? `${prs.length}${prs.length > 0 ? '+' : ''} open PRs (list truncated)`
     : `${prs.length} open PR${prs.length === 1 ? '' : 's'}`;
   blocks.push(`${slackBold('PR Status Digest')} - ${escapeSlackText(formatHeaderDate(now, timeZone))}\n${countLabel}`);
 
