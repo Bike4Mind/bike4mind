@@ -52,7 +52,7 @@ async function rescueUnchunkedFiles(): Promise<number> {
 
   const cutoff = new Date(Date.now() - CHUNK_SCAN_MIN_AGE_MS);
   const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff))
-    .select('_id userId')
+    .select('_id userId batchId')
     .limit(CHUNK_RESCUE_MAX_PER_RUN)
     .lean();
 
@@ -60,10 +60,10 @@ async function rescueUnchunkedFiles(): Promise<number> {
     await sendToQueue(Resource.fabFileChunkQueue.url, {
       fabFileId: String(file._id),
       userId: file.userId,
-      // This is a background sweep, not a user upload, so it is haltable by the convergence kill
-      // switch (#1676). A global sweep across all lakes carries no lakeId, so only the platform
-      // switch pauses it - a per-lake pause never blocks it.
-      origin: CONVERGENCE_ORIGIN,
+      // Only a data-lake file (has a batch) is convergence work the kill switch may halt (#1676).
+      // A plain upload rescued after a lost S3 event is user work - it must always run (#1420), so
+      // it carries no origin. No lakeId either: this global sweep is gated by the platform switch.
+      ...(file.batchId ? { origin: CONVERGENCE_ORIGIN } : {}),
     });
   }
   return candidates.length;

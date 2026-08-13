@@ -50,10 +50,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = event.Records[0].body;
   const { fabFileId, userId, chunkSize, origin, lakeId } = ChunkFabFilePayload.parse(JSON.parse(body));
 
+  logger.updateMetadata({ fabFileId, userId });
+
   // Convergence kill switch (#1676): re-check inside the SHARED handler so a paused switch stops
-  // background work already on the queue, not just the next scheduling pass. Gated before any DB
-  // read so a user upload (origin absent) pays nothing. Returning drops the message; the file stays
-  // un-chunked until convergence is re-triggered - the intended "halt", never a lost user upload.
+  // background work already on the queue. Gated before any DB read, so a user upload (origin absent)
+  // short-circuits with zero I/O. Returning drops the message; the file stays un-chunked (chunkCount
+  // 0), so the rescue sweep re-selects it once convergence resumes - never a lost user upload.
   if (
     await isConvergenceHalted(
       { origin, lakeId },
@@ -75,11 +77,6 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
   const user = await User.findById(userId);
   if (!user) throw new Error(`User not found for userId: ${userId}`);
-
-  logger.updateMetadata({
-    fabFileId,
-    userId,
-  });
 
   logger.log('====================================');
   logger.log(`Started chunk queue handler for fabFileId: ${fabFileId}`);

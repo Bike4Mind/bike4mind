@@ -163,8 +163,8 @@ describe('dataLakeBatchReconcile cron handler', () => {
         select: () => ({
           limit: () => ({
             lean: async () => [
-              { _id: 'ff1', userId: 'u1' },
-              { _id: 'ff2', userId: 'u2' },
+              { _id: 'ff1', userId: 'u1' }, // plain upload, no lake batch
+              { _id: 'ff2', userId: 'u2', batchId: 'batch-9' }, // data-lake file
             ],
           }),
         }),
@@ -173,13 +173,13 @@ describe('dataLakeBatchReconcile cron handler', () => {
       const res = await handler();
 
       expect(h.sendToQueue).toHaveBeenCalledTimes(2);
-      // The rescue sweep is background work, so each message carries convergence provenance (#1676)
-      // and is haltable by the kill switch; a global sweep carries no lakeId (platform switch only).
+      // A plain lost-webhook upload (no batch) is user work - it must always run, so no origin (#1676).
       expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
         fabFileId: 'ff1',
         userId: 'u1',
-        origin: 'convergence',
       });
+      // A data-lake file (has a batch) is convergence work, haltable by the kill switch; a global
+      // sweep carries no lakeId (platform switch only).
       expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
         fabFileId: 'ff2',
         userId: 'u2',

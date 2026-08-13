@@ -18,11 +18,10 @@ export const WorkOriginSchema = z.enum(WORK_ORIGINS);
 export const CONVERGENCE_ORIGIN: WorkOrigin = 'convergence';
 
 /**
- * Provenance fields shared by the chunk and vectorize SQS payloads. Spread into both schemas so
- * they cannot drift. `origin` fails soft to undefined (treated as `user`): a message with a missing
- * or malformed origin defaults to "user work, never halted" - mis-halting a customer upload is the
- * exact trap this feature exists to avoid, so we only ever halt work EXPLICITLY tagged convergence.
- * `lakeId`, when present, is the lake a per-lake pause is keyed to (absent for a global sweep).
+ * Provenance fields shared by the chunk and vectorize SQS payloads. Spread into both so they can't
+ * drift. `origin` fails soft to undefined (`.catch`) => treated as `user` => never halted: only work
+ * EXPLICITLY tagged convergence is haltable, so a missing/malformed origin can't strand a user
+ * upload. `lakeId` keys a per-lake pause (absent for a global sweep).
  */
 export const provenancePayloadShape = {
   origin: WorkOriginSchema.optional().catch(undefined),
