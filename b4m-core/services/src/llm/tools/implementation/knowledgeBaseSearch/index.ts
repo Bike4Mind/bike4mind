@@ -32,16 +32,13 @@ import {
   fileScopedSemanticSearch,
   semanticDataLakeSearch,
   SemanticChunkResult,
-  type SemanticSearchBudgets,
   type SemanticSearchScanAccounting,
 } from '../../../../dataLakeService/semanticDataLakeSearch';
-import { resolveSearchBudgets } from '../../../../dataLakeService/resolveSearchBudgets';
+import { resolveSearchBudgets, type ResolvedSearchBudgets } from '../../../../dataLakeService/resolveSearchBudgets';
 import { openSearchChunkAdapter } from '../../../../dataLakeService/openSearchChunkAdapter';
 import { getEffectiveLLMApiKeys } from '../../../../apiKeyService';
 import { recordOperationalUsage } from '../../../../billing';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
-
-const CHUNK_TEXT_CAP = 1200;
 
 // One tiktoken tokenizer for the whole module: KB search fires up to 3x per turn on
 // the hot chat path, and a fresh tokenizer would throw away its encoder cache each call.
@@ -62,21 +59,52 @@ function prettyFileName(fn: string): string {
 }
 
 /**
+ * Cut to a budget without splitting a character. `slice` counts UTF-16 code units, so a cut at an
+ * arbitrary index can land between the halves of a surrogate pair (emoji, supplementary-plane CJK)
+ * and emit a lone surrogate - a corrupted final character in the text the model reads, and one that
+ * survives into anything quoting the passage back. Dropping the orphaned half costs one character of
+ * an already-truncated passage.
+ */
+function clipToCodePointBoundary(text: string, maxChars: number): string {
+  const sliced = text.slice(0, maxChars);
+  const last = sliced.charCodeAt(sliced.length - 1);
+  const endsOnOrphanedHighSurrogate = last >= 0xd800 && last <= 0xdbff;
+  return endsOnOrphanedHighSurrogate ? sliced.slice(0, -1) : sliced;
+}
+
+/**
  * Format semantic passages WITH their content so the model can answer without retrieving.
  *
  * Passage text is untrusted: a lake can serve content its owner did not author (a shared source
  * folder, research-driven acquisition), so every passage rides inside the delimited block and has
  * its line-initial markers defanged. Our own framing - the notices below and the preamble - stays
  * OUTSIDE the block at column 0, which is what makes the two distinguishable.
+ *
+ * `maxChunkChars` comes from resolveSearchBudgets, which derives it from the chunk-size policy. It is
+ * not a constant here on purpose: a serve cap set independently of the chunk size WILL disagree with
+ * it, and the disagreement is invisible - every full-size passage arrives pre-truncated and the model
+ * answers from a fraction of what the lake stores. Clipping now only fires on chunks larger than the
+ * current policy would produce (legacy content from a coarser chunker), and says so when it does.
  */
 function formatSemanticResults(
   results: SemanticChunkResult[],
+  maxChunkChars: number,
   scan?: SemanticSearchScanAccounting,
-  skipNotice?: string | null
+  skipNotice?: string | null,
+  logger?: Logger
 ): string {
+  let clippedCount = 0;
+  let longestChars = 0;
   const blocks = results.map((r, i) => {
+    // Measured AFTER trim on purpose: the budget governs what this function emits, and the trimmed
+    // string is what it emits. A padded chunk that fits once trimmed is served whole, correctly.
     const text = r.chunkText.trim();
-    const clipped = text.length > CHUNK_TEXT_CAP ? `${text.slice(0, CHUNK_TEXT_CAP)}…` : text;
+    longestChars = Math.max(longestChars, text.length);
+    // Clip BEFORE defanging, never after: defang indents line-initial markers, so slicing the
+    // defanged string would spend part of the content budget on the defense itself.
+    const overBudget = text.length > maxChunkChars;
+    if (overBudget) clippedCount++;
+    const clipped = overBudget ? `${clipToCodePointBoundary(text, maxChunkChars)}\u2026` : text;
     // The file name is content-adjacent and equally attacker-influenced: without toContentLabel a
     // crafted name carries a newline plus a forged marker into the label line.
     return (
@@ -84,6 +112,15 @@ function formatSemanticResults(
       defangRetrievedContent(clipped)
     );
   });
+  // One line per call, not per passage: this runs on the hot chat path up to MAX_SEARCHES times a
+  // turn. Silence here was the reason a lake could deliver a fraction of its content indefinitely
+  // without anything to grep for, so the counts and the longest passage are both named.
+  if (clippedCount > 0) {
+    logger?.warn(
+      `📚 [semantic] clipped ${clippedCount}/${results.length} passage(s) at ${maxChunkChars} chars ` +
+        `(longest ${longestChars}); these chunks exceed the current chunk policy and should be reprocessed`
+    );
+  }
   // A truncated scan ranked only part of the corpus. Say so, or the model will read "no further
   // matches" into what is really "we stopped looking" and assert the library holds nothing else.
   // filesScanned + annFilesQueried, not filesScanned alone: an Atlas-served file was searched too,
@@ -91,9 +128,23 @@ function formatSemanticResults(
   const partial = scan?.truncated
     ? `NOTE: this search covered only ${scan.filesScanned + scan.annFilesQueried} of ${scan.filesMatching} documents (a scan budget was reached), so these passages may be incomplete. Do not state or imply the knowledge base has nothing further on this topic.\n\n`
     : '';
+  // Distinct from the note above: that one says how much of the corpus was reached, this says that a
+  // passage which WAS reached arrived incomplete. Composed here at column 0, deliberately outside the
+  // untrusted block - inside it, defangRetrievedContent would indent our own notice.
+  const clippedScope =
+    clippedCount === results.length
+      ? results.length === 1
+        ? 'The passage'
+        : `All ${results.length} passages`
+      : `${clippedCount} of the ${results.length} passages`;
+  const truncated =
+    clippedCount > 0
+      ? `NOTE: ${clippedScope} below ${clippedCount === 1 ? 'was' : 'were'} truncated at ${maxChunkChars} characters, so ${clippedCount === 1 ? 'it shows' : 'each shows'} only its opening. Do not treat a truncated passage as the document's full content; call retrieve_knowledge_content for the rest of a file you need to quote or reason over precisely.\n\n`
+      : '';
   return (
     formatSkipNotice(skipNotice) +
     partial +
+    truncated +
     `Found ${results.length} relevant passage(s) in the knowledge base — the content is included below, so answer directly and only call retrieve_knowledge_content if you need MORE detail from a specific file:\n\n` +
     `${GROUNDED_NO_INVENTION_RULE}\n\n` +
     renderRetrievedContentBlock(blocks)
@@ -121,7 +172,7 @@ async function resolveEmbeddingContext(context: ToolContext): Promise<{
   embeddingModel: SupportedEmbeddingModel;
   provider: string;
   apiKeyTable: Awaited<ReturnType<typeof getEffectiveLLMApiKeys>>;
-  budgets: SemanticSearchBudgets;
+  budgets: ResolvedSearchBudgets;
   vectorSearchEnabled: boolean;
 } | null> {
   const adminSettings = context.db.adminSettings;
@@ -295,10 +346,13 @@ interface SemanticArmResult {
   output: string | null;
   skipNotice: string | null;
   datalakeTags: string[];
+  /** Files this arm actually matched, for attachmentInlineNotice - see its call site. Empty
+   *  whenever `output` is null (nothing matched, or the arm never ran). */
+  fileHits: Array<{ id: string; fileName: string }>;
 }
 
 /** Nothing to report: dependency missing, no accessible corpus, or the arm threw. */
-const NO_SEMANTIC_RESULT: SemanticArmResult = { output: null, skipNotice: null, datalakeTags: [] };
+const NO_SEMANTIC_RESULT: SemanticArmResult = { output: null, skipNotice: null, datalakeTags: [], fileHits: [] };
 
 /**
  * Semantic-first KB search: embed the query and cosine-rank against the pre-computed chunk
@@ -360,7 +414,7 @@ async function trySemanticKbSearch(
 
     const skipNotice = describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
     // No hits: the keyword arm answers, but it has to carry the notice with it.
-    if (search.results.length === 0) return { output: null, skipNotice, datalakeTags: [] };
+    if (search.results.length === 0) return { output: null, skipNotice, datalakeTags: [], fileHits: [] };
 
     // Honor the max_results contract: topK fetches a wider pool (≥6) so cosine ranking has
     // candidates, but we return at most maxResults passages - parity with the keyword path's
@@ -374,9 +428,10 @@ async function trySemanticKbSearch(
 
     // Provenance for retrieval-scoped lake-prompt injection: which lakes these passages came from.
     return {
-      output: formatSemanticResults(ranked, search.scan, skipNotice),
+      output: formatSemanticResults(ranked, budgets.maxChunkChars, search.scan, skipNotice, context.logger),
       skipNotice,
       datalakeTags: datalakeTagsFrom(ranked.flatMap(r => r.fileTags)),
+      fileHits: ranked.map(r => ({ id: r.fileId, fileName: r.fileName })),
     };
   } catch (err) {
     context.logger.warn('📚 [semantic] KB search failed, falling back to keyword:', err);
@@ -430,13 +485,18 @@ async function tryScopedSemanticKbSearch(
     await recordAllEmbeddingUsage(context, query, embeddingModel, provider, search.alternateModelsEmbedded ?? []);
 
     const skipNotice = describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
-    if (search.results.length === 0) return { output: null, skipNotice, datalakeTags: [] };
+    if (search.results.length === 0) return { output: null, skipNotice, datalakeTags: [], fileHits: [] };
 
     const ranked = search.results.slice(0, maxResults);
     await emitSemanticCitables(context, ranked, "this agent's knowledge base", skipNotice);
     // Agent-scoped results never carry a lake prompt: this arm must not consult owner-wide access
     // or imply a wider corpus, so its provenance is intentionally empty (no injection downstream).
-    return { output: formatSemanticResults(ranked, search.scan, skipNotice), skipNotice, datalakeTags: [] };
+    return {
+      output: formatSemanticResults(ranked, budgets.maxChunkChars, search.scan, skipNotice, context.logger),
+      skipNotice,
+      datalakeTags: [],
+      fileHits: ranked.map(r => ({ id: r.fileId, fileName: r.fileName })),
+    };
   } catch (err) {
     context.logger.warn('📚 [semantic] scoped KB search failed, falling back to scoped keyword:', err);
     return NO_SEMANTIC_RESULT;
@@ -483,6 +543,80 @@ function formatSearchResults(files: IFabFileDocument[]): string {
   );
 }
 
+/**
+ * Extra note when the session has an attachment still chunking, so the model does not read a
+ * zero/near-zero result as "this file is inaccessible" when its raw content is already inlined
+ * elsewhere in the prompt (see ToolContext.inlinedAttachmentIds). Two shapes:
+ *  - zero hits at all: the attachment may not be findable by search yet, but is already above.
+ *  - a hit IS an inlined attachment: heads off a follow-up retrieve_knowledge_content call that
+ *    would just return the same "not indexed yet" result for content the model already has -
+ *    but only when the WHOLE file is above (ToolContext.fullyInlinedAttachmentIds). A file that
+ *    is merely inlined can still be a cosine excerpt or a truncated head (#1163 review), so
+ *    telling the model it never needs retrieval for that file would suppress the one path that
+ *    can fetch the rest of it.
+ * Returns '' when there is nothing to add, so an unpopulated context (agent/embed surfaces) is a
+ * byte-identical no-op.
+ */
+function attachmentInlineNotice(context: ToolContext, rankedResults: Array<{ id: string; fileName: string }>): string {
+  const inlined = context.inlinedAttachmentIds;
+  if (!inlined?.length) return '';
+  const fullyInlined = new Set(context.fullyInlinedAttachmentIds ?? []);
+
+  if (rankedResults.length === 0) {
+    // Hedged ("may") rather than asserted: deferral to retrieval is the exception
+    // (resolveCorpusInlinePlan, lake access + a large corpus), so most inlined attachments here
+    // are ordinary, fully-searchable files where a zero-hit result just means the query missed -
+    // not that the file is unsearchable. Matches the sibling wording in knowledgeBaseRetrieve.
+    const fullyInlinedIds = inlined.filter(id => fullyInlined.has(id));
+    const partialIds = inlined.filter(id => !fullyInlined.has(id));
+    const parts: string[] = [];
+    if (fullyInlinedIds.length > 0) {
+      parts.push(
+        `${fullyInlinedIds.length} file(s) attached to this conversation may not be indexed for search yet, ` +
+          `so they may not be found through this tool. Their content was already included directly in the ` +
+          `conversation above - answer from that rather than telling the user the attachment is inaccessible.`
+      );
+    }
+    if (partialIds.length > 0) {
+      parts.push(
+        `${partialIds.length} file(s) attached to this conversation may not be indexed for search yet, so ` +
+          `they may not be found through this tool. PART of their content was already included directly in ` +
+          `the conversation above, but what is shown may be an excerpt or a truncated head - answer from ` +
+          `that if it covers the question, but do not assume it is the whole document.`
+      );
+    }
+    return `\n\nNOTE: ${parts.join(' ')}`;
+  }
+
+  // Deduped by id: the semantic arm's rankedResults is per-PASSAGE, so a top-K result can carry
+  // several chunks from the same inlined file and would otherwise repeat its name in the notice.
+  const inlinedHits = Array.from(
+    new Map(rankedResults.filter(f => inlined.includes(f.id)).map(f => [f.id, f])).values()
+  );
+  if (inlinedHits.length === 0) return '';
+
+  const fullHits = inlinedHits.filter(f => fullyInlined.has(f.id));
+  const partialHits = inlinedHits.filter(f => !fullyInlined.has(f.id));
+  const parts: string[] = [];
+  if (fullHits.length > 0) {
+    const names = fullHits.map(f => `"${f.fileName}"`).join(', ');
+    parts.push(
+      `${names} are attached to this conversation and their content is already included above - ` +
+        `you do not need retrieve_knowledge_content for them (it may return nothing while indexing ` +
+        `is still in progress).`
+    );
+  }
+  if (partialHits.length > 0) {
+    const names = partialHits.map(f => `"${f.fileName}"`).join(', ');
+    parts.push(
+      `${names} are attached to this conversation and part of their content is already included ` +
+        `above, but what is shown may be an excerpt or a truncated head - retrieve_knowledge_content ` +
+        `may still surface additional passages from them.`
+    );
+  }
+  return `\n\nNOTE: ${parts.join(' ')}`;
+}
+
 export const knowledgeBaseSearchTool: ToolDefinition = {
   name: 'search_knowledge_base',
   implementation: context => {
@@ -509,6 +643,9 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           context.logger.log(
             `📚 Knowledge Base Search: call #${searchCallCount} — capped, instructing model to answer`
           );
+          // No attachmentInlineNotice here: by this point real searches have already run and may
+          // have found hits, so a hardcoded empty-results notice would wrongly claim attachments
+          // "are not indexed for search yet" and cast doubt on passages already surfaced above.
           return (
             `You have already run ${searchCallCount - 1} knowledge-base searches; the relevant passages are in the conversation above. ` +
             `STOP searching and compose your complete answer NOW from those results. Do NOT call search_knowledge_base ` +
@@ -528,6 +665,9 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
         // the generic no-results message before either arm runs, never fall back owner-wide.
         const scope = context.kbScope;
         if (scope && scope.fileIds.length === 0) {
+          // Deliberately untouched even if inlinedAttachmentIds were ever set here: an
+          // empty-scope agent surface must read as a pure "nothing in scope" early return, not
+          // acquire new behavior tied to a signal this surface was never designed to receive.
           return formatSearchResults([]);
         }
 
@@ -545,8 +685,15 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
         // enters later via retrieve_knowledge_content, which injects there. Test .output, not the
         // object: the arm always resolves to a truthy result now, so `if (semantic)` would swallow
         // the keyword fallback entirely.
-        if (semantic.output)
-          return prependRetrievedLakePrompts(context, semantic.output, semantic.datalakeTags, injectedLakeTags);
+        if (semantic.output) {
+          const withLakePrompts = await prependRetrievedLakePrompts(
+            context,
+            semantic.output,
+            semantic.datalakeTags,
+            injectedLakeTags
+          );
+          return withLakePrompts + attachmentInlineNotice(context, semantic.fileHits);
+        }
 
         try {
           let searchResults;
@@ -719,7 +866,11 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             );
           }
 
-          return formatSearchResults(rankedResults) + formatSkipNotice(semantic.skipNotice);
+          return (
+            formatSearchResults(rankedResults) +
+            formatSkipNotice(semantic.skipNotice) +
+            attachmentInlineNotice(context, rankedResults)
+          );
         } catch (error) {
           context.logger.error('❌ Knowledge Base Search: Error during search:', error);
           return 'An error occurred while searching your knowledge base. Please try again.';

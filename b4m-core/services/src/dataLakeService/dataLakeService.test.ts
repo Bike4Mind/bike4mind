@@ -753,6 +753,7 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
     // The list itself, so adding a field to READER_LAKE_FIELDS is a deliberate edit here too.
     expect([...READER_LAKE_FIELDS].sort()).toEqual(
       [
+        'auditQueryTextEnabled',
         'createdAt',
         'createdByUserId',
         'datalakeTag',

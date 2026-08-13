@@ -32,6 +32,7 @@ export const READER_LAKE_FIELDS = [
   'requiredUserTag',
   'requiredEntitlement',
   'isPublic',
+  'auditQueryTextEnabled',
   'status',
   'fileCount',
   'totalSizeBytes',
@@ -73,6 +74,8 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   createdByUserId: 'reader',
   organizationId: 'reader',
   isPublic: 'reader',
+  // A reader whose questions may be logged should be able to see that the lake records them.
+  auditQueryTextEnabled: 'reader',
   status: 'reader',
   fileCount: 'reader',
   totalSizeBytes: 'reader',

@@ -9,6 +9,8 @@ import DataLakeManagerPanel from './DataLakeManagerPanel';
 
 // Archive resolves synchronously so the onSuccess (exit-to-root) wiring is exercised.
 const archiveMutate = vi.fn((_id: string, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
+// Same for the active-lake delete button, so its onSuccess (exit-to-root) wiring is exercised too.
+const deleteMutate = vi.fn((_id: string, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
 // Same for purge, so the confirm dialog's close-on-success wiring is exercised.
 const cleanupMutate = vi.fn((_id: string, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
 const useActiveDataLakeBatches = vi.fn(() => ({ data: [] as unknown[] }));
@@ -22,7 +24,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     useArchiveDataLake: () => ({ mutate: archiveMutate, isPending: false }),
     useUnarchiveDataLake: mutation,
     useRestoreDeletedDataLake: mutation,
-    usePermanentDeleteDataLake: mutation,
+    usePermanentDeleteDataLake: () => ({ mutate: deleteMutate, isPending: false }),
     useCleanupDataLake: () => ({ mutate: cleanupMutate, isPending: false }),
     useGetArchivedDataLakes: () => useGetArchivedDataLakes(),
     useGetDeletedDataLakes: () => useGetDeletedDataLakes(),
@@ -84,6 +86,11 @@ const lakeFiles = [
   // Tagged with "genre" itself, not a deeper child - "genre" is ALSO the parent of war/peace
   // above, so this file must stay reachable once genre has subfolders.
   { id: 'f5', fileName: 'genre-overview.md', tags: [{ name: 'lk:genre' }] },
+  // Bracket-prefixed source names, all under one leaf - group by category then title, not the
+  // raw leading "[" (which would put every one of these in the same "no signal" bucket).
+  { id: 'f6', fileName: '[Marketing] Zebra Plan.md', tags: [{ name: 'lk:briefs:x' }] },
+  { id: 'f7', fileName: '[Marketing] Apple Plan.md', tags: [{ name: 'lk:briefs:x' }] },
+  { id: 'f8', fileName: '[Sales] Intro.md', tags: [{ name: 'lk:briefs:x' }] },
 ];
 
 const useGetDataLakes = vi.fn(() => ({ data: [] as unknown[], isLoading: false }));
@@ -164,6 +171,7 @@ beforeEach(() => {
   useGetDataLakes.mockReset();
   useGetDataLakes.mockReturnValue({ data: [mineLake, theirsLake], isLoading: false });
   archiveMutate.mockClear();
+  deleteMutate.mockClear();
   cleanupMutate.mockClear();
   useGetDeletedDataLakes.mockReset();
   useGetDeletedDataLakes.mockReturnValue({ data: undefined });
@@ -380,6 +388,20 @@ describe('DataLakeManagerPanel - lake navigation', () => {
     expect(screen.getByTestId('mock-article')).toHaveTextContent('genre-overview.md');
   });
 
+  it('sorts bracket-prefixed file names by category then title, not the raw leading "["', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-manager-node-briefs'));
+    await user.click(screen.getByTestId('datalake-manager-node-x'));
+
+    // Marketing group (Apple before Zebra within it) sorts before Sales - a raw-name sort would
+    // instead tiebreak on the shared "[" and give a different, meaningless order.
+    const fileRows = screen.getAllByTestId(/^datalake-manager-file-/).map(el => el.getAttribute('data-testid'));
+    expect(fileRows).toEqual(['datalake-manager-file-f7', 'datalake-manager-file-f6', 'datalake-manager-file-f8']);
+  });
+
   it('opens the Uncategorized bucket and lists the untagged file', async () => {
     const user = userEvent.setup();
     renderPanel();
@@ -428,7 +450,7 @@ describe('DataLakeManagerPanel - lake navigation', () => {
 });
 
 describe('DataLakeManagerPanel - management affordances gate on canManage', () => {
-  it('shows Add files / Settings / Archive on a lake the caller can manage', async () => {
+  it('shows Add files / Settings / Archive / Delete on a lake the caller can manage', async () => {
     const user = userEvent.setup();
     renderPanel();
 
@@ -437,9 +459,10 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     expect(screen.getByTestId('datalake-addfiles-btn-mine')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-settings-btn-mine')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-archive-btn-mine')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-delete-active-btn-mine')).toBeInTheDocument();
   });
 
-  it("hides all three on a lake the caller cannot manage (someone else's public lake)", async () => {
+  it("hides all four on a lake the caller cannot manage (someone else's public lake)", async () => {
     const user = userEvent.setup();
     renderPanel();
 
@@ -450,6 +473,7 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     expect(screen.queryByTestId('datalake-addfiles-btn-theirs')).toBeNull();
     expect(screen.queryByTestId('datalake-settings-btn-theirs')).toBeNull();
     expect(screen.queryByTestId('datalake-archive-btn-theirs')).toBeNull();
+    expect(screen.queryByTestId('datalake-delete-active-btn-theirs')).toBeNull();
   });
 
   it('archiving the active lake exits to the root overview (no re-entry on a later restore)', async () => {
@@ -462,6 +486,20 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     // The archive's onSuccess clears the active lake, so even though the mocked list still
     // contains 'mine', the panel is back at root - a restore later can't teleport back in.
     expect(archiveMutate).toHaveBeenCalledWith('mine', expect.objectContaining({ onSuccess: expect.any(Function) }));
+    expect(screen.queryByTestId('datalake-manager-lakeinfo')).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
+  });
+
+  it('deleting the active lake directly (skipping archive) exits to the root overview', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-delete-active-btn-mine'));
+
+    // Same lifecycle action the archived row's Delete button calls - deleteDataLake has no
+    // archived-status precondition, so this reaches the same recoverable soft-delete.
+    expect(deleteMutate).toHaveBeenCalledWith('mine', expect.objectContaining({ onSuccess: expect.any(Function) }));
     expect(screen.queryByTestId('datalake-manager-lakeinfo')).not.toBeInTheDocument();
     expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
   });
