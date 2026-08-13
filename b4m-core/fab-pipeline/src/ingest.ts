@@ -65,6 +65,32 @@ function isPdfUrl(url: string): boolean {
   return new URL(url).pathname.toLowerCase().endsWith('.pdf');
 }
 
+/**
+ * Strip embedded credentials before a URL is written to a log.
+ *
+ * `https://user:pass@host/doc` is a legitimate paste, and this function is reached from the Slack
+ * `@datalake add` path and the LLM URL-fetch path - both of which take URLs from whoever can type in
+ * a channel or a chat. The FETCH still uses the original URL; only what is recorded is redacted, and a
+ * log line outlives the message that produced it.
+ *
+ * MUST STAY IN SYNC with `sanitizeUrlForRecord` in `apps/client/server/slack/dataLakeLinkIngest.ts`,
+ * which does the same job for the PERSISTED provenance record. Deliberately duplicated rather than
+ * shared: exporting this would change `fab-pipeline`'s public surface, which its own `index.test.ts`
+ * pins as an explicit list of names.
+ */
+function redactUrlCredentials(raw: string): string {
+  try {
+    const parsed = new URL(raw);
+    if (!parsed.username && !parsed.password) return raw;
+    parsed.username = '';
+    parsed.password = '';
+    return parsed.toString();
+  } catch {
+    // Unparseable, so the credentials cannot be located to strip them. Log nothing rather than guess.
+    return '[unparseable url]';
+  }
+}
+
 /** Last path segment, used only as a display-name fallback when a page has no `<title>`. */
 function lastPathSegment(url: string): string {
   try {
@@ -157,9 +183,16 @@ export async function fetchAndParseURL(url: string, { logger }: { logger: Logger
     // Type decided from what we ACTUALLY received, not from the URL the caller passed: the server's
     // Content-Type when it states one, otherwise the FINAL url's extension. `currentUrl` is the
     // post-redirect address, so a chain that changes content type is classified correctly.
-    const contentType = String(response.headers?.['content-type'] ?? '');
+    const contentType = String(response.headers?.['content-type'] ?? '').toLowerCase();
+    // Generic-binary content types carry no format signal, so fall back to the URL extension the
+    // same way an absent Content-Type does - otherwise a .pdf served as application/octet-stream
+    // is decoded as text. That is how S3 objects stored without an explicit ContentType and
+    // `Content-Disposition: attachment` download links arrive, and treating them as text sent PDF
+    // bytes through `toString('utf8')` into garbage that then got chunked and vectorized.
+    const isGenericBinary =
+      !contentType || contentType.includes('application/octet-stream') || contentType.includes('binary/octet-stream');
     const urlMimeType =
-      contentType.includes('application/pdf') || (!contentType && isPdfUrl(currentUrl))
+      contentType.includes('application/pdf') || (isGenericBinary && isPdfUrl(currentUrl))
         ? 'application/pdf'
         : 'text/plain';
 
@@ -192,11 +225,17 @@ export async function fetchAndParseURL(url: string, { logger }: { logger: Logger
 
     // Both URLs when they differ: the pasted one is what the user recognises, the final one is what
     // was actually fetched and parsed. Logging only the former made a redirect invisible in the log.
-    const fetched = currentUrl === url ? url : `${url} -> ${currentUrl}`;
+    // Redacted because BOTH can carry credentials - and logging the pair widened that exposure, so the
+    // redaction has to cover the chain, not just the original.
+    const original = redactUrlCredentials(url);
+    const final = redactUrlCredentials(currentUrl);
+    const fetched = original === final ? original : `${original} -> ${final}`;
     logger.log(`Fetched ${title} with mimetype ${urlMimeType} and parsed ${fetched}`);
     return { title, textContent: urlContent, mimeType: urlMimeType, ext: mime.extension(urlMimeType) || null };
   } catch (error) {
-    logger.updateMetadata({ failedUrl: url });
+    // Redacted for the same reason as the success log: this metadata is attached to the log record, and
+    // a failure is exactly when a malformed credentialed URL is most likely to be the input.
+    logger.updateMetadata({ failedUrl: redactUrlCredentials(url) });
     logger.debug('Error fetching or parsing URL:', error);
     throw error;
   }
