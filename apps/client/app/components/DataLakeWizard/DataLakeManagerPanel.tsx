@@ -260,6 +260,11 @@ export default function DataLakeManagerPanel() {
               setPath([]);
               setSelectedFile(null);
             }}
+            onDeleted={() => {
+              setLakeId(null);
+              setPath([]);
+              setSelectedFile(null);
+            }}
           />
         )
       ) : managerTab === 'discover' ? (
@@ -1085,6 +1090,7 @@ function LakeInfoPanel({
   onOpenSettings,
   onReviewTaxonomy,
   onArchived,
+  onDeleted,
 }: {
   lake: ManagerLake;
   fileCount: number | undefined;
@@ -1097,9 +1103,14 @@ function LakeInfoPanel({
    *  derived activeLake re-binding to a lake that just left the list (and a later restore
    *  teleporting back in). */
   onArchived: () => void;
+  /** Same exit-to-root need as onArchived: a direct delete also removes the lake from the
+   *  active list, skipping the archive step entirely (the lifecycle 'delete' action has no
+   *  archived-status precondition). */
+  onDeleted: () => void;
 }) {
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
   const archiveLake = useArchiveDataLake();
+  const deleteLake = usePermanentDeleteDataLake();
   const startChatWithLake = useStartChatWithLake();
   const [startingChat, setStartingChat] = useState(false);
   const visibility = lake.isPublic ? 'Public' : lake.organizationId ? 'Organization' : 'Private';
@@ -1269,6 +1280,24 @@ function LakeInfoPanel({
             </Chip>
           )}
         </Box>
+        {lake.canManage && (
+          <Box sx={{ mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+            <Tooltip title="Delete (recoverable - restore from the Deleted section)" size="sm">
+              <Button
+                variant="outlined"
+                color="danger"
+                size="sm"
+                startDecorator={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
+                data-testid={`datalake-delete-active-btn-${lake.id}`}
+                loading={deleteLake.isPending}
+                onClick={() => deleteLake.mutate(lake.id, { onSuccess: onDeleted })}
+                sx={{ flexShrink: 0, fontSize: '13px' }}
+              >
+                Delete
+              </Button>
+            </Tooltip>
+          </Box>
+        )}
       </Box>
       <Box sx={{ ...TREE_SCROLL_SX, px: 3, py: 2 }}>
         {lake.description ? (
