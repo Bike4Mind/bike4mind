@@ -190,7 +190,10 @@ export async function fetchAndParseURL(url: string, { logger }: { logger: Logger
       urlContent = textContent || htmlContent;
     }
 
-    logger.log(`Fetched ${title} with mimetype ${urlMimeType} and parsed ${url}`);
+    // Both URLs when they differ: the pasted one is what the user recognises, the final one is what
+    // was actually fetched and parsed. Logging only the former made a redirect invisible in the log.
+    const fetched = currentUrl === url ? url : `${url} -> ${currentUrl}`;
+    logger.log(`Fetched ${title} with mimetype ${urlMimeType} and parsed ${fetched}`);
     return { title, textContent: urlContent, mimeType: urlMimeType, ext: mime.extension(urlMimeType) || null };
   } catch (error) {
     logger.updateMetadata({ failedUrl: url });
