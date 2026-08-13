@@ -112,7 +112,7 @@ describe('applyTaxonomySuggestions', () => {
 
     await expect(
       applyTaxonomySuggestions({ userId: 'stranger', isAdmin: false }, 'b1', [], adapters as any)
-    ).rejects.toThrow(/creator/i);
+    ).rejects.toThrow(/do not have permission to apply/i);
     expect(adapters.db.batches.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
   });
 

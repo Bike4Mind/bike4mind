@@ -43,6 +43,15 @@ vi.mock('@bike4mind/services', async () => ({
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   dataLakeRepository: {},
+  dataLakeAccessGrantRepository: {
+    listByLake: vi.fn().mockResolvedValue([]),
+    listActiveByLakes: vi.fn().mockResolvedValue([]),
+    listByPrincipal: vi.fn().mockResolvedValue([]),
+    findGrant: vi.fn().mockResolvedValue(null),
+    upsertGrant: vi.fn().mockResolvedValue({}),
+    removeGrant: vi.fn().mockResolvedValue(true),
+    removeAllForLake: vi.fn().mockResolvedValue(0),
+  },
   fabFileRepository: {},
   projectRepository: {},
   userRepository: { findById: vi.fn() },

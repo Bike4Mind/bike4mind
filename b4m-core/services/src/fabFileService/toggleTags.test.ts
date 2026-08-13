@@ -259,7 +259,9 @@ describe('toggleTags - data lake meta-tags', () => {
   it('refuses a lake the caller cannot manage', async () => {
     const adapters = makeAdapters([file('f1')], lake({ createdByUserId: 'someone-else' }));
 
-    await expect(run(adapters, { ids: ['f1'], tags: ['datalake:lake'] })).rejects.toThrow(/only the creator/i);
+    await expect(run(adapters, { ids: ['f1'], tags: ['datalake:lake'] })).rejects.toThrow(
+      /do not have permission to add/i
+    );
     expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
     // A rejected join must not still trigger recomputeLakeStats - that would let a mere file-share
     // recipient force-publish a draft lake they have no relationship to via activateIfDraft.
@@ -273,7 +275,9 @@ describe('toggleTags - data lake meta-tags', () => {
       lake({ createdByUserId: 'someone-else' })
     );
 
-    await expect(run(adapters, { ids: ['f1'], tags: ['datalake:lake'] })).rejects.toThrow(/only the creator/i);
+    await expect(run(adapters, { ids: ['f1'], tags: ['datalake:lake'] })).rejects.toThrow(
+      /do not have permission to remove/i
+    );
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
     expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
   });
@@ -415,7 +419,7 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
     adapters.db.users.findById = vi.fn().mockResolvedValue({ id: 'editor', isAdmin: false });
 
     await expect(runAs('editor', adapters, { ids: ['f1'], tags: ['lk:invoices'] })).rejects.toThrow(
-      /only the creator can remove/i
+      /do not have permission to remove/i
     );
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
     expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
@@ -430,7 +434,7 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
     adapters.db.users.findById = vi.fn().mockResolvedValue({ id: 'editor', isAdmin: false });
 
     await expect(runAs('editor', adapters, { ids: ['f1', 'f2'], tags: ['unrelated', 'lk:invoices'] })).rejects.toThrow(
-      /only the creator can remove/i
+      /do not have permission to remove/i
     );
     // f1's unrelated-tag toggle never ran either - the gate for the WHOLE batch fires up front.
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();

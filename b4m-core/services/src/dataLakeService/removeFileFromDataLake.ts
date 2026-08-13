@@ -1,12 +1,13 @@
-import type { IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
+import type { IDataLakeAccessGrantRepository, IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
-import { removeFileFromLake } from './lakeMembership';
+import { removeFileFromLake, type MembershipActor } from './lakeMembership';
 import { recomputeLakeStats } from './recomputeLakeStats';
 
 interface RemoveFileFromDataLakeAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats' | 'activateIfDraft'>;
     fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'>;
+    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
   };
 }
 
@@ -77,7 +78,7 @@ interface RemoveFileFromDataLakeAdapters {
  * it.
  */
 export const removeFileFromDataLake = async (
-  actor: { userId: string; isAdmin: boolean },
+  actor: MembershipActor,
   dataLakeId: string,
   fabFileId: string,
   { db }: RemoveFileFromDataLakeAdapters

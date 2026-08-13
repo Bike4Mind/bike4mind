@@ -2,6 +2,7 @@ import { sessionService, dataLakeService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
+  dataLakeAccessGrantRepository,
   dataLakeRepository,
   fabFileRepository,
   projectRepository,
@@ -46,7 +47,7 @@ const handler = baseApi().post(
     if (body.dataLakeId) {
       const ctx = await toAccessContext(req);
       const lake = await dataLakeService.assertLakeAccess(String(body.dataLakeId), ctx, {
-        db: { dataLakes: dataLakeRepository },
+        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
       });
       const lakeDefaults = sessionService.resolveLakeSessionDefaults(lake);
       createParams = { ...lakeDefaults, ...body } as CreateSessionRequestBody;

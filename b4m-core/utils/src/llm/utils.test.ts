@@ -1726,6 +1726,40 @@ describe('Context Management Tests', () => {
       });
     });
 
+    describe('priorToolNames', () => {
+      const makeToolCallItem = (n: number, names: string[]) =>
+        makeItem(n, { promptMeta: { functionCalls: names.map((name, i) => ({ id: `${n}-${i}`, name })) } });
+
+      it('collects tool names from promptMeta.functionCalls across the returned window', async () => {
+        // Item 4 is the current prompt (popped, per the newest-first/pop-current convention
+        // established above); history after pop = [1, 2, 3].
+        const items = [makeItem(4), makeToolCallItem(3, ['blog_draft']), makeToolCallItem(2, ['skill']), makeItem(1)];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(meta.priorToolNames).toEqual(['skill', 'blog_draft']);
+      });
+
+      it('returns an empty array when no turn recorded a function call', async () => {
+        const items = [makeItem(2), makeItem(1)];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(meta.priorToolNames).toEqual([]);
+      });
+
+      it('drops a call with no recorded name rather than pushing undefined', async () => {
+        const items = [makeItem(1, { promptMeta: { functionCalls: [{ id: 'x' }] } })];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(meta.priorToolNames).toEqual([]);
+      });
+    });
+
     // Priority 2 rebuilds tool_use/tool_result pairs from promptMeta.functionCalls when
     // structuredReplies is absent. It was unreachable for as long as the Mongoose subschema
     // dropped functionCalls[].id, so these pin the shape Anthropic requires.
@@ -3925,6 +3959,141 @@ describe('admin prompt templates', () => {
   // unadorned completion has to be able to reach it.
   it('omits the admin format template when the caller opts out', async () => {
     expect(carriesFormatTemplate(await build({ verbose: false, skipAdminPromptTemplates: true }))).toBe(false);
+  });
+});
+
+describe('buildAndSortMessages - injectedBlocks reporting', () => {
+  const findBlock = (blocks: Awaited<ReturnType<typeof buildAndSortMessages>>['injectedBlocks'], id: string) =>
+    blocks.find(b => b.id === id);
+
+  it('reports both blocks injected and delivered when triggered on a normal turn', async () => {
+    const settings = { UseFormatPrompt: 'true', FormatPromptTemplate: 'Formatting only.', UseImagePrompt: 'true' };
+    const { messages, injectedBlocks } = await buildAndSortMessages(
+      [],
+      [],
+      [{ role: 'user', content: 'draw me a picture of a cat' }],
+      100000,
+      settings,
+      0,
+      mockLogger as any,
+      createMockTokenizer(),
+      { verbose: false, imageGenerationAvailable: true }
+    );
+
+    const format = findBlock(injectedBlocks, 'formatPrompt');
+    const image = findBlock(injectedBlocks, 'imagePrompt');
+    expect(format).toEqual({ id: 'formatPrompt', injected: true, delivered: true, content: 'Formatting only.' });
+    expect(image?.injected).toBe(true);
+    expect(image?.delivered).toBe(true);
+    // Read back off the same messages the model actually received, not re-derived.
+    expect(messages.some(m => m.content === format?.content)).toBe(true);
+    expect(messages.some(m => m.content === image?.content)).toBe(true);
+  });
+
+  it('reports both blocks not injected (mode_skipped) when the caller opts out, and neither string reaches the model', async () => {
+    const settings = { UseFormatPrompt: 'true', FormatPromptTemplate: 'Formatting only.', UseImagePrompt: 'true' };
+    const { messages, injectedBlocks } = await buildAndSortMessages(
+      [],
+      [],
+      [{ role: 'user', content: 'draw me a picture of a cat' }],
+      100000,
+      settings,
+      0,
+      mockLogger as any,
+      createMockTokenizer(),
+      { verbose: false, imageGenerationAvailable: true, skipAdminPromptTemplates: true } as any
+    );
+
+    expect(findBlock(injectedBlocks, 'formatPrompt')).toEqual({
+      id: 'formatPrompt',
+      injected: false,
+      delivered: false,
+      reason: 'mode_skipped',
+    });
+    expect(findBlock(injectedBlocks, 'imagePrompt')).toEqual({
+      id: 'imagePrompt',
+      injected: false,
+      delivered: false,
+      reason: 'mode_skipped',
+    });
+    expect(messages.some(m => typeof m.content === 'string' && m.content.includes('Formatting only'))).toBe(false);
+  });
+
+  it('reports the format prompt setting_disabled when UseFormatPrompt is off (the default)', async () => {
+    const { injectedBlocks } = await buildAndSortMessages(
+      [],
+      [],
+      [{ role: 'user', content: 'hello' }],
+      100000,
+      {},
+      0,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    expect(findBlock(injectedBlocks, 'formatPrompt')).toEqual({
+      id: 'formatPrompt',
+      injected: false,
+      delivered: false,
+      reason: 'setting_disabled',
+    });
+  });
+
+  it('reports the image prompt not_triggered when the message does not request an image', async () => {
+    const { injectedBlocks } = await buildAndSortMessages(
+      [],
+      [],
+      [{ role: 'user', content: 'what is the capital of France?' }],
+      100000,
+      { UseImagePrompt: 'true' },
+      0,
+      mockLogger as any,
+      createMockTokenizer(),
+      { verbose: false, imageGenerationAvailable: true }
+    );
+
+    expect(findBlock(injectedBlocks, 'imagePrompt')).toEqual({
+      id: 'imagePrompt',
+      injected: false,
+      delivered: false,
+      reason: 'not_triggered',
+    });
+  });
+
+  // The delivery case that matters most: injected does not imply delivered. A long enough format
+  // template can still be injected and then dropped by the system-token cap on a small window.
+  it('reports the format prompt injected but not delivered when the budget cannot fit it', async () => {
+    const settings = { UseFormatPrompt: 'true', FormatPromptTemplate: 'x'.repeat(2000) };
+    const { messages, injectedBlocks } = await buildAndSortMessages(
+      [],
+      [],
+      [{ role: 'user', content: 'hello' }],
+      1500,
+      settings,
+      0,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    const format = findBlock(injectedBlocks, 'formatPrompt');
+    expect(format?.injected).toBe(true);
+    expect(format?.delivered).toBe(false);
+    expect(messages.some(m => typeof m.content === 'string' && m.content.includes('x'.repeat(2000)))).toBe(false);
+  });
+
+  it('returns an empty injectedBlocks array on the non-positive-budget early exit', async () => {
+    const { injectedBlocks } = await buildAndSortMessages(
+      [],
+      [],
+      [{ role: 'user', content: 'hello' }],
+      0,
+      { UseFormatPrompt: 'true', FormatPromptTemplate: 'Formatting only.' },
+      0,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    expect(injectedBlocks).toEqual([]);
   });
 });
 

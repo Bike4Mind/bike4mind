@@ -177,6 +177,21 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    */
   findByIdWithCredentials(id: string, organizationId: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
+  /**
+   * (Re)write the org-owned encrypted refresh token and re-stamp `connectedBy` to the re-syncing
+   * user, scoped to an org. organizationId is REQUIRED so one org can never overwrite another org's
+   * credential. Credential + connectedBy are written unconditionally; status/lastError heal to
+   * `connected` only from a non-`syncing` state, so a Re-sync during an in-flight ingest cannot flip
+   * the claim and start a duplicate run (see the model note). SECURITY: `encryptedRefreshToken` must
+   * already be encrypted by the caller (packages/database cannot reach the crypto helpers).
+   */
+  updateCredential(
+    id: string,
+    organizationId: string,
+    encryptedRefreshToken: string,
+    connectedBy: string
+  ): Promise<IOrgGoogleDriveConnectionDocument | null>;
+
   /** Update health state; clears `lastError` on a healthy update. */
   updateHealth(
     id: string,
@@ -201,4 +216,11 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    * path releases via `updateHealth({ status: 'connected' })` instead.
    */
   releaseSyncClaim(id: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
+
+  /**
+   * Delete a connection (org-scoped), releasing its GLOBAL Drive-folder claim so the folder can be
+   * connected elsewhere. Must HARD delete: a merely-disabled row still holds the unique driveFolderId
+   * index and would keep blocking re-claim. Returns true if a row was removed.
+   */
+  release(id: string, organizationId: string): Promise<boolean>;
 }

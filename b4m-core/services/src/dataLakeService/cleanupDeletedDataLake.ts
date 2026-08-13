@@ -1,11 +1,13 @@
 import type {
+  IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IDataLakeBatchRepository,
   IFabFileRepository,
   IFabFileChunkRepository,
 } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
-import { canManageLake } from './manageRule';
+import { type ManageActor } from './manageRule';
+import { resolveCanManageLake } from './authorizeLakeManage';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
 import { strictIndexRemove, type RetrievalIndexPort } from './ports';
@@ -13,6 +15,7 @@ import { strictIndexRemove, type RetrievalIndexPort } from './ports';
 interface CleanupDeletedDataLakeAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'delete' | 'find'>;
+    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'removeAllForLake'>;
     batches: Pick<IDataLakeBatchRepository, 'find' | 'delete'>;
     fabFiles: Pick<IFabFileRepository, 'findIdsByDataLakeTag' | 'hardDeleteByIds'>;
     fabFileChunks: Pick<IFabFileChunkRepository, 'deleteManyByFabFileId'>;
@@ -53,7 +56,7 @@ async function inChunks<T>(items: T[], size: number, fn: (item: T) => Promise<un
  * runs first. See `strictIndexRemove` in ports.ts for that posture and what it does not cover.
  */
 export const cleanupDeletedDataLake = async (
-  actor: { userId: string; isAdmin: boolean },
+  actor: ManageActor,
   dataLakeId: string,
   { db, retrievalIndex, shredMemory, logger, chunkSize = DEFAULT_CLEANUP_CHUNK_SIZE }: CleanupDeletedDataLakeAdapters
 ): Promise<void> => {
@@ -62,8 +65,8 @@ export const cleanupDeletedDataLake = async (
     // Already gone - idempotent success.
     return;
   }
-  if (!canManageLake(existing, actor)) {
-    throw new BadRequestError('Only the creator can clean up this data lake');
+  if (!(await resolveCanManageLake(existing, actor, { db }))) {
+    throw new BadRequestError('You do not have permission to clean up this data lake');
   }
   if (existing.status !== 'deleted') {
     throw new BadRequestError('Data lake must be soft-deleted before cleanup');
@@ -106,6 +109,12 @@ export const cleanupDeletedDataLake = async (
   // 4. Delete the lake's batches (chunked, same rationale as the chunk sweep above).
   const batches = await db.batches.find({ dataLakeId });
   await inChunks(batches, chunkSize, b => db.batches.delete(b.id));
+
+  // 4b. Cascade-remove the lake's access grants so the purge leaves none orphaned (the grant model
+  // has no TTL/FK, so this is the only sweep). Idempotent: removeAllForLake is a no-op once the rows
+  // are gone, so a DLQ retry is safe. Runs before the lake record delete for the same
+  // recoverable-on-failure ordering as the rest of the sweep.
+  await db.dataLakeAccessGrants.removeAllForLake(dataLakeId);
 
   // 5. Delete the lake record last, so a mid-sweep failure leaves it recoverable/re-runnable.
   await db.dataLakes.delete(dataLakeId);

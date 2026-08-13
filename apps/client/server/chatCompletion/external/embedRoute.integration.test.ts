@@ -189,7 +189,12 @@ async function seed(overrides: SeedOverrides = {}) {
     name: 'Embed Org',
     userId: owner.id,
     currentCredits: 100000,
-    // Org membership lives here (a User doc carries no org field). Both are members.
+    // Membership is the authoritative users[] ACL (a User doc carries no org field). Both are members.
+    users: [
+      { userId: owner.id, permissions: ['read'] },
+      { userId: teammate.id, permissions: ['read'] },
+    ],
+    // Credit side-table, seeded in parallel but NOT the membership source of truth.
     userDetails: [
       { id: owner.id, email: 'owner@example.com', name: 'Embed Owner' },
       { id: teammate.id, email: 'teammate@example.com', name: 'Teammate' },

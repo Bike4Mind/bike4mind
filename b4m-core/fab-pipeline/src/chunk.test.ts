@@ -1,6 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import JSZip from 'jszip';
-import { SmartChunker, Chunk, DEFAULT_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET } from './chunk';
+import {
+  SmartChunker,
+  Chunk,
+  DEFAULT_PASSAGE_TOKEN_TARGET,
+  MIN_PASSAGE_TOKEN_TARGET,
+  effectiveChunkTokenLimit,
+  embeddingModelContextWindow,
+} from './chunk';
 import { Logger } from '@bike4mind/observability';
 
 // Minimal mock storage - chunkText doesn't use storage
@@ -20,6 +27,52 @@ function createChunker(chunkTokenLimit = CHUNK_TOKEN_LIMIT): SmartChunker {
   const buffer = 8192 - chunkTokenLimit;
   return new SmartChunker(MODEL, mockStorage, logger, buffer);
 }
+
+// text-embedding-3-small: 8192-token window. Default 20% buffer => floor(8192*0.2)=1638, so the
+// hard limit a passage target is capped to is 8192 - 1638 = 6554.
+const MODEL_WINDOW = 8192;
+const DEFAULT_BUFFERED_HARD_LIMIT = MODEL_WINDOW - Math.floor(MODEL_WINDOW * 0.2); // 6554
+
+describe('embeddingModelContextWindow', () => {
+  it('returns the model window for a supported model', () => {
+    expect(embeddingModelContextWindow('text-embedding-3-small')).toBe(MODEL_WINDOW);
+  });
+
+  it('throws on an unsupported model (matching the chunker)', () => {
+    expect(() => embeddingModelContextWindow('not-a-real-model')).toThrow(/Unsupported embedding model/);
+  });
+});
+
+describe('effectiveChunkTokenLimit', () => {
+  const model = 'text-embedding-3-small';
+
+  it('passes a passage target through unchanged when it fits under the buffered window', () => {
+    expect(effectiveChunkTokenLimit({ model, passageTokenTarget: 512 })).toBe(512);
+  });
+
+  it('falls back to the default when no target is supplied', () => {
+    expect(effectiveChunkTokenLimit({ model })).toBe(DEFAULT_PASSAGE_TOKEN_TARGET);
+  });
+
+  it('floors a below-minimum target to MIN_PASSAGE_TOKEN_TARGET', () => {
+    expect(effectiveChunkTokenLimit({ model, passageTokenTarget: 1 })).toBe(MIN_PASSAGE_TOKEN_TARGET);
+  });
+
+  it('caps a target larger than the model can embed to the buffered window (#1662 clamp)', () => {
+    expect(effectiveChunkTokenLimit({ model, passageTokenTarget: 100_000 })).toBe(DEFAULT_BUFFERED_HARD_LIMIT);
+  });
+
+  it('two over-window targets clamp to the SAME effective limit (so they never false-conflict)', () => {
+    const a = effectiveChunkTokenLimit({ model, passageTokenTarget: 100_000 });
+    const b = effectiveChunkTokenLimit({ model, passageTokenTarget: 50_000 });
+    expect(a).toBe(b);
+  });
+
+  it('treats a non-finite/negative target as absent (default)', () => {
+    expect(effectiveChunkTokenLimit({ model, passageTokenTarget: -5 })).toBe(DEFAULT_PASSAGE_TOKEN_TARGET);
+    expect(effectiveChunkTokenLimit({ model, passageTokenTarget: Number.NaN })).toBe(DEFAULT_PASSAGE_TOKEN_TARGET);
+  });
+});
 
 describe('SmartChunker', () => {
   let chunker: SmartChunker;

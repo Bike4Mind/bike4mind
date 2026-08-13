@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
   dataLakeBatchRepository: {},
+  dataLakeAccessGrantRepository: {},
   fabFileRepository: {},
   fabFileChunkRepository: {},
 }));

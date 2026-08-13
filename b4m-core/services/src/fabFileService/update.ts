@@ -1,6 +1,7 @@
 import { Logger } from '@bike4mind/observability';
 import {
   FAB_FILE_CONTENT_REWRITE_PATCH,
+  IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFabFileDocument,
   IFabFileRepository,
@@ -48,6 +49,8 @@ interface UpdateFabFileAdapters {
       'shareable' | 'update' | 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'
     >;
     dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
+    // Optional: forwarded to reconcileLakeTags; absent -> createdByUserId + org-rung fallback there.
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listActiveByLakes'>;
   };
   /** Forwarded to `reconcileLakeTags`; see its own adapter for what this is for. */
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };

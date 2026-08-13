@@ -2,6 +2,7 @@ import { FileEvents, IFabFile, KnowledgeType } from '@bike4mind/common';
 import {
   changeStorageSize,
   dataLakeRepository,
+  dataLakeAccessGrantRepository,
   fabFileChunkRepository,
   fabFileRepository,
   fileTagRepository,
@@ -105,7 +106,7 @@ const handler = baseApi()
       ...(req.body.primaryTag ? [req.body.primaryTag] : []),
     ];
     await dataLakeService.assertCanWriteDataLakeTags({ userId, isAdmin: !!req.user.isAdmin }, candidateTagNames, {
-      db: { dataLakes: dataLakeRepository },
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
     const updatedFabFile = await withTransaction(async () => {
@@ -129,7 +130,11 @@ const handler = baseApi()
             error: req.body.error,
           },
           {
-            db: { fabFiles: fabFileRepository, dataLakes: dataLakeRepository },
+            db: {
+              fabFiles: fabFileRepository,
+              dataLakes: dataLakeRepository,
+              dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            },
             logger: req.logger,
             storage: {
               upload: (filepath, content, option) => {

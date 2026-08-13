@@ -32,6 +32,16 @@ export const DEFAULT_PASSAGE_TOKEN_TARGET = 512;
 export const MIN_PASSAGE_TOKEN_TARGET = 64;
 
 /**
+ * Model-INDEPENDENT sanity ceiling for a configured passage target, in tokens. A passage larger
+ * than a full typical embedding context window (~8K) defeats retrieval granularity - one vector
+ * would average a whole document (see DEFAULT_PASSAGE_TOKEN_TARGET). This bounds the scoped
+ * `DefaultChunkSize` setting (#1662) where the specific embedding model is NOT known (the resolver
+ * clamp is pure); the EXACT per-model embedding-window cap is enforced downstream by the chunker
+ * (`effectiveChunkTokenLimit` in fab-pipeline), which knows the model and reduces further if needed.
+ */
+export const MAX_PASSAGE_TOKEN_TARGET = 8192;
+
+/**
  * Characters per token used to turn a chunk's TOKEN target into the SERVE path's CHARACTER budget.
  *
  * Deliberately an upper bound, not the ~4 chars/token average for English prose. The number exists

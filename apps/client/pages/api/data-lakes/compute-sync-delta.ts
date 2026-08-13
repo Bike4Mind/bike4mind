@@ -1,6 +1,11 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
-import { dataLakeRepository, fabFileRepository, lakeAccessEventRepository } from '@bike4mind/database';
+import {
+  dataLakeAccessGrantRepository,
+  dataLakeRepository,
+  fabFileRepository,
+  lakeAccessEventRepository,
+} from '@bike4mind/database';
 import { ComputeSyncDeltaRequestInput } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
 import { Request } from 'express';
@@ -23,7 +28,7 @@ const handler = baseApi()
 
     // Shared access gate (resolves by slug; not-found-style denial).
     const dataLake = await dataLakeService.assertLakeAccess(data.dataLakeSlug, await toAccessContext(req), {
-      db: { dataLakes: dataLakeRepository },
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
     // Find existing files with matching hashes across all data lake files (cross-user

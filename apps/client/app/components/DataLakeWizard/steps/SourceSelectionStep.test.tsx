@@ -20,6 +20,12 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => ({
     selector({ selectedAccount: selectedAccount.current }),
 }));
 vi.mock('sonner', () => ({ toast: { info: toastInfo } }));
+// DriveConnectAction pulls in React Query (useConfig / lake-connection hooks); stub it so these
+// step-order/name-validation tests need no QueryClientProvider. Its own behavior is covered by
+// DriveConnectAction.test.tsx.
+vi.mock('@client/app/components/DataLakeWizard/steps/DriveConnectAction', () => ({
+  default: () => null,
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (

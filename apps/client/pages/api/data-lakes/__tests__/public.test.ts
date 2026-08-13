@@ -9,11 +9,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * rejected query never reaches the service, and an accepted one arrives coerced.
  */
 
-const { mockBrowse, LAKES_REPO, USERS_REPO, mockRecord } = vi.hoisted(() => ({
+const { mockBrowse, LAKES_REPO, USERS_REPO, GRANTS_REPO, mockToAccessContext, mockRecord } = vi.hoisted(() => ({
   mockBrowse: vi.fn(),
   // Distinguishable sentinels so the adapter case can assert identity pass-through.
   LAKES_REPO: { __tag: 'dataLakeRepository' },
   USERS_REPO: { __tag: 'userRepository' },
+  GRANTS_REPO: { __tag: 'dataLakeAccessGrantRepository' },
+  mockToAccessContext: vi.fn(),
   mockRecord: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -41,8 +43,12 @@ vi.mock('@bike4mind/services', async () => ({
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: LAKES_REPO,
   userRepository: USERS_REPO,
+  dataLakeAccessGrantRepository: GRANTS_REPO,
   lakeAccessEventRepository: { record: mockRecord },
 }));
+// Real toAccessContext pulls in entitlements/subscription lookups that are out of scope for this
+// query-bounds test; stub it so the actor is just whatever the caller's req.user resolves to.
+vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: mockToAccessContext }));
 
 import handler from '@pages/api/data-lakes/public';
 
@@ -81,6 +87,9 @@ describe('GET /api/data-lakes/public - query bounds', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockBrowse.mockResolvedValue(EMPTY_RESULT);
+    mockToAccessContext.mockImplementation((req: { user: { id: string; isAdmin?: boolean } }) =>
+      Promise.resolve({ userId: req.user.id, isAdmin: !!req.user.isAdmin })
+    );
   });
 
   it('rejects a limit above the cap', () => expectRejected({ limit: '61' }, 'limit'));
@@ -127,6 +136,9 @@ describe('GET /api/data-lakes/public - search and pass-through', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockBrowse.mockResolvedValue(EMPTY_RESULT);
+    mockToAccessContext.mockImplementation((req: { user: { id: string; isAdmin?: boolean } }) =>
+      Promise.resolve({ userId: req.user.id, isAdmin: !!req.user.isAdmin })
+    );
   });
 
   it('trims the search term', async () => {
@@ -156,6 +168,7 @@ describe('GET /api/data-lakes/public - search and pass-through', () => {
     await route(makeReq({}), makeRes());
     expect(browseArgs()[2].db.dataLakes).toBe(LAKES_REPO);
     expect(browseArgs()[2].db.users).toBe(USERS_REPO);
+    expect(browseArgs()[2].db.dataLakeAccessGrants).toBe(GRANTS_REPO);
   });
 
   it('returns the service result as JSON', async () => {

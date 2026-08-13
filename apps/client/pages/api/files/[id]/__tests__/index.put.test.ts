@@ -47,6 +47,18 @@ vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/database')>()),
   changeStorageSize: vi.fn(),
   dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag, find: h.find, setStats: h.setStats },
+  // Stubbed (not the real, Mongo-backed repository): the real assertCanWriteDataLakeTags gate
+  // reaches this for its grant-supersession check, and a real repository call here has no DB
+  // connection to answer against and hangs the suite on a buffering timeout.
+  dataLakeAccessGrantRepository: {
+    listByLake: vi.fn().mockResolvedValue([]),
+    listActiveByLakes: vi.fn().mockResolvedValue([]),
+    listByPrincipal: vi.fn().mockResolvedValue([]),
+    findGrant: vi.fn().mockResolvedValue(null),
+    upsertGrant: vi.fn().mockResolvedValue({}),
+    removeGrant: vi.fn().mockResolvedValue(true),
+    removeAllForLake: vi.fn().mockResolvedValue(0),
+  },
   fabFileChunkRepository: {},
   fabFileRepository: {
     shareable: { findAccessibleById: h.findAccessibleById },

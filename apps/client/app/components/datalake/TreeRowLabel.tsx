@@ -5,6 +5,8 @@ import type { TypographyProps } from '@mui/joy/Typography';
 interface TreeRowLabelProps {
   /** The row's name. Rendered clipped, and shown whole in a tooltip once it no longer fits. */
   label: string;
+  /** Optional theme color token override (e.g. 'danger.500' for a failed file's row). */
+  color?: string;
   /** Joy Typography level override - e.g. the standalone page tree's file rows use the smaller
    *  `body-xs` to stay visually subordinate to their `body-sm` folder rows. Omit for the flat
    *  14px/400 the in-chat tree and the manager modal use. */
@@ -18,7 +20,7 @@ interface TreeRowLabelProps {
  * so a long name behaves the same in both lists. Lives in its own component because the rows are
  * built inside a render callback, where per-row hooks are not an option.
  */
-export default function TreeRowLabel({ label, level }: TreeRowLabelProps) {
+export default function TreeRowLabel({ label, color, level }: TreeRowLabelProps) {
   const textRef = useRef<HTMLParagraphElement>(null);
   const [isClipped, setIsClipped] = useState(false);
 
@@ -39,7 +41,7 @@ export default function TreeRowLabel({ label, level }: TreeRowLabelProps) {
         ref={textRef}
         level={level}
         noWrap
-        sx={{ ...(level ? undefined : { fontSize: '14px' }), fontWeight: 400, color: 'text.primary' }}
+        sx={{ ...(level ? undefined : { fontSize: '14px' }), fontWeight: 400, color: color ?? 'text.primary' }}
       >
         {label}
       </Typography>

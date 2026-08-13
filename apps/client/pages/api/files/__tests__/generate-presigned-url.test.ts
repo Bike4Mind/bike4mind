@@ -34,6 +34,20 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag },
   dataLakeBatchRepository: { findById: h.batchFindById },
+  dataLakeAccessGrantRepository: { listByLake: vi.fn().mockResolvedValue([]) },
+}));
+
+// The endpoint resolves its actor via toAccessContext (#1668); stub it so the real one's
+// entitlements + org-admin DB reads don't get pulled into this unit test. The actor identity still
+// comes from req.user (never the body), preserving the security property the route depends on.
+vi.mock('@server/dataLakes/toAccessContext', () => ({
+  toAccessContext: vi.fn(async (req: { user: { id: string; isAdmin?: boolean } }) => ({
+    userId: req.user.id,
+    isAdmin: !!req.user.isAdmin,
+    userTags: [],
+    entitlementKeys: [],
+    administeredOrgIds: [],
+  })),
 }));
 
 // Only the settings read is stubbed; checkStorageLimit and resolveSupportedMimeType are real
