@@ -108,10 +108,15 @@ export function buildSlackLakeIngestDeps(args: {
     // attacker-chosen URL would be fetched up to three times; and a slow or redirecting URL can
     // approach MongoDB's default 60s transactionLifetimeLimitSeconds and abort AFTER the bytes were
     // already transferred. The file path keeps its transaction because the download happens outside
-    // it, so only DB work is inside. Nothing is lost here: the sole write is one `fabFiles.create`,
-    // which is atomic on its own. (`pages/api/files/createFabFileURL.ts` still has the wrapped
+    // it, so only DB work is inside. (`pages/api/files/createFabFileURL.ts` still has the wrapped
     // shape; it predates this and is a single hop, so it is left alone rather than widening this
     // change into the web door.)
+    //
+    // Losing the transaction does cost something, and `deleteCreatedFile` is what pays for it: the
+    // service creates the row and THEN uploads the object, so without a rollback an upload failure
+    // would strand a FabFile whose S3 object never arrives - and since chunk/vectorize is driven by
+    // the ObjectCreated event, that row would be listed but never indexable. This is the
+    // compensating action that a transaction would otherwise have given us for free.
     createLakeFileFromUrl: (userId, params) =>
       fabFilesService.createFabFileByUrl(
         userId,
@@ -121,6 +126,7 @@ export function buildSlackLakeIngestDeps(args: {
           storage,
           tags: params.tags,
           provenance: params.provenance,
+          deleteCreatedFile: (id: string) => FabFile.findByIdAndDelete(id),
         }
       ),
   };
