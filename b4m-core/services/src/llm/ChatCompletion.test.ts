@@ -936,20 +936,60 @@ describe('ChatCompletionProcess', () => {
       // Auto-added tools are OUR additions, and any attached tool also pulls the provider's
       // server-side tool-use preamble into the request (observed live: an Anthropic completion
       // with only auto-added tools knew the current date on a fresh raw session). The same
-      // admin user is used for both cases, so the pair discriminates on the mode alone.
-      it('suppresses auto-added tools under a mode, but not for a default request', async () => {
-        (service as any).user.isAdmin = true; // makes blog_draft auto-add fire on the default path
+      // admin user is used across all three cases, so they discriminate on message/mode alone.
+      it('offers blog_draft when the message signals blog intent, on a default request', async () => {
+        (service as any).user.isAdmin = true;
         try {
           mockTextModel();
-          const base = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+          const body = {
+            ...startQuestParams,
+            message: 'Turn this conversation into a blog post',
+            tools: [],
+            projectId: undefined,
+            organizationId: undefined,
+          };
 
-          await service.process({ body: base, logger: mockLogger });
-          const defaultTools = vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools;
-          expect(defaultTools?.map((t: { toolSchema: { name: string } }) => t.toolSchema.name)).toContain('blog_draft');
+          await service.process({ body, logger: mockLogger });
+          const tools = vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools;
+          expect(tools?.map((t: { toolSchema: { name: string } }) => t.toolSchema.name)).toContain('blog_draft');
+        } finally {
+          delete (service as any).user.isAdmin;
+        }
+      });
 
+      // The no-signal path #810 adds: an ordinary "Hello" carries no blog intent and continues no
+      // prior blog workflow, so blog_draft is not worth its tokens on this turn.
+      it('does not offer blog_draft on an ordinary message with no blog intent', async () => {
+        (service as any).user.isAdmin = true;
+        try {
           mockTextModel();
-          await service.process({ body: { ...base, promptMode: 'raw' as const }, logger: mockLogger });
-          const rawTools = vi.mocked(mockedGetLlmByModel.mock.results[1].value.complete).mock.calls[0][2].tools;
+          const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+
+          await service.process({ body, logger: mockLogger });
+          const tools = vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools;
+          expect(tools?.map((t: { toolSchema: { name: string } }) => t.toolSchema.name) ?? []).not.toContain(
+            'blog_draft'
+          );
+        } finally {
+          delete (service as any).user.isAdmin;
+        }
+      });
+
+      it('suppresses auto-added tools under a mode even with blog intent in the message', async () => {
+        (service as any).user.isAdmin = true;
+        try {
+          mockTextModel();
+          const body = {
+            ...startQuestParams,
+            message: 'Turn this conversation into a blog post',
+            promptMode: 'raw' as const,
+            tools: [],
+            projectId: undefined,
+            organizationId: undefined,
+          };
+
+          await service.process({ body, logger: mockLogger });
+          const rawTools = vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools;
           expect(rawTools ?? []).toEqual([]);
         } finally {
           delete (service as any).user.isAdmin;
@@ -2308,6 +2348,54 @@ describe('ChatCompletionProcess', () => {
 
       expect(systemText).not.toContain('Available Skills');
       expect(systemText).not.toContain('Skill Invoked');
+    });
+
+    // #810: the `skill` LLM tool used to be offered unconditionally. These pin the conditional
+    // gate to the SAME catalog/session state runAndCaptureSystemText already exercises for the
+    // system-prompt side, so the tool and the catalog it describes move together.
+    describe('conditional skill tool offer (#810)', () => {
+      const runAndCaptureTools = async (params: { message: string; catalog?: ISkill[]; resolved?: ISkill[] }) => {
+        await runAndCaptureSystemText(params);
+        return vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools as
+          { toolSchema: { name: string } }[] | undefined;
+      };
+
+      it('does not offer skill for an empty catalog and an ordinary message', async () => {
+        const tools = await runAndCaptureTools({ message: 'just chatting, no slash command' });
+        expect(tools?.map(t => t.toolSchema.name) ?? []).not.toContain('skill');
+      });
+
+      it('offers skill when the user has at least one invocable skill, paired with its catalog block', async () => {
+        const [systemText, tools] = await Promise.all([
+          runAndCaptureSystemText({
+            message: 'just chatting',
+            catalog: [ownedSkill({ name: 'greet', description: 'Greet someone' })],
+          }),
+          runAndCaptureTools({
+            message: 'just chatting',
+            catalog: [ownedSkill({ name: 'greet', description: 'Greet someone' })],
+          }),
+        ]);
+        expect(systemText).toContain('Available Skills');
+        expect(tools?.map(t => t.toolSchema.name)).toContain('skill');
+      });
+
+      it('rescues an empty catalog via an explicit /skill-name invocation attempt', async () => {
+        const tools = await runAndCaptureTools({
+          message: '/greet Bob',
+          resolved: [ownedSkill({ name: 'greet', body: 'Say hello to $ARGUMENTS' })],
+        });
+        expect(tools?.map(t => t.toolSchema.name)).toContain('skill');
+      });
+
+      it('does not offer skill when the session explicitly disabled it, even with a non-empty catalog', async () => {
+        mockSession.disabledTools = ['skill'];
+        const tools = await runAndCaptureTools({
+          message: 'just chatting',
+          catalog: [ownedSkill({ name: 'greet', description: 'Greet someone' })],
+        });
+        expect(tools?.map(t => t.toolSchema.name) ?? []).not.toContain('skill');
+      });
     });
 
     // The priority table decides nothing unless the builder is handed the resolver. Dropping

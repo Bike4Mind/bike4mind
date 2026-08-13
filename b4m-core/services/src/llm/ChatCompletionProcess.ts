@@ -151,6 +151,7 @@ import {
 import type { ToolTelemetry, ToolErrorCategory, SystemPromptDetail, DataLakeGroundingMode } from '@bike4mind/common';
 import { buildAlwaysOnFloorDetails, buildInjectedBlockDetails } from './systemPromptFloorTelemetry';
 import { resolveArtifactsEnabled } from './artifactGating';
+import { shouldOfferBlogTools, shouldOfferSkillTool } from './autoAddedToolGating';
 import { resolveMementoGates } from './mementoGating';
 import {
   ContextTelemetryAlertsSchema,
@@ -429,7 +430,6 @@ interface ProcessInitContext {
   sessionFabFileIds: string[];
   params: z.infer<typeof QuestStartBodySchema>['params'];
   enabledTools: (z.infer<typeof b4mLLMTools> | string)[];
-  hasContentTransform?: boolean;
   projectId?: string;
   organizationId?: string | null;
   questMaster?: z.infer<typeof QuestStartBodySchema>['questMaster'];
@@ -1121,42 +1121,21 @@ export class ChatCompletionProcess {
     // tools get paired too. Here we only copy the request selection so the auto-adds below
     // don't mutate `parsedBody.tools`.
     const finalEnabledTools: string[] = [...enabledTools];
-    let hasContentTransform = false;
 
     // Auto-added capabilities are OUR additions, not the caller's, so a prompt mode skips this
     // whole block - and not only for prompt hygiene: attaching any tool also pulls the provider's
     // server-side tool-use preamble into the request (observed live: a completion whose only tools
     // were auto-added knew the current date on a fresh raw-mode session). Tools the caller sent
     // explicitly are caller intent and stay, mode or not.
+    //
+    // blog_publish/blog_edit/blog_draft and `skill` are NOT auto-added here even though they are
+    // OUR additions too: both need signals not yet available at this point in the request (an
+    // intent-or-continuation check needs the fetched history; `skill` needs the invocable-skill
+    // catalog SkillsFeature populates later) - see the conditional auto-add in process(), after
+    // previous messages are fetched and the feature loop has run.
     if (!parsedBody.promptMode) {
-      // Auto-add blog_publish tool if user has blog integration configured (admin-only for now)
-      if (this.user.isAdmin && this.user.blogIntegration && !enabledTools.includes('blog_publish')) {
-        finalEnabledTools.push('blog_publish');
-      }
-
-      // Auto-add blog_edit tool if user has blog integration configured (admin-only for now)
-      if (this.user.isAdmin && this.user.blogIntegration && !enabledTools.includes('blog_edit')) {
-        finalEnabledTools.push('blog_edit');
-      }
-
-      // Auto-add blog_draft tool for admin users (used by Content Publishing Studio)
-      if (this.user.isAdmin && !enabledTools.includes('blog_draft')) {
-        finalEnabledTools.push('blog_draft');
-        hasContentTransform = true;
-      }
-
       if (!enabledTools.includes('navigate_view') && shouldAutoEnableNavigateView(parsedBody.extraContextMessages)) {
         finalEnabledTools.push('navigate_view');
-      }
-
-      // Auto-add the `skill` LLM tool when the host has wired a skill repository.
-      // Skills are user-defined instruction templates and there's no separate
-      // toggle for them in the UI - gating purely on db.skills being present
-      // keeps callers without skill support unaffected. SkillsFeature still
-      // surfaces the catalog into the system prompt so the LLM knows what's
-      // invocable.
-      if (this.db.skills && !finalEnabledTools.includes('skill')) {
-        finalEnabledTools.push('skill');
       }
     }
 
@@ -1194,7 +1173,6 @@ export class ChatCompletionProcess {
       sessionFabFileIds,
       params,
       enabledTools: finalEnabledTools,
-      hasContentTransform,
       projectId,
       organizationId,
       questMaster,
@@ -1257,7 +1235,6 @@ export class ChatCompletionProcess {
       sessionFabFileIds,
       params,
       enabledTools,
-      hasContentTransform,
       projectId,
       organizationId,
       questMaster,
@@ -2014,6 +1991,52 @@ export class ChatCompletionProcess {
       const [previousMessages, totalMessageCount, cacheInfo] = previousMessagesResult;
       const oldestIncludedQuestId = cacheInfo.oldestIncludedQuestId ?? null;
       const verbatimExcludedCount = cacheInfo.excludedOlderQuestCount ?? 0;
+
+      // blog_publish/blog_edit/blog_draft and `skill` are auto-added HERE rather than at the
+      // request-parse site (initializeProcessContext) because each needs a signal that isn't
+      // available that early: the intent-or-continuation check needs this fetched history, and
+      // `skill` needs the invocable-skill catalog SkillsFeature populated in the feature loop
+      // above. Each explicitly re-checks session.disabledTools since this runs after
+      // resolveEnabledTools's own denylist pass (see the comment there on applying it last).
+      let hasContentTransform = false;
+      if (!promptMode) {
+        const blogGates = shouldOfferBlogTools({
+          isAdmin: this.user.isAdmin,
+          hasBlogIntegration: Boolean(this.user.blogIntegration),
+          message,
+          previousMessages,
+        });
+        if (
+          blogGates.publish &&
+          !enabledTools.includes('blog_publish') &&
+          !session.disabledTools?.includes('blog_publish')
+        ) {
+          enabledTools.push('blog_publish');
+        }
+        if (blogGates.edit && !enabledTools.includes('blog_edit') && !session.disabledTools?.includes('blog_edit')) {
+          enabledTools.push('blog_edit');
+        }
+        if (blogGates.draft && !enabledTools.includes('blog_draft') && !session.disabledTools?.includes('blog_draft')) {
+          enabledTools.push('blog_draft');
+        }
+        hasContentTransform = blogGates.draft;
+
+        // The only honest gate for `skill` is whether this user has a model-invocable skill - a
+        // user with zero skills used to pay ~161 tokens for a tool whose every call returns "you
+        // have no LLM-invocable skills defined", with no catalog in the prompt to name one.
+        if (
+          !enabledTools.includes('skill') &&
+          !session.disabledTools?.includes('skill') &&
+          shouldOfferSkillTool({
+            hasSkillRepository: Boolean(this.db.skills),
+            invocableSkillCount: (quest as { _skillCatalog?: unknown[] })._skillCatalog?.length ?? 0,
+            message,
+            previousMessages,
+          })
+        ) {
+          enabledTools.push('skill');
+        }
+      }
 
       // Local (Ollama) models run on modest hardware with small context budgets and
       // are easily derailed by prose that isn't about the task. Give them a leaner
