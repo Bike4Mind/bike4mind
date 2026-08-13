@@ -84,15 +84,15 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
     await dataLakeRepository.create(baseLake({ slug: 'shared', requiredUserTag: 'Opti' })); // org-less, gated (curated-style)
 
     // Org-A member holding the tag: gets the gateless org lake (org IS its grant) + the cross-org gated lake.
-    const inOrgWithTag = await dataLakeRepository.findActiveByUserTagsAndEntitlements(['Opti'], [], 'orgA', 'u1');
+    const inOrgWithTag = await dataLakeRepository.findActiveByUserTagsAndEntitlements(['Opti'], [], ['orgA'], 'u1');
     expect(inOrgWithTag.map(l => l.slug).sort()).toEqual(['acme', 'shared']);
 
     // Org-A member WITHOUT the tag: still gets the gateless org lake (org membership), not the gated one.
-    const inOrgNoTag = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], 'orgA', 'u1');
+    const inOrgNoTag = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgA'], 'u1');
     expect(inOrgNoTag.map(l => l.slug)).toEqual(['acme']);
 
     // Org-B member with the tag: gets the cross-org gated lake, NOT org-A's lake.
-    const orgBWithTag = await dataLakeRepository.findActiveByUserTagsAndEntitlements(['Opti'], [], 'orgB', 'u2');
+    const orgBWithTag = await dataLakeRepository.findActiveByUserTagsAndEntitlements(['Opti'], [], ['orgB'], 'u2');
     expect(orgBWithTag.map(l => l.slug)).toEqual(['shared']);
   });
 
@@ -100,12 +100,12 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
     await dataLakeRepository.create(baseLake({ slug: 'gated', organizationId: 'orgA', requiredUserTag: 'team' }));
 
     // Right org, missing tag -> excluded.
-    expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], 'orgA')).toEqual([]);
+    expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgA'])).toEqual([]);
     // Right org + tag -> included.
-    const ok = await dataLakeRepository.findActiveByUserTagsAndEntitlements(['team'], [], 'orgA');
+    const ok = await dataLakeRepository.findActiveByUserTagsAndEntitlements(['team'], [], ['orgA']);
     expect(ok.map(l => l.slug)).toEqual(['gated']);
     // Wrong org even with the tag -> excluded (org is not a flat OR with the tag).
-    expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements(['team'], [], 'orgB')).toEqual([]);
+    expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements(['team'], [], ['orgB'])).toEqual([]);
   });
 
   it('Public: an isPublic lake is retrievable by any user, cross-org, without owner/tag/key', async () => {
@@ -113,7 +113,7 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
     await dataLakeRepository.create(baseLake({ slug: 'personal', createdByUserId: 'alice' })); // private control
 
     // A stranger in a different org retrieves the public lake but NOT the private one.
-    const stranger = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], 'orgB', 'bob');
+    const stranger = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgB'], 'bob');
     expect(stranger.map(l => l.slug)).toEqual(['pub']);
     // A tag/key-less stranger with no org still gets it.
     const orgless = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], undefined, 'bob');
@@ -124,10 +124,21 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
     await dataLakeRepository.create(baseLake({ slug: 'pubgated', isPublic: true, requiredEntitlement: 'product:pro' }));
 
     // No key -> excluded even though isPublic is set (the gate holds).
-    expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], 'orgB', 'bob')).toEqual([]);
+    expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgB'], 'bob')).toEqual([]);
     // Key held -> retrievable cross-org (public bypasses the org prerequisite).
-    const withKey = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], ['product:pro'], 'orgB', 'bob');
+    const withKey = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], ['product:pro'], ['orgB'], 'bob');
     expect(withKey.map(l => l.slug)).toEqual(['pubgated']);
+  });
+
+  it('a gateless lake resolves for EVERY org in the membership set, not just the first', async () => {
+    await dataLakeRepository.create(baseLake({ slug: 'in-a', organizationId: 'org-a' }));
+    await dataLakeRepository.create(baseLake({ slug: 'in-b', organizationId: 'org-b' }));
+
+    const bothOrgs = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['org-a', 'org-b']);
+    expect(bothOrgs.map(l => l.slug).sort()).toEqual(['in-a', 'in-b']);
+
+    // An empty membership set never widens access - neither org lake resolves.
+    expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], [])).toEqual([]);
   });
 
   it('owner bypass reaches a GATED lake the creator does not personally satisfy', async () => {

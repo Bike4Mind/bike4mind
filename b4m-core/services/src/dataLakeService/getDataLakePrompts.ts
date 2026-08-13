@@ -36,24 +36,25 @@ export interface DataLakePrompt {
  * neither the user nor their org admin could see what is steering the answer. Content
  * from a stranger's public lake is still retrievable; only its INSTRUCTIONS are dropped.
  *
- * Trusted = the caller's own lake, or a lake scoped to the caller's org (the org admin
- * governance path). The surviving lakes are rendered by renderDataLakePromptSection at each
- * retrieval-scoped injection site (forced retrieval + the model-driven knowledge tools).
+ * Trusted = the caller's own lake, or a lake scoped to one of the caller's orgs (the org admin
+ * governance path - membership, not the selected-org pointer, #1674). The surviving lakes are
+ * rendered by renderDataLakePromptSection at each retrieval-scoped injection site (forced
+ * retrieval + the model-driven knowledge tools).
  *
- * Both sides of the org comparison are normalized through normalizeId (which yields undefined for
- * an absent value, so it never becomes the string "undefined"). The schema stores these as Strings
- * today, but an ObjectId- or populated-document-vs-String comparison would fail SILENTLY - denying
- * injection with no error - which is the hard failure mode to notice. Same reasoning and normalizer
- * as the actor-side coercion in the resolver (#1281 / @bike4mind/utils/normalizeId).
+ * The lake side is normalized through normalizeId (which yields undefined for an absent value, so
+ * it never becomes the string "undefined"). The schema stores this as a String today, but an
+ * ObjectId- or populated-document org would fail the membership-set `includes` SILENTLY - denying
+ * injection with no error - which is the hard failure mode to notice (#1281 / @bike4mind/utils/normalizeId).
+ * The actor side needs no such normalization: `organizationIds` is already a set of plain strings
+ * by contract (resolved via `IOrganizationRepository.findMembershipOrgIds`).
  */
 function isTrustedForInjection(
   lake: Pick<IDataLakeDocument, 'createdByUserId' | 'organizationId'>,
-  actor: { userId?: string; organizationId?: string }
+  actor: { userId?: string; organizationIds?: string[] }
 ): boolean {
   if (actor.userId && lake.createdByUserId && String(lake.createdByUserId) === actor.userId) return true;
   const lakeOrg = normalizeId(lake.organizationId);
-  const actorOrg = normalizeId(actor.organizationId);
-  return !!lakeOrg && !!actorOrg && lakeOrg === actorOrg;
+  return !!lakeOrg && (actor.organizationIds ?? []).includes(lakeOrg);
 }
 
 /**
@@ -96,14 +97,14 @@ export async function getAccessibleDataLakePrompts(
 
   const userTags = context.user.tags || [];
   const entitlementKeys = context.entitlementKeys ?? [];
-  // Normalize for the same reason getDynamicDataLakeAccess does: a hydrated user doc carries an
-  // ObjectId (or a populated Organization document), and the lake's owner/org fields are Strings.
-  const organizationId = normalizeId(context.user.organizationId);
   const userId = context.user.id ? String(context.user.id) : undefined;
+  // Same membership resolution as getDynamicDataLakeAccess - resolved from `db.organizations`,
+  // never from a selected-org pointer (#1674).
+  const organizationIds = userId ? await context.db.organizations.findMembershipOrgIds(userId) : [];
 
   let lakes: IDataLakeDocument[];
   try {
-    lakes = await repo.findActiveByUserTagsAndEntitlements(userTags, entitlementKeys, organizationId, userId);
+    lakes = await repo.findActiveByUserTagsAndEntitlements(userTags, entitlementKeys, organizationIds, userId);
   } catch (err) {
     context.logger?.warn('[dataLakes] prompt lookup failed; injecting no lake prompts', err);
     return [];
@@ -120,7 +121,7 @@ export async function getAccessibleDataLakePrompts(
       .filter(
         lake =>
           lakeMatchesAccess(lake, normalizedTags, normalizedKeys) &&
-          isTrustedForInjection(lake, { userId, organizationId }) &&
+          isTrustedForInjection(lake, { userId, organizationIds }) &&
           // Retrieval scope: keep only lakes this turn actually used. `datalakeTag` is the exact
           // string a lake's files carry, so this is a precise lake<->retrieval match, not a prefix.
           (!restrictTags || restrictTags.has(lake.datalakeTag))

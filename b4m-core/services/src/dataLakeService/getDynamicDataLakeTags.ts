@@ -5,19 +5,11 @@ import {
   toDataLakeConfig,
   type DataLakeMembershipScope,
   type IDataLakeRepository,
+  type IOrganizationRepository,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { buildDatalakeTag } from './createDataLake';
 import { lakeMembershipScope } from './lakeMembershipScope';
-
-/**
- * An id value `normalizeId` resolves: a plain string, a Mongo ObjectId (via `toHexString`), or a
- * populated Mongoose document (`{ _id }` / string `{ id }`). Deliberately excludes a bare
- * `{ toString(): string }` - `normalizeId` ignores that shape and returns undefined - which is why
- * `organizationId` uses this while `id`, still `String()`-coerced, keeps the wider `toString` form.
- */
-type NormalizableId = string | { toHexString(): string } | { _id: unknown } | { id: string };
 
 /**
  * The minimal context the data-lake access resolver needs. The knowledge tools
@@ -32,19 +24,23 @@ type NormalizableId = string | { toHexString(): string } | { _id: unknown } | { 
 export interface DataLakeAccessContext {
   db: {
     dataLakes?: Pick<IDataLakeRepository, 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements'>;
+    /**
+     * Resolves the caller's org membership set (owner + `users[]` ACL) internally from
+     * `user.id` - required so an absent resolver can't silently drop every org lake (#1674).
+     */
+    organizations: Pick<IOrganizationRepository, 'findMembershipOrgIds'>;
   };
   /**
-   * The caller. `organizationId` scopes org lakes (org-less lakes stay open to all);
-   * `id` is the owner bypass - the caller always retrieves their own lakes (re-checked in
-   * memory against each lake's persisted `createdByUserId`, not assumed from the query), and a
-   * gateless org-less lake is owner-only (Private-by-default). A hydrated user doc carries
-   * ObjectIds, so `organizationId` is resolved via `normalizeId` (string, ObjectId, or populated
-   * `{ _id }` doc) while `id` is `String()`-coerced before querying.
+   * The caller. Membership is resolved internally from `id` via `db.organizations` - there is
+   * NO `organizationId` input here: that field was the selected-org display pointer, which is
+   * not necessarily a membership (#1674). `id` is the owner bypass - the caller always retrieves
+   * their own lakes (re-checked in memory against each lake's persisted `createdByUserId`, not
+   * assumed from the query), and a gateless org-less lake is owner-only (Private-by-default).
+   * An id-less caller resolves to the empty membership set (member of nothing).
    */
   user: {
     id?: string | { toString(): string } | null;
     tags?: string[] | null;
-    organizationId?: NormalizableId | null;
   };
   /** Caller's resolved entitlement keys; absent means tag-only matching. */
   entitlementKeys?: string[];
@@ -116,12 +112,11 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
 }> {
   const userTags = context.user.tags || [];
   const entitlementKeys = context.entitlementKeys ?? [];
-  // Coerce to string: the lake's organizationId/createdByUserId are String fields, but a hydrated
-  // user doc may carry an ObjectId - or a populated Organization document - here, and an
-  // ObjectId/document query against a String never matches. normalizeId handles all three shapes;
-  // plain String() would turn a populated doc into "[object Object]" (#1281 / @bike4mind/utils/normalizeId).
-  const organizationId = normalizeId(context.user.organizationId);
   const userId = context.user.id ? String(context.user.id) : undefined;
+  // Authoritative membership (owner + users[] ACL), resolved here so every construction site
+  // of this context - the chat tools, the retrieval scope, semantic search - cannot disagree
+  // about what "my orgs" means (#1674). Id-less callers are members of nothing.
+  const organizationIds = userId ? await context.db.organizations.findMembershipOrgIds(userId) : [];
   let dynamicDataLakes: DataLakeConfig[] | undefined;
   // Ids of fetched lakes whose PERSISTED createdByUserId is this caller. Read off the raw
   // documents because toDataLakeConfig drops createdByUserId - and that projection is also what
@@ -138,7 +133,7 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
       const dbLakes = await context.db.dataLakes.findActiveByUserTagsAndEntitlements(
         userTags,
         entitlementKeys,
-        organizationId,
+        organizationIds,
         userId
       );
       dynamicDataLakes = dbLakes.map(toDataLakeConfig);

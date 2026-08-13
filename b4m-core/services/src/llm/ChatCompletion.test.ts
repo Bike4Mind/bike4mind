@@ -225,7 +225,7 @@ describe('ChatCompletionProcess', () => {
         update: vi.fn(),
         attachAgent: vi.fn().mockResolvedValue(mockSession),
       },
-      organizations: { findById: vi.fn(), update: vi.fn() },
+      organizations: { findById: vi.fn(), update: vi.fn(), findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
       quests: {
         findById: vi.fn().mockResolvedValue(mockQuest),
         findByIdWithStatus: vi.fn().mockResolvedValue(mockQuest),
@@ -320,7 +320,10 @@ describe('ChatCompletionProcess', () => {
       // re-run the DB lookup every turn for every caller who has no lake - the common case.
       const findLakes = vi.fn().mockResolvedValue([]);
       (service as any).accessibleDataLakeAccessMemo = undefined;
-      (service as any).db = { dataLakes: { findActiveByUserTagsAndEntitlements: findLakes } };
+      (service as any).db = {
+        dataLakes: { findActiveByUserTagsAndEntitlements: findLakes },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      };
       (service as any).getEntitlements = vi.fn().mockResolvedValue([]);
       (service as any).entitlementsResolved = false;
       (service as any).entitlementKeys = [];

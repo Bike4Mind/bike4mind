@@ -219,8 +219,10 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * resolved entitlement keys), or - for a gateless ORG lake - membership in its org. Plus
    * the caller's OWN lakes (owner bypass). Mirrors the HTTP path's `findAccessible`.
    *
-   * `organizationId` is the hard org prerequisite: org-less lakes stay reachable cross-org
-   * (curated opti/help); an org-scoped lake only resolves for a caller in that org.
+   * `organizationIds` is the hard org prerequisite: org-less lakes stay reachable cross-org
+   * (curated opti/help); an org-scoped lake only resolves for a caller who is a MEMBER of that
+   * org (owner + `users[]` ACL - see `IOrganizationRepository.findMembershipOrgIds`, #1674).
+   * Empty/absent never widens access - it collapses every org arm to its org-less-only form.
    *
    * `userId` is the owner bypass + the Private-by-default rule: a lake with NO org and NO
    * gate is owner-only (not world-readable). Supply it on every user-facing retrieval call;
@@ -229,7 +231,7 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   findActiveByUserTagsAndEntitlements(
     userTags: string[],
     entitlementKeys: string[],
-    organizationId?: string | null,
+    organizationIds?: string[] | null,
     userId?: string | null
   ): Promise<IDataLakeDocument[]>;
   findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]>;

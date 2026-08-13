@@ -17,8 +17,19 @@ const dbLake = (overrides: Partial<IDataLakeDocument> & Pick<IDataLakeDocument, 
 // real authority for lakes the caller does NOT own - even when the DB layer over-returns, an
 // entitlement-gated lake is only surfaced to a key holder. A lake the caller created is the one
 // exception, and its ownership is re-verified in memory rather than taken from the query.
-const ctx = (lakes: IDataLakeDocument[], over: Partial<DataLakeAccessContext> = {}): DataLakeAccessContext => ({
-  db: { dataLakes: { findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue(lakes) } as never },
+//
+// `organizationIds` stands in for the caller's membership set (what `db.organizations.
+// findMembershipOrgIds` would resolve) - default empty (member of nothing) unless a test
+// needs an org lake to resolve.
+const ctx = (
+  lakes: IDataLakeDocument[],
+  over: Partial<DataLakeAccessContext> = {},
+  organizationIds: string[] = []
+): DataLakeAccessContext => ({
+  db: {
+    dataLakes: { findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue(lakes) } as never,
+    organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(organizationIds) },
+  },
   user: { tags: [] },
   ...over,
 });
@@ -49,50 +60,74 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
   });
 
   it('falls back to static lakes (and never throws) when the dataLakes repo is absent', async () => {
-    const res = await getDynamicDataLakeAccess({ db: {}, user: { tags: ['Opti'] } });
+    const res = await getDynamicDataLakeAccess({
+      db: { organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) } },
+      user: { tags: ['Opti'] },
+    });
     // Static DATA_LAKES: the opti lake requires the Opti tag.
     expect(res.dataLakeTags.sort()).toEqual(['datalake:opti-knowledge']);
   });
 
-  it('threads the caller organizationId + id into the DB pre-filter (scoping happens there)', async () => {
-    const spy = vi.fn().mockResolvedValue([]);
+  it('resolves the membership set via db.organizations and passes it to the collection query', async () => {
+    const findActive = vi.fn().mockResolvedValue([]);
     await getDynamicDataLakeAccess({
-      db: { dataLakes: { findActiveByUserTagsAndEntitlements: spy } as never },
-      user: { id: 'u1', tags: ['x'], organizationId: 'org123' },
+      db: {
+        dataLakes: { findActiveByUserTagsAndEntitlements: findActive } as never,
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(['org-a', 'org-b']) },
+      },
+      user: { id: 'u1', tags: [] },
+      entitlementKeys: [],
+    } as never);
+    expect(findActive).toHaveBeenCalledWith([], [], ['org-a', 'org-b'], 'u1');
+  });
+
+  it('threads entitlementKeys and tags into the DB pre-filter alongside the resolved membership set', async () => {
+    const spy = vi.fn().mockResolvedValue([]);
+    const findMembershipOrgIds = vi.fn().mockResolvedValue(['org123']);
+    await getDynamicDataLakeAccess({
+      db: { dataLakes: { findActiveByUserTagsAndEntitlements: spy } as never, organizations: { findMembershipOrgIds } },
+      user: { id: 'u1', tags: ['x'] },
       entitlementKeys: ['k:pro'],
     });
-    expect(spy).toHaveBeenCalledWith(['x'], ['k:pro'], 'org123', 'u1');
+    expect(findMembershipOrgIds).toHaveBeenCalledWith('u1');
+    expect(spy).toHaveBeenCalledWith(['x'], ['k:pro'], ['org123'], 'u1');
   });
 
-  it('passes undefined org/id for an org-less, id-less caller (only org-less gated lakes resolve)', async () => {
+  it('resolves an empty membership set (never calling db.organizations) for an id-less caller', async () => {
     const spy = vi.fn().mockResolvedValue([]);
+    const findMembershipOrgIds = vi.fn().mockResolvedValue(['unreachable']);
     await getDynamicDataLakeAccess({
-      db: { dataLakes: { findActiveByUserTagsAndEntitlements: spy } as never },
+      db: { dataLakes: { findActiveByUserTagsAndEntitlements: spy } as never, organizations: { findMembershipOrgIds } },
       user: { tags: [] },
     });
-    expect(spy).toHaveBeenCalledWith([], [], undefined, undefined);
+    // An id-less caller is a member of nothing - the resolver must not even ask, since there is
+    // no id to resolve membership for.
+    expect(findMembershipOrgIds).not.toHaveBeenCalled();
+    expect(spy).toHaveBeenCalledWith([], [], [], undefined);
   });
 
-  it('normalizes an ObjectId organizationId (and string-coerces id) before querying', async () => {
+  it('string-coerces an ObjectId-like id before resolving membership and querying', async () => {
     const spy = vi.fn().mockResolvedValue([]);
-    // Simulates a hydrated user doc: organizationId arrives as an ObjectId (exposes toHexString),
-    // id as an ObjectId-like value. normalizeId yields the org hex; id keeps its String() coercion.
+    const findMembershipOrgIds = vi.fn().mockResolvedValue([]);
+    // Simulates a hydrated user doc: id arrives as an ObjectId-like value (exposes toString).
     await getDynamicDataLakeAccess({
-      db: { dataLakes: { findActiveByUserTagsAndEntitlements: spy } as never },
-      user: { id: { toString: () => 'user-oid' }, tags: [], organizationId: { toHexString: () => 'org-oid' } },
+      db: { dataLakes: { findActiveByUserTagsAndEntitlements: spy } as never, organizations: { findMembershipOrgIds } },
+      user: { id: { toString: () => 'user-oid' }, tags: [] },
     });
-    expect(spy).toHaveBeenCalledWith([], [], 'org-oid', 'user-oid');
+    expect(findMembershipOrgIds).toHaveBeenCalledWith('user-oid');
+    expect(spy).toHaveBeenCalledWith([], [], [], 'user-oid');
   });
 
-  it('normalizes a POPULATED-document organizationId to its hex, never "[object Object]" (#1343)', async () => {
+  it('passes the resolved membership set through to the collection query unchanged', async () => {
     const spy = vi.fn().mockResolvedValue([]);
-    // A .populate('organizationId') upstream would hand a full Organization doc here. Raw String()
-    // would make the org filter "[object Object]" and match no org lake; normalizeId reads its _id.
+    // The resolver does no normalization of its own on this set - findMembershipOrgIds is the
+    // authority, and already returns normalized strings (#1674).
+    const findMembershipOrgIds = vi.fn().mockResolvedValue(['org-hex', 'org-hex-2']);
     await getDynamicDataLakeAccess({
-      db: { dataLakes: { findActiveByUserTagsAndEntitlements: spy } as never },
-      user: { tags: [], organizationId: { _id: { toHexString: () => 'org-hex' }, name: 'Acme' } },
+      db: { dataLakes: { findActiveByUserTagsAndEntitlements: spy } as never, organizations: { findMembershipOrgIds } },
+      user: { id: 'u1', tags: [] },
     });
-    expect(spy).toHaveBeenCalledWith([], [], 'org-hex', undefined);
+    expect(spy).toHaveBeenCalledWith([], [], ['org-hex', 'org-hex-2'], 'u1');
   });
 
   it('drops a DB lake that carries a static-registry meta-tag, gate or no gate', async () => {
@@ -116,7 +151,7 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
     const failing = { findActiveByUserTagsAndEntitlements: vi.fn().mockRejectedValue(new Error('mongo down')) };
 
     const res = await getDynamicDataLakeAccess({
-      db: { dataLakes: failing as never },
+      db: { dataLakes: failing as never, organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) } },
       user: { tags: ['Opti'] },
       entitlementKeys: [],
       logger: { warn } as never,
@@ -224,9 +259,7 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
       requiredUserTag: 'TagIDoNotHold',
     });
 
-    const res = await getDynamicDataLakeAccess(
-      ctx([orgLake], { user: { id: 'owner', tags: [], organizationId: 'orgA' } })
-    );
+    const res = await getDynamicDataLakeAccess(ctx([orgLake], { user: { id: 'owner', tags: [] } }, ['orgA']));
 
     expect(res.dataLakeTags).toEqual(['datalake:orgA:handbook']);
     expect(res.scopedTagPrefixes).toEqual(['hb:']);

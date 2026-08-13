@@ -7,6 +7,7 @@ import {
   fabFileChunkRepository,
   fabFileRepository,
   imageModerationIncidentRepository,
+  organizationRepository,
   projectRepository,
   userRepository,
 } from '@bike4mind/database';
@@ -75,6 +76,7 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
         // moderation gate. The gate itself is unconditional (constructed
         // inline in the tool) - this only wires the incident record, not the block.
         imageModerationIncidents: imageModerationIncidentRepository,
+        organizations: organizationRepository,
       },
       storage: getFilesStorage(),
       imageGenerateStorage: getGeneratedImageStorage(),
