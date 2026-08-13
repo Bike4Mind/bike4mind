@@ -18,7 +18,7 @@ import {
   type ModelInfo,
 } from '@bike4mind/common';
 import { executeToolsBatch } from './executeToolsBatch';
-import { recordToolResult } from './recordToolResult';
+import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   CompletionInfo,
   DEFAULT_MAX_TOOL_CALLS,
@@ -687,7 +687,7 @@ export class AnthropicBackend implements ICompletionBackend {
     messages: IMessage[],
     options: Partial<ICompletionOptions>,
     cb: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
-    toolsUsed: Array<{ name: string; arguments?: string; id?: string }> = []
+    toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     this.currentModel = model;
     options = {
@@ -2064,7 +2064,18 @@ export class AnthropicBackend implements ICompletionBackend {
                 { id, name, model, isMcpTool, streaming: false },
                 messages
               );
-              if (!parsedParams) continue;
+              if (!parsedParams) {
+                // tryParseToolParams already pushed this exact observation into messages (see the
+                // streaming path's identical site) - record it here too so a call that never ran
+                // still shows as such, rather than falling through as an unstamped entry.
+                recordToolResult(
+                  toolsUsed,
+                  { id, name },
+                  'Error: Tool parameters were corrupted due to a stream interruption. Please retry.',
+                  false
+                );
+                continue;
+              }
 
               resolvedTools.push({ id: id ?? '', name, parameters, parsedParams, toolFn, isMcpTool });
             }

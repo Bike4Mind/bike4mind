@@ -1,7 +1,7 @@
 import { Content, GenerationConfig, GoogleGenAI, Part, Tool } from '@google/genai';
 import { DEFAULT_MAX_TOOL_CALLS, ICompletionBackend, type CompletionInfo, type ICompletionOptions } from './backend';
 import { executeToolsBatch } from './executeToolsBatch';
-import { recordToolResult } from './recordToolResult';
+import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import { Logger } from '@bike4mind/observability';
 import {
   ChatModels,
@@ -74,7 +74,7 @@ export class GeminiBackend implements ICompletionBackend {
     toolCall: { name?: string; args?: Record<string, unknown> },
     part: GeminiPart,
     toolCalls: ToolCall[],
-    toolsUsed: Array<{ name: string; arguments?: string; id?: string }>,
+    toolsUsed: Array<RecordableToolUse>,
     checkDuplicates: boolean = false
   ): void {
     const toolName = toolCall.name ?? 'unknown_tool';
@@ -544,7 +544,7 @@ export class GeminiBackend implements ICompletionBackend {
     messages: IMessage[],
     options: Partial<ICompletionOptions>,
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
-    toolsUsed: Array<{ name: string; arguments?: string; id?: string }> = []
+    toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     this.currentModel = modelName;
     const modelInfo = (await this.getModelInfo()).find(model => model.id === modelName);

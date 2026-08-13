@@ -430,3 +430,115 @@ describe.each(SPECS)('$name tool result recording', spec => {
     expect(returnValues).toEqual(['3', '7']);
   });
 });
+
+describe('malformed tool arguments are stamped, not left unrecorded', () => {
+  // Regression: the malformed-arguments skip path pushes a toolsUsed entry (id+name) before the
+  // JSON.parse that fails, so it enters replayableToolCalls in utils.ts once a sibling call in the
+  // same turn has a real returnValue - it must carry success:false, or it replays as an
+  // indistinguishable TOOL_RESULT_NOT_RECORDED marker instead of "this call never ran".
+
+  it('AnthropicBackend records success:false when tool_use JSON is malformed (streaming)', async () => {
+    const backend = new AnthropicBackend('test-key');
+    let calls = 0;
+    const sequence: unknown[][] = [
+      [
+        { type: 'message_start' },
+        {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'call_1', name: 'add', input: {} },
+        },
+        { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{not valid json' } },
+        { type: 'content_block_stop', index: 0 },
+        { type: 'message_delta', usage: { input_tokens: 10, output_tokens: 5 } },
+        { type: 'message_stop' },
+      ],
+      [
+        { type: 'message_start' },
+        { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Sorry, that failed.' } },
+        { type: 'content_block_stop', index: 0 },
+        { type: 'message_delta', usage: { input_tokens: 20, output_tokens: 5 } },
+        { type: 'message_stop' },
+      ],
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (backend as unknown as { _api: any })._api = {
+      messages: { create: async () => asyncIterable(sequence[calls++]) },
+    };
+    const tool = makeTool(async ({ a, b }) => String(a + b));
+    const { calls: cbCalls, cb } = captureCb();
+
+    await backend.complete(
+      'claude-sonnet-4-5-20250929',
+      [{ role: 'user', content: 'add' }],
+      { stream: true, tools: [tool], executeTools: true },
+      cb
+    );
+
+    const toolsUsed = lastToolsUsed(cbCalls);
+    expect(toolsUsed).toBeDefined();
+    expect(toolsUsed![0].success).toBe(false);
+    expect(toolsUsed![0].returnValue).toContain('corrupted');
+  });
+
+  it('OpenAIBackend records success:false when tool_calls JSON is malformed (streaming)', async () => {
+    const backend = new OpenAIBackend({ openai: 'test-key' } as never);
+    let calls = 0;
+    const sequence: unknown[][] = [
+      [
+        {
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'add', arguments: '' } }],
+              },
+              finish_reason: null,
+            },
+          ],
+          usage: null,
+        },
+        {
+          choices: [
+            {
+              index: 0,
+              delta: { tool_calls: [{ index: 0, function: { arguments: '{not valid' } }] },
+              finish_reason: null,
+            },
+          ],
+          usage: null,
+        },
+        {
+          choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
+          usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+        },
+      ],
+      [
+        { choices: [{ index: 0, delta: { content: 'Sorry, that failed.' }, finish_reason: null }], usage: null },
+        {
+          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 20, completion_tokens: 5, total_tokens: 25 },
+        },
+      ],
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (backend as unknown as { _api: any })._api = {
+      chat: { completions: { create: async () => asOpenAIStream(sequence[calls++]) } },
+    };
+    const tool = makeTool(async ({ a, b }) => String(a + b));
+    const { calls: cbCalls, cb } = captureCb();
+
+    await backend.complete(
+      'gpt-4o',
+      [{ role: 'user', content: 'add' }],
+      { stream: true, tools: [tool], executeTools: true },
+      cb
+    );
+
+    const toolsUsed = lastToolsUsed(cbCalls);
+    expect(toolsUsed).toBeDefined();
+    expect(toolsUsed![0].success).toBe(false);
+    expect(toolsUsed![0].returnValue).toContain('malformed');
+  });
+});

@@ -13,7 +13,7 @@ import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resource
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
 import { executeToolsBatch } from './executeToolsBatch';
-import { recordToolResult } from './recordToolResult';
+import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   CompletionInfo,
   DEFAULT_MAX_TOOL_CALLS,
@@ -272,7 +272,7 @@ export class XAIBackend implements ICompletionBackend {
     messages: IMessage[],
     options: Partial<ICompletionOptions>,
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
-    toolsUsed: Array<{ name: string; arguments?: string; id?: string }> = []
+    toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     this.currentModel = model;
     options = {
@@ -444,6 +444,12 @@ export class XAIBackend implements ICompletionBackend {
                 this.logger.warn(`JSON parse error for ${toolCall.function.name} arguments`);
                 const entry = toolsUsed.find(t => t.name === toolCall.function.name && t.id === toolCall.id);
                 if (entry) entry.arguments = '{}';
+                recordToolResult(
+                  toolsUsed,
+                  { id: toolCall.id, name: toolCall.function.name },
+                  'Error: Tool arguments were malformed and could not be parsed.',
+                  false
+                );
               }
             }
 
@@ -700,6 +706,12 @@ export class XAIBackend implements ICompletionBackend {
             this.logger.warn(`JSON parse error for ${name} arguments (streaming)`);
             const entry = toolsUsed.find(t => t.name === name && t.id === id);
             if (entry) entry.arguments = '{}';
+            recordToolResult(
+              toolsUsed,
+              { id, name },
+              'Error: Tool arguments were malformed and could not be parsed.',
+              false
+            );
           }
         }
 
