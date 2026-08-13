@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, act, waitFor } from '@testing-library/react';
+import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 
@@ -41,7 +41,14 @@ const makeReport = () => ({
 });
 
 function renderDialog() {
-  return render(<PrReportDialog open onClose={vi.fn()} />, { wrapper });
+  const onClose = vi.fn();
+  return { onClose, ...render(<PrReportDialog open onClose={onClose} />, { wrapper }) };
+}
+
+// Escape reaches Joy's Modal keydown handler by bubbling from any element inside the
+// dialog; the send button is always mounted, so it is a stable target.
+function pressEscape() {
+  fireEvent.keyDown(screen.getByTestId('pr-report-send-btn'), { key: 'Escape', code: 'Escape' });
 }
 
 beforeEach(() => {
@@ -113,8 +120,57 @@ describe('PrReportDialog send-state machine', () => {
       resolveSend({ outcome: 'deliveryUnknown' });
     });
 
-    // Unconfirmed: Regenerate stays locked so it cannot reset state past the warning.
+    // Unconfirmed: Regenerate AND Close stay locked so neither can reset state past the
+    // warning (Close would unmount the dialog, and the next open re-arms with a fresh key).
     expect(await screen.findByTestId('pr-report-confirm-resend-btn')).toBeInTheDocument();
     expect(screen.getByTestId('pr-report-regenerate-btn')).toBeDisabled();
+    expect(screen.getByTestId('pr-report-close-btn')).toBeDisabled();
+  });
+
+  it('IS dismissable via Escape when idle (control - proves the gated cases are real)', async () => {
+    // Without this, the two non-dismissal tests could pass simply because Escape never
+    // reaches Joy's handler in jsdom. Here onClose is wired, so Escape must fire it.
+    const { onClose } = renderDialog();
+    expect(screen.getByTestId('pr-report-send-btn')).not.toBeDisabled();
+
+    pressEscape();
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it('cannot be dismissed via Escape while a send is in flight', async () => {
+    const user = userEvent.setup();
+    let resolveSend!: (value: unknown) => void;
+    sendMutateAsync.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          resolveSend = resolve;
+        })
+    );
+    const { onClose } = renderDialog();
+
+    await user.click(screen.getByTestId('pr-report-send-btn'));
+    await waitFor(() => expect(screen.getByTestId('pr-report-send-btn')).toBeDisabled());
+
+    pressEscape();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('pr-report-send-btn')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveSend({ outcome: 'sent' });
+    });
+  });
+
+  it('cannot be dismissed via Escape during an unconfirmed delivery', async () => {
+    const user = userEvent.setup();
+    sendMutateAsync.mockResolvedValue({ outcome: 'deliveryUnknown' });
+    const { onClose } = renderDialog();
+
+    await user.click(screen.getByTestId('pr-report-send-btn'));
+    expect(await screen.findByTestId('pr-report-confirm-resend-btn')).toBeInTheDocument();
+
+    // Escape must not slip past the "I checked the channel" gate.
+    pressEscape();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('pr-report-confirm-resend-btn')).toBeInTheDocument();
   });
 });

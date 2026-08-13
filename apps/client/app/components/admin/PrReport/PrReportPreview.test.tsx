@@ -22,10 +22,12 @@ describe('PrReportPreview', () => {
       { wrapper }
     );
 
-    // Resolved user name is shown.
-    expect(screen.getByText(/Wes Carda/)).toBeInTheDocument();
-    // A group id has no users.info name, so it renders as the raw id - honest, not blank.
-    expect(screen.getByText(/S0REVIEWERS/)).toBeInTheDocument();
+    // Resolved user name is shown, in a mention span (@Wes Carda).
+    expect(screen.getByText(/^@Wes Carda$/)).toBeInTheDocument();
+    // A group id has no users.info name, so it renders as the raw id in a mention span
+    // (@S0REVIEWERS). Pinned to the notifying-form render: a revert to inert `<@S...>`
+    // text would not produce this span and this assertion would fail.
+    expect(screen.getByText(/^@S0REVIEWERS$/)).toBeInTheDocument();
     // The link is clickable and points where the label says.
     const link = screen.getByRole('link', { name: '#1 Fix' });
     expect(link).toHaveAttribute('href', 'https://x.test/1');

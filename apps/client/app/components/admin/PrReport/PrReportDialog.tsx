@@ -105,6 +105,11 @@ export function PrReportDialog({ open, onClose }: PrReportDialogProps) {
   }, [open]);
 
   const onTextChange = (next: string) => {
+    // A send in flight has already captured the text and key: ignore edits so the key is
+    // not pointlessly rotated and the shown text cannot drift from what was actually
+    // posted. The textarea is disabled in this state too - this is the belt to that
+    // suspenders.
+    if (sendState === 'sending') return;
     setText(next);
     // While a delivery is unconfirmed the gate stays shut: only confirmResendAfterUnknown
     // (a deliberate acknowledgement) may leave 'deliveryUnknown', and it mints its own
@@ -116,10 +121,8 @@ export function PrReportDialog({ open, onClose }: PrReportDialogProps) {
     // the previous one. Re-keying on edit is what keeps the dedupe scoped to genuine
     // retries (a double-click, which does not change the text).
     setIdempotencyKey(crypto.randomUUID());
-    if (sendState !== 'sending') {
-      setSendState('idle');
-      setFailure(null);
-    }
+    setSendState('idle');
+    setFailure(null);
   };
 
   const runSend = async () => {
@@ -157,11 +160,13 @@ export function PrReportDialog({ open, onClose }: PrReportDialogProps) {
   const sendDisabled = !text.trim() || sendState === 'sending' || finished || unknownDelivery;
 
   return (
-    // A send in flight must not be abandoned by Escape/backdrop: the mutation continuation
-    // would be lost on unmount, and if the post actually landed the next open mints a fresh
-    // key and re-enables Send - the double-post this dialog is meant to prevent. An
-    // undefined onClose makes Joy's Modal non-dismissable for the duration of the send.
-    <Modal open={open} onClose={sendState === 'sending' ? undefined : onClose}>
+    // Neither an in-flight send NOR an unconfirmed delivery may be abandoned by
+    // Escape/backdrop/Close. The parent unmounts on close, so the next open mints a fresh
+    // key and re-enables Send - the exact double-post this dialog exists to prevent.
+    // 'sending' would lose the mutation continuation; 'deliveryUnknown' would escape the "I
+    // checked the channel" gate, whose whole point is that leaving it takes a deliberate
+    // acknowledgement. An undefined onClose makes Joy's Modal non-dismissable in both.
+    <Modal open={open} onClose={sendState === 'sending' || unknownDelivery ? undefined : onClose}>
       <ModalDialog
         aria-labelledby="pr-report-dialog-title"
         sx={{ width: 'min(860px, 96vw)', maxHeight: '92vh', overflow: 'auto' }}
@@ -227,6 +232,10 @@ export function PrReportDialog({ open, onClose }: PrReportDialogProps) {
                     maxRows={22}
                     value={text}
                     onChange={event => onTextChange(event.target.value)}
+                    // Locked while a send is in flight so the shown text stays what was
+                    // posted; still editable during deliveryUnknown so the admin can fix
+                    // the draft before the deliberate re-send.
+                    disabled={sendState === 'sending'}
                     slotProps={{ textarea: { style: { fontFamily: 'monospace', fontSize: '0.8rem' } } }}
                   />
                 </TabPanel>
@@ -299,7 +308,7 @@ export function PrReportDialog({ open, onClose }: PrReportDialogProps) {
               variant="plain"
               color="neutral"
               onClick={onClose}
-              disabled={sendState === 'sending'}
+              disabled={sendState === 'sending' || unknownDelivery}
               data-testid="pr-report-close-btn"
             >
               Close
