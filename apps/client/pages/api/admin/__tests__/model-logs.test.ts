@@ -66,26 +66,50 @@ describe('GET /api/admin/model-logs', () => {
       promptMeta: {
         session: { id: 'session-2', userId: 'user-1' },
         model: { name: 'gpt-4o' },
+        // Only `name` is ever written by the real path (result/error are declared but unwritten -
+        // see the route's own comment), so the fixture searches on name, not result/error.
         executionTracking: {
-          steps: [{ name: 'search_knowledge_base', status: 'completed', result: 'found the golden retriever facts' }],
+          steps: [{ name: 'search_knowledge_base_golden_retriever', status: 'completed' }],
         },
       },
+    });
+
+    await Quest.create({
+      sessionId: 'session-3',
+      type: 'message',
+      timestamp: new Date(),
+      prompt: 'hey',
+      promptMeta: { session: { id: 'session-3', userId: 'user-1' }, model: { name: 'llama-3' } },
     });
 
     // Deliberately seeds systemPrompt/userPrompt with the search term, to prove the route no
     // longer matches on them now that those two dead $or arms are dropped - they are never
     // persisted by the real write path, but the schema still admits a direct write like this.
     await Quest.create({
-      sessionId: 'session-3',
+      sessionId: 'session-4',
       type: 'message',
       timestamp: new Date(),
-      prompt: 'hey',
+      prompt: 'yo',
       promptMeta: {
-        session: { id: 'session-3', userId: 'user-1' },
+        session: { id: 'session-4', userId: 'user-1' },
         model: { name: 'grok-3' },
         context: { systemPrompt: 'golden retriever facts', userPrompt: 'golden retriever facts' },
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any, // any: fixture deliberately writes fields the PromptMeta type excludes.
+    });
+
+    // promptMeta.prompt IS a real, always-persisted field - replaces the dropped userPrompt arm's
+    // search intent without the leak risk.
+    await Quest.create({
+      sessionId: 'session-5',
+      type: 'message',
+      timestamp: new Date(),
+      prompt: 'yep',
+      promptMeta: {
+        session: { id: 'session-5', userId: 'user-1' },
+        model: { name: 'gemini-2.5-flash' },
+        prompt: 'what breed makes a good golden retriever companion?',
+      },
     });
   });
 
@@ -104,18 +128,27 @@ describe('GET /api/admin/model-logs', () => {
     expect(JSON.stringify(body.logs)).toContain('claude-opus-5');
   });
 
-  it('matches on an executionTracking.steps result via $elemMatch', async () => {
-    const { req, res } = run({ search: 'golden retriever' });
+  it('matches on an executionTracking.steps name via $elemMatch', async () => {
+    const { req, res } = run({ search: 'search_knowledge_base_golden_retriever' });
     await handler(req, res);
     const body = res._getJSONData();
     expect(body.total).toBe(1);
     expect(JSON.stringify(body.logs)).toContain('gpt-4o');
   });
 
-  it('does not match on context.systemPrompt/userPrompt (dead arms dropped, not fixed)', async () => {
-    const { req, res } = run({ search: 'golden retriever' });
+  it('matches on promptMeta.prompt, replacing the dropped userPrompt arm intent', async () => {
+    const { req, res } = run({ search: 'golden retriever companion' });
     await handler(req, res);
     const body = res._getJSONData();
+    expect(body.total).toBe(1);
+    expect(JSON.stringify(body.logs)).toContain('gemini-2.5-flash');
+  });
+
+  it('does not match on context.systemPrompt/userPrompt (dead arms dropped, not fixed)', async () => {
+    const { req, res } = run({ search: 'golden retriever facts' });
+    await handler(req, res);
+    const body = res._getJSONData();
+    expect(body.total).toBe(0);
     expect(JSON.stringify(body.logs)).not.toContain('grok-3');
   });
 });

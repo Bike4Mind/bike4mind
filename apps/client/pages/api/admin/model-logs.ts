@@ -45,23 +45,23 @@ const handler = baseApi().get(
 
       // Add search filter. promptMeta.context.systemPrompt/userPrompt are deliberately never
       // persisted (see ChatCompletionProcess.ts's leak-avoidance comments), so those two arms
-      // can never match - dropped rather than fixed. executionTracking.steps is an array of
-      // objects, so a bare $regex against the array never matches either; $elemMatch is the
-      // correct way to regex a specific field inside each element (same pattern already used
-      // in fabFileSearchQuery.ts's tag search).
+      // can never match - dropped rather than fixed. promptMeta.prompt IS persisted
+      // (ChatCompletionProcess.ts) and covers the same "search the user's prompt text" intent
+      // without that leak risk, so it replaces the dropped userPrompt arm rather than just
+      // deleting the capability. executionTracking.steps is an array of objects, so a bare
+      // $regex against the array never matches - $elemMatch is the correct way to regex a field
+      // inside each element (same pattern already used in fabFileSearchQuery.ts's tag search).
+      // Only `name` is included there: `result`/`error` are declared on the step schema but
+      // nothing in ChatCompletionProcess.ts ever writes them, so a $regex arm against either
+      // would be dead weight, same class of issue as the two dropped context arms.
       if (search) {
         const escapedSearch = escapeRegex(search);
         query.$or = [
           { 'promptMeta.model.name': { $regex: escapedSearch, $options: 'i' } },
+          { 'promptMeta.prompt': { $regex: escapedSearch, $options: 'i' } },
           {
             'promptMeta.executionTracking.steps': {
-              $elemMatch: {
-                $or: [
-                  { name: { $regex: escapedSearch, $options: 'i' } },
-                  { result: { $regex: escapedSearch, $options: 'i' } },
-                  { error: { $regex: escapedSearch, $options: 'i' } },
-                ],
-              },
+              $elemMatch: { name: { $regex: escapedSearch, $options: 'i' } },
             },
           },
         ];
