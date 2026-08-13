@@ -86,3 +86,32 @@ export function buildLacksContentPrefixTagFilter(prefix: string): Record<string,
     },
   };
 }
+
+/**
+ * Matches files carrying no lake-membership meta-tag OTHER than `datalakeTag` itself.
+ *
+ * `addFileToLake` has no exclusivity check, so one file can carry more than one lake's meta-tag at
+ * once. A query that needs to tell "mine, and only mine" from "mine, but also a co-owning lake's"
+ * spreads this alongside a membership filter - see `hasArchivedMemberExclusiveToDataLakeTag`'s own
+ * doc for why that distinction matters there.
+ *
+ * The namespace test is case-INSENSITIVE, matching `isDataLakeTagName` (@bike4mind/common) - a
+ * `DATALAKE:other` tag is still another lake's membership however it is cased. The "other than
+ * mine" test is exact and case-SENSITIVE, the same comparison `buildDataLakeMembershipFilter`'s
+ * meta arm uses to decide a row is mine at all - both halves of a composed query must agree on
+ * what "mine" is, or a mixed-case variant of this lake's own tag would count as a foreign one.
+ *
+ * A document with no `tags` at all matches ($not is true on a missing field), which is correct: it
+ * carries no other lake's tag. It cannot widen anything, since every membership arm requires one.
+ */
+export function buildNoOtherLakeMetaTagFilter(datalakeTag: string): Record<string, unknown> {
+  return {
+    tags: {
+      $not: {
+        $elemMatch: {
+          name: { $regex: new RegExp(`^${DATALAKE_TAG_PREFIX}`, 'i'), $ne: datalakeTag },
+        },
+      },
+    },
+  };
+}

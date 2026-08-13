@@ -325,14 +325,130 @@ describe('FabFile data lake lifecycle membership', () => {
       expect(found.map(f => f.fileName)).toEqual(['meta.txt']);
     });
 
-    it('hasArchivedByDataLakeTag reports existence without materializing the rows', async () => {
+    it('hasArchivedMemberExclusiveToDataLakeTag reports existence without materializing the rows', async () => {
       await seedLakeRows();
 
-      expect(await fabFileRepository.hasArchivedByDataLakeTag(scope)).toBe(false);
+      expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(scope)).toBe(false);
 
       await fabFileRepository.archiveByDataLakeTag(scope);
 
-      expect(await fabFileRepository.hasArchivedByDataLakeTag(scope)).toBe(true);
+      expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(scope)).toBe(true);
+    });
+
+    describe('hasArchivedMemberExclusiveToDataLakeTag - excluding a co-owning lake (#1729)', () => {
+      const SIBLING_TAG = 'datalake:org1:sibling-lake';
+
+      it("ignores an archived member that also carries another lake's meta-tag - it is that lake's under its own stamp, not this lake's orphan", async () => {
+        const coMember = await makeFile({
+          fileName: 'co-member.txt',
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }, { name: SIBLING_TAG }],
+        });
+        await FabFile.updateOne({ _id: coMember._id }, { $set: { archivedAt: new Date('2026-05-01') } });
+
+        expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(metaOnlyScope)).toBe(false);
+      });
+
+      it("still reports a row carrying ONLY this lake's meta-tag, the genuine legacy orphan the guard exists to protect", async () => {
+        // The unrelated tag matters: it keeps this test from passing by accident if the namespace
+        // regex were ever dropped entirely (which would exclude on ANY second tag, not just
+        // another lake's).
+        const mineOnly = await makeFile({
+          fileName: 'mine-only.txt',
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }, { name: 'unrelated-content-tag' }],
+        });
+        await FabFile.updateOne({ _id: mineOnly._id }, { $set: { archivedAt: new Date('2026-05-01') } });
+
+        expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(metaOnlyScope)).toBe(true);
+      });
+
+      it("ignores a row carrying THREE lakes' meta-tags", async () => {
+        const triMember = await makeFile({
+          fileName: 'tri-member.txt',
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }, { name: SIBLING_TAG }, { name: 'datalake:org1:third-lake' }],
+        });
+        await FabFile.updateOne({ _id: triMember._id }, { $set: { archivedAt: new Date('2026-05-01') } });
+
+        expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(metaOnlyScope)).toBe(false);
+      });
+
+      it('decides per row: a genuine mine-only orphan still reports true alongside a co-tagged archived row', async () => {
+        const mineOnly = await makeFile({ fileName: 'mine-only.txt', userId: CREATOR, tags: [{ name: DATALAKE_TAG }] });
+        await FabFile.updateOne({ _id: mineOnly._id }, { $set: { archivedAt: new Date('2026-05-01') } });
+        const coMember = await makeFile({
+          fileName: 'co-member.txt',
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }, { name: SIBLING_TAG }],
+        });
+        await FabFile.updateOne({ _id: coMember._id }, { $set: { archivedAt: new Date('2026-05-01') } });
+
+        expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(metaOnlyScope)).toBe(true);
+      });
+
+      it('does not trip on a co-tagged row that is not archived at all', async () => {
+        await makeFile({
+          fileName: 'co-member-live.txt',
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }, { name: SIBLING_TAG }],
+        });
+
+        expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(metaOnlyScope)).toBe(false);
+      });
+
+      it('folds case on the namespace, so a mixed-case sibling meta-tag still excludes the row', async () => {
+        const coMember = await makeFile({
+          fileName: 'co-member-mixed-case.txt',
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }, { name: 'DATALAKE:Org1:Sibling' }],
+        });
+        await FabFile.updateOne({ _id: coMember._id }, { $set: { archivedAt: new Date('2026-05-01') } });
+
+        expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(metaOnlyScope)).toBe(false);
+      });
+
+      it("treats a case-variant of THIS LAKE'S OWN tag as another lake's - the deliberate degenerate direction, since no lake can hold a non-canonical meta-tag anyway", async () => {
+        const variant = await makeFile({
+          fileName: 'own-tag-case-variant.txt',
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }, { name: 'DataLake:Org1:Acme-Docs' }],
+        });
+        await FabFile.updateOne({ _id: variant._id }, { $set: { archivedAt: new Date('2026-05-01') } });
+
+        expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(metaOnlyScope)).toBe(false);
+      });
+
+      it('lets lake A claim its own stamp so its bounded unarchive leaves the co-owned member archived, instead of the unbounded fallback freeing it', async () => {
+        const coMember = await makeFile({
+          fileName: 'co-member.txt',
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }, { name: SIBLING_TAG }],
+        });
+        const SIBLING_STAMP = new Date('2026-05-01T00:00:00.000Z');
+        await FabFile.updateOne({ _id: coMember._id }, { $set: { archivedAt: SIBLING_STAMP } });
+        const liveOwnMember = await makeFile({
+          fileName: 'own-member.txt',
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }],
+        });
+        const OWN_STAMP = new Date('2026-06-01T00:00:00.000Z');
+
+        // What archiveDataLake's guard asks before deciding to claim: false here means "claim".
+        expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(metaOnlyScope)).toBe(false);
+
+        // The sweep only touches archivedAt: null rows, so the already-archived co-member is
+        // never re-stamped - it archives just the live member under lake A's OWN stamp.
+        expect(await fabFileRepository.archiveByDataLakeTag(scope, OWN_STAMP)).toBe(1);
+        expect(await fabFileRepository.unarchiveByDataLakeTag(scope, OWN_STAMP)).toBe(1);
+        expect((await readRaw(liveOwnMember._id.toString()))?.archivedAt ?? null).toBeNull();
+        expect((await readRaw(coMember._id.toString()))?.archivedAt?.getTime()).toBe(SIBLING_STAMP.getTime());
+
+        // Naming the damage the claim prevents: the unbounded call a permanently-unstamped lake
+        // (the pre-fix behavior) would have made instead frees the co-owner's row.
+        expect(await fabFileRepository.unarchiveByDataLakeTag(scope)).toBe(1);
+        expect((await readRaw(coMember._id.toString()))?.archivedAt ?? null).toBeNull();
+      });
     });
   });
 
