@@ -175,7 +175,7 @@ const ToolsUsed = memo<ToolsUsedProps>(({ functionCalls = [], size = 'sm' }) => 
                 Error
               </Typography>
               <Typography level="body-sm" color="danger" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                {selectedTool?.error ?? selectedTool?.returnValue}
+                {selectedTool?.error ?? selectedTool?.returnValue ?? '(no error message)'}
               </Typography>
             </Box>
           )}

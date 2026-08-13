@@ -53,8 +53,6 @@ const handler = baseApi()
 
     const { userId, content, tags, username, userEmail, promptMeta, type } = newFeedbackData;
 
-    console.log('newFeedbackData', newFeedbackData);
-
     const existingUser = await User.findOne({ email: userEmail }).populate('organizationId');
 
     const organization = (existingUser?.organizationId as unknown as IOrganizationDocument)?.name || 'Unknown';

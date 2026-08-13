@@ -105,6 +105,10 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     }[collectionName];
   }
 
+  // scopedFields (built below) is persisted onto the QuerySubscription record a few lines down
+  // as `fields`, which is what the separate subscriber-fanout service reads to build its own
+  // change-stream projection - so this exclusion applies to live update/insert events fanout
+  // relays, not just the one-time fetchInitialData query above.
   const fieldLimits = resolveFieldLimits(collectionName, Quest.collection.collectionName);
 
   let scopedFields: undefined | Record<string, boolean | number> =
@@ -122,6 +126,9 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     if (Object.keys(inclusions).length) {
       const haveExclusions = Object.values(scopedFields).some(v => !v);
       if (haveExclusions) {
+        // No current caller sends inclusion fields for the quests collection (all pass
+        // fields: {}), so fieldLimits' exclusions never reach here today - but if one ever
+        // does, this throws instead of silently losing the returnValue/error exclusion.
         throw new Error('Cannot mix exclusions and inclusions');
       }
       scopedFields = {

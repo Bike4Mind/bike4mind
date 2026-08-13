@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { questRepository, sessionRepository } from '@bike4mind/database';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, redactFunctionCallsForViewer } from '@bike4mind/common';
 import { toGeneratedFiles } from '@server/utils/generatedFiles';
 import type { Request } from 'express';
 
@@ -47,6 +47,14 @@ const handler = baseApi({
   const images = quest.images ?? [];
   const files = toGeneratedFiles(images);
 
+  // A share grant authorizes reading the conversation, not re-reading whatever the owner's
+  // tools touched on the owner's behalf - see redactFunctionCallsForViewer.
+  const isOwner = session.userId === userId;
+  const promptMeta =
+    isOwner || !quest.promptMeta?.functionCalls
+      ? quest.promptMeta
+      : { ...quest.promptMeta, functionCalls: redactFunctionCallsForViewer(quest.promptMeta.functionCalls) };
+
   return res.json({
     id: quest.id,
     status: quest.status,
@@ -57,7 +65,7 @@ const handler = baseApi({
     files,
     createdAt: quest.createdAt,
     updatedAt: quest.updatedAt,
-    promptMeta: quest.promptMeta,
+    promptMeta,
     executionTracking: quest.promptMeta?.executionTracking,
   });
 });
