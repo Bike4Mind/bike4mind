@@ -450,6 +450,23 @@ describe('FabFile data lake lifecycle membership', () => {
         expect((await readRaw(coMember._id.toString()))?.archivedAt ?? null).toBeNull();
       });
     });
+
+    describe('hasArchivedMemberExclusiveToDataLakeTag - the residual prefix-arm limitation, ratified not fixed (#1729)', () => {
+      it("still reports true for a row carrying ONLY this lake's meta-tag that a prefix-sharing sibling's own sweep independently archived - no per-file attribution exists to tell the two apart", async () => {
+        // No second DataLake document is needed: the probe only reads FabFile tags/archivedAt, so
+        // a row satisfying a sibling's PREFIX arm (same creator, a tag under a shared prefix) while
+        // carrying ONLY this lake's META tag is indistinguishable here from a genuine orphan -
+        // that is precisely the accepted limitation this test pins.
+        const prefixArmVictim = await makeFile({
+          fileName: 'prefix-arm-victim.txt',
+          userId: CREATOR,
+          tags: [{ name: DATALAKE_TAG }, { name: 'acme:shared-prefix-content' }],
+        });
+        await FabFile.updateOne({ _id: prefixArmVictim._id }, { $set: { archivedAt: new Date('2026-05-01') } });
+
+        expect(await fabFileRepository.hasArchivedMemberExclusiveToDataLakeTag(metaOnlyScope)).toBe(true);
+      });
+    });
   });
 
   describe('softDeleteByDataLakeTag / undeleteByDataLakeTag', () => {
