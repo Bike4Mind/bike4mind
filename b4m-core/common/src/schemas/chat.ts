@@ -18,6 +18,11 @@ import { z } from 'zod';
 export const SimplifiedChatRequestSchema = z.object({
   sessionId: z.string().nullish(), // Accepts string, null, or undefined - null treated as "not provided"
   message: z.string(),
+  // Billing target. When set, the turn is billed to this organization's credit pool - but only
+  // after the handler validates the caller actually belongs to it (never trusted as-is; see
+  // resolveActiveOrg). Omitted (the default) bills the caller personally, matching the app UI's
+  // selected-account model. An org member is no longer forced onto the org pool.
+  organizationId: z.string().optional(),
   model: z.string().optional(), // Made optional - will use admin setting if not provided
   temperature: z.number().min(0).max(2).optional(),
   // Output-budget override. `max_tokens` is the canonical field; `maxTokens` and

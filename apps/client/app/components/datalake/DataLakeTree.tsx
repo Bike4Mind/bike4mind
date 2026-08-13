@@ -5,10 +5,12 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import type { TagNode } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import FileIndexingAlert from './FileIndexingAlert';
 import DataLakeTreeView, { type DataLakeTreeChrome } from './DataLakeTreeView';
+import TreeRowLabel from './TreeRowLabel';
 import { inkFor } from '@client/app/components/datalake/surfaceChrome';
 import type { Hue } from '@client/app/components/datalake/surfaceChrome';
 import { humanizeSegment, useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
 import type { DataLakeSurfaceTheme } from '@client/app/components/datalake/surfaceTokens';
+import type { DataLakeBrowseSource } from '@client/app/hooks/data/dataLakes';
 import type { IFabFileDocument } from '@bike4mind/common';
 
 /** Branch ink comes from the top-level prefix, so a whole subtree reads as one color. */
@@ -21,7 +23,9 @@ interface DataLakeTreeProps {
   articles: IFabFileDocument[];
   breadcrumb: string[];
   onNavigate: (breadcrumb: string[]) => void;
-  selectedFileId: string | null;
+  /** Threaded to DataLakeTreeView's cross-tree article search. */
+  source?: DataLakeBrowseSource;
+  selectedFileIds: ReadonlySet<string>;
   onSelectFile: (file: IFabFileDocument) => void;
   isLoading: boolean;
   isError?: boolean;
@@ -117,34 +121,31 @@ export default function DataLakeTree(props: DataLakeTreeProps) {
         </ListItem>
       );
     },
-    renderFileRow: (file, selected, onSelect) => (
-      <ListItem key={file.id}>
-        <ListItemButton
-          selected={selected}
-          onClick={onSelect}
-          sx={{ borderRadius: 'sm', gap: 1 }}
-          data-testid={`datalake-file-${file.id}`}
-        >
-          <ArticleGlyph
-            sx={{
-              fontSize: 16,
-              color: file.error ? 'danger.500' : selected ? inkFor(theme.accent, isDark) : 'text.tertiary',
-              flexShrink: 0,
-            }}
-          />
-          <ListItemContent>
-            <Typography
-              level="body-xs"
-              noWrap
-              sx={{ fontWeight: selected ? 'lg' : undefined, color: file.error ? 'danger.500' : undefined }}
-            >
-              {file.fileName.replace(/\.[^/.]+$/, '')}
-            </Typography>
-          </ListItemContent>
-          <FileIndexingAlert file={file} />
-        </ListItemButton>
-      </ListItem>
-    ),
+    renderFileRow: (file, selected, onSelect) => {
+      const displayName = file.fileName.replace(/\.[^/.]+$/, '');
+      return (
+        <ListItem key={file.id}>
+          <ListItemButton
+            selected={selected}
+            onClick={onSelect}
+            sx={{ borderRadius: 'sm', gap: 1 }}
+            data-testid={`datalake-file-${file.id}`}
+          >
+            <ArticleGlyph
+              sx={{
+                fontSize: 16,
+                color: file.error ? 'danger.500' : selected ? inkFor(theme.accent, isDark) : 'text.tertiary',
+                flexShrink: 0,
+              }}
+            />
+            <ListItemContent>
+              <TreeRowLabel label={displayName} level="body-xs" color={file.error ? 'danger.500' : undefined} />
+            </ListItemContent>
+            <FileIndexingAlert file={file} />
+          </ListItemButton>
+        </ListItem>
+      );
+    },
     humanize: (segment, depth) => humanizeSegment(segment, depth, taxonomy),
     allCategoriesLabel: copy.allCategoriesLabel,
     emptyFilesLabel: 'No articles found',

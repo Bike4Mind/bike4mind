@@ -1,6 +1,14 @@
 import { z } from 'zod';
 import { CREDITS_PER_USD_COST } from '../pricing';
 import { DEFAULT_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET } from '../constants/chunking';
+import {
+  LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS,
+  LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS,
+  LAKE_ACCESS_AUDIT_RETENTION_MAX_DAYS,
+  LAKE_ACCESS_QUERY_TEXT_RETENTION_DEFAULT_DAYS,
+  LAKE_ACCESS_QUERY_TEXT_RETENTION_MAX_DAYS,
+  LAKE_ACCESS_QUERY_TEXT_RETENTION_MIN_DAYS,
+} from '../constants/lakeAccessAudit';
 import { CHAT_MODELS, ChatModels } from '../models';
 import {
   BedrockEmbeddingModel,
@@ -11,6 +19,7 @@ import {
 } from './embedding';
 import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } from '../types/entities/SreTypes';
 import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
+import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/ScopedSettingTypes';
 
 /**
  * Default text for the artifact-emission system prompt. Single source of truth used BOTH as the
@@ -108,11 +117,15 @@ export const HELP_CENTER_PROMPT = `HELP CENTER: Bike4Mind has a built-in Help Ce
  *
  * Counterweight to the completeness pressure the rest of the system prompt applies: without an
  * explicit licence to abstain, the model treats "answer fully" as unconditional and fills gaps with
- * invented specifics about the user or their data. Measured as the single largest quality gain on
- * questions whose correct answer is a refusal, so it ships on every completion rather than only on
- * the grounded surfaces. Kept short on purpose - it must be cheap and behaviorally light.
+ * invented specifics - including a named customer, competitor, deal or dollar figure a leading
+ * question implied but no source supports, volunteered with citation-like framing so it reads as
+ * sourced. In internal evaluation (a harness kept outside this repo) this was among the largest
+ * quality gains on questions whose correct answer is a refusal, so it ships on every completion
+ * rather than only on the grounded surfaces (it is also the only surface covering a turn that
+ * answers WITHOUT searching the knowledge base). Kept short
+ * on purpose - it must be cheap and behaviorally light.
  */
-export const ABSTENTION_PROMPT = `When a request is underspecified or your sources do not cover it, say so and name what is missing. "I do not have enough to answer that" is a correct, high-value answer. Never invent facts about the user, their business, or their data.`;
+export const ABSTENTION_PROMPT = `When a request is underspecified or your sources do not cover it, say so and name what is missing. "I do not have enough to answer that" is a correct, high-value answer. Never invent facts about the user, their business, or their data, and never state a specific customer, competitor, deal, or figure as fact - or cite a source for it - unless your sources support it, even when the question assumes it.`;
 
 /**
  * Default text for the formatting system message. Runtime fallback used by
@@ -168,6 +181,7 @@ export const SettingKeySchema = z.enum([
   'EnableDataLakes',
   'EnableDataLakesDefault',
   'EnableDataLakeSlackAdd',
+  'EnableDataLakeGroundingMode',
   'EnableLakeMemory',
   'EnableDataLakeVectorSearch',
   'EnableBriefcase',
@@ -279,6 +293,10 @@ export const SettingKeySchema = z.enum([
   'dataLakeEmbeddingBudgetPeriodHours',
   'dataLakeEmbeddingMaxCallsPerMinute',
   'dataLakeVectorizeChunkBatchSize',
+
+  // LAKE ACCESS AUDIT SETTINGS
+  'LakeAccessAuditRetentionDays',
+  'LakeAccessQueryTextRetentionDays',
 
   // New MaxContentLength setting
   'MaxContentLength',
@@ -660,6 +678,14 @@ interface BaseSetting {
   publicSafe?: boolean;
   /** Parent setting key - this setting is hidden in admin UI when the parent is off. */
   dependsOn?: SettingKey;
+  /**
+   * Opt-in scoping (epic #1658 lane 0 / #1660). Absent = platform-only, the historical behavior:
+   * the value lives solely in `AdminSettings` and `resolveScopedSetting` returns it unchanged at
+   * every scope. Present, the setting also honors org/owner/lake OVERRIDES per `settableAt`, with
+   * the narrower scope winning. A setting is never silently scoped - it opts in here, which is why
+   * adding this field changes no existing consumer.
+   */
+  scope?: SettingScopeConfig;
 }
 
 function makeStringSetting(
@@ -1685,6 +1711,16 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiRateLimitProPerMin', order: 3 },
     ],
   },
+  DATA_LAKE_AUDIT: {
+    id: 'dataLakeAuditService',
+    name: 'Data Lake Access Audit',
+    description: 'Retention for the lake access audit trail and its opt-in query-text log',
+    icon: 'Security',
+    settings: [
+      { key: 'LakeAccessAuditRetentionDays', order: 1 },
+      { key: 'LakeAccessQueryTextRetentionDays', order: 2 },
+    ],
+  },
   // Note: CONTEXT_TELEMETRY settings are managed in the Context Inspector tab (Admin UI)
   // to keep all telemetry controls in one place
 } satisfies {
@@ -1817,6 +1853,17 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 90,
+    dependsOn: 'EnableDataLakes',
+  }),
+  EnableDataLakeGroundingMode: makeBooleanSetting({
+    key: 'EnableDataLakeGroundingMode',
+    name: 'Data Lakes: Per-lake grounding mode',
+    defaultValue: true,
+    description:
+      "Global rollback lever for the per-lake grounding mode (inline vs retrieve vs auto-by-size). On by default. Turn OFF to ignore every lake's configured mode and fall back to pure size-only corpus deferral (CorpusRetrievalMinInlineTokensPerDoc), reverting the retrieve-by-default behavior for all lakes at once without editing each lake.",
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 92,
     dependsOn: 'EnableDataLakes',
   }),
   EnableLakeMemory: makeBooleanSetting({
@@ -2137,7 +2184,7 @@ export const settingsMap = {
     name: 'Abstention Prompt',
     defaultValue: ABSTENTION_PROMPT,
     description:
-      'Short system prompt licensing the model to say "I do not have enough to answer that" and to name what is missing instead of inventing facts about the user or their data. Injected on every chat completion. Live-editable; clearing it reverts to the built-in default.',
+      'Short system prompt licensing the model to say "I do not have enough to answer that" and to name what is missing instead of inventing facts about the user or their data. Injected on every chat completion. Live-editable; clearing it reverts to the built-in default. After an upgrade, diff a saved copy against that default: a saved copy pins the wording from whenever it was saved and will not pick up fixes made since.',
     category: 'AI',
     order: 11,
   }),
@@ -3009,6 +3056,8 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 2,
+    // A scan budget an org/owner/lake may tighten below the platform ceiling (#1661 org/lake rungs).
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
   }),
   dataLakeSearchMaxChunks: makeNumberSetting({
     key: 'dataLakeSearchMaxChunks',
@@ -3020,6 +3069,38 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 3,
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
+  }),
+  LakeAccessAuditRetentionDays: makeNumberSetting({
+    key: 'LakeAccessAuditRetentionDays',
+    name: 'Lake Access Audit Retention (days)',
+    defaultValue: LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS,
+    // The enforced floor: the admin API rejects a save below this, and the write path
+    // (lakeAccessEventRepository.record) clamps to it unconditionally regardless of what is
+    // stored, so this control cannot be used to shorten the audit trail below the floor.
+    min: LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS,
+    max: LAKE_ACCESS_AUDIT_RETENTION_MAX_DAYS,
+    description:
+      'How long a lake access audit event (who read a lake, and when) is retained, in days. Has a ' +
+      'floor of 450 days (12 months live plus a Type II observation tail) - this is a platform-wide ' +
+      'value, not per-organization, until a scoped settings resolver exists.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.DATA_LAKE_AUDIT.id,
+    order: 1,
+  }),
+  LakeAccessQueryTextRetentionDays: makeNumberSetting({
+    key: 'LakeAccessQueryTextRetentionDays',
+    name: 'Lake Access Query Text Retention (days)',
+    defaultValue: LAKE_ACCESS_QUERY_TEXT_RETENTION_DEFAULT_DAYS,
+    min: LAKE_ACCESS_QUERY_TEXT_RETENTION_MIN_DAYS,
+    max: LAKE_ACCESS_QUERY_TEXT_RETENTION_MAX_DAYS,
+    description:
+      'How long the opt-in query-text log (the natural-language question behind a lake retrieval) ' +
+      'is retained, in days. Always resolved shorter than the audit event retention itself, ' +
+      'regardless of this value, since the query text is more sensitive than the event metadata.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.DATA_LAKE_AUDIT.id,
+    order: 2,
   }),
   // Data-lake cost governance. These are SPEND levers, not scan budgets: 0 is a valid value
   // meaning "stop spending" (min: 0, unlike the search budgets above), the defaults apply only

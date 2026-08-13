@@ -21,6 +21,8 @@ import {
   TAXONOMY_NON_TERMINAL_STATUSES,
   TAXONOMY_ATTENTION_STATUSES,
   normalizeEntitlementKey,
+  DATA_LAKE_GROUNDING_MODES,
+  DEFAULT_DATA_LAKE_GROUNDING_MODE,
 } from '@bike4mind/common';
 
 const DATA_LAKE_STATUSES: DataLakeStatus[] = [
@@ -50,6 +52,16 @@ const DataLakeSchema = new mongoose.Schema(
     // IDataLake.preferredSystemPromptId). Validated against the session-activatable allowlist at
     // the write boundary; resolved to session.systemPromptId once at create time.
     preferredSystemPromptId: { type: String },
+    // Per-lake grounding mode (see IDataLake.groundingMode). Resolved to session.corpusGroundingMode
+    // once at create time and enforced by the completion path's corpus defer plan. The default sets
+    // the value on NEW lakes; lakes predating this field read back undefined and the resolver
+    // applies the same default, so both ground identically. Spread to a mutable array - mongoose's
+    // enum option types reject the `as const` readonly tuple.
+    groundingMode: {
+      type: String,
+      enum: [...DATA_LAKE_GROUNDING_MODES],
+      default: DEFAULT_DATA_LAKE_GROUNDING_MODE,
+    },
     fileTagPrefix: { type: String, required: true },
     datalakeTag: { type: String, required: true },
     requiredUserTag: { type: String },
@@ -70,6 +82,9 @@ const DataLakeSchema = new mongoose.Schema(
     // bypassing the org prerequisite + Private-by-default. No dedicated index (tiny collection,
     // same rationale as requiredEntitlement); the public arm in the access filters keys off it.
     isPublic: { type: Boolean, default: false },
+    // Per-lake opt-in to query-text audit logging (see IDataLake.auditQueryTextEnabled). No
+    // dedicated index - same rationale as isPublic/requiredEntitlement (tiny collection).
+    auditQueryTextEnabled: { type: Boolean, default: false },
     status: { type: String, enum: DATA_LAKE_STATUSES, default: 'draft' },
     fileCount: { type: Number, default: 0 },
     totalSizeBytes: { type: Number, default: 0 },

@@ -32,6 +32,7 @@ export const READER_LAKE_FIELDS = [
   'requiredUserTag',
   'requiredEntitlement',
   'isPublic',
+  'auditQueryTextEnabled',
   'status',
   'fileCount',
   'totalSizeBytes',
@@ -63,6 +64,9 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   // Editor-only, like systemPrompt: a reader gets its EFFECT (the prompt activates on a session
   // created for the lake, resolved server-side) but never reads the binding itself.
   preferredSystemPromptId: 'withheld',
+  // Editor-only, same as the prompt fields: a reader gets its EFFECT (inline vs retrieve, resolved
+  // server-side when a session is created for the lake) but never reads the setting itself.
+  groundingMode: 'withheld',
   fileTagPrefix: 'reader',
   datalakeTag: 'reader',
   requiredUserTag: 'reader',
@@ -70,6 +74,8 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   createdByUserId: 'reader',
   organizationId: 'reader',
   isPublic: 'reader',
+  // A reader whose questions may be logged should be able to see that the lake records them.
+  auditQueryTextEnabled: 'reader',
   status: 'reader',
   fileCount: 'reader',
   totalSizeBytes: 'reader',

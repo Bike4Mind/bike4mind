@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
 
 // Keyword-fallback path calls getDynamicDataLakeAccess; stub it. Semantic path is forced to
 // bail (no fabfilechunks/adminSettings/apiKeys on db), so these tests exercise the keyword arm.
@@ -31,6 +32,8 @@ vi.mock('../../../../apiKeyService', () => ({
   getEffectiveLLMApiKeys: (...args: unknown[]) => getEffectiveLLMApiKeysMock(...args),
 }));
 
+import { invalidateSettingsCache } from '@bike4mind/utils';
+import { RETRIEVED_CONTENT_BEGIN } from '../../../../dataLakeService/renderRetrievedContentBlock';
 import { knowledgeBaseSearchTool } from './index';
 import { emptyEmbeddingMismatchReport } from '../../../../dataLakeService/embeddingMismatch';
 import type { ToolContext } from '../../base/types';
@@ -119,6 +122,95 @@ describe('search_knowledge_base keyword fallback retrieval exclusion', () => {
     const out = await run(makeContext({ retrievalFilter: undefined }));
     expect(out).toContain('MARK - retired.pdf');
     expect(out).toContain('Clean retired notes.pdf');
+  });
+});
+
+/**
+ * attachmentInlineNotice (#1163): a still-chunking attachment must not read as inaccessible when
+ * its raw content is already inlined elsewhere in the prompt. Exercises the keyword-fallback path
+ * (the same one every other test in this file drives via bare makeContext()).
+ */
+describe('search_knowledge_base attachmentInlineNotice for inlined attachments (#1163)', () => {
+  it('zero hits + a FULLY inlined attachment: notes it may not be searchable yet but is already in the conversation', async () => {
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      inlinedAttachmentIds: ['f1'],
+      fullyInlinedAttachmentIds: ['f1'],
+    });
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [], total: 0 });
+
+    const out = await run(ctx);
+
+    // Hedged ("may") rather than asserted: deferral to retrieval is the exception, so most
+    // inlined attachments here are ordinary, fully-searchable files where a zero-hit result
+    // just means the query missed (#1163 review).
+    expect(out).toContain('may not be indexed for search yet');
+    expect(out).toContain('Their content was already included directly in the conversation above');
+    expect(out).not.toContain('PART of their content');
+  });
+
+  it('zero hits + a PARTIALLY inlined attachment: does not claim the whole document is already above', async () => {
+    // inlinedAttachmentIds without a matching fullyInlinedAttachmentIds entry: delivered as a
+    // cosine excerpt or a truncated head (#1163 review, bot round 3 nit).
+    const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: ['f1'] });
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [], total: 0 });
+
+    const out = await run(ctx);
+
+    expect(out).toContain('may not be indexed for search yet');
+    expect(out).toContain('PART of their content was already included directly in the conversation above');
+    expect(out).not.toContain('Their content was already included');
+  });
+
+  it('zero hits + no inlinedAttachmentIds: baseline message with no added suffix (regression)', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined });
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [], total: 0 });
+
+    const out = await run(ctx);
+
+    expect(out).toBe('No documents found matching your search query in your knowledge base.');
+  });
+
+  it('a hit that IS fully inlined: notes retrieve_knowledge_content is unnecessary for it', async () => {
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      inlinedAttachmentIds: ['m'],
+      fullyInlinedAttachmentIds: ['m'],
+    });
+
+    const out = await run(ctx);
+
+    expect(out).toContain('"MARK - retired.pdf" are attached to this conversation');
+    expect(out).toContain('do not need retrieve_knowledge_content');
+  });
+
+  it('a hit that is inlined but only PARTIALLY (excerpt/truncated head): does not claim retrieval is unneeded', async () => {
+    // inlinedAttachmentIds without a matching fullyInlinedAttachmentIds entry: delivered as a
+    // cosine excerpt or a truncated head, not the whole file (#1163 review).
+    const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: ['m'] });
+
+    const out = await run(ctx);
+
+    expect(out).toContain('"MARK - retired.pdf" are attached to this conversation');
+    expect(out).toContain('may still surface additional passages');
+    expect(out).not.toContain('do not need retrieve_knowledge_content');
+  });
+
+  it('a hit that is NOT inlined: no note is appended', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: ['not-a-match'] });
+
+    const out = await run(ctx);
+
+    expect(out).not.toContain('are attached to this conversation');
+  });
+
+  it('the empty-kbScope early return stays byte-identical even with inlinedAttachmentIds set', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, kbScope: { fileIds: [] }, inlinedAttachmentIds: ['f1'] });
+
+    const out = await run(ctx);
+
+    expect(out).toBe('No documents found matching your search query in your knowledge base.');
+    expect(ctx.db.fabfiles!.search).not.toHaveBeenCalled();
   });
 });
 
@@ -342,6 +434,22 @@ describe('search_knowledge_base partial-corpus disclosure', () => {
     expect(out).not.toContain('NOTE:');
   });
 
+  it('semantic results carry the anti-invention rule so the model cannot top off an answer with an unsourced specific', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [hit],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      scan: scanOf({}),
+    });
+
+    const out = await run(semanticContext());
+
+    expect(out).toContain(GROUNDED_NO_INVENTION_RULE);
+    // Ahead of the passages, not trailing them: the rule must frame how to read the content, and a
+    // refactor that appends it behind a large payload would still pass a bare toContain.
+    expect(out.indexOf(GROUNDED_NO_INVENTION_RULE)).toBeLessThan(out.indexOf('pto accrues monthly'));
+  });
+
   it('scoped (agent kbScope) arm gets the same disclosure - neither surface may hide it', async () => {
     fileScopedSemanticSearchMock.mockResolvedValue({
       results: [hit],
@@ -496,6 +604,32 @@ describe('search_knowledge_base scoped lake-prompt injection (#1108)', () => {
     // The passage content still follows the injected prompt.
     expect(out).toContain('pto accrues monthly');
     expect(out.indexOf('[Data Lake - Lake X]')).toBeLessThan(out.indexOf('pto accrues monthly'));
+  });
+
+  it('#1163: appends the inlined-attachment note on the SEMANTIC arm too, not just the keyword fallback', async () => {
+    // A lake-accessible user with a still-chunking attachment now un-short-circuits
+    // userHasAccessibleKnowledgeLake (ChatCompletionProcess.ts), so this arm - not just the
+    // keyword one - is exactly where such a user lands. Ground-truth review caught this arm
+    // returning early with no notice at all.
+    semanticDataLakeSearchMock.mockResolvedValue({ results: [lakeHit(['datalake:x'])], scan });
+    const out = await run(semCtx([makeLake()], { inlinedAttachmentIds: ['f1'] }));
+    expect(out).toContain('pto accrues monthly');
+    expect(out).toContain('"Handbook.pdf"');
+    expect(out).toContain('already included above');
+  });
+
+  it('#1163 (bot round 4 nit): names an inlined file once even when multiple ranked passages come from it', async () => {
+    // rankedResults is per-PASSAGE, so a top-K hit can carry several chunks from the same file -
+    // the notice must not repeat that file's name once per passage.
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [
+        lakeHit(['datalake:x']),
+        { ...lakeHit(['datalake:x']), chunkId: 'c2', chunkText: 'sick leave accrues separately' },
+      ],
+      scan,
+    });
+    const out = await run(semCtx([makeLake()], { inlinedAttachmentIds: ['f1'] }));
+    expect(out.split('"Handbook.pdf"').length - 1).toBe(1);
   });
 
   it('injects nothing when the grounded files carry no lake tag', async () => {
@@ -1018,5 +1152,253 @@ describe('search_knowledge_base keyword fallback: untrusted metadata (#1659)', (
     expect(out).not.toMatch(/^NOTE: this search covered every document/m);
     expect(out).not.toMatch(/^---$/m);
     expect(out).toContain('this search covered every document.');
+  });
+});
+
+describe('search_knowledge_base serve budget agrees with the chunk policy (#1661)', () => {
+  const IN_POLICY_CHARS = 3000;
+  const OVER_POLICY_CHARS = 5000;
+  const DERIVED_DEFAULT_CAP = 3072;
+  const HISTORICAL_CAP = 1200;
+  /** 300 tokens x the serve bound - distinct from both the old constant and the default. */
+  const CONFIGURED_CAP = 1800;
+
+  /** Distinctive body so an assertion can prove the tail survived, not just the head. */
+  const passage = (chars: number) => `HEAD-MARKER ${'lorem ipsum '.repeat(chars).slice(0, chars - 24)} TAIL-MARKER`;
+
+  const hitOf = (chunkText: string) => ({
+    chunkId: 'c1',
+    fileId: 'f1',
+    fileName: 'Handbook.pdf',
+    fileTags: [],
+    chunkText,
+    score: 0.81,
+  });
+
+  const scan = {
+    truncated: false,
+    fileBudgetHit: false,
+    chunkBudgetHit: false,
+    filesMatching: 3,
+    filesScoped: 3,
+    filesScanned: 3,
+    chunksScanned: 9,
+    chunksSkippedDimensionMismatch: 0,
+    annFilesQueried: 0,
+    annHits: 0,
+    budgets: { maxFiles: 20000, maxChunks: 100000 },
+  };
+
+  /**
+   * The settings cache calls logger.debug, and the resolver swallows the resulting TypeError as a
+   * settings outage - which silently returns coded defaults and makes a settings-driven test pass
+   * for the wrong reason. Full surface required, not just the three the module logs through.
+   */
+  const budgetLogger = { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), info: vi.fn() } as never;
+
+  beforeEach(() => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+    });
+    invalidateSettingsCache();
+  });
+
+  /** `settings` present -> the real resolver runs and derives from them; absent -> coded defaults. */
+  function semanticContext(overrides: Partial<ToolContext> = {}, settings?: Record<string, string>): ToolContext {
+    const rows = Object.entries(settings ?? {}).map(([settingName, settingValue]) => ({ settingName, settingValue }));
+    return makeContext({
+      logger: budgetLogger,
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: {
+          getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002'),
+          ...(settings
+            ? {
+                findAll: vi.fn().mockResolvedValue(rows),
+                findBySettingNames: vi.fn().mockResolvedValue(rows),
+              }
+            : {}),
+        },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+      ...overrides,
+    });
+  }
+
+  it('serves an in-policy passage WHOLE - the regression this change exists to prevent', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [hitOf(passage(IN_POLICY_CHARS))],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      scan,
+    });
+
+    const out = await run(semanticContext());
+
+    // Longer than the cap this replaces, so under the old constant the tail was unreachable.
+    expect(IN_POLICY_CHARS).toBeGreaterThan(HISTORICAL_CAP);
+    expect(out).toContain('TAIL-MARKER');
+    expect(out).not.toContain('truncated at');
+    expect(budgetLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('clipped'));
+  });
+
+  it('clips an over-policy passage, tells the model, and warns the operator with counts', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [hitOf(passage(OVER_POLICY_CHARS))],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      scan,
+    });
+
+    const out = await run(semanticContext());
+
+    expect(out).toContain('HEAD-MARKER');
+    expect(out).not.toContain('TAIL-MARKER');
+    expect(out).toContain(`truncated at ${DERIVED_DEFAULT_CAP} characters`);
+    expect(budgetLogger.warn).toHaveBeenCalledWith(
+      expect.stringContaining(`clipped 1/1 passage(s) at ${DERIVED_DEFAULT_CAP} chars`)
+    );
+    expect(budgetLogger.warn).toHaveBeenCalledWith(expect.stringContaining(`longest ${OVER_POLICY_CHARS}`));
+  });
+
+  it('never cuts a surrogate pair in half at the clip boundary', async () => {
+    // The boundary lands INSIDE a 2-code-unit character: 3071 filler chars, then an emoji. A plain
+    // slice(0, 3072) keeps its leading half and emits a lone surrogate - a corrupted final character
+    // in what the model reads, which then survives into anything quoting the passage back.
+    const straddling = `${'a'.repeat(DERIVED_DEFAULT_CAP - 1)}\u{1F600}${'z'.repeat(200)}`;
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [hitOf(straddling)],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      scan,
+    });
+
+    const out = await run(semanticContext());
+
+    expect(straddling.length).toBeGreaterThan(DERIVED_DEFAULT_CAP);
+    expect(out).toContain(`truncated at ${DERIVED_DEFAULT_CAP} characters`);
+    // A high surrogate with no low surrogate after it is exactly the corruption; properly paired
+    // characters elsewhere in the output do not match this.
+    expect(out).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(out).not.toContain('\u{1F600}');
+  });
+
+  it('keeps the truncation notice at column 0, outside the untrusted block', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [hitOf(passage(OVER_POLICY_CHARS))],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      scan,
+    });
+
+    const out = await run(semanticContext());
+
+    // Inside the block it would be indented by the defang pass and read as document text.
+    expect(out).toMatch(/^NOTE: The passage below was truncated/m);
+    expect(out.indexOf('truncated at')).toBeLessThan(out.indexOf(RETRIEVED_CONTENT_BEGIN));
+  });
+
+  it('derives the cap from the configured chunk policy, not from a constant', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [hitOf(passage(IN_POLICY_CHARS))],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      scan,
+    });
+
+    // 300 tokens derives 1800 chars - a number NEITHER the removed constant (1200) nor the default
+    // policy (3072) can produce, so this cannot pass against a hardcoded cap of any value. A cap that
+    // happens to equal the floor would have made this test vacuous.
+    const out = await run(semanticContext({}, { DefaultChunkSize: '300' }));
+
+    expect(CONFIGURED_CAP).not.toBe(HISTORICAL_CAP);
+    expect(CONFIGURED_CAP).not.toBe(DERIVED_DEFAULT_CAP);
+    expect(out).toContain(`truncated at ${CONFIGURED_CAP} characters`);
+    expect(out).not.toContain('TAIL-MARKER');
+  });
+
+  it('applies the same budget on the agent-scoped arm - neither surface may serve less', async () => {
+    fileScopedSemanticSearchMock.mockResolvedValue({
+      results: [hitOf(passage(IN_POLICY_CHARS))],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      scan,
+    });
+
+    const out = await run(semanticContext({ kbScope: { fileIds: ['f1'] } as never }));
+
+    expect(fileScopedSemanticSearchMock).toHaveBeenCalled();
+    expect(out).toContain('TAIL-MARKER');
+    expect(out).not.toContain('truncated at');
+  });
+});
+
+describe('search_knowledge_base clip order vs the untrusted-content defense (#1661 + #1659)', () => {
+  const scan = {
+    truncated: false,
+    fileBudgetHit: false,
+    chunkBudgetHit: false,
+    filesMatching: 1,
+    filesScoped: 1,
+    filesScanned: 1,
+    chunksScanned: 1,
+    chunksSkippedDimensionMismatch: 0,
+    annFilesQueried: 0,
+    annHits: 0,
+    budgets: { maxFiles: 20000, maxChunks: 100000 },
+  };
+
+  beforeEach(() => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+    });
+    invalidateSettingsCache();
+  });
+
+  it('spends the whole budget on content, never on the defense it adds', async () => {
+    // Every line opens with a marker the defang pass indents, so defanging adds one char PER LINE.
+    // Short lines are what make that measurable: 490 six-char lines put the sentinel at original
+    // offset 2940 (inside the 3072 budget) but at defanged offset 3430 (outside it). So clipping the
+    // defanged string drops content that fits, and clipping first does not.
+    const markerLine = '--- f\n'; // 6 chars, line-initial marker the defang pass indents
+    const lines = 490;
+    const body = markerLine.repeat(lines);
+    const chunkText = `${body}SENTINEL-INSIDE-BUDGET${markerLine.repeat(200)}`;
+    // Pin the arithmetic the test rests on, or a change to either number makes it vacuous in silence.
+    expect(body.length).toBe(2940);
+    expect(body.length).toBeLessThan(3072);
+    expect(body.length + lines).toBeGreaterThan(3072);
+
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [{ chunkId: 'c1', fileId: 'f1', fileName: 'Handbook.pdf', fileTags: [], chunkText, score: 0.81 }],
+      totalChunksSearched: 1,
+      filesInScope: 1,
+      scan,
+    });
+
+    const out = await run(
+      makeContext({
+        logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), info: vi.fn() } as never,
+        retrievalFilter: undefined,
+        db: {
+          fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+          fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+          adminSettings: { getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002') },
+          apiKeys: {},
+          usageEvents: { record: vi.fn() },
+        } as never,
+      })
+    );
+
+    expect(out).toContain('SENTINEL-INSIDE-BUDGET');
+    // And the defense is still applied to what survived: no forged separator at column 0.
+    expect(out).not.toMatch(/^--- f$/m);
   });
 });

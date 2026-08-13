@@ -135,6 +135,25 @@ export interface ToolContext {
    * would silently read unscoped.
    */
   kbScope?: KbScope;
+  /**
+   * FabFile ids attached to THIS session whose text was actually delivered into this turn's
+   * prompt (the `sessionKnowledgeIds` subset that is both NOT deferred to retrieval and NOT
+   * silently dropped by `processFabFilesServer` - see `buildDataSources`'s
+   * `actuallyInlinedKnowledgeIds`). The knowledge tools use this to tell a caller "that file's
+   * content is already above" without lying about a deferred OR undeliverable (audio,
+   * unserveable image, unsupported/corrupted file) attachment. Absent/empty on non-chat surfaces
+   * (agent executor, embed) where nothing is inlined this way.
+   */
+  inlinedAttachmentIds?: string[];
+  /**
+   * Subset of `inlinedAttachmentIds` whose ENTIRE content is in the prompt - excludes a cosine
+   * excerpt or a raw-content read truncated to fit the token budget (see `buildDataSources`'s
+   * `fullyInlinedAttachmentIds`). A file can be in `inlinedAttachmentIds` but NOT here, meaning
+   * only part of it reached the prompt; only THIS set is safe to tell a caller "you already have
+   * everything, no need to search/retrieve further" (#1163 review: that claim was being made for
+   * a merely-inlined, possibly-partial file).
+   */
+  fullyInlinedAttachmentIds?: string[];
   storage: Pick<BaseStorage, 'upload' | 'getSignedUrl' | 'getPublicUrl'>;
   imageGenerateStorage: Pick<BaseStorage, 'upload' | 'getSignedUrl' | 'getPublicUrl'>;
   statusUpdate: (q: Partial<IChatHistoryItemDocument>, status?: string) => Promise<void>;

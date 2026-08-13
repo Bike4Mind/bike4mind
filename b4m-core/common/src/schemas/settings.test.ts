@@ -12,8 +12,13 @@ import {
   maskSensitiveSettingValue,
   isMaskedSensitiveSettingValue,
   type AdminSettingDoc,
+  ABSTENTION_PROMPT,
 } from './settings';
 import { DEFAULT_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET } from '../constants/chunking';
+import {
+  LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS,
+  LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS,
+} from '../constants/lakeAccessAudit';
 import { SRE_SECRET_PLACEHOLDER } from '../types/entities/SreTypes';
 
 describe('makeObjectSetting JSON preprocess', () => {
@@ -430,5 +435,52 @@ describe('DefaultChunkSize agrees with the chunker', () => {
     // makeNumberSetting does `prefault(config.defaultValue ?? 0)`, so a broken import resolves to
     // 0 silently instead of throwing. Pin it.
     expect(settingsMap.DefaultChunkSize.schema.parse(undefined)).toBe(DEFAULT_PASSAGE_TOKEN_TARGET);
+  });
+});
+
+describe('LakeAccessAuditRetentionDays cannot be configured below the floor', () => {
+  // Same drift class as DefaultChunkSize: the floor is enforced in two places (this schema's
+  // `min`, and the write path's unconditional clamp), and both must agree with the exported
+  // constant or an admin could save a value the write path silently overrides without complaint.
+  it('min matches the exported floor constant', () => {
+    expect(settingsMap.LakeAccessAuditRetentionDays.min).toBe(LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS);
+  });
+
+  it('rejects a save below the floor and accepts the floor itself', () => {
+    expect(() =>
+      settingsMap.LakeAccessAuditRetentionDays.schema.parse(LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS - 1)
+    ).toThrow();
+    expect(settingsMap.LakeAccessAuditRetentionDays.schema.parse(LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS)).toBe(
+      LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS
+    );
+  });
+
+  it('prefaults to the default constant rather than makeNumberSetting fallback 0', () => {
+    expect(settingsMap.LakeAccessAuditRetentionDays.schema.parse(undefined)).toBe(
+      LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS
+    );
+  });
+});
+
+describe('AbstentionPrompt default carries the anti-invention licence', () => {
+  // The always-on backstop is the ONLY anti-invention text on a normal turn that answers WITHOUT
+  // searching the knowledge base. (A promptMode session strips it like any authored prompt, so that
+  // surface is an uncovered gap by design - not something this backstop routes around.) Guard that
+  // its default still both licenses abstention AND bars volunteering a specific unsourced fact. The
+  // grounded-surface half ships two tests; without this, blanking this clause would pass unnoticed.
+  it('licenses saying "not enough to answer" instead of inventing', () => {
+    expect(ABSTENTION_PROMPT).toContain('I do not have enough to answer that');
+    expect(ABSTENTION_PROMPT).toMatch(/never invent facts/i);
+  });
+
+  it('bars stating - or citing a source for - a specific customer/competitor/deal/figure', () => {
+    for (const noun of ['customer', 'competitor', 'deal', 'figure']) {
+      expect(ABSTENTION_PROMPT.toLowerCase()).toContain(noun);
+    }
+    expect(ABSTENTION_PROMPT).toMatch(/cite a source/i);
+  });
+
+  it('ships as the AbstentionPrompt setting default (no drift between const and setting)', () => {
+    expect(settingsMap.AbstentionPrompt.defaultValue).toBe(ABSTENTION_PROMPT);
   });
 });

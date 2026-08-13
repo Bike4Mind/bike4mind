@@ -5,7 +5,7 @@ import { dataLakeRepository } from '@bike4mind/database';
 import { type AccessContext } from '@bike4mind/common';
 import { Request } from 'express';
 import { z } from 'zod';
-import { resolveActiveOrg } from '@server/dataLakes/resolveActiveOrg';
+import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
 
 // The active account-switcher org (client-supplied) is the org a promotion targets. It is
 // authorization-validated (resolveActiveOrg) before use, so it can't scope a lake into an

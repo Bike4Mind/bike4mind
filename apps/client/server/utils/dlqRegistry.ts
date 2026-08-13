@@ -204,6 +204,12 @@ const DLQ_REGISTRY = [
     application: 'DataLakeManagement',
     sourceQueue: 'lakeMemoryQueue',
   },
+  {
+    label: 'drive-lake-ingest',
+    displayName: 'Drive Lake Ingest',
+    application: 'DataLakeManagement',
+    sourceQueue: 'driveLakeIngestQueue',
+  },
 ] as const satisfies readonly DlqDescriptor[];
 
 /** Valid source queue names - derived from DLQ_REGISTRY so they stay in sync automatically. */

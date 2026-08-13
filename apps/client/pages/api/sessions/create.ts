@@ -28,12 +28,20 @@ const handler = baseApi().post(
     const body = req.body as CreateSessionBody;
     const { projectId } = body;
 
+    // corpusGroundingMode is resolved server-side from the lake (resolveLakeSessionDefaults), never
+    // client-supplied. Strip any value a hand-built body carries BEFORE the merge below, so it can
+    // neither override a lake editor's deliberate per-lake mode (body would otherwise win the spread)
+    // nor pin a mode on an ordinary non-lake session and switch off size-based deferral there. The
+    // lake arm re-sets it from the lake; a non-lake session is left with no mode (size-only behavior).
+    delete body.corpusGroundingMode;
+
     // "Start chat with this lake": when the request names a lake, seed the session's
     // lake-derived defaults (forced retrieval scoped to the lake + its preferred prompt id) from
     // the ONE reusable resolver. Gated on `dataLakeId` so ordinary session creation does zero
     // extra work and stays byte-identical. The lake is access-gated first (assertLakeAccess) so a
-    // caller can never arm a lake's prompt for a lake they cannot reach; explicit request values
-    // win over the lake defaults, so a hand-set systemPromptId/retrievalTags always beats the lake.
+    // caller can never arm a lake's prompt for a lake they cannot reach. Explicit request values
+    // win over the lake defaults for systemPromptId/retrievalTags (a hand-set value beats the lake),
+    // but corpusGroundingMode is stripped above, so the lake is always authoritative for it.
     let createParams: CreateSessionRequestBody = body as CreateSessionRequestBody;
     if (body.dataLakeId) {
       const ctx = await toAccessContext(req);

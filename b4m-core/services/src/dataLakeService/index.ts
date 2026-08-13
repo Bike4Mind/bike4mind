@@ -40,6 +40,7 @@ export * from './boundedTopK';
 export * from './resolveSearchBudgets';
 export * from './resolveSpendLevers';
 export * from './enforceEmbeddingSpendGate';
+export * from './resolveLakeAuditRetention';
 export * from './openSearchVectorSearch';
 export * from './openSearchChunkAdapter';
 export * from './openSearchRetrievalIndex';

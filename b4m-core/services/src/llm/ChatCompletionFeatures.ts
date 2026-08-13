@@ -64,6 +64,7 @@ import {
   renderRetrievedContentBlock,
   toContentLabel,
 } from '../dataLakeService/renderRetrievedContentBlock';
+import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { getRelevantMementos } from '../mementoService';
 import {
   BaseStorage,
@@ -180,6 +181,30 @@ export type featureNames =
   | 'lakeMemory'
   | 'contextSummarization'
   | 'skills';
+
+/**
+ * Every featureNames value, enumerated at runtime. Kept in sync with the type the same way
+ * PROMPT_SOURCE_METADATA is: the Record below forces the compiler to cover the whole union, so a
+ * renamed or newly added feature that is missed here fails to build rather than silently
+ * dropping out of the reconciliation guard in systemPromptSources.ts.
+ */
+const ALL_FEATURE_NAMES_MAP: Record<featureNames, true> = {
+  slack: true,
+  mementos: true,
+  questMaster: true,
+  autoNameSession: true,
+  project: true,
+  summarizeNotebook: true,
+  agentDetection: true,
+  organizationPrompt: true,
+  sessionPrompt: true,
+  knowledgeRetrieval: true,
+  lakeMemory: true,
+  contextSummarization: true,
+  skills: true,
+};
+export const ALL_FEATURE_NAMES = Object.keys(ALL_FEATURE_NAMES_MAP) as featureNames[];
+
 export interface IChatCompletionServiceOptions {
   db: DatabaseAdapters & GetEffectiveApiKeyAdapters['db'];
   storage: BaseStorage;
@@ -2039,7 +2064,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // `\n\n---\n\n` join this used to do inline, so the separator is unchanged.
       const retrievedContext: IMessage = {
         role: 'system' as const,
-        content: header + capabilityNote + coverageNote + renderRetrievedContentBlock(sections),
+        content:
+          header +
+          `${GROUNDED_NO_INVENTION_RULE}\n\n` +
+          capabilityNote +
+          coverageNote +
+          renderRetrievedContentBlock(sections),
       };
 
       // Retrieval-scoped lake-prompt injection (#1108): attach the operating instructions of ONLY

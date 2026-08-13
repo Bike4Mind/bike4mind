@@ -80,6 +80,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   bulkUpdateTags: vi.fn(),
   findByContentHashes: vi.fn(),
   findByContentHashesInDataLake: vi.fn(),
+  findByDriveFileIdsInDataLake: vi.fn(),
   markFailedIfNotAlready: vi.fn(),
   computeDataLakeStats: vi.fn(),
   findFileIdsMissingChunkedCharCount: vi.fn(),
@@ -96,6 +97,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   hardDeleteByIds: vi.fn(),
   findIdsByDataLakeTag: vi.fn(),
   findByUserId: vi.fn(),
+  sumFileSizeByUserId: vi.fn(),
 });
 
 export const createMockUser = (overrides = {}) => ({

@@ -14,6 +14,7 @@ vi.mock('../../../../dataLakeService/getDynamicDataLakeTags', () => ({
 
 import { knowledgeBaseRetrieveTool } from './index';
 import type { ToolContext } from '../../base/types';
+import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
 
 const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), info: vi.fn() } as never;
 
@@ -101,6 +102,10 @@ describe('retrieve_knowledge_content — by-id (Path A) retrieval exclusion', ()
 
     expect(out).toContain('Retrieved content from');
     expect(out).toContain('chunk body');
+    // This tool hands the model the largest block of raw document text and both search surfaces route
+    // it here for "more detail" - so it carries the same anti-invention rule, ahead of the content.
+    expect(out).toContain(GROUNDED_NO_INVENTION_RULE);
+    expect(out.indexOf(GROUNDED_NO_INVENTION_RULE)).toBeLessThan(out.indexOf('chunk body'));
   });
 
   it('OWNED branch: an unvectorized file is excluded when vectorizedOnly is set', async () => {
@@ -472,6 +477,124 @@ describe('retrieve_knowledge_content bounds its chunk read', () => {
     const out = await runById(ctx);
 
     expect(out).toContain('chunk reader unavailable');
+  });
+});
+
+/**
+ * Zero-chunk replies point at content already inlined in the prompt (#1163) instead of implying
+ * the file is unreachable, but only for files the caller actually inlined this turn
+ * (context.inlinedAttachmentIds) - a lake doc genuinely still indexing is not inline anywhere, so
+ * claiming otherwise would be false.
+ */
+describe('retrieve_knowledge_content zero-chunk wording for inlined attachments (#1163)', () => {
+  const zeroChunkRepo = () => pagedTextChunkRepo([]);
+
+  it('a fully-inlined zero-chunk file points the model at the already-provided full content', async () => {
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      inlinedAttachmentIds: [FILE_ID],
+      fullyInlinedAttachmentIds: [FILE_ID],
+    });
+    (ctx.db as { fabfilechunks: unknown }).fabfilechunks = zeroChunkRepo();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Report.pdf' })
+    );
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('"Report.pdf"');
+    expect(out).toContain('Their full content was already provided earlier in this conversation');
+    expect(out).not.toContain('may not have been processed');
+    expect(out).not.toContain('no indexed content');
+  });
+
+  it('a partially-inlined zero-chunk file does not claim its FULL content is already provided', async () => {
+    // inlinedAttachmentIds without a matching fullyInlinedAttachmentIds entry: this file was
+    // delivered as a cosine excerpt or a truncated head, not in full (#1163 review).
+    const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: [FILE_ID] });
+    (ctx.db as { fabfilechunks: unknown }).fabfilechunks = zeroChunkRepo();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Report.pdf' })
+    );
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('"Report.pdf"');
+    expect(out).toContain('PART of their content was already provided');
+    expect(out).not.toContain('Their full content was already provided');
+    expect(out).not.toContain('may not have been processed');
+    expect(out).not.toContain('no indexed content');
+  });
+
+  it('a zero-chunk file NOT in inlinedAttachmentIds keeps the honest still-indexing wording', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined }); // inlinedAttachmentIds omitted entirely
+    (ctx.db as { fabfilechunks: unknown }).fabfilechunks = zeroChunkRepo();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Report.pdf' })
+    );
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('indexing may still be in progress');
+    expect(out).not.toContain('already provided earlier in this conversation');
+  });
+
+  it('two zero-chunk matches: only the inlined one is named as already-available', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: ['inlined-file'] });
+    (ctx.db as { fabfilechunks: unknown }).fabfilechunks = zeroChunkRepo();
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: [
+        makeFile({ id: 'inlined-file', fileName: 'Inlined.pdf' }),
+        makeFile({ id: 'deferred-file', fileName: 'Deferred.pdf' }),
+      ],
+    });
+
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    const out = (await tool.toolFn({ query: 'q' })) as string;
+
+    expect(out).toContain('"Inlined.pdf"');
+    expect(out).not.toContain('Deferred.pdf');
+  });
+
+  it('a metadata-search miss (Path B) also points at an inlined attachment, not just a zero-chunk match', async () => {
+    // Ground-truth catch: a freshly-attached file whose name/tags/notes do not match the query
+    // never reaches the zero-chunk branch at all - it fails the metadata search itself.
+    const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: ['f1'] });
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [] });
+
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    const out = (await tool.toolFn({ query: 'unrelated phrase' })) as string;
+
+    expect(out).toContain('No documents found matching');
+    expect(out).toContain('already included directly in the conversation above');
+  });
+
+  it('a metadata-search miss with no inlined attachments is unchanged', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined }); // inlinedAttachmentIds omitted
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [] });
+
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    const out = (await tool.toolFn({ query: 'unrelated phrase' })) as string;
+
+    expect(out).toBe(
+      'No documents found matching query "unrelated phrase". Try broadening your search with search_knowledge_base.'
+    );
+  });
+
+  it('regression: a file with at least one real chunk is unaffected by the zero-chunk wording', async () => {
+    const ctx = makeContext({ retrievalFilter: undefined, inlinedAttachmentIds: [FILE_ID] });
+    (ctx.db as { fabfilechunks: unknown }).fabfilechunks = pagedTextChunkRepo([
+      { id: 'c1', text: 'real content body' },
+    ]);
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Report.pdf' })
+    );
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('Retrieved content from');
+    expect(out).toContain('real content body');
+    expect(out).not.toContain('indexing may still be in progress');
   });
 });
 

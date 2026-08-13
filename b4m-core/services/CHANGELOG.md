@@ -1,5 +1,43 @@
 # @bike4mind/services
 
+## 5.0.0
+
+### Major Changes
+
+- [#1688](https://github.com/Bike4Mind/bike4mind/pull/1688) [`851e2c2`](https://github.com/Bike4Mind/bike4mind/commit/851e2c26928c92c574d9310e2eec8e268f672882) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - return debug info from buildAndSortMessages
+
+### Minor Changes
+
+- [#1594](https://github.com/Bike4Mind/bike4mind/pull/1594) [`549c92d`](https://github.com/Bike4Mind/bike4mind/commit/549c92d2fddda1bd02685b18d667ad785479537b) Thanks [@onoya](https://github.com/onoya)! - make corpus inline-vs-retrieve a per-lake grounding mode
+
+- [#1610](https://github.com/Bike4Mind/bike4mind/pull/1610) [`8cf6d07`](https://github.com/Bike4Mind/bike4mind/commit/8cf6d077b5310ced28da693e2b502b668dd6d326) Thanks [@onoya](https://github.com/onoya)! - ingest a connected Google Drive folder into a data lake ([#1589](https://github.com/Bike4Mind/bike4mind/issues/1589))
+
+- [#1643](https://github.com/Bike4Mind/bike4mind/pull/1643) [`ec81acc`](https://github.com/Bike4Mind/bike4mind/commit/ec81acc5b50a40589c279ac0a92c006bbce3bac5) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - vectorSearch cutover for mixed-embeddingModel lakes
+
+- [#1713](https://github.com/Bike4Mind/bike4mind/pull/1713) [`ed20c15`](https://github.com/Bike4Mind/bike4mind/commit/ed20c1595a1a3bdfcd2b67302b1a0d05a713e826) Thanks [@onoya](https://github.com/onoya)! - scoped settings resolver (platform -> org -> owner -> lake)
+
+- [#1719](https://github.com/Bike4Mind/bike4mind/pull/1719) [`b98acf7`](https://github.com/Bike4Mind/bike4mind/commit/b98acf7bf967471089155ea3e2d7766791b2bfb7) Thanks [@biletskiy6](https://github.com/biletskiy6)! - persist chunk char length and per-file text length, with backfill
+
+- [#1720](https://github.com/Bike4Mind/bike4mind/pull/1720) [`92f199c`](https://github.com/Bike4Mind/bike4mind/commit/92f199cae0be5fe4b55744bfa6d65ad07c109936) Thanks [@onoya](https://github.com/onoya)! - add data lake access-grant relation with roles and expiry
+
+### Patch Changes
+
+- [#1598](https://github.com/Bike4Mind/bike4mind/pull/1598) [`abc90f5`](https://github.com/Bike4Mind/bike4mind/commit/abc90f562e15caa46428fc94afa3ffff410e5d5c) Thanks [@onoya](https://github.com/onoya)! - keep grounded chat from inventing customers, deals and figures absent from retrieval
+
+- [#1704](https://github.com/Bike4Mind/bike4mind/pull/1704) [`b0def05`](https://github.com/Bike4Mind/bike4mind/commit/b0def05de4c614089387779871f381d3b2070045) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - delimit retrieved knowledge-base content as untrusted
+
+- [#1709](https://github.com/Bike4Mind/bike4mind/pull/1709) [`c0d796f`](https://github.com/Bike4Mind/bike4mind/commit/c0d796f274b8985f07fc46fe90980a1f741a0f11) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - preserve data-lake membership on whole-array writes
+
+- Updated dependencies [[`abc90f5`](https://github.com/Bike4Mind/bike4mind/commit/abc90f562e15caa46428fc94afa3ffff410e5d5c), [`851e2c2`](https://github.com/Bike4Mind/bike4mind/commit/851e2c26928c92c574d9310e2eec8e268f672882), [`ed20c15`](https://github.com/Bike4Mind/bike4mind/commit/ed20c1595a1a3bdfcd2b67302b1a0d05a713e826)]:
+  - @bike4mind/common@4.0.1
+  - @bike4mind/utils@4.0.0
+  - @bike4mind/agents@0.20.1
+  - @bike4mind/auth@0.7.1
+  - @bike4mind/db-core@0.3.1
+  - @bike4mind/fab-pipeline@1.0.1
+  - @bike4mind/llm-adapters@0.11.1
+  - @bike4mind/mcp@1.41.2
+
 ## 4.0.0
 
 ### Major Changes
