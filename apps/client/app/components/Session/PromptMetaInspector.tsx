@@ -52,20 +52,22 @@ export const usePromptMetaInspector = create<{
   setPosition: (x, y) => set({ position: { x, y } }),
 }));
 
-type PromptMetaTool = { toolSchema?: { name?: string }; name?: string };
+/**
+ * createdAt/updatedAt are not part of PromptMetaZodSchema - they are the parent quest
+ * document's own timestamps, spliced onto this object by MessageContent.tsx before it opens
+ * the inspector. Extending the type here (rather than casting `as any` at each read) documents
+ * that splice as the real contract instead of an unexplained escape hatch.
+ */
+type PromptMetaWithQuestTimestamps = PromptMeta & { createdAt?: string; updatedAt?: string };
 
 /**
- * `tools` sits outside PromptMetaZodSchema, so an ABSENT field is the ordinary case and means the
- * turn captured nothing - not that zero tools were sent. Returns undefined for absent so callers
- * can keep the two apart; conflating them reads as a confident "no tools were sent" and sends
- * readers hunting a tool-pipeline bug when the real signal is "promptMeta was never populated".
+ * `offeredTools` is absent, not empty, when the turn's promptMeta was never populated at all -
+ * an absent field means "not captured", not "zero tools were sent". Returns undefined for absent
+ * so callers can keep the two apart; conflating them reads as a confident "no tools were sent"
+ * and sends readers hunting a tool-pipeline bug when the real signal is capture never happened.
  */
-const readPromptMetaTools = (promptMeta: PromptMeta): PromptMetaTool[] | undefined => {
-  const tools = (promptMeta as PromptMeta & { tools?: unknown }).tools;
-  return Array.isArray(tools) ? (tools as PromptMetaTool[]) : undefined;
-};
-
-const promptMetaToolName = (tool: PromptMetaTool) => tool.toolSchema?.name || tool.name || 'unknown';
+const readOfferedTools = (promptMeta: PromptMeta): string[] | undefined =>
+  Array.isArray(promptMeta.offeredTools) ? promptMeta.offeredTools : undefined;
 
 const PromptMetaInspector = () => {
   const [position, setPosition] = usePromptMetaInspector(useShallow(state => [state.position, state.setPosition]));
@@ -75,7 +77,9 @@ const PromptMetaInspector = () => {
   const closeMetaInspector = useCallback(() => setPromptMeta(null), [setPromptMeta]);
   const totalActualTokens =
     (promptMeta?.tokenUsage?.actualInputTokens || 0) + (promptMeta?.tokenUsage?.actualOutputTokens || 0);
-  const promptMetaTools = promptMeta ? readPromptMetaTools(promptMeta) : undefined;
+  const offeredTools = promptMeta ? readOfferedTools(promptMeta) : undefined;
+  const questTimestamps = promptMeta as PromptMetaWithQuestTimestamps | null;
+  const generatedAt = promptMeta?.generatedAt || questTimestamps?.createdAt;
 
   const [activeTab, setActiveTab] = useState<string>('details');
 
@@ -111,17 +115,17 @@ const PromptMetaInspector = () => {
   const handleCopyMarkdown = () => {
     if (!promptMeta) return;
 
-    const generatedAtRaw = (promptMeta as any).generatedAt || (promptMeta as any).createdAt;
+    const generatedAtRaw = promptMeta.generatedAt || (promptMeta as PromptMetaWithQuestTimestamps).createdAt;
     const generatedDisplay = generatedAtRaw
       ? `${dayjs(generatedAtRaw).format('YYYY-MM-DD HH:mm:ss')} (${generatedAtRaw})`
-      : `${dayjs().format('YYYY-MM-DD HH:mm:ss')} (report copy time — server did not stamp generatedAt)`;
+      : `${dayjs().format('YYYY-MM-DD HH:mm:ss')} (report copy time - server did not stamp generatedAt)`;
 
-    const tools = readPromptMetaTools(promptMeta);
+    const tools = readOfferedTools(promptMeta);
     const toolsSent =
       tools === undefined
-        ? 'not captured (promptMeta.tools absent)'
+        ? 'not captured (promptMeta.offeredTools absent)'
         : tools.length > 0
-          ? tools.map(promptMetaToolName).join(', ')
+          ? tools.join(', ')
           : 'NONE (empty array)';
 
     const markdown = `# AI Request Debug Report
@@ -163,7 +167,7 @@ const PromptMetaInspector = () => {
 - **Quest ID**: ${(promptMeta.questId as string) || 'N/A'}
 
 ## Issues
-${tools === undefined ? '⚠️ **NOT CAPTURED**: promptMeta.tools is absent, so this report says nothing either way about the tool pipeline. If the fields above also read N/A, promptMeta was never populated for this turn.' : ''}
+${tools === undefined ? '⚠️ **NOT CAPTURED**: promptMeta.offeredTools is absent, so this report says nothing either way about the tool pipeline. If the fields above also read N/A, promptMeta was never populated for this turn.' : ''}
 ${tools?.length === 0 ? 'Note: zero tools were sent to the model. Expected under forced knowledge retrieval and other tool-free modes; a defect only if this turn was supposed to have tools.' : ''}
 ${promptMeta.functionCalls?.length === 0 && (tools?.length ?? 0) > 0 ? '⚠️ **WARNING**: Tools were sent but none were called by the model' : ''}
 ${promptMeta.warnings?.length ? promptMeta.warnings.map((w: string) => `⚠️ ${w}`).join('\n') : ''}
@@ -349,17 +353,12 @@ ${promptMeta.promptErrors?.length ? promptMeta.promptErrors.map((e: string) => `
                         User ID: {promptMeta.session?.userId || 'N/A'}
                       </Chip>
                       <Chip variant="soft" color="neutral" startDecorator={<Timer />}>
-                        Generated:{' '}
-                        {(promptMeta as any).generatedAt || (promptMeta as any).createdAt
-                          ? dayjs((promptMeta as any).generatedAt || (promptMeta as any).createdAt).format(
-                              'YYYY-MM-DD HH:mm:ss'
-                            )
-                          : 'N/A'}
+                        Generated: {generatedAt ? dayjs(generatedAt).format('YYYY-MM-DD HH:mm:ss') : 'N/A'}
                       </Chip>
                       <Chip variant="soft" color="neutral" startDecorator={<Timer />}>
                         Updated:{' '}
-                        {(promptMeta as any).updatedAt
-                          ? dayjs((promptMeta as any).updatedAt).format('YYYY-MM-DD HH:mm:ss')
+                        {questTimestamps?.updatedAt
+                          ? dayjs(questTimestamps.updatedAt).format('YYYY-MM-DD HH:mm:ss')
                           : 'N/A'}
                       </Chip>
                     </Stack>
@@ -628,28 +627,24 @@ ${promptMeta.promptErrors?.length ? promptMeta.promptErrors.map((e: string) => `
                           size="sm"
                           variant="soft"
                           color={
-                            promptMetaTools === undefined
-                              ? 'neutral'
-                              : promptMetaTools.length > 0
-                                ? 'success'
-                                : 'warning'
+                            offeredTools === undefined ? 'neutral' : offeredTools.length > 0 ? 'success' : 'warning'
                           }
                           data-testid="prompt-meta-tools-count-chip"
                         >
-                          {promptMetaTools === undefined ? 'not captured' : `${promptMetaTools.length} tools`}
+                          {offeredTools === undefined ? 'not captured' : `${offeredTools.length} tools`}
                         </Chip>
                       </Stack>
-                      {promptMetaTools === undefined ? (
+                      {offeredTools === undefined ? (
                         <Chip size="sm" variant="soft" color="neutral" data-testid="prompt-meta-tools-absent-chip">
-                          promptMeta.tools absent - nothing was recorded for this turn
+                          promptMeta.offeredTools absent - nothing was recorded for this turn
                         </Chip>
-                      ) : promptMetaTools.length > 0 ? (
+                      ) : offeredTools.length > 0 ? (
                         <Box>
                           <Typography level="body-xs">Available Tools:</Typography>
                           <Stack direction="row" spacing={1} flexWrap="wrap">
-                            {promptMetaTools.map((tool, index) => (
+                            {offeredTools.map((toolName, index) => (
                               <Chip key={index} size="sm" variant="soft" color="primary">
-                                {promptMetaToolName(tool)}
+                                {toolName}
                               </Chip>
                             ))}
                           </Stack>
