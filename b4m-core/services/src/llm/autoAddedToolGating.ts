@@ -42,12 +42,16 @@ export function shouldOfferBlogTools(input: {
   message: string;
   previousMessages: readonly IMessage[];
 }): { draft: boolean; publish: boolean; edit: boolean } {
+  // Checked first so the regex/history scan below never runs for the common non-admin turn -
+  // previousMessages can span the whole conversation on a session with unlimited history.
+  if (!input.isAdmin) return { draft: false, publish: false, edit: false };
+
   const intentOrContinuation =
     BLOG_REQUEST_PATTERN.test(input.message) || hasPriorToolUse(input.previousMessages, BLOG_TOOL_NAMES);
   return {
-    draft: input.isAdmin && intentOrContinuation,
-    publish: input.isAdmin && input.hasBlogIntegration && intentOrContinuation,
-    edit: input.isAdmin && input.hasBlogIntegration && intentOrContinuation,
+    draft: intentOrContinuation,
+    publish: input.hasBlogIntegration && intentOrContinuation,
+    edit: input.hasBlogIntegration && intentOrContinuation,
   };
 }
 

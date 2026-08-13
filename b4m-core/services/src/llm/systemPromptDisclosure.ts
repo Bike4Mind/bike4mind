@@ -1,5 +1,5 @@
 import type { IMessage } from '@bike4mind/common';
-import type { BuilderInjectedBlock } from '@bike4mind/utils';
+import { BUILDER_INJECTED_BLOCK_IDS, type BuilderInjectedBlock } from '@bike4mind/utils';
 import {
   ALWAYS_ON_FLOOR_SOURCES,
   PROMPT_SOURCE_METADATA,
@@ -134,7 +134,7 @@ export function buildSystemPromptText(
 
   // Same complete-inventory contract as the loop above: a row per id regardless of gate/delivery,
   // text only when the block actually reached the model.
-  for (const id of ['formatPrompt', 'imagePrompt'] as const) {
+  for (const id of BUILDER_INJECTED_BLOCK_IDS) {
     const block = injectedBlocks.find(b => b.id === id);
     const { source, name } = INJECTED_BLOCK_METADATA[id];
     if (!block?.injected || !block.delivered || !block.content) {

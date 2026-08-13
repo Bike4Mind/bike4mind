@@ -21,6 +21,7 @@ import 'dotenv/config';
 import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam } from '@anthropic-ai/sdk/resources/messages';
 import { ARTIFACT_EMISSION_PROMPT, HELP_CENTER_PROMPT, ABSTENTION_PROMPT } from '@bike4mind/common';
+import { AnthropicBackend } from '@bike4mind/llm-adapters';
 import { b4mTools } from '@bike4mind/services/llm/tools';
 import type { ToolContext } from '@bike4mind/services/llm/tools';
 
@@ -38,16 +39,12 @@ const USER_MESSAGE = 'What is the capital of France?';
 // below - `.toolFn` is never invoked - so an empty stub context is safe here.
 const stubContext = {} as unknown as ToolContext;
 
-function buildToolSchemas() {
+function buildToolSchemas(apiKey: string) {
   const names = ['skill', 'blog_draft', 'blog_publish', 'blog_edit'] as const;
-  return names.map(name => {
-    const { toolSchema } = b4mTools[name].implementation(stubContext, {});
-    const { parameters, strict, ...rest } = toolSchema;
-    // Mirrors AnthropicBackend.formatTools() (anthropicBackend.ts:2270-2282):
-    // `strict` is OpenAI-only and Anthropic rejects it.
-    void strict;
-    return { ...rest, input_schema: parameters };
-  });
+  const toolDefs = names.map(name => b4mTools[name].implementation(stubContext, {}));
+  // Reuse the real adapter's schema transform rather than re-deriving it, so the probe's
+  // tools param can never drift from what a live completion actually sends.
+  return new AnthropicBackend(apiKey).formatTools(toolDefs);
 }
 
 async function probe(model: string) {
@@ -58,7 +55,7 @@ async function probe(model: string) {
   }
 
   const client = new Anthropic({ apiKey });
-  const tools = buildToolSchemas();
+  const tools = buildToolSchemas(apiKey);
   const messages: MessageParam[] = [{ role: 'user', content: USER_MESSAGE }];
 
   const shapes: Array<{ label: string; params: Parameters<typeof client.messages.countTokens>[0] }> = [

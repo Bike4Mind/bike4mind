@@ -664,11 +664,13 @@ export function shouldDeferCorpusToRetrieval(input: {
 }
 
 /**
- * Tools this process auto-adds server-side regardless of user selection. Two auto-add sites feed
- * this: the request-parse method (blog_publish/blog_edit/blog_draft for admins, navigate_view,
- * skill) and `resolveEnabledTools` (the attached-knowledge offer). Small local (Ollama) models get
- * confused by tools they didn't ask for, so the names in this list are trimmed for that backend
- * unless the user explicitly enabled them. Keep this list in sync with those auto-add sites.
+ * Tools this process auto-adds server-side regardless of user selection. Three auto-add sites
+ * feed this: the request-parse method (navigate_view), the conditional blog/skill gate in
+ * `process()` (blog_publish/blog_edit/blog_draft, skill - each on its own intent/catalog signal,
+ * see `shouldOfferBlogTools`/`shouldOfferSkillTool`), and `resolveEnabledTools` (the
+ * attached-knowledge offer). Small local (Ollama) models get confused by tools they didn't ask
+ * for, so the names in this list are trimmed for that backend unless the user explicitly enabled
+ * them. Keep this list in sync with those auto-add sites.
  *
  * Deliberately NOT listed: search_knowledge_base / retrieve_knowledge_content. Attaching a
  * document is itself an explicit user signal that the docs should be used, unlike the genuinely
@@ -1996,8 +1998,9 @@ export class ChatCompletionProcess {
       // request-parse site (initializeProcessContext) because each needs a signal that isn't
       // available that early: the intent-or-continuation check needs this fetched history, and
       // `skill` needs the invocable-skill catalog SkillsFeature populated in the feature loop
-      // above. Each explicitly re-checks session.disabledTools since this runs after
-      // resolveEnabledTools's own denylist pass (see the comment there on applying it last).
+      // above. No session.disabledTools check needed here - the final denylist pass on the built
+      // tool list (below, near buildTools) already strips any session-forbidden tool regardless
+      // of when it was added to enabledTools.
       let hasContentTransform = false;
       if (!promptMode) {
         const blogGates = shouldOfferBlogTools({
@@ -2006,17 +2009,13 @@ export class ChatCompletionProcess {
           message,
           previousMessages,
         });
-        if (
-          blogGates.publish &&
-          !enabledTools.includes('blog_publish') &&
-          !session.disabledTools?.includes('blog_publish')
-        ) {
+        if (blogGates.publish && !enabledTools.includes('blog_publish')) {
           enabledTools.push('blog_publish');
         }
-        if (blogGates.edit && !enabledTools.includes('blog_edit') && !session.disabledTools?.includes('blog_edit')) {
+        if (blogGates.edit && !enabledTools.includes('blog_edit')) {
           enabledTools.push('blog_edit');
         }
-        if (blogGates.draft && !enabledTools.includes('blog_draft') && !session.disabledTools?.includes('blog_draft')) {
+        if (blogGates.draft && !enabledTools.includes('blog_draft')) {
           enabledTools.push('blog_draft');
         }
         hasContentTransform = blogGates.draft;
@@ -2026,7 +2025,6 @@ export class ChatCompletionProcess {
         // have no LLM-invocable skills defined", with no catalog in the prompt to name one.
         if (
           !enabledTools.includes('skill') &&
-          !session.disabledTools?.includes('skill') &&
           shouldOfferSkillTool({
             hasSkillRepository: Boolean(this.db.skills),
             invocableSkillCount: (quest as { _skillCatalog?: unknown[] })._skillCatalog?.length ?? 0,
@@ -2418,7 +2416,7 @@ export class ChatCompletionProcess {
 
       const toolPromptMessage = await toolBuilder.buildToolPrompt({
         toolPromptId,
-        hasContentTransform: (hasContentTransform ?? false) && blogDraftAvailable,
+        hasContentTransform: hasContentTransform && blogDraftAvailable,
         hasChessEngine: enabledTools.includes('chess_engine'),
         hasCurrentDateTime: enabledTools.includes('current_datetime'),
         userTimezone,
@@ -2888,6 +2886,8 @@ export class ChatCompletionProcess {
         );
       }
 
+      const countSystemBlockTokens = (content: string) =>
+        calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions);
       let systemPromptDetails: SystemPromptDetail[] | undefined;
       try {
         systemPromptDetails = await toPromptDetails(
@@ -2913,7 +2913,7 @@ export class ChatCompletionProcess {
               artifactEmissionDelivered: delivered('artifactEmission'),
               helpCenterDelivered: delivered('helpCenter'),
             },
-            content => calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions)
+            countSystemBlockTokens
           ))
         );
       } catch (detailsError) {
@@ -2924,11 +2924,7 @@ export class ChatCompletionProcess {
       // drop the floor rows toPromptDetails/buildAlwaysOnFloorDetails already computed.
       if (systemPromptDetails) {
         try {
-          systemPromptDetails.push(
-            ...(await buildInjectedBlockDetails(injectedBlocks, content =>
-              calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions)
-            ))
-          );
+          systemPromptDetails.push(...(await buildInjectedBlockDetails(injectedBlocks, countSystemBlockTokens)));
         } catch (injectedDetailsError) {
           logger.warn(`📊 Failed to itemize injected format/image prompt blocks:`, injectedDetailsError);
         }

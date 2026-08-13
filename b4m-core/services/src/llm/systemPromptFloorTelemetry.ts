@@ -1,5 +1,5 @@
 import type { SystemPromptDetail } from '@bike4mind/common';
-import type { BuilderInjectedBlock, BuilderInjectedBlockId } from '@bike4mind/utils';
+import { BUILDER_INJECTED_BLOCK_IDS, type BuilderInjectedBlock, type BuilderInjectedBlockId } from '@bike4mind/utils';
 
 /**
  * Resolved inputs for the always-on system-prompt floor. Content strings are
@@ -129,7 +129,7 @@ export async function buildInjectedBlockDetails(
 ): Promise<SystemPromptDetail[]> {
   const details: SystemPromptDetail[] = [];
 
-  for (const id of ['formatPrompt', 'imagePrompt'] as const) {
+  for (const id of BUILDER_INJECTED_BLOCK_IDS) {
     const block = blocks.find(b => b.id === id);
     const metadata = INJECTED_BLOCK_METADATA[id];
     const wasIncluded = (block?.injected ?? false) && (block?.delivered ?? false);
