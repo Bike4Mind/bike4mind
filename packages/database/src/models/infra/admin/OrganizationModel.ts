@@ -393,6 +393,18 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
     return orgs.map(org => org._id.toString());
   }
 
+  async findIdsWithAdminRights(userId: string): Promise<string[]> {
+    // Billing owner OR team manager OR an appointed org admin (adminUserIds). Broader than
+    // findIdsAdministeredBy, which omits appointed admins - see the interface doc for why this is a
+    // separate method. Matches the org-admin semantics of assertCanManageOrgGroups (billing owner +
+    // adminUserIds), extended with managerId for parity with findIdsAdministeredBy.
+    const orgs = await this.organizationModel
+      .find({ $or: [{ userId }, { managerId: userId }, { adminUserIds: userId }] })
+      .select('_id')
+      .lean();
+    return orgs.map(org => org._id.toString());
+  }
+
   async incrementCurrentStorage(organizationId: string, count: number): Promise<void> {
     await this.organizationModel.findByIdAndUpdate(organizationId, [
       {

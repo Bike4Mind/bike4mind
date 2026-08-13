@@ -283,7 +283,7 @@ describe('createFabFile - lake-tag gate at create time', () => {
         },
         mockAdaptersFor(false)
       )
-    ).rejects.toThrow(/only the creator can change this data lake/i);
+    ).rejects.toThrow(/do not have permission to change this data lake/i);
   });
 
   it('does not touch the dataLakes adapter for a create with no lake-related tags', async () => {

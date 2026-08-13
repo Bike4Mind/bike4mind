@@ -1,6 +1,7 @@
 import {
   dataLakeRepository,
   dataLakeBatchRepository,
+  dataLakeAccessGrantRepository,
   fabFileRepository,
   fabFileChunkRepository,
   memoryLedgerRepository,
@@ -17,7 +18,13 @@ import { z, ZodError } from 'zod';
 
 const CleanupPayload = z.object({
   dataLakeId: z.string(),
-  actor: z.object({ userId: z.string(), isAdmin: z.boolean() }),
+  // administeredOrgIds rides along so the async re-check keeps the org-manageable rung the request
+  // path used (optional for back-compat with any message enqueued before this field existed).
+  actor: z.object({
+    userId: z.string(),
+    isAdmin: z.boolean(),
+    administeredOrgIds: z.array(z.string()).optional(),
+  }),
 });
 
 /**
@@ -35,6 +42,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     await dataLakeService.cleanupDeletedDataLake(actor, dataLakeId, {
       db: {
         dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
         batches: dataLakeBatchRepository,
         fabFiles: fabFileRepository,
         fabFileChunks: fabFileChunkRepository,

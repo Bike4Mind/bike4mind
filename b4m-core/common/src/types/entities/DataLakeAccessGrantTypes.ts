@@ -82,6 +82,12 @@ export interface IDataLakeAccessGrantRepository extends IBaseRepository<IDataLak
    */
   listByLake(dataLakeId: string, opts?: { activeAsOf?: Date }): Promise<IDataLakeAccessGrantDocument[]>;
   /**
+   * Every grant across a SET of lakes - one query for a list view that must render a per-lake
+   * `isOwn`/`canManage` label without N per-lake round-trips. Same `activeAsOf` expiry filter as
+   * `listByLake`. An empty `dataLakeIds` returns `[]` without querying.
+   */
+  listActiveByLakes(dataLakeIds: string[], opts?: { activeAsOf?: Date }): Promise<IDataLakeAccessGrantDocument[]>;
+  /**
    * Every grant a principal holds, across all lakes - the input read-time resolution (#1673) needs
    * to answer "which lakes can this principal reach". Same `activeAsOf` expiry filter as
    * `listByLake`.

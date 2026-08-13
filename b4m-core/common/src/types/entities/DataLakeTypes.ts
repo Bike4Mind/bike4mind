@@ -28,6 +28,15 @@ export interface AccessContext {
   userTags: string[];
   organizationId?: string;
   /**
+   * Orgs the caller holds admin RIGHTS in (billing owner / manager / appointed admin), resolved
+   * app-side via `organizationRepository.findIdsWithAdminRights` and injected here (same pre-resolved
+   * seam as `entitlementKeys`; core never imports the Organization model). An org admin may MANAGE any
+   * lake scoped to one of these orgs - the org-manageable rung in `canManageLake`. Distinct from the
+   * singular `organizationId` above, which is the caller's selected-org display preference, never an
+   * authorization input on its own. Optional - absent -> no org-admin rung (back-compat).
+   */
+  administeredOrgIds?: string[];
+  /**
    * Caller's resolved entitlement keys (subscription- + tag-derived), resolved app-side
    * and injected here - core never imports the resolver or the Subscription model (same
    * seam as the retrieval path's `DataLakeAccessContext.entitlementKeys`). The management
@@ -253,7 +262,7 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    */
   findAccessible(
     ctx: AccessContext,
-    opts?: { statuses?: DataLakeStatus[]; includePublic?: boolean }
+    opts?: { statuses?: DataLakeStatus[]; includePublic?: boolean; grantedLakeIds?: string[] }
   ): Promise<IDataLakeDocument[]>;
   /**
    * The discover/browse catalog: active, PUBLIC, gate-less lakes for the public-browse surface,

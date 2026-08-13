@@ -9,6 +9,11 @@ export * from './utils';
 export * from './ports';
 export * from './assertLakeAccess';
 export * from './authorizeLakeWrite';
+// canManageLake + ManageActor are already surfaced via authorizeLakeWrite's re-export; export the
+// rest of the pure decision core (owner resolution) by name to avoid a duplicate-export clash.
+export { isEffectiveOwner, isLakeCreator, resolveEffectiveOwnerIds, type LakeGrant } from './manageRule';
+export * from './authorizeLakeManage';
+export * from './transferLakeOwnership';
 export * from './authorizeBatchAccess';
 export * from './fallbackLakeTags';
 export * from './lakeMembershipScope';

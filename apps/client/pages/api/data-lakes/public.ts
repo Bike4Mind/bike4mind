@@ -1,9 +1,10 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository, userRepository } from '@bike4mind/database';
+import { dataLakeRepository, dataLakeAccessGrantRepository, userRepository } from '@bike4mind/database';
 import { Request } from 'express';
 import { z } from 'zod';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
 
 // Coerce + clamp the browse query. Strings arrive from the query string; empty search is
 // dropped so it isn't sent to the repo as a no-op regex. Paging bounds mirror the repo clamp.
@@ -22,9 +23,15 @@ const handler = baseApi()
     const { q, limit, offset } = BrowseQuery.parse(req.query);
 
     const result = await dataLakeService.browsePublicDataLakes(
-      { userId: req.user.id, isAdmin: !!req.user.isAdmin },
+      await toAccessContext(req),
       { search: q, limit, offset },
-      { db: { dataLakes: dataLakeRepository, users: userRepository } }
+      {
+        db: {
+          dataLakes: dataLakeRepository,
+          users: userRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        },
+      }
     );
 
     return res.json(result);

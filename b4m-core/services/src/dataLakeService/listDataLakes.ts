@@ -1,13 +1,48 @@
 import type {
   AccessContext,
+  IDataLakeAccessGrantRepository,
   IDataLakeDocument,
   IDataLakeRepository,
   DataLakeConfig,
   ManageableDataLakeConfig,
 } from '@bike4mind/common';
 import { DATA_LAKES, toDataLakeConfig, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
-import { canManageLake, isLakeCreator } from './manageRule';
+import { canManageLake, isEffectiveOwner, type LakeGrant } from './manageRule';
 import { redactLakesForActor, type ReaderDataLake } from './redactLakeForActor';
+
+/** Grant-repo slice the list labels need: batch-read a set of lakes' grants, and one principal's. */
+type GrantLookup = Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes' | 'listByPrincipal'>;
+
+/**
+ * The active grants for a set of lakes, grouped by lake id, so per-lake `canManage`/`isOwn` labels
+ * are grant-aware in ONE query. Empty when no grant repo is wired - labels then fall back to the
+ * org-admin rung (from `ctx.administeredOrgIds`) plus the createdByUserId owner fallback, which is
+ * the pre-grant behavior.
+ */
+const grantsByLakeIdFor = async (
+  lakes: Pick<IDataLakeDocument, 'id'>[],
+  grants?: GrantLookup
+): Promise<Map<string, LakeGrant[]>> => {
+  const byLake = new Map<string, LakeGrant[]>();
+  if (!grants || lakes.length === 0) return byLake;
+  const rows = await grants.listActiveByLakes(
+    lakes.map(l => l.id),
+    { activeAsOf: new Date() }
+  );
+  for (const row of rows) {
+    const list = byLake.get(row.dataLakeId) ?? [];
+    list.push({ principalType: row.principalType, principalId: row.principalId, role: row.role });
+    byLake.set(row.dataLakeId, list);
+  }
+  return byLake;
+};
+
+/** Lake ids the caller holds any active grant on - fed to findAccessible so a granted lake lists. */
+const grantedLakeIdsFor = async (userId: string, grants?: GrantLookup): Promise<string[]> => {
+  if (!grants) return [];
+  const rows = await grants.listByPrincipal('user', userId, { activeAsOf: new Date() });
+  return Array.from(new Set(rows.map(row => row.dataLakeId)));
+};
 
 /**
  * Owner fields this service reads to label non-own lakes. Narrows what the code may touch, not
@@ -27,6 +62,13 @@ interface ListDataLakesAdapters {
      * pay for the extra query - `isOwn` is still computed for them (it is free), just unlabeled.
      */
     users?: { findByIds: (ids: string[]) => Promise<OwnerLookup> };
+    /**
+     * Optional access-grant repo. When present, `canManage`/`isOwn` labels honor curator and
+     * transferred-owner grants, and a lake the caller holds a grant on (but is neither creator nor
+     * org-admin of) still appears via findAccessible's grant arm. Absent -> labels use the org-admin
+     * rung + createdByUserId fallback only.
+     */
+    dataLakeAccessGrants?: GrantLookup;
   };
 }
 
@@ -117,9 +159,10 @@ export const listDataLakes = async (
   ctx: AccessContext,
   { db }: ListDataLakesAdapters
 ): Promise<ManageableDataLakeConfig[]> => {
+  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants);
   let dynamicLakes: IDataLakeDocument[] = [];
   try {
-    dynamicLakes = await db.dataLakes.findAccessible(ctx, { statuses: ['draft', 'active'] });
+    dynamicLakes = await db.dataLakes.findAccessible(ctx, { statuses: ['draft', 'active'], grantedLakeIds });
   } catch {
     // DB may not have the collection yet - fall through to hardcoded
   }
@@ -127,9 +170,16 @@ export const listDataLakes = async (
   // Label lakes the caller does not own with the creator's name (manager route only; the
   // content-scope resolver passes no `users` adapter and this resolves to an empty map).
   const ownerNames = await resolveOwnerNames(dynamicLakes, ctx.userId, db.users);
-  const dynamicConfigs = dynamicLakes.map(dl =>
-    toManageableConfig(dl, canManageLake(dl, ctx), isLakeCreator(dl, ctx), ownerNames.get(dl.createdByUserId))
-  );
+  const grantsByLake = await grantsByLakeIdFor(dynamicLakes, db.dataLakeAccessGrants);
+  const dynamicConfigs = dynamicLakes.map(dl => {
+    const grants = grantsByLake.get(dl.id);
+    return toManageableConfig(
+      dl,
+      canManageLake(dl, ctx, grants),
+      isEffectiveOwner(dl, ctx, grants),
+      ownerNames.get(dl.createdByUserId)
+    );
+  });
 
   // Merge with hardcoded fallbacks (DB entries take precedence by slug/id).
   const dynamicIds = new Set(dynamicLakes.map(d => d.slug));
@@ -166,8 +216,11 @@ export const listAllDataLakes = async (
   }
 
   const ownerNames = await resolveOwnerNames(dynamicLakes, ctx.userId, db.users);
+  const grantsByLake = await grantsByLakeIdFor(dynamicLakes, db.dataLakeAccessGrants);
+  // Admin manages every DB lake (canManage: true), but isOwn stays the true effective-owner test so
+  // the "you" label still means ownership, not the admin's blanket manage power.
   const dynamicConfigs = dynamicLakes.map(dl =>
-    toManageableConfig(dl, true, isLakeCreator(dl, ctx), ownerNames.get(dl.createdByUserId))
+    toManageableConfig(dl, true, isEffectiveOwner(dl, ctx, grantsByLake.get(dl.id)), ownerNames.get(dl.createdByUserId))
   );
   const dynamicIds = new Set(dynamicLakes.map(d => d.slug));
   const fallbacks = DATA_LAKES.filter(dl => !dynamicIds.has(dl.id)).map(toFallbackConfig);
@@ -187,8 +240,14 @@ export const listArchivedDataLakes = async (
   ctx: AccessContext,
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
-  const lakes = await db.dataLakes.findAccessible(ctx, { statuses: ['archived'], includePublic: false });
-  return redactLakesForActor(lakes, ctx);
+  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants);
+  const lakes = await db.dataLakes.findAccessible(ctx, {
+    statuses: ['archived'],
+    includePublic: false,
+    grantedLakeIds,
+  });
+  const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
+  return redactLakesForActor(lakes, ctx, grantsByLake);
 };
 
 /**
@@ -200,6 +259,8 @@ export const listDeletedDataLakes = async (
   ctx: AccessContext,
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
-  const lakes = await db.dataLakes.findAccessible(ctx, { statuses: ['deleted'], includePublic: false });
-  return redactLakesForActor(lakes, ctx);
+  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants);
+  const lakes = await db.dataLakes.findAccessible(ctx, { statuses: ['deleted'], includePublic: false, grantedLakeIds });
+  const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
+  return redactLakesForActor(lakes, ctx, grantsByLake);
 };

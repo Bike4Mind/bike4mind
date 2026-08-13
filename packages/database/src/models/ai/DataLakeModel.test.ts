@@ -197,6 +197,19 @@ describe('DataLakeRepository.findAccessible — Private-by-default (HTTP/managem
     ]);
   });
 
+  it('the explicit-grant arm surfaces a lake the caller holds a grant on, even a private one they did not create', async () => {
+    // A transferred/delegated lake: alice created it, but bob now holds an owner grant. It is a
+    // private (org-less, gateless) lake, so bob reaches it ONLY via the grant arm (#1668).
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'transferred', createdByUserId: 'alice' }));
+
+    // Without the grant id, bob (a stranger) sees nothing.
+    expect(await dataLakeRepository.findAccessible(ctx({ userId: 'bob' }))).toEqual([]);
+    // With bob's granted lake id threaded in, the private lake surfaces for him.
+    expect(
+      (await dataLakeRepository.findAccessible(ctx({ userId: 'bob' }), { grantedLakeIds: [lake.id] })).map(l => l.slug)
+    ).toEqual(['transferred']);
+  });
+
   it('a gateless ORG lake is visible to org members; a tag lake to tag holders; cross-org/non-holders excluded', async () => {
     await dataLakeRepository.create(baseLake({ slug: 'acme', organizationId: 'orgA' }));
     await dataLakeRepository.create(baseLake({ slug: 'shared', requiredUserTag: 'Opti' }));

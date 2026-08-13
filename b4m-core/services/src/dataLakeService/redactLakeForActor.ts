@@ -1,5 +1,5 @@
-import type { AccessContext, IDataLake, IDataLakeDocument } from '@bike4mind/common';
-import { canManageLake } from './authorizeLakeWrite';
+import type { IDataLake, IDataLakeDocument } from '@bike4mind/common';
+import { canManageLake, type LakeGrant, type ManageActor } from './manageRule';
 
 /**
  * The fields a NON-editor reader may receive from a lake document. This is an ALLOW-LIST: the
@@ -134,9 +134,10 @@ function toReaderLake(lake: IDataLakeDocument): ReaderDataLake {
  */
 export function redactLakeForActor(
   lake: IDataLakeDocument,
-  actor: Pick<AccessContext, 'userId' | 'isAdmin'>
+  actor: ManageActor,
+  grants: readonly LakeGrant[] = []
 ): IDataLakeDocument | ReaderDataLake {
-  if (canManageLake(lake, actor)) {
+  if (canManageLake(lake, actor, grants)) {
     const trimmed = lake.systemPrompt?.trim();
     // Blank in any form - unset, null, empty, or whitespace-only - is reported as absent, matching
     // the list projection (toManageableConfig) and getDataLakePrompts. An unset prompt needs no
@@ -157,10 +158,16 @@ export function redactLakeForActor(
   return toReaderLake(lake);
 }
 
-/** `redactLakeForActor` over a list - the archived/deleted management views. */
+/**
+ * `redactLakeForActor` over a list - the archived/deleted management views. `grantsByLakeId` (the
+ * active grants grouped per lake id, pre-fetched by the caller via `listActiveByLakes`) lets a
+ * curator / org-owner / transferred owner receive the full editor document, not the reader subset;
+ * a lake absent from the map is treated as having no grants (back-compat).
+ */
 export function redactLakesForActor(
   lakes: IDataLakeDocument[],
-  actor: Pick<AccessContext, 'userId' | 'isAdmin'>
+  actor: ManageActor,
+  grantsByLakeId?: ReadonlyMap<string, readonly LakeGrant[]>
 ): (IDataLakeDocument | ReaderDataLake)[] {
-  return lakes.map(lake => redactLakeForActor(lake, actor));
+  return lakes.map(lake => redactLakeForActor(lake, actor, grantsByLakeId?.get(lake.id) ?? []));
 }

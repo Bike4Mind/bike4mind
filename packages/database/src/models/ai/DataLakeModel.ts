@@ -332,7 +332,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
    */
   async findAccessible(
     ctx: AccessContext,
-    opts?: { statuses?: DataLakeStatus[]; includePublic?: boolean }
+    opts?: { statuses?: DataLakeStatus[]; includePublic?: boolean; grantedLakeIds?: string[] }
   ): Promise<IDataLakeDocument[]> {
     const statuses = opts?.statuses ?? (['draft', 'active'] as DataLakeStatus[]);
     // Public lakes belong in the browse/read list, NOT the archived/deleted MANAGEMENT views:
@@ -397,6 +397,15 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // (dropped for management views via includePublic - see the note at the top of this method).
     const nonOwnerArms: Record<string, unknown>[] = [{ $and: [orgConstraint, requirementConstraint, notPrivate] }];
     if (includePublic) nonOwnerArms.unshift(publicArm);
+
+    // Explicit-grant arm (#1668): a lake the caller holds an active access grant on is reachable by
+    // that grant alone - the grant IS the authorization, so it needs none of the org/gate constraints
+    // (it is the analog of the createdByUserId owner bypass, extended to a transferred/delegated
+    // owner-curator-reader). The ids are pre-resolved by the caller from listByPrincipal (an empty
+    // list adds no arm). This covers ONLY persisted grant rows; the ephemeral tag/entitlement view is
+    // #1673's separate concern.
+    const grantedLakeIds = opts?.grantedLakeIds ?? [];
+    if (grantedLakeIds.length > 0) nonOwnerArms.push({ _id: { $in: grantedLakeIds } });
 
     const filter: Record<string, unknown> = ctx.isAdmin
       ? { status: { $in: statuses } }
