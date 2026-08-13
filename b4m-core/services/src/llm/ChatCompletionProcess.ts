@@ -85,6 +85,7 @@ import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
 import { settleToolCallCredits } from './settleToolCredits';
+import { toolsUsedToFunctionCalls } from './toolsUsedToFunctionCalls';
 import { LATTICE_TOOL_NAMES } from './tools';
 import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
 import {
@@ -3474,19 +3475,16 @@ export class ChatCompletionProcess {
               async (streamedTexts, completionInfo) => {
                 toolsUsed = completionInfo?.toolsUsed || [];
                 // Include tool ID for Anthropic API tool pairing reconstruction
-                quest.promptMeta!.functionCalls = toolsUsed.map(tool => {
-                  let parameters: Record<string, unknown> = {};
-                  try {
-                    parameters = JSON.parse(tool.arguments || '{}');
-                  } catch (e) {
+                quest.promptMeta!.functionCalls = toolsUsedToFunctionCalls(
+                  toolsUsed,
+                  ({ toolName, argumentsPreview, error }) => {
                     logger.warn('[ChatCompletionProcess] Skipping malformed tool arguments in functionCalls (#9328)', {
-                      toolName: tool.name,
-                      argumentsPreview: (tool.arguments || '').substring(0, 100),
-                      error: e instanceof Error ? e.message : String(e),
+                      toolName,
+                      argumentsPreview,
+                      error,
                     });
                   }
-                  return { name: tool.name, parameters, id: tool.id };
-                });
+                );
                 // Clear the interval on first response and calculate TTFVT
                 if (streamedTexts.some(text => text != null && text.trim().length > 0)) {
                   // Capture TTFVT on first non-empty chunk (regardless of chunk number)
