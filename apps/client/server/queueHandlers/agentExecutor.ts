@@ -38,6 +38,7 @@ import {
   skillRepository,
   usageEventRepository,
   imageModerationIncidentRepository,
+  lakeAccessEventRepository,
   mcpServerRepository,
 } from '@bike4mind/database';
 import { registerLambdaErrorHandlers, getSettingsByNames, fetchAgentConversationHistory } from '@bike4mind/utils';
@@ -1217,6 +1218,7 @@ async function processExecution(
         // moderation gate. The gate itself is unconditional (constructed
         // inline in the tool) - this only wires the incident record, not the block.
         imageModerationIncidents: imageModerationIncidentRepository,
+        lakeAccessEvents: lakeAccessEventRepository,
       },
       sessionRepository: sessionRepository,
       storage: getFilesStorage(),
@@ -2593,6 +2595,7 @@ async function processSubagentDispatch(
         // moderation gate. The gate itself is unconditional (constructed
         // inline in the tool) - this only wires the incident record, not the block.
         imageModerationIncidents: imageModerationIncidentRepository,
+        lakeAccessEvents: lakeAccessEventRepository,
       },
       sessionRepository,
       storage: getFilesStorage(),

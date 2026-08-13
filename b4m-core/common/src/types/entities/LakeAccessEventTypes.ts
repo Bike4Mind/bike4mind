@@ -25,6 +25,9 @@ export type LakeAccessPrincipalKind = (typeof LAKE_ACCESS_PRINCIPAL_KINDS)[numbe
  */
 export const LAKE_ACCESS_SURFACES = [
   'data-lake-semantic-search',
+  'data-lake-articles',
+  'data-lake-public-browse',
+  'data-lake-sync-delta',
   'chat-kb-search',
   'chat-kb-search-scoped',
   'chat-kb-retrieve',
@@ -53,10 +56,12 @@ export interface ILakeAccessEvent {
   onBehalfOfUserId?: string;
   organizationId?: string;
   /**
-   * The retrieval SCOPE that was authorized and searched, not per-chunk attribution - the
-   * retrieval primitives this event records do not carry which lake produced which chunk. One
-   * retrieval call commonly spans several lakes at once. Answers "was lake X in scope for this
-   * read", not "did this specific chunk come from lake X".
+   * Best-effort attribution: lakes whose `datalake:<slug>` meta-tag appears on a returned
+   * result, narrowed from the full authorized scope where that tag is recoverable (#1678).
+   * Falls back to the FULL authorized/searched scope when nothing in the result set carries a
+   * recoverable tag (e.g. every match came from a content-tag-prefix arm, which cannot be
+   * reversed to one lake) - callers must never drop a lake from its own audit trail just
+   * because attribution was inconclusive. One retrieval call commonly spans several lakes.
    */
   resolvedLakeIds: string[];
   /** Identifiers only - chunk TEXT must never reach this model. */

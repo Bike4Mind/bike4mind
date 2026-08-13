@@ -16,6 +16,7 @@ import {
   ImageModerationIncident,
   IUsageEventRepository,
   IOrganizationRepository,
+  ILakeAccessEventRepository,
   ModelInfo,
 } from '@bike4mind/common';
 
@@ -105,6 +106,11 @@ export interface ToolContext {
     usageEvents?: Pick<IUsageEventRepository, 'record'>;
     /** Owner lookup for usage attribution; findById is all the recorder needs. */
     organizations?: Pick<IOrganizationRepository, 'findById'>;
+    /**
+     * Lake access audit sink (#1678). Optional - a host that hasn't wired it in degrades to a
+     * silent no-op (see recordLakeAccessEvent) rather than blocking retrieval.
+     */
+    lakeAccessEvents?: Pick<ILakeAccessEventRepository, 'record'>;
   };
   /**
    * Caller's RESOLVED entitlement keys (subscription- + tag-derived), resolved app-side

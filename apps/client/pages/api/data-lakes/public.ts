@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository, userRepository } from '@bike4mind/database';
+import { dataLakeRepository, userRepository, lakeAccessEventRepository } from '@bike4mind/database';
 import { Request } from 'express';
 import { z } from 'zod';
 
@@ -26,6 +26,22 @@ const handler = baseApi()
       { search: q, limit, offset },
       { db: { dataLakes: dataLakeRepository, users: userRepository } }
     );
+
+    // Best-effort audit write (#1678) - the browsed lakes themselves ARE the result, so no
+    // tag-attribution step is needed; every returned lake goes straight into resolvedLakeIds.
+    if (result.data.length > 0) {
+      dataLakeService.recordLakeAccessEvent(
+        lakeAccessEventRepository,
+        {
+          principalKind: 'user',
+          principalId: req.user.id,
+          resolvedLakeIds: result.data.map(lake => lake.id),
+          surface: 'data-lake-public-browse',
+          ...(q ? { queryText: q } : {}),
+        },
+        req.logger
+      );
+    }
 
     return res.json(result);
   });

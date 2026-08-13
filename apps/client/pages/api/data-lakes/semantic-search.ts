@@ -12,6 +12,7 @@ import {
   organizationRepository,
   usageEventRepository,
   userRepository,
+  lakeAccessEventRepository,
 } from '@bike4mind/database';
 import { apiKeyService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
 import { getProviderFromModel } from '@bike4mind/fab-pipeline';
@@ -224,7 +225,7 @@ const handler = baseApi()
       const isAborted = () => clientAborted;
 
       // --- Resolve accessible data lakes (this IS the access gate) ---
-      const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await resolveRetrievalLakeScope(req);
+      const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } = await resolveRetrievalLakeScope(req);
 
       // Every lake contributes exactly one meta-tag, so an empty tag list means zero
       // accessible lakes. Gating on the prefixes instead would be wrong: a caller can
@@ -377,6 +378,26 @@ const handler = baseApi()
       if (isAborted()) return res.end();
 
       const warning = dataLakeService.describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
+
+      // Best-effort audit write (#1678) - attribute to a specific lake where the datalake tag is
+      // recoverable, falling back to the whole authorized scope otherwise (see the doc comment on
+      // resolvedLakeIds). Never awaited: an audit-write failure must not affect this response.
+      dataLakeService.recordLakeAccessEvent(
+        lakeAccessEventRepository,
+        {
+          principalKind: 'user',
+          principalId: req.user.id,
+          resolvedLakeIds: dataLakeService.attributeAccessedLakeIds(
+            search.results.map(r => r.fileTags),
+            lakes
+          ),
+          chunkIds: search.results.map(r => r.chunkId),
+          fileIds: [...new Set(search.results.map(r => r.fileId))],
+          surface: 'data-lake-semantic-search',
+          queryText: query,
+        },
+        req.logger
+      );
 
       return res.json({
         results: search.results.map(r => ({

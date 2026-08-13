@@ -7,6 +7,7 @@ const getDynamicDataLakeAccessMock = vi.fn().mockResolvedValue({
   dataLakeTags: [],
   dataLakeTagPrefixes: [],
   scopedTagPrefixes: [],
+  lakes: [],
 });
 vi.mock('../../../../dataLakeService/getDynamicDataLakeTags', () => ({
   getDynamicDataLakeAccess: (...args: unknown[]) => getDynamicDataLakeAccessMock(...args),
@@ -387,6 +388,7 @@ describe('search_knowledge_base partial-corpus disclosure', () => {
       dataLakeTags: ['datalake:x'],
       dataLakeTagPrefixes: [],
       scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
     });
   });
 
@@ -593,6 +595,7 @@ describe('search_knowledge_base scoped lake-prompt injection (#1108)', () => {
       dataLakeTags: ['datalake:x'],
       dataLakeTagPrefixes: [],
       scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
     });
   });
 
@@ -701,6 +704,7 @@ describe('search_knowledge_base embedding-mismatch disclosure', () => {
       dataLakeTags: ['datalake:x'],
       dataLakeTagPrefixes: [],
       scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
     });
   });
 
@@ -845,6 +849,7 @@ describe('search_knowledge_base alternate-model billing', () => {
       dataLakeTags: ['datalake:x'],
       dataLakeTagPrefixes: [],
       scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
     });
   });
 
@@ -985,6 +990,7 @@ describe('search_knowledge_base untrusted-content delimiter (#1659)', () => {
       dataLakeTags: ['datalake:x'],
       dataLakeTagPrefixes: [],
       scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
     });
   });
 
@@ -1201,6 +1207,7 @@ describe('search_knowledge_base serve budget agrees with the chunk policy (#1661
       dataLakeTags: ['datalake:x'],
       dataLakeTagPrefixes: [],
       scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
     });
     invalidateSettingsCache();
   });
@@ -1358,6 +1365,7 @@ describe('search_knowledge_base clip order vs the untrusted-content defense (#16
       dataLakeTags: ['datalake:x'],
       dataLakeTagPrefixes: [],
       scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
     });
     invalidateSettingsCache();
   });
@@ -1400,5 +1408,160 @@ describe('search_knowledge_base clip order vs the untrusted-content defense (#16
     expect(out).toContain('SENTINEL-INSIDE-BUDGET');
     // And the defense is still applied to what survived: no forged separator at column 0.
     expect(out).not.toMatch(/^--- f$/m);
+  });
+});
+
+describe('search_knowledge_base access-event audit (#1678)', () => {
+  const record = vi.fn().mockResolvedValue(undefined);
+
+  beforeEach(() => record.mockClear());
+
+  it('records a chat-kb-search event for the keyword arm, attributed to the tag-matched lake', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      db: {
+        lakeAccessEvents: { record },
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'f1', fileName: 'Handbook.pdf', tags: [{ name: 'datalake:x' }] }],
+            total: 1,
+          }),
+        },
+      } as never,
+    });
+
+    await run(ctx);
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principalKind: 'user',
+        principalId: 'u1',
+        resolvedLakeIds: ['lake-x'],
+        fileIds: ['f1'],
+        surface: 'chat-kb-search',
+        queryText: 'retired notes',
+      })
+    );
+  });
+
+  it('does not record an event when the keyword arm finds nothing', async () => {
+    const ctx = makeContext({
+      db: {
+        lakeAccessEvents: { record },
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }) },
+      } as never,
+    });
+
+    await run(ctx);
+
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('records a chat-kb-search event for the semantic arm, attributed via fileTags', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [
+        {
+          chunkId: 'c1',
+          fileId: 'f1',
+          fileName: 'Handbook.pdf',
+          fileTags: ['datalake:x'],
+          chunkText: 'pto accrues monthly',
+          score: 0.81,
+        },
+      ],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      chunksScored: 9,
+      embeddingModel: ADA,
+      embeddingMismatch: emptyEmbeddingMismatchReport(),
+      alternateModelsEmbedded: [],
+      scan: {
+        truncated: false,
+        fileBudgetHit: false,
+        chunkBudgetHit: false,
+        filesMatching: 3,
+        filesScoped: 3,
+        filesScanned: 3,
+        chunksScanned: 9,
+        chunksSkippedDimensionMismatch: 0,
+        annFilesQueried: 0,
+        annHits: 0,
+        budgets: { maxFiles: 20000, maxChunks: 100000 },
+      },
+    });
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      db: {
+        lakeAccessEvents: { record },
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+
+    await run(ctx);
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resolvedLakeIds: ['lake-x'],
+        chunkIds: ['c1'],
+        fileIds: ['f1'],
+        surface: 'chat-kb-search',
+      })
+    );
+  });
+
+  it('records under chat-kb-search-scoped, with no lake attribution, for an agent-scoped call', async () => {
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      kbScope: { fileIds: ['f1'] },
+      db: {
+        lakeAccessEvents: { record },
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({ data: [{ id: 'f1', fileName: 'Scoped.pdf', tags: [] }], total: 1 }),
+        },
+      } as never,
+    });
+
+    await run(ctx);
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resolvedLakeIds: [],
+        fileIds: ['f1'],
+        surface: 'chat-kb-search-scoped',
+      })
+    );
+  });
+
+  it('never throws the tool call when the audit write rejects', async () => {
+    record.mockRejectedValueOnce(new Error('mongo blip'));
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      db: {
+        lakeAccessEvents: { record },
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({ data: [{ id: 'f1', fileName: 'Clean.pdf', tags: [] }], total: 1 }),
+        },
+      } as never,
+    });
+
+    const out = await run(ctx);
+
+    expect(out).toContain('Clean.pdf');
   });
 });

@@ -10,6 +10,8 @@ import {
 } from '../../../../dataLakeService/renderRetrievedContentBlock';
 import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
 import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
+import { attributeAccessedLakeIds } from '../../../../dataLakeService/attributeAccessedLakes';
+import { recordLakeAccessEvent } from '../../../../dataLakeService/recordLakeAccessEvent';
 
 interface KnowledgeBaseRetrieveParams {
   file_id?: string;
@@ -379,6 +381,28 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
               'answer from that; only report them as unavailable if nothing about them appears above.'
             );
           }
+
+          // Best-effort audit write (#1678). The extra getDynamicDataLakeAccess call only runs
+          // when there's actually a recorder wired AND this isn't the agent-scoped branch (which
+          // never consults lake access, same as the search tool's scoped arm) - otherwise it's a
+          // wasted round trip for a lookup nothing will use.
+          const attributionLakes =
+            scope || !context.db.lakeAccessEvents ? [] : (await getDynamicDataLakeAccess(context)).lakes;
+          recordLakeAccessEvent(
+            context.db.lakeAccessEvents,
+            {
+              principalKind: 'user',
+              principalId: context.userId,
+              resolvedLakeIds: attributeAccessedLakeIds(
+                retrievedFiles.map(f => f.tags?.map(t => t.name) ?? []),
+                attributionLakes
+              ),
+              fileIds: retrievedFiles.map(f => f.id),
+              surface: 'chat-kb-retrieve',
+              ...(query ? { queryText: query } : {}),
+            },
+            context.logger
+          );
 
           // Create citable source chips for the UI - mirrors web_search pattern
           const citables: CitableSource[] = retrievedFiles.map((file, index) => {

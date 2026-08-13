@@ -7,6 +7,7 @@ const getDynamicDataLakeAccessMock = vi.fn().mockResolvedValue({
   dataLakeTags: [],
   dataLakeTagPrefixes: [],
   scopedTagPrefixes: [],
+  lakes: [],
 });
 vi.mock('../../../../dataLakeService/getDynamicDataLakeTags', () => ({
   getDynamicDataLakeAccess: (...args: unknown[]) => getDynamicDataLakeAccessMock(...args),
@@ -769,5 +770,105 @@ describe('retrieve_knowledge_content untrusted-content delimiter (#1659)', () =>
     expect(out).not.toContain('[Data Lake -');
     expect(out).toContain(BEGIN);
     expect(out.indexOf('body')).toBeLessThan(out.indexOf(END));
+  });
+});
+
+describe('retrieve_knowledge_content access-event audit (#1678)', () => {
+  const record = vi.fn().mockResolvedValue(undefined);
+
+  // makeContext's `...overrides` replaces `db` wholesale rather than merging, so every case here
+  // that needs lakeAccessEvents also has to re-supply fabfiles/fabfilechunks alongside it.
+  function auditContext(overrides: Partial<ToolContext> = {}): ToolContext {
+    return makeContext({
+      db: {
+        fabfiles: { findByIdAndUserId: vi.fn(), findById: vi.fn(), search: vi.fn() },
+        fabfilechunks: pagedTextChunkRepo([{ id: 'c1', text: 'chunk body' }]),
+        lakeAccessEvents: { record },
+      } as never,
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    record.mockClear();
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+  });
+
+  it('records a chat-kb-retrieve event attributed to the tag-matched lake', async () => {
+    const ctx = auditContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Clean.pdf', tags: [{ name: 'datalake:x' }] })
+    );
+
+    await runById(ctx);
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principalKind: 'user',
+        principalId: 'u1',
+        resolvedLakeIds: ['lake-x'],
+        fileIds: [FILE_ID],
+        surface: 'chat-kb-retrieve',
+      })
+    );
+  });
+
+  it('passes the query through as queryText on the tag/query path', async () => {
+    const ctx = auditContext();
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: [makeFile({ id: 'c', fileName: 'Clean Guide.pdf' })],
+    });
+
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    await tool.toolFn({ query: 'retired guide' });
+
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ queryText: 'retired guide' }));
+  });
+
+  it('records with no lake attribution for an agent-scoped call, without an extra lake lookup', async () => {
+    const ctx = auditContext({ retrievalFilter: undefined, kbScope: { fileIds: [FILE_ID] } });
+    (ctx.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockResolvedValue(makeFile());
+
+    await runById(ctx);
+
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ resolvedLakeIds: [], surface: 'chat-kb-retrieve' }));
+    // The scoped branch must never consult owner-wide lake access, audit or not.
+    expect(getDynamicDataLakeAccessMock).not.toHaveBeenCalled();
+  });
+
+  it('does not call getDynamicDataLakeAccess for attribution when no recorder is wired', async () => {
+    const ctx = makeContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(makeFile());
+
+    await runById(ctx);
+
+    expect(getDynamicDataLakeAccessMock).not.toHaveBeenCalled();
+  });
+
+  it('does not record an event when nothing was retrieved (not-found)', async () => {
+    const ctx = auditContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (ctx.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    await runById(ctx);
+
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('still returns retrieved content when the audit write rejects', async () => {
+    record.mockRejectedValueOnce(new Error('mongo blip'));
+    const ctx = auditContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Clean.pdf' })
+    );
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('Retrieved content from');
   });
 });

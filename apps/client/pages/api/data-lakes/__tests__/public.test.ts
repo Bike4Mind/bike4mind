@@ -9,11 +9,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * rejected query never reaches the service, and an accepted one arrives coerced.
  */
 
-const { mockBrowse, LAKES_REPO, USERS_REPO } = vi.hoisted(() => ({
+const { mockBrowse, LAKES_REPO, USERS_REPO, mockRecord } = vi.hoisted(() => ({
   mockBrowse: vi.fn(),
   // Distinguishable sentinels so the adapter case can assert identity pass-through.
   LAKES_REPO: { __tag: 'dataLakeRepository' },
   USERS_REPO: { __tag: 'userRepository' },
+  mockRecord: vi.fn().mockResolvedValue(undefined),
 }));
 
 // The route is baseApi().use(...).get(fn), so `use` must return the chain and `get` returns the
@@ -29,8 +30,19 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/featureFlag', () => ({
   requireFeatureEnabled: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
-vi.mock('@bike4mind/services', () => ({ dataLakeService: { browsePublicDataLakes: mockBrowse } }));
-vi.mock('@bike4mind/database', () => ({ dataLakeRepository: LAKES_REPO, userRepository: USERS_REPO }));
+vi.mock('@bike4mind/services', async () => ({
+  dataLakeService: {
+    browsePublicDataLakes: mockBrowse,
+    recordLakeAccessEvent: (
+      await import('../../../../../../b4m-core/services/src/dataLakeService/recordLakeAccessEvent')
+    ).recordLakeAccessEvent,
+  },
+}));
+vi.mock('@bike4mind/database', () => ({
+  dataLakeRepository: LAKES_REPO,
+  userRepository: USERS_REPO,
+  lakeAccessEventRepository: { record: mockRecord },
+}));
 
 import handler from '@pages/api/data-lakes/public';
 
@@ -44,6 +56,7 @@ const EMPTY_RESULT = { data: [], total: 0 };
 const makeReq = (query: Record<string, string | string[]>, user: Record<string, unknown> = { id: 'u1' }) => ({
   query,
   user,
+  logger: { warn: vi.fn(), error: vi.fn() },
 });
 
 const makeRes = () => {
@@ -151,5 +164,43 @@ describe('GET /api/data-lakes/public - search and pass-through', () => {
     const res = makeRes();
     await route(makeReq({}), res);
     expect(res.json).toHaveBeenCalledWith(result);
+  });
+});
+
+describe('GET /api/data-lakes/public access-event audit (#1678)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('records an event with every browsed lake id, no attribution step needed', async () => {
+    mockBrowse.mockResolvedValue({ data: [{ id: 'lake1' }, { id: 'lake2' }], total: 2 });
+
+    await route(makeReq({ q: 'sales' }, { id: 'u1' }), makeRes());
+
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principalKind: 'user',
+        principalId: 'u1',
+        resolvedLakeIds: ['lake1', 'lake2'],
+        surface: 'data-lake-public-browse',
+        queryText: 'sales',
+      })
+    );
+  });
+
+  it('does not record an event on an empty result page', async () => {
+    mockBrowse.mockResolvedValue({ data: [], total: 0 });
+
+    await route(makeReq({}), makeRes());
+
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('still returns the response when the audit write rejects', async () => {
+    mockBrowse.mockResolvedValue({ data: [{ id: 'lake1' }], total: 1 });
+    mockRecord.mockRejectedValueOnce(new Error('mongo blip'));
+    const res = makeRes();
+
+    await route(makeReq({}), res);
+
+    expect(res.json).toHaveBeenCalledWith({ data: [{ id: 'lake1' }], total: 1 });
   });
 });

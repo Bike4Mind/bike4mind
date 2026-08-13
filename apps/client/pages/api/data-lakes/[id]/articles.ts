@@ -7,6 +7,7 @@ import {
   fabFileRepository,
   projectRepository,
   userRepository,
+  lakeAccessEventRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { getFilesStorage } from '@server/utils/storage';
@@ -109,6 +110,20 @@ const handler = baseApi()
         // Single-lake browser: only this lake's files.
         restrictToDataLake: true,
       }
+    );
+
+    // Best-effort audit write (#1678) - the lake is already resolved, so no attribution needed.
+    dataLakeService.recordLakeAccessEvent(
+      lakeAccessEventRepository,
+      {
+        principalKind: 'user',
+        principalId: userId,
+        resolvedLakeIds: [dataLake.id],
+        fileIds: (result.data as Array<{ id: string }>).map(f => f.id),
+        surface: 'data-lake-articles',
+        ...(search ? { queryText: search } : {}),
+      },
+      req.logger
     );
 
     return res.json({ data: result.data, total: result.total, hasMore: result.hasMore });

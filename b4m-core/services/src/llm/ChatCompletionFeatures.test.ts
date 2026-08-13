@@ -1515,3 +1515,121 @@ describe('KnowledgeRetrievalFeature untrusted-content delimiter (#1659)', () => 
     expect(content).toContain('cite ONLY by bracketed index');
   });
 });
+
+describe('KnowledgeRetrievalFeature access-event audit (#1678)', () => {
+  const embeddingFactory = {
+    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+  };
+
+  const LAKE = {
+    id: 'lake1',
+    slug: 'lake1',
+    name: 'Lake One',
+    fileTagPrefix: 'lake1:',
+    datalakeTag: 'datalake:lake1',
+    createdByUserId: 'u1',
+    status: 'active',
+  };
+
+  const record = vi.fn().mockResolvedValue(undefined);
+
+  const makeCtx = (fileTags: { name: string }[] = [{ name: 'datalake:lake1' }]) => {
+    const files = [{ id: 'fileA', fileName: 'Handbook.pdf', tags: fileTags, vectorized: true }];
+    return {
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+      user: { id: 'u1', tags: [], groups: [] },
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: files, hasMore: false, total: files.length }) },
+        fabfilechunks: {
+          findByFabFileId: vi.fn(),
+          findVectorsByFabFileIds: vi.fn(() =>
+            Promise.resolve([{ id: 'chA1', fabFileId: 'fileA', text: 'pto accrues monthly', vector: [1, 0] }])
+          ),
+        },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
+        dataLakes: {
+          findActiveByUserTags: vi.fn().mockResolvedValue([]),
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([LAKE]),
+        },
+        lakeAccessEvents: { record },
+      },
+      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+  };
+
+  beforeEach(() => record.mockClear());
+
+  it('records a forced-retrieval event attributed to the tag-matched lake', async () => {
+    const ctx = makeCtx();
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+
+    await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'pto policy'
+    );
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principalKind: 'user',
+        principalId: 'u1',
+        resolvedLakeIds: ['lake1'],
+        fileIds: ['fileA'],
+        chunkIds: ['chA1'],
+        surface: 'forced-retrieval',
+        queryText: 'pto policy',
+      })
+    );
+  });
+
+  it('falls back to the full authorized scope when the grounded file carries no recoverable tag', async () => {
+    const ctx = makeCtx([{ name: 'opti:policy' }]);
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+
+    await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'pto policy'
+    );
+
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ resolvedLakeIds: ['lake1'] }));
+  });
+
+  it('does not record an event when nothing grounds (abstention)', async () => {
+    const ctx = makeCtx();
+    ctx.db.fabfiles.search = vi.fn().mockResolvedValue({ data: [], hasMore: false, total: 0 });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+
+    await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'pto policy'
+    );
+
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('still returns the retrieved context when the audit write rejects', async () => {
+    record.mockRejectedValueOnce(new Error('mongo blip'));
+    const ctx = makeCtx();
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+
+    const messages = await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'pto policy'
+    );
+
+    expect(messages[0]?.content).toContain('Handbook.pdf');
+  });
+});

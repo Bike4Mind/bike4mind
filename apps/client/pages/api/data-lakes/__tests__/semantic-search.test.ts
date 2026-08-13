@@ -10,6 +10,7 @@ const {
   mockGetSettingsValue,
   mockResolveSearchBudgets,
   mockGetProviderFromModel,
+  mockRecordLakeAccessEvent,
 } = vi.hoisted(() => ({
   mockResolveScope: vi.fn(),
   mockSemanticSearch: vi.fn(),
@@ -19,6 +20,7 @@ const {
   mockGetSettingsValue: vi.fn(),
   mockResolveSearchBudgets: vi.fn(),
   mockGetProviderFromModel: vi.fn(),
+  mockRecordLakeAccessEvent: vi.fn().mockResolvedValue(undefined),
 }));
 
 // Only the middleware chain and the seams below are mocked; @bike4mind/common stays real so
@@ -55,6 +57,7 @@ vi.mock('@bike4mind/database', () => ({
   organizationRepository: { findById: vi.fn() },
   usageEventRepository: {},
   userRepository: { findById: mockFindUserById },
+  lakeAccessEventRepository: { record: mockRecordLakeAccessEvent },
 }));
 // The report helpers are the REAL ones: the wording and snake_case mapping are what these tests
 // check, so a reimplementation here would prove nothing. Imported from source because the module
@@ -75,6 +78,14 @@ vi.mock('@bike4mind/services', async () => ({
     emptyEmbeddingMismatchReport: (
       await import('../../../../../../b4m-core/services/src/dataLakeService/embeddingMismatch')
     ).emptyEmbeddingMismatchReport,
+    // Real implementations (pure, already unit-tested on their own) so this suite can assert on
+    // the actual lakeAccessEventRepository.record call args rather than a reimplementation.
+    attributeAccessedLakeIds: (
+      await import('../../../../../../b4m-core/services/src/dataLakeService/attributeAccessedLakes')
+    ).attributeAccessedLakeIds,
+    recordLakeAccessEvent: (
+      await import('../../../../../../b4m-core/services/src/dataLakeService/recordLakeAccessEvent')
+    ).recordLakeAccessEvent,
     resolveSearchBudgets: mockResolveSearchBudgets,
     // A distinct, identifiable value (not a real adapter) so a test can assert reference
     // equality without depending on openSearchChunkAdapter's own implementation.
@@ -108,6 +119,7 @@ const DYNAMIC_SCOPE = {
   dataLakeTags: ['datalake:acme-handbook'],
   dataLakeTagPrefixes: ['opti:'],
   scopedTagPrefixes: ['acme:'],
+  lakes: [{ id: 'lake-acme', name: 'Acme Handbook', slug: 'acme-handbook', datalakeTag: 'datalake:acme-handbook' }],
 };
 
 const FULL_SCAN = {
@@ -133,7 +145,7 @@ const EMPTY_RESULT = {
 
 // req.on is required by the client-disconnect listener; the logger by the usage-recording catch.
 const makeReq = (body: unknown, user: Record<string, unknown> = { id: 'u1', tags: [] }) =>
-  ({ user, body, on: vi.fn(), logger: { warn: vi.fn(), debug: vi.fn() } }) as never;
+  ({ user, body, on: vi.fn(), logger: { warn: vi.fn(), debug: vi.fn(), error: vi.fn() } }) as never;
 
 const makeRes = () => {
   const res: Record<string, unknown> = { writableEnded: false };
@@ -295,6 +307,7 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
       dataLakeTags: ['datalake:acme-handbook'],
       dataLakeTagPrefixes: [],
       scopedTagPrefixes: ['acme:'],
+      lakes: DYNAMIC_SCOPE.lakes,
     });
 
     await handler(makeReq({ query: 'onboarding' }), makeRes());
@@ -720,5 +733,85 @@ describe('POST /api/data-lakes/semantic-search mixed-model payload shape', () =>
     const body = res.json.mock.calls[0][0];
     expect(body.scan.ann_models_queried).toBe(0);
     expect(body.embedding_mismatch.alternate_model_served).toEqual({ files: 0, models: [] });
+  });
+});
+
+describe('POST /api/data-lakes/semantic-search access-event audit (#1678)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveScope.mockResolvedValue(DYNAMIC_SCOPE);
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'k' });
+    mockGetProviderFromModel.mockReturnValue(ModelBackend.OpenAI);
+    mockGetSettingsValue.mockResolvedValue(undefined);
+    mockResolveSearchBudgets.mockResolvedValue({ maxFiles: 20000, maxChunks: 100000 });
+    mockFindUserById.mockResolvedValue(null); // billing resolution is not under test here
+  });
+
+  const RESULT_WITH_LAKE_TAG = {
+    results: [
+      {
+        chunkId: 'c1',
+        fileId: 'f1',
+        fileName: 'handbook.md',
+        fileTags: ['datalake:acme-handbook'],
+        chunkText: 'pto policy',
+        score: 0.82,
+      },
+    ],
+    totalChunksSearched: 12,
+    chunksScored: 12,
+    embeddingMismatch: emptyEmbeddingMismatchReport(),
+    filesInScope: 3,
+    embeddingModel: 'text-embedding-ada-002',
+    scan: FULL_SCAN,
+  };
+
+  it('records an event attributed to the tag-matched lake, with chunk/file ids and the query text', async () => {
+    mockSemanticSearch.mockResolvedValue(RESULT_WITH_LAKE_TAG);
+
+    await handler(makeReq({ query: 'pto policy' }, { id: 'u1', tags: [] }), makeRes());
+
+    expect(mockRecordLakeAccessEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principalKind: 'user',
+        principalId: 'u1',
+        resolvedLakeIds: ['lake-acme'],
+        chunkIds: ['c1'],
+        fileIds: ['f1'],
+        surface: 'data-lake-semantic-search',
+        queryText: 'pto policy',
+      })
+    );
+  });
+
+  it('falls back to the full authorized scope when no result carries a recoverable datalake tag', async () => {
+    mockSemanticSearch.mockResolvedValue({
+      ...RESULT_WITH_LAKE_TAG,
+      results: [{ ...RESULT_WITH_LAKE_TAG.results[0], fileTags: ['opti:policy'] }],
+    });
+
+    await handler(makeReq({ query: 'pto policy' }), makeRes());
+
+    expect(mockRecordLakeAccessEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ resolvedLakeIds: DYNAMIC_SCOPE.lakes.map(l => l.id) })
+    );
+  });
+
+  it('does not record an event on the empty-scope short-circuit (nothing was read)', async () => {
+    mockResolveScope.mockResolvedValue({ dataLakeTags: [], dataLakeTagPrefixes: [], scopedTagPrefixes: [], lakes: [] });
+
+    await handler(makeReq({ query: 'pto policy' }), makeRes());
+
+    expect(mockRecordLakeAccessEvent).not.toHaveBeenCalled();
+  });
+
+  it('still returns the search response when the audit write rejects', async () => {
+    mockSemanticSearch.mockResolvedValue(RESULT_WITH_LAKE_TAG);
+    mockRecordLakeAccessEvent.mockRejectedValueOnce(new Error('mongo blip'));
+    const res = makeRes();
+
+    await handler(makeReq({ query: 'pto policy' }), res);
+
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ results: expect.any(Array) }));
   });
 });
