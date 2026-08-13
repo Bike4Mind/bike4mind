@@ -10,6 +10,9 @@
  * so a race between the two just makes the loser a no-op. Idempotent across runs (forced batches
  * leave the non-terminal set), capped per run so it stays inside the Lambda timeout.
  *
+ * runStuckBatchSweep is also the self-host worker's counterpart (worker/main.ts) - self-host has
+ * no SST cron, so it drives the same sweep off its own scheduled-task interval.
+ *
  * Schedule: daily. Enabled: production + dev.
  */
 
@@ -61,17 +64,19 @@ async function rescueUnchunkedFiles(): Promise<number> {
   return candidates.length;
 }
 
-export async function handler() {
-  const stage = Resource.App.stage;
-  await connectDB(Config.MONGODB_URI.replace('%STAGE%', stage));
-
+/**
+ * Find + reconcile stuck data-lake batches. The hosted daily cron (handler(), below) and the
+ * self-host worker's scheduled task (worker/main.ts) both come through here, so the two drivers
+ * run the exact same stuck-batch logic rather than the self-host path drifting from the cron.
+ */
+export async function runStuckBatchSweep(runLogger: Logger): Promise<{ candidates: number; forced: string[] }> {
   const timeoutMs = dataLakeService.DEFAULT_STUCK_BATCH_TIMEOUT_MS;
   const cutoff = new Date(Date.now() - timeoutMs);
   const stuck = await dataLakeBatchRepository.findStuck(cutoff, MAX_PER_RUN);
 
   const forced = await dataLakeService.reconcileStuckBatches(stuck, timeoutMs, {
     db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
-    logger,
+    logger: runLogger,
     metrics: {
       // Also backstops the taxonomy enqueue for a batch that never reached upload-complete
       // NOR a terminal chunk/vectorize event (finalizeBatchIfComplete already backstops the
@@ -80,11 +85,20 @@ export async function handler() {
       emitForcedTerminal: batch =>
         Promise.all([
           recordReconcilerForcedTerminal().catch(() => {}),
-          enqueueTaxonomyAnalysisIfWanted(batch, logger).catch(() => {}),
+          enqueueTaxonomyAnalysisIfWanted(batch, runLogger).catch(() => {}),
         ]).then(() => {}),
       emitStuckGauge: count => recordStuckBatchGauge(count).catch(() => {}),
     },
   });
+
+  return { candidates: stuck.length, forced };
+}
+
+export async function handler() {
+  const stage = Resource.App.stage;
+  await connectDB(Config.MONGODB_URI.replace('%STAGE%', stage));
+
+  const { candidates, forced } = await runStuckBatchSweep(logger);
 
   // Global fallback for the background AI-tagging phase - the read-time reconciler
   // (10-minute timeout) is the primary backstop; this daily sweep catches a stuck job on a
@@ -107,7 +121,7 @@ export async function handler() {
   await recordReconcileRun().catch(() => {});
 
   logger.info('[DataLakeBatchReconcile] Sweep complete', {
-    candidates: stuck.length,
+    candidates,
     forced: forced.length,
     taxonomyCandidates: stuckTaxonomy.length,
     taxonomyForced: forcedTaxonomy.length,
@@ -116,7 +130,7 @@ export async function handler() {
   return {
     statusCode: 200,
     body: JSON.stringify({
-      candidates: stuck.length,
+      candidates,
       forced: forced.length,
       taxonomyCandidates: stuckTaxonomy.length,
       taxonomyForced: forcedTaxonomy.length,

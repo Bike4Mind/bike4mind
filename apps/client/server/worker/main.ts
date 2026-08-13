@@ -12,6 +12,7 @@ import { dispatch as fabFileVectorizeDispatch } from '@server/queueHandlers/fabF
 import { dispatch as dataLakeTaxonomyAnalysisDispatch } from '@server/queueHandlers/dataLakeTaxonomyAnalysis';
 import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
 import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
+import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
 import { buildFabFileChunkScanFilter, CHUNK_SCAN_BATCH, CHUNK_SCAN_MIN_AGE_MS } from './chunkScan';
@@ -42,6 +43,8 @@ const FAB_FILE_VISIBILITY_TIMEOUT_SEC = 300;
 const SCHEDULER_INTERVAL_MS = 5 * 60_000;
 /** Safety-net scan cadence: catches uploads whose MinIO webhook never arrived. */
 const CHUNK_SCAN_INTERVAL_MS = 60_000;
+/** Matches hosted's daily dataLakeBatchReconcile cron cadence (infra/cron.ts). */
+const DATA_LAKE_BATCH_RECONCILE_INTERVAL_MS = 24 * 60 * 60_000;
 /** Grace period on SIGTERM/SIGINT for in-flight message handling to finish before exit. */
 const DRAIN_GRACE_MS = 20_000;
 
@@ -151,6 +154,13 @@ async function main() {
     }
   });
 
+  // Self-host counterpart of the hosted daily dataLakeBatchReconcile cron (infra/cron.ts):
+  // without this, a self-host batch that nobody's list-view revisits stays stuck indefinitely
+  // now that the timeout is 3 hours instead of 30 minutes. Same shared sweep, same timeout.
+  worker.registerScheduledTask('dataLakeBatchReconcile', DATA_LAKE_BATCH_RECONCILE_INTERVAL_MS, async () => {
+    await runStuckBatchSweep(bootLogger);
+  });
+
   // Remote-provider catalog freshness (sec 6.2). The enableModelDiscovery gate,
   // the lease and the per-source minimum interval all live inside the service,
   // so this closure is the same call the hosted cron makes.
@@ -173,6 +183,15 @@ async function main() {
   // Held (not fire-and-forget) so shutdown can wait for it: a run abandoned
   // mid-flight strands its Mongo lease until the TTL expires.
   const startupLeg = startDiscoveryOnStartup({ logger: bootLogger, host: 'selfhost' });
+
+  // Same "don't wait a full interval" reasoning as the discovery startup leg above, but not
+  // held for shutdown: each batch transition is an atomic guarded single-document update
+  // (markTerminalIfActive), so an abandoned run leaves no lease behind to strand.
+  runStuckBatchSweep(bootLogger).catch(err => {
+    bootLogger.error('[dataLakeBatchReconcile] startup sweep failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
 
   const shutdown = async (signal: string) => {
     bootLogger.info(`${signal} received - draining selfHostWorker (up to ${DRAIN_GRACE_MS}ms)`);
