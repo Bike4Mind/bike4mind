@@ -54,14 +54,20 @@ export function assertRepoFormat(repo: string): void {
 
 export interface ChatEgressPolicy {
   /**
-   * Hosts the digest may be posted to. OPERATOR-CONFIGURED, not compiled in: a
-   * self-hosted chat platform has no provider domain, so its allowlist is the
-   * operator's own host.
+   * Hosts the digest may be posted to. OPERATOR-CONFIGURED, not compiled in. Today
+   * the check runs against the Slack API origin below, so the default deployment
+   * lists `slack.com`.
    */
   allowedHosts: string[];
   /**
-   * The API origin the post will actually reach. Defaults to Slack's. A self-hosted
-   * deployment overrides it, which is exactly why the allowlist cannot be baked in.
+   * The API origin the post is validated against. Defaults to Slack's.
+   *
+   * This is the seam for a future self-hosted (non-Slack) origin, but that path is
+   * NOT wired end-to-end yet: nothing in the settings schema populates this, and the
+   * Slack adapter (`createPostReport`) posts through `WebClient`'s default `slack.com`
+   * origin regardless. Redirecting egress to a self-hosted host needs BOTH this
+   * populated from settings AND the poster pointed at the same origin - deferred until
+   * there is a deployment to validate it against.
    */
   apiBaseUrl?: string;
 }

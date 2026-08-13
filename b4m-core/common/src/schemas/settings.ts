@@ -3823,7 +3823,7 @@ export const settingsMap = {
     name: 'PR Report Egress Allowlist',
     defaultValue: { hosts: ['slack.com', 'www.slack.com'] },
     description:
-      'Hosts the PR digest may post to. FAILS CLOSED: an empty list rejects every send rather than degrading to allow-any, because the post body carries PR titles, author logins and the staffing implied by the role rosters. Self-hosted chat platforms must name their own host here.',
+      'Hosts the PR digest may post to. FAILS CLOSED: an empty list rejects every send rather than degrading to allow-any, because the post body carries PR titles, author logins and the staffing implied by the role rosters. Validated against the Slack API origin, so the default lists slack.com; self-hosted (non-Slack) origins are not yet supported.',
     category: 'Slack',
     order: 144,
     schema: z.object({

@@ -40,6 +40,10 @@ export function parseIdentityMap(input: string | null | undefined): ParsedIdenti
     const line = index + 1;
     const trimmed = raw.trim();
 
+    // A leading '#' is a hard-reserved comment prefix: the whole line is dropped, so a
+    // key that literally begins with '#' cannot be expressed. Acceptable - no GitHub
+    // login, synthetic role key (qa_/devops_/reviewer_) or Slack member id starts with
+    // one, and LINE_PATTERN's key class would otherwise happily match it.
     if (!trimmed || trimmed.startsWith('#')) return;
 
     const match = LINE_PATTERN.exec(trimmed);
