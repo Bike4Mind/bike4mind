@@ -65,7 +65,7 @@ const SITES: { path: string; matches: number; note: string }[] = [
   {
     path: 'apps/client/app/hooks/useEmbeddingMismatchStatus.ts',
     matches: 1,
-    note: 'Client badge: drives the session-toolbar mismatch dot. Same tier as FilesSection',
+    note: 'Client badge: reddens the session-toolbar file count. Same tier as FilesSection',
   },
 ];
 
