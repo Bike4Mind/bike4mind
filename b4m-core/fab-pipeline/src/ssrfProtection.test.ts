@@ -1,5 +1,39 @@
 import { describe, it, expect } from 'vitest';
-import { isPrivateIP, isPrivateOrInternalHostname } from './ssrfProtection';
+import { isPrivateIP, isPrivateOrInternalHostname, validateUrlForFetch } from './ssrfProtection';
+
+/**
+ * Bracketed IPv6 was a live SSRF bypass: `new URL('http://[::1]/').hostname` is `'[::1]'`, and every
+ * literal check compared against unbracketed forms, so a bracketed address matched nothing, was then
+ * treated as an IP literal (so DNS validation was skipped) and returned valid. Reachable through the
+ * LLM URL-fetch path and Files Manager Add-from-URL, and as a `Location:` value it also defeated the
+ * per-hop redirect revalidation this module exists to provide.
+ */
+describe('SSRF - bracketed IPv6 literals', () => {
+  it.each([
+    ['loopback', 'http://[::1]/'],
+    ['loopback with a port', 'http://[::1]:8080/admin'],
+    ['unspecified', 'http://[::]/'],
+    ['unique-local', 'http://[fd00::1]/'],
+    ['link-local', 'http://[fe80::1]/'],
+    ['IPv4-mapped metadata endpoint, dotted', 'http://[::ffff:169.254.169.254]/latest/meta-data/'],
+    ['IPv4-mapped metadata endpoint, hex', 'http://[::ffff:a9fe:a9fe]/latest/meta-data/'],
+    ['IPv4-mapped loopback, hex', 'http://[::ffff:7f00:1]/'],
+  ])('refuses %s', async (_label, url) => {
+    await expect(validateUrlForFetch(url)).resolves.toMatchObject({ valid: false });
+  });
+
+  it('blocks the bracketed forms at the hostname level too', () => {
+    expect(isPrivateOrInternalHostname('[::1]')).toBe(true);
+    expect(isPrivateOrInternalHostname('[fd00::1]')).toBe(true);
+    expect(isPrivateIP('[::1]')).toBe(true);
+  });
+
+  it('still recognises the unbracketed forms it always did', () => {
+    expect(isPrivateIP('::1')).toBe(true);
+    expect(isPrivateIP('fe80::1')).toBe(true);
+    expect(isPrivateIP('::ffff:169.254.169.254')).toBe(true);
+  });
+});
 
 describe('isPrivateIP - non-canonical (leading-zero) IPv4 octets', () => {
   it('blocks a form that a decimal parser reads as public but inet_aton reads as loopback', () => {
