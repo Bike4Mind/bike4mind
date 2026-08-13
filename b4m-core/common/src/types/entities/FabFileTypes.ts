@@ -411,7 +411,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
 
   /**
    * Sum the `fileSize` of every non-deleted file a user owns, via an aggregate
-   * so no documents are hydrated. A missing/non-numeric `fileSize` counts as 0.
+   * so no documents are hydrated. A missing or null `fileSize` counts as 0.
    * @param userId - The ID of the user.
    * @returns A promise that resolves to the total size in bytes.
    */

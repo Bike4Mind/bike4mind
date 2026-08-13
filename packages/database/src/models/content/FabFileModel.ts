@@ -530,8 +530,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   /**
    * Total `fileSize` of a user's non-deleted files, summed in the database so no
    * documents are hydrated - the only thing recalculateUserStorage needs is the
-   * integer. `$ifNull` makes a missing/non-numeric `fileSize` count as 0, matching
-   * the `|| 0` the load-all-and-reduce caller used to apply. Same live-file filter
+   * integer. `$ifNull` makes a missing or null `fileSize` count as 0, matching the
+   * `|| 0` the load-all-and-reduce caller used to apply (the schema types `fileSize`
+   * as a Number, so a non-numeric value is unreachable). Same live-file filter
    * as findByUserId; mirrors the aggregate shape in computeDataLakeStats.
    */
   async sumFileSizeByUserId(userId: string): Promise<number> {
