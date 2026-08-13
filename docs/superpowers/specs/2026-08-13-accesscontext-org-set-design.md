@@ -62,8 +62,12 @@ can keep consuming the pointer silently.
   sites gain an `await` and pass the repository.
 - `buildSlackAccessContext` (`apps/client/server/slack/dataLakeFileIngest.ts`) resolves the same
   way for the resolved Slack actor.
-- `resolveRetrievalLakeScope` (`apps/client/server/dataLakes/resolveRetrievalLakeScope.ts`)
-  resolves the set for the retrieval context instead of normalizing the pointer.
+- The retrieval context is different: `DataLakeAccessContext` is constructed all over the chat
+  pipeline (ToolContext is passed to the resolver wholesale), so the set is resolved INSIDE
+  `getDynamicDataLakeAccess`/`getDataLakePrompts` from `user.id` via a new required
+  `db.organizations: Pick<IOrganizationRepository, 'findMembershipOrgIds'>` adapter on the
+  context. Construction sites (including `resolveRetrievalLakeScope`) just thread the
+  repository and stop forwarding `user.organizationId`.
 
 Admins get their set resolved like everyone else; admin bypasses stay where they are today (in
 the gate and the collection query), not in construction.
@@ -86,8 +90,9 @@ and passes the validated active org to the service separately.
   `findActiveByUserTagsAndEntitlements`, whose `organizationId` parameter widens to
   `organizationIds: string[]`.
 - **Retrieval resolver** - `getDynamicDataLakeAccess` (`getDynamicDataLakeTags.ts`): its
-  context's `user.organizationId` field becomes `organizationIds: string[]` (already resolved
-  by the callers per section 3) and threads through to the widened collection method.
+  context loses `user.organizationId`; the resolver derives `organizationIds` internally
+  (section 3) and threads it to the widened collection method. An id-less caller resolves to
+  the empty set.
 
 Fourth, minor reader: `getDataLakePrompts`'s `lakeOrg`/`actorOrg` disclosure compare moves to
 the same set-membership rule so prompt disclosure cannot disagree with the gate.
