@@ -65,10 +65,10 @@ export function shouldOfferBlogTools(input: {
  * Whether the `skill` tool should be offered this turn. `invocableSkillCount` is the honest gate: a
  * user with zero invocable skills gets a tool whose every call returns "you have no LLM-invocable
  * skills defined" today, with no catalog in the prompt to name one - offering it costs tokens for a
- * call that can never succeed. `hasSkillInvocation` and the prior-turn check rescue the two cases a
- * bare catalog count misses: an explicit `/skill-name` attempt (a typo or a reference the user's
- * catalog does not resolve, so the tool can at least report why), and a natural follow-up continuing
- * a skill invoked earlier this conversation.
+ * call that can never succeed. The slash-mention check (`detectSkillMentions`) and the prior-turn
+ * check rescue the two cases a bare catalog count misses: an explicit `/skill-name` attempt (a typo
+ * or a reference the user's catalog does not resolve, so the tool can at least report why), and a
+ * natural follow-up continuing a skill invoked earlier this conversation.
  */
 export function shouldOfferSkillTool(input: {
   hasSkillRepository: boolean;

@@ -124,7 +124,7 @@ import {
   featureNames,
 } from './ChatCompletionFeatures';
 import { AgentDetectionFeature } from './features/AgentDetectionFeature';
-import { SkillsFeature } from './features/SkillsFeature';
+import { SkillsFeature, type QuestWithSkillCatalog } from './features/SkillsFeature';
 import { StatusManager } from './StatusManager';
 import { buildContextOverflowMessage } from './contextOverflowMessage';
 import {
@@ -2116,7 +2116,7 @@ export class ChatCompletionProcess {
           !enabledTools.includes('skill') &&
           shouldOfferSkillTool({
             hasSkillRepository: Boolean(this.db.skills),
-            invocableSkillCount: (quest as { _skillCatalog?: unknown[] })._skillCatalog?.length ?? 0,
+            invocableSkillCount: (quest as QuestWithSkillCatalog)._skillCatalog?.length ?? 0,
             message,
             priorToolNames,
           })
