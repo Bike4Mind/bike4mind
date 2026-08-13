@@ -2360,7 +2360,10 @@ describe('ChatCompletionProcess', () => {
           supportsImageVariation: false,
         },
       ]);
-      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: params.message }]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: params.message }],
+        messageTruncation: null,
+      } as any);
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: params.message });
 
