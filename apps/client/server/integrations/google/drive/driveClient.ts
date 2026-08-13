@@ -46,6 +46,36 @@ export function createDriveClient(accessToken: string): drive_v3.Drive {
 }
 
 /**
+ * Read-access probe for a single folder, using the CALLER's own Drive credential. Drive returns 404
+ * (not 403) for a file the caller can't see, so a successful `files.get` is itself proof the caller
+ * can read the folder - that is the signal drive-sync uses to gate the global folder claim (a user
+ * must be able to read a folder before they can claim it for a lake). Never throws: any error (no
+ * access, bad id, transient) resolves to `exists: false` so the caller fails closed.
+ */
+export async function getFolderAccess(
+  drive: drive_v3.Drive,
+  folderId: string
+): Promise<{ exists: boolean; isFolder: boolean; canRead: boolean }> {
+  if (!isValidDriveFolderId(folderId)) return { exists: false, isFolder: false, canRead: false };
+  try {
+    const res = await drive.files.get({
+      fileId: folderId,
+      fields: 'id, mimeType, capabilities/canDownload',
+      supportsAllDrives: true,
+    });
+    const file = res.data;
+    return {
+      exists: true,
+      isFolder: file.mimeType === FOLDER_MIME_TYPE,
+      // canDownload is often absent for folders; only an EXPLICIT false denies read.
+      canRead: file.capabilities?.canDownload !== false,
+    };
+  } catch {
+    return { exists: false, isFolder: false, canRead: false };
+  }
+}
+
+/**
  * List the immediate children of a Drive folder (one level), following pagination.
  *
  * `supportsAllDrives`/`includeItemsFromAllDrives` are set so items that live in a Shared Drive
