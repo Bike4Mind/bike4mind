@@ -3,7 +3,9 @@ import { getVector } from '@server/managers/fabFileManager';
 import {
   adminSettingsRepository,
   apiKeyRepository,
+  cacheRepository,
   dataLakeBatchRepository,
+  dataLakeRepository,
   embeddingCacheRepository,
   fabFileChunkRepository,
   fabFileRepository,
@@ -22,7 +24,8 @@ import {
   FabFileChunkSearchIndex,
 } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
-import { apiKeyService, embeddingCacheService, fabFilesService } from '@bike4mind/services';
+import { apiKeyService, dataLakeService, embeddingCacheService, fabFilesService } from '@bike4mind/services';
+import { getEmbeddingModelCost } from '@bike4mind/common';
 import {
   finalizeBatchIfComplete,
   isBatchComplete,
@@ -180,25 +183,83 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       const missTexts = cacheMisses.map(m => m.text);
       const missTokenCounts = cacheMisses.map(m => m.tokenCount);
 
+      // COST GOVERNANCE GATE - data-lake work only (batchId present). This is the single
+      // point where a provider embedding call spends money on a lake owner's behalf, so it
+      // sits downstream of the cache (hits are free) and upstream of every embed call. A
+      // denial throws and rides the existing failure path below: the file is marked failed
+      // with the gate's user-safe reason and the batch still reaches a terminal state.
+      // Captured for the release-on-failure below: a reservation whose provider call never
+      // succeeded must be given back, or provider blips permanently poison the lake's
+      // LIFETIME meter (x3 under SQS redelivery, each attempt reserving again).
+      let grantedReservation: { estimatedMicroUsd: number; batchId: string; dataLakeId?: string } | null = null;
+      if (existingFabFile.batchId) {
+        const missTokens = missTokenCounts.reduce((sum, n) => sum + n, 0);
+        // Ceil, never round: a spend meter may overcount a fraction of a micro-USD, not under.
+        const estimatedMicroUsd = Math.ceil(getEmbeddingModelCost(embeddingModel, missTokens) * 1_000_000);
+        const batch = await dataLakeBatchRepository.findById(existingFabFile.batchId);
+        await dataLakeService.enforceEmbeddingSpendGate({
+          estimatedMicroUsd,
+          batchId: existingFabFile.batchId,
+          dataLakeId: batch?.dataLakeId,
+          db: {
+            adminSettings: adminSettingsRepository,
+            cache: cacheRepository,
+            dataLakes: dataLakeRepository,
+            dataLakeBatches: dataLakeBatchRepository,
+          },
+          logger,
+        });
+        grantedReservation = { estimatedMicroUsd, batchId: existingFabFile.batchId, dataLakeId: batch?.dataLakeId };
+        logger.log(`[spendGate] granted ~${estimatedMicroUsd} microUSD for ${missTokens} tokens`);
+      }
+
       let newVectors: number[][];
-      if (missTexts.length === 1) {
-        // Single chunk: use single embedding method
-        const vector = await getVector(embeddingProvider, missTexts[0]);
-        newVectors = [vector];
-      } else {
-        // Multiple chunks: use batch method
-        if (
-          'generateEmbeddingBatch' in embeddingProvider &&
-          typeof embeddingProvider.generateEmbeddingBatch === 'function'
-        ) {
-          newVectors = await (
-            embeddingProvider.generateEmbeddingBatch as (texts: string[], tokenCounts?: number[]) => Promise<number[][]>
-          )(missTexts, missTokenCounts);
+      try {
+        if (missTexts.length === 1) {
+          // Single chunk: use single embedding method
+          const vector = await getVector(embeddingProvider, missTexts[0]);
+          newVectors = [vector];
         } else {
-          // Fallback for providers without batch support
-          logger.log('Provider does not support batch embedding, falling back to individual calls');
-          newVectors = await Promise.all(missTexts.map(text => getVector(embeddingProvider, text)));
+          // Multiple chunks: use batch method
+          if (
+            'generateEmbeddingBatch' in embeddingProvider &&
+            typeof embeddingProvider.generateEmbeddingBatch === 'function'
+          ) {
+            newVectors = await (
+              embeddingProvider.generateEmbeddingBatch as (
+                texts: string[],
+                tokenCounts?: number[]
+              ) => Promise<number[][]>
+            )(missTexts, missTokenCounts);
+          } else {
+            // Fallback for providers without batch support
+            logger.log('Provider does not support batch embedding, falling back to individual calls');
+            newVectors = await Promise.all(missTexts.map(text => getVector(embeddingProvider, text)));
+          }
         }
+      } catch (providerErr) {
+        // The provider call failed, so the reserved money was never spent: return it to the
+        // run and lake meters (the period window drains on its own). Scoped to EXACTLY the
+        // provider call - a failure after embeddings succeeded is real spend and stays
+        // metered. Best-effort: a release failure must not mask the provider error, and a
+        // hard crash before reaching here still leaks (which is why the per-lake meter also
+        // has an admin reset).
+        if (grantedReservation) {
+          const { estimatedMicroUsd, batchId, dataLakeId } = grantedReservation;
+          try {
+            const releasedRun = await dataLakeBatchRepository.releaseEmbeddingSpend(batchId, estimatedMicroUsd);
+            const releasedLake = dataLakeId
+              ? await dataLakeRepository.releaseEmbeddingSpend(dataLakeId, estimatedMicroUsd)
+              : true;
+            logger.warn(
+              `[spendGate] released ~${estimatedMicroUsd} microUSD after provider failure ` +
+                `(run: ${releasedRun}, lake: ${releasedLake})`
+            );
+          } catch (releaseErr) {
+            logger.error(`[spendGate] failed to release reservation after provider failure: ${releaseErr}`);
+          }
+        }
+        throw providerErr;
       }
 
       await Promise.all(
@@ -370,17 +431,23 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       logger.warn(`Vectorization failed for ${fabFileId} (embedding auth): ${errorMessage}`);
     }
 
+    // A non-retryable spend-gate denial is deterministic (a budget does not regrow, the
+    // switch does not flip itself): retrying only re-reserves spend from the wider meters
+    // and burns delivery attempts, so it skips the retry deferral and accounts immediately.
+    const isTerminalSpendDenial = err instanceof dataLakeService.EmbeddingSpendDeniedError && !err.retryable;
+
     // Only account a failure into the batch/file state on the LAST SQS delivery attempt -
     // see deferFailureIfRetryable's doc comment for why an earlier attempt must leave
     // 'failed' status untouched.
     if (
-      await deferFailureIfRetryable(event, FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT, {
+      !isTerminalSpendDenial &&
+      (await deferFailureIfRetryable(event, FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT, {
         fabFileId,
         batchId: existingFabFile.batchId,
         action: 'Vectorization',
         errorMessage,
         logger,
-      })
+      }))
     ) {
       throw err; // Re-throw so SQS retries
     }
@@ -411,6 +478,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       } catch (innerErr) {
         logger.error(`Error reporting batch failure: ${innerErr}`);
       }
+    }
+    // A terminal denial is fully accounted above - consume the message instead of
+    // rethrowing, so a deliberately stopped pipeline does not shovel messages into the
+    // DLQ and page whoever flipped the switch.
+    if (isTerminalSpendDenial) {
+      logger.warn(`Vectorization denied by spend gate for ${fabFileId}: ${errorMessage}`);
+      return;
     }
     throw err; // Re-throw so SQS marks the message failed
   }

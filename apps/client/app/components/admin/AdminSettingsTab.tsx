@@ -47,6 +47,7 @@ import BrushIcon from '@mui/icons-material/Brush';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import AppRegistrationIcon from '@mui/icons-material/AppRegistration';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import SavingsIcon from '@mui/icons-material/Savings';
 import ExtensionIcon from '@mui/icons-material/Extension';
 import WidgetsIcon from '@mui/icons-material/Widgets';
 import SecurityIcon from '@mui/icons-material/Security';
@@ -120,6 +121,7 @@ export const IconMap: IconMapType = {
   PictureAsPdf: JoyIcon(PictureAsPdfIcon),
   NightsStay: JoyIcon(NightsStayIcon),
   Speed: JoyIcon(SpeedIcon),
+  Savings: JoyIcon(SavingsIcon),
 };
 
 // Resolve a settings icon name to a component, falling back to the Settings gear

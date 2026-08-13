@@ -1484,3 +1484,113 @@ describe('DataLakeRepository archive stamp', () => {
     expect((await dataLakeRepository.claimFilesArchivedAt(created.id, second))?.getTime()).toBe(second.getTime());
   });
 });
+
+describe('tryAddEmbeddingSpend (lake and batch spend meters)', () => {
+  setupMongoTest();
+
+  const USD = 1_000_000; // micro-USD per USD
+
+  it('reserves against a lake until the budget is exhausted, all-or-nothing', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'spend-lake' }));
+
+    expect(await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 3 * USD, 5 * USD)).toBe(true);
+    expect(await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 2 * USD, 5 * USD)).toBe(true);
+    // Budget now exactly consumed - the next reservation is denied and nothing is applied.
+    expect(await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 1, 5 * USD)).toBe(false);
+
+    const after = await dataLakeRepository.findById(lake.id);
+    expect(after?.embeddingSpendMicroUsd).toBe(5 * USD);
+  });
+
+  it('denies on limit 0 - the operator STOP value - even for a zero-cost call', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'stopped-lake' }));
+    expect(await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 0, 0)).toBe(false);
+    expect(await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 1, 0)).toBe(false);
+  });
+
+  it('treats amount <= 0 as a no-op success when the budget is open (fully-cached run)', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'cached-lake' }));
+    expect(await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 0, 5 * USD)).toBe(true);
+    expect((await dataLakeRepository.findById(lake.id))?.embeddingSpendMicroUsd ?? 0).toBe(0);
+  });
+
+  it('meters a legacy lake document that predates the spend field', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'legacy-lake' }));
+    await DataLakeModel.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(lake.id) },
+      { $unset: { embeddingSpendMicroUsd: '' } }
+    );
+
+    expect(await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 2 * USD, 5 * USD)).toBe(true);
+    expect((await dataLakeRepository.findById(lake.id))?.embeddingSpendMicroUsd).toBe(2 * USD);
+    // A first reservation larger than the whole budget must not seed past the limit.
+    await DataLakeModel.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(lake.id) },
+      { $unset: { embeddingSpendMicroUsd: '' } }
+    );
+    expect(await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 6 * USD, 5 * USD)).toBe(false);
+  });
+
+  it('never jointly breaches the budget under concurrent reservations', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'race-lake' }));
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => dataLakeRepository.tryAddEmbeddingSpend(lake.id, 30, 100))
+    );
+    expect(results.filter(Boolean).length).toBe(3); // 4 x 30 would breach 100
+    expect((await dataLakeRepository.findById(lake.id))?.embeddingSpendMicroUsd).toBe(90);
+  });
+
+  it('meters a batch with the same contract, even after the batch went terminal', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1' });
+
+    expect(await dataLakeBatchRepository.tryAddEmbeddingSpend(batch.id, 40, 100)).toBe(true);
+
+    // Unlike incrementCounters, spend metering must survive a reconciler-forced terminal
+    // status: the money is about to be spent regardless, and losing it would undercount.
+    await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed_with_errors', 'reconciler');
+    expect(await dataLakeBatchRepository.tryAddEmbeddingSpend(batch.id, 40, 100)).toBe(true);
+    expect(await dataLakeBatchRepository.tryAddEmbeddingSpend(batch.id, 40, 100)).toBe(false);
+
+    const after = await dataLakeBatchRepository.findById(batch.id);
+    expect(after?.embeddingSpendMicroUsd).toBe(80);
+  });
+});
+
+describe('releaseEmbeddingSpend / resetEmbeddingSpend (provider-failure compensation)', () => {
+  setupMongoTest();
+
+  it('returns exactly one reservation to a lake meter', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'release-lake' }));
+    await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 70, 100);
+
+    expect(await dataLakeRepository.releaseEmbeddingSpend(lake.id, 30)).toBe(true);
+    expect((await dataLakeRepository.findById(lake.id))?.embeddingSpendMicroUsd).toBe(40);
+  });
+
+  it('refuses a release larger than the meter instead of going negative (raced admin reset)', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'race-release-lake' }));
+    await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 20, 100);
+
+    expect(await dataLakeRepository.releaseEmbeddingSpend(lake.id, 30)).toBe(false);
+    expect((await dataLakeRepository.findById(lake.id))?.embeddingSpendMicroUsd).toBe(20);
+  });
+
+  it('releases a batch reservation with the same contract', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1' });
+    await dataLakeBatchRepository.tryAddEmbeddingSpend(batch.id, 70, 100);
+
+    expect(await dataLakeBatchRepository.releaseEmbeddingSpend(batch.id, 70)).toBe(true);
+    expect((await dataLakeBatchRepository.findById(batch.id))?.embeddingSpendMicroUsd).toBe(0);
+    // The freed budget is reservable again - the retry-amplification case this exists for.
+    expect(await dataLakeBatchRepository.tryAddEmbeddingSpend(batch.id, 100, 100)).toBe(true);
+  });
+
+  it('admin reset zeroes a poisoned lake meter', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'reset-lake' }));
+    await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 100, 100);
+    expect(await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 1, 100)).toBe(false); // stuck
+
+    expect(await dataLakeRepository.resetEmbeddingSpend(lake.id)).toBe(true);
+    expect(await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 1, 100)).toBe(true); // unstuck
+  });
+});

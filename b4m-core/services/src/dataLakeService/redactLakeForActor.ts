@@ -81,6 +81,9 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   totalSizeBytes: 'reader',
   totalChunkedChars: 'reader',
   lastSyncAt: 'reader',
+  // Cost-governance meter: the lake's spend against its embedding budget is the owner's
+  // financial telemetry, not something a reader needs to search the lake.
+  embeddingSpendMicroUsd: 'withheld',
   // Teardown bookkeeping: of no use to a reader, and it reports when the owner tore the lake down.
   filesDeletedAt: 'withheld',
   // Same rationale, archive axis.

@@ -43,6 +43,20 @@ export interface ICacheRepository extends IBaseRepository<ICacheDocument> {
     ttlMs: number
   ): Promise<{ success: boolean; count: number; expiresAt: Date }>;
   /**
+   * `tryIncrementWithinLimitFixedWindow` generalized to add `amount` per call instead of 1.
+   * Same FIXED-WINDOW semantics and expiry handling. The add is all-or-nothing: if
+   * count + amount would exceed `limit`, nothing is applied and success is false.
+   *
+   * Built for metering spend (e.g. micro-USD per rolling period) where each event's weight
+   * differs; `limit < amount` (including limit <= 0) is a deny, `amount <= 0` a no-op success.
+   */
+  tryAddWithinLimitFixedWindow(
+    key: string,
+    amount: number,
+    limit: number,
+    ttlMs: number
+  ): Promise<{ success: boolean; count: number; expiresAt: Date }>;
+  /**
    * Atomically decrement a counter (used for rollback)
    * @returns Current count after decrement
    */
