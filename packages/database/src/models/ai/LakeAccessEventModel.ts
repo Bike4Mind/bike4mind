@@ -199,10 +199,13 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
   ): Promise<boolean> {
     try {
       const days = resolveLakeAccessQueryTextRetentionDays(queryTextRetentionDays, auditDays);
-      const truncated = queryText.length > LAKE_ACCESS_QUERY_TEXT_MAX_CHARS;
+      // Codepoint-safe: a plain .slice(0, N) counts UTF-16 code units, so it can split a
+      // surrogate pair (an emoji, many non-Latin scripts) right at the cap boundary.
+      const codepoints = Array.from(queryText);
+      const truncated = codepoints.length > LAKE_ACCESS_QUERY_TEXT_MAX_CHARS;
       await LakeAccessQueryTextModel.create({
         _id: eventId,
-        queryText: truncated ? queryText.slice(0, LAKE_ACCESS_QUERY_TEXT_MAX_CHARS) : queryText,
+        queryText: truncated ? codepoints.slice(0, LAKE_ACCESS_QUERY_TEXT_MAX_CHARS).join('') : queryText,
         queryTextTruncated: truncated,
         expiresAt: lakeAccessExpiresAt(now, days),
       } as Partial<ILakeAccessQueryTextDocument>);

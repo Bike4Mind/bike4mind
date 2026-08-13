@@ -12,10 +12,8 @@ const ModelName = 'LakeAccessQueryText';
 // text per event" structurally impossible rather than merely disallowed.
 const LakeAccessQueryTextSchema = new Schema<ILakeAccessQueryTextDocument>(
   {
-    // No explicit `_id` path: Mongoose already gives every schema an ObjectId `_id` by default,
-    // and `.create({ _id: eventId, ... })` (see LakeAccessEventModel.record) already works
-    // against that default - declaring it here only conflicts with the generic Schema<T>'s
-    // definition type, since `_id` isn't a key of ILakeAccessQueryTextDocument (that's `id`).
+    // No explicit `_id` path - LakeAccessEventModel.record() supplies it (see the shared-`_id`
+    // note above); declaring it here would conflict with Schema<T>'s definition type.
     queryText: { type: String, required: true },
     queryTextTruncated: { type: Boolean, default: false },
     // See the equivalent field on LakeAccessEventModel for what `immutable` does and does not
