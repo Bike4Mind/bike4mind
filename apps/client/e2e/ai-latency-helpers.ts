@@ -130,4 +130,10 @@ export interface PromptResult {
   responseTimeMs: number;
   responseTimeSec: number;
   responseRateCharsPerSec: number;
+  /**
+   * True for image/artifact prompts, whose responseTime measures end-to-end deliverable
+   * generation rather than a text streaming rate. Excluded from the gated latency average so the
+   * workflow's threshold check stays a text-streaming signal. Absent (falsy) for text prompts.
+   */
+  measuresDeliverable?: boolean;
 }

@@ -237,9 +237,14 @@ export class ChatPage extends BasePage {
    * deferred to {@link waitForImageResponse}, which holds the full IMAGE_GENERATION budget.
    */
   async sendImageMessageAndWaitForResponse(text: string, timeout: number = TIMEOUTS.IMAGE_GENERATION) {
+    // Baseline the newest reply before sending: waitForStreamingComplete's "stop button never
+    // appeared" fallback returns as soon as it sees any non-empty reply, so without this baseline
+    // a prior chat's leftover reply (navigateToNewChat does not await DOM clearing) could be
+    // mistaken for this turn's response.
+    const previousResponse = await this.newestResponseText();
     await this.typeAndWaitForSendReady(text);
     await this.page.keyboard.press('Enter');
-    await this.waitForStreamingComplete(timeout);
+    await this.waitForStreamingComplete(timeout, previousResponse);
   }
 
   /**
@@ -298,11 +303,22 @@ export class ChatPage extends BasePage {
    * "Generating...", so the COMBINED count never dips to 0 mid-handoff - polling the sum to 0
    * waits out the whole lifecycle without racing the transition. No-op (returns at once) when
    * neither placeholder is present, so it is safe on prompts that may not render an artifact.
+   *
+   * Caveat: this only guarantees no placeholder is currently pending, not that an artifact
+   * rendered. waitForStreamingComplete has early-return paths (stop button never appeared; text
+   * stabilised while it stayed visible) that can return before "<artifact" has streamed; in that
+   * narrow window the count is already 0 and this returns at once. Fine for these prompts, which
+   * do stream an artifact - revisit if a prompt relies on this as proof one mounted.
    */
   async waitForArtifactSettled(timeout: number = TIMEOUTS.IMAGE_GENERATION) {
     const root = this.aiResponseRoot.last();
     const generating = root.getByTestId('generating-artifact-indicator');
     const loading = root.getByTestId('artifact-loading');
-    await expect.poll(async () => (await generating.count()) + (await loading.count()), { timeout }).toBe(0);
+    await expect
+      .poll(async () => (await generating.count()) + (await loading.count()), {
+        timeout,
+        message: 'Artifact placeholders ("Generating artifact..." / "Loading artifact...") never cleared',
+      })
+      .toBe(0);
   }
 }

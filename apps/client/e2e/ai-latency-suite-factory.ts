@@ -70,9 +70,15 @@ export function createAiLatencySuite({
     // Dedupe by id, last write wins so a retry's result supersedes the original.
     const results = [...new Map([...priorResults, ...newResults].map(r => [r.id, r])).values()];
 
+    // The gated latency average must stay text-streaming-only. Image/artifact prompts measure a
+    // much longer, different thing (deliverable generation, which for artifacts runs during the
+    // stream), so fold only the text prompts into the average - otherwise the workflow's
+    // AVG > thresholdSec check would go red on generation time and mask real streaming regressions.
+    // Any 3-of-N pick includes at least one text prompt, but guard the empty case anyway.
+    const gatedResults = results.filter(r => !r.measuresDeliverable);
     const averageResponseTimeSec =
-      results.length > 0
-        ? Math.round((results.reduce((sum, r) => sum + r.responseTimeSec, 0) / results.length) * 1000) / 1000
+      gatedResults.length > 0
+        ? Math.round((gatedResults.reduce((sum, r) => sum + r.responseTimeSec, 0) / gatedResults.length) * 1000) / 1000
         : 0;
 
     // Never downgrade an already-resolved model back to 'unknown' (a recycled worker starts fresh).
@@ -97,27 +103,27 @@ export function createAiLatencySuite({
       resolvedModel = await resolveSelectedModel(modelSelector);
       await modelSelector.selectTextModel(resolvedModel, disableSmartTools ? { disableSmartTools: true } : undefined);
 
-      // Image-generating and artifact-producing prompts render past the flat text-streaming
-      // budget, so give them the image-generation budget (the long pole is the render, not the
-      // token stream). Plain text prompts keep the standard streaming budget.
-      const streamBudget =
-        scenario.expectsImage || scenario.generatesArtifact ? TIMEOUTS.IMAGE_GENERATION : TIMEOUTS.AI_RESPONSE;
-
       const startMs = Date.now();
       let imageAsserted = false;
       if (scenario.expectsImage) {
         // Image flow: do not gate on the text container (it only mounts with the image), then
         // assert the image itself as the success signal. If no image renders within budget (e.g.
         // a model without image generation), fall through to the keyword check below rather than
-        // hard-failing, so the suite stays meaningful across model capabilities.
-        await chatPage.sendImageMessageAndWaitForResponse(scenario.prompt, streamBudget);
-        imageAsserted = await chatPage.tryWaitForImageResponse(streamBudget);
+        // hard-failing, so the suite stays meaningful across model capabilities. Budgets mirror
+        // image-generation.spec.ts: the standard streaming budget for the send (the token stream
+        // is short), the image-generation budget for the render (the long pole).
+        await chatPage.sendImageMessageAndWaitForResponse(scenario.prompt, TIMEOUTS.AI_RESPONSE);
+        imageAsserted = await chatPage.tryWaitForImageResponse(TIMEOUTS.IMAGE_GENERATION);
       } else {
-        await chatPage.sendMessageAndWaitForResponse(scenario.prompt, streamBudget);
-        // Streaming completing does not mean the artifact resolved; wait out the placeholder so
-        // the scrape below reads the finished reply instead of "Generating artifact...".
+        // An artifact is generated while the reply is still streaming (the stop button stays
+        // visible), so an artifact prompt needs the image-generation budget for the send itself;
+        // plain text keeps the standard streaming budget.
+        const sendBudget = scenario.generatesArtifact ? TIMEOUTS.IMAGE_GENERATION : TIMEOUTS.AI_RESPONSE;
+        await chatPage.sendMessageAndWaitForResponse(scenario.prompt, sendBudget);
+        // Streaming completing does not mean the artifact resolved; wait out the placeholders so
+        // the scrape below reads the finished reply, not "Generating artifact..."/"Loading artifact...".
         if (scenario.generatesArtifact) {
-          await chatPage.waitForArtifactSettled(streamBudget);
+          await chatPage.waitForArtifactSettled(TIMEOUTS.IMAGE_GENERATION);
         }
       }
       const responseTimeMs = Date.now() - startMs;
@@ -157,6 +163,10 @@ export function createAiLatencySuite({
         responseTimeMs,
         responseTimeSec: Math.round(responseTimeSec * 1000) / 1000,
         responseRateCharsPerSec,
+        // Image/artifact prompts time end-to-end deliverable generation (image render / artifact
+        // settle), not a text streaming rate - flag them so persistResults keeps them out of the
+        // gated latency average, which must stay streaming-only to still catch a text regression.
+        measuresDeliverable: Boolean(scenario.expectsImage || scenario.generatesArtifact),
       };
       collectedResults.push(result);
       // Persist immediately so this prompt's numbers survive a later prompt's timeout/worker recycle.
