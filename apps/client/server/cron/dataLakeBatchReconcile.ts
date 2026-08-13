@@ -30,6 +30,7 @@ import { Config } from '@server/utils/config';
 import { recordReconcilerForcedTerminal, recordStuckBatchGauge, recordReconcileRun } from '@server/utils/cloudwatch';
 import { enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
 import { buildFabFileChunkScanFilter, CHUNK_SCAN_MIN_AGE_MS } from '@server/worker/chunkScan';
+import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
 
@@ -59,6 +60,10 @@ async function rescueUnchunkedFiles(): Promise<number> {
     await sendToQueue(Resource.fabFileChunkQueue.url, {
       fabFileId: String(file._id),
       userId: file.userId,
+      // This is a background sweep, not a user upload, so it is haltable by the convergence kill
+      // switch (#1676). A global sweep across all lakes carries no lakeId, so only the platform
+      // switch pauses it - a per-lake pause never blocks it.
+      origin: CONVERGENCE_ORIGIN,
     });
   }
   return candidates.length;

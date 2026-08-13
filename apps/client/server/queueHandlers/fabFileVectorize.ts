@@ -9,6 +9,7 @@ import {
   embeddingCacheRepository,
   fabFileChunkRepository,
   fabFileRepository,
+  scopedSettingsRepository,
   User,
   withTransaction,
 } from '@bike4mind/database';
@@ -33,6 +34,8 @@ import {
 } from '@server/queueHandlers/dataLakeBatchProgress';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
+import { provenancePayloadShape } from '@server/queueHandlers/convergenceProvenance';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getProviderFromModel } from '@bike4mind/fab-pipeline';
 import { Resource } from 'sst';
@@ -45,12 +48,38 @@ const VectorizePayload = z.object({
   fabFileId: z.string(),
   embeddingModel: SupportedEmbeddingModelSchema,
   batchSize: z.number().optional(),
+  // Provenance for the convergence kill switch (#1676), forwarded from the chunk handler. Absent
+  // => user work, which is never halted.
+  ...provenancePayloadShape,
 });
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = event.Records[0].body;
   const payload = VectorizePayload.parse(JSON.parse(body));
   const { userId, fabFileId, embeddingModel } = payload;
+
+  // Convergence kill switch (#1676): a re-check here (not only in the chunk handler) is what makes
+  // the switch bite on vectorize messages already fanned out before it was flipped. Gated before
+  // any DB read; user work (origin absent) pays nothing. Dropping the message leaves these chunks
+  // un-vectorized until convergence resumes - the intended halt, never a user upload.
+  if (
+    await isConvergenceHalted(
+      { origin: payload.origin, lakeId: payload.lakeId },
+      {
+        adminSettings: adminSettingsRepository,
+        scopedSettings: scopedSettingsRepository,
+        dataLakes: dataLakeRepository,
+      },
+      logger
+    )
+  ) {
+    logger.log(
+      `[convergenceKillSwitch] Paused background vectorize work for fabFileId ${fabFileId}` +
+        (payload.lakeId ? ` (lake ${payload.lakeId})` : '') +
+        ' - kill switch on; message dropped, will re-run when convergence resumes'
+    );
+    return;
+  }
 
   // Support both single chunk (backward compat) and batch processing
   const isBatch = payload.chunkIds && payload.chunkIds.length > 0;

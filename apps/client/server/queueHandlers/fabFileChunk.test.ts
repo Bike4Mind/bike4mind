@@ -41,8 +41,11 @@ vi.mock('@bike4mind/database', () => ({
     shareable: { findAccessibleById: h.findAccessibleById },
     markFailedIfNotAlready: h.markFailedIfNotAlready,
   },
-  dataLakeRepository: {},
-  scopedSettingsRepository: {},
+  // Deps for the convergence kill switch (#1676), built eagerly on every message. Never exercised
+  // by these user-origin payloads (origin absent -> user work short-circuits before any read), but
+  // the named exports must exist so the deps object can be constructed.
+  dataLakeRepository: { findById: vi.fn() },
+  scopedSettingsRepository: { findOverrides: vi.fn() },
   FabFile: { updateOne: h.fabFileUpdateOne },
   User: { findById: vi.fn(async () => ({ id: 'u1' })) },
   // Run the callback so chunkFabfile actually executes (and rejects) under test.
@@ -52,10 +55,12 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', () => ({
   fabFilesService: { chunkFabfile: h.chunkFabfile },
   // Owner-altitude chunk-policy resolution (#1662). The resolver never throws; default it to the
-  // platform value so the handler proceeds exactly as before these seams existed.
+  // platform value so the handler proceeds exactly as before these seams existed. scopeForLake
+  // (#1676) is only reached for background lake work; stubbed so the deps object can be constructed.
   scopedSettingsService: {
     scopeForFileOwner: vi.fn(() => ({ owner: { id: 'u1', type: 'user' } })),
     resolveScopedSetting: h.resolveScopedSetting,
+    scopeForLake: vi.fn(),
   },
   dataLakeService: {
     resolveSpendLevers: vi.fn(async () => ({ vectorizeChunkBatchSize: 50 })),

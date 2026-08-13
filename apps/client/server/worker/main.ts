@@ -16,6 +16,7 @@ import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
 import { buildFabFileChunkScanFilter, CHUNK_SCAN_BATCH, CHUNK_SCAN_MIN_AGE_MS } from './chunkScan';
+import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
 import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
@@ -147,6 +148,9 @@ async function main() {
       await sendToQueue(Resource.fabFileChunkQueue.url, {
         fabFileId: String(file._id),
         userId: file.userId,
+        // Self-host counterpart of the hosted rescue sweep: background work, haltable by the
+        // convergence kill switch (#1676). Global sweep => no lakeId => platform switch only.
+        origin: CONVERGENCE_ORIGIN,
       });
     }
     if (candidates.length > 0) {

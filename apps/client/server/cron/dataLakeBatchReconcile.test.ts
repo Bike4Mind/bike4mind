@@ -173,8 +173,18 @@ describe('dataLakeBatchReconcile cron handler', () => {
       const res = await handler();
 
       expect(h.sendToQueue).toHaveBeenCalledTimes(2);
-      expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', { fabFileId: 'ff1', userId: 'u1' });
-      expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', { fabFileId: 'ff2', userId: 'u2' });
+      // The rescue sweep is background work, so each message carries convergence provenance (#1676)
+      // and is haltable by the kill switch; a global sweep carries no lakeId (platform switch only).
+      expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
+        fabFileId: 'ff1',
+        userId: 'u1',
+        origin: 'convergence',
+      });
+      expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
+        fabFileId: 'ff2',
+        userId: 'u2',
+        origin: 'convergence',
+      });
       expect(JSON.parse(res.body).rescuedChunkFiles).toBe(2);
     });
 
