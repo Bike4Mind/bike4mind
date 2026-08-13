@@ -10,6 +10,8 @@ export * from './CodeAgentEventModel';
 export * from './DataLakeModel';
 export * from './DataLakeAccessGrantModel';
 export * from './EmbeddingCacheModel';
+export * from './LakeAccessEventModel';
+export * from './LakeAccessQueryTextModel';
 export * from './LatticeModel';
 export * from './McpServerModel';
 export * from './MemoryLedgerEventModel';
