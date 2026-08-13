@@ -260,6 +260,30 @@ describe('handleDataLakeCommand', () => {
       expect(reply.split(refusal).length - 1).toBe(1);
     });
 
+    it('does NOT collapse two identical SUCCESS lines, only refusals', async () => {
+      // A swallowed success would misreport what is actually in the lake, so de-duplication is scoped
+      // to refusals. Contrived here, but the collision is possible when a file name coincides with the
+      // link's page title in the same lake.
+      parseDataLakeCommand.mockReturnValue({
+        subcommand: 'add',
+        lakeSlug: 'sales',
+        link: 'https://example.com/doc',
+        rawArgs: '',
+      });
+      ingestSlackFilesIntoLake.mockResolvedValue({
+        ok: true,
+        lakeName: 'Sales',
+        added: ['same.pdf'],
+        duplicates: [],
+        rejected: [],
+      });
+      ingestSlackLinkIntoLake.mockResolvedValue({ ok: true, lakeName: 'Sales', fileName: 'same.pdf' });
+
+      const reply = await handleDataLakeCommand(baseParams({ files: [{ id: 'F1', name: 'same.pdf' }] }));
+
+      expect(reply.split('\n').length).toBe(2);
+    });
+
     it('still reports two DIFFERENT outcomes separately', async () => {
       // The de-duplication must not collapse genuine half-outcomes, which always differ because each
       // names its own file or link.
