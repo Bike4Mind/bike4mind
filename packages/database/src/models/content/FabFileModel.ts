@@ -16,7 +16,7 @@ import BaseRepository from '@bike4mind/db-core';
 import { addLowercaseField } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
 import { buildFabFileSearchQuery, buildOwnershipConditions, escapeRegex } from '../../queries/fabFileSearchQuery';
-import { buildDataLakeMembershipFilter } from '../../queries/dataLakeLifecycleScope';
+import { buildDataLakeMembershipFilter, buildNoOtherLakeMetaTagFilter } from '../../queries/dataLakeLifecycleScope';
 
 /**
  * "not a lake membership tag", derived from the one constant rather than spelled out, so a change
@@ -1090,10 +1090,19 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   // guard) needs to know whether ANY member is already archived, stamped or not, to decide
   // whether claiming a fresh stamp would strand a pre-existing one; scoping it by a stamp that
   // does not exist yet would defeat the check.
-  async hasArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<boolean> {
+  //
+  // EXCLUSIVE to this lake's own meta-tag: a row also carrying another lake's meta-tag is that
+  // lake's under that lake's own stamp, not this lake's orphan (addFileToLake has no exclusivity
+  // check, so one file can carry more than one lake's tag). Counting it here would make this
+  // lake skip claiming its own stamp, stay permanently unstamped, and fall back to the pre-fix
+  // unbounded restore on every one of its OWN future unarchive calls - freeing the co-owner's
+  // legitimately-archived row. Says nothing about a prefix-ARM collision, which carries no lake
+  // attribution at all and remains a known, accepted limitation (#1729).
+  async hasArchivedMemberExclusiveToDataLakeTag(scope: DataLakeMembershipScope): Promise<boolean> {
     return (
       (await this.fabFileModel.exists({
         ...buildDataLakeMembershipFilter(scope),
+        ...buildNoOtherLakeMetaTagFilter(scope.datalakeTag),
         deletedAt: null,
         archivedAt: { $ne: null },
       })) != null
