@@ -37,11 +37,22 @@ const grantsByLakeIdFor = async (
   return byLake;
 };
 
-/** Lake ids the caller holds any active grant on - fed to findAccessible so a granted lake lists. */
+/**
+ * Lake ids the caller holds an active MANAGE grant on (owner or curator) - fed to findAccessible so
+ * a transferred/delegated lake lists. Role-filtered ON PURPOSE to stay consistent with the single
+ * read gate: `canAccessLake` admits a grant only via `canManageLake`, which recognizes owner/curator
+ * (not reader). Listing a `reader`-granted lake the gate would then 404 on open would be incoherent;
+ * reader-grant read access is #1673's job (read-time grant resolution), so it is excluded here too.
+ * Only resolves USER-principal grants - org-principal grants (rung 5) are not surfaced to the list
+ * yet (they are manageable by direct id); see the epic's Lane B follow-ups. This PR only ever writes
+ * owner/curator user grants, so the filter changes nothing today - it is a guard for when Lane B lands.
+ */
 const grantedLakeIdsFor = async (userId: string, grants?: GrantLookup): Promise<string[]> => {
   if (!grants) return [];
   const rows = await grants.listByPrincipal('user', userId, { activeAsOf: new Date() });
-  return Array.from(new Set(rows.map(row => row.dataLakeId)));
+  return Array.from(
+    new Set(rows.filter(row => row.role === 'owner' || row.role === 'curator').map(row => row.dataLakeId))
+  );
 };
 
 /**

@@ -59,6 +59,9 @@ export const setLakeVisibility = async (
   // actor org). Demotion to private stays full-manage. Deliberately isEffectiveOwner, not
   // canManageLake: it is the grant-aware owner check (a transferred owner qualifies, the creator
   // once superseded does not) WITHOUT the admin / curator / org-admin bypasses this must exclude.
+  // This invariant is not routable around via transfer: transferLakeOwnership's consent guard
+  // forbids an org admin from transferring a lake to THEMSELVES (they must name another member), so
+  // an org admin cannot self-grant ownership here and then expose. See transferLakeOwnership.ts.
   if (exposes && !isEffectiveOwner(existing, actor, grants)) {
     throw new BadRequestError('Only the lake’s owner can change how it is shared.');
   }

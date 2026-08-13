@@ -36,6 +36,14 @@ export interface TransferLakeOwnershipResult {
  * effective owner, or an admin of the lake's org (the orphaned-creator succession path) may transfer
  * - a curator manages but does not own, so cannot hand ownership away.
  *
+ * CONSENT GUARD (#1668 review B4): an actor authorized SOLELY by the org-admin rung - not the
+ * effective owner, not a platform admin - may NOT name THEMSELVES as the new owner. Succession is a
+ * reassignment to ANOTHER member, not a self-grab: without this an org admin could transfer a lake to
+ * self and then use `setLakeVisibility`'s expose gate (which is `isEffectiveOwner`, precisely so an
+ * admin cannot expose a lake without the owner consenting) to publish it - routing around the very
+ * invariant that gate documents. Reassigning to another member is fine: the recipient is then a real
+ * owner exposing their own lake. A platform admin is unconstrained (global superuser by definition).
+ *
  * Refused for a fallback (hardcoded registry) lake, which has no backing document to hang a grant on
  * (`assertLakeGrantable`). For an org-scoped lake the new owner must belong to that org - membership
  * never crosses organizations (epic decision 12).
@@ -55,9 +63,16 @@ export const transferLakeOwnership = async (
 
   const grants = await loadActiveLakeGrants(lake, { db });
   const lakeOrg = normalizeId(lake.organizationId);
+  const isOwner = isEffectiveOwner(lake, actor, grants);
   const isOrgAdminOfLake = !!lakeOrg && (actor.administeredOrgIds ?? []).includes(lakeOrg);
-  if (!(actor.isAdmin || isEffectiveOwner(lake, actor, grants) || isOrgAdminOfLake)) {
+  if (!(actor.isAdmin || isOwner || isOrgAdminOfLake)) {
     throw new BadRequestError('You do not have permission to transfer ownership of this data lake');
+  }
+  // Consent guard (see doc above): an org admin acting purely by the org-admin rung may reassign the
+  // lake to another member, but may not grab ownership for themselves and then expose it around the
+  // owner-only expose gate. A platform admin or the current owner is exempt.
+  if (!actor.isAdmin && !isOwner && newOwnerUserId === actor.userId) {
+    throw new BadRequestError('An organization admin cannot transfer a data lake to themselves; name another member.');
   }
 
   const newOwner = await db.users.findById(newOwnerUserId);

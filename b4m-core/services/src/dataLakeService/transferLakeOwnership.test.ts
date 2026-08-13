@@ -118,4 +118,33 @@ describe('transferLakeOwnership', () => {
     expect(result.newOwnerUserId).toBe('newOwner');
     expect(upsertGrant).toHaveBeenCalledWith(expect.objectContaining({ principalId: 'newOwner', role: 'owner' }));
   });
+
+  it('consent guard (B4): forbids an org admin from transferring the lake to THEMSELVES', async () => {
+    const { adapters, upsertGrant } = makeAdapters({
+      lakeDoc: lake({ organizationId: 'org1', createdByUserId: 'departed' }),
+      org: { userId: 'billing', adminUserIds: ['orgAdmin'], users: [{ userId: 'orgAdmin' }] },
+    });
+    const orgAdmin: ManageActor = { userId: 'orgAdmin', isAdmin: false, administeredOrgIds: ['org1'] };
+    await expect(transferLakeOwnership(orgAdmin, 'lake1', 'orgAdmin', adapters)).rejects.toThrow(
+      /cannot transfer a data lake to themselves/i
+    );
+    expect(upsertGrant).not.toHaveBeenCalled();
+  });
+
+  it('a platform admin MAY transfer a lake to themselves (superuser, exempt from the consent guard)', async () => {
+    const { adapters, upsertGrant } = makeAdapters({ lakeDoc: lake({ createdByUserId: 'someoneElse' }) });
+    const result = await transferLakeOwnership({ userId: 'root', isAdmin: true }, 'lake1', 'root', adapters);
+    expect(result.newOwnerUserId).toBe('root');
+    expect(upsertGrant).toHaveBeenCalledWith(expect.objectContaining({ principalId: 'root', role: 'owner' }));
+  });
+
+  it('the current owner MAY transfer to themselves (no-op-ish; exempt from the consent guard)', async () => {
+    // Owner authorized as effective owner, not via the org-admin rung, so the guard does not apply.
+    const { adapters } = makeAdapters({
+      lakeDoc: lake({ organizationId: 'org1', createdByUserId: 'creator' }),
+      org: { users: [{ userId: 'creator' }] },
+    });
+    const result = await transferLakeOwnership(owner, 'lake1', 'creator', adapters);
+    expect(result.newOwnerUserId).toBe('creator');
+  });
 });

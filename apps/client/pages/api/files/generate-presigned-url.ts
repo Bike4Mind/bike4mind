@@ -11,7 +11,13 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
-import { adminSettingsRepository, dataLakeBatchRepository, dataLakeRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  dataLakeBatchRepository,
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+} from '@bike4mind/database';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { dataLakeService } from '@bike4mind/services';
 import { getSettingsMap, resolveSupportedMimeType } from '@bike4mind/utils';
 import { createFabFile } from '@server/managers/fabFileManager';
@@ -62,10 +68,13 @@ const handler = baseApi().post(
       console.log('==============');
 
       // Applying a lake's `datalake:*` meta-tag is a WRITE into that lake - gate it so this
-      // presign door can't be used to inject files into a lake the caller only reads.
+      // presign door can't be used to inject files into a lake the caller only reads. Full actor
+      // (ctx) + the grant repo so a transferred owner / curator / org admin can upload here too,
+      // matching the batch presign door (generate-presigned-urls-batch.ts).
       const requestedTagNames = (data.tags ?? []).map(t => t.name);
-      await dataLakeService.assertCanWriteDataLakeTags({ userId, isAdmin: !!req.user.isAdmin }, requestedTagNames, {
-        db: { dataLakes: dataLakeRepository },
+      const ctx = await toAccessContext(req);
+      await dataLakeService.assertCanWriteDataLakeTags(ctx, requestedTagNames, {
+        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
       });
       // This route creates the FabFile through the manager's direct FabFile.create(), not the
       // fabFileService.createFabFile door that gates the static-registry namespace centrally -
