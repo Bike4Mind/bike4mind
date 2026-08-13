@@ -153,7 +153,11 @@ describe('fabFileChunk handler - chunk-failure surfacing', () => {
     // The self-host safety-net scan uses isChunking to avoid re-enqueuing a file mid-run;
     // it must be cleared on the failure path so the file can be retried/reprocessed.
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(CHUNK_ERR);
-    expect(h.fabFileUpdateOne).toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { isChunking: true } });
+    // The claim also stamps chunkClaimedAt (Date) so the rescue sweep can reclaim a hard-killed run.
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith(
+      { _id: 'ff1' },
+      { $set: { isChunking: true, chunkClaimedAt: expect.any(Date) } }
+    );
     expect(h.fabFileUpdateOne).toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { isChunking: false } });
   });
 });
@@ -239,7 +243,11 @@ describe('fabFileChunk handler - idempotency guard against re-chunking (human re
     h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1', chunked: true });
     await dispatch(makeEvent(payload), {} as never, mockLogger);
     expect(h.chunkFabfile).not.toHaveBeenCalled();
-    expect(h.fabFileUpdateOne).not.toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { isChunking: true } });
+    // objectContaining so the guard still fires if the claim's $set gains fields (e.g. chunkClaimedAt).
+    expect(h.fabFileUpdateOne).not.toHaveBeenCalledWith(
+      { _id: 'ff1' },
+      expect.objectContaining({ $set: expect.objectContaining({ isChunking: true }) })
+    );
   });
 
   it('skips re-chunking a file already flagged as producing no extractable text', async () => {
