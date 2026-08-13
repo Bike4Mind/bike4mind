@@ -107,17 +107,16 @@ export function createAiLatencySuite({
       let imageAsserted = false;
       if (scenario.expectsImage) {
         // Image flow: do not gate on the text container (it only mounts with the image), then
-        // assert the image itself as the success signal. If no image renders within budget (e.g.
-        // a model without image generation), fall through to the keyword check below rather than
-        // hard-failing, so the suite stays meaningful across model capabilities. Budgets mirror
-        // image-generation.spec.ts: the standard streaming budget for the send (the token stream
-        // is short), the image-generation budget for the render (the long pole).
-        await chatPage.sendImageMessageAndWaitForResponse(scenario.prompt, TIMEOUTS.AI_RESPONSE);
+        // assert the image as the success signal. The image is tool-produced WHILE the reply
+        // streams - the stop button hides only once generation finishes (city-no-cars streams no
+        // caption, textlen 0), so the send needs the image-generation budget too, not just the
+        // render wait. A short send budget here would throw before the render budget is ever used.
+        await chatPage.sendImageMessageAndWaitForResponse(scenario.prompt, TIMEOUTS.IMAGE_GENERATION);
         imageAsserted = await chatPage.tryWaitForImageResponse(TIMEOUTS.IMAGE_GENERATION);
       } else {
-        // An artifact is generated while the reply is still streaming (the stop button stays
-        // visible), so an artifact prompt needs the image-generation budget for the send itself;
-        // plain text keeps the standard streaming budget.
+        // An artifact is likewise generated while the reply is still streaming, so an artifact
+        // prompt needs the image-generation budget for the send; plain text keeps the standard
+        // streaming budget.
         const sendBudget = scenario.generatesArtifact ? TIMEOUTS.IMAGE_GENERATION : TIMEOUTS.AI_RESPONSE;
         await chatPage.sendMessageAndWaitForResponse(scenario.prompt, sendBudget);
         // Streaming completing does not mean the artifact resolved; wait out the placeholders so
@@ -134,11 +133,23 @@ export function createAiLatencySuite({
       const responseTimeSec = responseTimeMs / 1000;
       const responseRateCharsPerSec = responseText.length > 0 ? Math.round(responseText.length / responseTimeSec) : 0;
 
-      // Keyword-on-text validates prose replies. Skip it only when a rendered image was actually
-      // asserted above: an image-only reply carries no caption, so keyword matching would be a
-      // false negative. When an image prompt produced no image (imageAsserted false), fall through
-      // and validate on text - the graceful path for models without image generation.
-      if (!imageAsserted) {
+      // An image prompt's only trustworthy signal is the rendered image. Its keyword list is
+      // generic prose ("here", "picture", "generated") that a refusal or any description also
+      // satisfies (matching is a lowercased substring includes, so "here" even hits inside
+      // "there"), so a keyword fallback would pass on a real image-generation outage. Soft-assert
+      // the image instead: the Quality column turns red when no image renders, while latency for
+      // the run still records and later prompts still execute. Text and artifact prompts validate
+      // on keywords - and an artifact prompt that renders no artifact degrades to that same text
+      // check, which is meaningful for prose (unlike the image list).
+      if (scenario.expectsImage) {
+        expect
+          .soft(
+            imageAsserted,
+            `Expected a generated image for "${scenario.prompt}" but none rendered within ` +
+              `${TIMEOUTS.IMAGE_GENERATION}ms - image generation may be unavailable or broken.`
+          )
+          .toBe(true);
+      } else {
         const normalizedResponse = normalizeForMatch(responseText);
         const foundKeywords = scenario.expectedKeywords.filter(kw =>
           normalizedResponse.includes(normalizeForMatch(kw))
