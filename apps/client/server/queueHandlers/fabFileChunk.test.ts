@@ -23,6 +23,9 @@ const h = vi.hoisted(() => ({
   isBatchComplete: vi.fn(),
   deferFailureIfRetryable: vi.fn(),
   fabFileUpdateOne: vi.fn(() => ({ catch: vi.fn() })),
+  // The lease acquire: truthy doc = claim won (acquired). Default wins; a test overrides it to null
+  // to exercise a superseded/duplicate delivery bailing out.
+  fabFileFindOneAndUpdate: vi.fn(async () => ({ _id: 'ff1' })),
   selfHostOpenSearchEnabled: vi.fn(() => false),
   recomputeFileChunkPolicyConflict: vi.fn(async () => null),
   resolveScopedSetting: vi.fn(async () => ({ value: 512, source: 'platform' })),
@@ -47,7 +50,7 @@ vi.mock('@bike4mind/database', () => ({
   // the named exports must exist so the deps object can be constructed.
   dataLakeRepository: { findById: vi.fn() },
   scopedSettingsRepository: { findOverrides: vi.fn() },
-  FabFile: { updateOne: h.fabFileUpdateOne },
+  FabFile: { updateOne: h.fabFileUpdateOne, findOneAndUpdate: h.fabFileFindOneAndUpdate },
   User: { findById: vi.fn(async () => ({ id: 'u1' })) },
   // Run the callback so chunkFabfile actually executes (and rejects) under test.
   withTransaction: vi.fn((fn: () => unknown) => fn()),
@@ -149,13 +152,14 @@ describe('fabFileChunk handler - chunk-failure surfacing', () => {
     expect(mockLogger.updateMetadata).not.toHaveBeenCalledWith({ batchId: 'batch-1' });
   });
 
-  it('marks isChunking true at start and clears it to false even when chunking fails', async () => {
+  it('acquires the lease (isChunking true + chunkClaimedAt) and clears it even when chunking fails', async () => {
     // The self-host safety-net scan uses isChunking to avoid re-enqueuing a file mid-run;
     // it must be cleared on the failure path so the file can be retried/reprocessed.
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(CHUNK_ERR);
-    // The claim also stamps chunkClaimedAt (Date) so the rescue sweep can reclaim a hard-killed run.
-    expect(h.fabFileUpdateOne).toHaveBeenCalledWith(
-      { _id: 'ff1' },
+    // Acquire is a compare-and-set findOneAndUpdate that stamps chunkClaimedAt (the claim token) so
+    // the rescue sweep can reclaim a hard-killed run and a duplicate delivery can be rejected.
+    expect(h.fabFileFindOneAndUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ _id: 'ff1' }),
       { $set: { isChunking: true, chunkClaimedAt: expect.any(Date) } }
     );
     expect(h.fabFileUpdateOne).toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { isChunking: false } });
@@ -240,14 +244,13 @@ describe('fabFileChunk handler - idempotency guard against re-chunking (human re
   beforeEach(() => vi.clearAllMocks());
 
   it('skips re-chunking a file already marked chunked, without ever calling chunkFabfile', async () => {
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.fabFileFindOneAndUpdate.mockResolvedValue({ _id: 'ff1' });
     h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1', chunked: true });
     await dispatch(makeEvent(payload), {} as never, mockLogger);
     expect(h.chunkFabfile).not.toHaveBeenCalled();
-    // objectContaining so the guard still fires if the claim's $set gains fields (e.g. chunkClaimedAt).
-    expect(h.fabFileUpdateOne).not.toHaveBeenCalledWith(
-      { _id: 'ff1' },
-      expect.objectContaining({ $set: expect.objectContaining({ isChunking: true }) })
-    );
+    // The lease is briefly held then released by the finally, but the destructive re-chunk is skipped.
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { isChunking: false } });
   });
 
   it('skips re-chunking a file already flagged as producing no extractable text', async () => {
@@ -396,6 +399,8 @@ describe('fabFileChunk handler - convergence kill switch (#1676)', () => {
     h.findAccessibleById.mockResolvedValue({ id: 'ff1', chunked: false });
     h.chunkFabfile.mockResolvedValue([{ id: 'c1' }]);
     h.claimFileStatus.mockResolvedValue(false);
+    // Non-halt cases run the claim-lease acquire first; give it a winning CAS so they proceed.
+    h.fabFileFindOneAndUpdate.mockResolvedValue({ _id: 'ff1' });
   });
 
   it('halts a convergence message when the switch is on, before any file work', async () => {
@@ -406,7 +411,7 @@ describe('fabFileChunk handler - convergence kill switch (#1676)', () => {
     // Gated before the fabFile load, the chunk, and the isChunking claim; nothing fans out.
     expect(h.findAccessibleById).not.toHaveBeenCalled();
     expect(h.chunkFabfile).not.toHaveBeenCalled();
-    expect(h.fabFileUpdateOne).not.toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { isChunking: true } });
+    expect(h.fabFileFindOneAndUpdate).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
@@ -425,5 +430,48 @@ describe('fabFileChunk handler - convergence kill switch (#1676)', () => {
       expect.anything(),
       expect.objectContaining({ fabFileId: 'ff1', origin: 'convergence', lakeId: 'lake-9' })
     );
+  });
+});
+
+describe('fabFileChunk handler - claim lease (single-run guard, human review)', () => {
+  // chunkFabfile's deleteManyByFabFileId is destructive, so at most one worker may run it per file.
+  // The lease is a compare-and-set on FabFile: a tokened delivery must still carry its exact claim
+  // stamp; a superseded/duplicate delivery loses the CAS and must bail WITHOUT clearing the winner's
+  // isChunking. Closes the round-3 P0: a stale-claim re-enqueue racing a merely-slow (not crashed)
+  // wave file would otherwise both pass an unconditioned pickup and both run the delete.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', chunked: false });
+    h.chunkFabfile.mockResolvedValue([]);
+  });
+
+  it('a tokened delivery claims the file by matching its exact chunkClaimedAt stamp', async () => {
+    h.fabFileFindOneAndUpdate.mockResolvedValue({ _id: 'ff1' });
+    const claimedAt = 1_700_000_000_000;
+    await dispatch(makeEvent({ ...payload, claimedAt }), {} as never, mockLogger);
+    // The CAS matches on the exact stamp (the token), and restamps on pickup so a duplicate misses.
+    expect(h.fabFileFindOneAndUpdate).toHaveBeenCalledWith(
+      { _id: 'ff1', chunkClaimedAt: new Date(claimedAt) },
+      { $set: { isChunking: true, chunkClaimedAt: expect.any(Date) } }
+    );
+    expect(h.chunkFabfile).toHaveBeenCalled();
+  });
+
+  it('an untokened delivery claims a free-or-stale file (no token to match)', async () => {
+    h.fabFileFindOneAndUpdate.mockResolvedValue({ _id: 'ff1' });
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    const [query] = h.fabFileFindOneAndUpdate.mock.calls[0] as [Record<string, unknown>];
+    expect(query._id).toBe('ff1');
+    expect(query.$or).toBeDefined(); // free-or-stale arms, not a token match
+  });
+
+  it('a superseded/duplicate delivery (lost CAS) skips chunking AND does not clear the winner isChunking', async () => {
+    h.fabFileFindOneAndUpdate.mockResolvedValue(null); // another worker holds the claim
+    await dispatch(makeEvent({ ...payload, claimedAt: 1_700_000_000_000 }), {} as never, mockLogger);
+    expect(h.chunkFabfile).not.toHaveBeenCalled();
+    // Critically: the finally must NOT run for a delivery that never won the lease, or it would
+    // release the ACTUAL owner's claim mid-run.
+    expect(h.fabFileUpdateOne).not.toHaveBeenCalled();
   });
 });

@@ -63,14 +63,18 @@ const invoke = async (method: 'GET' | 'POST', body: unknown = {}) => {
 };
 
 const lake = { id: 'lake1', datalakeTag: 'datalake:acme', createdByUserId: 'u1' };
+const CLAIMED_AT = 1_700_000_000_000;
 
 beforeEach(() => {
   vi.clearAllMocks();
   h.assertLakeAccess.mockResolvedValue(lake);
   h.assertLakeWriteAccess.mockResolvedValue(lake);
   h.countFailedLakeFiles.mockResolvedValue(0);
-  // By default the claim wins every id it's asked for (returns the same ids).
-  h.claimFilesForRechunkByIds.mockImplementation(async (ids: string[]) => ids);
+  // By default the claim wins every id it's asked for, each with a claim stamp (the token the
+  // message carries so the worker can reject a superseded/duplicate delivery).
+  h.claimFilesForRechunkByIds.mockImplementation(async (ids: string[]) =>
+    ids.map(id => ({ id, claimedAt: CLAIMED_AT }))
+  );
   h.releaseChunkClaimByIds.mockResolvedValue(0);
   h.sendToQueue.mockResolvedValue(undefined);
 });
@@ -103,10 +107,12 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
     expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
       fabFileId: 'f1',
       userId: 'u1',
+      claimedAt: CLAIMED_AT,
     });
     expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
       fabFileId: 'f2',
       userId: 'u2',
+      claimedAt: CLAIMED_AT,
     });
     expect(h.releaseChunkClaimByIds).not.toHaveBeenCalled();
     expect(json).toHaveBeenCalledWith({ detected: 2, enqueued: 2, remaining: 0 });
@@ -144,20 +150,26 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
       { fabFileId: 'c', userId: 'u' },
     ]);
     // 'b' was already claimed by a concurrent wave, so the claim returns only a and c.
-    h.claimFilesForRechunkByIds.mockResolvedValue(['a', 'c']);
+    h.claimFilesForRechunkByIds.mockResolvedValue([
+      { id: 'a', claimedAt: CLAIMED_AT },
+      { id: 'c', claimedAt: CLAIMED_AT },
+    ]);
     const { json } = await invoke('POST', {});
     expect(h.sendToQueue).toHaveBeenCalledTimes(2);
     expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
       fabFileId: 'a',
       userId: 'u',
+      claimedAt: CLAIMED_AT,
     });
     expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
       fabFileId: 'c',
       userId: 'u',
+      claimedAt: CLAIMED_AT,
     });
     expect(h.sendToQueue).not.toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
       fabFileId: 'b',
       userId: 'u',
+      claimedAt: CLAIMED_AT,
     });
     expect(h.releaseChunkClaimByIds).not.toHaveBeenCalled();
     // enqueued counts what THIS call put on the queue; the lost id stays in `remaining`.

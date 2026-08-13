@@ -1067,7 +1067,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
   }
 
-  async claimFilesForRechunkByIds(ids: string[]): Promise<string[]> {
+  async claimFilesForRechunkByIds(ids: string[]): Promise<{ id: string; claimedAt: number }[]> {
     if (ids.length === 0) return [];
     // Per-file COMPARE-AND-SET claim. `isChunking:{$ne:true}` is the precondition, so if two rebuild
     // waves (or a wave and the rescue sweep) both read the same file as detectable, only the first
@@ -1077,28 +1077,72 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // hides the reset (chunked:false/chunkCount:0) file from the background rescue sweep during the
     // reset->worker-pickup window; the worker's `finally` clears it on every exit (its try wraps the
     // pre-flight checks), and a send that never lands is released (releaseChunkClaimByIds).
-    const claimed: string[] = [];
-    for (const id of ids) {
-      const doc = await this.fabFileModel.findOneAndUpdate(
-        { _id: id, isChunking: { $ne: true } },
-        {
-          $set: {
-            isChunking: true,
-            // Stamp the claim so a pre-claim whose chunk message is then lost is reclaimed by the
-            // rescue sweep's stale-claim arm instead of sitting isChunking:true forever.
-            chunkClaimedAt: new Date(),
-            chunked: false,
-            chunkCount: 0,
-            vectorized: false,
-            vectorizedChunkCount: 0,
-            notes: '',
-            chunkEmbeddingModelStampedAt: null,
+    //
+    // Returns each won id with its claim stamp (chunkClaimedAt as epoch ms). The stamp is the claim
+    // TOKEN: the caller puts it on the queue message and the worker only proceeds if the file still
+    // carries that exact stamp (it restamps on pickup), so a duplicate delivery or a stale
+    // re-enqueue of the same file matches nothing and can't concurrently re-run the destructive
+    // chunk. The per-id CAS calls are independent, so they run in parallel.
+    const results = await Promise.all(
+      ids.map(async id => {
+        const claimedAt = new Date();
+        const doc = await this.fabFileModel.findOneAndUpdate(
+          { _id: id, isChunking: { $ne: true } },
+          {
+            $set: {
+              isChunking: true,
+              chunkClaimedAt: claimedAt,
+              chunked: false,
+              chunkCount: 0,
+              vectorized: false,
+              vectorizedChunkCount: 0,
+              notes: '',
+              // A file that chunked then FAILED vectorization carries a non-empty `error` with
+              // chunked:true; detection doesn't check `error`, so it can land in a rebuild wave.
+              // Clear it with the rest of the reset - the file is being deliberately reprocessed -
+              // else a released claim (send failed) strands it: chunked:false + a stale error is
+              // invisible to both re-detection (needs chunked:true) and the rescue sweep (needs
+              // empty error).
+              error: null,
+              chunkEmbeddingModelStampedAt: null,
+            },
+          }
+        );
+        return doc ? { id, claimedAt: claimedAt.getTime() } : null;
+      })
+    );
+    return results.filter((r): r is { id: string; claimedAt: number } => r !== null);
+  }
+
+  async claimForChunkScanByIds(ids: string[], staleClaimBefore: Date): Promise<{ id: string; claimedAt: number }[]> {
+    if (ids.length === 0) return [];
+    // COMPARE-AND-SET claim for the rescue sweep. The sweep re-enqueues files that completed upload
+    // but were never chunked (lost S3 event), plus stale claims (a worker hard-killed before its
+    // finally). Taking the claim BEFORE enqueue - not just re-sending like the old sweep did - is
+    // what stops a merely-slow (not crashed) wave file from being chunked twice: only the id this
+    // CAS actually wins is enqueued, and stamping chunkClaimedAt=now both hands the worker a token
+    // to match and stops the next sweep pass from re-sending the same file every cycle. The
+    // precondition mirrors buildFabFileChunkScanFilter's stale arm exactly (incl. the null-stamp arm
+    // that rescues an isChunking:true file predating chunkClaimedAt). Per-id CAS calls are
+    // independent, so they run in parallel.
+    const results = await Promise.all(
+      ids.map(async id => {
+        const claimedAt = new Date();
+        const doc = await this.fabFileModel.findOneAndUpdate(
+          {
+            _id: id,
+            $or: [
+              { isChunking: { $ne: true } },
+              { isChunking: true, chunkClaimedAt: { $lt: staleClaimBefore } },
+              { isChunking: true, chunkClaimedAt: null },
+            ],
           },
-        }
-      );
-      if (doc) claimed.push(id);
-    }
-    return claimed;
+          { $set: { isChunking: true, chunkClaimedAt: claimedAt } }
+        );
+        return doc ? { id, claimedAt: claimedAt.getTime() } : null;
+      })
+    );
+    return results.filter((r): r is { id: string; claimedAt: number } => r !== null);
   }
 
   async releaseChunkClaimByIds(ids: string[]): Promise<number> {

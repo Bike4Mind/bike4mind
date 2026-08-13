@@ -102,7 +102,7 @@ describe('FabFileRepository.claimFilesForRechunkByIds', () => {
     await FabFile.deleteMany({});
   });
 
-  it('claims a free file (isChunking:true + reset flags) and returns its id', async () => {
+  it('claims a free file (isChunking:true + reset flags, incl. error) and returns its id + claim stamp', async () => {
     const [f] = await FabFile.create([
       makeFile({
         chunked: true,
@@ -110,11 +110,16 @@ describe('FabFileRepository.claimFilesForRechunkByIds', () => {
         isChunking: false,
         vectorized: true,
         vectorizedChunkCount: 1,
+        // A file that chunked then FAILED vectorization: chunked:true + a stale error. The claim
+        // must clear that error, else a released claim strands it invisibly.
+        error: 'vectorize timeout',
         chunkEmbeddingModelStampedAt: new Date(),
       }),
     ]);
 
-    expect(await fabFileRepository.claimFilesForRechunkByIds([f._id.toString()])).toEqual([f._id.toString()]);
+    expect(await fabFileRepository.claimFilesForRechunkByIds([f._id.toString()])).toEqual([
+      { id: f._id.toString(), claimedAt: expect.any(Number) },
+    ]);
 
     const after = await FabFile.findById(f._id).lean();
     expect(after?.isChunking).toBe(true); // claimed, so the rescue sweep can't grab it mid-flight
@@ -123,6 +128,7 @@ describe('FabFileRepository.claimFilesForRechunkByIds', () => {
     expect(after?.chunkCount).toBe(0);
     expect(after?.vectorized).toBe(false);
     expect(after?.vectorizedChunkCount).toBe(0);
+    expect(after?.error).toBeNull(); // stale vectorize error cleared with the rest of the reset
     expect(after?.chunkEmbeddingModelStampedAt).toBeNull();
   });
 
@@ -135,12 +141,60 @@ describe('FabFileRepository.claimFilesForRechunkByIds', () => {
   it('returns only the subset it won when some ids are already claimed', async () => {
     const [free, taken] = await FabFile.create([makeFile({ isChunking: false }), makeFile({ isChunking: true })]);
     expect(await fabFileRepository.claimFilesForRechunkByIds([free._id.toString(), taken._id.toString()])).toEqual([
-      free._id.toString(),
+      { id: free._id.toString(), claimedAt: expect.any(Number) },
     ]);
   });
 
   it('an empty id list is a no-op', async () => {
     expect(await fabFileRepository.claimFilesForRechunkByIds([])).toEqual([]);
+  });
+});
+
+describe('FabFileRepository.claimForChunkScanByIds', () => {
+  setupMongoTest();
+  beforeEach(async () => {
+    await FabFile.deleteMany({});
+  });
+
+  const staleBefore = () => new Date(Date.now() - 30 * 60_000);
+
+  it('claims a free (not-in-flight) file, stamping isChunking + chunkClaimedAt', async () => {
+    const [f] = await FabFile.create([makeFile({ chunked: false, chunkCount: 0, isChunking: false })]);
+    expect(await fabFileRepository.claimForChunkScanByIds([f._id.toString()], staleBefore())).toEqual([
+      { id: f._id.toString(), claimedAt: expect.any(Number) },
+    ]);
+    const after = await FabFile.findById(f._id).lean();
+    expect(after?.isChunking).toBe(true);
+    expect(after?.chunkClaimedAt).toBeInstanceOf(Date);
+  });
+
+  it('reclaims a STALE claim (isChunking:true, chunkClaimedAt older than the cutoff)', async () => {
+    const [f] = await FabFile.create([
+      makeFile({ chunked: false, chunkCount: 0, isChunking: true, chunkClaimedAt: new Date(Date.now() - 60 * 60_000) }),
+    ]);
+    expect(await fabFileRepository.claimForChunkScanByIds([f._id.toString()], staleBefore())).toEqual([
+      { id: f._id.toString(), claimedAt: expect.any(Number) },
+    ]);
+  });
+
+  it('does NOT reclaim a FRESH in-flight claim (chunkClaimedAt within the cutoff)', async () => {
+    const [f] = await FabFile.create([
+      makeFile({ chunked: false, chunkCount: 0, isChunking: true, chunkClaimedAt: new Date() }),
+    ]);
+    expect(await fabFileRepository.claimForChunkScanByIds([f._id.toString()], staleBefore())).toEqual([]);
+  });
+
+  it('reclaims a null-stamp stuck claim (isChunking:true with no chunkClaimedAt) - the backfill arm', async () => {
+    const [f] = await FabFile.create([makeFile({ chunked: false, chunkCount: 0, isChunking: true })]);
+    const after0 = await FabFile.findById(f._id).lean();
+    expect(after0?.chunkClaimedAt ?? null).toBeNull(); // stuck before chunkClaimedAt existed
+    expect(await fabFileRepository.claimForChunkScanByIds([f._id.toString()], staleBefore())).toEqual([
+      { id: f._id.toString(), claimedAt: expect.any(Number) },
+    ]);
+  });
+
+  it('an empty id list is a no-op', async () => {
+    expect(await fabFileRepository.claimForChunkScanByIds([], staleBefore())).toEqual([]);
   });
 });
 

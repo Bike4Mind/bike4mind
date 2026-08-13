@@ -88,6 +88,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   setChunkedCharCount: vi.fn(),
   findChunkedFilesByScope: vi.fn(),
   claimFilesForRechunkByIds: vi.fn(),
+  claimForChunkScanByIds: vi.fn(),
   releaseChunkClaimByIds: vi.fn(),
   countFailedFilesByScope: vi.fn(),
   countDataLakeFilesByMembership: vi.fn(),

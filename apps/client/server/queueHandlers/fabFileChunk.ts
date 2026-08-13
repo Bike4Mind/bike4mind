@@ -26,7 +26,7 @@ import {
 import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
 import { isSupportedEmbeddingModel } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
-import { NO_EXTRACTABLE_TEXT_NOTE_PREFIX } from '@server/worker/chunkScan';
+import { NO_EXTRACTABLE_TEXT_NOTE_PREFIX, CHUNK_CLAIM_STALE_MS } from '@server/worker/chunkScan';
 import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
 import { provenancePayloadShape } from '@server/queueHandlers/convergenceProvenance';
 import { Resource } from 'sst';
@@ -44,11 +44,19 @@ const ChunkFabFilePayload = z.object({
   // Provenance for the convergence kill switch (#1676): distinguishes background lake work
   // (haltable) from real-time user uploads (never halted). Absent => user work.
   ...provenancePayloadShape,
+  // Optional claim TOKEN (chunkClaimedAt as epoch ms) set by a producer that pre-claimed the file
+  // (the "Rebuild passages" wave or the rescue sweep). When present, the worker proceeds only if
+  // the file still carries this exact stamp - see the acquire step below. Untokened producers
+  // (upload / S3 webhook / per-file reprocess) omit it and the worker claims the file itself.
+  // `.catch(undefined)` fails soft to the untokened path on a malformed value.
+  claimedAt: z.coerce.number().int().positive().optional().catch(undefined),
 });
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = event.Records[0].body;
-  const { fabFileId, userId, chunkSize, origin, lakeId } = ChunkFabFilePayload.parse(JSON.parse(body));
+  const { fabFileId, userId, chunkSize, origin, lakeId, claimedAt } = ChunkFabFilePayload.parse(
+    JSON.parse(body)
+  );
 
   logger.updateMetadata({ fabFileId, userId });
 
@@ -75,19 +83,43 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     return;
   }
 
-  // The `try` wraps every step from here so the `finally` that clears isChunking runs on ALL exits,
-  // including the pre-flight throws/returns below. It used to start only after the isChunking set, so
-  // a claim (this handler's own, or a lake "Rebuild passages" pre-claim on the file) leaked forever
-  // whenever a pre-flight check threw - e.g. a missing/unsupported default embedding model, which
-  // throws identically for every file in a wave.
+  // Single-run lease. chunkFabfile unconditionally deletes then recreates a file's chunks, so at
+  // most one worker may run it per file at a time. The lease is acquired FIRST, before any pre-flight
+  // check, so that (a) any throw/return below still runs the `finally` that releases OUR claim, and
+  // (b) a superseded or duplicate delivery bails here without disturbing the winner's claim.
+  //
+  // A TOKENED delivery (a "Rebuild passages" wave or the rescue sweep) carries the exact chunkClaimedAt
+  // stamp it was pre-claimed with; the worker restamps on pickup, so a duplicate of the same message,
+  // or a stale re-enqueue whose stamp has since moved on, matches nothing and returns instead of
+  // re-running the destructive chunk concurrently with the real one. An UNTOKENED delivery (upload /
+  // S3 webhook / per-file reprocess) claims a file that is not being chunked, or whose claim is stale
+  // (a worker hard-killed before its finally) - the same arms buildFabFileChunkScanFilter selects on.
+  let acquired = false;
   try {
+    const now = new Date();
+    const staleClaimBefore = new Date(now.getTime() - CHUNK_CLAIM_STALE_MS);
+    const claimQuery =
+      claimedAt !== undefined
+        ? { _id: fabFileId, chunkClaimedAt: new Date(claimedAt) }
+        : {
+            _id: fabFileId,
+            $or: [
+              { isChunking: { $ne: true } },
+              { isChunking: true, chunkClaimedAt: { $lt: staleClaimBefore } },
+              { isChunking: true, chunkClaimedAt: null },
+            ],
+          };
+    const claimDoc = await FabFile.findOneAndUpdate(claimQuery, {
+      $set: { isChunking: true, chunkClaimedAt: now },
+    });
+    if (!claimDoc) {
+      logger.log(`FabFile ${fabFileId}: chunk claim superseded or duplicate delivery, skipping`);
+      return;
+    }
+    acquired = true;
+
     const user = await User.findById(userId);
     if (!user) throw new Error(`User not found for userId: ${userId}`);
-
-    logger.updateMetadata({
-      fabFileId,
-      userId,
-    });
 
     logger.log('====================================');
     logger.log(`Started chunk queue handler for fabFileId: ${fabFileId}`);
@@ -144,13 +176,6 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           `embedding window; reduced to ${effectivePassageTokenTarget}.`
       );
     }
-
-    // Mark the file as actively chunking so the self-host safety-net scan (worker) doesn't
-    // re-enqueue it mid-run - a duplicate would re-chunk and re-embed the whole file. Cleared
-    // in `finally` on success AND failure so it can still be retried/reprocessed. Default: false.
-    // chunkClaimedAt stamps the claim so the rescue sweep can reclaim it if THIS run is hard-killed
-    // (OOM/timeout/deploy) before the finally clears isChunking - see buildFabFileChunkScanFilter.
-    await FabFile.updateOne({ _id: fabFileId }, { $set: { isChunking: true, chunkClaimedAt: new Date() } });
 
     // Tag data-lake chunk logs with the batch id for incident triage (the lake is derivable
     // from the batch). dataLakeId isn't on the FabFile and isn't worth an extra read here.
@@ -385,8 +410,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     logger.log('Completed chunk queue handler');
     logger.log('====================================');
   } finally {
-    await FabFile.updateOne({ _id: fabFileId }, { $set: { isChunking: false } }).catch(err =>
-      logger.error(`Failed to clear isChunking for ${fabFileId}: ${err}`)
-    );
+    // Release ONLY a claim this run actually won. A superseded/duplicate delivery (acquired=false)
+    // must not clear isChunking - that flag belongs to the worker that won the lease.
+    if (acquired) {
+      await FabFile.updateOne({ _id: fabFileId }, { $set: { isChunking: false } }).catch(err =>
+        logger.error(`Failed to clear isChunking for ${fabFileId}: ${err}`)
+      );
+    }
   }
 });

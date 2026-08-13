@@ -136,7 +136,12 @@ describe('buildFabFileChunkScanFilter - stale-claim recovery arm', () => {
     expect(matches({ ...base, isChunking: true, chunkClaimedAt: recent }, filter)).toBe(false);
   });
 
-  it('does NOT rescue an in-flight claim with no timestamp - $lt skips missing fields (conservative)', () => {
-    expect(matches({ ...base, isChunking: true }, filter)).toBe(false);
+  it('RESCUES an isChunking:true claim with no timestamp - the backfill for files stuck before chunkClaimedAt existed', () => {
+    // Every code path that sets isChunking:true now stamps chunkClaimedAt in the same write, so a
+    // null/missing stamp on an in-flight file can only be a pre-migration straggler - which would
+    // otherwise stay claimed and unrescuable forever. The sweep re-claims it via a CAS before
+    // enqueue, so a still-running (not crashed) file isn't double-processed.
+    expect(matches({ ...base, isChunking: true, chunkClaimedAt: null }, filter)).toBe(true);
+    expect(matches({ ...base, isChunking: true }, filter)).toBe(true);
   });
 });

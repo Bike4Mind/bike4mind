@@ -62,17 +62,24 @@ async function rescueUnchunkedFiles(): Promise<number> {
     .limit(CHUNK_RESCUE_MAX_PER_RUN)
     .lean();
 
-  for (const file of candidates) {
+  // CLAIM before enqueue, then send only the ids won: re-sending a stale-looking claim without
+  // taking it (the old behavior) let a merely-slow, still-in-flight file be chunked twice. The
+  // claim stamp is the token the worker matches so a duplicate delivery can't double-process.
+  const userById = new Map(candidates.map(f => [String(f._id), String(f.userId)]));
+  const batchById = new Map(candidates.map(f => [String(f._id), f.batchId]));
+  const claimed = await fabFileRepository.claimForChunkScanByIds([...userById.keys()], staleClaimBefore);
+  for (const { id, claimedAt } of claimed) {
     await sendToQueue(Resource.fabFileChunkQueue.url, {
-      fabFileId: String(file._id),
-      userId: file.userId,
+      fabFileId: id,
+      userId: userById.get(id)!,
+      claimedAt,
       // Only a data-lake file (has a batch) is convergence work the kill switch may halt (#1676).
       // A plain upload rescued after a lost S3 event is user work - it must always run (#1420), so
       // it carries no origin. No lakeId either: this global sweep is gated by the platform switch.
-      ...(file.batchId ? { origin: CONVERGENCE_ORIGIN } : {}),
+      ...(batchById.get(id) ? { origin: CONVERGENCE_ORIGIN } : {}),
     });
   }
-  return candidates.length;
+  return claimed.length;
 }
 
 /**

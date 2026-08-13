@@ -815,14 +815,24 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   findChunkedFilesByScope(scope: DataLakeMembershipScope): Promise<{ id: string; userId: string }[]>;
   /**
    * Per-file compare-and-set CLAIM for re-chunking (isChunking:true, precondition isChunking:{$ne:
-   * true}) plus a reset of the chunk/vector flags so a re-enqueued job re-chunks instead of hitting
-   * the "already chunked" guard. Returns ONLY the ids actually claimed - a file a concurrent wave
-   * already claimed is skipped - and the caller must enqueue exactly that subset, never the pre-read
-   * set, so two waves can't double-process one file. The claim also hides the reset file from the
-   * rescue sweep during the reset->worker-pickup window; a claim whose enqueue fails MUST be released
-   * (releaseChunkClaimByIds).
+   * true}) plus a reset of the chunk/vector flags (incl. `error`) so a re-enqueued job re-chunks
+   * instead of hitting the "already chunked" guard or stranding a stale vectorize error. Returns
+   * ONLY the ids actually claimed - a file a concurrent wave already claimed is skipped - each with
+   * its claim stamp (chunkClaimedAt as epoch ms). The stamp is the claim TOKEN the caller must put
+   * on the queue message: the worker only proceeds if the file still carries that exact stamp, so a
+   * duplicate or superseded delivery can't double-process one file. A claim whose enqueue fails MUST
+   * be released (releaseChunkClaimByIds).
    */
-  claimFilesForRechunkByIds(ids: string[]): Promise<string[]>;
+  claimFilesForRechunkByIds(ids: string[]): Promise<{ id: string; claimedAt: number }[]>;
+  /**
+   * Compare-and-set CLAIM for the rescue sweep, over ids it already selected via
+   * buildFabFileChunkScanFilter. Takes the claim (isChunking:true, chunkClaimedAt=now) only if the
+   * file is not being chunked or its claim is stale - mirroring that filter's stale arm - so a
+   * merely-slow (not crashed) file already in flight isn't re-enqueued and chunked twice. Returns
+   * ONLY the ids won, each with its claim stamp (the token the worker matches); the caller enqueues
+   * exactly that subset.
+   */
+  claimForChunkScanByIds(ids: string[], staleClaimBefore: Date): Promise<{ id: string; claimedAt: number }[]>;
   /**
    * Undo a claim whose chunk message never reached the queue: restore chunked:true and clear
    * isChunking so the file is re-detectable and not stranded. Returns the number modified.

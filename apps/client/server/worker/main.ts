@@ -1,6 +1,6 @@
 import type { SQSEvent } from 'aws-lambda';
 import { taskSchedulerService } from '@bike4mind/services';
-import { taskScheduleRepository, connectDB, FabFile, adminSettingsRepository } from '@bike4mind/database';
+import { taskScheduleRepository, connectDB, FabFile, fabFileRepository, adminSettingsRepository } from '@bike4mind/database';
 import { TaskScheduleHandler } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
@@ -151,18 +151,25 @@ async function main() {
       .limit(CHUNK_SCAN_BATCH)
       .lean();
 
-    for (const file of candidates) {
+    // CLAIM before enqueue, then send only the ids won: re-sending a stale-looking claim without
+    // taking it (the old behavior) let a merely-slow, still-in-flight file be chunked twice. The
+    // claim stamp is the token the worker matches so a duplicate delivery can't double-process.
+    const userById = new Map(candidates.map(f => [String(f._id), String(f.userId)]));
+    const batchById = new Map(candidates.map(f => [String(f._id), f.batchId]));
+    const claimed = await fabFileRepository.claimForChunkScanByIds([...userById.keys()], staleClaimBefore);
+    for (const { id, claimedAt } of claimed) {
       await sendToQueue(Resource.fabFileChunkQueue.url, {
-        fabFileId: String(file._id),
-        userId: file.userId,
+        fabFileId: id,
+        userId: userById.get(id)!,
+        claimedAt,
         // Self-host counterpart of the hosted rescue sweep: only a data-lake file (has a batch) is
         // convergence work the kill switch may halt (#1676); a plain lost-webhook upload is user
         // work and always runs. Global sweep => no lakeId => platform switch only.
-        ...(file.batchId ? { origin: CONVERGENCE_ORIGIN } : {}),
+        ...(batchById.get(id) ? { origin: CONVERGENCE_ORIGIN } : {}),
       });
     }
-    if (candidates.length > 0) {
-      bootLogger.info(`[fabFileChunkScan] enqueued ${candidates.length} un-chunked file(s)`);
+    if (claimed.length > 0) {
+      bootLogger.info(`[fabFileChunkScan] enqueued ${claimed.length} un-chunked file(s)`);
     }
   });
 

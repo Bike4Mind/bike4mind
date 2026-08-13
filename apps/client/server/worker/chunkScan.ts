@@ -61,9 +61,20 @@ export const buildFabFileChunkScanFilter = (cutoff: Date, staleClaimBefore?: Dat
   error: { $in: [null, ''] },
   // Normally exclude in-flight files (isChunking:true). When a stale-claim cutoff is supplied, ALSO
   // rescue a claim older than it: a hard worker crash never runs the finally that clears isChunking,
-  // so without this the file stays claimed and invisible forever. A missing/fresh chunkClaimedAt is
-  // never matched here (a `$lt` skips missing fields), so a legitimately in-flight file is untouched.
+  // so without this the file stays claimed and invisible forever. The `chunkClaimedAt:null` arm is
+  // the BACKFILL: any file already stuck isChunking:true before chunkClaimedAt existed has no stamp,
+  // which a `$lt` skips - so without it those files would stay unrescuable forever. It's safe
+  // because every code path that sets isChunking:true now stamps chunkClaimedAt in the same write,
+  // so a null stamp on an isChunking:true file can only be a pre-migration straggler, never a
+  // legitimately in-flight one. The sweep re-claims each match via claimForChunkScanByIds (a CAS
+  // that re-checks these same arms) before enqueue, so a merely-slow file isn't double-processed.
   ...(staleClaimBefore
-    ? { $or: [{ isChunking: { $ne: true } }, { isChunking: true, chunkClaimedAt: { $lt: staleClaimBefore } }] }
+    ? {
+        $or: [
+          { isChunking: { $ne: true } },
+          { isChunking: true, chunkClaimedAt: { $lt: staleClaimBefore } },
+          { isChunking: true, chunkClaimedAt: null },
+        ],
+      }
     : { isChunking: { $ne: true } }),
 });

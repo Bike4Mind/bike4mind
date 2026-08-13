@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   enqueueTaxonomyAnalysisIfWanted: vi.fn(),
   getSettingsValue: vi.fn(),
   fabFileFind: vi.fn(),
+  claimForChunkScan: vi.fn(),
   sendToQueue: vi.fn(),
 }));
 
@@ -18,7 +19,7 @@ vi.mock('@bike4mind/database', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
   dataLakeBatchRepository: { findStuck: h.findStuck, findStuckTaxonomy: h.findStuckTaxonomy },
   dataLakeRepository: {},
-  fabFileRepository: {},
+  fabFileRepository: { claimForChunkScanByIds: h.claimForChunkScan },
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   FabFile: { find: h.fabFileFind },
 }));
@@ -76,6 +77,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
     h.fabFileFind.mockReturnValue({
       select: () => ({ limit: () => ({ lean: async () => [] }) }),
     });
+    h.claimForChunkScan.mockResolvedValue([]);
   });
 
   it('scans with a cutoff ~ now-timeout and a bounded limit, reconciles, and heartbeats', async () => {
@@ -158,7 +160,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
       h.reconcile.mockResolvedValue([]);
     });
 
-    it('re-enqueues complete-but-never-chunked files when auto-chunk is enabled', async () => {
+    it('CLAIMS then re-enqueues only the ids it won, tagging each with its claim token', async () => {
       h.getSettingsValue.mockResolvedValue(true);
       h.fabFileFind.mockReturnValue({
         select: () => ({
@@ -170,29 +172,66 @@ describe('dataLakeBatchReconcile cron handler', () => {
           }),
         }),
       });
+      // The CAS claim wins both files, each with its stamp; the sweep enqueues only won ids.
+      h.claimForChunkScan.mockResolvedValue([
+        { id: 'ff1', claimedAt: 111 },
+        { id: 'ff2', claimedAt: 222 },
+      ]);
 
       const res = await handler();
 
+      // Only won ids are enqueued (never the raw pre-read set), and each carries its claim token so
+      // the worker can reject a duplicate/superseded delivery.
+      expect(h.claimForChunkScan).toHaveBeenCalledWith(['ff1', 'ff2'], expect.any(Date));
       expect(h.sendToQueue).toHaveBeenCalledTimes(2);
       // A plain lost-webhook upload (no batch) is user work - it must always run, so no origin (#1676).
       expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
         fabFileId: 'ff1',
         userId: 'u1',
+        claimedAt: 111,
       });
       // A data-lake file (has a batch) is convergence work, haltable by the kill switch; a global
       // sweep carries no lakeId (platform switch only).
       expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
         fabFileId: 'ff2',
         userId: 'u2',
+        claimedAt: 222,
         origin: 'convergence',
       });
       expect(JSON.parse(res.body).rescuedChunkFiles).toBe(2);
+    });
+
+    it('enqueues only the ids the claim won when a concurrent worker took the rest', async () => {
+      h.getSettingsValue.mockResolvedValue(true);
+      h.fabFileFind.mockReturnValue({
+        select: () => ({
+          limit: () => ({
+            lean: async () => [
+              { _id: 'ff1', userId: 'u1' },
+              { _id: 'ff2', userId: 'u2' },
+            ],
+          }),
+        }),
+      });
+      // ff2 was already claimed elsewhere -> the CAS returns only ff1.
+      h.claimForChunkScan.mockResolvedValue([{ id: 'ff1', claimedAt: 111 }]);
+
+      const res = await handler();
+
+      expect(h.sendToQueue).toHaveBeenCalledTimes(1);
+      expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
+        fabFileId: 'ff1',
+        userId: 'u1',
+        claimedAt: 111,
+      });
+      expect(JSON.parse(res.body).rescuedChunkFiles).toBe(1);
     });
 
     it('does nothing when auto-chunk is disabled', async () => {
       h.getSettingsValue.mockResolvedValue(false);
       await handler();
       expect(h.fabFileFind).not.toHaveBeenCalled();
+      expect(h.claimForChunkScan).not.toHaveBeenCalled();
       expect(h.sendToQueue).not.toHaveBeenCalled();
     });
 

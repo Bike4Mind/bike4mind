@@ -68,21 +68,23 @@ const handler = baseApi()
       // double-process it. The claim flips `chunked` off (so the re-enqueued job clears
       // fabFileChunk.ts's idempotency guard) and hides the file from the rescue sweep.
       const claimedById = new Map(wave.map(f => [f.fabFileId, f.userId] as const));
-      const claimedIds = await fabFileRepository.claimFilesForRechunkByIds([...claimedById.keys()]);
+      const claimed = await fabFileRepository.claimFilesForRechunkByIds([...claimedById.keys()]);
       // allSettled, not all: one failed send must not fail the batch and strand the OTHER claimed
       // files with nothing on the queue. Release the claim on any file whose send didn't land so it
-      // self-heals (re-detected / re-swept) instead of sitting claimed-and-invisible.
+      // self-heals (re-detected / re-swept) instead of sitting claimed-and-invisible. `claimedAt` is
+      // the claim token: the worker only re-chunks a file that still carries this exact stamp, so a
+      // duplicate delivery or a stale rescue re-enqueue can't double-process it.
       const results = await Promise.allSettled(
-        claimedIds.map(id => sendToQueue(queueUrl, { fabFileId: id, userId: claimedById.get(id)! }))
+        claimed.map(({ id, claimedAt }) => sendToQueue(queueUrl, { fabFileId: id, userId: claimedById.get(id)!, claimedAt }))
       );
-      const failedIds = claimedIds.filter((_, i) => results[i].status === 'rejected');
+      const failedIds = claimed.filter((_, i) => results[i].status === 'rejected').map(c => c.id);
       if (failedIds.length > 0) {
         req.logger?.error?.(
-          `rechunk: ${failedIds.length}/${claimedIds.length} sends failed for lake ${lake.id}, released`
+          `rechunk: ${failedIds.length}/${claimed.length} sends failed for lake ${lake.id}, released`
         );
         await fabFileRepository.releaseChunkClaimByIds(failedIds);
       }
-      enqueued = claimedIds.length - failedIds.length;
+      enqueued = claimed.length - failedIds.length;
     }
 
     return res.json({
