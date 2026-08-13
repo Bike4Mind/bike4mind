@@ -784,8 +784,13 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Existence-only probe, unbounded by any stamp (unlike findArchivedByDataLakeTag) - a caller
    * deciding whether to claim a fresh stamp needs to know if ANY member is already archived,
    * stamped or not.
+   *
+   * EXCLUSIVE means the row carries no OTHER lake's membership meta-tag: a co-tagged row is
+   * whichever co-owning lake's stamp is on it, not this lake's un-restorable orphan, so counting
+   * it here would leave this lake permanently unstamped and its own later unarchive unbounded.
+   * Says nothing about a prefix-ARM collision, which carries no lake attribution at all (#1729).
    */
-  hasArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<boolean>;
+  hasArchivedMemberExclusiveToDataLakeTag(scope: DataLakeMembershipScope): Promise<boolean>;
   /** Soft-deleted member files stamped `stampedAt` - used by the deleted->active restore dedup pass. */
   findDeletedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]>;
   /**

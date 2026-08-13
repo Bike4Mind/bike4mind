@@ -20,7 +20,10 @@ interface ArchiveDataLakeAdapters {
     batches: Pick<IDataLakeBatchRepository, 'findActiveByDataLakeId' | 'markTerminalIfActive'>;
     fabFiles: Pick<
       IFabFileRepository,
-      'archiveByDataLakeTag' | 'computeDataLakeStats' | 'findIdsByDataLakeTag' | 'hasArchivedByDataLakeTag'
+      | 'archiveByDataLakeTag'
+      | 'computeDataLakeStats'
+      | 'findIdsByDataLakeTag'
+      | 'hasArchivedMemberExclusiveToDataLakeTag'
     >;
   };
   retrievalIndex?: RetrievalIndexPort;
@@ -78,28 +81,39 @@ export const archiveDataLake = async (
   // skip claiming a stamp EVERY time; it could never bound its own later unarchive and would keep
   // freeing the sibling's rows unbounded, the exact bug this whole fix exists to close. No other
   // lake's document can carry this lake's own tag (see buildDataLakeMembershipFilter), so this
-  // check cannot get a false positive from a SIBLING's document. It is not immune to a false
-  // positive on one of THIS lake's own documents, though: a document genuinely carrying this
-  // lake's meta-tag can still be swept and stamped by a co-owning or prefix-sharing sibling
-  // lake's OWN archive, either because that same document also carries a second lake's meta-tag
-  // (addFileToLake has no exclusivity check), or because it independently satisfies a sibling's
-  // prefix arm (its owner matches that sibling's creator and it carries a tag under that
-  // sibling's prefix). The sweep that stamps it runs on the sibling's OWN scope, which does not
-  // care what else the document is tagged with. Either way this guard still trips (correctly
-  // conservative: it cannot tell "genuinely mine, never archived" from "mine, but a sibling
-  // archived it first"), a known limitation for these rarer, deliberate or coincidental
-  // multi-membership cases rather than the ordinary single-arm prefix collision this scoping
-  // closes. Tracked in #1729.
+  // check cannot get a false positive from a SIBLING's document that only shares a prefix.
+  //
+  // It also excludes a document that carries a SECOND lake's meta-tag too: `addFileToLake` has no
+  // exclusivity check, so one file can belong to more than one lake, and a co-tagged row already
+  // archived under a co-owner's own stamp is that lake's, not this lake's un-restorable orphan.
+  // Counting it here would make this lake skip claiming its own stamp forever and fall back to
+  // the pre-fix unbounded restore on every one of ITS OWN future unarchive calls - see
+  // `hasArchivedMemberExclusiveToDataLakeTag`'s own doc.
+  //
+  // What remains, and is NOT excluded: a document carrying ONLY this lake's meta-tag that a
+  // prefix-sharing sibling's own sweep stamped because it independently satisfies that sibling's
+  // prefix arm (same creator, a tag under that sibling's prefix). Nothing on the row records
+  // which lake's sweep touched it, so this guard still trips there - conservatively, and
+  // deliberately: a per-file lake-attribution marker doesn't exist today, and the precondition
+  // (a same-creator prefix collision) is rare enough that adding one isn't justified. Tracked and
+  // ratified as an accepted, disclosed limitation in #1729.
   //
   // Trade-off worth naming: a lake whose OWN pre-existing unstamped archive is entirely
-  // prefix-only (no meta-tagged member at all) no longer trips this guard either, so its next
-  // archive claims a real stamp and those old prefix-only rows stop being reachable by the
-  // (now-bounded) unbounded fallback once filesArchivedAt is no longer absent. Accepted
-  // deliberately: that population is fixed and shrinking (only lakes archived before this field
-  // existed), while the sibling-freeing bug this scoping closes is live for as long as prefix
-  // collisions exist.
+  // prefix-only (no meta-tagged member at all), OR whose only leftover unstamped member also
+  // carries a SECOND lake's meta-tag, no longer trips this guard either, so its next archive
+  // claims a real stamp and that leftover row stops being reachable by the (now-bounded) unbounded
+  // fallback once filesArchivedAt is no longer absent. For the co-tagged case this is only safe
+  // when the co-owning lake can itself still restore that row (an ordinary lake, with its own
+  // document, can); it is NOT safe for a leftover co-tagged with a hardcoded fallback/registry
+  // "lake" that has no backing document at all (see the fallback-lake registry) - such a lake can
+  // never run its own unarchive, so that row would go from "wrongly reachable by this lake's
+  // unbounded fallback" to permanently unreachable by anyone. Accepted deliberately: both leftover
+  // populations are fixed and shrinking (rows predating this field, or predating a since-tightened
+  // membership rule), while the sibling-freeing bug this scoping closes is live for as long as
+  // multi-membership or prefix collisions exist.
   const hasUnstampedArchive =
-    !existing.filesArchivedAt && (await db.fabFiles.hasArchivedByDataLakeTag({ datalakeTag: existing.datalakeTag }));
+    !existing.filesArchivedAt &&
+    (await db.fabFiles.hasArchivedMemberExclusiveToDataLakeTag({ datalakeTag: existing.datalakeTag }));
   let stamp: Date | undefined;
   if (!hasUnstampedArchive) {
     const at = new Date();
