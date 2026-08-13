@@ -416,6 +416,11 @@ export const SettingKeySchema = z.enum([
   'modelDiscoveryAllowEgress',
   'modelDiscoveryPriceBandPct',
   'modelDiscoveryAutoRemap',
+  // PR REPORT GENERATOR
+  'prReportRepo',
+  'prReportIdentityMap',
+  'prReportSlackChannel',
+  'prReportEgressAllowlist',
 ]);
 export type SettingKey = z.infer<typeof SettingKeySchema>;
 
@@ -3993,6 +3998,45 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
     order: 6,
+  }),
+  prReportRepo: makeStringSetting({
+    key: 'prReportRepo',
+    name: 'PR Report Repository',
+    defaultValue: '',
+    description:
+      'The `owner/repo` whose open pull requests the PR status digest reports on. Validated against an anchored GitHub repo grammar before it is interpolated into any authenticated outbound URL (SSRF guard) - a value with an empty or `..` segment is rejected.',
+    category: 'Admin',
+    order: 141,
+  }),
+  prReportIdentityMap: makeStringSetting({
+    key: 'prReportIdentityMap',
+    name: 'PR Report Identity Map',
+    defaultValue: '',
+    description:
+      'Maps GitHub logins and synthetic role keys (`qa_*`, `devops_*`, `reviewer_*`) to Slack member IDs, one mapping per line. Accepts `key value`, `key=value` or `key: value`; blank and `#` comment lines are ignored. Values must be real Slack member IDs - display names do not produce notification mentions.',
+    category: 'Admin',
+    order: 142,
+  }),
+  prReportSlackChannel: makeStringSetting({
+    key: 'prReportSlackChannel',
+    name: 'PR Report Slack Channel',
+    defaultValue: '',
+    description:
+      'Slack channel ID the PR status digest posts to. The bot token itself is resolved from the credential store, never from admin settings.',
+    category: 'Slack',
+    order: 143,
+  }),
+  prReportEgressAllowlist: makeObjectSetting({
+    key: 'prReportEgressAllowlist',
+    name: 'PR Report Egress Allowlist',
+    defaultValue: { hosts: ['slack.com', 'www.slack.com'] },
+    description:
+      'Hosts the PR digest may post to. FAILS CLOSED: an empty list rejects every send rather than degrading to allow-any, because the post body carries PR titles, author logins and the staffing implied by the role rosters. Validated against the Slack API origin, so the default lists slack.com; self-hosted (non-Slack) origins are not yet supported.',
+    category: 'Slack',
+    order: 144,
+    schema: z.object({
+      hosts: z.array(z.string()).default([]),
+    }),
   }),
   // Add more settings as needed
 } satisfies {

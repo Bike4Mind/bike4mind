@@ -336,6 +336,57 @@ class CacheRepository extends BaseRepository<ICacheDocument> implements ICacheRe
       existingData: existingDoc.result as Record<string, unknown> | undefined,
     };
   }
+
+  /**
+   * Read a dedupe entry's value without claiming or mutating it.
+   *
+   * Treats an expired-but-not-yet-swept document as absent: Mongo's TTL monitor
+   * runs about once a minute, so `expiresAt <= now` rows are still readable and
+   * would otherwise look like live reservations.
+   */
+  async readDedup(key: string): Promise<Record<string, unknown> | null> {
+    const doc = await this.model.findOne({ key, expiresAt: { $gt: new Date() } });
+    return (doc?.result as Record<string, unknown> | undefined) ?? null;
+  }
+
+  /**
+   * Compare-and-set on a dedupe entry: replace `result` only while
+   * `result[ownerField]` still equals `ownerValue`.
+   *
+   * The owner guard is what stops a submit that stalled past its TTL from
+   * overwriting a newer submit's reservation. Passing `ttlMs` extends the
+   * expiry; omitting it leaves the original expiry in place, which is what a
+   * state flip wants - the window should not slide just because the state moved.
+   */
+  async casUpdateDedup(
+    key: string,
+    ownerField: string,
+    ownerValue: string,
+    data: Record<string, unknown>,
+    ttlMs?: number
+  ): Promise<boolean> {
+    const set: Record<string, unknown> = { result: data };
+    if (ttlMs !== undefined) {
+      set.expiresAt = new Date(Date.now() + ttlMs);
+    }
+
+    const updated = await this.model.findOneAndUpdate(
+      { key, [`result.${ownerField}`]: ownerValue },
+      { $set: set },
+      { new: true }
+    );
+
+    return !!updated;
+  }
+
+  /**
+   * Compare-and-delete on a dedupe entry: remove it only while
+   * `result[ownerField]` still equals `ownerValue`.
+   */
+  async casDeleteDedup(key: string, ownerField: string, ownerValue: string): Promise<boolean> {
+    const result = await this.model.deleteOne({ key, [`result.${ownerField}`]: ownerValue });
+    return (result.deletedCount ?? 0) > 0;
+  }
 }
 
 const CacheSchema = new mongoose.Schema<ICacheDocument>({
