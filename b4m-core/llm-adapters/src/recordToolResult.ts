@@ -14,6 +14,7 @@ export const TOOL_RESULT_TRUNCATION_NOTICE = '\n[tool result truncated]';
 export type RecordableToolUse = {
   name: string;
   arguments?: string;
+  /** Tool use ID for Anthropic API tool pairing */
   id?: string;
   returnValue?: string;
   success?: boolean;

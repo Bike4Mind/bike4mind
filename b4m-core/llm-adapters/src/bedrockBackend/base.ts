@@ -2,6 +2,7 @@ import { Logger } from '@bike4mind/observability';
 import { ChatModels, IMessage, ModelBackend, PermissionDeniedError, type ModelInfo } from '@bike4mind/common';
 import { stripToolDependentMessages } from '../toolPairingUtils';
 import { executeToolsBatch } from '../executeToolsBatch';
+import { recordToolResult } from '../recordToolResult';
 import {
   ChoiceEndReason,
   type CompletionInfo,
@@ -468,10 +469,12 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                   await callback(results, buildCompletionInfo());
                 });
 
+                const resultStr = outcome.result.toString();
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
                 this.pushToolMessages(
                   messages,
                   { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  outcome.result.toString()
+                  resultStr
                 );
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
@@ -480,11 +483,14 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                   `[BaseBedrockBackend] Tool ${outcome.name} failed:`,
                   outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
                 );
+                const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
+                const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
                 // Push error result so the model can continue
                 this.pushToolMessages(
                   messages,
                   { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`
+                  observation
                 );
               }
             }
@@ -568,6 +574,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 if (!toolFn) continue;
                 const safeParameters = parameters || '{}';
                 let result: { toString(): string };
+                let succeeded = true;
                 try {
                   result = await toolFn(JSON.parse(safeParameters));
                 } catch (err) {
@@ -577,6 +584,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                     `[BaseBedrockBackend] Tool ${name} failed:`,
                     err instanceof Error ? err.message : String(err)
                   );
+                  succeeded = false;
                   result = `Error processing ${name} tool: ${err instanceof Error ? err.message : 'Unknown error'}`;
                 }
 
@@ -585,6 +593,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                   await callback(results, buildCompletionInfo());
                 });
 
+                recordToolResult(toolsUsed, { id, name }, result.toString(), succeeded);
                 this.pushToolMessages(messages, { id, name, parameters }, result.toString());
               }
 

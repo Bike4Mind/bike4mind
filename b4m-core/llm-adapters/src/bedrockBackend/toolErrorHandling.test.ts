@@ -12,6 +12,7 @@ import { describe, it, expect } from 'vitest';
 import { PermissionDeniedError } from '@bike4mind/common';
 import type { ChatModels, IMessage, ModelInfo, CompletionInfo } from '@bike4mind/common';
 import { BaseBedrockBackend } from './base';
+import { MAX_RECORDED_TOOL_RESULT_CHARS, TOOL_RESULT_TRUNCATION_NOTICE } from '../recordToolResult';
 import {
   ChoiceEndReason,
   ChoiceStatus,
@@ -383,5 +384,201 @@ describe('BaseBedrockBackend tool error handling — streaming path', () => {
         cb
       )
     ).rejects.toThrow(/aborted/);
+  });
+});
+
+function makeSucceedingTool(value: string): ICompletionOptionTools {
+  return {
+    toolSchema: {
+      name: 'always_throws',
+      description: 'Test tool',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+    toolFn: async () => value,
+  };
+}
+
+function lastToolsUsed(calls: CapturedCb[]) {
+  for (let i = calls.length - 1; i >= 0; i--) {
+    const toolsUsed = calls[i].info?.toolsUsed;
+    if (toolsUsed && toolsUsed.length > 0) return toolsUsed;
+  }
+  return undefined;
+}
+
+describe('BaseBedrockBackend tool result recording - non-streaming path', () => {
+  it('records returnValue and success:true on a successful round-trip', async () => {
+    const backend = new TestBedrockBackend();
+    let callIndex = 0;
+    const bodies = [
+      asBedrockInvokeBody(nonStreamingToolCallChunk()),
+      asBedrockInvokeBody(nonStreamingTextChunk('done')),
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (backend as unknown as { _bedrockRuntime: any })._bedrockRuntime = {
+      send: async () => ({ body: bodies[callIndex++] }),
+    };
+    const { calls, cb } = captureCb();
+
+    await backend.complete(
+      TEST_MODEL,
+      [{ role: 'user', content: 'go' }],
+      { stream: false, tools: [makeSucceedingTool('42')], executeTools: true } as Partial<ICompletionOptions>,
+      cb
+    );
+
+    const toolsUsed = lastToolsUsed(calls);
+    expect(toolsUsed).toBeDefined();
+    expect(toolsUsed![0].success).toBe(true);
+    expect(toolsUsed![0].returnValue).toBe('42');
+  });
+
+  it('records success:false with the error text on a failing tool', async () => {
+    const backend = new TestBedrockBackend();
+    let callIndex = 0;
+    const bodies = [
+      asBedrockInvokeBody(nonStreamingToolCallChunk()),
+      asBedrockInvokeBody(nonStreamingTextChunk('done')),
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (backend as unknown as { _bedrockRuntime: any })._bedrockRuntime = {
+      send: async () => ({ body: bodies[callIndex++] }),
+    };
+    const { calls, cb } = captureCb();
+
+    await backend.complete(
+      TEST_MODEL,
+      [{ role: 'user', content: 'go' }],
+      {
+        stream: false,
+        tools: [makeThrowingTool(new Error('task parameter is required'))],
+        executeTools: true,
+      } as Partial<ICompletionOptions>,
+      cb
+    );
+
+    const toolsUsed = lastToolsUsed(calls);
+    expect(toolsUsed).toBeDefined();
+    expect(toolsUsed![0].success).toBe(false);
+    expect(toolsUsed![0].returnValue).toContain('task parameter is required');
+  });
+
+  it('truncates an over-cap result to the cap plus notice length', async () => {
+    const backend = new TestBedrockBackend();
+    let callIndex = 0;
+    const bodies = [
+      asBedrockInvokeBody(nonStreamingToolCallChunk()),
+      asBedrockInvokeBody(nonStreamingTextChunk('done')),
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (backend as unknown as { _bedrockRuntime: any })._bedrockRuntime = {
+      send: async () => ({ body: bodies[callIndex++] }),
+    };
+    const { calls, cb } = captureCb();
+    const longResult = 'x'.repeat(MAX_RECORDED_TOOL_RESULT_CHARS + 500);
+
+    await backend.complete(
+      TEST_MODEL,
+      [{ role: 'user', content: 'go' }],
+      { stream: false, tools: [makeSucceedingTool(longResult)], executeTools: true } as Partial<ICompletionOptions>,
+      cb
+    );
+
+    const toolsUsed = lastToolsUsed(calls);
+    expect(toolsUsed).toBeDefined();
+    expect(toolsUsed![0].returnValue?.length).toBe(
+      MAX_RECORDED_TOOL_RESULT_CHARS + TOOL_RESULT_TRUNCATION_NOTICE.length
+    );
+    expect(toolsUsed![0].returnValue?.endsWith(TOOL_RESULT_TRUNCATION_NOTICE)).toBe(true);
+  });
+});
+
+describe('BaseBedrockBackend tool result recording - streaming path', () => {
+  it('records returnValue and success:true on a successful round-trip', async () => {
+    const backend = new TestBedrockBackend();
+    const turns = [streamingToolCallTurn(), streamingTextTurn('done')];
+    let callIndex = 0;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (backend as unknown as { _bedrockRuntime: any })._bedrockRuntime = {
+      send: async () => {
+        const turn = turns[callIndex++];
+        if (!turn) throw new Error('no more mocked turns');
+        return { body: asBedrockStreamBody(turn) };
+      },
+    };
+    const { calls, cb } = captureCb();
+
+    await backend.complete(
+      TEST_MODEL,
+      [{ role: 'user', content: 'go' }],
+      { stream: true, tools: [makeSucceedingTool('42')], executeTools: true } as Partial<ICompletionOptions>,
+      cb
+    );
+
+    const toolsUsed = lastToolsUsed(calls);
+    expect(toolsUsed).toBeDefined();
+    expect(toolsUsed![0].success).toBe(true);
+    expect(toolsUsed![0].returnValue).toBe('42');
+  });
+
+  it('records success:false with the error text on a failing tool', async () => {
+    const backend = new TestBedrockBackend();
+    const turns = [streamingToolCallTurn(), streamingTextTurn('done')];
+    let callIndex = 0;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (backend as unknown as { _bedrockRuntime: any })._bedrockRuntime = {
+      send: async () => {
+        const turn = turns[callIndex++];
+        if (!turn) throw new Error('no more mocked turns');
+        return { body: asBedrockStreamBody(turn) };
+      },
+    };
+    const { calls, cb } = captureCb();
+
+    await backend.complete(
+      TEST_MODEL,
+      [{ role: 'user', content: 'go' }],
+      {
+        stream: true,
+        tools: [makeThrowingTool(new Error('task parameter is required'))],
+        executeTools: true,
+      } as Partial<ICompletionOptions>,
+      cb
+    );
+
+    const toolsUsed = lastToolsUsed(calls);
+    expect(toolsUsed).toBeDefined();
+    expect(toolsUsed![0].success).toBe(false);
+    expect(toolsUsed![0].returnValue).toContain('task parameter is required');
+  });
+
+  it('truncates an over-cap result to the cap plus notice length', async () => {
+    const backend = new TestBedrockBackend();
+    const turns = [streamingToolCallTurn(), streamingTextTurn('done')];
+    let callIndex = 0;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (backend as unknown as { _bedrockRuntime: any })._bedrockRuntime = {
+      send: async () => {
+        const turn = turns[callIndex++];
+        if (!turn) throw new Error('no more mocked turns');
+        return { body: asBedrockStreamBody(turn) };
+      },
+    };
+    const { calls, cb } = captureCb();
+    const longResult = 'x'.repeat(MAX_RECORDED_TOOL_RESULT_CHARS + 500);
+
+    await backend.complete(
+      TEST_MODEL,
+      [{ role: 'user', content: 'go' }],
+      { stream: true, tools: [makeSucceedingTool(longResult)], executeTools: true } as Partial<ICompletionOptions>,
+      cb
+    );
+
+    const toolsUsed = lastToolsUsed(calls);
+    expect(toolsUsed).toBeDefined();
+    expect(toolsUsed![0].returnValue?.length).toBe(
+      MAX_RECORDED_TOOL_RESULT_CHARS + TOOL_RESULT_TRUNCATION_NOTICE.length
+    );
+    expect(toolsUsed![0].returnValue?.endsWith(TOOL_RESULT_TRUNCATION_NOTICE)).toBe(true);
   });
 });

@@ -20,6 +20,7 @@ import { ILogger, Logger } from '@bike4mind/observability';
 import { Agent } from 'undici';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { executeToolsBatch } from './executeToolsBatch';
+import { truncateToolResult } from './recordToolResult';
 import { normalizeOllamaDoneReason } from './stopReason';
 
 /** A tool call normalized across native (message.tool_calls) and content-embedded forms. */
@@ -364,10 +365,14 @@ export class OllamaBackend implements ICompletionBackend {
         { parallel: options.parallelToolExecution !== false, maxConcurrency: options.maxParallelTools }
       );
 
+      // Captured index-aligned with `resolved` so executedToolsUsed below can stamp each
+      // entry with the exact observation the model saw, success included.
+      const observations: string[] = [];
       outcomes.forEach((outcome, i) => {
         const { tc } = resolved[i];
         const params = tc.arguments || '{}';
         if (outcome.ok) {
+          observations[i] = outcome.result;
           this.pushToolMessages(messages, { id: tc.id, name: tc.name, parameters: params }, outcome.result);
         } else {
           // A denied permission must abort, not be fed back as a result.
@@ -375,15 +380,24 @@ export class OllamaBackend implements ICompletionBackend {
           const errorMsg = `Error running ${tc.name}: ${
             outcome.error instanceof Error ? outcome.error.message : 'Unknown error'
           }`;
+          observations[i] = errorMsg;
           this.pushToolMessages(messages, { id: tc.id, name: tc.name, parameters: params }, errorMsg);
         }
       });
 
       // Only calls we actually ran count as used; hallucinated tool names must
-      // not inflate the reported tool list.
+      // not inflate the reported tool list. Ollama rebuilds this array (rather than
+      // mutating toolsUsed in place like other backends) so returnValue/success are
+      // stamped directly into the rebuild, index-aligned with outcomes/observations.
       const executedToolsUsed = [
         ...priorToolsUsed,
-        ...resolved.map(({ tc }) => ({ name: tc.name, arguments: tc.arguments, id: tc.id })),
+        ...resolved.map(({ tc }, i) => ({
+          name: tc.name,
+          arguments: tc.arguments,
+          id: tc.id,
+          returnValue: truncateToolResult(observations[i]),
+          success: outcomes[i].ok,
+        })),
       ];
 
       // Stop before another round if the request was cancelled mid-flight, rather

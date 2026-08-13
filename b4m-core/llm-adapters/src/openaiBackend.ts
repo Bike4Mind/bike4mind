@@ -27,6 +27,7 @@ import type {
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
 import { executeToolsBatch } from './executeToolsBatch';
+import { recordToolResult } from './recordToolResult';
 import {
   CompletionInfo,
   DEFAULT_MAX_TOOL_CALLS,
@@ -1293,6 +1294,7 @@ export class OpenAIBackend implements ICompletionBackend {
                   outcome.error instanceof Error ? outcome.error.message : 'Unknown error'
                 }`;
                 streamedText[c.index] = errorMsg;
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, errorMsg, false);
                 // Push error result so the model can acknowledge the failure
                 this.pushToolMessages(
                   messages,
@@ -1333,6 +1335,9 @@ export class OpenAIBackend implements ICompletionBackend {
                     '[Artifact rendered and delivered to user]'
                   )
                 : resultStr;
+
+              // Record the sanitized string, not resultStr - that's what the model actually saw.
+              recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, sanitizedResult, true);
 
               this.pushToolMessages(
                 messages,
@@ -1658,11 +1663,13 @@ export class OpenAIBackend implements ICompletionBackend {
         for (const outcome of outcomes) {
           if (!outcome.ok) {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
+            const errorMsg = `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`;
+            recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, errorMsg, false);
             // Push error result so the model can acknowledge the failure
             this.pushToolMessages(
               messages,
               { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-              `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`
+              errorMsg
             );
             continue;
           }
@@ -1698,6 +1705,8 @@ export class OpenAIBackend implements ICompletionBackend {
                 '[Artifact rendered and delivered to user]'
               )
             : resultStr;
+
+          recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, sanitizedResult, true);
 
           this.pushToolMessages(
             messages,
@@ -2155,16 +2164,15 @@ export class OpenAIBackend implements ICompletionBackend {
       const outcome = batchOutcomes[i];
       const r = resolved[i];
       if (outcome.ok) {
-        this.pushToolMessages(
-          messages,
-          { id: r.callId, name: r.name, parameters: r.args },
-          outcome.result.result.toString()
-        );
+        const resultStr = outcome.result.result.toString();
+        recordToolResult(toolsUsed, { id: r.callId, name: r.name }, resultStr, true);
+        this.pushToolMessages(messages, { id: r.callId, name: r.name, parameters: r.args }, resultStr);
       } else {
         if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
         const errorMsg = `Error processing ${r.name} tool: ${
           outcome.error instanceof Error ? outcome.error.message : 'Unknown error'
         }`;
+        recordToolResult(toolsUsed, { id: r.callId, name: r.name }, errorMsg, false);
         this.pushToolMessages(messages, { id: r.callId, name: r.name, parameters: r.args }, errorMsg);
       }
     }

@@ -12,6 +12,7 @@ import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resource
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
 import { executeToolsBatch } from './executeToolsBatch';
+import { recordToolResult } from './recordToolResult';
 import {
   CompletionInfo,
   DEFAULT_MAX_TOOL_CALLS,
@@ -381,17 +382,22 @@ export class KimiBackend implements ICompletionBackend {
 
             for (const outcome of outcomes) {
               if (outcome.ok) {
+                const resultStr = outcome.result.toString();
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
                 this.pushToolMessages(
                   messages,
                   { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  outcome.result.toString()
+                  resultStr
                 );
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
+                const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
+                const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
                 this.pushToolMessages(
                   messages,
                   { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`
+                  observation
                 );
               }
             }
@@ -643,17 +649,22 @@ export class KimiBackend implements ICompletionBackend {
 
         for (const outcome of outcomes) {
           if (outcome.ok) {
+            const resultStr = outcome.result.toString();
+            recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
             this.pushToolMessages(
               messages,
               { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-              outcome.result.toString()
+              resultStr
             );
           } else {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
+            const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
+            const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+            recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
             this.pushToolMessages(
               messages,
               { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-              `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`
+              observation
             );
           }
         }

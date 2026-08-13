@@ -2,6 +2,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import { CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS } from '@bike4mind/common';
 import { OllamaBackend } from './ollamaBackend';
 import type { ICompletionOptionTools } from './backend';
+import { MAX_RECORDED_TOOL_RESULT_CHARS, TOOL_RESULT_TRUNCATION_NOTICE } from './recordToolResult';
 
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {} } as any;
 
@@ -26,12 +27,14 @@ const mathTool = (toolFn: ICompletionOptionTools['toolFn']): ICompletionOptionTo
 
 // Run a completion, returning the visible text plus the last tool list the
 // backend surfaced via completionInfo (consumers assign functionCalls from this).
+type RunToolsUsed = Array<{ name: string; returnValue?: string; success?: boolean }>;
+
 async function run(
   backend: OllamaBackend,
   options: Record<string, unknown>
-): Promise<{ text: string; toolsUsed: Array<{ name: string }> }> {
+): Promise<{ text: string; toolsUsed: RunToolsUsed }> {
   const out: string[] = [];
-  let toolsUsed: Array<{ name: string }> = [];
+  let toolsUsed: RunToolsUsed = [];
   await backend.complete(
     'qwen2.5-coder:3b',
     [{ role: 'user', content: 'go' } as any],
@@ -40,7 +43,7 @@ async function run(
       texts.forEach(t => {
         if (t) out.push(t);
       });
-      if (info?.toolsUsed) toolsUsed = info.toolsUsed as Array<{ name: string }>;
+      if (info?.toolsUsed) toolsUsed = info.toolsUsed as RunToolsUsed;
     }
   );
   return { text: out.join(''), toolsUsed };
@@ -725,5 +728,98 @@ describe('OllamaBackend drops tool-dependent prompts once it stops offering tool
     // the system prompt that never depended on a tool survives.
     expect(round(1)).not.toContain('MUST use the image_generation tool');
     expect(round(1)).toContain('Format replies as markdown');
+  });
+});
+
+describe('OllamaBackend tool result recording', () => {
+  it('records returnValue and success:true on a successful round-trip', async () => {
+    const toolFn = vi.fn(async () => '4');
+    const { backend } = makeBackend([
+      {
+        message: {
+          content: '',
+          tool_calls: [{ function: { name: 'math_evaluate', arguments: { expression: '2+2' } } }],
+        },
+        prompt_eval_count: 5,
+        eval_count: 1,
+      },
+      { message: { content: 'The answer is 4.', tool_calls: [] }, prompt_eval_count: 6, eval_count: 3 },
+    ]);
+
+    const { toolsUsed } = await run(backend, { executeTools: true, tools: [mathTool(toolFn)] });
+
+    expect(toolsUsed[0].success).toBe(true);
+    expect(toolsUsed[0].returnValue).toBe('4');
+  });
+
+  it('records success:false with the error text on a failing tool', async () => {
+    const toolFn = vi.fn(async () => {
+      throw new Error('division by zero');
+    });
+    const { backend } = makeBackend([
+      {
+        message: {
+          content: '',
+          tool_calls: [{ function: { name: 'math_evaluate', arguments: { expression: '1/0' } } }],
+        },
+        prompt_eval_count: 5,
+        eval_count: 1,
+      },
+      { message: { content: 'That failed.', tool_calls: [] }, prompt_eval_count: 6, eval_count: 3 },
+    ]);
+
+    const { toolsUsed } = await run(backend, { executeTools: true, tools: [mathTool(toolFn)] });
+
+    expect(toolsUsed[0].success).toBe(false);
+    expect(toolsUsed[0].returnValue).toContain('division by zero');
+  });
+
+  it('truncates an over-cap result to the cap plus notice length', async () => {
+    const longResult = 'x'.repeat(MAX_RECORDED_TOOL_RESULT_CHARS + 500);
+    const toolFn = vi.fn(async () => longResult);
+    const { backend } = makeBackend([
+      {
+        message: {
+          content: '',
+          tool_calls: [{ function: { name: 'math_evaluate', arguments: { expression: '2+2' } } }],
+        },
+        prompt_eval_count: 5,
+        eval_count: 1,
+      },
+      { message: { content: 'Done.', tool_calls: [] }, prompt_eval_count: 6, eval_count: 3 },
+    ]);
+
+    const { toolsUsed } = await run(backend, { executeTools: true, tools: [mathTool(toolFn)] });
+
+    expect(toolsUsed[0].returnValue?.length).toBe(
+      MAX_RECORDED_TOOL_RESULT_CHARS + TOOL_RESULT_TRUNCATION_NOTICE.length
+    );
+    expect(toolsUsed[0].returnValue?.endsWith(TOOL_RESULT_TRUNCATION_NOTICE)).toBe(true);
+  });
+
+  it('gives two calls to the same tool in one round distinct returnValues', async () => {
+    let callIndex = 0;
+    const results = ['3', '7'];
+    const toolFn = vi.fn(async () => results[callIndex++]);
+    const { backend } = makeBackend([
+      {
+        message: {
+          content: '',
+          tool_calls: [
+            { function: { name: 'math_evaluate', arguments: { expression: '1+2' } } },
+            { function: { name: 'math_evaluate', arguments: { expression: '3+4' } } },
+          ],
+        },
+        prompt_eval_count: 5,
+        eval_count: 1,
+      },
+      { message: { content: 'Done.', tool_calls: [] }, prompt_eval_count: 6, eval_count: 3 },
+    ]);
+
+    const { toolsUsed } = await run(backend, { executeTools: true, tools: [mathTool(toolFn)] });
+
+    expect(toolsUsed.length).toBe(2);
+    const returnValues = toolsUsed.map(t => t.returnValue).sort();
+    expect(returnValues).toEqual(['3', '7']);
   });
 });

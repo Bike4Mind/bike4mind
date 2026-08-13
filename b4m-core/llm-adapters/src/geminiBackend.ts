@@ -1,6 +1,7 @@
 import { Content, GenerationConfig, GoogleGenAI, Part, Tool } from '@google/genai';
 import { DEFAULT_MAX_TOOL_CALLS, ICompletionBackend, type CompletionInfo, type ICompletionOptions } from './backend';
 import { executeToolsBatch } from './executeToolsBatch';
+import { recordToolResult } from './recordToolResult';
 import { Logger } from '@bike4mind/observability';
 import {
   ChatModels,
@@ -823,13 +824,21 @@ export class GeminiBackend implements ICompletionBackend {
                   await callback(results, { toolsUsed });
                 });
 
+                const resultContent = JSON.stringify({ result: outcome.result });
+                recordToolResult(
+                  toolsUsed,
+                  { id: outcome.toolCall.id, name: outcome.toolCall.name },
+                  resultContent,
+                  true
+                );
+
                 // Push tool result to conversation history
                 messages.push({
                   role: 'tool',
                   content: [
                     {
                       type: 'tool_result',
-                      content: JSON.stringify({ result: outcome.result }),
+                      content: resultContent,
                       tool_use_id: outcome.toolCall.id,
                     },
                   ],
@@ -838,15 +847,22 @@ export class GeminiBackend implements ICompletionBackend {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
 
                 this.logger.error(`[Gemini] Error executing tool ${outcome.toolCall.name}:`, outcome.error);
+                const errorContent = JSON.stringify({
+                  error: outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
+                });
+                recordToolResult(
+                  toolsUsed,
+                  { id: outcome.toolCall.id, name: outcome.toolCall.name },
+                  errorContent,
+                  false
+                );
                 // Push error as tool result
                 messages.push({
                   role: 'tool',
                   content: [
                     {
                       type: 'tool_result',
-                      content: JSON.stringify({
-                        error: outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
-                      }),
+                      content: errorContent,
                       tool_use_id: outcome.toolCall.id,
                     },
                   ],
@@ -1044,13 +1060,16 @@ export class GeminiBackend implements ICompletionBackend {
               await callback(results, { toolsUsed });
             });
 
+            const resultContent = JSON.stringify({ result: outcome.result });
+            recordToolResult(toolsUsed, { id: outcome.toolCall.id, name: outcome.toolCall.name }, resultContent, true);
+
             // Push tool result to conversation history
             messages.push({
               role: 'tool',
               content: [
                 {
                   type: 'tool_result',
-                  content: JSON.stringify({ result: outcome.result }),
+                  content: resultContent,
                   tool_use_id: outcome.toolCall.id,
                 },
               ],
@@ -1058,15 +1077,17 @@ export class GeminiBackend implements ICompletionBackend {
           } else {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
             this.logger.error(`[Gemini] Error executing tool ${outcome.toolCall.name}:`, outcome.error);
+            const errorContent = JSON.stringify({
+              error: outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
+            });
+            recordToolResult(toolsUsed, { id: outcome.toolCall.id, name: outcome.toolCall.name }, errorContent, false);
             // Push error as tool result
             messages.push({
               role: 'tool',
               content: [
                 {
                   type: 'tool_result',
-                  content: JSON.stringify({
-                    error: outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
-                  }),
+                  content: errorContent,
                   tool_use_id: outcome.toolCall.id,
                 },
               ],

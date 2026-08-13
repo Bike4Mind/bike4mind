@@ -18,6 +18,7 @@ import {
   type ModelInfo,
 } from '@bike4mind/common';
 import { executeToolsBatch } from './executeToolsBatch';
+import { recordToolResult } from './recordToolResult';
 import {
   CompletionInfo,
   DEFAULT_MAX_TOOL_CALLS,
@@ -1702,6 +1703,14 @@ export class AnthropicBackend implements ICompletionBackend {
                 // Normalize the toolsUsed entry so callers can safely JSON.parse arguments
                 const entry = toolsUsed.find(t => t.name === name && t.id === id);
                 if (entry) entry.arguments = '{}';
+                // tryParseToolParams already pushed this exact observation into messages - record
+                // it here too so a call that never ran (not merely failed) still shows as such.
+                recordToolResult(
+                  toolsUsed,
+                  { id, name },
+                  'Error: Tool parameters were corrupted due to a stream interruption. Please retry.',
+                  false
+                );
                 continue;
               }
 
@@ -1790,6 +1799,10 @@ export class AnthropicBackend implements ICompletionBackend {
                   await cb(results, { inputTokens: 0, outputTokens: 0, toolsUsed });
                 });
 
+                // outcome.id (not toolId, which falls back to a fresh randomUUID) is what
+                // toolsUsed was pushed with, so it's what correlates back to that entry.
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
+
                 this.pushToolMessages(
                   messages,
                   { id: toolId, name: outcome.name, parameters: outcome.parameters },
@@ -1799,16 +1812,19 @@ export class AnthropicBackend implements ICompletionBackend {
                 // Re-throw permission denials; inject error result for all others
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
 
+                const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
                 this.logger.error('[Tool Execution] Tool failed', {
                   model,
                   toolName: outcome.name,
-                  error: outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
+                  error: errorMessage,
                 });
 
+                const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
                 this.pushToolMessages(
                   messages,
                   { id: toolId, name: outcome.name, parameters: outcome.parameters },
-                  `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`
+                  observation
                 );
               }
             }
@@ -2135,6 +2151,8 @@ export class AnthropicBackend implements ICompletionBackend {
                   await cb(results, { toolsUsed });
                 });
 
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
+
                 this.pushToolMessages(
                   messages,
                   { id: toolId, name: outcome.name, parameters: outcome.parameters },
@@ -2143,16 +2161,19 @@ export class AnthropicBackend implements ICompletionBackend {
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
 
+                const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
                 this.logger.error('[Tool Execution] Tool failed (non-streaming)', {
                   model,
                   toolName: outcome.name,
-                  error: outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
+                  error: errorMessage,
                 });
 
+                const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
                 this.pushToolMessages(
                   messages,
                   { id: toolId, name: outcome.name, parameters: outcome.parameters },
-                  `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`
+                  observation
                 );
               }
             }
