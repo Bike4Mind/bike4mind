@@ -26,7 +26,13 @@ export interface AccessContext {
   userId: string;
   isAdmin: boolean;
   userTags: string[];
-  organizationId?: string;
+  /**
+   * Authoritative org membership (normalized string ids), resolved at context construction
+   * from the organization documents' owner + users[] ACL (findMembershipOrgIds) - never from
+   * user.organizationId, which is the "currently selected org" display preference and must
+   * not be an authorization input (#1674). Empty array = member of no organization.
+   */
+  organizationIds: string[];
   /**
    * Caller's resolved entitlement keys (subscription- + tag-derived), resolved app-side
    * and injected here - core never imports the resolver or the Subscription model (same
@@ -35,7 +41,7 @@ export interface AccessContext {
    * Optional - absent -> tag-only matching (back-compat for any caller not threading it).
    *
    * Intentionally distinct from `DataLakeAccessContext` (retrieval): this type also carries
-   * `userId`/`isAdmin`/`organizationId` for the owner/org bypass that retrieval doesn't need.
+   * `userId`/`isAdmin`/`organizationIds` for the owner/org bypass that retrieval doesn't need.
    */
   entitlementKeys?: string[];
 }
@@ -198,11 +204,12 @@ export interface IDataLakeDocument extends IDataLake, IMongoDocument {}
 
 export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> {
   /**
-   * Resolve a lake by slug. Slug is unique only per scope (organizationId), so pass
-   * the caller's org to disambiguate: the caller's own-org lake is preferred, falling
-   * back to an org-less lake with that slug. Without an org, only org-less lakes match.
+   * Resolve a lake by slug. Slug is unique only per scope (organizationId), so pass the
+   * caller's membership set to disambiguate: a lake in one of the caller's own orgs is
+   * preferred, falling back to an org-less lake with that slug. Without a set, only
+   * org-less lakes match.
    */
-  findBySlug(slug: string, organizationId?: string): Promise<IDataLakeDocument | null>;
+  findBySlug(slug: string, organizationIds?: string[]): Promise<IDataLakeDocument | null>;
   /** Resolve a lake by its globally-unique join meta-tag (`datalake:<slug>` / `datalake:<org>:<slug>`). */
   findByDatalakeTag(datalakeTag: string): Promise<IDataLakeDocument | null>;
   findActiveByUserTags(userTags: string[]): Promise<IDataLakeDocument[]>;

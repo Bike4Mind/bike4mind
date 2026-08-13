@@ -141,12 +141,14 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     super(dataLakeModel);
   }
 
-  async findBySlug(slug: string, organizationId?: string): Promise<IDataLakeDocument | null> {
-    // Slug is unique per (organizationId, slug). Prefer the caller's own-org lake,
-    // then fall back to an org-less lake with the same slug - deterministic, so the
-    // 404 outcome reflects the caller's scope, not arbitrary document order.
-    if (organizationId) {
-      const own = await this.dataLakeModel.findOne({ slug, organizationId });
+  async findBySlug(slug: string, organizationIds?: string[]): Promise<IDataLakeDocument | null> {
+    // Slug is unique per (organizationId, slug). Prefer a lake in one of the caller's own
+    // orgs, then fall back to an org-less lake with the same slug. Sorted so two own-org
+    // matches resolve deterministically rather than by document order.
+    if (organizationIds && organizationIds.length > 0) {
+      const own = await this.dataLakeModel
+        .findOne({ slug, organizationId: { $in: organizationIds } })
+        .sort({ organizationId: 1 });
       if (own) return own.toJSON() as IDataLakeDocument;
     }
     const orgless = await this.dataLakeModel.findOne({ slug, organizationId: { $in: [null, ''] } });
@@ -283,10 +285,11 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // Use the ONE canonical normalization (shared with the in-memory filter + write path).
     const keys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
 
-    // Org constraint: lake has no org OR the lake's org matches the user's org.
-    const orgConstraint = ctx.organizationId
-      ? { $or: [{ organizationId: { $in: [null, ''] } }, { organizationId: ctx.organizationId }] }
-      : { organizationId: { $in: [null, ''] } };
+    // Org constraint: lake has no org OR the lake's org is one the caller is a MEMBER of.
+    const orgConstraint =
+      ctx.organizationIds.length > 0
+        ? { $or: [{ organizationId: { $in: [null, ''] } }, { organizationId: { $in: ctx.organizationIds } }] }
+        : { organizationId: { $in: [null, ''] } };
 
     // Requirement constraint (mirror of `lakeMatchesAccess`): the lake has NO restriction
     // (BOTH requiredUserTag AND requiredEntitlement blank), OR the user holds the required

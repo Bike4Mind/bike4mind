@@ -445,7 +445,10 @@ async function main(opts: Options): Promise<number> {
   // Pass the org through: the org-less overload only matches lakes with no organizationId,
   // so an org-scoped lake is invisible without it. Static registry lakes (opti-knowledge,
   // premium overlay entries) have no DB doc at all and resolve from DATA_LAKES.
-  const dbLake = await dataLakeRepository.findBySlug(opts.slug, opts.organizationId);
+  const dbLake = await dataLakeRepository.findBySlug(
+    opts.slug,
+    opts.organizationId ? [opts.organizationId] : undefined
+  );
   const lake = resolveLakeTarget(
     opts.slug,
     dbLake
