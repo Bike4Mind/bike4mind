@@ -15,8 +15,9 @@ const assistantText = (text: string): IMessage => ({ role: 'assistant', content:
 const userText = (text: string): IMessage => ({ role: 'user', content: text });
 
 describe('BLOG_REQUEST_PATTERN', () => {
-  // Pinned verbatim: this is the ONLY product surface that depends on the blog auto-add today
-  // (ContentPublishingModal.tsx). If this stops matching, the Studio silently loses blog_draft.
+  // Pinned verbatim: this is the one surface found to proactively send a message expecting the
+  // blog tool without saying "blog" itself (ContentPublishingModal.tsx). If this stops matching,
+  // the Studio silently loses blog_draft.
   it('matches the Content Publishing Studio prompt verbatim', () => {
     expect(BLOG_REQUEST_PATTERN.test('Transform this conversation into a blog post.')).toBe(true);
   });

@@ -39,7 +39,25 @@ export type AlwaysOnFloorInput = {
  *
  * NOTE: this measures only content WE author. The provider-injected tool-use
  * preamble that Anthropic adds whenever any tool is attached is not visible
- * here; sizing that needs a provider count_tokens probe (tracked separately).
+ * here; sizing that needs a provider count_tokens probe - see
+ * packages/scripts/count-tokens-probe.ts.
+ *
+ * DECISION (#810, real cl100k_base counts, not estimates): against a ~7,400-7,800
+ * token cold-turn target, artifact_emission is ~2,822 tokens (~38%) and help_center
+ * ~178 (~2%). The two BuilderInjectedBlock rows below are far smaller - format_prompt
+ * ~66 tokens, image_prompt ~38, combined ~1.4% of the target. format_prompt and
+ * image_prompt are kept AS-IS: format_prompt's
+ * gate (UseFormatPrompt) defaults OFF, so it already contributes 0 tokens on a
+ * default deployment; image_prompt is already double-gated (imageGenerationAvailable
+ * AND a word-boundary trigger pattern, both already narrowed and tested) and its
+ * remaining cost is a rounding error against the target. Trimming either buys
+ * nothing measurable. artifact_emission is the real lever (~38%) but is explicitly
+ * OUT OF SCOPE here - the issue notes a prior attempt to trim it was declined
+ * pending product sign-off, and this ticket's guardrail (measure before removing)
+ * argues for a dedicated follow-on with usage data, not a blind cut riding on this
+ * PR. Revisit format_prompt specifically if production data ever shows
+ * UseFormatPrompt on at meaningful volume - that would make its ~66 tokens/turn
+ * worth a trigger-word gate symmetric with image_prompt's.
  *
  * @param countTokens counts one system block's content; injected so the caller
  *   supplies the real tokenizer and tests can stay deterministic.

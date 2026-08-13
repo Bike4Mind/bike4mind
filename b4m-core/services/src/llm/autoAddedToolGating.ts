@@ -3,9 +3,11 @@ import { detectSkillMentions, type IMessage } from '@bike4mind/common';
 /**
  * Blog intent in the message itself. Deliberately narrow: bare `post`/`publish`/`article` fire on
  * ordinary chat, so a word-boundary match on `blog` and its close relatives is the whole gate.
- * Verified against the one product surface that depends on the auto-add today - the Content
- * Publishing Studio's prompt is literally "Transform this conversation into a blog post." - so this
- * pattern covers it verbatim.
+ * Verified against the one product surface found to PROACTIVELY SEND a message expecting a blog
+ * tool without the user's own wording naming it - the Content Publishing Studio's prompt is
+ * literally "Transform this conversation into a blog post." - so this pattern covers it verbatim.
+ * (Other blog_draft/publish/edit references in the client are consumers of the tool's result -
+ * an artifact renderer, a preview card, a Settings help string - not message-sending triggers.)
  */
 export const BLOG_REQUEST_PATTERN = /\b(?:blog|blogs|blogging|blogged|blogpost|substack|wordpress|ghost\s+cms)\b/i;
 
