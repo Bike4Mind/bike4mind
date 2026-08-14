@@ -16,6 +16,7 @@ import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
 import { buildFabFileChunkScanFilter, CHUNK_SCAN_BATCH, CHUNK_SCAN_MIN_AGE_MS } from './chunkScan';
+import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
 import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
@@ -139,7 +140,7 @@ async function main() {
 
     const cutoff = new Date(Date.now() - CHUNK_SCAN_MIN_AGE_MS);
     const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff))
-      .select('_id userId')
+      .select('_id userId batchId')
       .limit(CHUNK_SCAN_BATCH)
       .lean();
 
@@ -147,6 +148,10 @@ async function main() {
       await sendToQueue(Resource.fabFileChunkQueue.url, {
         fabFileId: String(file._id),
         userId: file.userId,
+        // Self-host counterpart of the hosted rescue sweep: only a data-lake file (has a batch) is
+        // convergence work the kill switch may halt (#1676); a plain lost-webhook upload is user
+        // work and always runs. Global sweep => no lakeId => platform switch only.
+        ...(file.batchId ? { origin: CONVERGENCE_ORIGIN } : {}),
       });
     }
     if (candidates.length > 0) {

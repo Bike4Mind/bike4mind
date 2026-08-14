@@ -13,7 +13,9 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@bike4mind/observability', () => {
   class MockLogger {
-    withMetadata() { return this; }
+    withMetadata() {
+      return this;
+    }
     log() {}
     info() {}
     warn() {}
@@ -91,9 +93,7 @@ describe('spendReconciliation cron', () => {
     await runHandler();
 
     // 2026-07: provider=$500, internal=$450, delta=+$50, denominator=max(500,450)=500, pct=10%
-    const julyCall = mockAppend.mock.calls.find(
-      (c: unknown[]) => (c[0] as { month: string }).month === '2026-07'
-    );
+    const julyCall = mockAppend.mock.calls.find((c: unknown[]) => (c[0] as { month: string }).month === '2026-07');
     expect(julyCall).toBeDefined();
     const julyRow = julyCall![0] as { deltaUsd: number; deltaPct: number; providerUsd: number; internalUsd: number };
     expect(julyRow.providerUsd).toBe(500);
@@ -138,12 +138,10 @@ describe('spendReconciliation cron', () => {
 
     await runHandler();
 
-    const augCall = mockAppend.mock.calls.find(
-      (c: unknown[]) => {
-        const row = c[0] as { month: string; provider: string };
-        return row.month === '2026-08' && row.provider === 'openai';
-      }
-    );
+    const augCall = mockAppend.mock.calls.find((c: unknown[]) => {
+      const row = c[0] as { month: string; provider: string };
+      return row.month === '2026-08' && row.provider === 'openai';
+    });
     expect(augCall).toBeDefined();
     const row = augCall![0] as { internalUsd: number; deltaUsd: number; deltaPct: number };
     expect(row.internalUsd).toBe(0);

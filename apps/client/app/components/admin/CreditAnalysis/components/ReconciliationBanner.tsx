@@ -9,9 +9,7 @@ import { ISpendReconciliation } from '@bike4mind/common';
 
 const signedUsd = (value: number) => `${value < 0 ? '-' : '+'}$${Math.abs(value).toFixed(2)}`;
 
-const statusFromDelta = (
-  deltaPct: number
-): { color: 'success' | 'warning' | 'danger'; Icon: React.ElementType } => {
+const statusFromDelta = (deltaPct: number): { color: 'success' | 'warning' | 'danger'; Icon: React.ElementType } => {
   if (deltaPct < 2) return { color: 'success', Icon: CheckCircleOutlineIcon };
   if (deltaPct <= 10) return { color: 'warning', Icon: WarningAmberIcon };
   return { color: 'danger', Icon: ErrorOutlineIcon };
@@ -68,13 +66,7 @@ export const ReconciliationBanner: React.FC = () => {
       startDecorator={<overall.Icon />}
       data-testid="reconciliation-banner"
       endDecorator={
-        <IconButton
-          size="sm"
-          variant="plain"
-          color={overall.color}
-          onClick={fetchReconciliation}
-          disabled={isLoading}
-        >
+        <IconButton size="sm" variant="plain" color={overall.color} onClick={fetchReconciliation} disabled={isLoading}>
           <RefreshIcon fontSize="small" />
         </IconButton>
       }

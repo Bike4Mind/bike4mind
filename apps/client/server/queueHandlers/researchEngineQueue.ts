@@ -3,6 +3,7 @@ import { researchTaskService } from '@bike4mind/services';
 import {
   adminSettingsRepository,
   dataLakeRepository,
+  organizationRepository,
   researchTaskRepository,
   researchDataRepository,
   withTransaction,
@@ -94,6 +95,7 @@ const process = async (parameters: { id: string; userId: string }, logger: Logge
             taskSchedules: taskScheduleRepository,
             apiKeys: apiKeyRepository,
             dataLakes: dataLakeRepository,
+            organizations: organizationRepository,
           },
           llm,
           scraper: {

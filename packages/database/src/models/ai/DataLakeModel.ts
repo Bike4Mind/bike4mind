@@ -212,12 +212,14 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     super(dataLakeModel);
   }
 
-  async findBySlug(slug: string, organizationId?: string): Promise<IDataLakeDocument | null> {
-    // Slug is unique per (organizationId, slug). Prefer the caller's own-org lake,
-    // then fall back to an org-less lake with the same slug - deterministic, so the
-    // 404 outcome reflects the caller's scope, not arbitrary document order.
-    if (organizationId) {
-      const own = await this.dataLakeModel.findOne({ slug, organizationId });
+  async findBySlug(slug: string, organizationIds?: string[]): Promise<IDataLakeDocument | null> {
+    // Slug is unique per (organizationId, slug). Prefer a lake in one of the caller's own
+    // orgs, then fall back to an org-less lake with the same slug. Sorted so two own-org
+    // matches resolve deterministically rather than by document order.
+    if (organizationIds && organizationIds.length > 0) {
+      const own = await this.dataLakeModel
+        .findOne({ slug, organizationId: { $in: organizationIds } })
+        .sort({ organizationId: 1 });
       if (own) return own.toJSON() as IDataLakeDocument;
     }
     const orgless = await this.dataLakeModel.findOne({ slug, organizationId: { $in: [null, ''] } });
@@ -260,7 +262,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
   async findActiveByUserTagsAndEntitlements(
     userTags: string[],
     entitlementKeys: string[],
-    organizationId?: string | null,
+    organizationIds?: string[] | null,
     userId?: string | null
   ): Promise<IDataLakeDocument[]> {
     const normalizedTags = userTags.map(t => t.toLowerCase());
@@ -268,19 +270,23 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // Use the ONE canonical normalization rule (shared with the in-memory filter + write
     // path) so stored values and query keys can't drift.
     const keys = (entitlementKeys ?? []).map(normalizeEntitlementKey);
+    // Empty/absent never widens access: both org arms below collapse to their org-less-only
+    // form when the caller belongs to no org (#1674).
+    const memberOrgIds = organizationIds ?? [];
 
     // Non-owner grants, each evaluated under the org prerequisite below. A non-owner reaches
     // a lake only when it grants them something - a held tag, a held entitlement, or (for a
     // gateless ORG lake) membership in its org. A gateless, org-less lake grants nothing here,
     // so it resolves ONLY via the owner bypass -> Private-by-default, not world-readable.
     const nonOwnerArms: Record<string, unknown>[] = [{ requiredUserTag: { $in: allTags } }];
-    if (organizationId) {
-      // Gateless lake (no tag, no entitlement) scoped to the caller's org -> the org is its grant.
+    if (memberOrgIds.length > 0) {
+      // Gateless lake (no tag, no entitlement) scoped to one of the caller's orgs -> membership
+      // is its grant.
       nonOwnerArms.push({
         $and: [
           { $or: [{ requiredUserTag: null }, { requiredUserTag: '' }] },
           { $or: [{ requiredEntitlement: null }, { requiredEntitlement: '' }] },
-          { organizationId },
+          { organizationId: { $in: memberOrgIds } },
         ],
       });
     }
@@ -290,11 +296,12 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       nonOwnerArms.push({ requiredEntitlement: { $in: keys } });
     }
 
-    // Org prerequisite (hard): org-less lakes OR lakes in the caller's org. null/'' form for
-    // DocumentDB safety. Combined with the grants via $and - two top-level $or keys collide.
-    const orgConstraint = organizationId
-      ? { $or: [{ organizationId: null }, { organizationId: '' }, { organizationId }] }
-      : { $or: [{ organizationId: null }, { organizationId: '' }] };
+    // Org prerequisite (hard): org-less lakes OR lakes in one of the caller's orgs. null/'' form
+    // for DocumentDB safety. Combined with the grants via $and - two top-level $or keys collide.
+    const orgConstraint =
+      memberOrgIds.length > 0
+        ? { $or: [{ organizationId: null }, { organizationId: '' }, { organizationId: { $in: memberOrgIds } }] }
+        : { $or: [{ organizationId: null }, { organizationId: '' }] };
 
     const accessArms: Record<string, unknown>[] = [{ $and: [orgConstraint, { $or: nonOwnerArms }] }];
 
@@ -354,10 +361,14 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // Use the ONE canonical normalization (shared with the in-memory filter + write path).
     const keys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
 
-    // Org constraint: lake has no org OR the lake's org matches the user's org.
-    const orgConstraint = ctx.organizationId
-      ? { $or: [{ organizationId: { $in: [null, ''] } }, { organizationId: ctx.organizationId }] }
-      : { organizationId: { $in: [null, ''] } };
+    // Org constraint: lake has no org OR the lake's org is one the caller is a MEMBER of.
+    // `?? []`: a runtime belt against a malformed ctx, not a widening of the declared (required)
+    // type - a missing set must deny org-scoped lakes, not throw or vacuously allow them.
+    const memberOrgIds = ctx.organizationIds ?? [];
+    const orgConstraint =
+      memberOrgIds.length > 0
+        ? { $or: [{ organizationId: { $in: [null, ''] } }, { organizationId: { $in: memberOrgIds } }] }
+        : { organizationId: { $in: [null, ''] } };
 
     // Requirement constraint (mirror of `lakeMatchesAccess`): the lake has NO restriction
     // (BOTH requiredUserTag AND requiredEntitlement blank), OR the user holds the required

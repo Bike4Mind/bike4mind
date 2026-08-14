@@ -373,6 +373,7 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
       user: { id: 'u1', tags: [], groups: [] },
       db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
         fabfiles: { search: vi.fn().mockResolvedValue({ data: files, hasMore: false, total: files.length }) },
         fabfilechunks: {
           findByFabFileId: vi.fn(),
@@ -522,6 +523,7 @@ describe('KnowledgeRetrievalFeature retrieval exclusion (4th ctor arg)', () => {
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
       user: { id: 'u1', tags: [], groups: [] },
       db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
         fabfiles: { search: vi.fn().mockResolvedValue({ data: files, hasMore: false, total: files.length }) },
         fabfilechunks: {
           findByFabFileId: vi.fn(),
@@ -628,6 +630,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
       user: { id: 'u1', tags: [], groups: [] },
       db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
         fabfiles: {
           search: vi
             .fn()
@@ -1072,6 +1075,7 @@ describe('KnowledgeRetrievalFeature abstention when nothing is retrieved', () =>
     logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
     user: { id: 'u1', tags: [], groups: [] },
     db: {
+      organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
       fabfiles: {
         search: overrides.search ?? vi.fn().mockResolvedValue({ data: [], hasMore: false, total: 0 }),
       },
@@ -1167,6 +1171,7 @@ describe('KnowledgeRetrievalFeature same-width model mismatch', () => {
     logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
     user: { id: 'u1', tags: [], groups: [] },
     db: {
+      organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
       fabfiles: {
         search: vi.fn().mockResolvedValue({
           data: files.map(f => ({ tags: [], ...f })),
@@ -1300,6 +1305,7 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
       user: { id: OWNER, tags: [], groups: [] },
       db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
         fabfiles: { search: vi.fn().mockResolvedValue({ data: files, hasMore: false, total: files.length }) },
         fabfilechunks: {
           findByFabFileId: vi.fn(),
@@ -1424,6 +1430,7 @@ describe('KnowledgeRetrievalFeature untrusted-content delimiter (#1659)', () => 
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
       user: { id: 'u1', tags: [], groups: [] },
       db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
         fabfiles: { search: vi.fn().mockResolvedValue({ data: files, hasMore: false, total: 1 }) },
         fabfilechunks: {
           findByFabFileId: vi.fn(),

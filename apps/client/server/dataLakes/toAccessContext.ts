@@ -1,5 +1,4 @@
 import type { AccessContext } from '@bike4mind/common';
-import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { organizationRepository } from '@bike4mind/database';
 import { getRequestEntitlements, type EntitlementRequest } from '@server/entitlements';
 
@@ -35,11 +34,11 @@ export async function toAccessContext(req: EntitlementRequest): Promise<AccessCo
     userId: user.id,
     isAdmin,
     userTags: user.tags ?? [],
-    // Normalize to a primitive string: `organizationId` can arrive as an ObjectId or a
-    // populated Organization document depending on the route's `.populate`, and the org
-    // gates compare it in memory with strict equality. A casting Mongo query would still
-    // match, so an un-normalized value 404s a lake the caller's own list returns.
-    organizationId: normalizeId(user.organizationId),
+    // Authoritative membership set (owner + users[] ACL), resolved per request - NOT
+    // user.organizationId, the selected-org display preference (#1674). Resolved for admins
+    // too: the fallback-lake org prerequisite and findBySlug's own-org preference apply to
+    // admins as well, unlike the entitlement gates below.
+    organizationIds: await organizationRepository.findMembershipOrgIds(user.id),
     entitlementKeys: isAdmin ? [] : await getRequestEntitlements(req),
     administeredOrgIds: isAdmin ? [] : await organizationRepository.findIdsWithAdminRights(user.id),
   };

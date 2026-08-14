@@ -26,7 +26,13 @@ export interface AccessContext {
   userId: string;
   isAdmin: boolean;
   userTags: string[];
-  organizationId?: string;
+  /**
+   * Authoritative org membership (normalized string ids), resolved at context construction
+   * from the organization documents' owner + users[] ACL (findMembershipOrgIds) - never from
+   * user.organizationId, which is the "currently selected org" display preference and must
+   * not be an authorization input (#1674). Empty array = member of no organization.
+   */
+  organizationIds: string[];
   /**
    * Orgs the caller holds admin RIGHTS in (billing owner / manager / appointed admin), resolved
    * app-side via `organizationRepository.findIdsWithAdminRights` and injected here (same pre-resolved
@@ -44,7 +50,7 @@ export interface AccessContext {
    * Optional - absent -> tag-only matching (back-compat for any caller not threading it).
    *
    * Intentionally distinct from `DataLakeAccessContext` (retrieval): this type also carries
-   * `userId`/`isAdmin`/`organizationId` for the owner/org bypass that retrieval doesn't need.
+   * `userId`/`isAdmin`/`organizationIds` for the owner/org bypass that retrieval doesn't need.
    */
   entitlementKeys?: string[];
 }
@@ -260,11 +266,12 @@ export interface IDataLakeDocument extends IDataLake, IMongoDocument {}
 
 export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> {
   /**
-   * Resolve a lake by slug. Slug is unique only per scope (organizationId), so pass
-   * the caller's org to disambiguate: the caller's own-org lake is preferred, falling
-   * back to an org-less lake with that slug. Without an org, only org-less lakes match.
+   * Resolve a lake by slug. Slug is unique only per scope (organizationId), so pass the
+   * caller's membership set to disambiguate: a lake in one of the caller's own orgs is
+   * preferred, falling back to an org-less lake with that slug. Without a set, only
+   * org-less lakes match.
    */
-  findBySlug(slug: string, organizationId?: string): Promise<IDataLakeDocument | null>;
+  findBySlug(slug: string, organizationIds?: string[]): Promise<IDataLakeDocument | null>;
   /** Resolve a lake by its globally-unique join meta-tag (`datalake:<slug>` / `datalake:<org>:<slug>`). */
   findByDatalakeTag(datalakeTag: string): Promise<IDataLakeDocument | null>;
   findActiveByUserTags(userTags: string[]): Promise<IDataLakeDocument[]>;
@@ -274,8 +281,10 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * resolved entitlement keys), or - for a gateless ORG lake - membership in its org. Plus
    * the caller's OWN lakes (owner bypass). Mirrors the HTTP path's `findAccessible`.
    *
-   * `organizationId` is the hard org prerequisite: org-less lakes stay reachable cross-org
-   * (curated opti/help); an org-scoped lake only resolves for a caller in that org.
+   * `organizationIds` is the hard org prerequisite: org-less lakes stay reachable cross-org
+   * (curated opti/help); an org-scoped lake only resolves for a caller who is a MEMBER of that
+   * org (owner + `users[]` ACL - see `IOrganizationRepository.findMembershipOrgIds`, #1674).
+   * Empty/absent never widens access - it collapses every org arm to its org-less-only form.
    *
    * `userId` is the owner bypass + the Private-by-default rule: a lake with NO org and NO
    * gate is owner-only (not world-readable). Supply it on every user-facing retrieval call;
@@ -284,7 +293,7 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   findActiveByUserTagsAndEntitlements(
     userTags: string[],
     entitlementKeys: string[],
-    organizationId?: string | null,
+    organizationIds?: string[] | null,
     userId?: string | null
   ): Promise<IDataLakeDocument[]>;
   findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]>;
