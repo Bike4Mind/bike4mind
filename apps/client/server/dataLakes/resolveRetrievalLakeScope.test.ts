@@ -12,11 +12,14 @@ const { mockGetDynamicDataLakeAccess, mockGetRequestEntitlements } = vi.hoisted(
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: { getDynamicDataLakeAccess: mockGetDynamicDataLakeAccess },
 }));
-vi.mock('@bike4mind/database', () => ({ dataLakeRepository: { __marker: 'dataLakeRepository' } }));
+vi.mock('@bike4mind/database', () => ({
+  dataLakeRepository: { __marker: 'dataLakeRepository' },
+  organizationRepository: { __marker: 'organizationRepository' },
+}));
 vi.mock('@server/entitlements', () => ({ getRequestEntitlements: mockGetRequestEntitlements }));
 
 import { resolveRetrievalLakeScope, withStaticRegistryBypass } from './resolveRetrievalLakeScope';
-import { dataLakeRepository } from '@bike4mind/database';
+import { dataLakeRepository, organizationRepository } from '@bike4mind/database';
 import type { EntitlementRequest } from '@server/entitlements';
 
 type Scope = Parameters<typeof withStaticRegistryBypass>[0];
@@ -154,10 +157,12 @@ describe('resolveRetrievalLakeScope', () => {
 
     // Deep equality, not objectContaining: an extra or missing field here IS the divergence
     // this ticket exists to close. This mirrors the ToolContext fields the chat tool hands the
-    // same resolver; it is a literal, so a change on the chat side would not fail here.
+    // same resolver; it is a literal, so a change on the chat side would not fail here. Threads
+    // organizationRepository so the resolver can derive membership itself - user.organizationId
+    // (the selected-org pointer) is NOT forwarded (#1674).
     expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
-      db: { dataLakes: dataLakeRepository },
-      user: { id: 'u1', tags: ['Opti'], organizationId: 'org1' },
+      db: { dataLakes: dataLakeRepository, organizations: organizationRepository },
+      user: { id: 'u1', tags: ['Opti'] },
       entitlementKeys: ['optihashi:pro'],
     });
   });
@@ -202,39 +207,27 @@ describe('resolveRetrievalLakeScope', () => {
     expect(mockGetDynamicDataLakeAccess.mock.calls[0][0].entitlementKeys).toEqual(['acme:pro']);
   });
 
-  it('forwards absent tags and org explicitly rather than falsy-coercing them', async () => {
+  it('forwards absent tags explicitly rather than falsy-coercing them', async () => {
     await resolveRetrievalLakeScope(asReq({ id: 'u1', tags: null }));
 
     expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
-      db: { dataLakes: dataLakeRepository },
-      user: { id: 'u1', tags: [], organizationId: undefined },
+      db: { dataLakes: dataLakeRepository, organizations: organizationRepository },
+      user: { id: 'u1', tags: [] },
       entitlementKeys: [],
     });
   });
 
-  it('normalizes a populated-document organizationId at the seam (#1343)', async () => {
-    // A .populate('organizationId') upstream would hand req.user a full Organization doc. It must
-    // reach the shared resolver as its hex string, not "[object Object]", mirroring toAccessContext.
+  it('never forwards user.organizationId, regardless of its shape (#1343 concern now lives in the shared resolver)', async () => {
+    // A .populate('organizationId') upstream would hand req.user a full Organization doc; this
+    // used to need normalizing at this seam (#1343). It no longer matters what shape arrives here -
+    // organizationId is not part of what this seam forwards at all (#1674): membership is resolved
+    // inside getDynamicDataLakeAccess from user.id via the threaded organizationRepository.
     const populatedOrg = { _id: { toHexString: () => 'org-hex' }, name: 'Acme' } as unknown as string;
     await resolveRetrievalLakeScope(asReq({ id: 'u1', tags: ['Opti'], organizationId: populatedOrg }));
 
     expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
-      db: { dataLakes: dataLakeRepository },
-      user: { id: 'u1', tags: ['Opti'], organizationId: 'org-hex' },
-      entitlementKeys: [],
-    });
-  });
-
-  it('normalizes an empty-string organizationId to undefined (org-less), not literal "" (#1343)', async () => {
-    // An empty string is not a valid org id: normalizeId('') returns undefined, so the caller is
-    // treated as org-less (only org-less lakes resolve) rather than filtering on a literal "".
-    // This is the intended, safer behavior - locking it in so the delta from the old `?? undefined`
-    // pass-through stays deliberate.
-    await resolveRetrievalLakeScope(asReq({ id: 'u1', tags: ['Opti'], organizationId: '' }));
-
-    expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
-      db: { dataLakes: dataLakeRepository },
-      user: { id: 'u1', tags: ['Opti'], organizationId: undefined },
+      db: { dataLakes: dataLakeRepository, organizations: organizationRepository },
+      user: { id: 'u1', tags: ['Opti'] },
       entitlementKeys: [],
     });
   });

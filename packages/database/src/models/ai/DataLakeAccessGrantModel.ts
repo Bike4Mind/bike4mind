@@ -70,6 +70,18 @@ class DataLakeAccessGrantRepository
     return results.map(r => r.toJSON() as IDataLakeAccessGrantDocument);
   }
 
+  async listActiveByLakes(
+    dataLakeIds: string[],
+    opts?: { activeAsOf?: Date }
+  ): Promise<IDataLakeAccessGrantDocument[]> {
+    if (dataLakeIds.length === 0) return []; // $in: [] is a valid no-match, but skip the round-trip.
+    const results = await this.grantModel.find({
+      dataLakeId: { $in: dataLakeIds },
+      ...buildActiveGrantFilter(opts?.activeAsOf),
+    });
+    return results.map(r => r.toJSON() as IDataLakeAccessGrantDocument);
+  }
+
   async listByPrincipal(
     principalType: DataLakePrincipalType,
     principalId: string,

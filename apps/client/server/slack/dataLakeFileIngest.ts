@@ -3,6 +3,7 @@ import {
   FabFileSourceType,
   KnowledgeType,
   type AccessContext,
+  type IDataLakeAccessGrantRepository,
   type IDataLakeDocument,
   type IDataLakeRepository,
   type IFabFileDocument,
@@ -64,6 +65,9 @@ export interface CreateLakeFileParams {
 export interface SlackLakeIngestDeps {
   // `find` is required by the fallback tagger, the others by the write gate.
   dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug' | 'findByDatalakeTag' | 'find'>;
+  // The write gate (assertLakeWriteAccess) resolves the lake's grants so a curator / transferred
+  // owner may ingest, not just the creator.
+  dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
   fabFiles: {
     findByContentHashesInDataLake(hashes: string[], datalakeTag: string): Promise<IFabFileDocument[]>;
   };
@@ -71,6 +75,8 @@ export interface SlackLakeIngestDeps {
   createLakeFile(userId: string, params: CreateLakeFileParams): Promise<IFabFileDocument>;
   /** Entitlement keys for the actor; admins skip resolution, mirroring `toAccessContext`. */
   resolveEntitlementKeys(actor: SlackIngestActor): Promise<string[]>;
+  /** Authoritative org membership set for the actor, mirroring `toAccessContext` (#1674). */
+  resolveMembershipOrgIds(userId: string): Promise<string[]>;
   downloadFile(url: string, fileName: string): Promise<Buffer>;
   /**
    * The `MaxFileSize` admin setting in bytes, so an over-limit file is refused BEFORE it is
@@ -117,14 +123,14 @@ export type SlackLakeIngestOutcome =
  */
 export async function buildSlackAccessContext(
   actor: SlackIngestActor,
-  deps: Pick<SlackLakeIngestDeps, 'resolveEntitlementKeys'>
+  deps: Pick<SlackLakeIngestDeps, 'resolveEntitlementKeys' | 'resolveMembershipOrgIds'>
 ): Promise<AccessContext> {
   const isAdmin = !!actor.isAdmin;
   return {
     userId: actor.id,
     isAdmin,
     userTags: actor.tags ?? [],
-    organizationId: actor.organizationId,
+    organizationIds: await deps.resolveMembershipOrgIds(actor.id),
     entitlementKeys: isAdmin ? [] : await deps.resolveEntitlementKeys(actor),
   };
 }
@@ -162,7 +168,9 @@ export async function ingestSlackFilesIntoLake(
   // Authorization first: resolve + write-gate the lake before any download or create.
   let lake: IDataLakeDocument;
   try {
-    lake = await dataLakeService.assertLakeWriteAccess(lakeSlug, ctx, { db: { dataLakes: deps.dataLakes } });
+    lake = await dataLakeService.assertLakeWriteAccess(lakeSlug, ctx, {
+      db: { dataLakes: deps.dataLakes, dataLakeAccessGrants: deps.dataLakeAccessGrants },
+    });
   } catch (err) {
     // Branch on the error CLASS, not the message. Matching /not found/i sent two reachable cases
     // down the wrong arm: a built-in lake (BadRequestError "...built into the platform and is

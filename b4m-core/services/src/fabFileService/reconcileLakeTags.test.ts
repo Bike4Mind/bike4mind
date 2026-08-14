@@ -179,7 +179,7 @@ describe('reconcileLakeTags', () => {
   it('refuses a meta-tag the caller applied that names no lake', async () => {
     const adapters = makeAdapters([], null);
 
-    await expect(run(adapters, [], [tag('datalake:ghost', 1)])).rejects.toThrow(/only the creator/i);
+    await expect(run(adapters, [], [tag('datalake:ghost', 1)])).rejects.toThrow(/do not have permission to add/i);
   });
 
   // A lake can be deleted out from under a file. The orphaned string must not make the file
@@ -211,7 +211,7 @@ describe('reconcileLakeTags', () => {
   it('refuses a join by a caller who cannot manage the lake, before returning a payload', async () => {
     const adapters = makeAdapters([], lake({ createdByUserId: 'someone-else' }));
 
-    await expect(run(adapters, [], [tag('datalake:lake', 1)])).rejects.toThrow(/only the creator can add/i);
+    await expect(run(adapters, [], [tag('datalake:lake', 1)])).rejects.toThrow(/do not have permission to add/i);
   });
 
   it('preserves membership when the caller drops the meta-tag, regardless of manage rights', async () => {

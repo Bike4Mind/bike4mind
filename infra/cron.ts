@@ -699,6 +699,26 @@ const agentExecutionAbandonedSweepCron = new sst.aws.Cron('agentExecutionAbandon
   enabled: ['production', 'dev'].includes($app.stage),
 });
 
+// Spend Reconciliation -- fetches authoritative billing from Anthropic/OpenAI
+// admin APIs and compares against internal COGS estimates.
+const spendReconciliationCron = new sst.aws.Cron('spendReconciliation', {
+  schedule: 'cron(0 6 * * ? *)', // Daily at 6am UTC
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/client/server/cron/spendReconciliation.handler',
+    runtime: 'nodejs24.x',
+    timeout: '5 minutes',
+    link: [...allSecrets],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    logging: {
+      retention: '1 week',
+    },
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
 export {
   dailyUserActivityReport,
   weeklyUserActivityReport,
@@ -725,4 +745,5 @@ export {
   modelDiscoveryCron,
   agentExecutionAbandonedSweepCron,
   dataLakeBatchReconcileCron,
+  spendReconciliationCron,
 };

@@ -1,7 +1,12 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository, dataLakeBatchRepository, fabFileRepository } from '@bike4mind/database';
+import {
+  dataLakeRepository,
+  dataLakeBatchRepository,
+  dataLakeAccessGrantRepository,
+  fabFileRepository,
+} from '@bike4mind/database';
 import { UpdateDataLakeRequestInput } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { Request } from 'express';
@@ -17,11 +22,16 @@ const handler = baseApi()
     // Single shared gate: resolves the lake and asserts owner/org/tag access,
     // denying with a not-found-style error so existence isn't disclosed.
     const dataLake = await dataLakeService.assertLakeAccess(id, ctx, {
-      db: { dataLakes: dataLakeRepository },
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
     // Read access is wider than manage (org members, gate holders, and anyone at all for a
-    // published lake), so strip the editor-only fields before serializing the raw document.
-    return res.json(dataLakeService.redactLakeForActor(dataLake, ctx));
+    // published lake), so strip the editor-only fields before serializing the raw document. Load
+    // the lake's grants so a curator / transferred owner (not just the creator/admin) still gets
+    // the full editor document.
+    const grants = await dataLakeService.loadActiveLakeGrants(dataLake, {
+      db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
+    });
+    return res.json(dataLakeService.redactLakeForActor(dataLake, ctx, grants));
   })
   // PUT /api/data-lakes/:id - update a data lake (metadata only; not lifecycle)
   .put(async (req: Request, res) => {
@@ -40,17 +50,14 @@ const handler = baseApi()
     const ctx = await toAccessContext(req);
     // Gate first (org-aware, not-found-style denial) so this write path can't be used
     // to probe existence or act cross-org - consistent with the lifecycle endpoint.
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, { db: { dataLakes: dataLakeRepository } });
+    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+    });
     dataLakeService.assertLakeWritable(lake);
 
-    const updated = await dataLakeService.updateDataLake(
-      { userId: ctx.userId, isAdmin: ctx.isAdmin },
-      lake.id,
-      params,
-      {
-        db: { dataLakes: dataLakeRepository },
-      }
-    );
+    const updated = await dataLakeService.updateDataLake(ctx, lake.id, params, {
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+    });
 
     return res.json(updated);
   })
@@ -58,12 +65,15 @@ const handler = baseApi()
   .delete(async (req: Request, res) => {
     const { id } = req.query as { id: string };
     const ctx = await toAccessContext(req);
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, { db: { dataLakes: dataLakeRepository } });
+    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+    });
     dataLakeService.assertLakeWritable(lake);
 
-    const archived = await dataLakeService.archiveDataLake({ userId: ctx.userId, isAdmin: ctx.isAdmin }, lake.id, {
+    const archived = await dataLakeService.archiveDataLake(ctx, lake.id, {
       db: {
         dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
         batches: dataLakeBatchRepository,
         fabFiles: fabFileRepository,
       },

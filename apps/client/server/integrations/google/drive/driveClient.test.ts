@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { drive_v3 } from 'googleapis';
-import { listFolderChildren, isFolder, isValidDriveFolderId, FOLDER_MIME_TYPE } from './driveClient';
+import { listFolderChildren, getFolderAccess, isFolder, isValidDriveFolderId, FOLDER_MIME_TYPE } from './driveClient';
 
 /**
  * Mocks just the `files.list` surface listFolderChildren uses, returning a queue of pages so
@@ -71,6 +71,43 @@ describe('isValidDriveFolderId', () => {
     expect(isValidDriveFolderId('has space')).toBe(false);
     expect(isValidDriveFolderId('')).toBe(false);
     expect(isValidDriveFolderId(undefined)).toBe(false);
+  });
+});
+
+describe('getFolderAccess', () => {
+  const driveWithGet = (impl: () => unknown) => ({ files: { get: vi.fn(impl) } }) as unknown as drive_v3.Drive;
+
+  it('reports a readable folder the caller can see', async () => {
+    const drive = driveWithGet(async () => ({
+      data: { id: 'F', mimeType: FOLDER_MIME_TYPE, capabilities: { canDownload: true } },
+    }));
+    expect(await getFolderAccess(drive, 'FOLDER_X')).toEqual({ exists: true, isFolder: true, canRead: true });
+  });
+
+  it('treats a Drive error (404 for an inaccessible folder) as not-exists, failing closed', async () => {
+    const drive = driveWithGet(async () => {
+      throw new Error('File not found');
+    });
+    expect(await getFolderAccess(drive, 'FOLDER_X')).toEqual({ exists: false, isFolder: false, canRead: false });
+  });
+
+  it('flags a readable id that is a file, not a folder', async () => {
+    const drive = driveWithGet(async () => ({ data: { id: 'F', mimeType: 'text/plain' } }));
+    expect(await getFolderAccess(drive, 'FOLDER_X')).toMatchObject({ exists: true, isFolder: false });
+  });
+
+  it('denies read only on an explicit canDownload:false', async () => {
+    const drive = driveWithGet(async () => ({
+      data: { id: 'F', mimeType: FOLDER_MIME_TYPE, capabilities: { canDownload: false } },
+    }));
+    expect(await getFolderAccess(drive, 'FOLDER_X')).toMatchObject({ canRead: false });
+  });
+
+  it('never issues a query for an invalid id', async () => {
+    const get = vi.fn();
+    const drive = { files: { get } } as unknown as drive_v3.Drive;
+    expect(await getFolderAccess(drive, "x' in parents")).toEqual({ exists: false, isFolder: false, canRead: false });
+    expect(get).not.toHaveBeenCalled();
   });
 });
 

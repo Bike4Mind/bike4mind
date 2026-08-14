@@ -96,15 +96,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(asyn
       if (!billingOrg) throw new BadRequestError('Billing organization not found');
     }
 
-    // Org-billed: enforce the per-member cap before touching the shared pool,
-    // mirroring deductCreditsWithOrgSupport (which re-checks it at settlement).
-    if (billingOrg?.maxCreditsPerMember != null) {
-      const usedCredits = billingOrg.userDetails?.find(member => member.id === userId)?.usedCredits ?? 0;
-      if (usedCredits + requiredCredits > billingOrg.maxCreditsPerMember) {
-        throw insufficientCreditsError(
-          `Your organization member credit limit has been reached for sound generation. Contact your organization administrator.`
-        );
-      }
+    // Org-billed: enforce the per-member cap before touching the shared pool. This is an
+    // independent pre-flight - the settlement write (deductCreditsWithOrgSupport) does NOT
+    // re-check the cap, so this path is the only enforcement point for media generation.
+    if (billingOrg && creditService.isMemberCreditCapExceeded(billingOrg, userId, requiredCredits)) {
+      throw insufficientCreditsError(
+        `Your organization member credit limit has been reached for sound generation. Contact your organization administrator.`
+      );
     }
 
     // Reserve the deterministic cost BEFORE incurring any provider cost: the

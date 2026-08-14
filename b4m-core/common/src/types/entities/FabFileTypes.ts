@@ -90,6 +90,36 @@ export interface IFabFileVersion {
 
 export interface IFabFileChunkDocument extends IFabFileChunk, IMongoDocument {}
 
+/** One member lake whose required chunk policy a file's current chunks do not satisfy (#1662). */
+export interface FabFileChunkPolicyConflictLake {
+  /** DB lake id when known; absent for a static-registry lake (which carries no requirement). */
+  lakeId?: string;
+  /** The lake's meta-tag ("datalake:<slug>"), always present for attribution. */
+  datalakeTag: string;
+  name: string;
+  /** The raw target the lake requires (operator-set), for display. */
+  requiredTarget: number;
+  /** That required target after the model-window clamp - what the conflict is actually decided on. */
+  effectiveRequiredTarget: number;
+}
+
+/**
+ * Records that a file belongs to one or more data lakes whose REQUIRED chunk policy its current
+ * chunks do not satisfy (#1662). Chunk policy is resolved at file-OWNER altitude; a lake is a
+ * CONSTRAINT, not an override, so a mismatch is reported here (and logged/pushed) rather than
+ * silently re-chunking - which would rewrite chunks for non-members and oscillate for a file tagged
+ * into two lakes whose requirements disagree.
+ */
+export interface FabFileChunkPolicyConflict {
+  /** The file's effective chunk target (TOKENS, post model-window clamp) its chunks were built with. */
+  effectiveTarget: number;
+  /** The embedding model both effective targets were computed against. */
+  embeddingModel: string;
+  /** Member lakes whose required policy this file's chunks do not satisfy. */
+  lakes: FabFileChunkPolicyConflictLake[];
+  detectedAt: Date;
+}
+
 export interface IFabFile {
   userId: string;
   fileName: string;
@@ -151,6 +181,19 @@ export interface IFabFile {
   isChunking?: boolean;
   /** Whether this FabFile has been chunked */
   chunked?: boolean;
+  /**
+   * The effective chunk passage target (TOKENS, post model-window clamp) this file's CURRENT chunks
+   * were produced with (#1662). Recorded by the chunk handler so a later lake-membership change can
+   * check a lake's required policy against the file WITHOUT re-chunking. Absent on files chunked
+   * before this landed.
+   */
+  chunkedPassageTokenTarget?: number;
+  /**
+   * Set when this file belongs to data lakes whose required chunk policy its current chunks do not
+   * satisfy (#1662); `null`/absent means no conflict. A report, not a failure: the file stays
+   * chunked at its owner-altitude policy. Cleared when a re-chunk or membership change resolves it.
+   */
+  chunkPolicyConflict?: FabFileChunkPolicyConflict | null;
 
   /** Whether this FabFile is currently being vectorized. */
   isVectorizing?: boolean;
@@ -401,6 +444,17 @@ export interface DataLakeMembershipScope {
 export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   shareable: IShareableStaticMethods<IFabFileDocument>;
   getAccessibleFiles: (fabFileIds: string[], scope: Record<string, unknown>) => Promise<IFabFileDocument[]>;
+
+  /**
+   * Persist the chunk-policy outcome for a file (#1662): the effective target its current chunks
+   * were built with, plus the cross-lake conflict report (`null` clears a now-resolved conflict).
+   * One atomic $set so the recorded target and the conflict decided from it can never disagree.
+   */
+  setChunkPolicyConflict(
+    fabFileId: string,
+    chunkedPassageTokenTarget: number,
+    conflict: FabFileChunkPolicyConflict | null
+  ): Promise<void>;
 
   /**
    * Find all files for a user.
@@ -784,8 +838,13 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Existence-only probe, unbounded by any stamp (unlike findArchivedByDataLakeTag) - a caller
    * deciding whether to claim a fresh stamp needs to know if ANY member is already archived,
    * stamped or not.
+   *
+   * EXCLUSIVE means the row carries no OTHER lake's membership meta-tag: a co-tagged row is
+   * whichever co-owning lake's stamp is on it, not this lake's un-restorable orphan, so counting
+   * it here would leave this lake permanently unstamped and its own later unarchive unbounded.
+   * Says nothing about a prefix-ARM collision, which carries no lake attribution at all (#1729).
    */
-  hasArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<boolean>;
+  hasArchivedMemberExclusiveToDataLakeTag(scope: DataLakeMembershipScope): Promise<boolean>;
   /** Soft-deleted member files stamped `stampedAt` - used by the deleted->active restore dedup pass. */
   findDeletedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]>;
   /**

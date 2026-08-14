@@ -15,6 +15,22 @@ const baseLake = (overrides: Partial<IDataLake> & Pick<IDataLake, 'slug'>): Omit
     ...overrides,
   }) as Omit<IDataLake, 'id'>;
 
+describe('DataLakeRepository - auditQueryTextEnabled', () => {
+  setupMongoTest();
+
+  it('defaults to false on a lake created without it', async () => {
+    // A governance flag defaulting to true would silently start logging every query for every
+    // lake created before this ticket's opt-in existed - the worst possible failure mode here.
+    const created = await dataLakeRepository.create(baseLake({ slug: 'no-audit-opt-in' }));
+    expect(created.auditQueryTextEnabled).toBe(false);
+  });
+
+  it('persists an explicit true', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'audit-opt-in', auditQueryTextEnabled: true }));
+    expect(created.auditQueryTextEnabled).toBe(true);
+  });
+});
+
 describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
   setupMongoTest();
 
@@ -84,15 +100,15 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
     await dataLakeRepository.create(baseLake({ slug: 'shared', requiredUserTag: 'Opti' })); // org-less, gated (curated-style)
 
     // Org-A member holding the tag: gets the gateless org lake (org IS its grant) + the cross-org gated lake.
-    const inOrgWithTag = await dataLakeRepository.findActiveByUserTagsAndEntitlements(['Opti'], [], 'orgA', 'u1');
+    const inOrgWithTag = await dataLakeRepository.findActiveByUserTagsAndEntitlements(['Opti'], [], ['orgA'], 'u1');
     expect(inOrgWithTag.map(l => l.slug).sort()).toEqual(['acme', 'shared']);
 
     // Org-A member WITHOUT the tag: still gets the gateless org lake (org membership), not the gated one.
-    const inOrgNoTag = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], 'orgA', 'u1');
+    const inOrgNoTag = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgA'], 'u1');
     expect(inOrgNoTag.map(l => l.slug)).toEqual(['acme']);
 
     // Org-B member with the tag: gets the cross-org gated lake, NOT org-A's lake.
-    const orgBWithTag = await dataLakeRepository.findActiveByUserTagsAndEntitlements(['Opti'], [], 'orgB', 'u2');
+    const orgBWithTag = await dataLakeRepository.findActiveByUserTagsAndEntitlements(['Opti'], [], ['orgB'], 'u2');
     expect(orgBWithTag.map(l => l.slug)).toEqual(['shared']);
   });
 
@@ -100,12 +116,12 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
     await dataLakeRepository.create(baseLake({ slug: 'gated', organizationId: 'orgA', requiredUserTag: 'team' }));
 
     // Right org, missing tag -> excluded.
-    expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], 'orgA')).toEqual([]);
+    expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgA'])).toEqual([]);
     // Right org + tag -> included.
-    const ok = await dataLakeRepository.findActiveByUserTagsAndEntitlements(['team'], [], 'orgA');
+    const ok = await dataLakeRepository.findActiveByUserTagsAndEntitlements(['team'], [], ['orgA']);
     expect(ok.map(l => l.slug)).toEqual(['gated']);
     // Wrong org even with the tag -> excluded (org is not a flat OR with the tag).
-    expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements(['team'], [], 'orgB')).toEqual([]);
+    expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements(['team'], [], ['orgB'])).toEqual([]);
   });
 
   it('Public: an isPublic lake is retrievable by any user, cross-org, without owner/tag/key', async () => {
@@ -113,7 +129,7 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
     await dataLakeRepository.create(baseLake({ slug: 'personal', createdByUserId: 'alice' })); // private control
 
     // A stranger in a different org retrieves the public lake but NOT the private one.
-    const stranger = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], 'orgB', 'bob');
+    const stranger = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgB'], 'bob');
     expect(stranger.map(l => l.slug)).toEqual(['pub']);
     // A tag/key-less stranger with no org still gets it.
     const orgless = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], undefined, 'bob');
@@ -124,10 +140,21 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
     await dataLakeRepository.create(baseLake({ slug: 'pubgated', isPublic: true, requiredEntitlement: 'product:pro' }));
 
     // No key -> excluded even though isPublic is set (the gate holds).
-    expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], 'orgB', 'bob')).toEqual([]);
+    expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['orgB'], 'bob')).toEqual([]);
     // Key held -> retrievable cross-org (public bypasses the org prerequisite).
-    const withKey = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], ['product:pro'], 'orgB', 'bob');
+    const withKey = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], ['product:pro'], ['orgB'], 'bob');
     expect(withKey.map(l => l.slug)).toEqual(['pubgated']);
+  });
+
+  it('a gateless lake resolves for EVERY org in the membership set, not just the first', async () => {
+    await dataLakeRepository.create(baseLake({ slug: 'in-a', organizationId: 'org-a' }));
+    await dataLakeRepository.create(baseLake({ slug: 'in-b', organizationId: 'org-b' }));
+
+    const bothOrgs = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], ['org-a', 'org-b']);
+    expect(bothOrgs.map(l => l.slug).sort()).toEqual(['in-a', 'in-b']);
+
+    // An empty membership set never widens access - neither org lake resolves.
+    expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], [])).toEqual([]);
   });
 
   it('owner bypass reaches a GATED lake the creator does not personally satisfy', async () => {
@@ -160,13 +187,11 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
 describe('DataLakeRepository.findAccessible — Private-by-default (HTTP/management path)', () => {
   setupMongoTest();
 
-  const ctx = (
-    over: Partial<{ userId: string; isAdmin: boolean; userTags: string[]; organizationId?: string }> = {}
-  ) => ({
+  const ctx = (over: Partial<AccessContext> = {}): AccessContext => ({
     userId: 'someone',
     isAdmin: false,
-    userTags: [] as string[],
-    organizationId: undefined as string | undefined,
+    userTags: [],
+    organizationIds: [],
     ...over,
   });
 
@@ -181,20 +206,46 @@ describe('DataLakeRepository.findAccessible — Private-by-default (HTTP/managem
     ]);
   });
 
+  it('the explicit-grant arm surfaces a lake the caller holds a grant on, even a private one they did not create', async () => {
+    // A transferred/delegated lake: alice created it, but bob now holds an owner grant. It is a
+    // private (org-less, gateless) lake, so bob reaches it ONLY via the grant arm (#1668).
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'transferred', createdByUserId: 'alice' }));
+
+    // Without the grant id, bob (a stranger) sees nothing.
+    expect(await dataLakeRepository.findAccessible(ctx({ userId: 'bob' }))).toEqual([]);
+    // With bob's granted lake id threaded in, the private lake surfaces for him.
+    expect(
+      (await dataLakeRepository.findAccessible(ctx({ userId: 'bob' }), { grantedLakeIds: [lake.id] })).map(l => l.slug)
+    ).toEqual(['transferred']);
+  });
+
   it('a gateless ORG lake is visible to org members; a tag lake to tag holders; cross-org/non-holders excluded', async () => {
     await dataLakeRepository.create(baseLake({ slug: 'acme', organizationId: 'orgA' }));
     await dataLakeRepository.create(baseLake({ slug: 'shared', requiredUserTag: 'Opti' }));
 
     // Org-A member (no tag): sees the org lake, not the gated one, not anyone's private lake.
     expect(
-      (await dataLakeRepository.findAccessible(ctx({ userId: 'u1', organizationId: 'orgA' }))).map(l => l.slug)
+      (await dataLakeRepository.findAccessible(ctx({ userId: 'u1', organizationIds: ['orgA'] }))).map(l => l.slug)
     ).toEqual(['acme']);
     // Org-B member holding the tag: the cross-org gated lake only - never org-A's lake.
     expect(
-      (await dataLakeRepository.findAccessible(ctx({ userId: 'u2', organizationId: 'orgB', userTags: ['Opti'] }))).map(
-        l => l.slug
-      )
+      (
+        await dataLakeRepository.findAccessible(ctx({ userId: 'u2', organizationIds: ['orgB'], userTags: ['Opti'] }))
+      ).map(l => l.slug)
     ).toEqual(['shared']);
+  });
+
+  it('lists org lakes from EVERY org in the membership set', async () => {
+    await dataLakeRepository.create(baseLake({ slug: 'a-lake', organizationId: 'org-a' }));
+    await dataLakeRepository.create(baseLake({ slug: 'b-lake', organizationId: 'org-b' }));
+    await dataLakeRepository.create(baseLake({ slug: 'c-lake', organizationId: 'org-c' }));
+
+    const lakes = await dataLakeRepository.findAccessible(ctx({ organizationIds: ['org-a', 'org-b'] }));
+
+    const names = lakes.map(l => l.slug).sort();
+    expect(names).toContain('a-lake');
+    expect(names).toContain('b-lake');
+    expect(names).not.toContain('c-lake');
   });
 
   it('Public: an isPublic lake is listed for a stranger in another org; a private one is not', async () => {
@@ -202,7 +253,7 @@ describe('DataLakeRepository.findAccessible — Private-by-default (HTTP/managem
     await dataLakeRepository.create(baseLake({ slug: 'personal', createdByUserId: 'alice' }));
 
     // A non-owner in a different org gets the public lake but never the org-less private one.
-    const res = await dataLakeRepository.findAccessible(ctx({ userId: 'bob', organizationId: 'orgB' }));
+    const res = await dataLakeRepository.findAccessible(ctx({ userId: 'bob', organizationIds: ['orgB'] }));
     expect(res.map(l => l.slug)).toEqual(['pub']);
   });
 
@@ -238,7 +289,7 @@ describe('DataLakeRepository.findAccessible — management gate (entitlement-awa
     userId: 'someone-else',
     isAdmin: false,
     userTags: [],
-    organizationId: undefined,
+    organizationIds: [],
     ...overrides,
   });
 
@@ -291,13 +342,13 @@ describe('DataLakeRepository.findAccessible — management gate (entitlement-awa
     );
     // Right org + key -> included.
     expect(
-      (await dataLakeRepository.findAccessible(ctx({ organizationId: 'orgA', entitlementKeys: ['product:pro'] }))).map(
-        l => l.slug
-      )
+      (
+        await dataLakeRepository.findAccessible(ctx({ organizationIds: ['orgA'], entitlementKeys: ['product:pro'] }))
+      ).map(l => l.slug)
     ).toEqual(['orgent']);
     // Wrong org even with the key -> excluded (org is not a flat OR with the requirement).
     expect(
-      await dataLakeRepository.findAccessible(ctx({ organizationId: 'orgB', entitlementKeys: ['product:pro'] }))
+      await dataLakeRepository.findAccessible(ctx({ organizationIds: ['orgB'], entitlementKeys: ['product:pro'] }))
     ).toEqual([]);
   });
 
@@ -519,6 +570,35 @@ describe('DataLakeRepository — slug is unique per org', () => {
         })
       )
     ).resolves.toBeDefined();
+  });
+});
+
+describe('DataLakeRepository.findBySlug', () => {
+  setupMongoTest();
+
+  it('resolves the lexicographically-lowest organizationId when two own orgs share a slug (N5)', async () => {
+    // Both lakes are equally "own-org" for this caller; the sort makes the tie-break
+    // deterministic rather than document-order-dependent. Input order is deliberately
+    // reversed from the expected winner so a naive "first in organizationIds" bug would fail.
+    await dataLakeRepository.create(
+      baseLake({
+        slug: 'shared-slug',
+        organizationId: 'org-a',
+        createdByUserId: 'ownerA',
+        datalakeTag: 'datalake:org-a:shared-slug',
+      })
+    );
+    await dataLakeRepository.create(
+      baseLake({
+        slug: 'shared-slug',
+        organizationId: 'org-b',
+        createdByUserId: 'ownerB',
+        datalakeTag: 'datalake:org-b:shared-slug',
+      })
+    );
+
+    const resolved = await dataLakeRepository.findBySlug('shared-slug', ['org-b', 'org-a']);
+    expect(resolved?.organizationId).toBe('org-a');
   });
 });
 
@@ -1466,5 +1546,115 @@ describe('DataLakeRepository archive stamp', () => {
     await dataLakeRepository.update({ id: created.id, filesArchivedAt: null });
 
     expect((await dataLakeRepository.claimFilesArchivedAt(created.id, second))?.getTime()).toBe(second.getTime());
+  });
+});
+
+describe('tryAddEmbeddingSpend (lake and batch spend meters)', () => {
+  setupMongoTest();
+
+  const USD = 1_000_000; // micro-USD per USD
+
+  it('reserves against a lake until the budget is exhausted, all-or-nothing', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'spend-lake' }));
+
+    expect(await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 3 * USD, 5 * USD)).toBe(true);
+    expect(await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 2 * USD, 5 * USD)).toBe(true);
+    // Budget now exactly consumed - the next reservation is denied and nothing is applied.
+    expect(await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 1, 5 * USD)).toBe(false);
+
+    const after = await dataLakeRepository.findById(lake.id);
+    expect(after?.embeddingSpendMicroUsd).toBe(5 * USD);
+  });
+
+  it('denies on limit 0 - the operator STOP value - even for a zero-cost call', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'stopped-lake' }));
+    expect(await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 0, 0)).toBe(false);
+    expect(await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 1, 0)).toBe(false);
+  });
+
+  it('treats amount <= 0 as a no-op success when the budget is open (fully-cached run)', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'cached-lake' }));
+    expect(await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 0, 5 * USD)).toBe(true);
+    expect((await dataLakeRepository.findById(lake.id))?.embeddingSpendMicroUsd ?? 0).toBe(0);
+  });
+
+  it('meters a legacy lake document that predates the spend field', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'legacy-lake' }));
+    await DataLakeModel.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(lake.id) },
+      { $unset: { embeddingSpendMicroUsd: '' } }
+    );
+
+    expect(await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 2 * USD, 5 * USD)).toBe(true);
+    expect((await dataLakeRepository.findById(lake.id))?.embeddingSpendMicroUsd).toBe(2 * USD);
+    // A first reservation larger than the whole budget must not seed past the limit.
+    await DataLakeModel.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(lake.id) },
+      { $unset: { embeddingSpendMicroUsd: '' } }
+    );
+    expect(await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 6 * USD, 5 * USD)).toBe(false);
+  });
+
+  it('never jointly breaches the budget under concurrent reservations', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'race-lake' }));
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => dataLakeRepository.tryAddEmbeddingSpend(lake.id, 30, 100))
+    );
+    expect(results.filter(Boolean).length).toBe(3); // 4 x 30 would breach 100
+    expect((await dataLakeRepository.findById(lake.id))?.embeddingSpendMicroUsd).toBe(90);
+  });
+
+  it('meters a batch with the same contract, even after the batch went terminal', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1' });
+
+    expect(await dataLakeBatchRepository.tryAddEmbeddingSpend(batch.id, 40, 100)).toBe(true);
+
+    // Unlike incrementCounters, spend metering must survive a reconciler-forced terminal
+    // status: the money is about to be spent regardless, and losing it would undercount.
+    await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed_with_errors', 'reconciler');
+    expect(await dataLakeBatchRepository.tryAddEmbeddingSpend(batch.id, 40, 100)).toBe(true);
+    expect(await dataLakeBatchRepository.tryAddEmbeddingSpend(batch.id, 40, 100)).toBe(false);
+
+    const after = await dataLakeBatchRepository.findById(batch.id);
+    expect(after?.embeddingSpendMicroUsd).toBe(80);
+  });
+});
+
+describe('releaseEmbeddingSpend / resetEmbeddingSpend (provider-failure compensation)', () => {
+  setupMongoTest();
+
+  it('returns exactly one reservation to a lake meter', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'release-lake' }));
+    await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 70, 100);
+
+    expect(await dataLakeRepository.releaseEmbeddingSpend(lake.id, 30)).toBe(true);
+    expect((await dataLakeRepository.findById(lake.id))?.embeddingSpendMicroUsd).toBe(40);
+  });
+
+  it('refuses a release larger than the meter instead of going negative (raced admin reset)', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'race-release-lake' }));
+    await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 20, 100);
+
+    expect(await dataLakeRepository.releaseEmbeddingSpend(lake.id, 30)).toBe(false);
+    expect((await dataLakeRepository.findById(lake.id))?.embeddingSpendMicroUsd).toBe(20);
+  });
+
+  it('releases a batch reservation with the same contract', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1' });
+    await dataLakeBatchRepository.tryAddEmbeddingSpend(batch.id, 70, 100);
+
+    expect(await dataLakeBatchRepository.releaseEmbeddingSpend(batch.id, 70)).toBe(true);
+    expect((await dataLakeBatchRepository.findById(batch.id))?.embeddingSpendMicroUsd).toBe(0);
+    // The freed budget is reservable again - the retry-amplification case this exists for.
+    expect(await dataLakeBatchRepository.tryAddEmbeddingSpend(batch.id, 100, 100)).toBe(true);
+  });
+
+  it('admin reset zeroes a poisoned lake meter', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'reset-lake' }));
+    await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 100, 100);
+    expect(await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 1, 100)).toBe(false); // stuck
+
+    expect(await dataLakeRepository.resetEmbeddingSpend(lake.id)).toBe(true);
+    expect(await dataLakeRepository.tryAddEmbeddingSpend(lake.id, 1, 100)).toBe(true); // unstuck
   });
 });

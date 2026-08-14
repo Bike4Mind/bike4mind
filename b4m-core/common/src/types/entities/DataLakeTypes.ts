@@ -26,7 +26,22 @@ export interface AccessContext {
   userId: string;
   isAdmin: boolean;
   userTags: string[];
-  organizationId?: string;
+  /**
+   * Authoritative org membership (normalized string ids), resolved at context construction
+   * from the organization documents' owner + users[] ACL (findMembershipOrgIds) - never from
+   * user.organizationId, which is the "currently selected org" display preference and must
+   * not be an authorization input (#1674). Empty array = member of no organization.
+   */
+  organizationIds: string[];
+  /**
+   * Orgs the caller holds admin RIGHTS in (billing owner / manager / appointed admin), resolved
+   * app-side via `organizationRepository.findIdsWithAdminRights` and injected here (same pre-resolved
+   * seam as `entitlementKeys`; core never imports the Organization model). An org admin may MANAGE any
+   * lake scoped to one of these orgs - the org-manageable rung in `canManageLake`. Distinct from the
+   * singular `organizationId` above, which is the caller's selected-org display preference, never an
+   * authorization input on its own. Optional - absent -> no org-admin rung (back-compat).
+   */
+  administeredOrgIds?: string[];
   /**
    * Caller's resolved entitlement keys (subscription- + tag-derived), resolved app-side
    * and injected here - core never imports the resolver or the Subscription model (same
@@ -35,7 +50,7 @@ export interface AccessContext {
    * Optional - absent -> tag-only matching (back-compat for any caller not threading it).
    *
    * Intentionally distinct from `DataLakeAccessContext` (retrieval): this type also carries
-   * `userId`/`isAdmin`/`organizationId` for the owner/org bypass that retrieval doesn't need.
+   * `userId`/`isAdmin`/`organizationIds` for the owner/org bypass that retrieval doesn't need.
    */
   entitlementKeys?: string[];
 }
@@ -87,6 +102,17 @@ export interface IDataLake {
    * LAKE_FIELD_VISIBILITY): a reader gets its EFFECT, never reads the setting.
    */
   groundingMode?: DataLakeGroundingMode;
+  /**
+   * The chunk passage target in TOKENS this lake REQUIRES of its member files (#1662). This is a
+   * CONSTRAINT, not an override: chunk policy is resolved at file-OWNER altitude (see the scoped
+   * `DefaultChunkSize` setting), because chunks are keyed per FabFile and shared by every consumer
+   * of that file. A file whose effective chunk target does not equal this - including a file tagged
+   * into two lakes whose requirements disagree - is REPORTED as a conflict (see IFabFile.
+   * chunkPolicyConflict), never silently re-chunked to satisfy one lake at another's or a
+   * non-member's expense. Absent/`null` = the lake imposes no chunk requirement (the common case);
+   * `null` is the explicit clear sentinel written by updateDataLake, undefined is never-set.
+   */
+  requiredPassageTokenTarget?: number | null;
   /** Tag prefix for all files in this data lake, must end with ":" (e.g. "acme:") */
   fileTagPrefix: string;
   /** Auto-computed meta-tag: "datalake:<slug>" */
@@ -120,6 +146,18 @@ export interface IDataLake {
    * `LakeVisibility`: private (no org, not public) | organization (org-scoped) | public.
    */
   isPublic?: boolean;
+  /**
+   * Per-lake opt-in (default false) to logging the natural-language QUERY TEXT behind a
+   * retrieval, alongside the always-on access event (see LakeAccessEventModel). Off by default
+   * because query text is simultaneously the most useful field for a customer and the most
+   * sensitive - without this gate the audit log would become a second copy of the corpus plus a
+   * record of everyone's questions. Read as the caller's INTENT: the actual write only happens
+   * when EVERY lake a retrieval call resolved has opted in (unanimity), never partially. Exposed
+   * to a reader (see LAKE_FIELD_VISIBILITY) so the people whose questions may be logged can see
+   * that the lake records them. Flipping this off does not retro-delete already-written query
+   * text - it expires on its own (shorter) retention clock.
+   */
+  auditQueryTextEnabled?: boolean;
   /** Whether this data lake is active or archived */
   status: DataLakeStatus;
   /** Cached file count (updated on upload/delete) */
@@ -132,6 +170,13 @@ export interface IDataLake {
    * fileCount/totalSizeBytes by recomputeLakeStats; never incremented in place.
    */
   totalChunkedChars?: number;
+  /**
+   * Lifetime embedding spend attributed to this lake, in integer micro-USD (1e-6 USD - a
+   * single chunk can cost well under a cent). Reserved atomically BEFORE each provider
+   * embedding call via tryAddEmbeddingSpend, so it can slightly overcount on a crash between
+   * reserve and call, never undercount. Enforces the dataLakeEmbeddingBudgetPerLakeUsd lever.
+   */
+  embeddingSpendMicroUsd?: number;
   /** Last time files were synced/uploaded to this data lake */
   lastSyncAt?: Date;
   /**
@@ -198,11 +243,12 @@ export interface IDataLakeDocument extends IDataLake, IMongoDocument {}
 
 export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> {
   /**
-   * Resolve a lake by slug. Slug is unique only per scope (organizationId), so pass
-   * the caller's org to disambiguate: the caller's own-org lake is preferred, falling
-   * back to an org-less lake with that slug. Without an org, only org-less lakes match.
+   * Resolve a lake by slug. Slug is unique only per scope (organizationId), so pass the
+   * caller's membership set to disambiguate: a lake in one of the caller's own orgs is
+   * preferred, falling back to an org-less lake with that slug. Without a set, only
+   * org-less lakes match.
    */
-  findBySlug(slug: string, organizationId?: string): Promise<IDataLakeDocument | null>;
+  findBySlug(slug: string, organizationIds?: string[]): Promise<IDataLakeDocument | null>;
   /** Resolve a lake by its globally-unique join meta-tag (`datalake:<slug>` / `datalake:<org>:<slug>`). */
   findByDatalakeTag(datalakeTag: string): Promise<IDataLakeDocument | null>;
   findActiveByUserTags(userTags: string[]): Promise<IDataLakeDocument[]>;
@@ -212,8 +258,10 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * resolved entitlement keys), or - for a gateless ORG lake - membership in its org. Plus
    * the caller's OWN lakes (owner bypass). Mirrors the HTTP path's `findAccessible`.
    *
-   * `organizationId` is the hard org prerequisite: org-less lakes stay reachable cross-org
-   * (curated opti/help); an org-scoped lake only resolves for a caller in that org.
+   * `organizationIds` is the hard org prerequisite: org-less lakes stay reachable cross-org
+   * (curated opti/help); an org-scoped lake only resolves for a caller who is a MEMBER of that
+   * org (owner + `users[]` ACL - see `IOrganizationRepository.findMembershipOrgIds`, #1674).
+   * Empty/absent never widens access - it collapses every org arm to its org-less-only form.
    *
    * `userId` is the owner bypass + the Private-by-default rule: a lake with NO org and NO
    * gate is owner-only (not world-readable). Supply it on every user-facing retrieval call;
@@ -222,7 +270,7 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   findActiveByUserTagsAndEntitlements(
     userTags: string[],
     entitlementKeys: string[],
-    organizationId?: string | null,
+    organizationIds?: string[] | null,
     userId?: string | null
   ): Promise<IDataLakeDocument[]>;
   findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]>;
@@ -234,7 +282,7 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    */
   findAccessible(
     ctx: AccessContext,
-    opts?: { statuses?: DataLakeStatus[]; includePublic?: boolean }
+    opts?: { statuses?: DataLakeStatus[]; includePublic?: boolean; grantedLakeIds?: string[] }
   ): Promise<IDataLakeDocument[]>;
   /**
    * The discover/browse catalog: active, PUBLIC, gate-less lakes for the public-browse surface,
@@ -254,6 +302,25 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     id: string,
     stats: { fileCount: number; totalSizeBytes: number; totalChunkedChars: number }
   ): Promise<IDataLakeDocument | null>;
+  /**
+   * Atomically reserve `amountMicroUsd` of embedding spend against this lake, but only if
+   * the running total stays within `limitMicroUsd`. All-or-nothing; false means the caller
+   * must NOT make the provider call. Call BEFORE spending, so a crash can only overcount.
+   * `limitMicroUsd <= 0` always denies (0 is the operator's "stop" value).
+   */
+  tryAddEmbeddingSpend(id: string, amountMicroUsd: number, limitMicroUsd: number): Promise<boolean>;
+  /**
+   * Return a reservation that never became a provider call (the call failed). Exact-inverse of
+   * ONE tryAddEmbeddingSpend grant, guarded so it cannot drive the meter negative; false means
+   * the meter was already below the amount (e.g. an admin reset raced it) and nothing changed.
+   */
+  releaseEmbeddingSpend(id: string, amountMicroUsd: number): Promise<boolean>;
+  /**
+   * Admin remedy: zero this lake's lifetime spend meter. Exists because releases are best-effort
+   * (a hard crash between reserve and release still leaks) and the levers are global - without a
+   * per-lake reset the only way to unstick a poisoned lake is a hand-written Mongo update.
+   */
+  resetEmbeddingSpend(id: string): Promise<boolean>;
   /**
    * One-way draft -> active, the transition that makes a lake reachable from `findPublicLakes`
    * and the `findActive*` retrieval arms. Guarded inside the query, so a caller holding a stale
@@ -369,6 +436,10 @@ export interface IDataLakeBatch {
   totalSizeBytes: number;
   uploadedSizeBytes: number;
 
+  /** Embedding spend metered against this run, integer micro-USD - same reserve-first
+   * contract as IDataLake.embeddingSpendMicroUsd. Enforces the per-run budget lever. */
+  embeddingSpendMicroUsd?: number;
+
   // File manifest
   files: IDataLakeBatchFile[];
 
@@ -440,6 +511,11 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    */
   claimFileStatus(batchId: string, fabFileId: string, from: BatchFileStatus[], to: BatchFileStatus): Promise<boolean>;
   incrementCounter(batchId: string, field: BatchCounterField, amount?: number): Promise<IDataLakeBatchDocument | null>;
+  /** Per-run twin of IDataLakeRepository.tryAddEmbeddingSpend - same reserve-first,
+   * all-or-nothing contract, metered against this batch's embeddingSpendMicroUsd. */
+  tryAddEmbeddingSpend(batchId: string, amountMicroUsd: number, limitMicroUsd: number): Promise<boolean>;
+  /** Per-run twin of IDataLakeRepository.releaseEmbeddingSpend - same exact-inverse contract. */
+  releaseEmbeddingSpend(batchId: string, amountMicroUsd: number): Promise<boolean>;
   /** Atomic multi-field variant of incrementCounter - use when two+ counters must land together
    * (e.g. failedFiles + processingFailedFiles), so a crash between them can't leave one applied
    * and the other not. */

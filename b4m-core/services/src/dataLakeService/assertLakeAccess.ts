@@ -1,11 +1,20 @@
-import type { AccessContext, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
+import type {
+  AccessContext,
+  IDataLakeAccessGrantRepository,
+  IDataLakeDocument,
+  IDataLakeRepository,
+} from '@bike4mind/common';
 import { DATA_LAKES, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, normalizeId } from '@bike4mind/utils';
-import { canManageLake } from './manageRule';
+import { canManageLake, type LakeGrant } from './manageRule';
 
 interface AssertLakeAccessAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug'>;
+    // Optional: when wired, a transferred/delegated owner or curator reaches the lake through the
+    // single read gate too (canAccessLake delegates to the grant-aware canManageLake). Absent ->
+    // read access falls back to createdByUserId + org/tag/public, the pre-grant behavior.
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
   };
 }
 
@@ -35,9 +44,10 @@ export function canAccessLake(
     IDataLakeDocument,
     'createdByUserId' | 'organizationId' | 'requiredUserTag' | 'requiredEntitlement' | 'isPublic'
   >,
-  ctx: AccessContext
+  ctx: AccessContext,
+  grants: readonly LakeGrant[] = []
 ): boolean {
-  if (canManageLake(lake, ctx)) return true;
+  if (canManageLake(lake, ctx, grants)) return true;
 
   const normalizedTags = ctx.userTags.map(t => t.toLowerCase());
   const normalizedKeys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
@@ -61,10 +71,12 @@ export function canAccessLake(
   if (!lakeOrgId && !lake.requiredUserTag && !lake.requiredEntitlement) return false;
 
   // Org is a hard prerequisite when the lake is org-scoped - evaluated BEFORE the
-  // tag/entitlement any-of so a holder in a different org can never pass. Normalize both
-  // sides: the ctx org id can reach here as an ObjectId or populated doc, and a raw strict
-  // compare then 404s a lake the casting Mongo collection query still returns.
-  if (lakeOrgId && lakeOrgId !== normalizeId(ctx.organizationId)) return false;
+  // tag/entitlement any-of so a non-member can never pass. Membership is the SET the
+  // context resolved from the org ACLs (#1674); the lake side still normalizes because
+  // a hydrated lake doc can carry an ObjectId.
+  // `?? []`: a runtime belt against a malformed ctx, not a widening of the declared (required)
+  // type - a missing set must deny, not throw or vacuously allow.
+  if (lakeOrgId && !(ctx.organizationIds ?? []).includes(lakeOrgId)) return false;
 
   return lakeMatchesAccess(lake, normalizedTags, normalizedKeys);
 }
@@ -114,7 +126,8 @@ function resolveFallbackLake(lakeIdOrSlug: string, ctx: AccessContext): IDataLak
   const config = DATA_LAKES.find(dl => dl.id === lakeIdOrSlug || dl.slug === lakeIdOrSlug);
   if (!config) return null;
   const configOrgId = normalizeId(config.organizationId);
-  if (configOrgId && configOrgId !== normalizeId(ctx.organizationId)) return null;
+  // `?? []`: same runtime belt as canAccessLake above - a malformed ctx must deny, not throw.
+  if (configOrgId && !(ctx.organizationIds ?? []).includes(configOrgId)) return null;
   if (!ctx.isAdmin) {
     const normalizedTags = ctx.userTags.map(t => t.toLowerCase());
     const normalizedKeys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
@@ -147,9 +160,19 @@ export const assertLakeAccess = async (
 ): Promise<IDataLakeDocument> => {
   const lake =
     (await db.dataLakes.findById(lakeIdOrSlug).catch(() => null)) ??
-    (await db.dataLakes.findBySlug(lakeIdOrSlug, ctx.organizationId));
+    (await db.dataLakes.findBySlug(lakeIdOrSlug, ctx.organizationIds));
   if (lake) {
-    if (!canAccessLake(lake, ctx)) throw new NotFoundError('Data lake not found');
+    // A persisted lake may carry grants; a fallback lake never does. Fetch only when the repo is
+    // wired, so callers that have not threaded it keep the createdByUserId + org/tag/public behavior.
+    const grants: LakeGrant[] =
+      db.dataLakeAccessGrants && !isFallbackLake(lake)
+        ? (await db.dataLakeAccessGrants.listByLake(lake.id, { activeAsOf: new Date() })).map(g => ({
+            principalType: g.principalType,
+            principalId: g.principalId,
+            role: g.role,
+          }))
+        : [];
+    if (!canAccessLake(lake, ctx, grants)) throw new NotFoundError('Data lake not found');
     return lake;
   }
   const fallback = resolveFallbackLake(lakeIdOrSlug, ctx);

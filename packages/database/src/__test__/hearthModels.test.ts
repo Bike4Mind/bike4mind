@@ -416,9 +416,9 @@ describe('Hearth models + MongoHearthStore', () => {
       });
       const bare = await hearthRepository.ensureActor(USER, 'agent', 'Claude Code (teal-lynx)');
 
-      const names = await hearthRepository.actorNamesById([labelled._id.toString(), bare._id.toString()]);
-      expect(names.get(labelled._id.toString())).toBe('erik (planning notebook)');
-      expect(names.get(bare._id.toString())).toBe('Claude Code (teal-lynx)');
+      const identities = await hearthRepository.actorIdentitiesById([labelled._id.toString(), bare._id.toString()]);
+      expect(identities.get(labelled._id.toString())).toEqual({ displayName: 'erik (planning notebook)', kind: 'human' });
+      expect(identities.get(bare._id.toString())).toEqual({ displayName: 'Claude Code (teal-lynx)', kind: 'agent' });
     });
   });
 });

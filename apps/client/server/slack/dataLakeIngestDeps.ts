@@ -1,4 +1,11 @@
-import { adminSettingsRepository, dataLakeRepository, fabFileRepository, withTransaction } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+  fabFileRepository,
+  organizationRepository,
+  withTransaction,
+} from '@bike4mind/database';
 import { User } from '@bike4mind/database/auth';
 import { FabFile } from '@bike4mind/database/content';
 import { fabFilesService } from '@bike4mind/services';
@@ -22,6 +29,7 @@ export function buildSlackLakeIngestDeps(args: {
 }): SlackLakeIngestDeps & { dataLakes: DataLakeCommandRepo } {
   return {
     dataLakes: dataLakeRepository,
+    dataLakeAccessGrants: dataLakeAccessGrantRepository,
     fabFiles: fabFileRepository,
     downloadFile: args.downloadFile,
     logger: args.logger,
@@ -43,6 +51,7 @@ export function buildSlackLakeIngestDeps(args: {
         email: actor.email,
         emailVerified: actor.emailVerified,
       }),
+    resolveMembershipOrgIds: userId => organizationRepository.findMembershipOrgIds(userId),
     createLakeFile: (userId, params) =>
       withTransaction(async () =>
         fabFilesService.createFabFile(

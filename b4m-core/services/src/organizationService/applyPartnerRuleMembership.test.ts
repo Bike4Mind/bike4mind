@@ -106,6 +106,12 @@ describe('applyPartnerRuleMembership', () => {
     // A Stripe org's ceiling is never raised out of band.
     expect(db.organizations.addMemberRaisingSeats).not.toHaveBeenCalled();
     expect(db.users.update).toHaveBeenCalledWith({ id: 'user-id', organizationId: 'org-id' });
+    // The atomic add touches only users[]; seed the credit side-table too (#1460).
+    expect(db.organizations.ensureUserDetails).toHaveBeenCalledWith('org-id', {
+      id: 'user-id',
+      email: 'test@partner.com',
+      name: 'Test User',
+    });
   });
 
   it('rejects with at-capacity (no write) when a full Stripe-billed org cannot fit the user', async () => {
@@ -134,6 +140,12 @@ describe('applyPartnerRuleMembership', () => {
 
     expect(result).toEqual({ added: false, reason: 'already-member' });
     expect(db.users.update).toHaveBeenCalledWith({ id: 'user-id', organizationId: 'org-id' });
+    // Backfill the credit side-table for the member the concurrent signup added (idempotent, #1460).
+    expect(db.organizations.ensureUserDetails).toHaveBeenCalledWith('org-id', {
+      id: 'user-id',
+      email: 'test@partner.com',
+      name: 'Test User',
+    });
   });
 
   it('refuses to add an unverified user (security gate) and writes nothing', async () => {
@@ -210,6 +222,12 @@ describe('applyPartnerRuleMembership', () => {
 
     expect(result).toEqual({ added: false, reason: 'already-member' });
     expect(db.users.update).toHaveBeenCalledWith({ id: 'user-id', organizationId: 'org-id' });
+    // Backfill the credit side-table for the member the concurrent signup added (idempotent, #1460).
+    expect(db.organizations.ensureUserDetails).toHaveBeenCalledWith('org-id', {
+      id: 'user-id',
+      email: 'test@partner.com',
+      name: 'Test User',
+    });
   });
 
   it('rejects with at-capacity (no write) when a non-Stripe org is clamped at the seat ceiling (#1424)', async () => {

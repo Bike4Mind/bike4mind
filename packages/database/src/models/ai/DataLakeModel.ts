@@ -62,6 +62,11 @@ const DataLakeSchema = new mongoose.Schema(
       enum: [...DATA_LAKE_GROUNDING_MODES],
       default: DEFAULT_DATA_LAKE_GROUNDING_MODE,
     },
+    // Chunk passage target (TOKENS) this lake REQUIRES of its member files (see
+    // IDataLake.requiredPassageTokenTarget). A constraint the chunk handler checks, NOT an override
+    // (#1662): a member file whose effective target differs is reported as a conflict, never
+    // re-chunked. No index (tiny collection, only read from a lake already in hand).
+    requiredPassageTokenTarget: { type: Number },
     fileTagPrefix: { type: String, required: true },
     datalakeTag: { type: String, required: true },
     requiredUserTag: { type: String },
@@ -82,10 +87,15 @@ const DataLakeSchema = new mongoose.Schema(
     // bypassing the org prerequisite + Private-by-default. No dedicated index (tiny collection,
     // same rationale as requiredEntitlement); the public arm in the access filters keys off it.
     isPublic: { type: Boolean, default: false },
+    // Per-lake opt-in to query-text audit logging (see IDataLake.auditQueryTextEnabled). No
+    // dedicated index - same rationale as isPublic/requiredEntitlement (tiny collection).
+    auditQueryTextEnabled: { type: Boolean, default: false },
     status: { type: String, enum: DATA_LAKE_STATUSES, default: 'draft' },
     fileCount: { type: Number, default: 0 },
     totalSizeBytes: { type: Number, default: 0 },
     totalChunkedChars: { type: Number, default: 0 },
+    // Lifetime embedding spend, integer micro-USD - see IDataLake.embeddingSpendMicroUsd.
+    embeddingSpendMicroUsd: { type: Number, default: 0 },
     lastSyncAt: { type: Date },
     // Teardown batch key (see IDataLake.filesDeletedAt): the exact stamp phase-1 delete wrote on
     // the lake's member files, matched by equality on restore. Set only through
@@ -136,17 +146,76 @@ export const DataLakeModel =
   (mongoose.models['DataLake'] as unknown as mongoose.Model<IDataLakeDocument>) ||
   mongoose.model<IDataLakeDocument>('DataLake', DataLakeSchema);
 
+/**
+ * Shared reserve-first spend meter behind both tryAddEmbeddingSpend implementations (lake and
+ * batch - the per-lake and per-run budget levers share one contract). Atomically adds
+ * `amountMicroUsd` to the document's embeddingSpendMicroUsd ONLY if the total stays within
+ * `limitMicroUsd`; all-or-nothing, so two concurrent reservations can never jointly breach the
+ * budget. The $or arm covers documents created before the field existed (an absent field fails
+ * plain comparison queries in Mongo, which would permanently deny legacy lakes/batches).
+ *
+ * amount <= 0 is a no-op success (a fully-cached run spends nothing); limit <= 0 always denies
+ * BEFORE checking amount - 0 is the operator's "stop" value, and it must win even for a
+ * zero-cost call so "stopped" reads unambiguously as "no provider calls at all".
+ */
+/**
+ * Exact-inverse of a reservation made by tryAddSpendWithinLimit, for the caller that reserved
+ * and then watched the provider call fail: the money was never spent, so the meter must give it
+ * back or ordinary provider errors permanently poison a lifetime budget (x3 under SQS retries).
+ * Guarded on `spend >= amount` so a concurrent admin reset can never drive the meter negative;
+ * an unmatched release is logged by the caller and skipped - the meter is already lower than
+ * the reservation being returned.
+ */
+async function releaseSpend(
+  model: mongoose.Model<IDataLakeDocument> | mongoose.Model<IDataLakeBatchDocument>,
+  id: string,
+  amountMicroUsd: number
+): Promise<boolean> {
+  if (amountMicroUsd <= 0) return true;
+  const res = await (model as mongoose.Model<IDataLakeDocument>).updateOne(
+    { _id: id, embeddingSpendMicroUsd: { $gte: amountMicroUsd } },
+    { $inc: { embeddingSpendMicroUsd: -amountMicroUsd } }
+  );
+  return res.modifiedCount === 1;
+}
+
+async function tryAddSpendWithinLimit(
+  model: mongoose.Model<IDataLakeDocument> | mongoose.Model<IDataLakeBatchDocument>,
+  id: string,
+  amountMicroUsd: number,
+  limitMicroUsd: number
+): Promise<boolean> {
+  if (limitMicroUsd <= 0) return false;
+  if (amountMicroUsd <= 0) return true;
+  // Denied before the query: the $exists arm below would otherwise let a legacy document
+  // seed a first reservation larger than the whole budget.
+  if (amountMicroUsd > limitMicroUsd) return false;
+  const res = await (model as mongoose.Model<IDataLakeDocument>).updateOne(
+    {
+      _id: id,
+      $or: [
+        { embeddingSpendMicroUsd: { $exists: false } },
+        { embeddingSpendMicroUsd: { $lte: limitMicroUsd - amountMicroUsd } },
+      ],
+    },
+    { $inc: { embeddingSpendMicroUsd: amountMicroUsd } }
+  );
+  return res.modifiedCount === 1;
+}
+
 class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements IDataLakeRepository {
   constructor(private dataLakeModel: mongoose.Model<IDataLakeDocument>) {
     super(dataLakeModel);
   }
 
-  async findBySlug(slug: string, organizationId?: string): Promise<IDataLakeDocument | null> {
-    // Slug is unique per (organizationId, slug). Prefer the caller's own-org lake,
-    // then fall back to an org-less lake with the same slug - deterministic, so the
-    // 404 outcome reflects the caller's scope, not arbitrary document order.
-    if (organizationId) {
-      const own = await this.dataLakeModel.findOne({ slug, organizationId });
+  async findBySlug(slug: string, organizationIds?: string[]): Promise<IDataLakeDocument | null> {
+    // Slug is unique per (organizationId, slug). Prefer a lake in one of the caller's own
+    // orgs, then fall back to an org-less lake with the same slug. Sorted so two own-org
+    // matches resolve deterministically rather than by document order.
+    if (organizationIds && organizationIds.length > 0) {
+      const own = await this.dataLakeModel
+        .findOne({ slug, organizationId: { $in: organizationIds } })
+        .sort({ organizationId: 1 });
       if (own) return own.toJSON() as IDataLakeDocument;
     }
     const orgless = await this.dataLakeModel.findOne({ slug, organizationId: { $in: [null, ''] } });
@@ -189,7 +258,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
   async findActiveByUserTagsAndEntitlements(
     userTags: string[],
     entitlementKeys: string[],
-    organizationId?: string | null,
+    organizationIds?: string[] | null,
     userId?: string | null
   ): Promise<IDataLakeDocument[]> {
     const normalizedTags = userTags.map(t => t.toLowerCase());
@@ -197,19 +266,23 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // Use the ONE canonical normalization rule (shared with the in-memory filter + write
     // path) so stored values and query keys can't drift.
     const keys = (entitlementKeys ?? []).map(normalizeEntitlementKey);
+    // Empty/absent never widens access: both org arms below collapse to their org-less-only
+    // form when the caller belongs to no org (#1674).
+    const memberOrgIds = organizationIds ?? [];
 
     // Non-owner grants, each evaluated under the org prerequisite below. A non-owner reaches
     // a lake only when it grants them something - a held tag, a held entitlement, or (for a
     // gateless ORG lake) membership in its org. A gateless, org-less lake grants nothing here,
     // so it resolves ONLY via the owner bypass -> Private-by-default, not world-readable.
     const nonOwnerArms: Record<string, unknown>[] = [{ requiredUserTag: { $in: allTags } }];
-    if (organizationId) {
-      // Gateless lake (no tag, no entitlement) scoped to the caller's org -> the org is its grant.
+    if (memberOrgIds.length > 0) {
+      // Gateless lake (no tag, no entitlement) scoped to one of the caller's orgs -> membership
+      // is its grant.
       nonOwnerArms.push({
         $and: [
           { $or: [{ requiredUserTag: null }, { requiredUserTag: '' }] },
           { $or: [{ requiredEntitlement: null }, { requiredEntitlement: '' }] },
-          { organizationId },
+          { organizationId: { $in: memberOrgIds } },
         ],
       });
     }
@@ -219,11 +292,12 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       nonOwnerArms.push({ requiredEntitlement: { $in: keys } });
     }
 
-    // Org prerequisite (hard): org-less lakes OR lakes in the caller's org. null/'' form for
-    // DocumentDB safety. Combined with the grants via $and - two top-level $or keys collide.
-    const orgConstraint = organizationId
-      ? { $or: [{ organizationId: null }, { organizationId: '' }, { organizationId }] }
-      : { $or: [{ organizationId: null }, { organizationId: '' }] };
+    // Org prerequisite (hard): org-less lakes OR lakes in one of the caller's orgs. null/'' form
+    // for DocumentDB safety. Combined with the grants via $and - two top-level $or keys collide.
+    const orgConstraint =
+      memberOrgIds.length > 0
+        ? { $or: [{ organizationId: null }, { organizationId: '' }, { organizationId: { $in: memberOrgIds } }] }
+        : { $or: [{ organizationId: null }, { organizationId: '' }] };
 
     const accessArms: Record<string, unknown>[] = [{ $and: [orgConstraint, { $or: nonOwnerArms }] }];
 
@@ -270,7 +344,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
    */
   async findAccessible(
     ctx: AccessContext,
-    opts?: { statuses?: DataLakeStatus[]; includePublic?: boolean }
+    opts?: { statuses?: DataLakeStatus[]; includePublic?: boolean; grantedLakeIds?: string[] }
   ): Promise<IDataLakeDocument[]> {
     const statuses = opts?.statuses ?? (['draft', 'active'] as DataLakeStatus[]);
     // Public lakes belong in the browse/read list, NOT the archived/deleted MANAGEMENT views:
@@ -283,10 +357,14 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // Use the ONE canonical normalization (shared with the in-memory filter + write path).
     const keys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
 
-    // Org constraint: lake has no org OR the lake's org matches the user's org.
-    const orgConstraint = ctx.organizationId
-      ? { $or: [{ organizationId: { $in: [null, ''] } }, { organizationId: ctx.organizationId }] }
-      : { organizationId: { $in: [null, ''] } };
+    // Org constraint: lake has no org OR the lake's org is one the caller is a MEMBER of.
+    // `?? []`: a runtime belt against a malformed ctx, not a widening of the declared (required)
+    // type - a missing set must deny org-scoped lakes, not throw or vacuously allow them.
+    const memberOrgIds = ctx.organizationIds ?? [];
+    const orgConstraint =
+      memberOrgIds.length > 0
+        ? { $or: [{ organizationId: { $in: [null, ''] } }, { organizationId: { $in: memberOrgIds } }] }
+        : { organizationId: { $in: [null, ''] } };
 
     // Requirement constraint (mirror of `lakeMatchesAccess`): the lake has NO restriction
     // (BOTH requiredUserTag AND requiredEntitlement blank), OR the user holds the required
@@ -335,6 +413,15 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // (dropped for management views via includePublic - see the note at the top of this method).
     const nonOwnerArms: Record<string, unknown>[] = [{ $and: [orgConstraint, requirementConstraint, notPrivate] }];
     if (includePublic) nonOwnerArms.unshift(publicArm);
+
+    // Explicit-grant arm (#1668): a lake the caller holds an active access grant on is reachable by
+    // that grant alone - the grant IS the authorization, so it needs none of the org/gate constraints
+    // (it is the analog of the createdByUserId owner bypass, extended to a transferred/delegated
+    // owner-curator-reader). The ids are pre-resolved by the caller from listByPrincipal (an empty
+    // list adds no arm). This covers ONLY persisted grant rows; the ephemeral tag/entitlement view is
+    // #1673's separate concern.
+    const grantedLakeIds = opts?.grantedLakeIds ?? [];
+    if (grantedLakeIds.length > 0) nonOwnerArms.push({ _id: { $in: grantedLakeIds } });
 
     const filter: Record<string, unknown> = ctx.isAdmin
       ? { status: { $in: statuses } }
@@ -433,6 +520,20 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return (doc?.toJSON() as IDataLakeDocument) ?? null;
   }
 
+  async tryAddEmbeddingSpend(id: string, amountMicroUsd: number, limitMicroUsd: number): Promise<boolean> {
+    return tryAddSpendWithinLimit(this.dataLakeModel, id, amountMicroUsd, limitMicroUsd);
+  }
+
+  async releaseEmbeddingSpend(id: string, amountMicroUsd: number): Promise<boolean> {
+    return releaseSpend(this.dataLakeModel, id, amountMicroUsd);
+  }
+
+  /** Admin remedy for a poisoned meter (see resetEmbeddingSpend on the repository interface). */
+  async resetEmbeddingSpend(id: string): Promise<boolean> {
+    const res = await this.dataLakeModel.updateOne({ _id: id }, { $set: { embeddingSpendMicroUsd: 0 } });
+    return res.matchedCount === 1;
+  }
+
   async activateIfDraft(id: string): Promise<boolean> {
     // The status guard lives in the FILTER, not in a prior read: the membership doors that call
     // this hand over a lake document they fetched before their own status writes, so testing the
@@ -523,6 +624,8 @@ const DataLakeBatchSchema = new mongoose.Schema(
     skippedFiles: { type: Number, default: 0 },
     totalSizeBytes: { type: Number, default: 0 },
     uploadedSizeBytes: { type: Number, default: 0 },
+    // Embedding spend metered against this run, integer micro-USD - see IDataLakeBatch.
+    embeddingSpendMicroUsd: { type: Number, default: 0 },
     files: [DataLakeBatchFileSchema],
     appliedTags: [
       {
@@ -678,6 +781,17 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
       { new: true }
     );
     return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
+  }
+
+  // Deliberately NOT guarded on non-terminal status like incrementCounters: the reserve
+  // happens before a provider call that is about to spend real money, and a batch the
+  // reconciler just forced terminal must still meter (never lose) that spend.
+  async tryAddEmbeddingSpend(batchId: string, amountMicroUsd: number, limitMicroUsd: number): Promise<boolean> {
+    return tryAddSpendWithinLimit(this.batchModel, batchId, amountMicroUsd, limitMicroUsd);
+  }
+
+  async releaseEmbeddingSpend(batchId: string, amountMicroUsd: number): Promise<boolean> {
+    return releaseSpend(this.batchModel, batchId, amountMicroUsd);
   }
 
   /**
