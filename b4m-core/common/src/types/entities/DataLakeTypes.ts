@@ -129,6 +129,29 @@ export interface IDataLake {
   requiredEntitlement?: string;
   /** User who created this data lake */
   createdByUserId: string;
+  /**
+   * The last principal to write this lake's CONFIGURATION - server-set from the authenticated
+   * actor at the service boundary, never client input (it is absent from
+   * UpdateDataLakeRequestInput, so secureParameters drops a supplied value). `createdByUserId`
+   * never moves on an update, so without this nothing records WHO: `timestamps` advances
+   * `updatedAt` and no field says by whom.
+   *
+   * Written by every CONFIG-write service - updateDataLake, setLakeVisibility,
+   * transferLakeOwnership, and the archive/unarchive + delete/restore lifecycle pairs - so the
+   * answer holds for the whole config surface, not just the metadata PUT. Lifecycle stamps only on
+   * the TERMINAL transition, one stamp per operator action rather than one per intermediate hop.
+   *
+   * Deliberately NOT stamped: file membership (addFileToLake/removeFileFromDataLake) changes the
+   * lake's CONTENT rather than its configuration and is attributed per file; recomputeLakeStats
+   * and the lake-memory lease are system bookkeeping with no operator behind them; and
+   * resetEmbeddingSpend moves a cost meter, not an answering behavior. So this reads as "who last
+   * changed how this lake is configured", never "who last touched this lake in any way".
+   *
+   * A stamp, not a history: it is overwritten by the next write and answers only "who last
+   * touched this". Editor-only (see LAKE_FIELD_VISIBILITY). Absent on a lake not written since
+   * this field existed.
+   */
+  lastUpdatedByUserId?: string;
   /** Organization scope (optional - if set, only org members can manage) */
   organizationId?: string;
   /**
