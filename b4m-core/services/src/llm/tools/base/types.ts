@@ -103,8 +103,12 @@ export interface ToolContext {
      * where recording degrades to a no-op.
      */
     usageEvents?: Pick<IUsageEventRepository, 'record'>;
-    /** Owner lookup for usage attribution; findById is all the recorder needs. */
-    organizations?: Pick<IOrganizationRepository, 'findById'>;
+    /**
+     * Owner lookup for usage attribution (`findById`) plus the org-membership resolution the
+     * data-lake retrieval resolver needs internally (`findMembershipOrgIds`, #1674). Required -
+     * an absent resolver would silently drop every org lake from retrieval.
+     */
+    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds'>;
   };
   /**
    * Caller's RESOLVED entitlement keys (subscription- + tag-derived), resolved app-side

@@ -230,10 +230,11 @@ const acceptOrganization = async (
     name: user.name,
   });
 
-  // Establish full membership on the user document. Without this, the accepting
-  // user's `organizationId` stays null and every org-scoped feature that reads
-  // `user.organizationId` (e.g. data-lake AccessContext) treats them as org-less.
-  // Mirrors the InviteType.Group path above and organizationService.addMember,
+  // Establish the selected-org display preference on the user document. This is
+  // the field the UI reads for the active-org switcher; lake authorization reads
+  // the membership set via findMembershipOrgIds (#1674), not this pointer. Without
+  // this, the accepting user's `organizationId` stays null and has no org selected
+  // in the UI. Mirrors the InviteType.Group path above and organizationService.addMember,
   // which set the selected organization as a required side effect of joining.
   user.organizationId = organizationId;
   await db.users.update(user);

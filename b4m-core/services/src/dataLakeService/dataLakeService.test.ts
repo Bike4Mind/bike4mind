@@ -71,7 +71,7 @@ const ctx = (overrides: Partial<AccessContext> = {}): AccessContext => ({
   userId: 'someone',
   isAdmin: false,
   userTags: [],
-  organizationId: undefined,
+  organizationIds: [],
   ...overrides,
 });
 
@@ -94,17 +94,28 @@ describe('canAccessLake — the single access gate rule', () => {
 
   it('grants a non-owner who satisfies BOTH org and tag', () => {
     const l = lake({ organizationId: 'orgA', requiredUserTag: 'Opti' });
-    expect(canAccessLake(l, ctx({ organizationId: 'orgA', userTags: ['opti'] }))).toBe(true);
+    expect(canAccessLake(l, ctx({ organizationIds: ['orgA'], userTags: ['opti'] }))).toBe(true);
   });
 
   it('DENIES a tag-holder in a DIFFERENT org (org is a hard prerequisite, not a flat OR)', () => {
     const l = lake({ organizationId: 'orgA', requiredUserTag: 'Opti' });
-    expect(canAccessLake(l, ctx({ organizationId: 'orgB', userTags: ['opti'] }))).toBe(false);
+    expect(canAccessLake(l, ctx({ organizationIds: ['orgB'], userTags: ['opti'] }))).toBe(false);
   });
 
   it('DENIES a same-org user missing the required tag', () => {
     const l = lake({ organizationId: 'orgA', requiredUserTag: 'Opti' });
-    expect(canAccessLake(l, ctx({ organizationId: 'orgA', userTags: ['other'] }))).toBe(false);
+    expect(canAccessLake(l, ctx({ organizationIds: ['orgA'], userTags: ['other'] }))).toBe(false);
+  });
+
+  it('grants an org lake to a member of that org regardless of any other memberships', () => {
+    const l = lake({ organizationId: 'org-a', requiredUserTag: '', requiredEntitlement: '' });
+    expect(canAccessLake(l, ctx({ organizationIds: ['org-b', 'org-a'] }))).toBe(true);
+  });
+
+  it('denies an org lake to a caller whose membership set does not include it (empty set included)', () => {
+    const l = lake({ organizationId: 'org-a', requiredUserTag: '', requiredEntitlement: '' });
+    expect(canAccessLake(l, ctx({ organizationIds: ['org-b'] }))).toBe(false);
+    expect(canAccessLake(l, ctx({ organizationIds: [] }))).toBe(false);
   });
 
   it('Private-by-default: a gateless, org-less lake is owner/admin-only', () => {
@@ -115,7 +126,7 @@ describe('canAccessLake — the single access gate rule', () => {
     // Every other caller is denied - this is the single-lake gate matching the rule the
     // collection paths enforce, so a guessed-slug private lake can't be reached.
     expect(canAccessLake(priv, ctx())).toBe(false);
-    expect(canAccessLake(priv, ctx({ organizationId: 'orgA', userTags: ['anything'] }))).toBe(false);
+    expect(canAccessLake(priv, ctx({ organizationIds: ['orgA'], userTags: ['anything'] }))).toBe(false);
   });
 
   it('Public: an isPublic lake is readable by any caller, cross-org, bypassing Private-by-default', () => {
@@ -123,7 +134,7 @@ describe('canAccessLake — the single access gate rule', () => {
     // first so it is readable by everyone, in any org, regardless of tags/keys.
     const pub = lake({ isPublic: true, createdByUserId: 'alice' });
     expect(canAccessLake(pub, ctx({ userId: 'stranger' }))).toBe(true);
-    expect(canAccessLake(pub, ctx({ userId: 'stranger', organizationId: 'orgB' }))).toBe(true);
+    expect(canAccessLake(pub, ctx({ userId: 'stranger', organizationIds: ['orgB'] }))).toBe(true);
   });
 
   it('Public + a (post-publish) gate still enforces the gate — defense in depth', () => {
@@ -134,7 +145,7 @@ describe('canAccessLake — the single access gate rule', () => {
     expect(canAccessLake(pubGated, ctx({ userId: 'stranger', entitlementKeys: ['product:pro'] }))).toBe(true);
     // Cross-org key-holder still reads it: public bypasses the org prerequisite.
     expect(
-      canAccessLake(pubGated, ctx({ userId: 'stranger', organizationId: 'orgB', entitlementKeys: ['product:pro'] }))
+      canAccessLake(pubGated, ctx({ userId: 'stranger', organizationIds: ['orgB'], entitlementKeys: ['product:pro'] }))
     ).toBe(true);
   });
 
@@ -178,12 +189,12 @@ describe('canAccessLake — entitlement-aware any-of (tag-retirement)', () => {
 
   it('DENIES an entitlement-holder in a DIFFERENT org (org stays a hard prerequisite)', () => {
     const l = lake({ organizationId: 'orgA', requiredEntitlement: 'product:pro' });
-    expect(canAccessLake(l, ctx({ organizationId: 'orgB', entitlementKeys: ['product:pro'] }))).toBe(false);
+    expect(canAccessLake(l, ctx({ organizationIds: ['orgB'], entitlementKeys: ['product:pro'] }))).toBe(false);
   });
 
   it('grants a same-org entitlement-holder when the lake is org-scoped', () => {
     const l = lake({ organizationId: 'orgA', requiredEntitlement: 'product:pro' });
-    expect(canAccessLake(l, ctx({ organizationId: 'orgA', entitlementKeys: ['product:pro'] }))).toBe(true);
+    expect(canAccessLake(l, ctx({ organizationIds: ['orgA'], entitlementKeys: ['product:pro'] }))).toBe(true);
   });
 
   it('no-tag-only-access: holding ONLY the bare tag (not the namespaced :pro key) is denied a :pro-gated lake', () => {
@@ -194,36 +205,48 @@ describe('canAccessLake — entitlement-aware any-of (tag-retirement)', () => {
   });
 });
 
-describe('canAccessLake — org id shape parity with the casting collection query', () => {
-  // findAccessible matches an org lake via a Mongo query that CASTS types, so an org member
-  // whose ctx.organizationId is an ObjectId or a populated Organization doc still lands in the
-  // list. canAccessLake compares in memory, so it must reach the SAME grant for every shape -
-  // otherwise the single-lake gate 404s a lake the caller's own list returns. Each shape below
-  // stands in for the same org value the collection query matched on.
+describe('canAccessLake - lake org id shape parity with the casting collection query', () => {
+  // findAccessible matches an org lake via a Mongo query that CASTS types, so a lake whose
+  // organizationId is an ObjectId or a populated Organization doc still lands in the list.
+  // canAccessLake compares in memory, so it must normalize THAT side to reach the SAME grant
+  // for every shape - otherwise the single-lake gate 404s a lake the caller's own list returns.
+  // ctx.organizationIds itself is NOT re-normalized here: it is documented as already-normalized
+  // strings, resolved once at context construction (#1674).
   const orgHex = '507f1f77bcf86cd799439011';
-  const orgLake = lake({ id: 'orgLake', organizationId: orgHex, createdByUserId: 'admin' });
 
-  it('grants a same-org member when ctx.organizationId is a matching string', () => {
-    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationId: orgHex }))).toBe(true);
+  it('grants a member when the lake org id is a matching string', () => {
+    const orgLake = lake({ id: 'orgLake', organizationId: orgHex, createdByUserId: 'admin' });
+    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationIds: [orgHex] }))).toBe(true);
   });
 
-  it('grants a same-org member when ctx.organizationId is an ObjectId', () => {
+  it('grants a member when the lake org id is an ObjectId', () => {
     const objectId = { toHexString: () => orgHex } as unknown as string;
-    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationId: objectId }))).toBe(true);
+    const orgLake = lake({ id: 'orgLake', organizationId: objectId, createdByUserId: 'admin' });
+    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationIds: [orgHex] }))).toBe(true);
   });
 
-  it('grants a same-org member when ctx.organizationId is a populated Organization document', () => {
+  it('grants a member when the lake org id is a populated Organization document', () => {
     const populated = { _id: { toHexString: () => orgHex }, name: 'Acme' } as unknown as string;
-    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationId: populated }))).toBe(true);
+    const orgLake = lake({ id: 'orgLake', organizationId: populated, createdByUserId: 'admin' });
+    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationIds: [orgHex] }))).toBe(true);
   });
 
-  it('still DENIES a member of a different org across every shape', () => {
+  it('still DENIES a member whose set does not include the lake org, across every lake-side shape', () => {
     const otherHex = '507f191e810c19729de860ea';
-    const otherObjectId = { toHexString: () => otherHex } as unknown as string;
-    const otherPopulated = { _id: { toHexString: () => otherHex } } as unknown as string;
-    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationId: otherHex }))).toBe(false);
-    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationId: otherObjectId }))).toBe(false);
-    expect(canAccessLake(orgLake, ctx({ userId: 'member', organizationId: otherPopulated }))).toBe(false);
+    const stringOrgLake = lake({ id: 'orgLakeStr', organizationId: orgHex, createdByUserId: 'admin' });
+    const objectIdOrgLake = lake({
+      id: 'orgLakeObj',
+      organizationId: { toHexString: () => orgHex } as unknown as string,
+      createdByUserId: 'admin',
+    });
+    const populatedOrgLake = lake({
+      id: 'orgLakePop',
+      organizationId: { _id: { toHexString: () => orgHex } } as unknown as string,
+      createdByUserId: 'admin',
+    });
+    expect(canAccessLake(stringOrgLake, ctx({ userId: 'member', organizationIds: [otherHex] }))).toBe(false);
+    expect(canAccessLake(objectIdOrgLake, ctx({ userId: 'member', organizationIds: [otherHex] }))).toBe(false);
+    expect(canAccessLake(populatedOrgLake, ctx({ userId: 'member', organizationIds: [otherHex] }))).toBe(false);
   });
 
   it('fails CLOSED: a lake with a truthy-but-not-id-shaped org and no gate denies a non-owner', () => {
@@ -235,7 +258,7 @@ describe('canAccessLake — org id shape parity with the casting collection quer
       organizationId: { not: 'an id' } as unknown as string,
       createdByUserId: 'owner',
     });
-    expect(canAccessLake(garbageOrgLake, ctx({ userId: 'member', organizationId: 'orgA' }))).toBe(false);
+    expect(canAccessLake(garbageOrgLake, ctx({ userId: 'member', organizationIds: ['orgA'] }))).toBe(false);
     expect(canAccessLake(garbageOrgLake, ctx({ userId: 'owner' }))).toBe(true); // owner still in
   });
 });
@@ -245,7 +268,7 @@ describe('assertLakeAccess — not-found-style denial', () => {
     const l = lake({ organizationId: 'orgA', requiredUserTag: 'Opti' });
     const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn() } };
     await expect(
-      assertLakeAccess('lake1', ctx({ organizationId: 'orgB', userTags: ['opti'] }), { db })
+      assertLakeAccess('lake1', ctx({ organizationIds: ['orgB'], userTags: ['opti'] }), { db })
     ).rejects.toThrow(/not found/i);
   });
 
@@ -310,7 +333,7 @@ describe('assertLakeAccess — hardcoded fallback lakes (no backing document)', 
       },
     };
     await expect(
-      assertLakeAccess('opti-knowledge', ctx({ userTags: ['opti'], organizationId: 'orgB' }), { db })
+      assertLakeAccess('opti-knowledge', ctx({ userTags: ['opti'], organizationIds: ['orgB'] }), { db })
     ).rejects.toThrow(/not found/i);
   });
 });
@@ -456,7 +479,7 @@ describe('listDataLakes - systemPrompt is returned to a lake EDITOR only', () =>
     const theirs = withPrompt({ id: 'org', slug: 'org', createdByUserId: 'other', organizationId: 'orgA' });
     const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
 
-    const result = await listDataLakes(ctx({ userId: 'member', organizationId: 'orgA' }), { db });
+    const result = await listDataLakes(ctx({ userId: 'member', organizationIds: ['orgA'] }), { db });
 
     expect(result.find(l => l.id === 'org')?.systemPrompt).toBeUndefined();
   });
@@ -794,7 +817,7 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
     const orgLake = prompted({ id: 'org', slug: 'org', createdByUserId: 'other', organizationId: 'orgA' });
     const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine, orgLake]), find: vi.fn() } };
 
-    const result = await listArchivedDataLakes(ctx({ userId: 'me', organizationId: 'orgA' }), { db });
+    const result = await listArchivedDataLakes(ctx({ userId: 'me', organizationIds: ['orgA'] }), { db });
 
     expect((result.find(l => l.id === 'mine') as IDataLakeDocument)?.systemPrompt).toBe('Answer only from this lake.');
     // Key absence, not undefined: blanking instead of deleting would pass the weaker assertion.
@@ -806,7 +829,7 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
     const orgLake = prompted({ id: 'org', slug: 'org', createdByUserId: 'other', organizationId: 'orgA' });
     const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([orgLake]), find: vi.fn() } };
 
-    const result = await listDeletedDataLakes(ctx({ userId: 'me', organizationId: 'orgA' }), { db });
+    const result = await listDeletedDataLakes(ctx({ userId: 'me', organizationIds: ['orgA'] }), { db });
 
     expect('systemPrompt' in result[0]!).toBe(false);
   });
@@ -823,7 +846,7 @@ describe('assertLakeWriteAccess — read-then-manage gate for the upload doors',
     const l = lake({ organizationId: 'orgA', requiredUserTag: 'Opti', createdByUserId: 'owner' });
     const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn() } };
     await expect(
-      assertLakeWriteAccess('lake1', ctx({ userId: 'x', organizationId: 'orgB', userTags: ['opti'] }), { db })
+      assertLakeWriteAccess('lake1', ctx({ userId: 'x', organizationIds: ['orgB'], userTags: ['opti'] }), { db })
     ).rejects.toThrow(/not found/i);
   });
 
@@ -831,7 +854,7 @@ describe('assertLakeWriteAccess — read-then-manage gate for the upload doors',
     const l = lake({ organizationId: 'orgA', requiredUserTag: 'Opti', createdByUserId: 'owner' });
     const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn() } };
     await expect(
-      assertLakeWriteAccess('lake1', ctx({ userId: 'reader', organizationId: 'orgA', userTags: ['opti'] }), { db })
+      assertLakeWriteAccess('lake1', ctx({ userId: 'reader', organizationIds: ['orgA'], userTags: ['opti'] }), { db })
     ).rejects.toThrow(/do not have permission to add files/i);
   });
 

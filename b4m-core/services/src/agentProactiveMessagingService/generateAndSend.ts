@@ -50,7 +50,12 @@ interface GenerateAndSendProactiveMessageAdapters {
      * Optional: recording degrades to a no-op when a caller leaves them unwired.
      */
     usageEvents?: Pick<IUsageEventRepository, 'record'>;
-    organizations?: Pick<IOrganizationRepository, 'findById'>;
+    /**
+     * Required: forwarded verbatim into `generateTools`'s `ToolContext['db']`, whose
+     * `organizations` field is itself required (#1674 - the data-lake retrieval resolver reads
+     * `findMembershipOrgIds` off it).
+     */
+    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds'>;
   };
   apiKeyTable: ApiKeyTable;
   /**
