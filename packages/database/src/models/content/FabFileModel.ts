@@ -594,9 +594,12 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         $match: {
           $and: [ownershipFilter, sessionFilter],
           deletedAt: null,
-          // Must mirror buildFabFileSearchQuery's baseFilter: this count is rendered as a badge
-          // beside the list that filter produces, so a file either feeds both or neither.
-          // Equality to null matches missing too, leaving files that were never archived alone.
+          // archivedAt must mirror buildFabFileSearchQuery's baseFilter: this count is rendered
+          // as a badge beside the list that filter produces. Equality to null matches missing
+          // too, leaving files that were never archived alone. Ownership scope is the one
+          // deliberate exception: excludePersonalShares (above) narrows this count below the
+          // list's own includeShared scope, so a tag living only on a 1:1-shared file drops its
+          // WORKSPACES row while the file itself still appears in the list/search results.
           archivedAt: null,
           tags: { $exists: true, $ne: [] },
         },

@@ -261,6 +261,9 @@ export function buildOwnershipConditions(
 
   // SCOPED prefix arm (dynamic lakes) - prefix match ANDed with base access, so a
   // user-chosen prefix colliding with another tenant's tags can never bypass ownership.
+  // Inherits excludePersonalShares through baseAccess: a scoped-lake file reachable ONLY via a
+  // 1:1 share would also drop out. Currently unreachable - no caller passes scopedTagPrefixes
+  // alongside excludePersonalShares - but documented so a future one doesn't get surprised.
   const scopedPrefixes = validPrefixes(options?.scopedTagPrefixes);
   if (scopedPrefixes.length > 0) {
     const prefixPattern = scopedPrefixes.map(p => escapeRegex(p)).join('|');

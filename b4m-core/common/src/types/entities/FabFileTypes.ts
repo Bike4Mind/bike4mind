@@ -592,7 +592,10 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   countByUserIdAndTag(userId: string, tag: string): Promise<number>;
 
   /**
-   * Count the number of files by tag for a user.
+   * Count the number of files by tag for a user. Widens to group/data-lake files when options
+   * are supplied, but never to a file merely shared 1:1 with the user (not owned by them) - such
+   * a file's tags can never be kept in sync by the user's own tag rename/delete, so it is
+   * excluded to avoid an orphan bucket the user can never clear.
    * @param userId - The ID of the user.
    * @returns A promise that resolves to the number of files.
    */
@@ -639,7 +642,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
 
   /**
    * Count unique files per root tag namespace for a user. Takes the same optional scope as
-   * countFilesByTagForUser, which it is served beside; omitting it counts owned files only.
+   * countFilesByTagForUser, which it is served beside, INCLUDING the same personal-share
+   * exclusion - the two must move in lockstep or a namespace's size disagrees with its tag
+   * count. Omitting the scope counts owned files only.
    */
   countUniqueFilesByNamespaceForUser(
     userId: string,

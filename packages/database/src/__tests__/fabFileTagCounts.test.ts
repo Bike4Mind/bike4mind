@@ -132,6 +132,36 @@ describe('FabFileRepository.countFilesByTagForUser', () => {
     expect(await countOf('reports', { userGroups: ['group-1'], dataLakeTags: [] })).toBe(1);
   });
 
+  // A file can be BOTH shared 1:1 AND reachable another way - the exclusion must not swallow
+  // that other, legitimate arm just because a personal share is also present.
+  it('still counts a file that is shared 1:1 AND group-shared, via the group arm', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'both-shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: 'contracts', strength: 1 }],
+      users: [{ userId, permissions: ['read'] }],
+      groups: [{ groupId: 'group-1', permissions: ['read'] }],
+    });
+
+    expect(await countOf('contracts', { userGroups: ['group-1'], dataLakeTags: [] })).toBe(1);
+  });
+
+  it('still counts a file that is shared 1:1 AND carries a data-lake meta-tag, via the data-lake arm', async () => {
+    const lakeTag = 'datalake:acme:handbook';
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'both-shared-lake.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: lakeTag, strength: 1 }],
+      users: [{ userId, permissions: ['read'] }],
+    });
+
+    expect(await countOf(lakeTag, { userGroups: [], dataLakeTags: [lakeTag] })).toBe(1);
+  });
+
   it('omits a tag no live file carries rather than reporting it as zero', async () => {
     await seed(['invoices']);
 
@@ -301,6 +331,20 @@ describe('FabFileRepository.countUniqueFilesByNamespaceForUser', () => {
       type: KnowledgeType.FILE,
       mimeType: 'text/plain',
       tags: [{ name: 'clients:acme', strength: 1 }],
+      groups: [{ groupId: 'group-1', permissions: ['read'] }],
+    });
+
+    expect(await countOf('clients', { userGroups: ['group-1'], dataLakeTags: [] })).toBe(1);
+  });
+
+  it('still counts a namespace on a file that is shared 1:1 AND group-shared, via the group arm', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'both-shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: 'clients:acme', strength: 1 }],
+      users: [{ userId, permissions: ['read'] }],
       groups: [{ groupId: 'group-1', permissions: ['read'] }],
     });
 
