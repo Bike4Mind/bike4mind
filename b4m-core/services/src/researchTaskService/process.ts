@@ -15,6 +15,7 @@ import {
   IResearchTask,
   IResearchTaskDeepResearch,
   IApiKeyRepository,
+  IOrganizationRepository,
 } from '@bike4mind/common';
 import { NotFoundError, BadRequestError, getSettingsByNames } from '@bike4mind/utils';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
@@ -56,6 +57,10 @@ interface ResearchTaskProcessAdapters {
       IDataLakeRepository,
       'findByDatalakeTag' | 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements'
     >;
+    // Required: this whole `db` object is passed through to ToolContext.db below, whose
+    // `organizations` field is itself required (#1674 - the data-lake retrieval resolver reads
+    // `findMembershipOrgIds` off it).
+    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds'>;
   };
   llm: Pick<ICompletionBackend, 'complete' | 'currentModel'>;
   storage: CreateFabFileAdapters['storage'];

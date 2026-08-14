@@ -47,6 +47,7 @@ let createLakeFile: ReturnType<typeof vi.fn>;
 let downloadFile: ReturnType<typeof vi.fn>;
 let findByContentHashesInDataLake: ReturnType<typeof vi.fn>;
 let resolveEntitlementKeys: ReturnType<typeof vi.fn>;
+let resolveMembershipOrgIds: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -55,6 +56,7 @@ beforeEach(() => {
   downloadFile = vi.fn().mockResolvedValue(Buffer.from('hello'));
   findByContentHashesInDataLake = vi.fn().mockResolvedValue([]);
   resolveEntitlementKeys = vi.fn().mockResolvedValue(['ent-a']);
+  resolveMembershipOrgIds = vi.fn().mockResolvedValue(['org-1']);
 
   assertLakeWriteAccess.mockResolvedValue(lake);
   assertCanWriteDataLakeTags.mockResolvedValue(undefined);
@@ -71,6 +73,7 @@ beforeEach(() => {
     fabFiles: { findByContentHashesInDataLake },
     createLakeFile,
     resolveEntitlementKeys,
+    resolveMembershipOrgIds,
     downloadFile,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
@@ -194,13 +197,14 @@ describe('AccessContext is built server-side', () => {
     await run();
 
     expect(resolveEntitlementKeys).toHaveBeenCalledWith(actor);
+    expect(resolveMembershipOrgIds).toHaveBeenCalledWith('user-1');
     expect(assertLakeWriteAccess).toHaveBeenCalledWith(
       'sales',
       expect.objectContaining({
         userId: 'user-1',
         isAdmin: false,
         userTags: ['beta'],
-        organizationId: 'org-1',
+        organizationIds: ['org-1'],
         entitlementKeys: ['ent-a'],
       }),
       expect.anything()

@@ -3,6 +3,7 @@ import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   fabFileRepository,
+  organizationRepository,
   withTransaction,
 } from '@bike4mind/database';
 import { User } from '@bike4mind/database/auth';
@@ -82,6 +83,7 @@ export function buildSlackLakeIngestDeps(args: {
         email: actor.email,
         emailVerified: actor.emailVerified,
       }),
+    resolveMembershipOrgIds: userId => organizationRepository.findMembershipOrgIds(userId),
     createLakeFile: (userId, params) =>
       withTransaction(async () =>
         fabFilesService.createFabFile(

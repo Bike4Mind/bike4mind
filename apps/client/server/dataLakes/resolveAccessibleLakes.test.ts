@@ -2,11 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { EntitlementRequest } from '@server/entitlements';
 
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
-const { mockListDataLakes, mockListAllDataLakes, mockGetRequestEntitlements } = vi.hoisted(() => ({
-  mockListDataLakes: vi.fn(),
-  mockListAllDataLakes: vi.fn(),
-  mockGetRequestEntitlements: vi.fn(),
-}));
+const { mockListDataLakes, mockListAllDataLakes, mockGetRequestEntitlements, mockFindMembershipOrgIds } = vi.hoisted(
+  () => ({
+    mockListDataLakes: vi.fn(),
+    mockListAllDataLakes: vi.fn(),
+    mockGetRequestEntitlements: vi.fn(),
+    mockFindMembershipOrgIds: vi.fn(),
+  })
+);
 
 // toAccessContext is deliberately NOT mocked - the point of these tests is that
 // resolveAccessibleLakes goes through it, so the entitlement keys reach the DB filter.
@@ -20,8 +23,11 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   projectRepository: {},
   userRepository: {},
-  // toAccessContext resolves the caller's org-admin set (#1668) through this repo.
-  organizationRepository: { findIdsWithAdminRights: vi.fn().mockResolvedValue([]) },
+  // toAccessContext resolves the membership set (#1674) and the org-admin set (#1668) here.
+  organizationRepository: {
+    findMembershipOrgIds: mockFindMembershipOrgIds,
+    findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
+  },
 }));
 vi.mock('@server/entitlements', () => ({ getRequestEntitlements: mockGetRequestEntitlements }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn() }) }));
@@ -36,6 +42,7 @@ describe('resolveAccessibleLakes', () => {
     mockListDataLakes.mockResolvedValue([]);
     mockListAllDataLakes.mockResolvedValue([]);
     mockGetRequestEntitlements.mockResolvedValue([]);
+    mockFindMembershipOrgIds.mockResolvedValue([]);
   });
 
   it('threads the resolved entitlement keys into the DB filter, and scopes static lakes by the same keys', async () => {
@@ -44,11 +51,17 @@ describe('resolveAccessibleLakes', () => {
     // retrieval kept, inverting the documented "browse is the wider surface" invariant. This is
     // the assertion that discriminates: the old inline literal carried no keys at all.
     mockGetRequestEntitlements.mockResolvedValue(['optihashi:pro']);
+    mockFindMembershipOrgIds.mockResolvedValue(['org1']);
 
     const lakes = await resolveAccessibleLakes(asReq({ id: 'u1', tags: [], organizationId: 'org1' }));
 
     expect(mockListDataLakes).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'u1', isAdmin: false, entitlementKeys: ['optihashi:pro'] }),
+      expect.objectContaining({
+        userId: 'u1',
+        isAdmin: false,
+        entitlementKeys: ['optihashi:pro'],
+        organizationIds: ['org1'],
+      }),
       expect.anything()
     );
     // The same keys drive the static filter, so the two halves of the merge cannot disagree about

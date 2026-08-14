@@ -53,6 +53,8 @@ export interface LakeAuthzDeps {
   dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
   /** Entitlement keys for the actor; admins skip resolution, mirroring `toAccessContext`. */
   resolveEntitlementKeys(actor: SlackIngestActor): Promise<string[]>;
+  /** Authoritative org membership set for the actor, mirroring `toAccessContext` (#1674). */
+  resolveMembershipOrgIds(userId: string): Promise<string[]>;
   logger: {
     info: (message: string, meta?: unknown) => void;
     warn: (message: string, ...args: unknown[]) => void;
@@ -67,14 +69,14 @@ export interface LakeAuthzDeps {
  */
 export async function buildSlackAccessContext(
   actor: SlackIngestActor,
-  deps: Pick<LakeAuthzDeps, 'resolveEntitlementKeys'>
+  deps: Pick<LakeAuthzDeps, 'resolveEntitlementKeys' | 'resolveMembershipOrgIds'>
 ): Promise<AccessContext> {
   const isAdmin = !!actor.isAdmin;
   return {
     userId: actor.id,
     isAdmin,
     userTags: actor.tags ?? [],
-    organizationId: actor.organizationId,
+    organizationIds: await deps.resolveMembershipOrgIds(actor.id),
     entitlementKeys: isAdmin ? [] : await deps.resolveEntitlementKeys(actor),
   };
 }

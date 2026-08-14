@@ -38,6 +38,7 @@ const LINK = 'https://example.com/article';
 let deps: SlackLinkIngestDeps;
 let createLakeFileFromUrl: ReturnType<typeof vi.fn>;
 let resolveEntitlementKeys: ReturnType<typeof vi.fn>;
+let resolveMembershipOrgIds: ReturnType<typeof vi.fn>;
 let listByLake: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
@@ -46,6 +47,7 @@ beforeEach(() => {
   listByLake = vi.fn().mockResolvedValue([]);
   createLakeFileFromUrl = vi.fn().mockResolvedValue({ id: 'fab-1', fileName: 'An Article' });
   resolveEntitlementKeys = vi.fn().mockResolvedValue(['ent-a']);
+  resolveMembershipOrgIds = vi.fn().mockResolvedValue(['org-1']);
 
   assertLakeWriteAccess.mockResolvedValue(lake);
   assertCanWriteDataLakeTags.mockResolvedValue(undefined);
@@ -63,6 +65,7 @@ beforeEach(() => {
     dataLakeAccessGrants: { listByLake } as never,
     createLakeFileFromUrl,
     resolveEntitlementKeys,
+    resolveMembershipOrgIds,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
 });

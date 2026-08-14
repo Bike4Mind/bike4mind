@@ -52,9 +52,9 @@ describe('fix-project-live-unique-name-index migration (real DB)', () => {
     expect(idx?.unique).toBe(true);
     expect(idx?.partialFilterExpression).toEqual({ deletedAt: null });
 
-    await expect(Project.collection.insertOne({ userId: 'u1', name: 'Roadmap', deletedAt: null })).rejects.toMatchObject(
-      { code: 11000 }
-    );
+    await expect(
+      Project.collection.insertOne({ userId: 'u1', name: 'Roadmap', deletedAt: null })
+    ).rejects.toMatchObject({ code: 11000 });
     await expect(
       Project.collection.insertOne({ userId: 'u3', name: 'Roadmap', deletedAt: null })
     ).resolves.toBeDefined();
