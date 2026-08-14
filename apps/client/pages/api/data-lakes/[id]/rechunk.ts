@@ -1,7 +1,12 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository, fabFileRepository, fabFileChunkRepository } from '@bike4mind/database';
+import {
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+  fabFileRepository,
+  fabFileChunkRepository,
+} from '@bike4mind/database';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
@@ -41,7 +46,9 @@ const handler = baseApi()
   .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
     const { id } = req.query;
     const ctx = await toAccessContext(req);
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, { db: { dataLakes: dataLakeRepository } });
+    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+    });
     // `failedCount` distinguishes "rebuild finished" from "some files gave up": a failed re-chunk
     // (error set, no chunks) is invisible to detection, so the badge alone would read it as done.
     const [underChunked, failedCount] = await Promise.all([
@@ -54,7 +61,9 @@ const handler = baseApi()
     const { id } = req.query;
     const { limit } = RechunkInput.parse(req.body ?? {});
     const ctx = await toAccessContext(req);
-    const lake = await dataLakeService.assertLakeWriteAccess(id, ctx, { db: { dataLakes: dataLakeRepository } });
+    const lake = await dataLakeService.assertLakeWriteAccess(id, ctx, {
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+    });
 
     const detected = await dataLakeService.detectUnderChunkedFiles(lake, detectDeps);
     const wave = detected.slice(0, limit ?? dataLakeService.DEFAULT_REBUILD_WAVE);
@@ -75,7 +84,9 @@ const handler = baseApi()
       // the claim token: the worker only re-chunks a file that still carries this exact stamp, so a
       // duplicate delivery or a stale rescue re-enqueue can't double-process it.
       const results = await Promise.allSettled(
-        claimed.map(({ id, claimedAt }) => sendToQueue(queueUrl, { fabFileId: id, userId: claimedById.get(id)!, claimedAt }))
+        claimed.map(({ id, claimedAt }) =>
+          sendToQueue(queueUrl, { fabFileId: id, userId: claimedById.get(id)!, claimedAt })
+        )
       );
       const failedIds = claimed.filter((_, i) => results[i].status === 'rejected').map(c => c.id);
       if (failedIds.length > 0) {

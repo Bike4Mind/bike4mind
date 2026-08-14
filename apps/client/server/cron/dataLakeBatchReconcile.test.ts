@@ -13,6 +13,9 @@ const h = vi.hoisted(() => ({
   fabFileFind: vi.fn(),
   claimForChunkScan: vi.fn(),
   sendToQueue: vi.fn(),
+  // Spied (not a bare stub) so a test can assert the cron passes BOTH the age cutoff and the
+  // stale-claim cutoff: a one-arg call silently turns the stale-claim rescue arm back off.
+  buildScanFilter: vi.fn((cutoff: Date, _staleClaimBefore: Date) => ({ chunkCount: 0, createdAt: { $lt: cutoff } })),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -46,7 +49,7 @@ vi.mock('sst', () => ({
 }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 vi.mock('@server/worker/chunkScan', () => ({
-  buildFabFileChunkScanFilter: (cutoff: Date) => ({ chunkCount: 0, createdAt: { $lt: cutoff } }),
+  buildFabFileChunkScanFilter: (...a: unknown[]) => h.buildScanFilter(...(a as [Date, Date])),
   CHUNK_SCAN_MIN_AGE_MS: 2 * 60_000,
   CHUNK_CLAIM_STALE_MS: 30 * 60_000,
 }));
@@ -179,6 +182,15 @@ describe('dataLakeBatchReconcile cron handler', () => {
       ]);
 
       const res = await handler();
+
+      // The scan filter must receive BOTH the age cutoff AND the stale-claim cutoff; a one-arg call
+      // (or the wrong Date) silently drops the stale-claim rescue arm. staleClaimBefore is the older
+      // of the two (30-min stale window vs 2-min age cutoff).
+      expect(h.buildScanFilter).toHaveBeenCalledTimes(1);
+      const [cutoff, staleClaimBefore] = h.buildScanFilter.mock.calls[0] as [Date, Date];
+      expect(cutoff).toBeInstanceOf(Date);
+      expect(staleClaimBefore).toBeInstanceOf(Date);
+      expect(staleClaimBefore.getTime()).toBeLessThan(cutoff.getTime());
 
       // Only won ids are enqueued (never the raw pre-read set), and each carries its claim token so
       // the worker can reject a duplicate/superseded delivery.

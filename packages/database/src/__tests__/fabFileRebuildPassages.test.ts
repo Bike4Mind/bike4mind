@@ -28,17 +28,20 @@ describe('FabFileChunkRepository.findUnderChunkedFabFileIds', () => {
   });
 
   it('returns only files with a chunk over the threshold, worst-first', async () => {
+    // Insert f-mid FIRST so insertion order (f-mid, f-big) is the OPPOSITE of worst-first
+    // (f-big 6000 > f-mid 2000). That makes the $sort load-bearing: without it the aggregation
+    // would return f-mid first and this assertion would fail, so it can't silently regress.
     await FabFileChunk.create([
+      { fabFileId: 'f-mid', text: 'c', tokenCount: 2000 },
       { fabFileId: 'f-big', text: 'a', tokenCount: 6000 },
       { fabFileId: 'f-big', text: 'b', tokenCount: 400 },
-      { fabFileId: 'f-mid', text: 'c', tokenCount: 2000 },
       { fabFileId: 'f-ok', text: 'd', tokenCount: 500 },
       { fabFileId: 'f-ok', text: 'e', tokenCount: 480 },
     ]);
 
     const ids = await fabFileChunkRepository.findUnderChunkedFabFileIds(['f-big', 'f-mid', 'f-ok'], 1500);
 
-    expect(ids).toEqual(['f-big', 'f-mid']); // worst-first, f-ok excluded
+    expect(ids).toEqual(['f-big', 'f-mid']); // worst-first (NOT insertion order), f-ok excluded
   });
 
   it('never returns a file outside the provided id set', async () => {

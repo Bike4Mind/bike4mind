@@ -1080,9 +1080,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     //
     // Returns each won id with its claim stamp (chunkClaimedAt as epoch ms). The stamp is the claim
     // TOKEN: the caller puts it on the queue message and the worker only proceeds if the file still
-    // carries that exact stamp (it restamps on pickup), so a duplicate delivery or a stale
-    // re-enqueue of the same file matches nothing and can't concurrently re-run the destructive
-    // chunk. The per-id CAS calls are independent, so they run in parallel.
+    // carries that exact stamp. The worker does NOT move the stamp on pickup (so an SQS retry of the
+    // same message still matches - see fabFileChunk.ts); only a SUPERSEDING claim (a later wave or the
+    // rescue sweep re-claiming this file) moves it, which is exactly what must invalidate the older
+    // message. So a duplicate delivery or a stale re-enqueue matches nothing and can't concurrently
+    // re-run the destructive chunk. The per-id CAS calls are independent, so they run in parallel.
     const results = await Promise.all(
       ids.map(async id => {
         const claimedAt = new Date();

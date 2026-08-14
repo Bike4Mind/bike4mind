@@ -89,11 +89,17 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   // (b) a superseded or duplicate delivery bails here without disturbing the winner's claim.
   //
   // A TOKENED delivery (a "Rebuild passages" wave or the rescue sweep) carries the exact chunkClaimedAt
-  // stamp it was pre-claimed with; the worker restamps on pickup, so a duplicate of the same message,
-  // or a stale re-enqueue whose stamp has since moved on, matches nothing and returns instead of
-  // re-running the destructive chunk concurrently with the real one. An UNTOKENED delivery (upload /
-  // S3 webhook / per-file reprocess) claims a file that is not being chunked, or whose claim is stale
-  // (a worker hard-killed before its finally) - the same arms buildFabFileChunkScanFilter selects on.
+  // stamp it was pre-claimed with, and proceeds only while the file still carries it. Pickup must NOT
+  // move that stamp: an SQS retry redelivers the SAME token, so overwriting it here would make every
+  // attempt after the first match nothing - silently collapsing the retry ladder (DLQ routing, batch
+  // failure accounting, `error` marking all die) into a single attempt. Leaving it put keeps the token
+  // stable across retries; a genuinely superseding claim (a new wave/sweep re-claim) is what moves it,
+  // which correctly invalidates the older message. Staleness stays safe because a run is bounded by the
+  // Lambda timeout (~13m) and CHUNK_CLAIM_STALE_MS (30m) exceeds it, so the sweep can't re-claim a still-
+  // running worker even though the stamp is now the pre-claim time rather than pickup time.
+  // An UNTOKENED delivery (upload / S3 webhook / per-file reprocess) claims a file that is not being
+  // chunked, or whose claim is stale (a worker hard-killed before its finally) - the same arms
+  // buildFabFileChunkScanFilter selects on - and DOES take a fresh lease stamp.
   let acquired = false;
   try {
     const now = new Date();
@@ -109,9 +115,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
               { isChunking: true, chunkClaimedAt: null },
             ],
           };
-    const claimDoc = await FabFile.findOneAndUpdate(claimQuery, {
-      $set: { isChunking: true, chunkClaimedAt: now },
-    });
+    const claimUpdate =
+      claimedAt !== undefined ? { $set: { isChunking: true } } : { $set: { isChunking: true, chunkClaimedAt: now } };
+    const claimDoc = await FabFile.findOneAndUpdate(claimQuery, claimUpdate);
     if (!claimDoc) {
       logger.log(`FabFile ${fabFileId}: chunk claim superseded or duplicate delivery, skipping`);
       return;

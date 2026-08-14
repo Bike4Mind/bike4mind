@@ -123,15 +123,22 @@ const liveFilter = (lake: LakeTarget) => ({ ...membership(lake), deletedAt: null
  * apps/client/server/worker/chunkScan.ts - including its stale-claim arm (a claim older than
  * CHUNK_CLAIM_STALE_MS, or an isChunking:true file predating chunkClaimedAt, is rescuable). */
 const stragglerFilter = (lake: LakeTarget) => ({
-  ...membership(lake),
   status: 'complete',
   chunkCount: 0,
   createdAt: { $lt: new Date(Date.now() - STRAGGLER_MIN_AGE_MS) },
   deletedAt: null,
-  $or: [
-    { isChunking: { $ne: true } },
-    { isChunking: true, chunkClaimedAt: { $lt: new Date(Date.now() - CHUNK_CLAIM_STALE_MS) } },
-    { isChunking: true, chunkClaimedAt: null },
+  // membership() itself returns a top-level `$or` for a prefix-bearing lake (meta-tag OR prefix
+  // arm), so the stale-claim `$or` below CANNOT be a sibling key - the later one would clobber the
+  // membership one and un-scope the query across every tenant. Nest both under `$and` so both hold.
+  $and: [
+    membership(lake),
+    {
+      $or: [
+        { isChunking: { $ne: true } },
+        { isChunking: true, chunkClaimedAt: { $lt: new Date(Date.now() - CHUNK_CLAIM_STALE_MS) } },
+        { isChunking: true, chunkClaimedAt: null },
+      ],
+    },
   ],
 });
 
