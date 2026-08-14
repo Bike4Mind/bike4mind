@@ -459,10 +459,12 @@ export const LLMProvider: React.FC = () => {
   // the deprecation fallback and the admin-default chain), and consumed once by the refit effect below so
   // that transition does not count as a user switch. Must stay in sync with both: the writer is the
   // default-model effect, the reader is the refit effect's allowRaise gate.
-  // INVARIANT: this handoff assumes the two effects run in declaration order on the same commit, which is
-  // how React runs sibling effects in one component. Keep them siblings here - extracting either into its
-  // own hook, or reordering them, breaks the handoff silently and re-opens #1254.
-  const autoResolvedModelRef = useRef<string | null>(null);
+  // What makes the handoff safe is NOT effect ordering: the consuming run happens on the commit after the
+  // write either way. It is that the flag records the whole TRANSITION and is consumed once, so it can only
+  // suppress the raise for the exact from -> to this effect resolved. Keying it on the destination alone
+  // was weaker: if another write moved the model again before the consuming run, the flag survived
+  // unconsumed and could later suppress a genuine user switch back to that same model.
+  const autoResolvedModelRef = useRef<{ from: string; to: string } | null>(null);
 
   // Set the default model and max tokens, respecting access control
   // Fallback chain: admin default -> user's last used model -> first accessible model
@@ -492,7 +494,7 @@ export const LLMProvider: React.FC = () => {
             const fallback = stableGetFallbackModel(state.model);
             if (fallback) {
               const liveFallbackInfo = modelInfoRepoRef.current?.find(m => m.id === fallback.id) ?? fallback;
-              autoResolvedModelRef.current = fallback.id;
+              autoResolvedModelRef.current = { from: state.model, to: fallback.id };
               return {
                 ...state,
                 model: fallback.id,
@@ -521,11 +523,17 @@ export const LLMProvider: React.FC = () => {
           // user below what the model can actually serve, and the sibling refit effect reads the live
           // repo, so both paths must agree on the ceiling. Falls back to `modelToUse` before the repo loads.
           const liveModelInfo = modelInfoRepoRef.current?.find(m => m.id === modelToUse.id) ?? modelToUse;
-          const nextMaxTokens = refitMaxTokensForModel(state.max_tokens, liveModelInfo, { allowRaise: false });
+          // hasNoModel means there is no ceiling to protect: the store is at DEFAULTS (a fresh session, or
+          // resetSettings), so state.max_tokens is the 8192 PLACEHOLDER, not a choice. Without the raise it
+          // would survive the fit untouched and strand a new user far below the model default, and the refit
+          // effect cannot correct it afterwards because this branch marks the transition auto-resolved.
+          const nextMaxTokens = refitMaxTokensForModel(state.max_tokens, liveModelInfo, {
+            allowRaise: hasNoModel,
+          });
           // Tell the refit effect below that THIS transition was resolved for the user, not chosen by
           // them. Without it that effect sees a model change, sets allowRaise, and raises the ceiling
           // straight back to the new model's default - undoing the line above.
-          autoResolvedModelRef.current = modelToUse.id;
+          autoResolvedModelRef.current = { from: state.model, to: modelToUse.id };
 
           return {
             ...state,
@@ -568,14 +576,18 @@ export const LLMProvider: React.FC = () => {
     if (isImageModel(activeModel)) return;
     const info = modelInfoRepo.find(m => m.id === activeModel);
     if (!info) return;
-    const modelChanged = refitModelRef.current !== null && refitModelRef.current !== activeModel;
+    const previousModel = refitModelRef.current;
+    const modelChanged = previousModel !== null && previousModel !== activeModel;
     refitModelRef.current = activeModel;
     // A switch the app resolved for the user is not a switch they asked for, so it must not raise a
     // ceiling they lowered (#1254). Consumed once: a later, genuine switch to this same model still
     // raises, which is what session hydration relies on (applyModelFromSession sets the model with no
     // max_tokens and depends on this effect fitting it to the new model).
-    const autoResolved = autoResolvedModelRef.current === activeModel;
-    if (autoResolved) autoResolvedModelRef.current = null;
+    // `previousModel` is null on the first run that fits anything, which is the fresh-session transition
+    // out of the empty model - the same '' the writer recorded as `from`.
+    const pendingAutoResolve = autoResolvedModelRef.current;
+    const autoResolved = pendingAutoResolve?.to === activeModel && pendingAutoResolve.from === (previousModel ?? '');
+    if (pendingAutoResolve?.to === activeModel) autoResolvedModelRef.current = null;
     const allowRaise = modelChanged && !autoResolved;
     setState(state => {
       const refitted = refitMaxTokensForModel(state.max_tokens, info, { allowRaise });
