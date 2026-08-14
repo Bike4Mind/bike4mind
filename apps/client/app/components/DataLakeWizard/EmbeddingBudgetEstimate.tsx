@@ -64,11 +64,17 @@ export function EmbeddingBudgetEstimate({ files, compact }: EmbeddingBudgetEstim
       variant="soft"
       data-testid="datalake-estimate-over-budget-alert"
     >
-      This upload may exceed the per-run embedding budget. Rough estimate: ~$
-      <span data-testid="datalake-estimate-total">{roundedCost}</span> for {files.length.toLocaleString()} file
-      {files.length === 1 ? '' : 's'}, against ~$
-      <span data-testid="datalake-estimate-remaining">{perRunBudgetUsd.toFixed(2)}</span> for this run. The estimate is
-      approximate - it is based on file size, not the text actually extracted, and rounds up. You can still upload.
+      {/* Alert lays its own children out as flex row items - a bare mix of text nodes and
+          <span>s becomes several independent flex items that wrap into overlapping columns
+          instead of flowing as one paragraph. Wrapping in a single Typography (matching the
+          "Adding files to..." Alert elsewhere in this file's own directory) keeps it one item. */}
+      <Typography level={compact ? 'body-xs' : 'body-sm'}>
+        This upload may exceed the per-run embedding budget. Rough estimate: ~$
+        <span data-testid="datalake-estimate-total">{roundedCost}</span> for {files.length.toLocaleString()} file
+        {files.length === 1 ? '' : 's'}, against ~$
+        <span data-testid="datalake-estimate-remaining">{perRunBudgetUsd.toFixed(2)}</span> for this run. The estimate
+        is approximate - it is based on file size, not the text actually extracted, and rounds up. You can still upload.
+      </Typography>
     </Alert>
   );
 }
