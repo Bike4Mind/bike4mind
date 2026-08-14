@@ -220,8 +220,20 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
       const body = res._getJSONData();
-      expect(JSON.stringify(body.promptMeta.functionCalls)).not.toContain('PRIVATE TOOL OUTPUT');
+      // Whole-response, not field-scoped: guards against the leak reappearing through a sibling
+      // field (e.g. executionTracking) that also reads off the unredacted quest.promptMeta.
+      expect(JSON.stringify(body)).not.toContain('PRIVATE TOOL OUTPUT');
       expect(body.promptMeta.functionCalls[0]).toMatchObject({ name: 'web_search', id: 'call_1', success: true });
+    });
+
+    it('strips returnValue for a sharee polling via an API key (not just JWT/browser callers)', async () => {
+      validateWithScopes([ApiKeyScope.READ_NOTEBOOKS]); // resolves to userId 'user-1', a sharee per beforeEach
+      mockQuestFindById.mockResolvedValue(questWithFunctionCalls());
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      const body = res._getJSONData();
+      expect(JSON.stringify(body)).not.toContain('PRIVATE TOOL OUTPUT');
     });
 
     it('leaves returnValue untouched for the session owner', async () => {
