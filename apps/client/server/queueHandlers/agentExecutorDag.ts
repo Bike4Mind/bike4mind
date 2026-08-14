@@ -370,8 +370,14 @@ export function isDagAggregationWake(args: {
  * work (no new billable work of its own) - it does not license the run to keep
  * iterating past it. If the member is still over cap once the DAG's own
  * already-paid-for cost has settled, this caps the parent's own loop to the one
- * iteration that turns the aggregated result into an answer. A no-op (returns
- * `maxIterations` unchanged) outside that exact case.
+ * iteration that turns the aggregated result into an answer for THIS wake. A
+ * no-op (returns `maxIterations` unchanged) outside that exact case.
+ *
+ * This is a per-wake bound, not a lifetime one: `maxIterations` is recomputed
+ * fresh from `iterationIndex` on every invocation, so a run that dispatches a
+ * new `coordinate_task` from within its grace iteration gets another one-iteration
+ * grant on its next aggregation wake. The real overall ceiling stays the run's
+ * original `maxIterations` - each wake just narrows what's left of it to one step.
  *
  * This only bounds the PARENT's own further iterations. A new subagent or DAG
  * fan-out dispatched from within that one grace iteration is a separate fresh

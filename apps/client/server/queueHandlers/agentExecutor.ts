@@ -2602,6 +2602,48 @@ async function processSubagentDispatch(
         error: 'insufficient_credits',
         isTimeout: false,
       });
+      // Phase 4a - DAG node terminal even on this refusal. The cap is a per-USER
+      // condition, so it trips uniformly for every sibling in the same DAG - without
+      // this, NONE of them would fire the hook that wakes the parent, leaving it
+      // wedged in `awaiting_dag_children` forever (no reaper: `cleanupStaleActive`
+      // deliberately excludes that status). Same recovery as the other terminal
+      // sites in this function: if the hook itself throws, mark the parent failed
+      // so the session unwedges instead of hanging.
+      if (child.dagNodeId) {
+        try {
+          await onDagNodeTerminal({
+            child: {
+              id: childExecutionId,
+              parentExecutionId: child.parentExecutionId,
+              dagNodeId: child.dagNodeId,
+              status: 'failed',
+            },
+            connectionId,
+            logger,
+          });
+        } catch (hookErr) {
+          const msg = hookErr instanceof Error ? hookErr.message : String(hookErr);
+          logger.error('[DAG] onDagNodeTerminal failed - marking parent failed', {
+            parentId: child.parentExecutionId,
+            childExecutionId,
+            error: msg,
+          });
+          if (child.parentExecutionId) {
+            await agentExecutionRepository
+              .markFailed(child.parentExecutionId, { message: `DAG completion hook failed: ${msg}` })
+              .catch(markErr => {
+                logger.error('[DAG] markFailed on parent also failed', {
+                  parentId: child.parentExecutionId,
+                  error: markErr instanceof Error ? markErr.message : String(markErr),
+                });
+              });
+            await sendWs('failed', {
+              executionId: child.parentExecutionId,
+              reason: 'dag_hook_error',
+            });
+          }
+        }
+      }
       return;
     }
 
