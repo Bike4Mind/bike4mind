@@ -16,9 +16,10 @@ import { dataLakeService } from '@bike4mind/services';
 import { dataLakeRepository, organizationRepository } from '@bike4mind/database';
 import { getRequestEntitlements, type EntitlementRequest } from '@server/entitlements';
 import type { Logger } from '@bike4mind/observability';
+import { getRequestMembershipOrgIds, type MembershipRequest } from './requestMembership';
 
 /** EntitlementRequest carries no logger; the routes calling this are Express requests that do. */
-type RetrievalScopeRequest = EntitlementRequest & { logger?: Logger };
+type RetrievalScopeRequest = EntitlementRequest & MembershipRequest & { logger?: Logger };
 
 /** The tag/prefix triple `semanticDataLakeSearch` scopes on. Mirrors the core resolver's return. */
 export type RetrievalLakeScope = Awaited<ReturnType<typeof dataLakeService.getDynamicDataLakeAccess>>;
@@ -92,7 +93,17 @@ export async function resolveRetrievalLakeScope(req: RetrievalScopeRequest): Pro
   // INSIDE the shared resolver from user.id, not from user.organizationId (the selected-org
   // display pointer) - see DataLakeAccessContext (#1674).
   const scope = await dataLakeService.getDynamicDataLakeAccess({
-    db: { dataLakes: dataLakeRepository, organizations: organizationRepository },
+    db: {
+      dataLakes: dataLakeRepository,
+      // The resolver derives membership itself from user.id; serve that lookup from the
+      // request memo so one request resolves membership once across toAccessContext and this
+      // scope. Any other id (defense-in-depth - the resolver only asks about user.id today)
+      // falls through to the repository.
+      organizations: {
+        findMembershipOrgIds: (uid: string) =>
+          uid === user.id ? getRequestMembershipOrgIds(req) : organizationRepository.findMembershipOrgIds(uid),
+      },
+    },
     user: {
       id: user.id,
       tags: user.tags ?? [],

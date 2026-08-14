@@ -161,7 +161,10 @@ describe('resolveRetrievalLakeScope', () => {
     // organizationRepository so the resolver can derive membership itself - user.organizationId
     // (the selected-org pointer) is NOT forwarded (#1674).
     expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
-      db: { dataLakes: dataLakeRepository, organizations: organizationRepository },
+      db: {
+        dataLakes: dataLakeRepository,
+        organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
+      },
       user: { id: 'u1', tags: ['Opti'] },
       entitlementKeys: ['optihashi:pro'],
     });
@@ -211,7 +214,10 @@ describe('resolveRetrievalLakeScope', () => {
     await resolveRetrievalLakeScope(asReq({ id: 'u1', tags: null }));
 
     expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
-      db: { dataLakes: dataLakeRepository, organizations: organizationRepository },
+      db: {
+        dataLakes: dataLakeRepository,
+        organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
+      },
       user: { id: 'u1', tags: [] },
       entitlementKeys: [],
     });
@@ -226,9 +232,25 @@ describe('resolveRetrievalLakeScope', () => {
     await resolveRetrievalLakeScope(asReq({ id: 'u1', tags: ['Opti'], organizationId: populatedOrg }));
 
     expect(mockGetDynamicDataLakeAccess).toHaveBeenCalledWith({
-      db: { dataLakes: dataLakeRepository, organizations: organizationRepository },
+      db: {
+        dataLakes: dataLakeRepository,
+        organizations: expect.objectContaining({ findMembershipOrgIds: expect.any(Function) }),
+      },
       user: { id: 'u1', tags: ['Opti'] },
       entitlementKeys: [],
     });
+  });
+
+  it('serves the resolver membership lookup from the request memo (one repository call per request)', async () => {
+    const req = asReq({ id: 'u1', tags: ['Opti'] }) as EntitlementRequest & { membershipOrgIds?: string[] };
+    // The repository mock is the __marker stub; give it a spy so a fall-through call is visible.
+    organizationRepository.findMembershipOrgIds = vi.fn().mockResolvedValue([]);
+
+    await resolveRetrievalLakeScope(req);
+    const { db } = mockGetDynamicDataLakeAccess.mock.calls.at(-1)![0];
+
+    req.membershipOrgIds = ['memoized-org'];
+    await expect(db.organizations.findMembershipOrgIds(req.user!.id)).resolves.toEqual(['memoized-org']);
+    expect(organizationRepository.findMembershipOrgIds).not.toHaveBeenCalled();
   });
 });
