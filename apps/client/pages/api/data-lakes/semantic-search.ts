@@ -24,7 +24,7 @@ import {
   isSupportedEmbeddingModel,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
-import { createTokenizer, getSettingsByNames, type ITokenizer } from '@bike4mind/utils';
+import { createTokenizer, getSettingsByNames, normalizeId, type ITokenizer } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import { resolveRetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
 
@@ -321,16 +321,18 @@ const handler = baseApi()
       // search reflects no lake content read (and would otherwise fall back to logging the WHOLE
       // authorized scope as accessed, per attributeAccessedLakeIds's empty-attribution fallback).
       // Attribute to a specific lake where the datalake tag is recoverable, falling back to the
-      // whole authorized scope otherwise (see the doc comment on resolvedLakeIds). Never awaited:
-      // an audit-write failure must not affect this response. Recorded here, right as the search
-      // results come back - NOT after the later isAborted() check - because the read already
+      // whole authorized scope otherwise (see the doc comment on resolvedLakeIds). Awaited (never
+      // rethrows - see recordLakeAccessEvent's doc comment): a per-request serverless route must
+      // not race a post-response freeze of the execution environment. Recorded here, right as the
+      // search results come back - NOT after the later isAborted() check - because the read already
       // happened at this point regardless of whether the client is still there for the response.
       if (search.results.length > 0) {
-        dataLakeService.recordLakeAccessEvent(
+        await dataLakeService.recordLakeAccessEvent(
           lakeAccessEventRepository,
           {
             principalKind: 'user',
             principalId: req.user.id,
+            organizationId: normalizeId(req.user.organizationId),
             resolvedLakeIds: dataLakeService.attributeAccessedLakeIds(
               search.results.map(r => r.fileTags),
               lakes
@@ -340,7 +342,8 @@ const handler = baseApi()
             surface: 'data-lake-semantic-search',
             queryText: query,
           },
-          req.logger
+          req.logger,
+          adminSettingsRepository
         );
       }
 

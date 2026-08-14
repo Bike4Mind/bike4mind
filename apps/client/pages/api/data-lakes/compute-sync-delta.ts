@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import {
+  adminSettingsRepository,
   dataLakeAccessGrantRepository,
   dataLakeRepository,
   fabFileRepository,
@@ -27,7 +28,8 @@ const handler = baseApi()
     const policy = data.conflictResolution ?? 'skip';
 
     // Shared access gate (resolves by slug; not-found-style denial).
-    const dataLake = await dataLakeService.assertLakeAccess(data.dataLakeSlug, await toAccessContext(req), {
+    const accessContext = await toAccessContext(req);
+    const dataLake = await dataLakeService.assertLakeAccess(data.dataLakeSlug, accessContext, {
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
@@ -74,18 +76,23 @@ const handler = baseApi()
 
     // Best-effort audit write - a hash match reveals a file's existence (id + name)
     // regardless of which policy branch then classifies it, so every matched hash counts here,
-    // not only the skip/update arms.
+    // not only the skip/update arms. Skipped entirely when nothing matched: a manifest full of
+    // new files touches no existing lake content, so there is nothing to attribute a read to.
+    // Awaited (never rethrows): a per-request serverless route must not race a post-response
+    // environment freeze.
     if (existingHashMap.size > 0) {
-      dataLakeService.recordLakeAccessEvent(
+      await dataLakeService.recordLakeAccessEvent(
         lakeAccessEventRepository,
         {
           principalKind: 'user',
           principalId: req.user.id,
+          organizationId: accessContext.organizationId,
           resolvedLakeIds: [dataLake.id],
           fileIds: [...existingHashMap.values()].map(f => f.fileId),
           surface: 'data-lake-sync-delta',
         },
-        req.logger
+        req.logger,
+        adminSettingsRepository
       );
     }
 

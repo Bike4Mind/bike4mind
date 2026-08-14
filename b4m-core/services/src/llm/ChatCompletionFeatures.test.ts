@@ -1533,6 +1533,9 @@ describe('KnowledgeRetrievalFeature access-event audit (#1678)', () => {
   };
 
   const record = vi.fn().mockResolvedValue(undefined);
+  // recordLakeAccessEvent awaits a platform-retention settings read before calling record(), so
+  // the call lands one microtask after getContextMessages itself returns - flush before asserting.
+  const flushAsync = () => new Promise(resolve => setImmediate(resolve));
 
   const makeCtx = (fileTags: { name: string }[] = [{ name: 'datalake:lake1' }]) => {
     const files = [{ id: 'fileA', fileName: 'Handbook.pdf', tags: fileTags, vectorized: true }];
@@ -1572,6 +1575,7 @@ describe('KnowledgeRetrievalFeature access-event audit (#1678)', () => {
       embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
       'pto policy'
     );
+    await flushAsync();
 
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1586,7 +1590,11 @@ describe('KnowledgeRetrievalFeature access-event audit (#1678)', () => {
     );
   });
 
-  it('falls back to the full authorized scope when the grounded file carries no recoverable tag', async () => {
+  // Forced retrieval's candidate search is a MIXED corpus (owned + shared + org-shared + data
+  // lake, via includeShared:true with no restrictToDataLake) - unlike the route/semantic-arm
+  // sites, a grounded file with no recoverable tag might just be the caller's own private file,
+  // so this must NOT fall back to the full scope, and must not record at all.
+  it('does not record when the grounded file carries no recoverable tag (mixed corpus, no fallback)', async () => {
     const ctx = makeCtx([{ name: 'opti:policy' }]);
     const feature = new KnowledgeRetrievalFeature(
       ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
@@ -1597,8 +1605,9 @@ describe('KnowledgeRetrievalFeature access-event audit (#1678)', () => {
       embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
       'pto policy'
     );
+    await flushAsync();
 
-    expect(record).toHaveBeenCalledWith(expect.objectContaining({ resolvedLakeIds: ['lake1'] }));
+    expect(record).not.toHaveBeenCalled();
   });
 
   it('does not record an event when nothing grounds (abstention)', async () => {
@@ -1629,7 +1638,9 @@ describe('KnowledgeRetrievalFeature access-event audit (#1678)', () => {
       embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
       'pto policy'
     );
+    await flushAsync();
 
     expect(messages[0]?.content).toContain('Handbook.pdf');
+    expect(record).toHaveBeenCalled();
   });
 });

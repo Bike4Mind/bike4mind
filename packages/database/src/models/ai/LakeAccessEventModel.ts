@@ -148,6 +148,15 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
     }
   }
 
+  /**
+   * NOT a complete picture of every read a lake was ever party to: an agent-scoped chat read
+   * (surface chat-kb-search-scoped, or chat-kb-retrieve/chat-kb-search under a kbScope) is
+   * authorized by the agent owner's curated file-id whitelist, not by lake membership, so it is
+   * recorded with resolvedLakeIds always empty and never matches this query - see the
+   * "never consults lake access" comments at those record call sites. Those events are still
+   * fully durable and visible via listByPrincipal; a UI presenting per-lake history should say so
+   * rather than implying this list is exhaustive.
+   */
   async listByLake(lakeId: string, opts?: { limit?: number }): Promise<ILakeAccessEventDocument[]> {
     const query = this.eventModel.find({ resolvedLakeIds: lakeId }).sort({ createdAt: -1 });
     if (opts?.limit) query.limit(opts.limit);

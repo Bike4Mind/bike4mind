@@ -19,7 +19,13 @@ vi.mock('@server/dataLakes', () => ({
   resolveAccessibleLakes: mockResolveAccessibleLakes,
   queryDataLakeArticles: mockQueryDataLakeArticles,
 }));
-vi.mock('@bike4mind/database', () => ({ lakeAccessEventRepository: { record: mockRecord } }));
+vi.mock('@bike4mind/database', () => ({
+  lakeAccessEventRepository: { record: mockRecord },
+  adminSettingsRepository: {
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
+}));
 vi.mock('@bike4mind/services', async () => ({
   dataLakeService: {
     attributeAccessedLakeIds: (
@@ -92,7 +98,10 @@ describe('GET /api/data-lakes/articles access-event audit (#1678)', () => {
     expect(mockRecord).toHaveBeenCalledWith(expect.objectContaining({ queryText: 'onboarding' }));
   });
 
-  it('falls back to the full accessible-lake scope when no returned file carries a datalake tag', async () => {
+  // The list/search path is a MIXED corpus (owned + shared + org-shared + data lake, since this
+  // route never sets restrictToDataLake) - a hit with no recoverable tag may be the caller's own
+  // private file, so this must NOT fall back to the full scope, unlike the deep-link case below.
+  it('does not record when no returned file carries a datalake tag (mixed corpus, no fallback)', async () => {
     mockQueryDataLakeArticles.mockResolvedValue({
       data: [{ id: 'f1', tags: [{ name: 'opti:policy' }] }],
       total: 1,
@@ -100,6 +109,21 @@ describe('GET /api/data-lakes/articles access-event audit (#1678)', () => {
     });
 
     await route(makeReq(), makeRes().res);
+
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  // The deep-link (?id=) branch IS sound for the fallback: queryDataLakeArticles authorizes it
+  // via isFileInAccessibleLake, so the one file it returns is guaranteed lake content even when
+  // prefix-matched (no recoverable tag).
+  it('falls back to the full accessible-lake scope on a deep-link fetch with no recoverable tag', async () => {
+    mockQueryDataLakeArticles.mockResolvedValue({
+      data: [{ id: 'f1', tags: [{ name: 'opti:policy' }] }],
+      total: 1,
+      hasMore: false,
+    });
+
+    await route(makeReq({ id: 'f1' }), makeRes().res);
 
     expect(mockRecord).toHaveBeenCalledWith(expect.objectContaining({ resolvedLakeIds: ['lake1', 'lake2'] }));
   });

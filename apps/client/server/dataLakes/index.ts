@@ -119,7 +119,7 @@ export async function findLakeAccessibleFabFile(
 export interface DataLakeArticlesQuery {
   id?: string;
   tags?: string | string[];
-  search?: string;
+  search?: string | string[];
   page?: string;
   limit?: string;
   sortBy?: string;
@@ -192,7 +192,10 @@ export async function queryDataLakeArticles(
 
   const rawTags = query.tags;
   const tags: string[] = rawTags ? (Array.isArray(rawTags) ? rawTags : [rawTags]) : [];
-  const search = query.search ?? '';
+  // Express hands back string[] for a repeated ?search= - narrow to the first value rather than
+  // let an array reach fabFilesService.search's textSearch (same pattern as [id]/articles.ts).
+  const rawSearch = query.search;
+  const search = (Array.isArray(rawSearch) ? rawSearch[0] : rawSearch) ?? '';
   const page = Math.max(1, Number(query.page) || 1);
   const limit = Math.min(2000, Math.max(1, Number(query.limit) || 50));
   const sortBy = query.sortBy === 'createdAt' ? ('createdAt' as const) : ('fileName' as const);

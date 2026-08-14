@@ -38,7 +38,8 @@ const handler = baseApi()
     const { id } = req.query;
 
     // Single shared gate (org-aware; not-found-style denial).
-    const dataLake = await dataLakeService.assertLakeAccess(id, await toAccessContext(req), {
+    const accessContext = await toAccessContext(req);
+    const dataLake = await dataLakeService.assertLakeAccess(id, accessContext, {
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
@@ -119,18 +120,22 @@ const handler = baseApi()
 
     // Best-effort audit write, only when something was actually returned - an empty
     // page reflects no lake content read. The lake is already resolved, so no attribution needed.
+    // Awaited (never rethrows): a per-request serverless route must not race a post-response
+    // freeze of the execution environment.
     if (result.data.length > 0) {
-      dataLakeService.recordLakeAccessEvent(
+      await dataLakeService.recordLakeAccessEvent(
         lakeAccessEventRepository,
         {
           principalKind: 'user',
           principalId: userId,
+          organizationId: accessContext.organizationId,
           resolvedLakeIds: [dataLake.id],
           fileIds: (result.data as Array<{ id: string }>).map(f => f.id),
           surface: 'data-lake-articles',
           ...(search ? { queryText: search } : {}),
         },
-        req.logger
+        req.logger,
+        adminSettingsRepository
       );
     }
 

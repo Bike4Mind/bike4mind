@@ -86,6 +86,16 @@ describe('queryDataLakeArticles scope plumbing', () => {
     expect(callArgs().params.options).toEqual({ textSearch: true, excludeContent: true });
   });
 
+  // Express hands back string[] for a repeated ?search= - narrow to the first value rather than
+  // let an array reach fabFilesService.search's `search` field, which expects a plain string.
+  it('narrows a repeated ?search= (Express hands back an array) to its first value', async () => {
+    await queryDataLakeArticles(req, [DYNAMIC_LAKE], { search: ['handbook', 'other'] } as any);
+
+    const { params } = callArgs();
+    expect(params.search).toBe('handbook');
+    expect(params.options).toEqual({ textSearch: true, excludeContent: true });
+  });
+
   // A dynamic lake's fileTagPrefix is user-chosen and can collide across tenants, so it must reach
   // the scoped arm (ANDed with ownership) and never the open one (an un-ANDed bypass).
   it('routes a dynamic lake prefix to the scoped arm, leaving the open arm empty', async () => {

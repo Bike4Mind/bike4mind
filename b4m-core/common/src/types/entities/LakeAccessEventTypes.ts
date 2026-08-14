@@ -27,6 +27,10 @@ export const LAKE_ACCESS_SURFACES = [
   'data-lake-articles',
   'data-lake-public-browse',
   'data-lake-sync-delta',
+  // The GET /api/files/:id lake-accessible fallback (files/[id]/index.ts) - same single-file
+  // metadata + URL read as the articles `?id=` deep link, reached through a different door, so it
+  // gets its own value rather than reusing data-lake-articles and conflating the two entry points.
+  'data-lake-file-fallback',
   'chat-kb-search',
   'chat-kb-search-scoped',
   'chat-kb-retrieve',

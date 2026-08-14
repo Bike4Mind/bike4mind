@@ -35,4 +35,25 @@ describe('attributeAccessedLakeIds', () => {
   it('returns empty when the scope itself is empty, even with no attribution', () => {
     expect(attributeAccessedLakeIds([['some:content:tag']], [])).toEqual([]);
   });
+
+  describe('allowFullScopeFallback: false (mixed-corpus callers)', () => {
+    it('still attributes normally when a tag actually matches', () => {
+      const ids = attributeAccessedLakeIds([['datalake:lake1']], LAKES, { allowFullScopeFallback: false });
+      expect(ids).toEqual(['lake1']);
+    });
+
+    it('returns empty, not the full scope, when nothing carries a recoverable tag', () => {
+      expect(attributeAccessedLakeIds([['some:content:tag']], LAKES, { allowFullScopeFallback: false })).toEqual([]);
+    });
+
+    it('returns empty, not the full scope, for an empty result set', () => {
+      expect(attributeAccessedLakeIds([], LAKES, { allowFullScopeFallback: false })).toEqual([]);
+    });
+
+    it('returns empty when a tag matches no known lake', () => {
+      expect(attributeAccessedLakeIds([['datalake:unknown-lake']], LAKES, { allowFullScopeFallback: false })).toEqual(
+        []
+      );
+    });
+  });
 });

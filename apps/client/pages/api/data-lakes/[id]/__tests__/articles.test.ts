@@ -194,6 +194,22 @@ describe('GET /api/data-lakes/:id/articles access-event audit (#1678)', () => {
     expect(h.record).not.toHaveBeenCalled();
   });
 
+  // Negative control distinct from the empty-result cases above: here the caller is denied
+  // ACCESS outright (assertLakeAccess throws), so the handler never reaches the search or the
+  // audit write at all - proving the recorder is skipped on a failed authorization, not merely
+  // on an authorized-but-empty read.
+  it('does not record an event when the access gate itself denies the request', async () => {
+    h.assertLakeAccess.mockRejectedValue(new Error('not found'));
+    const { res } = makeRes();
+
+    await expect((handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res)).rejects.toThrow(
+      'not found'
+    );
+
+    expect(h.search).not.toHaveBeenCalled();
+    expect(h.record).not.toHaveBeenCalled();
+  });
+
   it('does not record an event when the search ran but found no files', async () => {
     h.search.mockResolvedValue({ data: [], total: 0, hasMore: false });
     const { res } = makeRes();

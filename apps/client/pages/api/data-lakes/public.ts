@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
+  adminSettingsRepository,
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   userRepository,
@@ -27,8 +28,9 @@ const handler = baseApi()
   .get(async (req: Request, res) => {
     const { q, limit, offset } = BrowseQuery.parse(req.query);
 
+    const accessContext = await toAccessContext(req);
     const result = await dataLakeService.browsePublicDataLakes(
-      await toAccessContext(req),
+      accessContext,
       { search: q, limit, offset },
       {
         db: {
@@ -41,17 +43,21 @@ const handler = baseApi()
 
     // Best-effort audit write - the browsed lakes themselves ARE the result, so no
     // tag-attribution step is needed; every returned lake goes straight into resolvedLakeIds.
+    // Skipped entirely on an empty page: zero lakes browsed is not a lake access. Awaited (never
+    // rethrows): a per-request serverless route must not race a post-response environment freeze.
     if (result.data.length > 0) {
-      dataLakeService.recordLakeAccessEvent(
+      await dataLakeService.recordLakeAccessEvent(
         lakeAccessEventRepository,
         {
           principalKind: 'user',
           principalId: req.user.id,
+          organizationId: accessContext.organizationId,
           resolvedLakeIds: result.data.map(lake => lake.id),
           surface: 'data-lake-public-browse',
           ...(q ? { queryText: q } : {}),
         },
-        req.logger
+        req.logger,
+        adminSettingsRepository
       );
     }
 

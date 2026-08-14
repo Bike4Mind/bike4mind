@@ -24,8 +24,13 @@ vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () =>
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
+  dataLakeAccessGrantRepository: {},
   fabFileRepository: { findByContentHashesInDataLake: h.findByContentHashesInDataLake },
   lakeAccessEventRepository: { record: h.record },
+  adminSettingsRepository: {
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
 }));
 vi.mock('@bike4mind/services', async () => ({
   dataLakeService: {

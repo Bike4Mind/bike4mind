@@ -1413,6 +1413,9 @@ describe('search_knowledge_base clip order vs the untrusted-content defense (#16
 
 describe('search_knowledge_base access-event audit (#1678)', () => {
   const record = vi.fn().mockResolvedValue(undefined);
+  // recordLakeAccessEvent awaits a platform-retention settings read before calling record(), so
+  // the call lands one microtask after the tool itself returns - flush before asserting on it.
+  const flushAsync = () => new Promise(resolve => setImmediate(resolve));
 
   beforeEach(() => record.mockClear());
 
@@ -1437,6 +1440,9 @@ describe('search_knowledge_base access-event audit (#1678)', () => {
     });
 
     await run(ctx);
+    // The write now resolves platform retention (an async settings read) before calling
+    // record(), so the call lands one microtask after the tool itself returns.
+    await flushAsync();
 
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1514,6 +1520,7 @@ describe('search_knowledge_base access-event audit (#1678)', () => {
     });
 
     await run(ctx);
+    await flushAsync();
 
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1538,6 +1545,7 @@ describe('search_knowledge_base access-event audit (#1678)', () => {
     });
 
     await run(ctx);
+    await flushAsync();
 
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1549,19 +1557,30 @@ describe('search_knowledge_base access-event audit (#1678)', () => {
   });
 
   it('never throws the tool call when the audit write rejects', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
     record.mockRejectedValueOnce(new Error('mongo blip'));
     const ctx = makeContext({
       retrievalFilter: undefined,
       db: {
         lakeAccessEvents: { record },
         fabfiles: {
-          search: vi.fn().mockResolvedValue({ data: [{ id: 'f1', fileName: 'Clean.pdf', tags: [] }], total: 1 }),
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'f1', fileName: 'Clean.pdf', tags: [{ name: 'datalake:x' }] }],
+            total: 1,
+          }),
         },
       } as never,
     });
 
     const out = await run(ctx);
+    await flushAsync();
 
     expect(out).toContain('Clean.pdf');
+    expect(record).toHaveBeenCalled();
   });
 });

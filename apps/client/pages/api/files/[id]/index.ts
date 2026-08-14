@@ -19,9 +19,10 @@ import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
-import { findLakeAccessibleFabFile, resolveAccessibleLakes } from '@server/dataLakes';
+import { isFileInAccessibleLake, resolveAccessibleLakes } from '@server/dataLakes';
 import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
 import { getFilesStorage } from '@server/utils/storage';
+import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { Request } from 'express';
 import { Types } from 'mongoose';
 
@@ -58,21 +59,31 @@ const handler = baseApi()
       // browse endpoints use and, if granted, mint a fresh signed URL through the same path so
       // the shared file viewer (KnowledgeModal) can render it. (#836)
       const lakes = await resolveAccessibleLakes(req);
-      const lakeFile = await findLakeAccessibleFabFile(req, req.query.id);
-      if (!lakeFile) throw error; // not lake-accessible either - preserve the original 404
+      // Fetched directly and checked against the already-resolved `lakes` rather than calling
+      // findLakeAccessibleFabFile, which would re-run resolveAccessibleLakes's own DB read - the
+      // same one-resolve, reuse-everywhere shape as files/byIds.ts's lake fallback.
+      const candidate = lakes.length > 0 ? await fabFileRepository.findById(req.query.id) : null;
+      const lakeFile = candidate && !candidate.deletedAt && isFileInAccessibleLake(lakes, candidate) ? candidate : null;
+      // No accessible lake serves this id either - never an audit-worthy read, so nothing is
+      // recorded; preserve the original 404 exactly as getFabFile raised it.
+      if (!lakeFile) throw error;
       const fabFile = await fabFilesService.generateSignedUrl(lakeFile, adapter);
       // Best-effort audit write - this is the same single-file metadata + URL read as the
       // articles `?id=` deep link, just reached through the direct-fetch fallback door instead.
-      dataLakeService.recordLakeAccessEvent(
+      // Awaited (never rethrows): a per-request serverless route must not race a post-response
+      // freeze of the execution environment.
+      await dataLakeService.recordLakeAccessEvent(
         lakeAccessEventRepository,
         {
           principalKind: 'user',
           principalId: req.user.id,
+          organizationId: normalizeId(req.user.organizationId),
           resolvedLakeIds: dataLakeService.attributeAccessedLakeIds([lakeFile.tags?.map(t => t.name) ?? []], lakes),
           fileIds: [lakeFile.id],
-          surface: 'data-lake-articles',
+          surface: 'data-lake-file-fallback',
         },
-        req.logger
+        req.logger,
+        adminSettingsRepository
       );
       return res.json(fabFile);
     }

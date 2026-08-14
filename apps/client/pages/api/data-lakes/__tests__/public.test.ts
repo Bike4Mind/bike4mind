@@ -45,6 +45,10 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: USERS_REPO,
   dataLakeAccessGrantRepository: GRANTS_REPO,
   lakeAccessEventRepository: { record: mockRecord },
+  adminSettingsRepository: {
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
 }));
 // Real toAccessContext pulls in entitlements/subscription lookups that are out of scope for this
 // query-bounds test; stub it so the actor is just whatever the caller's req.user resolves to.
@@ -182,7 +186,6 @@ describe('GET /api/data-lakes/public - search and pass-through', () => {
 
 describe('GET /api/data-lakes/public access-event audit (#1678)', () => {
   beforeEach(() => vi.clearAllMocks());
-
   it('records an event with every browsed lake id, no attribution step needed', async () => {
     mockBrowse.mockResolvedValue({ data: [{ id: 'lake1' }, { id: 'lake2' }], total: 2 });
 

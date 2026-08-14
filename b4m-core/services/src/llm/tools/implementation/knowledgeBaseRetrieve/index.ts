@@ -104,6 +104,14 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
         }
 
         try {
+          // Memoized per call: Path A's shared-file fallback, Path B's search, and the audit
+          // attribution below each need the caller's dynamic lake access, but at most one of the
+          // first two ever runs (Path A returns before Path B on a resolved/missing file_id) - this
+          // makes whichever one runs first, plus the attribution step, share a single round trip
+          // instead of each re-resolving it.
+          let dynamicAccessPromise: ReturnType<typeof getDynamicDataLakeAccess> | undefined;
+          const dynamicAccess = () => (dynamicAccessPromise ??= getDynamicDataLakeAccess(context));
+
           let files: IFabFileDocument[] = [];
 
           // Path A: direct file_id lookup
@@ -134,7 +142,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                 // without ownership filter, then verify access via data lake tags, prefixes, or group sharing
                 const sharedFile = await context.db.fabfiles.findById(file_id);
                 if (isLiveVisibleFile(sharedFile, retrievalFilter)) {
-                  const { dataLakeTags, dataLakeTagPrefixes } = await getDynamicDataLakeAccess(context);
+                  const { dataLakeTags, dataLakeTagPrefixes } = await dynamicAccess();
                   const fileTags = sharedFile.tags?.map(t => t.name) || [];
                   const hasMetaTagAccess = dataLakeTags.some(dlt => fileTags.includes(dlt));
                   const hasPrefixAccess = dataLakeTagPrefixes.some(p => fileTags.some(t => t.startsWith(p)));
@@ -185,7 +193,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                 }
               );
             } else {
-              const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await getDynamicDataLakeAccess(context);
+              const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await dynamicAccess();
               searchResults = await context.db.fabfiles.search(
                 context.userId,
                 query || '',
@@ -382,27 +390,39 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             );
           }
 
-          // Best-effort audit write. The extra getDynamicDataLakeAccess call only runs
-          // when there's actually a recorder wired AND this isn't the agent-scoped branch (which
-          // never consults lake access, same as the search tool's scoped arm) - otherwise it's a
-          // wasted round trip for a lookup nothing will use.
-          const attributionLakes =
-            scope || !context.db.lakeAccessEvents ? [] : (await getDynamicDataLakeAccess(context)).lakes;
-          recordLakeAccessEvent(
-            context.db.lakeAccessEvents,
-            {
-              principalKind: 'user',
-              principalId: context.userId,
-              resolvedLakeIds: attributeAccessedLakeIds(
-                retrievedFiles.map(f => f.tags?.map(t => t.name) ?? []),
-                attributionLakes
-              ),
-              fileIds: retrievedFiles.map(f => f.id),
-              surface: 'chat-kb-retrieve',
-              ...(query ? { queryText: query } : {}),
-            },
-            context.logger
+          // Best-effort audit write. dynamicAccess() only runs here when neither Path A nor Path B
+          // already resolved it above (both memoize into the same promise) AND there's actually a
+          // recorder wired AND this isn't the agent-scoped branch (which never consults lake
+          // access, same as the search tool's scoped arm) - otherwise it's a wasted round trip for
+          // a lookup nothing will use.
+          const attributionLakes = scope || !context.db.lakeAccessEvents ? [] : (await dynamicAccess()).lakes;
+          // This tool's corpus is always mixed (a direct id can be owned, shared, or lake; Path B's
+          // search is owner+shared+org+lake too), so a retrieved file with no recoverable datalake
+          // tag may just be the caller's own private file - never fall back to the full scope, and
+          // skip the row entirely if nothing retrieved is actually attributable to a lake. The
+          // scoped branch has no lake concept at all (attributionLakes is always []) but is
+          // recorded regardless, same as the search tool's scoped arm.
+          const resolvedLakeIds = attributeAccessedLakeIds(
+            retrievedFiles.map(f => f.tags?.map(t => t.name) ?? []),
+            attributionLakes,
+            { allowFullScopeFallback: false }
           );
+          if (scope || resolvedLakeIds.length > 0) {
+            recordLakeAccessEvent(
+              context.db.lakeAccessEvents,
+              {
+                // Always 'user', including an agent-executor run - see ToolContext.userId's doc comment.
+                principalKind: 'user',
+                principalId: context.userId,
+                resolvedLakeIds,
+                fileIds: retrievedFiles.map(f => f.id),
+                surface: 'chat-kb-retrieve',
+                ...(query ? { queryText: query } : {}),
+              },
+              context.logger,
+              context.db.adminSettings
+            );
+          }
 
           // Create citable source chips for the UI - mirrors web_search pattern
           const citables: CitableSource[] = retrievedFiles.map((file, index) => {

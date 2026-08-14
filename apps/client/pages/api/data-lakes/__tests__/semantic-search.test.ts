@@ -47,6 +47,7 @@ vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
 vi.mock('@bike4mind/utils', () => ({
   createTokenizer: () => ({ countTokens: vi.fn(async () => 3) }),
   getSettingsByNames: vi.fn(),
+  normalizeId: (value: unknown) => (value == null ? undefined : String(value)),
 }));
 vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},

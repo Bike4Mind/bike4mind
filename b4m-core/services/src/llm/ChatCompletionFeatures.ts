@@ -76,6 +76,7 @@ import {
   fetchAndProcessPreviousMessages,
   IQueueService,
   ITokenizer,
+  normalizeId,
   postMessageToSlack,
   QuestMaster,
 } from '@bike4mind/utils';
@@ -2091,23 +2092,33 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const lakePromptMessage = await this.resolveRetrievedLakePromptMessage(sourceFileIds, fileById);
 
       // Best-effort audit write, attributed via the tags on the files this turn actually
-      // grounded on (sourceFileIds), not the wider scanned candidate pool.
-      recordLakeAccessEvent(
-        this.chatCompletion.db.lakeAccessEvents,
-        {
-          principalKind: 'user',
-          principalId: user.id,
-          resolvedLakeIds: attributeAccessedLakeIds(
-            sourceFileIds.map(fid => fileById.get(fid)?.tags?.map(t => t.name) ?? []),
-            lakes
-          ),
-          fileIds: sourceFileIds,
-          chunkIds: injectedChunkIds,
-          surface: 'forced-retrieval',
-          queryText: query,
-        },
-        this.logger
+      // grounded on (sourceFileIds), not the wider scanned candidate pool. The candidate search
+      // is a mixed corpus (owned + shared + org-shared + data lake, via includeShared:true with
+      // no restrictToDataLake), so a grounded file with no recoverable datalake tag may be the
+      // caller's own private file - never fall back to the full scope, and skip the row entirely
+      // if the turn grounded on zero lake content.
+      const forcedRetrievalLakeIds = attributeAccessedLakeIds(
+        sourceFileIds.map(fid => fileById.get(fid)?.tags?.map(t => t.name) ?? []),
+        lakes,
+        { allowFullScopeFallback: false }
       );
+      if (forcedRetrievalLakeIds.length > 0) {
+        recordLakeAccessEvent(
+          this.chatCompletion.db.lakeAccessEvents,
+          {
+            principalKind: 'user',
+            principalId: user.id,
+            organizationId: normalizeId(user.organizationId),
+            resolvedLakeIds: forcedRetrievalLakeIds,
+            fileIds: sourceFileIds,
+            chunkIds: injectedChunkIds,
+            surface: 'forced-retrieval',
+            queryText: query,
+          },
+          this.logger,
+          this.chatCompletion.db.adminSettings
+        );
+      }
 
       return lakePromptMessage ? [lakePromptMessage, retrievedContext] : [retrievedContext];
     } catch (error) {

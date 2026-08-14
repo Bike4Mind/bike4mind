@@ -715,11 +715,14 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             semantic.datalakeTags,
             injectedLakeTags
           );
-          // Best-effort audit write. resolvedLakeIds stays empty for the agent-scoped
-          // arm by design (semantic.lakeIds is always [] there) - it never consults lake access.
+          // Best-effort audit write, only reached when semantic.output is non-null - a null output
+          // means the search was skipped or found nothing, so there is no lake read to record.
+          // resolvedLakeIds stays empty for the agent-scoped arm by design (semantic.lakeIds is
+          // always [] there) - it never consults lake access.
           recordLakeAccessEvent(
             context.db.lakeAccessEvents,
             {
+              // Always 'user', including an agent-executor run - see ToolContext.userId's doc comment.
               principalKind: 'user',
               principalId: context.userId,
               resolvedLakeIds: semantic.lakeIds,
@@ -728,7 +731,8 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
               surface: scope ? 'chat-kb-search-scoped' : 'chat-kb-search',
               queryText: query,
             },
-            context.logger
+            context.logger,
+            context.db.adminSettings
           );
           return withLakePrompts + attachmentInlineNotice(context, semantic.fileHits);
         }
@@ -910,23 +914,36 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           }
 
           // Best-effort audit write, only when the keyword fallback actually found
-          // something - an empty rankedResults means nothing was read.
+          // something - an empty rankedResults means nothing was read. The unscoped arm's
+          // corpus is mixed (owned + shared + org-shared + data lake), so a hit with no
+          // recoverable datalake tag may just be the caller's own private file - never fall
+          // back to the full scope here (unlike the semantic arms, whose corpus is lake-scoped
+          // by construction), and skip the row entirely if nothing is actually attributable to a
+          // lake, since a read that touched zero lake content is not lake access. The scoped arm
+          // has no lake concept at all (resolvedLakeIds is always []) but is recorded regardless -
+          // see the surface's own note on why that row still matters.
           if (rankedResults.length > 0) {
-            recordLakeAccessEvent(
-              context.db.lakeAccessEvents,
-              {
-                principalKind: 'user',
-                principalId: context.userId,
-                resolvedLakeIds: attributeAccessedLakeIds(
-                  rankedResults.map((f: IFabFileDocument) => f.tags?.map(t => t.name) ?? []),
-                  keywordArmLakes
-                ),
-                fileIds: rankedResults.map((f: IFabFileDocument) => f.id),
-                surface: scope ? 'chat-kb-search-scoped' : 'chat-kb-search',
-                queryText: query,
-              },
-              context.logger
+            const resolvedLakeIds = attributeAccessedLakeIds(
+              rankedResults.map((f: IFabFileDocument) => f.tags?.map(t => t.name) ?? []),
+              keywordArmLakes,
+              { allowFullScopeFallback: false }
             );
+            if (scope || resolvedLakeIds.length > 0) {
+              recordLakeAccessEvent(
+                context.db.lakeAccessEvents,
+                {
+                  // Always 'user', including an agent-executor run - see ToolContext.userId's doc comment.
+                  principalKind: 'user',
+                  principalId: context.userId,
+                  resolvedLakeIds,
+                  fileIds: rankedResults.map((f: IFabFileDocument) => f.id),
+                  surface: scope ? 'chat-kb-search-scoped' : 'chat-kb-search',
+                  queryText: query,
+                },
+                context.logger,
+                context.db.adminSettings
+              );
+            }
           }
 
           return (

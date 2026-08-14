@@ -775,6 +775,9 @@ describe('retrieve_knowledge_content untrusted-content delimiter (#1659)', () =>
 
 describe('retrieve_knowledge_content access-event audit (#1678)', () => {
   const record = vi.fn().mockResolvedValue(undefined);
+  // recordLakeAccessEvent awaits a platform-retention settings read before calling record(), so
+  // the call lands one microtask after the tool itself returns - flush before asserting on it.
+  const flushAsync = () => new Promise(resolve => setImmediate(resolve));
 
   // makeContext's `...overrides` replaces `db` wholesale rather than merging, so every case here
   // that needs lakeAccessEvents also has to re-supply fabfiles/fabfilechunks alongside it.
@@ -806,6 +809,7 @@ describe('retrieve_knowledge_content access-event audit (#1678)', () => {
     );
 
     await runById(ctx);
+    await flushAsync();
 
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -821,11 +825,12 @@ describe('retrieve_knowledge_content access-event audit (#1678)', () => {
   it('passes the query through as queryText on the tag/query path', async () => {
     const ctx = auditContext();
     (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({
-      data: [makeFile({ id: 'c', fileName: 'Clean Guide.pdf' })],
+      data: [makeFile({ id: 'c', fileName: 'Clean Guide.pdf', tags: [{ name: 'datalake:x' }] })],
     });
 
     const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
     await tool.toolFn({ query: 'retired guide' });
+    await flushAsync();
 
     expect(record).toHaveBeenCalledWith(expect.objectContaining({ queryText: 'retired guide' }));
   });
@@ -835,6 +840,7 @@ describe('retrieve_knowledge_content access-event audit (#1678)', () => {
     (ctx.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockResolvedValue(makeFile());
 
     await runById(ctx);
+    await flushAsync();
 
     expect(record).toHaveBeenCalledWith(expect.objectContaining({ resolvedLakeIds: [], surface: 'chat-kb-retrieve' }));
     // The scoped branch must never consult owner-wide lake access, audit or not.
@@ -864,11 +870,13 @@ describe('retrieve_knowledge_content access-event audit (#1678)', () => {
     record.mockRejectedValueOnce(new Error('mongo blip'));
     const ctx = auditContext();
     (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
-      makeFile({ fileName: 'Clean.pdf' })
+      makeFile({ fileName: 'Clean.pdf', tags: [{ name: 'datalake:x' }] })
     );
 
     const out = await runById(ctx);
+    await flushAsync();
 
     expect(out).toContain('Retrieved content from');
+    expect(record).toHaveBeenCalled();
   });
 });

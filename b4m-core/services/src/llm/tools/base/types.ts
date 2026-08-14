@@ -62,6 +62,10 @@ export type ToolLlmUsage = {
 };
 
 export interface ToolContext {
+  /** The only principal signal a tool call carries - identical whether this turn is a live chat
+   * message or an autonomous agent-executor run. Lake access audit events (recordLakeAccessEvent)
+   * record every ToolContext-driven read as principalKind: 'user' for this reason; distinguishing
+   * an agent run would need a new marker threaded through here first. */
   userId: string;
   user: IUserDocument; // Full user document for tools that need user data (e.g., blog integration)
   /**
