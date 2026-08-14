@@ -229,13 +229,6 @@ export const useLLM = create(
 
           // Track model changes for remembering
           if (params.model && params.model !== prev.model) {
-            // TEMP #1254 instrumentation - remove before merge
-            console.log('[T1254] setLLM model change', {
-              from: prev.model,
-              to: params.model,
-              max_tokens: newState.max_tokens,
-              max_tokens_in_params: params.max_tokens,
-            });
             if (params.model && isImageModel(params.model)) {
               newState.lastUsedImageModel = params.model;
               // Sync imageModel when user selects an image model as primary
@@ -490,15 +483,6 @@ export const LLMProvider: React.FC = () => {
           if (needsModelSwitch && state.model) {
             const fallback = stableGetFallbackModel(state.model);
             if (fallback) {
-              // TEMP #1254 instrumentation - remove before merge
-              console.log('[T1254] fallback-effect deprecation-fallback reset', {
-                fromModel: state.model,
-                toModel: fallback.id,
-                fromMaxTokens: state.max_tokens,
-                toMaxTokens: getDefaultMaxTokens(fallback),
-                currentAccessible: stableIsModelAccessible(state.model),
-                accessibleIds: models.map(m => m.id),
-              });
               return {
                 ...state,
                 model: fallback.id,
@@ -527,18 +511,6 @@ export const LLMProvider: React.FC = () => {
           // straight back to the new model's default - undoing the line above.
           autoResolvedModelRef.current = modelToUse.id;
 
-          // TEMP #1254 instrumentation - remove before merge
-          console.log('[T1254] fallback-effect main reset', {
-            trigger: hasNoModel ? 'hasNoModel' : 'needsModelSwitch',
-            fromModel: state.model,
-            toModel: modelToUse.id,
-            sameModel: modelToUse.id === state.model,
-            fromMaxTokens: state.max_tokens,
-            modelDefaultMaxTokens: getDefaultMaxTokens(modelToUse),
-            writtenMaxTokens: nextMaxTokens,
-            currentAccessible: state.model ? stableIsModelAccessible(state.model) : null,
-            accessibleIds: models.map(m => m.id),
-          });
           return {
             ...state,
             model: modelToUse.id,
@@ -583,18 +555,6 @@ export const LLMProvider: React.FC = () => {
     const allowRaise = modelChanged && !autoResolved;
     setState(state => {
       const refitted = refitMaxTokensForModel(state.max_tokens, info, { allowRaise });
-      if (refitted !== state.max_tokens) {
-        // TEMP #1254 instrumentation - remove before merge
-        console.log('[T1254] refit-effect change', {
-          model: activeModel,
-          modelChanged,
-          autoResolved,
-          allowRaise,
-          fromMaxTokens: state.max_tokens,
-          toMaxTokens: refitted,
-          catalogMaxTokens: info.max_tokens,
-        });
-      }
       return refitted === state.max_tokens ? state : { ...state, max_tokens: refitted };
     });
     // setState from Zustand is stable by reference - matches the convention used by the
