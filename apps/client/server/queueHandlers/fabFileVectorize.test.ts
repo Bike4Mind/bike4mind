@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
   deferFailureIfRetryable: vi.fn(),
   fabFileUpdate: vi.fn(),
   countTerminalChunks: vi.fn(),
+  computeChunkVectorRollup: vi.fn(async () => ({ embeddedChunkCount: 0, embeddedCharCount: 0 })),
   chunkUpdate: vi.fn(),
   getAtlasIndexForModel: vi.fn(() => ({ name: 'idx', numDimensions: 3 })),
   stampChunkEmbeddingModel: vi.fn(),
@@ -45,7 +46,12 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { releaseEmbeddingSpend: h.lakeReleaseSpend },
   cacheRepository: {},
   embeddingCacheRepository: {},
-  fabFileChunkRepository: { findById: vi.fn(), countTerminalChunks: h.countTerminalChunks, update: h.chunkUpdate },
+  fabFileChunkRepository: {
+    findById: vi.fn(),
+    countTerminalChunks: h.countTerminalChunks,
+    computeChunkVectorRollup: h.computeChunkVectorRollup,
+    update: h.chunkUpdate,
+  },
   fabFileRepository: {
     shareable: { findAccessibleById: h.findAccessibleById },
     markFailedIfNotAlready: h.markFailedIfNotAlready,
@@ -473,7 +479,7 @@ describe('fabFileVectorize handler - embeddingModel discriminator stamp', () => 
       'ff1',
       'text-embedding-3-small',
       expect.objectContaining({ db: expect.anything() }),
-      { vectorized: true, vectorizedChunkCount: 1, isVectorizing: false }
+      { vectorized: true, vectorizedChunkCount: 1, isVectorizing: false, embeddedChunkCount: 0, embeddedCharCount: 0 }
     );
   });
 

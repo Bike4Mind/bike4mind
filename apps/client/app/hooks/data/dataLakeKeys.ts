@@ -32,6 +32,8 @@ export const dataLakeKeys = {
   filesOf: (dataLakeId: string) => ['dataLakeFiles', dataLakeId] as const,
   /** Invalidation prefix covering all lakes' file lists. */
   filesRoot: ['dataLakeFiles'] as const,
+  /** One lake's derived health report (GET /api/data-lakes/:id/health), #1666. */
+  health: (dataLakeId: string) => ['dataLakeHealth', dataLakeId] as const,
   tagCounts: (source: DataLakeBrowseSource) => ['dataLakeTagCounts', source] as const,
   tagCountsRoot: ['dataLakeTagCounts'] as const,
   articles: (source: DataLakeBrowseSource, params?: DataLakeArticlesParams) =>

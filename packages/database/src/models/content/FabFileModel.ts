@@ -158,6 +158,25 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
     });
   }
 
+  async computeChunkVectorRollup(
+    fabFileId: string
+  ): Promise<{ embeddedChunkCount: number; embeddedCharCount: number }> {
+    // `vector.0` exists = vector-bearing (mirrors countTerminalChunks' cheap presence test, no $size).
+    // Scoped to one file at vectorize completion, on the {fabFileId,_id} index - not a lake-wide scan.
+    const [agg] = await this.fabFileChunkModel.aggregate<{ embeddedChunkCount: number; embeddedCharCount: number }>([
+      { $match: { fabFileId, 'vector.0': { $exists: true } } },
+      {
+        $group: {
+          _id: null,
+          embeddedChunkCount: { $sum: 1 },
+          embeddedCharCount: { $sum: { $ifNull: ['$charLength', 0] } },
+        },
+      },
+      { $project: { _id: 0, embeddedChunkCount: 1, embeddedCharCount: 1 } },
+    ]);
+    return agg ?? { embeddedChunkCount: 0, embeddedCharCount: 0 };
+  }
+
   async updateEmbeddingModel(fabFileId: string, embeddingModel: string): Promise<void> {
     await this.fabFileChunkModel.updateMany({ fabFileId }, { $set: { embeddingModel } });
   }
@@ -284,6 +303,38 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
       { $group: { _id: null, total: { $sum: { $ifNull: ['$charLength', 0] } } } },
     ]);
     return agg?.total ?? 0;
+  }
+
+  async computeFileChunkRollups(fabFileId: string): Promise<{
+    chunkedCharCount: number;
+    maxChunkCharLength: number;
+    embeddedChunkCount: number;
+    embeddedCharCount: number;
+  }> {
+    // All four lake-health (#1666) file rollups in ONE pass over the file's chunks, for the backfill.
+    // `vector` size, not `vector.0` existence, because the per-chunk conditional cannot pre-filter -
+    // the same pass also sums ALL chunks for chunkedCharCount/maxChunkCharLength. Server-side; one-time.
+    const isEmbedded = { $gt: [{ $size: { $ifNull: ['$vector', []] } }, 0] };
+    const charLen = { $ifNull: ['$charLength', 0] };
+    const [agg] = await this.fabFileChunkModel.aggregate<{
+      chunkedCharCount: number;
+      maxChunkCharLength: number;
+      embeddedChunkCount: number;
+      embeddedCharCount: number;
+    }>([
+      { $match: { fabFileId } },
+      {
+        $group: {
+          _id: null,
+          chunkedCharCount: { $sum: charLen },
+          maxChunkCharLength: { $max: charLen },
+          embeddedChunkCount: { $sum: { $cond: [isEmbedded, 1, 0] } },
+          embeddedCharCount: { $sum: { $cond: [isEmbedded, charLen, 0] } },
+        },
+      },
+      { $project: { _id: 0, chunkedCharCount: 1, maxChunkCharLength: 1, embeddedChunkCount: 1, embeddedCharCount: 1 } },
+    ]);
+    return agg ?? { chunkedCharCount: 0, maxChunkCharLength: 0, embeddedChunkCount: 0, embeddedCharCount: 0 };
   }
 }
 
@@ -1006,6 +1057,58 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   /**
+   * Per-member health rollups for a lake (#1666): the raw numbers the pure predicate evaluator
+   * (`summarizeLakeHealth` in @bike4mind/common) grades. Reads only FabFile documents - never the
+   * chunk collection - so a lake with a million chunks still costs an O(members) file scan. Same
+   * membership + liveness filter as computeDataLakeStats, and only members that produced chunks
+   * (`chunkCount > 0`): a chunkless image or a still-pending upload carries no retrievable content.
+   *
+   * `limit` bounds how many rows reach app memory. It fetches one extra to detect overflow, so the
+   * caller can report coverage as partial and log it, rather than silently truncating a percentage.
+   */
+  async findDataLakeHealthMembers(
+    scope: DataLakeMembershipScope,
+    limit = 25_000
+  ): Promise<
+    Array<{
+      fabFileId: string;
+      fileName?: string;
+      chunkCount: number;
+      chunkedCharCount: number | null;
+      maxChunkCharLength: number | null;
+      embeddedChunkCount: number | null;
+      embeddedCharCount: number | null;
+    }>
+  > {
+    return this.fabFileModel.aggregate([
+      {
+        $match: {
+          ...buildDataLakeMembershipFilter(scope),
+          deletedAt: null,
+          archivedAt: null,
+          status: { $ne: 'pending' },
+          chunkCount: { $gt: 0 },
+        },
+      },
+      { $limit: limit + 1 },
+      {
+        $project: {
+          _id: 0,
+          fabFileId: { $toString: '$_id' },
+          fileName: 1,
+          chunkCount: { $ifNull: ['$chunkCount', 0] },
+          // Preserve null (UNMEASURED) rather than coalescing to 0 - the evaluator must tell "not yet
+          // measured" from "measured as zero". $ifNull with null keeps an ABSENT field as null too.
+          chunkedCharCount: { $ifNull: ['$chunkedCharCount', null] },
+          maxChunkCharLength: { $ifNull: ['$maxChunkCharLength', null] },
+          embeddedChunkCount: { $ifNull: ['$embeddedChunkCount', null] },
+          embeddedCharCount: { $ifNull: ['$embeddedCharCount', null] },
+        },
+      },
+    ]);
+  }
+
+  /**
    * One page of file ids that have chunks but no `chunkedCharCount` (missing or nulled by a
    * content rewrite), ascending by `_id` - the char-length backfill's phase-2 cursor.
    */
@@ -1027,6 +1130,41 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   /** Stamp a file's recomputed `chunkedCharCount` - the char-length backfill's phase-2 write. */
   async setChunkedCharCount(id: string, chunkedCharCount: number): Promise<void> {
     await this.fabFileModel.updateOne({ _id: id }, { $set: { chunkedCharCount } });
+  }
+
+  /**
+   * One page of file ids with chunks but missing the lake-health (#1666) rollups, keyed by
+   * `maxChunkCharLength` (absent on every file that predates the field, and on any the content-rewrite
+   * patch cleared). Ascending by `_id` - the backfill's phase-2 cursor. Superset of the
+   * chunkedCharCount gap: a file the #1665 backfill already gave chunkedCharCount but not these fields
+   * is still selected here, so one rerun trues up both.
+   */
+  async findFileIdsMissingChunkRollups(options: { limit?: number; afterFileId?: string } = {}): Promise<string[]> {
+    const { limit = 500, afterFileId } = options;
+    const docs = await this.fabFileModel
+      .find({
+        maxChunkCharLength: null,
+        chunkCount: { $gt: 0 },
+        ...(afterFileId ? { _id: { $gt: afterFileId } } : {}),
+      })
+      .select({ _id: 1 })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean();
+    return docs.map(d => String(d._id));
+  }
+
+  /** Stamp all four recomputed chunk-derived rollups together - the health backfill's phase-2 write. */
+  async setChunkRollups(
+    id: string,
+    rollups: {
+      chunkedCharCount: number;
+      maxChunkCharLength: number;
+      embeddedChunkCount: number;
+      embeddedCharCount: number;
+    }
+  ): Promise<void> {
+    await this.fabFileModel.updateOne({ _id: id }, { $set: rollups });
   }
 
   /**
@@ -1378,6 +1516,11 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     vectorizedChunkCount: { type: Number, default: 0 },
     // Sum of the file's chunks' charLength; nulled on content rewrite. See IFabFile.chunkedCharCount.
     chunkedCharCount: { type: Number, required: false },
+    // Lake-health (#1666) per-file rollups. Deliberately NOT `default: 0` - absent must read as
+    // UNMEASURED (backfill has not reached this file), distinct from a measured 0. See IFabFile.
+    maxChunkCharLength: { type: Number, required: false },
+    embeddedChunkCount: { type: Number, required: false },
+    embeddedCharCount: { type: Number, required: false },
 
     isChunking: { type: Boolean, default: false },
     chunked: { type: Boolean, default: false },

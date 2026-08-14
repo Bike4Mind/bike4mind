@@ -63,6 +63,38 @@ Every chunk is:
 - **Ranked by Relevance** - Best matches first
 - **Context-Aware** - Understands surrounding information
 
+### Lake Health (retrievability)
+A data lake reports **how much of its content can actually be found**, not just how much was
+uploaded. Every processing counter can read "complete" while a large share of a lake is unreachable -
+so health is *computed* from four checkable rules, and shown on the lake in the manager panel:
+
+- **One headline metric: reachable content.** The share of the lake's stored text that a search can
+  actually deliver to the model. This is the number to watch - it accounts for content that was
+  stored but is clipped at serve time or was never embedded.
+- **A three-state badge** - healthy, degraded, or unhealthy - derived from that share and the rules
+  below.
+- **A drill-down** naming which files are affected and why.
+
+The four rules, per file:
+1. **No oversized chunk** - no chunk is larger than the policy passage size.
+2. **Chunk count fits the document** - a long document split into too few chunks (in the extreme, a
+   whole document in one chunk) is flagged, because most of it can never rank in search.
+3. **Fully vectorized** - every chunk carries a vector; a chunk with no vector is invisible to
+   semantic search even though it was "processed".
+4. **Serve cap meets policy** - the retrieval serve limit is at least the policy passage size, so an
+   in-policy chunk is never clipped before the model sees it.
+
+Health is **advisory** - it never blocks a search. A degraded lake still answers; the model is simply
+told the results may be incomplete, so it does not assert completeness over content it cannot see.
+
+:::note Not yet measured
+A lake shows **"Health: not measured"** until the one-time indexing backfill has run for its content -
+the reachable-content figure needs a per-chunk character measurement that older content predates.
+This is not the same as unhealthy: it means the measurement, not the content, is missing. New and
+re-ingested content is measured automatically. If a lake stays unmeasured, re-run indexing (or ask an
+administrator to run the char-length backfill) to populate it.
+:::
+
 ## Organization Features
 
 ### Collections

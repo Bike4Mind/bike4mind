@@ -95,10 +95,18 @@ export const chunkFabfile = async (
   fabFile.chunked = chunks.length > 0;
   fabFile.chunkCount = chunks.length;
   fabFile.chunkedCharCount = chunkCharLengths.reduce((sum, len) => sum + len, 0);
+  // Lake-health P1 rollup (#1666): the largest chunk, so health checks "no chunk exceeds the policy
+  // size" without rescanning the chunk collection. 0 for a file that produced no chunks.
+  fabFile.maxChunkCharLength = chunkCharLengths.length > 0 ? Math.max(...chunkCharLengths) : 0;
 
   fabFile.isVectorizing = false;
   fabFile.vectorized = chunks.length > 0;
   fabFile.vectorizedChunkCount = 0;
+  // Re-chunking replaces every chunk, so the vector-bearing rollups from the OLD chunks are now
+  // stale. Zero them here; the vectorize pass that follows re-stamps them from the new chunks. Left
+  // in place, they would grade P3 / reachability against chunks that no longer exist.
+  fabFile.embeddedChunkCount = 0;
+  fabFile.embeddedCharCount = 0;
 
   fabFile.embeddingModel = embeddingModel;
   // The old chunks (and their embeddingModel stamps) are about to be deleted below - a stale

@@ -4,6 +4,7 @@ import type {
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
   IFabFileDocument,
+  LakeHealthApiResponse,
   ManageableDataLakeConfig,
   TaxonomyTag,
 } from '@bike4mind/common';
@@ -58,6 +59,28 @@ export function useGetDataLakes(
     },
     refetchOnWindowFocus: opts?.refetchOnWindowFocus ?? false,
     staleTime: opts?.staleTime ?? 1000 * 60 * 2,
+  });
+}
+
+/**
+ * One lake's derived health report (#1666): the four retrievability predicates and the
+ * reachable-content headline, computed on demand from per-file rollups. Advisory only.
+ *
+ * Fetched lazily (pass `enabled` when the detail view opens) and cached for a few minutes - health
+ * shifts only as content is re-ingested, so it does not need to be live. Like the other lake reads
+ * it does not retry the feature-gate 403.
+ */
+export function useGetDataLakeHealth(dataLakeId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: dataLakeKeys.health(dataLakeId ?? ''),
+    enabled: enabled && !!dataLakeId,
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 1000 * 60 * 2,
+    queryFn: async () => {
+      const response = await api.get<LakeHealthApiResponse>(`/api/data-lakes/${dataLakeId}/health`);
+      return response.data;
+    },
   });
 }
 
@@ -485,7 +508,12 @@ export function useReprocessFabFile(dataLakeId: string | null) {
     },
     onSuccess: () => {
       toast.success('Re-processing started - chunking and vectorization will re-run.');
-      if (dataLakeId) queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+      if (dataLakeId) {
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+        // Reprocessing changes the chunk/vector rollups health is computed from. The final figures
+        // land only once vectorization finishes (async); the badge refreshes then via its staleTime.
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
+      }
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to re-process file');
@@ -509,7 +537,11 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
     },
     onSuccess: () => {
       toast.success('File removed from data lake.');
-      if (dataLakeId) queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+      if (dataLakeId) {
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+        // Removing a member changes the lake's reachable-content denominator and predicate tallies.
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
+      }
       // Refresh the lake list to pick up the recomputed stats. fileCount counts meta-tagged
       // files only, so removing a file that was in the lake by prefix alone drops a row from
       // the list without moving the count.

@@ -77,6 +77,7 @@ import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStor
 import useStartChatWithLake from '@client/app/hooks/useStartChatWithLake';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import DataLakeEmptyState from '@client/app/components/datalake/DataLakeEmptyState';
+import LakeHealthBadge from '@client/app/components/datalake/LakeHealthBadge';
 import { RowActionsMenu, RowMenuItem } from '@client/app/components/datalake/rowActionsMenu';
 import DataLakeArticlePanel from './DataLakeArticlePanel';
 import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
@@ -1240,6 +1241,9 @@ function LakeInfoPanel({
               {fileCount} {fileCount === 1 ? 'file' : 'files'}
             </Chip>
           )}
+          {/* Derived retrievability health (#1666): reachable-content share + affected-file drill-down.
+              Advisory only. Fetched lazily for the lake in view; renders nothing for an empty lake. */}
+          <LakeHealthBadge lakeId={lake.id} />
           {/* Background AI-tag suggestion progress - an independent clock from ingest, so this
               can appear well after the lake's files are already fully uploaded/searchable. */}
           {(taxonomyBatch?.taxonomyStatus === 'queued' || taxonomyBatch?.taxonomyStatus === 'analyzing') && (

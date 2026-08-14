@@ -1,9 +1,10 @@
 #!/usr/bin/env tsx
 /**
- * One-time backfill for issue #1665: stamp `charLength` onto FabFileChunks, `chunkedCharCount`
- * onto their files, and `totalChunkedChars` onto lakes - the data the lake health predicates
- * (#1666) are computed from. The live write path (chunkFabfile) stamps all three going forward;
- * this trues up documents that predate the fields.
+ * One-time backfill for issues #1665 + #1666: stamp `charLength` onto FabFileChunks, the four
+ * chunk-derived rollups (`chunkedCharCount`, `maxChunkCharLength`, `embeddedChunkCount`,
+ * `embeddedCharCount`) onto their files, and `totalChunkedChars` onto lakes - the data the lake
+ * health predicates are computed from. The live write paths (chunkFabfile, the vectorize handler)
+ * stamp these going forward; this trues up documents that predate the fields.
  *
  * Standalone script rather than a migration for the same reason as
  * backfill-chunk-embedding-model.ts: a bounded, one-time sweep over existing data that must not
@@ -12,7 +13,7 @@
  * Three phases, strictly ordered (2 sums what 1 wrote; 3 sums what 2 wrote):
  *   1. Chunks: pipeline update computing $strLenCP('$text') server-side - chunk text never
  *      leaves the database. Same number countCodePoints produces on the write path.
- *   2. Files: chunkedCharCount = sum of the file's chunk charLengths.
+ *   2. Files: all four chunk-derived rollups in one aggregate per file (needs phase 1's charLength).
  *   3. Lakes: recomputeLakeStats over every non-deleted lake (now carries totalChunkedChars).
  *
  * Idempotent/resumable: phases 1 and 2 only match documents still missing the field, so a rerun
@@ -66,15 +67,17 @@ async function backfillFiles(opts: Options): Promise<number> {
   let processed = 0;
   let afterFileId: string | undefined;
   for (;;) {
-    const ids = await fabFileRepository.findFileIdsMissingChunkedCharCount({ limit: 500, afterFileId });
+    // Keyed on missing maxChunkCharLength (#1666), a superset of the chunkedCharCount gap: a file the
+    // first cut of this backfill gave only chunkedCharCount is re-selected and trued up in one rerun.
+    const ids = await fabFileRepository.findFileIdsMissingChunkRollups({ limit: 500, afterFileId });
     if (ids.length === 0) break;
     afterFileId = ids[ids.length - 1];
     for (const id of ids) {
-      // Dry-run never needs the sum - it only exists to be discarded - so skip the aggregate
+      // Dry-run never needs the rollups - they only exist to be discarded - so skip the aggregate
       // entirely rather than paying for it on every file in the lake.
       if (opts.execute) {
-        const total = await fabFileChunkRepository.sumChunkCharLengthByFabFileId(id);
-        await fabFileRepository.setChunkedCharCount(id, total);
+        const rollups = await fabFileChunkRepository.computeFileChunkRollups(id);
+        await fabFileRepository.setChunkRollups(id, rollups);
       }
       processed++;
     }

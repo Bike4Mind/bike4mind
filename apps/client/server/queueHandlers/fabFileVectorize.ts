@@ -333,6 +333,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // an SQS redelivery of an already-processed message would otherwise double-count
     // and prematurely cross chunkCount. Recompute is idempotent.
     const vectorizedChunkCount = await fabFileChunkRepository.countTerminalChunks(fabFileId, contextWindow);
+    // Lake-health rollups (#1666), recomputed from source alongside vectorizedChunkCount so the same
+    // SQS-redelivery idempotency holds. Distinct number from vectorizedChunkCount: this counts only
+    // truly vector-bearing chunks (P3), where the latter also counts oversized-unembeddable ones.
+    const { embeddedChunkCount, embeddedCharCount } = await fabFileChunkRepository.computeChunkVectorRollup(fabFileId);
     const fabFile = await fabFileRepository.shareable.findAccessibleById(user, fabFileId);
     if (!fabFile) throw new NotFoundError(`FabFile ${fabFileId} not found`);
 
@@ -350,7 +354,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         fabFileId,
         embeddingModel,
         { db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository } },
-        { vectorized: true, vectorizedChunkCount, isVectorizing: false }
+        { vectorized: true, vectorizedChunkCount, isVectorizing: false, embeddedChunkCount, embeddedCharCount }
       );
     } else {
       await fabFileRepository.update({
@@ -358,9 +362,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         vectorized: true,
         vectorizedChunkCount,
         isVectorizing: true,
+        embeddedChunkCount,
+        embeddedCharCount,
       });
     }
     fabFile.vectorizedChunkCount = vectorizedChunkCount;
+    fabFile.embeddedChunkCount = embeddedChunkCount;
+    fabFile.embeddedCharCount = embeddedCharCount;
     fabFile.isVectorizing = !isFileVectorized;
 
     if (isFileVectorized) {
