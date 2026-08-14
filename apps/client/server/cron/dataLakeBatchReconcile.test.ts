@@ -177,8 +177,8 @@ describe('dataLakeBatchReconcile cron handler', () => {
       });
       // The CAS claim wins both files, each with its stamp; the sweep enqueues only won ids.
       h.claimForChunkScan.mockResolvedValue([
-        { id: 'ff1', claimedAt: 111 },
-        { id: 'ff2', claimedAt: 222 },
+        { id: 'ff1', leaseId: 'lease-1' },
+        { id: 'ff2', leaseId: 'lease-2' },
       ]);
 
       const res = await handler();
@@ -200,14 +200,14 @@ describe('dataLakeBatchReconcile cron handler', () => {
       expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
         fabFileId: 'ff1',
         userId: 'u1',
-        claimedAt: 111,
+        leaseId: 'lease-1',
       });
       // A data-lake file (has a batch) is convergence work, haltable by the kill switch; a global
       // sweep carries no lakeId (platform switch only).
       expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
         fabFileId: 'ff2',
         userId: 'u2',
-        claimedAt: 222,
+        leaseId: 'lease-2',
         origin: 'convergence',
       });
       expect(JSON.parse(res.body).rescuedChunkFiles).toBe(2);
@@ -226,7 +226,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
         }),
       });
       // ff2 was already claimed elsewhere -> the CAS returns only ff1.
-      h.claimForChunkScan.mockResolvedValue([{ id: 'ff1', claimedAt: 111 }]);
+      h.claimForChunkScan.mockResolvedValue([{ id: 'ff1', leaseId: 'lease-1' }]);
 
       const res = await handler();
 
@@ -234,7 +234,7 @@ describe('dataLakeBatchReconcile cron handler', () => {
       expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
         fabFileId: 'ff1',
         userId: 'u1',
-        claimedAt: 111,
+        leaseId: 'lease-1',
       });
       expect(JSON.parse(res.body).rescuedChunkFiles).toBe(1);
     });

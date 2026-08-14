@@ -159,7 +159,7 @@ describe('fabFileChunk handler - chunk-failure surfacing', () => {
     // Acquire is a compare-and-set findOneAndUpdate that stamps chunkClaimedAt (the claim token) so
     // the rescue sweep can reclaim a hard-killed run and a duplicate delivery can be rejected.
     expect(h.fabFileFindOneAndUpdate).toHaveBeenCalledWith(expect.objectContaining({ _id: 'ff1' }), {
-      $set: { isChunking: true, chunkClaimedAt: expect.any(Date) },
+      $set: { isChunking: true, chunkClaimedAt: expect.any(Date), chunkLeaseId: null },
     });
     expect(h.fabFileUpdateOne).toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { isChunking: false } });
   });
@@ -434,10 +434,12 @@ describe('fabFileChunk handler - convergence kill switch (#1676)', () => {
 
 describe('fabFileChunk handler - claim lease (single-run guard, human review)', () => {
   // chunkFabfile's deleteManyByFabFileId is destructive, so at most one worker may run it per file.
-  // The lease is a compare-and-set on FabFile: a tokened delivery must still carry its exact claim
-  // stamp; a superseded/duplicate delivery loses the CAS and must bail WITHOUT clearing the winner's
-  // isChunking. Closes the round-3 P0: a stale-claim re-enqueue racing a merely-slow (not crashed)
-  // wave file would otherwise both pass an unconditioned pickup and both run the delete.
+  // The lease is a compare-and-set on FabFile: a tokened delivery must still carry its lease AND find
+  // the file not already chunking; a superseded/duplicate delivery loses the CAS and must bail WITHOUT
+  // clearing the winner's isChunking. The precondition is what makes the CAS exclusive - matching the
+  // token alone let every concurrent delivery through, since the update disturbed nothing the query
+  // matched. Separating lease identity from chunkClaimedAt is what lets pickup restamp the clock (so
+  // staleness measures run time) while a sequential SQS retry still matches.
   beforeEach(() => {
     vi.clearAllMocks();
     h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
@@ -445,56 +447,89 @@ describe('fabFileChunk handler - claim lease (single-run guard, human review)', 
     h.chunkFabfile.mockResolvedValue([]);
   });
 
-  it('a tokened delivery claims the file by matching its exact chunkClaimedAt stamp WITHOUT moving it', async () => {
+  it('a tokened delivery claims by matching its lease AND requiring the file is not already chunking', async () => {
     h.fabFileFindOneAndUpdate.mockResolvedValue({ _id: 'ff1' });
-    const claimedAt = 1_700_000_000_000;
-    await dispatch(makeEvent({ ...payload, claimedAt }), {} as never, mockLogger);
-    // The CAS matches on the exact stamp (the token) and sets ONLY isChunking - it must NOT restamp
-    // chunkClaimedAt, or an SQS retry carrying the same token would match nothing (see the retry test
-    // below). A superseding wave/sweep re-claim is what moves the stamp.
-    expect(h.fabFileFindOneAndUpdate).toHaveBeenCalledWith(
-      { _id: 'ff1', chunkClaimedAt: new Date(claimedAt) },
-      { $set: { isChunking: true } }
-    );
+    await dispatch(makeEvent({ ...payload, leaseId: 'lease-1' }), {} as never, mockLogger);
+    // Both halves of the query are load-bearing: the lease is the identity (so pickup may restamp
+    // chunkClaimedAt without breaking the retry ladder), and isChunking:{$ne:true} is what actually
+    // excludes a CONCURRENT duplicate delivery - without it the update disturbs nothing the query
+    // matched, so N simultaneous deliveries would all acquire and all run the destructive chunk.
+    const [query, update] = h.fabFileFindOneAndUpdate.mock.calls[0] as [
+      Record<string, unknown>,
+      { $set: Record<string, unknown> },
+    ];
+    expect(query).toEqual({ _id: 'ff1', chunkLeaseId: 'lease-1', isChunking: { $ne: true } });
+    expect(update.$set).toMatchObject({ isChunking: true });
+    // Restamped on purpose: the stale window must measure RUN time, not queue wait, or an attempt
+    // picked up after the 60m visibility timeout is instantly stale-eligible to the rescue sweep.
+    expect(update.$set.chunkClaimedAt).toBeInstanceOf(Date);
     expect(h.chunkFabfile).toHaveBeenCalled();
   });
 
-  it('a tokened pickup does not move the claim stamp, so an SQS retry of the same message still matches (retry ladder survives)', async () => {
-    // Regression for the token x retry collapse: if pickup restamped chunkClaimedAt, attempt 2 would
-    // carry the original token while the row now held attempt 1's stamp - the CAS matches nothing, the
-    // handler logs "superseded or duplicate delivery" and returns, and SQS deletes the message. SQS
-    // retry, DLQ routing, `error` marking and batch failure accounting would all die silently, so a
-    // tokened message (every wave/rescue file) got exactly one attempt. The token must survive retries.
+  it('a CONCURRENT duplicate delivery loses the CAS and never runs the destructive chunk', async () => {
+    // The regression this whole lease exists for. Delivery 1 wins the CAS; delivery 2 arrives while
+    // delivery 1 still holds isChunking:true, so its query matches nothing and it must bail BEFORE
+    // chunkFabfile. Modelled by the CAS returning a doc then null - which is exactly what the
+    // isChunking:{$ne:true} precondition produces. A mock that always resolves truthy (the previous
+    // shape of these tests) cannot distinguish this case from a sequential retry, which is how the
+    // unconditioned pickup survived review.
+    h.fabFileFindOneAndUpdate.mockResolvedValueOnce({ _id: 'ff1' }).mockResolvedValueOnce(null);
+    const evt = makeEvent({ ...payload, leaseId: 'lease-1' });
+
+    await dispatch(evt, {} as never, mockLogger); // delivery 1: wins
+    await dispatch(evt, {} as never, mockLogger); // delivery 2: loses
+
+    expect(h.fabFileFindOneAndUpdate).toHaveBeenCalledTimes(2);
+    expect(h.chunkFabfile).toHaveBeenCalledTimes(1); // exactly one run, not two
+    // ...and the loser must not clear the winner's claim (only an `acquired` run releases it), so
+    // exactly ONE release happens - the winner's. Counted by shape, since the success path issues
+    // other updateOne calls of its own.
+    const releases = h.fabFileUpdateOne.mock.calls.filter(
+      ([, update]) => (update as { $set?: Record<string, unknown> })?.$set?.isChunking === false
+    );
+    expect(releases).toHaveLength(1);
+  });
+
+  it('a SEQUENTIAL SQS retry of the same message still matches its lease (retry ladder survives)', async () => {
+    // The other half of the lease contract, and the reason the identity is a lease rather than the
+    // timestamp: attempt 1 finishes and its `finally` clears isChunking WITHOUT clearing the lease,
+    // so attempt 2 - carrying the same leaseId - matches again and runs. If pickup consumed the
+    // lease, SQS retry, DLQ routing, `error` marking and batch failure accounting would all die
+    // silently and a tokened message would get exactly one attempt.
     h.fabFileFindOneAndUpdate.mockResolvedValue({ _id: 'ff1' });
-    const claimedAt = 1_700_000_000_000;
-    const evt = makeEvent({ ...payload, claimedAt });
+    const evt = makeEvent({ ...payload, leaseId: 'lease-1' });
 
     await dispatch(evt, {} as never, mockLogger); // attempt 1
     await dispatch(evt, {} as never, mockLogger); // attempt 2: SQS redelivery of the SAME message
 
-    const tokenQuery = { _id: 'ff1', chunkClaimedAt: new Date(claimedAt) };
     const calls = h.fabFileFindOneAndUpdate.mock.calls as [
       Record<string, unknown>,
       { $set: Record<string, unknown> },
     ][];
     expect(calls).toHaveLength(2);
     for (const [query, update] of calls) {
-      expect(query).toEqual(tokenQuery); // both attempts present the identical token...
-      expect(update.$set).not.toHaveProperty('chunkClaimedAt'); // ...and pickup never consumes it
+      // Both attempts present the identical lease, and neither consumes it...
+      expect(query).toEqual({ _id: 'ff1', chunkLeaseId: 'lease-1', isChunking: { $ne: true } });
+      expect(update.$set).not.toHaveProperty('chunkLeaseId');
     }
+    expect(h.chunkFabfile).toHaveBeenCalledTimes(2); // ...so the retry genuinely re-runs
   });
 
-  it('an untokened delivery claims a free-or-stale file (no token to match)', async () => {
+  it('an untokened delivery claims a free-or-stale file and clears any lease (superseding older messages)', async () => {
     h.fabFileFindOneAndUpdate.mockResolvedValue({ _id: 'ff1' });
     await dispatch(makeEvent(payload), {} as never, mockLogger);
-    const [query] = h.fabFileFindOneAndUpdate.mock.calls[0] as [Record<string, unknown>];
+    const [query, update] = h.fabFileFindOneAndUpdate.mock.calls[0] as [
+      Record<string, unknown>,
+      { $set: Record<string, unknown> },
+    ];
     expect(query._id).toBe('ff1');
-    expect(query.$or).toBeDefined(); // free-or-stale arms, not a token match
+    expect(query.$or).toBeDefined(); // free-or-stale arms, not a lease match
+    expect(update.$set.chunkLeaseId).toBeNull(); // an older tokened message can no longer match
   });
 
   it('a superseded/duplicate delivery (lost CAS) skips chunking AND does not clear the winner isChunking', async () => {
     h.fabFileFindOneAndUpdate.mockResolvedValue(null); // another worker holds the claim
-    await dispatch(makeEvent({ ...payload, claimedAt: 1_700_000_000_000 }), {} as never, mockLogger);
+    await dispatch(makeEvent({ ...payload, leaseId: 'lease-1' }), {} as never, mockLogger);
     expect(h.chunkFabfile).not.toHaveBeenCalled();
     // Critically: the finally must NOT run for a delivery that never won the lease, or it would
     // release the ACTUAL owner's claim mid-run.
