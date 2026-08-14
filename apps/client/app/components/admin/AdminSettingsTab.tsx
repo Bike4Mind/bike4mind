@@ -338,6 +338,11 @@ const AdminSettingsTab: React.FC = () => {
           'secopsTriageConfig',
           // Overwatch rollup sync is an internal cron-lock document, not user-configurable
           'overwatchRollupSync',
+          // PR Status Digest settings are edited inline in the PR Status Digest tab
+          'prReportRepo',
+          'prReportIdentityMap',
+          'prReportSlackChannel',
+          'prReportEgressAllowlist',
         ].includes(settingConfig.key)
       )
         return false;
