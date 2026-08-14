@@ -19,7 +19,9 @@ export function validatePrivateKeyFormat(key: string): boolean {
 }
 
 /**
- * True when APP_URL is the localhost development origin, for deciding whether to
+ * True when the given origin - defaulting to APP_URL, but the CSRF middleware also
+ * passes an origin built from the request's Origin/Referer header - is the localhost
+ * development origin. Used for deciding whether to
  * trust `x-forwarded-proto` / `host` REQUEST HEADERS in place of the configured
  * origin (OAuth callback construction, the CSRF dev-origin allowance).
  *

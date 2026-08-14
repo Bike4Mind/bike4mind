@@ -1,7 +1,20 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { isLocalAppUrl } from './validators';
 
 describe('isLocalAppUrl', () => {
+  // The signature defaults to process.env.APP_URL, so ambient state would leak into
+  // every case that means to test an explicit argument - and into the absent-input
+  // case especially. Mirrors csrfProtection.test.ts, which saves/restores for the
+  // same reason.
+  const originalAppUrl = process.env.APP_URL;
+  beforeEach(() => {
+    delete process.env.APP_URL;
+  });
+  afterEach(() => {
+    if (originalAppUrl === undefined) delete process.env.APP_URL;
+    else process.env.APP_URL = originalAppUrl;
+  });
+
   it('matches the localhost dev origin, case-insensitively', () => {
     expect(isLocalAppUrl('http://localhost:3000')).toBe(true);
     expect(isLocalAppUrl('http://LOCALHOST:3000')).toBe(true);
@@ -36,8 +49,18 @@ describe('isLocalAppUrl', () => {
   });
 
   it('fails closed on absent or unparseable values', () => {
-    expect(isLocalAppUrl(undefined)).toBe(false);
+    // '' hits the !appUrl guard directly; `undefined` falls through to the default
+    // parameter, so it only exercises the absent path because the hook above
+    // cleared APP_URL. Both are asserted deliberately.
     expect(isLocalAppUrl('')).toBe(false);
+    expect(isLocalAppUrl(undefined)).toBe(false);
     expect(isLocalAppUrl('not a url')).toBe(false);
+  });
+
+  it('reads APP_URL when called with no argument', () => {
+    process.env.APP_URL = 'http://localhost:3000';
+    expect(isLocalAppUrl()).toBe(true);
+    process.env.APP_URL = 'https://app.example.com';
+    expect(isLocalAppUrl()).toBe(false);
   });
 });
