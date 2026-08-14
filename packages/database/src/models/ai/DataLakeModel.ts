@@ -82,6 +82,10 @@ const DataLakeSchema = new mongoose.Schema(
       set: (v: unknown) => (typeof v === 'string' ? normalizeEntitlementKey(v) : v),
     },
     createdByUserId: { type: String, required: true },
+    // Last principal to write this lake's config (see IDataLake.lastUpdatedByUserId). Server-set
+    // from the authenticated actor by every config-write service; no index (tiny collection, only
+    // ever read from a lake already in hand, same rationale as the fields below).
+    lastUpdatedByUserId: { type: String },
     organizationId: { type: String },
     // Public opt-in (see IDataLake.isPublic): a true value makes the lake readable app-wide,
     // bypassing the org prerequisite + Private-by-default. No dedicated index (tiny collection,
