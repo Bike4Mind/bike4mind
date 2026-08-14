@@ -1,13 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Regression test for the per-member cap gate added to `processSubagentDispatch`:
-// a human review on PR #1777 found the gate returned without firing
-// `onDagNodeTerminal`, so a capped-out member's DAG children would ALL fail this
-// gate (it's a per-user condition, so it trips uniformly for every sibling) and
-// NONE would wake the parent - a permanent hang, since `cleanupStaleActive`
-// deliberately excludes `awaiting_dag_children` from its sweep. This test drives
-// the real `handler` through a `dag_node_dispatch` message and asserts the hook
-// still fires on this refusal path.
+// The per-member cap gate in `processSubagentDispatch` must fire `onDagNodeTerminal`
+// on refusal: without it, a capped-out member's DAG children ALL fail this gate (it's
+// a per-user condition, so it trips uniformly for every sibling) and NONE would wake
+// the parent - a permanent hang, since `cleanupStaleActive` deliberately excludes
+// `awaiting_dag_children` from its sweep. Drives the real `handler` through a
+// `dag_node_dispatch` message and asserts the hook still fires on this refusal path.
 
 const benignStub: ProxyHandler<object> = {
   get(_, key) {
@@ -80,21 +78,25 @@ function makeSqsEvent(messages: Array<{ messageId: string; body: unknown }>) {
   } as never;
 }
 
-describe('agentExecutor per-member cap gate on dispatched DAG nodes', () => {
+function dagNodeDispatchEvent() {
+  return makeSqsEvent([
+    {
+      messageId: 'msg-1',
+      body: { kind: 'dag_node_dispatch', childExecutionId: 'child-1', connectionId: 'conn-1', dagNodeId: 'node-b' },
+    },
+  ]);
+}
+
+describe('agentExecutor DAG-node refusal paths fire onDagNodeTerminal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    onDagNodeTerminalMock.mockClear();
   });
 
-  it('fires onDagNodeTerminal so the parent is not left wedged in awaiting_dag_children', async () => {
+  it('fires the hook on the per-member cap refusal so the parent is not left wedged', async () => {
     const { handler } = await import('./agentExecutor');
-    const event = makeSqsEvent([
-      {
-        messageId: 'msg-1',
-        body: { kind: 'dag_node_dispatch', childExecutionId: 'child-1', connectionId: 'conn-1', dagNodeId: 'node-b' },
-      },
-    ]);
 
-    const result = await handler(event, {} as never);
+    const result = await handler(dagNodeDispatchEvent(), {} as never);
 
     expect(result).toEqual({ batchItemFailures: [] });
     expect(mockMarkFailed).toHaveBeenCalledWith('child-1', { message: 'Organization member credit limit reached' });
@@ -104,5 +106,32 @@ describe('agentExecutor per-member cap gate on dispatched DAG nodes', () => {
         child: expect.objectContaining({ id: 'child-1', dagNodeId: 'node-b', status: 'failed' }),
       })
     );
+  });
+
+  it('fires the hook on a session-ownership refusal too, via the same shared helper', async () => {
+    // Ownership is checked before the org-pool/member-cap gates, so this fires
+    // first regardless of the child's organizationId.
+    const { sessionRepository } = await import('@bike4mind/database');
+    vi.mocked(sessionRepository.findById).mockResolvedValueOnce({ id: 'session-1', userId: 'someone-else' } as never);
+
+    const { handler } = await import('./agentExecutor');
+    await handler(dagNodeDispatchEvent(), {} as never);
+
+    expect(mockMarkFailed).toHaveBeenCalledWith('child-1', { message: 'Session ownership validation failed' });
+    expect(onDagNodeTerminalMock).toHaveBeenCalledTimes(1);
+    expect(onDagNodeTerminalMock).toHaveBeenCalledWith(
+      expect.objectContaining({ child: expect.objectContaining({ id: 'child-1', status: 'failed' }) })
+    );
+  });
+
+  it('does NOT fire the hook when another Lambda already claimed the child (CAS loss)', async () => {
+    const { agentExecutionRepository } = await import('@bike4mind/database');
+    vi.mocked(agentExecutionRepository.claimExecution).mockResolvedValueOnce(false as never);
+
+    const { handler } = await import('./agentExecutor');
+    await handler(dagNodeDispatchEvent(), {} as never);
+
+    expect(mockMarkFailed).not.toHaveBeenCalled();
+    expect(onDagNodeTerminalMock).not.toHaveBeenCalled();
   });
 });

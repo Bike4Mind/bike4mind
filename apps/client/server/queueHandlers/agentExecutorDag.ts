@@ -368,10 +368,12 @@ export function isDagAggregationWake(args: {
 /**
  * The aggregation-wake exemption above only excuses the wake's own read-and-splice
  * work (no new billable work of its own) - it does not license the run to keep
- * iterating past it. If the member is still over cap once the DAG's own
- * already-paid-for cost has settled, this caps the parent's own loop to the one
- * iteration that turns the aggregated result into an answer for THIS wake. A
- * no-op (returns `maxIterations` unchanged) outside that exact case.
+ * iterating past it. If the member reads as over cap at the moment of the wake
+ * (per whatever the org's `userDetails[].usedCredits` counter reflects at that
+ * point - it does not yet see dispatched-child spend, tracked separately), this
+ * caps the parent's own loop to the one iteration that turns the aggregated
+ * result into an answer for THIS wake. A no-op (returns `maxIterations`
+ * unchanged) outside that exact case.
  *
  * This is a per-wake bound, not a lifetime one: `maxIterations` is recomputed
  * fresh from `iterationIndex` on every invocation, so a run that dispatches a
