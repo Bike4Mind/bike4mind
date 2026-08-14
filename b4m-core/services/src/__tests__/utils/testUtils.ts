@@ -195,6 +195,7 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     findByIdAndUserId: vi.fn(),
     ensureUserDetails: vi.fn(),
     updateUserDetails: vi.fn(),
+    findMembershipOrgIds: vi.fn(),
   });
 
 export const createMockCreditTransactionRepository = (): MockedObject<ICreditTransactionRepository> =>

@@ -31,10 +31,7 @@ const contextToLogs = (context: Context) => ({
 interface ProviderConfig {
   provider: string;
   source: ISpendReconciliationInput['source'];
-  fetch: (
-    key: string,
-    month: string
-  ) => Promise<{ providerUsd: number; breakdown: Record<string, number> } | null>;
+  fetch: (key: string, month: string) => Promise<{ providerUsd: number; breakdown: Record<string, number> } | null>;
   getKey: () => string | undefined;
 }
 

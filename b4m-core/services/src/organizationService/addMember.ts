@@ -74,10 +74,12 @@ export async function addMember(user: IUserDocument, parameters: AddMemberParame
     name: userToAdd.name,
   });
 
-  // Establish org membership on the user document. Org-scoped features (e.g.
-  // data-lake AccessContext) read user.organizationId; without this, members
-  // added via this path stay organizationId: null and get no org-scoped access -
-  // the same defect fixed for invite acceptance in sharingService/accept.ts.
+  // Establish the selected-org display preference on the user document. This is
+  // the field the UI reads for the active-org switcher; lake authorization reads
+  // the membership set via findMembershipOrgIds (#1674), not this pointer. Without
+  // this, members added via this path stay organizationId: null and have no org
+  // selected in the UI - the same defect fixed for invite acceptance in
+  // sharingService/accept.ts.
   userToAdd.organizationId = organizationId;
   await db.users.update(userToAdd);
 
