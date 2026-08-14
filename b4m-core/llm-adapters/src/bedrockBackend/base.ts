@@ -424,6 +424,14 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 resolvedTools.push({ id, name, parameters, parsedParams: JSON.parse(parameters), toolFn });
               } catch {
                 Logger.globalInstance.warn('[BaseBedrockBackend] Tool parameter parse error, skipping tool:', name);
+                const entry = toolsUsed.find(t => t.name === name && t.id === id);
+                if (entry) entry.arguments = '{}';
+                recordToolResult(
+                  toolsUsed,
+                  { id, name },
+                  'Error: Tool arguments were malformed and could not be parsed.',
+                  false
+                );
               }
             }
 

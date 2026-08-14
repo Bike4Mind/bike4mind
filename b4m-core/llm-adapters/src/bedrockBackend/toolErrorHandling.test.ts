@@ -581,4 +581,52 @@ describe('BaseBedrockBackend tool result recording - streaming path', () => {
     );
     expect(toolsUsed![0].returnValue?.endsWith(TOOL_RESULT_TRUNCATION_NOTICE)).toBe(true);
   });
+
+  // This is the one malformed-arguments site Bedrock did not stamp: the catch at the
+  // JSON.parse(parameters) resolution step logged and skipped, leaving the toolsUsed entry
+  // forever unstamped (arguments unparseable, success undefined) instead of recording a
+  // failure like every other backend's equivalent path.
+  it('stamps success:false when streamed tool arguments are malformed JSON', async () => {
+    const backend = new TestBedrockBackend();
+    const turns = [
+      [
+        { choices: [{ index: 0, status: ChoiceStatus.STREAM, tool: { name: 'always_throws', id: TOOL_CALL_ID } }] },
+        { choices: [{ index: 0, status: ChoiceStatus.STREAM, chunkText: '{not json' }] },
+        {
+          choices: [
+            {
+              index: 0,
+              status: ChoiceStatus.END,
+              statusEndReason: ChoiceEndReason.STOP,
+              usage: { input_tokens: 10, output_tokens: 2 },
+            },
+          ],
+        },
+      ],
+      streamingTextTurn('done'),
+    ];
+    let callIndex = 0;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (backend as unknown as { _bedrockRuntime: any })._bedrockRuntime = {
+      send: async () => {
+        const turn = turns[callIndex++];
+        if (!turn) throw new Error('no more mocked turns');
+        return { body: asBedrockStreamBody(turn) };
+      },
+    };
+    const { calls, cb } = captureCb();
+
+    await backend.complete(
+      TEST_MODEL,
+      [{ role: 'user', content: 'go' }],
+      { stream: true, tools: [makeSucceedingTool('42')], executeTools: true } as Partial<ICompletionOptions>,
+      cb
+    );
+
+    const toolsUsed = lastToolsUsed(calls);
+    expect(toolsUsed).toBeDefined();
+    expect(toolsUsed![0].success).toBe(false);
+    expect(toolsUsed![0].returnValue).toContain('malformed');
+    expect(toolsUsed![0].arguments).toBe('{}');
+  });
 });
