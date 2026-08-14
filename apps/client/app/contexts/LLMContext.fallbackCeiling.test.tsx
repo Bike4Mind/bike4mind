@@ -15,10 +15,17 @@ const h = vi.hoisted(() => ({
   // Ids the accessibility predicate accepts. Kept as one source so the predicate and the list it
   // builds can never disagree, which is the flaw that invalidated the earlier version of this file.
   accessibleIds: ['gpt-5.4-mini'] as string[],
+  // When true, the accessible list serves MINI with a stale admin-saved ceiling while the live catalog
+  // (useModelInfo) still reports the real one.
+  staleSnapshot: false,
 }));
 
 const GONE = { id: 'gpt-5.6-sol', type: 'text', contextWindow: 1_050_000, max_tokens: 128_000 };
 const MINI = { id: 'gpt-5.4-mini', type: 'text', contextWindow: 400_000, max_tokens: 100_000 };
+
+// The accessible list is `{ ...modelInfo, ...savedConfig }`, so a saved admin snapshot can disagree with
+// the live catalog. This is MINI as the accessible list reports it - with a stale, much lower ceiling.
+const MINI_STALE_SNAPSHOT = { ...MINI, max_tokens: 4_096 };
 
 vi.mock('@/app/contexts/UserSettingsContext', () => ({
   useUserSettings: () => ({ settings: { experimentalFeatures: {} }, isHydrated: true }),
@@ -29,7 +36,7 @@ vi.mock('@/app/hooks/useFeatureEnabled', () => ({
 vi.mock('../hooks/data/useModelInfo', () => ({ useModelInfo: () => ({ data: [GONE, MINI] }) }));
 vi.mock('../hooks/useAccessibleModels', () => ({
   useAccessibleModels: () => ({
-    accessibleModels: [GONE, MINI].filter(m => h.accessibleIds.includes(m.id)),
+    accessibleModels: [GONE, h.staleSnapshot ? MINI_STALE_SNAPSHOT : MINI].filter(m => h.accessibleIds.includes(m.id)),
     isModelAccessible: (id: string) => h.accessibleIds.includes(id),
     getFallbackModel: () => null,
   }),
@@ -45,6 +52,7 @@ describe('LLMProvider default-model effect - the ceiling it writes for a model t
     useLLM.getState().resetSettings();
     h.adminDefaultModel = MINI.id;
     h.accessibleIds = [MINI.id];
+    h.staleSnapshot = false;
   });
   afterEach(() => cleanup());
 
@@ -57,6 +65,22 @@ describe('LLMProvider default-model effect - the ceiling it writes for a model t
 
     await waitFor(() => expect(useLLM.getState().model).toBe(MINI.id));
     expect(useLLM.getState().max_tokens).toBe(2048);
+    // The same branch resets the agent flags; that half is deliberate and unchanged by this fix.
+    expect(useLLM.getState().isQuestMasterEnabled).toBe(false);
+    expect(useLLM.getState().isAgentsEnabled).toBe(false);
+  });
+
+  it('fits against the live catalog, not a stale admin-saved snapshot of the resolved model', async () => {
+    // The accessible list serves MINI with a stale 4096 ceiling while the live catalog says 100000.
+    // Clamping to the snapshot would strand the user at 4096, and the sibling refit effect reads the
+    // live repo, so the two paths would disagree.
+    h.staleSnapshot = true;
+    useLLM.getState().setLLM({ model: GONE.id, max_tokens: 50_000 });
+
+    render(<LLMProvider />);
+
+    await waitFor(() => expect(useLLM.getState().model).toBe(MINI.id));
+    expect(useLLM.getState().max_tokens).toBe(50_000);
   });
 
   it('still clamps a ceiling the resolved model cannot serve down to its default', async () => {
