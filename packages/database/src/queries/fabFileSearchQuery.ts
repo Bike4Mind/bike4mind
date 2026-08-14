@@ -178,21 +178,34 @@ export function buildOwnershipConditions(
      * name any user and read their files - keep it out of every parsed-input surface.
      */
     lakeMembership?: DataLakeMembershipScope;
+    /**
+     * Drop the "shared 1:1 with this user" arm from base access, keeping owned + group +
+     * data-lake arms. For a per-user tag/namespace count: the write paths that keep a tag's
+     * denormalized name in sync only ever touch files the user owns, so a tag string that
+     * survives solely on a file merely shared with them (not owned) can never be reconciled
+     * by renaming/deleting their own tag - it would keep counting as an orphan bucket. Group
+     * and data-lake access stay in, since those are the user's own persistent workspaces.
+     */
+    excludePersonalShares?: boolean;
   }
 ): object[] {
   // Base access: the file genuinely belongs to / is shared with this user. Reused both
   // as top-level $or arms and to scope the dynamic-lake prefix match.
   const baseAccess: object[] = [
     { userId }, // Files owned by user
-    {
-      // Files explicitly shared with user
-      users: {
-        $elemMatch: {
-          userId,
-          permissions: { $in: ['read', 'write'] },
-        },
-      },
-    },
+    ...(options?.excludePersonalShares
+      ? []
+      : [
+          {
+            // Files explicitly shared with user
+            users: {
+              $elemMatch: {
+                userId,
+                permissions: { $in: ['read', 'write'] },
+              },
+            },
+          },
+        ]),
   ];
 
   // Add group-level sharing if user has groups (organization sharing)

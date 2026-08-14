@@ -575,9 +575,12 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       scopedTagPrefixes?: string[];
     }
   ): Promise<{ tag: string; count: number }[]> {
-    // When options are provided, include shared/group/data-lake files.
+    // When options are provided, include group/data-lake files, but never a file merely shared
+    // 1:1 with this user - see buildOwnershipConditions.excludePersonalShares.
     // Without options, only count files owned by the user (backward compatible).
-    const ownershipFilter = options ? { $or: buildOwnershipConditions(userId, options) } : { userId };
+    const ownershipFilter = options
+      ? { $or: buildOwnershipConditions(userId, { ...options, excludePersonalShares: true }) }
+      : { userId };
     const sessionFilter = {
       $or: [
         { sessionId: null },
@@ -744,7 +747,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       scopedTagPrefixes?: string[];
     }
   ): Promise<{ namespace: string; fileCount: number }[]> {
-    const ownershipFilter = options ? { $or: buildOwnershipConditions(userId, options) } : { userId };
+    // excludePersonalShares: true to stay in lockstep with countFilesByTagForUser - see that
+    // function's comment on why a merely-shared file must not keep a namespace alive here.
+    const ownershipFilter = options
+      ? { $or: buildOwnershipConditions(userId, { ...options, excludePersonalShares: true }) }
+      : { userId };
     // Exclude session summaries (unless curated-notebook) to match search behavior. Both this and
     // the ownership filter can be an $or, so they go under $and rather than into one object where
     // the second $or key would overwrite the first.
