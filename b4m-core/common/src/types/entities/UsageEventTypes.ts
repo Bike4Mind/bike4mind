@@ -50,6 +50,12 @@ export const UsageEvent = z.object({
   ownerId: z.string(),
   ownerType: z.enum(CreditHolderType),
   sessionId: z.string().optional(),
+  /**
+   * Data lake this call is 1:1 attributable to (ingestion embeds only - a query
+   * embedding can span multiple lakes and is never attributed here). Unset for
+   * every other feature/call.
+   */
+  dataLakeId: z.string().optional(),
   feature: z.enum(USAGE_EVENT_FEATURES),
   /** Provider/backend, e.g. 'bedrock', 'openai', 'gemini'. */
   provider: z.string(),
@@ -591,4 +597,13 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
    * to an org they can access (session-usage detail authorization).
    */
   sessionBelongsToOwner(sessionId: string, ownerId: string, ownerType: CreditHolderType): Promise<boolean>;
+
+  /**
+   * One data lake's ledgered spend (ingestion embeds only, see `dataLakeId` on
+   * UsageEvent) rolled up by day, uploading member, model, and feature, over the
+   * trailing N days (default 30). Same shape as `ownerUsageSummary` - a lake is
+   * just a different $match key over the same event set. Powers the owner-facing
+   * data-lake spend view.
+   */
+  lakeUsageSummary(dataLakeId: string, days?: number): Promise<IOwnerUsageSummary>;
 }

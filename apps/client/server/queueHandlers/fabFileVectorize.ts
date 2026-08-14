@@ -9,7 +9,9 @@ import {
   embeddingCacheRepository,
   fabFileChunkRepository,
   fabFileRepository,
+  organizationRepository,
   scopedSettingsRepository,
+  usageEventRepository,
   User,
   withTransaction,
 } from '@bike4mind/database';
@@ -25,7 +27,13 @@ import {
   FabFileChunkSearchIndex,
 } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
-import { apiKeyService, dataLakeService, embeddingCacheService, fabFilesService } from '@bike4mind/services';
+import {
+  apiKeyService,
+  dataLakeService,
+  embeddingCacheService,
+  fabFilesService,
+  recordOperationalUsage,
+} from '@bike4mind/services';
 import { getEmbeddingModelCost } from '@bike4mind/common';
 import {
   finalizeBatchIfComplete,
@@ -305,6 +313,34 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           }
         }
         throw providerErr;
+      }
+
+      // Ledger the ingestion spend (cost attribution, #1677). Only for lake-scoped work
+      // (grantedReservation implies dataLakeId came from a real batch) - a cache-hit-only
+      // run never reaches this block, so cache hits already never produce a row.
+      // bypassCreditBilling: true because this spend is already governed by the dedicated
+      // spend-lever/gate above; debiting credits on top of it would double-charge.
+      if (grantedReservation) {
+        const organization = user.organizationId ? await organizationRepository.findById(user.organizationId) : null;
+        await recordOperationalUsage(
+          {
+            requestId: existingFabFile.batchId ?? fabFileId,
+            user,
+            organization,
+            dataLakeId: grantedReservation.dataLakeId,
+            feature: 'embedding',
+            provider: requiredProvider,
+            model: embeddingModel,
+            inputTokens: missTokenCounts.reduce((sum, n) => sum + n, 0),
+            costUsd: grantedReservation.estimatedMicroUsd / 1_000_000,
+            source: 'system',
+            bypassCreditBilling: true,
+          },
+          {
+            db: { usageEvents: usageEventRepository, adminSettings: adminSettingsRepository },
+            logger,
+          }
+        ).catch(err => logger.warn(`[recordOperationalUsage] ingestion spend record failed: ${err}`));
       }
 
       await Promise.all(

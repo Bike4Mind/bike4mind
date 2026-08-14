@@ -1,5 +1,6 @@
 import { IBaseRepository, type IMongoDocument } from '.';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
+import type { IOwnerUsageSummary } from './UsageEventTypes';
 
 // ── Data Lake Status ────────────────────────────────────────────────────────
 
@@ -691,4 +692,27 @@ export interface SyncDelta {
   changedFiles: SyncDeltaChangedFile[];
   removedFiles: SyncDeltaRemovedFile[];
   unchangedFiles: { fileId: string; fileName: string }[];
+}
+
+/**
+ * Wire shape of GET /api/data-lakes/:id/spend. `embeddingSpendMicroUsd` is the lake's
+ * lifetime RESERVATION-TIME ESTIMATE meter (reserve-first, admin-reset/release-
+ * compensated); `ledger` is the ACTUAL cost rolled up from UsageEvent rows (ingestion
+ * embeds only) - the two are expected to diverge, most visibly after an admin reset, and
+ * the client must label them distinctly rather than imply they should match. Budgets
+ * mirror `resolveSpendLevers()`'s live values so the view never has to re-derive them.
+ */
+export interface IDataLakeSpendResponse {
+  dataLakeId: string;
+  /** Trailing window the ledger rollup covers. */
+  days: number;
+  /** Lifetime reservation-time meter (see doc comment above); null when unset (pre-existing lake). */
+  embeddingSpendMicroUsd: number | null;
+  spendEnabled: boolean;
+  perRunBudgetMicroUsd: number;
+  perLakeBudgetMicroUsd: number;
+  perPeriodBudgetMicroUsd: number;
+  periodHours: number;
+  /** Actual COGS from the UsageEvent ledger (ingestion embeds attributed to this lake). */
+  ledger: IOwnerUsageSummary;
 }

@@ -30,6 +30,8 @@ const h = vi.hoisted(() => ({
   batchReleaseSpend: vi.fn(async () => true),
   lakeReleaseSpend: vi.fn(async () => true),
   getSettingsValue: vi.fn(),
+  organizationFindById: vi.fn(async () => null),
+  recordOperationalUsage: vi.fn(async () => undefined),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -55,6 +57,8 @@ vi.mock('@bike4mind/database', () => ({
     markFailedIfNotAlready: h.markFailedIfNotAlready,
     update: h.fabFileUpdate,
   },
+  organizationRepository: { findById: h.organizationFindById },
+  usageEventRepository: {},
   User: { findById: vi.fn(async () => ({ id: 'u1' })) },
   withTransaction: vi.fn((fn: () => unknown) => fn()),
 }));
@@ -63,6 +67,7 @@ vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn(async () => ({})) },
   embeddingCacheService: { getEmbedding: h.getEmbedding, setEmbedding: vi.fn().mockResolvedValue(undefined) },
   fabFilesService: { stampChunkEmbeddingModel: h.stampChunkEmbeddingModel },
+  recordOperationalUsage: h.recordOperationalUsage,
   dataLakeService: {
     enforceEmbeddingSpendGate: h.enforceEmbeddingSpendGate,
     // Mirror the real class's retryable flag so the handler's terminal-denial branch classifies correctly.
@@ -363,6 +368,71 @@ describe('fabFileVectorize handler - spend gate', () => {
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
     expect(h.deferFailureIfRetryable).toHaveBeenCalled();
     expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+  });
+});
+
+describe('fabFileVectorize handler - usage ledger (#1677)', () => {
+  const unvectorizedFile = (batchId?: string) => ({
+    id: 'ff1',
+    batchId,
+    vectorized: false,
+    chunkCount: 1,
+    vectorizedChunkCount: 0,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text: 'hello world',
+      tokenCount: 5,
+    });
+    h.getEmbedding.mockResolvedValue(null); // cache miss -> the ledger call is in play
+    h.enforceEmbeddingSpendGate.mockResolvedValue(undefined);
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+  });
+
+  it('records a UsageEvent attributed to the lake, bypassing credit billing', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.recordOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dataLakeId: 'lake-1',
+        feature: 'embedding',
+        bypassCreditBilling: true,
+        inputTokens: 5,
+        // getEmbeddingModelCost is mocked as a flat 0.0001 USD return (see spend-gate describe
+        // above) -> ceil(0.0001*1e6)/1e6 = 0.0001.
+        costUsd: 0.0001,
+      }),
+      expect.anything()
+    );
+  });
+
+  it('never records for a turn-attached file (no batchId, no lake)', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.recordOperationalUsage).not.toHaveBeenCalled();
+  });
+
+  it('never records on a cache hit (no spend occurred)', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.getEmbedding.mockResolvedValue([0.1, 0.2, 0.3]); // cache hit
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.recordOperationalUsage).not.toHaveBeenCalled();
+  });
+
+  it('a recordOperationalUsage failure never fails the vectorize run', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.recordOperationalUsage.mockRejectedValueOnce(new Error('ledger down'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
   });
 });
 

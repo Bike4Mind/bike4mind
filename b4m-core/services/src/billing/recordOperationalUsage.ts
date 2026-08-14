@@ -27,6 +27,8 @@ export interface RecordOperationalUsageParams {
   /** The user's organization, when they belong to one; attribution rolls up to it. */
   organization?: IOrganizationDocument | null;
   sessionId?: string;
+  /** Data lake this call is 1:1 attributable to (ingestion embeds only). */
+  dataLakeId?: string;
   feature: OperationalUsageFeature;
   /** Provider/backend, e.g. 'openai', 'voyageai'. */
   provider: string;
@@ -40,6 +42,13 @@ export interface RecordOperationalUsageParams {
   costUsd: number;
   latencyMs?: number;
   source?: CompletionSource;
+  /**
+   * Skip the credit-deduction path entirely, regardless of the billOperationalUsage/
+   * enforceCredits admin settings. For spend already governed by its own dedicated
+   * budget/gate (e.g. data-lake embedding spend levers) - debiting credits on top of
+   * that gate would be a second, unreviewed billing mechanism for the same spend.
+   */
+  bypassCreditBilling?: boolean;
 }
 
 export interface RecordOperationalUsageAdapters {
@@ -82,6 +91,7 @@ export async function recordOperationalUsage(
     // Both gates must be on to debit: billOperationalUsage opts this spend in,
     // enforceCredits is the platform-wide metering master switch (off on self-host).
     const shouldBill =
+      !params.bypassCreditBilling &&
       (getSettingsValue('billOperationalUsage', settings) ?? false) &&
       (getSettingsValue('enforceCredits', settings) ?? false);
 
@@ -124,6 +134,7 @@ export async function recordOperationalUsage(
     ownerId: organization ? organization.id : user.id,
     ownerType: organization ? CreditHolderType.Organization : CreditHolderType.User,
     sessionId: params.sessionId,
+    dataLakeId: params.dataLakeId,
     feature,
     provider: params.provider,
     model: params.model,

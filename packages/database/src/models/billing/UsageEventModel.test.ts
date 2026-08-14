@@ -71,6 +71,16 @@ describe('UsageEventRepository', () => {
       expect(doc!.apiKeyId).toBeUndefined();
     });
 
+    it('persists dataLakeId when provided (ingestion spend attribution, #1677)', async () => {
+      const doc = await record({ feature: 'embedding', dataLakeId: 'lake-1' });
+      expect(doc!.dataLakeId).toBe('lake-1');
+    });
+
+    it('leaves dataLakeId unset for non-lake events (query embeds, chat, etc.)', async () => {
+      const doc = await record();
+      expect(doc!.dataLakeId).toBeUndefined();
+    });
+
     it('rejects an unknown feature', async () => {
       await expect(record({ feature: 'nonsense' as IUsageEventInput['feature'] })).rejects.toThrow();
     });
@@ -306,6 +316,68 @@ describe('UsageEventRepository', () => {
 
     it('returns zeroed totals for an owner with no events', async () => {
       const summary = await usageEventRepository.ownerUsageSummary('org-empty', CreditHolderType.Organization);
+      expect(summary).toEqual({
+        overTime: [],
+        byMember: [],
+        byModel: [],
+        byFeature: [],
+        totals: { requests: 0, cogsUsd: 0, creditsCharged: 0 },
+      });
+    });
+  });
+
+  describe('lakeUsageSummary', () => {
+    const lakeEvent = (overrides: Partial<IUsageEventInput> = {}) =>
+      record({ feature: 'embedding', dataLakeId: 'lake-1', ...overrides });
+
+    it('rolls up a lake spend by day, uploading member, model, and feature', async () => {
+      await lakeEvent({ userId: 'user-a', costUsd: 0.01, creditsCharged: 0 });
+      await lakeEvent({ userId: 'user-a', provider: 'openai', model: 'gpt-4o', costUsd: 0.02, creditsCharged: 0 });
+      await lakeEvent({ userId: 'user-b', costUsd: 0.05, creditsCharged: 0 });
+
+      const summary = await usageEventRepository.lakeUsageSummary('lake-1');
+
+      expect(summary.totals.requests).toBe(3);
+      expect(summary.totals.cogsUsd).toBeCloseTo(0.08, 10);
+
+      // Breakdowns are ordered biggest-cost first.
+      expect(summary.byMember).toMatchObject([
+        { userId: 'user-b', requests: 1 },
+        { userId: 'user-a', requests: 2 },
+      ]);
+      // Sorted by cogsUsd desc: bedrock carries both user-a's first event (0.01) and
+      // user-b's (0.05) = 0.06 total, ahead of openai's single 0.02 event.
+      expect(summary.byModel).toMatchObject([
+        { provider: 'bedrock', model: 'claude-sonnet-4-5', requests: 2 },
+        { provider: 'openai', model: 'gpt-4o', requests: 1 },
+      ]);
+      expect(summary.byFeature).toMatchObject([{ feature: 'embedding', requests: 3 }]);
+
+      expect(summary.overTime).toHaveLength(1);
+      expect(summary.overTime[0]).toMatchObject({ requests: 3 });
+    });
+
+    it('scopes strictly to the given lake, never spilling to another lake or non-lake events', async () => {
+      await lakeEvent({ costUsd: 0.01 });
+      await lakeEvent({ dataLakeId: 'lake-2', costUsd: 0.99 });
+      await record({ feature: 'chat', costUsd: 0.99 }); // no dataLakeId at all
+
+      const summary = await usageEventRepository.lakeUsageSummary('lake-1');
+
+      expect(summary.totals.requests).toBe(1);
+      expect(summary.totals.cogsUsd).toBeCloseTo(0.01, 10);
+    });
+
+    it('excludes events outside the trailing window', async () => {
+      await lakeEvent();
+      await UsageEvent.collection.updateMany({}, { $set: { createdAt: new Date('2020-01-01') } });
+      const summary = await usageEventRepository.lakeUsageSummary('lake-1', 30);
+      expect(summary.overTime).toHaveLength(0);
+      expect(summary.totals).toEqual({ requests: 0, cogsUsd: 0, creditsCharged: 0 });
+    });
+
+    it('returns zeroed totals for a lake with no ledgered spend', async () => {
+      const summary = await usageEventRepository.lakeUsageSummary('lake-empty');
       expect(summary).toEqual({
         overTime: [],
         byMember: [],
