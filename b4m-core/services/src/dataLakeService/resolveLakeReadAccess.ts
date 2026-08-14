@@ -5,6 +5,20 @@ import type { LakeGrant } from './manageRule';
 /** The platform cutover flag governing whether read-grant resolution is enforced or report-only. */
 export const ENFORCE_LAKE_READ_GRANTS_KEY = 'EnforceLakeReadGrants' as const;
 
+/**
+ * Source-level interlock for the ENFORCE transition. The `EnforceLakeReadGrants` admin setting gives
+ * operators the report-only cutover + observability, but enforcement stays off until THIS constant is
+ * flipped - so an admin toggling the setting before the feature is code-complete cannot activate a
+ * half-wired gate (the exact "accidentally enabled" risk). Enforcement requires BOTH the setting ON
+ * and this constant true; report-only logging is unaffected either way.
+ *
+ * Flip to `true` ONLY in the PR that lands the two remaining prerequisites: the member-management
+ * WRITE path (the sole producer of reader/org grants - none exists today) AND the retrieval/grounding
+ * read arm (so a reader who can open a lake can also ground on it). Flipping the setting without this
+ * is intentionally a no-op, and logs a warning so the premature toggle is visible.
+ */
+export const READ_GRANT_ENFORCEMENT_READY = false;
+
 /** Minimal diagnostic sink - a structural subset of the app Logger, so no dependency is added here. */
 export interface LakeAccessLogger {
   info?: (message: string, meta?: unknown) => void;
@@ -94,21 +108,36 @@ export function resolveLakeReadAccess(
 }
 
 /**
- * The platform-level read-grant cutover flag. Platform altitude on purpose: this is a one-time
- * migration cutover for the whole install, not a per-lake operational lever. NEVER throws - an
- * unwired repo OR a failed read degrades to `false` (report-only / legacy), because a failed read is
- * not a "yes": collapsing it into enforce would silently widen access on a transient glitch. The warn
- * is the diagnostic that tells "flag was off" apart from "read failed" for a smoke test.
+ * Whether read-grant resolution is ENFORCED right now. Enforcement requires BOTH the platform setting
+ * ON and the source-level `READ_GRANT_ENFORCEMENT_READY` interlock (see its doc) - so a premature
+ * admin toggle stays report-only until the feature is code-complete. Platform altitude on purpose:
+ * the setting is a one-time install-wide migration cutover, not a per-lake lever.
+ *
+ * NEVER throws - an unwired repo OR a failed read degrades to `false` (report-only / legacy), because
+ * a failed read is not a "yes": collapsing it into enforce would silently widen access on a transient
+ * glitch. The warns are the diagnostics that tell "flag off" apart from "read failed" apart from
+ * "operator enabled it but the interlock is still holding" - all three must be visible to a smoke test.
  */
 export async function resolveEnforceReadGrants(
   settings: Pick<IAdminSettingsRepository, 'getSettingsValue'> | undefined,
   logger?: LakeAccessLogger
 ): Promise<boolean> {
   if (!settings) return false;
+  let intent = false;
   try {
-    return (await settings.getSettingsValue(ENFORCE_LAKE_READ_GRANTS_KEY)) === true;
+    intent = (await settings.getSettingsValue(ENFORCE_LAKE_READ_GRANTS_KEY)) === true;
   } catch (err) {
     logger?.warn?.('[lakeReadGrantCutover] enforce-flag read failed; treating as report-only', err);
     return false;
   }
+  // Interlock: the operator asked to enforce, but the feature is not code-ready. Stay report-only and
+  // make the premature toggle loud rather than silently half-enabling a gate with no retrieval arm.
+  if (intent && !READ_GRANT_ENFORCEMENT_READY) {
+    logger?.warn?.(
+      '[lakeReadGrantCutover] EnforceLakeReadGrants is ON but enforcement is code-gated off ' +
+        '(member-write + retrieval arms not wired); staying report-only'
+    );
+    return false;
+  }
+  return intent && READ_GRANT_ENFORCEMENT_READY;
 }
