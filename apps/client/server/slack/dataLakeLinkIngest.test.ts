@@ -180,6 +180,21 @@ describe('successful ingest', () => {
     );
   });
 
+  it('authorizes by the org MEMBERSHIP SET, not the selected-org pointer', async () => {
+    // The shared prologue is what makes FILE and LINK agree, so it is also what makes them break
+    // together: when #1762 swapped `organizationId` for the membership set, the change landed in
+    // `dataLakeIngestAuthz.ts` and only the FILE test pinned it. Same blind spot as the grants wiring
+    // above - typecheck skips test files, so the LINK path could silently drift back.
+    await run();
+
+    expect(resolveMembershipOrgIds).toHaveBeenCalledWith('user-1');
+    expect(assertLakeWriteAccess).toHaveBeenCalledWith(
+      'sales',
+      expect.objectContaining({ userId: 'user-1', organizationIds: ['org-1'] }),
+      expect.anything()
+    );
+  });
+
   it('stamps the lake tag, the fallback tag and the Slack + URL provenance', async () => {
     const outcome = await run();
 
