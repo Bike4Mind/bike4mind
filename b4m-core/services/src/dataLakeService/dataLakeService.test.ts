@@ -781,6 +781,20 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
     // Same for the grounding mode: editor-only, never shipped to a reader.
     expect((READER_LAKE_FIELDS as readonly string[]).includes('groundingMode')).toBe(false);
     expect(LAKE_FIELD_VISIBILITY.groundingMode).toBe('withheld');
+    // Who last changed the lake's config is editor-only: a reader gets the config history surface,
+    // never a raw actor id on the lake document.
+    expect((READER_LAKE_FIELDS as readonly string[]).includes('lastUpdatedByUserId')).toBe(false);
+    expect(LAKE_FIELD_VISIBILITY.lastUpdatedByUserId).toBe('withheld');
+  });
+
+  it('withholds lastUpdatedByUserId from a reader while serving it to an editor', () => {
+    const stamped = lake({ isPublic: true, lastUpdatedByUserId: 'admin1' });
+
+    const reader = redactLakeForActor(stamped, { userId: 'stranger', isAdmin: false });
+    expect(reader).not.toHaveProperty('lastUpdatedByUserId');
+
+    const editor = redactLakeForActor(stamped, { userId: 'stranger', isAdmin: true });
+    expect(editor).toHaveProperty('lastUpdatedByUserId', 'admin1');
   });
 
   it('does not mutate the source document (the caller may still hold it for a write path)', () => {
@@ -883,6 +897,47 @@ describe('updateDataLake — gate-after-publish guardrail', () => {
     await expect(
       updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { name: 'Renamed' }, { db })
     ).resolves.toMatchObject({ name: 'Renamed' });
+  });
+});
+
+describe('updateDataLake - config-write actor stamp', () => {
+  const makeDb = (l: IDataLakeDocument) => {
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    return { db: { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } }, update };
+  };
+
+  it('records the acting principal, not the creator', async () => {
+    // The admin arm is the whole point: it grants manage over every tenant's data, and it is the
+    // one path where nothing else in the document would say a stranger had been here.
+    const { db, update } = makeDb(lake({ createdByUserId: 'owner' }));
+    await updateDataLake({ userId: 'platformAdmin', isAdmin: true }, 'lake1', { groundingMode: 'inline' }, { db });
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ lastUpdatedByUserId: 'platformAdmin' }));
+    expect(update).toHaveBeenCalledWith(expect.not.objectContaining({ createdByUserId: expect.anything() }));
+  });
+
+  it('ignores a lastUpdatedByUserId supplied in the request body', async () => {
+    // Belt and braces: UpdateDataLakeRequestInput declares no such field, so secureParameters
+    // strips it - and the stamp is spread AFTER params, so even a schema change could not let a
+    // crafted body attribute its own write to someone else.
+    const { db, update } = makeDb(lake({ createdByUserId: 'owner' }));
+    await updateDataLake(
+      { userId: 'owner', isAdmin: false },
+      'lake1',
+      { name: 'Renamed', lastUpdatedByUserId: 'someoneElse' } as never,
+      { db }
+    );
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ lastUpdatedByUserId: 'owner' }));
+  });
+
+  it('writes no stamp key at all for an actor with no id, leaving a prior stamp intact', async () => {
+    const { db, update } = makeDb(lake({ createdByUserId: '', lastUpdatedByUserId: 'earlierAdmin' }));
+    await updateDataLake({ userId: '', isAdmin: true }, 'lake1', { name: 'Renamed' }, { db });
+
+    // Absent, not '': a stored empty id would read as a real principal whose identity was lost,
+    // and it would overwrite the last write that WAS attributable.
+    expect(update).toHaveBeenCalledWith(expect.not.objectContaining({ lastUpdatedByUserId: expect.anything() }));
   });
 });
 
@@ -1280,7 +1335,7 @@ describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
     await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { db: { dataLakes, fabFiles } });
 
     const settle = dataLakes.update.mock.calls.at(-1)?.[0];
-    expect(settle).toEqual({ id: 'lake1', status: 'active', filesArchivedAt: null });
+    expect(settle).toEqual({ id: 'lake1', status: 'active', filesArchivedAt: null, lastUpdatedByUserId: 'owner' });
   });
 });
 
@@ -1411,6 +1466,17 @@ describe('archiveDataLake - retrieval-index removal', () => {
     await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
     expect(adapters.db.fabFiles.findIdsByDataLakeTag).not.toHaveBeenCalled();
     expect(adapters.db.fabFiles.archiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, expect.any(Date));
+  });
+
+  it('stamps the actor on the terminal transition only, never on the transitional hop', async () => {
+    // One stamp per operator action: a crashed run that never settles must leave no record of an
+    // archive that did not happen.
+    const adapters = makeAdapters();
+    await archiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters);
+
+    const [[transitional], [terminal]] = adapters.db.dataLakes.update.mock.calls;
+    expect(transitional).toEqual({ id: 'lake1', status: 'archiving' });
+    expect(terminal).toEqual({ id: 'lake1', status: 'archived', lastUpdatedByUserId: 'owner' });
   });
 
   it('survives a member-id lookup that itself fails', async () => {
@@ -1717,7 +1783,13 @@ describe('teardown stamp bookkeeping', () => {
       await deleteDataLake(owner, 'lake1', adapters);
 
       expect(adapters.db.dataLakes.update.mock.calls[0][0]).toEqual({ id: 'lake1', status: 'deleting' });
-      expect(adapters.db.dataLakes.update.mock.calls[1][0]).toEqual({ id: 'lake1', status: 'deleted' });
+      // The terminal transition carries the actor stamp; the transitional hop above deliberately
+      // does not (one stamp per operator action - see lakeConfigWriteStamp).
+      expect(adapters.db.dataLakes.update.mock.calls[1][0]).toEqual({
+        id: 'lake1',
+        status: 'deleted',
+        lastUpdatedByUserId: 'owner',
+      });
     });
 
     it('leaves a teardown that predates the stamp unmarked, so its restore stays unbounded', async () => {
@@ -1771,7 +1843,13 @@ describe('teardown stamp bookkeeping', () => {
       await restoreDeletedDataLake(owner, 'lake1', adapters);
 
       const settle = adapters.db.dataLakes.update.mock.calls.at(-1)?.[0];
-      expect(settle).toEqual({ id: 'lake1', status: 'active', filesDeletedAt: null, filesArchivedAt: null });
+      expect(settle).toEqual({
+        id: 'lake1',
+        status: 'active',
+        filesDeletedAt: null,
+        filesArchivedAt: null,
+        lastUpdatedByUserId: 'owner',
+      });
       // undefined would be dropped on the way to mongo and leave the spent mark in place.
       expect(settle.filesDeletedAt).toBeNull();
       expect(settle.filesArchivedAt).toBeNull();
@@ -2297,6 +2375,14 @@ describe('setLakeVisibility — personal ↔ org promotion', () => {
       db,
     } as any);
     expect(db.dataLakes.update).toHaveBeenCalledWith(expect.objectContaining({ organizationId: 'orgA' }));
+  });
+
+  it('stamps the actor on a visibility change (who exposed this lake, not just when)', async () => {
+    const db = makeDb({ organizationId: 'orgA' });
+    await setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'private', {
+      db,
+    } as any);
+    expect(db.dataLakes.update).toHaveBeenCalledWith(expect.objectContaining({ lastUpdatedByUserId: 'owner' }));
   });
 
   it('demotes an org lake back to private by clearing organizationId (null, not undefined)', async () => {
