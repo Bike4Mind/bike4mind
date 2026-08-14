@@ -460,6 +460,11 @@ export const LLMProvider: React.FC = () => {
     stableIsModelAccessible,
   ]);
 
+  // Set by the default-model effect when it resolves a model on the user's behalf, and consumed once
+  // by the refit effect below so that transition does not count as a user switch. Must stay in sync
+  // with both: the writer is the fallback chain, the reader is the refit effect's allowRaise gate.
+  const autoResolvedModelRef = useRef<string | null>(null);
+
   // Set the default model and max tokens, respecting access control
   // Fallback chain: admin default -> user's last used model -> first accessible model
   //
@@ -510,6 +515,18 @@ export const LLMProvider: React.FC = () => {
           const lastUsed = state.lastUsedTextModel ? models.find(model => model.id === state.lastUsedTextModel) : null;
           const modelToUse = adminDefault || lastUsed || models[0];
 
+          // This branch only runs when the user did NOT choose the resolved model - theirs was unset
+          // or failed the accessibility predicate - so it must never RAISE the output ceiling, or a
+          // deliberately lowered value is discarded with no signal (#1254). Every user-initiated
+          // switch goes through buildModelSelectionPatch, which sets the new model's default
+          // explicitly, so nothing depends on this branch raising. refitMaxTokensForModel still
+          // corrects an unset or too-high value down to what the resolved model can actually serve.
+          const nextMaxTokens = refitMaxTokensForModel(state.max_tokens, modelToUse, { allowRaise: false });
+          // Tell the refit effect below that THIS transition was resolved for the user, not chosen by
+          // them. Without it that effect sees a model change, sets allowRaise, and raises the ceiling
+          // straight back to the new model's default - undoing the line above.
+          autoResolvedModelRef.current = modelToUse.id;
+
           // TEMP #1254 instrumentation - remove before merge
           console.log('[T1254] fallback-effect main reset', {
             trigger: hasNoModel ? 'hasNoModel' : 'needsModelSwitch',
@@ -517,7 +534,8 @@ export const LLMProvider: React.FC = () => {
             toModel: modelToUse.id,
             sameModel: modelToUse.id === state.model,
             fromMaxTokens: state.max_tokens,
-            toMaxTokens: getDefaultMaxTokens(modelToUse),
+            modelDefaultMaxTokens: getDefaultMaxTokens(modelToUse),
+            writtenMaxTokens: nextMaxTokens,
             currentAccessible: state.model ? stableIsModelAccessible(state.model) : null,
             accessibleIds: models.map(m => m.id),
           });
@@ -525,7 +543,7 @@ export const LLMProvider: React.FC = () => {
             ...state,
             model: modelToUse.id,
             defaultTextModel: modelToUse.id,
-            max_tokens: getDefaultMaxTokens(modelToUse),
+            max_tokens: nextMaxTokens,
             isQuestMasterEnabled: false,
             isAgentsEnabled: false,
           };
@@ -556,14 +574,22 @@ export const LLMProvider: React.FC = () => {
     if (!info) return;
     const modelChanged = refitModelRef.current !== null && refitModelRef.current !== activeModel;
     refitModelRef.current = activeModel;
+    // A switch the app resolved for the user is not a switch they asked for, so it must not raise a
+    // ceiling they lowered (#1254). Consumed once: a later, genuine switch to this same model still
+    // raises, which is what session hydration relies on (applyModelFromSession sets the model with no
+    // max_tokens and depends on this effect fitting it to the new model).
+    const autoResolved = autoResolvedModelRef.current === activeModel;
+    if (autoResolved) autoResolvedModelRef.current = null;
+    const allowRaise = modelChanged && !autoResolved;
     setState(state => {
-      const refitted = refitMaxTokensForModel(state.max_tokens, info, { allowRaise: modelChanged });
+      const refitted = refitMaxTokensForModel(state.max_tokens, info, { allowRaise });
       if (refitted !== state.max_tokens) {
         // TEMP #1254 instrumentation - remove before merge
         console.log('[T1254] refit-effect change', {
           model: activeModel,
           modelChanged,
-          allowRaise: modelChanged,
+          autoResolved,
+          allowRaise,
           fromMaxTokens: state.max_tokens,
           toMaxTokens: refitted,
           catalogMaxTokens: info.max_tokens,
