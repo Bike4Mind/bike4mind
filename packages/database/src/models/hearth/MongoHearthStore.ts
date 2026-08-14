@@ -11,6 +11,12 @@ import {
   type IHearthPresenceDoc,
 } from './HearthPresenceModel.js';
 
+/** What a rendering surface needs to name and badge an actor. */
+export interface HearthActorIdentity {
+  displayName: string;
+  kind: IHearthActorDoc['kind'];
+}
+
 function isDuplicateKeyError(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { code?: number }).code === 11000;
 }
@@ -273,13 +279,17 @@ export const hearthRepository = {
   },
 
   /**
-   * Resolve actor display names for a batch of events (for rendering surfaces).
-   * Prefers the renameable friendly name and falls back to the identity name.
+   * Resolve actor identities for a batch of events (for rendering surfaces).
+   * The name prefers the renameable friendly label and falls back to the
+   * identity name. `kind` travels with it because surfaces badge the kind, so a
+   * self-chosen displayName cannot pass for a session-derived human actor.
    */
-  async actorNamesById(actorIds: string[]): Promise<Map<string, string>> {
+  async actorIdentitiesById(actorIds: string[]): Promise<Map<string, HearthActorIdentity>> {
     const unique = [...new Set(actorIds)].map(id => new Types.ObjectId(id));
-    const actors = await HearthActor.find({ _id: { $in: unique } }, { displayName: 1, displayLabel: 1 });
-    return new Map(actors.map(a => [a._id.toString(), a.displayLabel ?? a.displayName]));
+    const actors = await HearthActor.find({ _id: { $in: unique } }, { displayName: 1, displayLabel: 1, kind: 1 });
+    return new Map(
+      actors.map(a => [a._id.toString(), { displayName: a.displayLabel ?? a.displayName, kind: a.kind }])
+    );
   },
 
   /**
