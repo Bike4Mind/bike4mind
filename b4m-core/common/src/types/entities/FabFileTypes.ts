@@ -592,7 +592,10 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   countByUserIdAndTag(userId: string, tag: string): Promise<number>;
 
   /**
-   * Count the number of files by tag for a user.
+   * Count the number of files by tag for a user. Widens to shared/group/data-lake files when
+   * options are supplied. `excludePersonalShares` additionally drops a file merely shared 1:1
+   * with the user - see buildOwnershipConditions (packages/database) for the full why and which
+   * kind of caller should or should not opt in.
    * @param userId - The ID of the user.
    * @returns A promise that resolves to the number of files.
    */
@@ -603,6 +606,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
       scopedTagPrefixes?: string[];
+      excludePersonalShares?: boolean;
     }
   ): Promise<{ tag: string; count: number }[]>;
 
@@ -638,8 +642,10 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   ): Promise<{ total: number; byPrefix: Record<string, number> }>;
 
   /**
-   * Count unique files per root tag namespace for a user. Takes the same optional scope as
-   * countFilesByTagForUser, which it is served beside; omitting it counts owned files only.
+   * Count unique files per root tag namespace for a user. Takes the SAME optional scope
+   * (including `excludePersonalShares`) as countFilesByTagForUser, which it is served beside -
+   * the two must move in lockstep or a namespace's size disagrees with its tag count. Omitting
+   * the scope counts owned files only.
    */
   countUniqueFilesByNamespaceForUser(
     userId: string,
@@ -648,6 +654,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
       scopedTagPrefixes?: string[];
+      excludePersonalShares?: boolean;
     }
   ): Promise<{ namespace: string; fileCount: number }[]>;
 

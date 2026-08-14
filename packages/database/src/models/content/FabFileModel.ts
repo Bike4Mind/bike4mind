@@ -573,9 +573,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
       scopedTagPrefixes?: string[];
+      excludePersonalShares?: boolean;
     }
   ): Promise<{ tag: string; count: number }[]> {
-    // When options are provided, include shared/group/data-lake files.
+    // When options are provided, include shared/group/data-lake files (narrowed by
+    // excludePersonalShares when the caller opts in - see buildOwnershipConditions).
     // Without options, only count files owned by the user (backward compatible).
     const ownershipFilter = options ? { $or: buildOwnershipConditions(userId, options) } : { userId };
     const sessionFilter = {
@@ -591,9 +593,12 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         $match: {
           $and: [ownershipFilter, sessionFilter],
           deletedAt: null,
-          // Must mirror buildFabFileSearchQuery's baseFilter: this count is rendered as a badge
-          // beside the list that filter produces, so a file either feeds both or neither.
-          // Equality to null matches missing too, leaving files that were never archived alone.
+          // archivedAt must mirror buildFabFileSearchQuery's baseFilter: this count is rendered
+          // as a badge beside the list that filter produces. Equality to null matches missing
+          // too, leaving files that were never archived alone. Ownership scope is the one
+          // deliberate exception, and only for a caller that opts into excludePersonalShares
+          // (WORKSPACES via counts.ts) - see buildOwnershipConditions for why. listFileTags does
+          // NOT opt in, so its fileCount stays in step with the file list it is rendered beside.
           archivedAt: null,
           tags: { $exists: true, $ne: [] },
         },
@@ -742,8 +747,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
       scopedTagPrefixes?: string[];
+      excludePersonalShares?: boolean;
     }
   ): Promise<{ namespace: string; fileCount: number }[]> {
+    // Caller must pass the SAME options (including excludePersonalShares) as
+    // countFilesByTagForUser - see that function's doc comment.
     const ownershipFilter = options ? { $or: buildOwnershipConditions(userId, options) } : { userId };
     // Exclude session summaries (unless curated-notebook) to match search behavior. Both this and
     // the ownership filter can be an $or, so they go under $and rather than into one object where
