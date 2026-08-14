@@ -106,6 +106,10 @@ export async function sendDataLakeSpendNotification(
   const { db, mailer, logger } = deps;
   const sendTimeoutMs = deps.sendTimeoutMs ?? DEFAULT_SEND_TIMEOUT_MS;
   let claimId: string | undefined;
+  // Cleared on the fast (common) path in the finally below - an uncleared setTimeout keeps a
+  // Lambda's event loop non-empty for the full sendTimeoutMs even after sendToAddressees
+  // already resolved.
+  let sendTimer: ReturnType<typeof setTimeout> | undefined;
   try {
     const lake = await db.dataLakes.findById(event.dataLakeId);
     const claim = await db.spendNotifications.claimNotification({
@@ -122,9 +126,9 @@ export async function sendDataLakeSpendNotification(
 
     return await Promise.race([
       sendToAddressees(event, lake, claim.id, db, mailer, logger),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`send exceeded ${sendTimeoutMs}ms`)), sendTimeoutMs)
-      ),
+      new Promise<never>((_, reject) => {
+        sendTimer = setTimeout(() => reject(new Error(`send exceeded ${sendTimeoutMs}ms`)), sendTimeoutMs);
+      }),
     ]);
   } catch (err) {
     logger?.warn?.(`[sendDataLakeSpendNotification] failed for lake ${event.dataLakeId}: ${err}`);
@@ -142,5 +146,7 @@ export async function sendDataLakeSpendNotification(
         );
     }
     return 'failed';
+  } finally {
+    clearTimeout(sendTimer);
   }
 }

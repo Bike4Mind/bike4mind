@@ -128,15 +128,20 @@ export async function enforceEmbeddingSpendGate(params: {
 
   const fire = async (event: Omit<DataLakeSpendNotificationEvent, 'dataLakeId'>): Promise<void> => {
     if (!notify || !dataLakeId) return;
+    // Clear the timer on the fast (common) path - an uncleared setTimeout keeps a Lambda's
+    // event loop non-empty for the full notifyTimeoutMs even after notify() already resolved.
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
         notify({ dataLakeId, ...event }),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`notify exceeded ${notifyTimeoutMs}ms`)), notifyTimeoutMs)
-        ),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`notify exceeded ${notifyTimeoutMs}ms`)), notifyTimeoutMs);
+        }),
       ]);
     } catch (err) {
       logger?.warn?.(`[spendGate] spend notification failed: ${err}`);
+    } finally {
+      clearTimeout(timer);
     }
   };
 
