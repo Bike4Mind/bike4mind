@@ -122,13 +122,16 @@ function isPrivateIPv6(ip: string): boolean {
 
   // ::ffff:0:0/96 - IPv4-mapped IPv6. These dial the underlying IPv4, so they must be judged by it.
   //
-  // Matched by SUBSTRING rather than the dotted form alone: Node normalises `::ffff:169.254.169.254`
-  // to the hex form `::ffff:a9fe:a9fe`, which the old anchored dotted-quad regex missed entirely - and
-  // that is the cloud metadata endpoint, i.e. instance credentials. When the tail is dotted we can
-  // judge the embedded IPv4 exactly; when it is hex we refuse rather than decode, which is what the
-  // sibling `ssrfGuard.ts` does too. A public `::ffff:` address is vanishingly rare and losing it is
-  // the right side of this trade.
-  if (normalized.includes('ffff:')) {
+  // Anchored on the PREFIX, and it has to be: an `ffff` hextet is legal anywhere in an address, so a
+  // substring test also refuses public ones like `2606:4700:ffff::1`. That over-block reaches further
+  // than it looks, because `validateUrlForFetch` rejects a hostname if ANY resolved IP is private -
+  // one `ffff` hextet in a dual-stack host's AAAA would sink its perfectly fine A record.
+  //
+  // Prefix matching still covers the case the dotted-quad regex used to miss: Node normalises
+  // `::ffff:169.254.169.254` to the hex form `::ffff:a9fe:a9fe`, which is the cloud metadata endpoint,
+  // i.e. instance credentials. When the tail is dotted we judge the embedded IPv4 exactly; when it is
+  // hex we refuse rather than decode, which is what the sibling `ssrfGuard.ts` does too.
+  if (normalized.startsWith('::ffff:')) {
     const tail = normalized.split(':').pop() ?? '';
     return tail.includes('.') ? isPrivateIPv4(tail) : true;
   }
@@ -145,6 +148,10 @@ function isPrivateIPv6(ip: string): boolean {
   // socket rather than a v4-only metadata service. It is closed anyway because it is the same shape as
   // the bug above, the design intent stated for the mapped form applies identically, and an unusual
   // dual-stack or CNI configuration can still translate. `::1` and `::` are handled earlier.
+  //
+  // Deliberately WIDER than the `::/96` this branch is named for: `startsWith('::')` refuses anything
+  // Node canonicalises to a leading `::`, not just the compatible range. Nothing legitimate is lost -
+  // `::/8` is IANA-reserved (RFC 4291), and `::1` and `::` are exact-matched above.
   if (normalized.startsWith('::')) {
     const tail = normalized.slice(2);
     return tail.includes('.') ? isPrivateIPv4(tail) : true;
