@@ -150,6 +150,53 @@ describe('FabFile data lake lifecycle membership', () => {
       expect(stats.fileCount).toBe(1);
       expect(stats.totalSizeBytes).toBe(100);
     });
+
+    it('bounds the prefix-arm scan on userId instead of examining every stranger sharing the tag prefix (#1793)', async () => {
+      // autoIndex builds in the background on connect; explicitly await it here so the hints
+      // below can rely on both candidate indexes actually existing.
+      await FabFile.createIndexes();
+      await seedLakeRows();
+      const strangers = await Promise.all(
+        Array.from({ length: 50 }, (_, i) =>
+          makeFile({ fileName: `stranger-${i}.txt`, userId: STRANGER, tags: [{ name: `acme:stranger-${i}` }] })
+        )
+      );
+
+      const stats = await fabFileRepository.computeDataLakeStats(scope);
+      // Sanity: the 50 strangers must not be counted, matching the exclusion pinned above.
+      expect(stats.fileCount).toBe(2);
+
+      // The prefix arm's own predicate (buildDataLakeMembershipFilter's second $or branch),
+      // isolated from the meta-tag arm so the comparison below is not muddied by an $or plan.
+      const prefixArmFilter = {
+        'tags.name': { $regex: new RegExp('^acme:') },
+        userId: CREATOR,
+        deletedAt: null,
+        archivedAt: null,
+        status: { $ne: 'pending' },
+      };
+
+      // Compare the two candidate indexes directly via hint, rather than trusting the planner's
+      // natural choice: on a collection this small the cost-based planner may prefer a plain
+      // COLLSCAN over either index regardless of which is better, which would make a
+      // planner-choice assertion flaky. Forcing each index isolates exactly what this PR changes:
+      // whether userId or tags.name leads the compound key.
+      const viaOldIndex = await FabFile.collection
+        .find(prefixArmFilter)
+        .hint('tags.name_1_archivedAt_1_deletedAt_1')
+        .explain('executionStats');
+      const viaNewIndex = await FabFile.collection
+        .find(prefixArmFilter)
+        .hint('userId_1_tags.name_1_archivedAt_1_deletedAt_1')
+        .explain('executionStats');
+
+      // Old index: tags.name leads, so the range covers this creator's file plus all 50
+      // strangers; userId is checked only after fetching each candidate.
+      expect(viaOldIndex.executionStats.totalDocsExamined).toBeGreaterThanOrEqual(strangers.length);
+      // New index: userId leads, bounding the scan to this creator's own matching documents.
+      expect(viaNewIndex.executionStats.totalDocsExamined).toBeLessThan(strangers.length);
+      expect(viaNewIndex.executionStats.totalDocsExamined).toBeLessThan(viaOldIndex.executionStats.totalDocsExamined);
+    });
   });
 
   // #1040: the single-lake browse (fabFileRepository.search with lakeMembership +
