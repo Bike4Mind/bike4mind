@@ -455,9 +455,13 @@ export const LLMProvider: React.FC = () => {
     stableIsModelAccessible,
   ]);
 
-  // Set by the default-model effect when it resolves a model on the user's behalf, and consumed once
-  // by the refit effect below so that transition does not count as a user switch. Must stay in sync
-  // with both: the writer is the fallback chain, the reader is the refit effect's allowRaise gate.
+  // Set by the default-model effect when it resolves a model on the user's behalf (both of its branches:
+  // the deprecation fallback and the admin-default chain), and consumed once by the refit effect below so
+  // that transition does not count as a user switch. Must stay in sync with both: the writer is the
+  // default-model effect, the reader is the refit effect's allowRaise gate.
+  // INVARIANT: this handoff assumes the two effects run in declaration order on the same commit, which is
+  // how React runs sibling effects in one component. Keep them siblings here - extracting either into its
+  // own hook, or reordering them, breaks the handoff silently and re-opens #1254.
   const autoResolvedModelRef = useRef<string | null>(null);
 
   // Set the default model and max tokens, respecting access control
@@ -481,15 +485,19 @@ export const LLMProvider: React.FC = () => {
         const needsModelSwitch = state.model && !stableIsModelAccessible(state.model);
 
         if (hasNoModel || needsModelSwitch) {
-          // If the current model is deprecated/inaccessible, try its fallback model first
+          // If the current model is deprecated/inaccessible, try its fallback model first.
+          // Same contract as the admin-default chain below - the user did not pick this model, so the
+          // ceiling is fitted, never raised, and against the live catalog. See the longer note there.
           if (needsModelSwitch && state.model) {
             const fallback = stableGetFallbackModel(state.model);
             if (fallback) {
+              const liveFallbackInfo = modelInfoRepoRef.current?.find(m => m.id === fallback.id) ?? fallback;
+              autoResolvedModelRef.current = fallback.id;
               return {
                 ...state,
                 model: fallback.id,
                 defaultTextModel: fallback.id,
-                max_tokens: getDefaultMaxTokens(fallback),
+                max_tokens: refitMaxTokensForModel(state.max_tokens, liveFallbackInfo, { allowRaise: false }),
                 isQuestMasterEnabled: false,
                 isAgentsEnabled: false,
               };
