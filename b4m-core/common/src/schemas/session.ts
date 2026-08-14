@@ -47,7 +47,7 @@ export type SessionUpdateRequest = z.infer<typeof SessionUpdateRequestSchema>;
 
 /** Path parameter for session-scoped endpoints, e.g. GET/PUT /api/sessions/{id}. */
 export const SessionIdParamSchema = z.object({
-  id: z.string(),
+  id: z.string().min(1),
 });
 
 /**

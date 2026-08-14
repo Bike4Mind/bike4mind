@@ -38,6 +38,10 @@ describe('SessionIdParamSchema', () => {
     expect(SessionIdParamSchema.safeParse({}).success).toBe(false);
   });
 
+  it('rejects an empty-string id rather than treating it as a valid (blank) path segment', () => {
+    expect(SessionIdParamSchema.safeParse({ id: '' }).success).toBe(false);
+  });
+
   it('parses req.query-shaped input, ignoring any real query-string keys alongside it', () => {
     const result = SessionIdParamSchema.safeParse({ id: 'sess_1', unrelatedQueryParam: 'x' });
     expect(result.success).toBe(true);
