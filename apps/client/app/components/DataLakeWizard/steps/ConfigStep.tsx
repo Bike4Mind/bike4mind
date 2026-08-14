@@ -257,7 +257,7 @@ export default function ConfigStep() {
                 Duplicate check: pending...
               </Typography>
             )}
-            <EmbeddingBudgetEstimate files={filesToEmbed.map(f => ({ name: f.file.name, size: f.size }))} />
+            <EmbeddingBudgetEstimate files={filesToEmbed.map(f => ({ name: f.relativePath, size: f.size }))} />
           </Stack>
         </Box>
 

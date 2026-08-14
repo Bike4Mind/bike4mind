@@ -648,9 +648,11 @@ export function useGetDataLakeArticles(params?: DataLakeArticlesParams | null, s
  * overTime ledger breakdown. `enabled` is passed by the caller so the modal can fetch lazily -
  * only once the Spend tab is actually opened, not on every settings-modal mount.
  *
- * A 4xx (not just 403) is treated as "forbidden": a fallback/hardcoded lake has a slug id, not
- * an ObjectId, and has no grantable document, so that path 400s/404s too and must not paint a
- * red error either - it just means no spend view for this lake.
+ * Any 4xx (not just 403) is treated as "forbidden": a fallback/hardcoded lake has no
+ * `createdByUserId` and no grants, so `canManageLake` fails closed for every non-admin caller
+ * there too (a 403 via the same gate, not a distinct mechanism) - treating any 4xx as
+ * "forbidden" is a deliberately wider net than hardcoding 403, so an unanticipated 4xx also
+ * hides the tab instead of painting a red error.
  */
 export function useDataLakeSpend(dataLakeId: string | null, days: number, opts?: { enabled?: boolean }) {
   const query = useQuery({
