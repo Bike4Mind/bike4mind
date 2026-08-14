@@ -24,6 +24,7 @@ import { slugifyDataLakeName } from '@client/app/hooks/data/dataLakeSlug';
 // the reserved namespace and an overlap with another lake's prefix.
 import { tagPrefixIssue } from '@bike4mind/common';
 import { useDuplicatePrefixLake } from '@client/app/hooks/data/dataLakes';
+import { EmbeddingBudgetEstimate } from '@client/app/components/DataLakeWizard/EmbeddingBudgetEstimate';
 
 export default function ConfigStep() {
   const theme = useTheme();
@@ -57,6 +58,9 @@ export default function ConfigStep() {
   const includedFiles = allFiles.filter(f => !f.excluded);
   const includedCount = includedFiles.length;
   const duplicateCount = includedFiles.filter(f => f.isDuplicate).length;
+  // The same set that will actually be embedded - a skipped duplicate uploads nothing, so the
+  // cost estimate must use this arithmetic, not the raw included list.
+  const filesToEmbed = config.conflictResolution === 'skip' ? includedFiles.filter(f => !f.isDuplicate) : includedFiles;
 
   // Auto-trigger hashing on first mount
   useEffect(() => {
@@ -253,6 +257,7 @@ export default function ConfigStep() {
                 Duplicate check: pending...
               </Typography>
             )}
+            <EmbeddingBudgetEstimate files={filesToEmbed.map(f => ({ name: f.file.name, size: f.size }))} />
           </Stack>
         </Box>
 

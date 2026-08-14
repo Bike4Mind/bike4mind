@@ -20,16 +20,36 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useDuplicatePrefixLake: () => prefixClash.current,
 }));
 
+// The embedding-cost estimate reads admin settings via react-query; stub the values instead of
+// standing up a QueryClientProvider. Steady state: spend governance on with a real budget and a
+// priced model, so the estimate/budget suite below controls exactly the values that matter.
+const settingsValues = vi.hoisted(() => ({
+  current: {
+    dataLakeEmbeddingSpendEnabled: 'true' as string | boolean | undefined,
+    dataLakeEmbeddingBudgetPerRunUsd: '5' as string | number | undefined,
+    defaultEmbeddingModel: 'text-embedding-3-small' as string | undefined,
+  },
+}));
+vi.mock('@client/app/hooks/data/settings', () => ({
+  useGetSettingsValue: (key: keyof typeof settingsValues.current) => settingsValues.current[key],
+}));
+
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-const seedConfig = (over: { tagPrefix?: string; name?: string; targetLake?: unknown }) =>
+const seedConfig = (over: {
+  tagPrefix?: string;
+  name?: string;
+  targetLake?: unknown;
+  allFiles?: unknown[];
+  conflictResolution?: 'skip' | 'update' | 'duplicate';
+}) =>
   useDataLakeWizardStore.setState({
     step: 'config',
     targetLake: (over.targetLake ?? null) as never,
-    allFiles: [],
+    allFiles: (over.allFiles ?? []) as never,
     optionalSteps: { preview: false, taxonomy: false },
     config: {
       name: over.name ?? 'My Lake',
@@ -37,9 +57,19 @@ const seedConfig = (over: { tagPrefix?: string; name?: string; targetLake?: unkn
       tagPrefix: over.tagPrefix ?? 'test:',
       requiredUserTag: '',
       requiredEntitlement: '',
-      conflictResolution: 'skip',
+      conflictResolution: over.conflictResolution ?? 'skip',
     },
   });
+
+const mockWizardFile = (name: string, size: number, overrides: Record<string, unknown> = {}) => ({
+  file: { name } as File,
+  relativePath: name,
+  size,
+  type: 'text/plain',
+  excluded: false,
+  isDuplicate: false,
+  ...overrides,
+});
 
 const renderStep = () =>
   render(
@@ -50,6 +80,11 @@ const renderStep = () =>
 
 afterEach(() => {
   useDataLakeWizardStore.getState().resetWizard();
+  settingsValues.current = {
+    dataLakeEmbeddingSpendEnabled: 'true',
+    dataLakeEmbeddingBudgetPerRunUsd: '5',
+    defaultEmbeddingModel: 'text-embedding-3-small',
+  };
 });
 
 /**
@@ -161,5 +196,70 @@ describe('ConfigStep - identity summary', () => {
     renderStep();
 
     expect(screen.queryByTestId('config-name-input')).toBeNull();
+  });
+});
+
+describe('ConfigStep - embedding cost estimate banner (#1677)', () => {
+  it('shows the estimate line for a plausible, in-budget upload', () => {
+    seedConfig({ allFiles: [mockWizardFile('a.txt', 50_000)] });
+
+    renderStep();
+
+    expect(screen.getByTestId('datalake-estimate-line')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-estimate-over-budget-alert')).not.toBeInTheDocument();
+  });
+
+  it('shows the over-budget warning without disabling anything (advisory only)', () => {
+    settingsValues.current.dataLakeEmbeddingBudgetPerRunUsd = '0.0000001';
+    seedConfig({ allFiles: [mockWizardFile('big.txt', 5_000_000)] });
+
+    renderStep();
+
+    expect(screen.getByTestId('datalake-estimate-over-budget-alert')).toHaveTextContent(/approximate/i);
+    expect(screen.getByTestId('datalake-estimate-over-budget-alert')).toHaveTextContent(/rounds up/i);
+  });
+
+  it('renders nothing when spend governance is off', () => {
+    settingsValues.current.dataLakeEmbeddingSpendEnabled = 'false';
+    seedConfig({ allFiles: [mockWizardFile('a.txt', 50_000)] });
+
+    renderStep();
+
+    expect(screen.queryByTestId('datalake-estimate-line')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-estimate-over-budget-alert')).not.toBeInTheDocument();
+  });
+
+  it('renders nothing for a self-host zero-price embedding model', () => {
+    settingsValues.current.defaultEmbeddingModel = 'nomic-embed-text';
+    seedConfig({ allFiles: [mockWizardFile('a.txt', 5_000_000)] });
+
+    renderStep();
+
+    expect(screen.queryByTestId('datalake-estimate-line')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-estimate-over-budget-alert')).not.toBeInTheDocument();
+  });
+
+  it('excludes a skipped duplicate from the estimate (it uploads nothing)', () => {
+    settingsValues.current.dataLakeEmbeddingBudgetPerRunUsd = '0.0000001';
+    seedConfig({
+      allFiles: [mockWizardFile('dup.txt', 5_000_000, { isDuplicate: true })],
+      conflictResolution: 'skip',
+    });
+
+    renderStep();
+
+    // Nothing left to embed once the only file is a skipped duplicate - no estimate at all.
+    expect(screen.queryByTestId('datalake-estimate-line')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-estimate-over-budget-alert')).not.toBeInTheDocument();
+  });
+
+  it('never touches the Start Upload button - advisory only', () => {
+    settingsValues.current.dataLakeEmbeddingBudgetPerRunUsd = '0.0000001';
+    seedConfig({ allFiles: [mockWizardFile('big.txt', 5_000_000)] });
+
+    renderStep();
+
+    expect(screen.getByTestId('datalake-estimate-over-budget-alert')).toBeInTheDocument();
+    expect(screen.queryByTestId('wizard-start-upload-btn')).toBeNull();
   });
 });
