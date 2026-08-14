@@ -8,6 +8,7 @@ import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { canManageLake, isEffectiveOwner, type ManageActor } from './manageRule';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
 import { findCollidingPrefixLakes } from './tagPrefixCollision';
+import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 
 /**
  * Private = owner-only (no org, not public); organization = scoped to the actor's own org;
@@ -122,6 +123,7 @@ export const setLakeVisibility = async (
       id: dataLakeId,
       organizationId: targetOrg ?? null,
       isPublic: targetIsPublic,
+      ...lakeConfigWriteStamp(actor),
     } as Partial<IDataLakeDocument>);
   } catch (err) {
     // A concurrent create/rename can win the (organizationId, slug) unique index between the
