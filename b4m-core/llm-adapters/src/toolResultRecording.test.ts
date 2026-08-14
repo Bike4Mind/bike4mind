@@ -426,7 +426,11 @@ describe.each(SPECS)('$name tool result recording', spec => {
     const toolsUsed = lastToolsUsed(calls);
     expect(toolsUsed).toBeDefined();
     expect(toolsUsed!.length).toBe(2);
-    const returnValues = toolsUsed!.map(t => spec.extractResult(t.returnValue ?? '')).sort();
+    // Positional, not sorted: sorting before comparing would pass even if the correlation swapped
+    // call_1 and call_2's results, since ['3','7'].sort() equals ['7','3'].sort(). Gemini's
+    // function-call parts carry no caller-supplied id (only a backend-minted one), so submission
+    // order - not id lookup - is the one correlation every spec here shares.
+    const returnValues = toolsUsed!.map(t => spec.extractResult(t.returnValue ?? ''));
     expect(returnValues).toEqual(['3', '7']);
   });
 });

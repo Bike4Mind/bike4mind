@@ -55,3 +55,38 @@ describe('convertMessagesToOpenAIFormat - image content pass-through', () => {
     expect(result[0]).toEqual({ role: 'system', content: 'you MUST use the image_generation tool' });
   });
 });
+
+// Shape mirrors b4m-core/utils/src/llm/utils.ts's Priority 2 tool-pairing reconstruction
+// (fetchAndProcessPreviousMessages), which builds exactly this assistant tool_use / user
+// tool_result pair from promptMeta.functionCalls[].returnValue - the field this repo's
+// backends only recently started writing. Confirms the reconstructed history round-trips
+// into a valid OpenAI-shaped request (tool_calls + role:'tool'), not just that utils.ts
+// assembles the intermediate IMessage array correctly.
+describe('convertMessagesToOpenAIFormat - replayed tool history (utils.ts Priority 2 shape)', () => {
+  it('converts a reconstructed tool_use/tool_result pair into tool_calls + role:tool', () => {
+    const assistantMessage: IMessage = {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'reply 1' },
+        { type: 'tool_use', id: 'toolu_1', name: 'web_search', input: { query: 'weather' } },
+      ],
+    } as IMessage;
+    const toolResultMessage: IMessage = {
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'sunny', is_error: false }],
+    } as IMessage;
+
+    const result = convertMessagesToOpenAIFormat([assistantMessage, toolResultMessage]);
+
+    expect(result).toEqual([
+      {
+        role: 'assistant',
+        content: 'reply 1',
+        tool_calls: [
+          { id: 'toolu_1', type: 'function', function: { name: 'web_search', arguments: '{"query":"weather"}' } },
+        ],
+      },
+      { role: 'tool', content: 'sunny', tool_call_id: 'toolu_1' },
+    ]);
+  });
+});

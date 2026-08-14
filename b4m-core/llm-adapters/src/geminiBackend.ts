@@ -1151,14 +1151,22 @@ export class GeminiBackend implements ICompletionBackend {
           };
         }
 
-        if (message.content?.[0].type === 'text') {
+        // Checked before the bare-text branch below: utils.ts's replayed-history reconstruction
+        // (fetchAndProcessPreviousMessages Priority 2) puts a leading `{type:'text'}` block ahead
+        // of the `tool_use` blocks in the SAME content array when the turn had both a text reply
+        // and tool calls. Gating on content[0].type alone took the text-only branch and silently
+        // dropped every tool_use block whenever text came first - so a replayed Gemini turn with a
+        // reply and a tool call would reach the model with the tool call missing.
+        const hasToolUse = Array.isArray(message.content) && message.content.some(item => item.type === 'tool_use');
+
+        if (!hasToolUse && message.content?.[0].type === 'text') {
           return {
             role: mapRole(message.role),
             parts: [{ text: (message.content?.[0] as MessageContentText).text }],
           };
         }
 
-        if (message.content?.[0].type === 'image') {
+        if (!hasToolUse && message.content?.[0].type === 'image') {
           return {
             role: mapRole(message.role),
             parts: [
@@ -1172,42 +1180,48 @@ export class GeminiBackend implements ICompletionBackend {
           };
         }
 
-        if (message.content?.[0].type === 'tool_use') {
+        if (hasToolUse) {
           // CRITICAL: Handle multiple tool_use items in one message (parallel function calls)
           // Per Gemini API docs: only the FIRST part gets thought_signature in parallel calls
-          const parts = message.content
-            .filter((item): item is MessageContentToolUse => item.type === 'tool_use')
-            .map((toolUse, index) => {
-              toolUseIdToName.set(toolUse.id, toolUse.name);
+          const textParts = message.content
+            .filter((item): item is MessageContentText => item.type === 'text')
+            .map(item => ({ text: item.text }));
+          const parts: any[] = [...textParts];
+          parts.push(
+            ...message.content
+              .filter((item): item is MessageContentToolUse => item.type === 'tool_use')
+              .map((toolUse, index) => {
+                toolUseIdToName.set(toolUse.id, toolUse.name);
 
-              const part: any = {
-                functionCall: {
-                  name: toolUse.name,
-                  args: toolUse.input,
-                },
-              };
+                const part: any = {
+                  functionCall: {
+                    name: toolUse.name,
+                    args: toolUse.input,
+                  },
+                };
 
-              // Only first tool call gets thought_signature (Gemini 3 requirement for parallel calls)
-              if (index === 0 && toolUse.thought_signature) {
-                part.thoughtSignature = toolUse.thought_signature; // camelCase for some versions
-                part.thought_signature = toolUse.thought_signature; // snake_case for other versions
-                this.logger.debug('[Gemini] Including thought_signature in request (both formats):', {
-                  name: toolUse.name,
-                  id: toolUse.id,
-                  position: 'first',
-                });
-              } else if (index === 0 && !toolUse.thought_signature) {
-                // Only warn for the first tool call if signature is missing
-                this.logger.warn('[Gemini] Missing thought_signature for first function call:', {
-                  name: toolUse.name,
-                  id: toolUse.id,
-                  messageRole: message.role,
-                });
-                this.logger.warn('[Gemini] This may cause a 400 error with Gemini 3 Pro');
-              }
+                // Only first tool call gets thought_signature (Gemini 3 requirement for parallel calls)
+                if (index === 0 && toolUse.thought_signature) {
+                  part.thoughtSignature = toolUse.thought_signature; // camelCase for some versions
+                  part.thought_signature = toolUse.thought_signature; // snake_case for other versions
+                  this.logger.debug('[Gemini] Including thought_signature in request (both formats):', {
+                    name: toolUse.name,
+                    id: toolUse.id,
+                    position: 'first',
+                  });
+                } else if (index === 0 && !toolUse.thought_signature) {
+                  // Only warn for the first tool call if signature is missing
+                  this.logger.warn('[Gemini] Missing thought_signature for first function call:', {
+                    name: toolUse.name,
+                    id: toolUse.id,
+                    messageRole: message.role,
+                  });
+                  this.logger.warn('[Gemini] This may cause a 400 error with Gemini 3 Pro');
+                }
 
-              return part;
-            });
+                return part;
+              })
+          );
 
           return {
             role: mapRole(message.role),
