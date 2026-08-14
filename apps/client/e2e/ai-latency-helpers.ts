@@ -127,13 +127,17 @@ export interface PromptResult {
   id: string;
   prompt: string;
   response: string;
+  /** Token-stream latency only (start -> stop-generation button gone), excluding image/artifact render. */
   responseTimeMs: number;
   responseTimeSec: number;
   responseRateCharsPerSec: number;
+  /** Image render / artifact settle time after the stream ended; 0 for plain text prompts. */
+  renderTimeMs: number;
+  renderTimeSec: number;
   /**
-   * True for image/artifact prompts, whose responseTime measures end-to-end deliverable
-   * generation rather than a text streaming rate. Excluded from the gated latency average so the
-   * workflow's threshold check stays a text-streaming signal. Absent (falsy) for text prompts.
+   * True for image/artifact prompts. Even measured stream-only their window runs for minutes, so
+   * they are excluded from the gated latency average, which must stay a text-streaming signal that
+   * still catches a real text regression. Absent (falsy) for text prompts.
    */
   measuresDeliverable?: boolean;
 }

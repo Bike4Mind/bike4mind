@@ -105,33 +105,46 @@ export function createAiLatencySuite({
 
       const startMs = Date.now();
       let imageAsserted = false;
+      // streamEndMs marks the end of the token stream (the send helper returns once the
+      // stop-generation button is gone). The image render and artifact settle that follow are a
+      // separate, much longer measurement, so latency and streaming rate below are taken over the
+      // stream window only and the render/settle tail is recorded separately as renderTimeMs.
+      let streamEndMs: number;
       if (scenario.expectsImage) {
-        // Image flow: do not gate on the text container (it only mounts with the image), then
-        // assert the image as the success signal. The image is tool-produced WHILE the reply
-        // streams - the stop button hides only once generation finishes (city-no-cars streams no
-        // caption, textlen 0), so the send needs the image-generation budget too, not just the
-        // render wait. A short send budget here would throw before the render budget is ever used.
+        // The image is tool-produced around the stream (the stop button can hide only once
+        // generation finishes; city-no-cars streams no caption, textlen 0), so the send needs the
+        // image-generation budget, not just the render wait - a short send budget would throw
+        // before the render budget is ever used. Do not gate on the text container (it only mounts
+        // with the image); assert the image as the success signal.
         await chatPage.sendImageMessageAndWaitForResponse(scenario.prompt, TIMEOUTS.IMAGE_GENERATION);
+        streamEndMs = Date.now();
         imageAsserted = await chatPage.tryWaitForImageResponse(TIMEOUTS.IMAGE_GENERATION);
       } else {
-        // An artifact is likewise generated while the reply is still streaming, so an artifact
-        // prompt needs the image-generation budget for the send; plain text keeps the standard
-        // streaming budget.
+        // An artifact is likewise generated around the stream, so an artifact prompt needs the
+        // image-generation budget for the send; plain text keeps the standard streaming budget.
         const sendBudget = scenario.generatesArtifact ? TIMEOUTS.IMAGE_GENERATION : TIMEOUTS.AI_RESPONSE;
         await chatPage.sendMessageAndWaitForResponse(scenario.prompt, sendBudget);
+        streamEndMs = Date.now();
         // Streaming completing does not mean the artifact resolved; wait out the placeholders so
         // the scrape below reads the finished reply, not "Generating artifact..."/"Loading artifact...".
         if (scenario.generatesArtifact) {
           await chatPage.waitForArtifactSettled(TIMEOUTS.IMAGE_GENERATION);
         }
       }
-      const responseTimeMs = Date.now() - startMs;
+      const settleEndMs = Date.now();
+
+      // Measure latency and streaming rate over the token-stream window only; keep the image
+      // render / artifact settle as a separate number so a 6-minute artifact mount neither reads
+      // as a slow stream nor distorts chars/sec (a short article over a long settle).
+      const responseTimeMs = streamEndMs - startMs;
+      const renderTimeMs = settleEndMs - streamEndMs;
 
       const allTexts = await chatPage.aiResponseRoot.allInnerTexts();
       const responseText = allTexts.join('\n');
 
       const responseTimeSec = responseTimeMs / 1000;
-      const responseRateCharsPerSec = responseText.length > 0 ? Math.round(responseText.length / responseTimeSec) : 0;
+      const responseRateCharsPerSec =
+        responseText.length > 0 && responseTimeSec > 0 ? Math.round(responseText.length / responseTimeSec) : 0;
 
       // An image prompt's only trustworthy signal is the rendered image. Its keyword list is
       // generic prose ("here", "picture", "generated") that a refusal or any description also
@@ -174,9 +187,14 @@ export function createAiLatencySuite({
         responseTimeMs,
         responseTimeSec: Math.round(responseTimeSec * 1000) / 1000,
         responseRateCharsPerSec,
-        // Image/artifact prompts time end-to-end deliverable generation (image render / artifact
-        // settle), not a text streaming rate - flag them so persistResults keeps them out of the
-        // gated latency average, which must stay streaming-only to still catch a text regression.
+        // Time spent rendering the image / settling the artifact after the stream ended. 0 for
+        // plain text prompts. Kept as its own field so "this artifact took N seconds to mount"
+        // stays visible without polluting the streaming latency/rate above.
+        renderTimeMs,
+        renderTimeSec: Math.round(renderTimeMs) / 1000,
+        // Even measured stream-only, an artifact prompt's stream window runs for minutes, so flag
+        // image/artifact prompts to keep them out of the gated latency average - it must stay a
+        // text-streaming signal that still catches a real text regression.
         measuresDeliverable: Boolean(scenario.expectsImage || scenario.generatesArtifact),
       };
       collectedResults.push(result);
