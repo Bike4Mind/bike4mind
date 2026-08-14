@@ -28,12 +28,29 @@ describe('validateBucketSpecs', () => {
     expect(validateBucketSpecs(BUCKET_SPECS, VALID_LOOKUP)).toEqual([]);
   });
 
-  it('rejects a roleKey with no entry in the identity map', () => {
-    // The whole mitigation for a typo'd role prefix: it would otherwise render as NO
-    // mention rather than an error, so the pool is silently never told anything.
+  it('flags a roleKey with no identity-map entry as ADVISORY, not blocking', () => {
+    // A blank or partial identity map is a legitimate configuration: the renderer omits
+    // the pool mention (see buildReport), so this is a warning, not a hard failure. It is
+    // surfaced to the admin but must never block the generate.
     const errors = validateBucketSpecs(BUCKET_SPECS, { devops_: 'S0DEVOPS11' });
 
-    expect(errors.some(error => error.bucket === 'awaitingReview' && error.reason.includes('reviewer_'))).toBe(true);
+    const reviewerError = errors.find(error => error.bucket === 'awaitingReview' && error.reason.includes('reviewer_'));
+    expect(reviewerError).toBeDefined();
+    expect(reviewerError?.severity).toBe('advisory');
+    // The structural checks (catch-all, orders, roleKey/specificOwner presence) still pass
+    // here, so nothing about an unmapped role key is blocking.
+    expect(errors.some(error => error.severity === 'blocking')).toBe(false);
+  });
+
+  it('marks structural misconfigurations as blocking', () => {
+    const specs: BucketSpecs = {
+      ...BUCKET_SPECS,
+      awaitingReview: { ...BUCKET_SPECS.awaitingReview, roleKey: undefined },
+    };
+
+    const errors = validateBucketSpecs(specs, VALID_LOOKUP);
+    const roleKeyError = errors.find(error => error.bucket === 'awaitingReview' && error.reason.includes('roleKey'));
+    expect(roleKeyError?.severity).toBe('blocking');
   });
 
   it('rejects a roleRoster spec that omits specificOwner rather than defaulting it', () => {

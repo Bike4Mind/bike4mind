@@ -12,6 +12,15 @@ import type { Bucket, BucketSpecs, IdentityLookup, PullRequest } from './types';
 export interface BucketSpecValidationError {
   bucket: Bucket;
   reason: string;
+  /**
+   * 'blocking' errors are structural (no catch-all, duplicate order, a roster with no
+   * roleKey or no specificOwner) and must fail the generate. 'advisory' covers the one
+   * recoverable case - a roster whose roleKey has no identity-map entry - which the
+   * renderer already degrades to "no pool mention" (see buildReport). An unfilled or
+   * partial identity map is a legitimate configuration, so that case is surfaced as a
+   * warning rather than blocking a digest the admin may not want pool pings on anyway.
+   */
+  severity: 'blocking' | 'advisory';
 }
 
 /**
@@ -30,6 +39,7 @@ export function validateBucketSpecs(specs: BucketSpecs, lookup: IdentityLookup):
     errors.push({
       bucket: 'none',
       reason: 'no bucket has role "catchAll" - classification would not be total',
+      severity: 'blocking',
     });
   }
 
@@ -42,6 +52,7 @@ export function validateBucketSpecs(specs: BucketSpecs, lookup: IdentityLookup):
       errors.push({
         bucket,
         reason: `order ${specs[bucket].order} is already used by "${existing}" - precedence would be ambiguous`,
+        severity: 'blocking',
       });
     }
     seenOrders.set(specs[bucket].order, bucket);
@@ -55,11 +66,16 @@ export function validateBucketSpecs(specs: BucketSpecs, lookup: IdentityLookup):
     // is simply never told anything. This check is the whole mitigation when the
     // map is held as structured config with no free-text parser to report on.
     if (!spec.roleKey) {
-      errors.push({ bucket, reason: 'mention is "roleRoster" but no roleKey is set' });
+      errors.push({ bucket, reason: 'mention is "roleRoster" but no roleKey is set', severity: 'blocking' });
     } else if (!lookup[spec.roleKey.toLowerCase()]) {
+      // ADVISORY, not blocking: the renderer already omits the pool mention for an
+      // unresolved roleKey (buildReport), so a blank or partial identity map still
+      // produces a valid digest. Surfaced as a warning so the admin knows the pool
+      // will not be pinged until they add the entry.
       errors.push({
         bucket,
-        reason: `roleKey "${spec.roleKey}" has no entry in the identity map - the roster would render as a missing mention`,
+        reason: `roleKey "${spec.roleKey}" has no entry in the identity map - the roster will post without an @-mention until you add it`,
+        severity: 'advisory',
       });
     }
 
@@ -73,6 +89,7 @@ export function validateBucketSpecs(specs: BucketSpecs, lookup: IdentityLookup):
         bucket,
         reason:
           'mention is "roleRoster" but no specificOwner is set - defaulting it would blanket-ping the whole pool on every report',
+        severity: 'blocking',
       });
     }
   }
@@ -116,6 +133,7 @@ export function validateSpecificOwnerFieldsPopulated(
           bucket,
           reason:
             'specificOwner is "requestedReviewer" but no PR carries requestedReviewerLogins - the provider or query does not populate it, so the roster gate would be permanently open',
+          severity: 'blocking',
         });
       }
     }

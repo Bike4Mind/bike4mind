@@ -1,6 +1,11 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { useMutation } from '@tanstack/react-query';
-import type { GenerateReportResponse, ParsedIdentityMapError, SendReportResponse } from '@bike4mind/services';
+import type {
+  BucketSpecValidationError,
+  GenerateReportResponse,
+  ParsedIdentityMapError,
+  SendReportResponse,
+} from '@bike4mind/services';
 
 /**
  * PR report generator - client data hooks.
@@ -14,6 +19,11 @@ import type { GenerateReportResponse, ParsedIdentityMapError, SendReportResponse
 export interface GenerateReportResult extends GenerateReportResponse {
   /** Line-numbered identity-map parse problems, for display beside the report. */
   identityMapErrors: ParsedIdentityMapError[];
+  /**
+   * Non-blocking roster advisories: buckets whose role key has no identity-map entry,
+   * so the pool will not be @-mentioned. The digest still generates.
+   */
+  rosterWarnings: BucketSpecValidationError[];
 }
 
 export function useGeneratePrReport() {

@@ -341,7 +341,7 @@ const AdminSettingsTab: React.FC = () => {
           // PR Status Digest settings are edited inline in the PR Status Digest tab
           'prReportRepo',
           'prReportIdentityMap',
-          'prReportSlackChannel',
+          'prReportWebhookUrl',
           'prReportEgressAllowlist',
         ].includes(settingConfig.key)
       )

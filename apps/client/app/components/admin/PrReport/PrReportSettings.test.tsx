@@ -10,8 +10,9 @@ import { getThemeConfig } from '@client/app/utils/themes';
  * Inline PR digest settings.
  *
  * Pins the behaviors the tab depends on: each field saves its own key, a blank identity
- * map is a legitimate save (not a rejected empty), and the egress allowlist is edited as
- * hosts with an explicit "empty blocks every send" warning.
+ * map is a legitimate save (not a rejected empty), the webhook URL is a sensitive field
+ * (never re-submits its stored mask, clears with confirmClear), and the egress allowlist
+ * is edited as hosts with an explicit "empty blocks every send" warning.
  */
 
 const { store, updateMutate } = vi.hoisted(() => ({
@@ -36,9 +37,9 @@ beforeEach(() => {
   // Report every write as successful so the field can flip to its saved state.
   updateMutate.mockImplementation((_vars: unknown, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
   store.prReportRepo = 'acme/widgets';
-  store.prReportSlackChannel = 'C0123456789';
+  store.prReportWebhookUrl = '';
   store.prReportIdentityMap = 'octocat U01ABCD2EF';
-  store.prReportEgressAllowlist = { hosts: ['slack.com', 'www.slack.com'] };
+  store.prReportEgressAllowlist = { hosts: ['hooks.slack.com'] };
 });
 
 describe('PrReportSettings', () => {
@@ -70,23 +71,48 @@ describe('PrReportSettings', () => {
     expect(updateMutate).toHaveBeenCalledWith({ key: 'prReportIdentityMap', value: '' }, expect.any(Object));
   });
 
+  it('saves a newly entered webhook URL under its own key', async () => {
+    const user = userEvent.setup();
+    render(<PrReportSettings />, { wrapper });
+
+    const webhook = 'https://hooks.slack.com/services/T00000000/B00000000/example-webhook-token';
+    const input = screen.getByTestId('pr-report-webhook-input');
+    await user.type(input, webhook);
+    await user.click(screen.getByTestId('pr-report-webhook-save-btn'));
+
+    expect(updateMutate).toHaveBeenCalledWith({ key: 'prReportWebhookUrl', value: webhook }, expect.any(Object));
+  });
+
+  it('clears a stored webhook URL with an explicit confirmClear', async () => {
+    // A stored secret comes back masked; the field never renders it and only offers Clear.
+    store.prReportWebhookUrl = '********';
+    const user = userEvent.setup();
+    render(<PrReportSettings />, { wrapper });
+
+    await user.click(screen.getByTestId('pr-report-webhook-clear-btn'));
+
+    expect(updateMutate).toHaveBeenCalledWith(
+      { key: 'prReportWebhookUrl', value: '', confirmClear: true },
+      expect.any(Object)
+    );
+  });
+
   it('edits the egress allowlist as hosts and saves an object value', async () => {
     const user = userEvent.setup();
     render(<PrReportSettings />, { wrapper });
 
-    // Scope to the chip container: "slack.com" also appears in the helper copy.
+    // Scope to the chip container: "hooks.slack.com" also appears in the helper copy.
     const hosts = () => within(screen.getByTestId('pr-report-egress-hosts'));
-    expect(hosts().getByText('slack.com')).toBeInTheDocument();
-    expect(hosts().getByText('www.slack.com')).toBeInTheDocument();
+    expect(hosts().getByText('hooks.slack.com')).toBeInTheDocument();
 
     // A pasted URL is reduced to its hostname before it becomes a chip.
-    await user.type(screen.getByTestId('pr-report-egress-add-input'), 'https://hooks.slack.com/services');
+    await user.type(screen.getByTestId('pr-report-egress-add-input'), 'https://slack-proxy.internal.test/services/x');
     await user.click(screen.getByTestId('pr-report-egress-add-btn'));
-    expect(hosts().getByText('hooks.slack.com')).toBeInTheDocument();
+    expect(hosts().getByText('slack-proxy.internal.test')).toBeInTheDocument();
 
     await user.click(screen.getByTestId('pr-report-egress-save-btn'));
     expect(updateMutate).toHaveBeenCalledWith(
-      { key: 'prReportEgressAllowlist', value: { hosts: ['slack.com', 'www.slack.com', 'hooks.slack.com'] } },
+      { key: 'prReportEgressAllowlist', value: { hosts: ['hooks.slack.com', 'slack-proxy.internal.test'] } },
       expect.any(Object)
     );
   });
