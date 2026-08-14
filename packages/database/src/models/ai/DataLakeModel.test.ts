@@ -1374,6 +1374,28 @@ describe('DataLakeRepository.activateIfDraft', () => {
   });
 });
 
+describe('DataLakeRepository config-write actor stamp', () => {
+  setupMongoTest();
+
+  // Every service-level test of this stamp mocks the repository, so a missing schema path would be
+  // invisible there: mongoose drops an unknown field on write without complaint, and the lake would
+  // silently keep answering "nobody has ever changed me". Same reasoning as the teardown stamp below.
+  it('round-trips lastUpdatedByUserId through the schema', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'stamped' }));
+
+    await dataLakeRepository.update({ id: created.id, lastUpdatedByUserId: 'admin1' });
+
+    expect((await dataLakeRepository.findById(created.id))?.lastUpdatedByUserId).toBe('admin1');
+  });
+
+  it('leaves it unset on a lake nobody has reconfigured', async () => {
+    // Absent, not '': the reader of this field must be able to tell "never reconfigured" from
+    // "reconfigured by a principal we could not name".
+    const created = await dataLakeRepository.create(baseLake({ slug: 'never-touched' }));
+    expect((await dataLakeRepository.findById(created.id))?.lastUpdatedByUserId ?? null).toBeNull();
+  });
+});
+
 describe('DataLakeRepository teardown stamp', () => {
   setupMongoTest();
 
