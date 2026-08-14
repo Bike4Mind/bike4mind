@@ -21,10 +21,15 @@ const h = vi.hoisted(() => ({
   // What getFallbackModel returns for a deprecated model. null = no admin-configured fallback, which
   // sends the effect down the admin-default chain instead of the deprecation branch.
   fallbackModel: null as { id: string; max_tokens: number } | null,
+  // The LIVE catalog (useModelInfo). It can lag the accessible list, and a model missing from it makes the
+  // refit effect early-return - which is how a pending auto-resolve flag goes unconsumed.
+  liveCatalogIds: ['gpt-5.6-sol', 'gpt-5.4-mini', 'gpt-5.6-terra'] as string[],
 }));
 
 const GONE = { id: 'gpt-5.6-sol', type: 'text', contextWindow: 1_050_000, max_tokens: 128_000 };
 const MINI = { id: 'gpt-5.4-mini', type: 'text', contextWindow: 400_000, max_tokens: 100_000 };
+const TERRA = { id: 'gpt-5.6-terra', type: 'text', contextWindow: 1_050_000, max_tokens: 128_000 };
+const ALL = [GONE, MINI, TERRA];
 
 // The accessible list is `{ ...modelInfo, ...savedConfig }`, so a saved admin snapshot can disagree with
 // the live catalog. This is MINI as the accessible list reports it - with a stale, much lower ceiling.
@@ -36,10 +41,14 @@ vi.mock('@/app/contexts/UserSettingsContext', () => ({
 vi.mock('@/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({ isFeatureEnabled: () => false, isLoading: false }),
 }));
-vi.mock('../hooks/data/useModelInfo', () => ({ useModelInfo: () => ({ data: [GONE, MINI] }) }));
+vi.mock('../hooks/data/useModelInfo', () => ({
+  useModelInfo: () => ({ data: ALL.filter(m => h.liveCatalogIds.includes(m.id)) }),
+}));
 vi.mock('../hooks/useAccessibleModels', () => ({
   useAccessibleModels: () => ({
-    accessibleModels: [GONE, h.staleSnapshot ? MINI_STALE_SNAPSHOT : MINI].filter(m => h.accessibleIds.includes(m.id)),
+    accessibleModels: [GONE, h.staleSnapshot ? MINI_STALE_SNAPSHOT : MINI, TERRA].filter(m =>
+      h.accessibleIds.includes(m.id)
+    ),
     isModelAccessible: (id: string) => h.accessibleIds.includes(id),
     getFallbackModel: () => h.fallbackModel,
   }),
@@ -57,6 +66,7 @@ describe('LLMProvider default-model effect - the ceiling it writes for a model t
     h.accessibleIds = [MINI.id];
     h.staleSnapshot = false;
     h.fallbackModel = null;
+    h.liveCatalogIds = ALL.map(m => m.id);
   });
   afterEach(() => cleanup());
 
@@ -147,6 +157,48 @@ describe('LLMProvider default-model effect - the ceiling it writes for a model t
 
     await waitFor(() => expect(useLLM.getState().model).toBe(MINI.id));
     expect(useLLM.getState().max_tokens).toBe(100_000);
+  });
+
+  it('gives a brand-new session the resolved model default, not the DEFAULTS placeholder', async () => {
+    // No setLLM at all: the store is at DEFAULTS, so model is '' and max_tokens is the 8192 placeholder.
+    // That placeholder is not a user choice, so this branch must raise past it. Protecting it would cap
+    // every first-ever load far below what the model serves - the same harm as #1254, from the other side.
+    expect(useLLM.getState().max_tokens).toBe(8192);
+
+    render(<LLMProvider />);
+
+    await waitFor(() => expect(useLLM.getState().model).toBe(MINI.id));
+    expect(useLLM.getState().max_tokens).toBe(100_000);
+  });
+
+  it('does not let an unconsumed auto-resolve flag suppress a later genuine switch', async () => {
+    // The flag records the whole transition, so it can only suppress the raise for the transition it
+    // recorded. Keyed on the destination alone it would survive an intervening model change and then
+    // silence a real user switch to that same model.
+    //
+    // Phase 1: the app resolves GONE -> TERRA, but TERRA has not reached the live catalog yet, so the refit
+    // effect early-returns on the missing entry and the flag is never consumed.
+    h.accessibleIds = [TERRA.id];
+    h.liveCatalogIds = [GONE.id, MINI.id];
+    useLLM.getState().setLLM({ model: GONE.id, max_tokens: 2048 });
+
+    render(<LLMProvider />);
+
+    await waitFor(() => expect(useLLM.getState().model).toBe(TERRA.id));
+    expect(useLLM.getState().max_tokens).toBe(2048);
+
+    // Phase 2: the catalog completes and the user lands on MINI, which seeds the refit effect's own ref.
+    h.accessibleIds = [TERRA.id, MINI.id];
+    h.liveCatalogIds = ALL.map(m => m.id);
+    useLLM.getState().setLLM({ model: MINI.id, max_tokens: 2048 });
+
+    await waitFor(() => expect(useLLM.getState().model).toBe(MINI.id));
+
+    // Phase 3: the user switches to TERRA themselves. The stale flag names TERRA as its destination, but
+    // the transition it recorded was GONE -> TERRA, not this one, so the ceiling must still be refitted up.
+    useLLM.getState().setLLM({ model: TERRA.id });
+
+    await waitFor(() => expect(useLLM.getState().max_tokens).toBe(128_000));
   });
 
   it('still raises the ceiling when the user switches to a stronger model themselves', async () => {
