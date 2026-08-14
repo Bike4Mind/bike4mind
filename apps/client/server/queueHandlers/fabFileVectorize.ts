@@ -328,15 +328,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       }
     }
 
-    // Recompute vectorizedChunkCount from SOURCE (terminal = has-vector OR oversized)
-    // rather than `+= validChunks.length`. With multiple vectorize messages per file,
-    // an SQS redelivery of an already-processed message would otherwise double-count
-    // and prematurely cross chunkCount. Recompute is idempotent.
-    const vectorizedChunkCount = await fabFileChunkRepository.countTerminalChunks(fabFileId, contextWindow);
-    // Lake-health rollups (#1666), recomputed from source alongside vectorizedChunkCount so the same
-    // SQS-redelivery idempotency holds. Distinct number from vectorizedChunkCount: this counts only
-    // truly vector-bearing chunks (P3), where the latter also counts oversized-unembeddable ones.
-    const { embeddedChunkCount, embeddedCharCount } = await fabFileChunkRepository.computeChunkVectorRollup(fabFileId);
+    // Recompute vectorizedChunkCount (terminal = has-vector OR oversized) AND the lake-health rollups
+    // (#1666, only truly vector-bearing chunks - P3) from SOURCE in ONE pass rather than `+=`. With
+    // multiple vectorize messages per file, an SQS redelivery of an already-processed message would
+    // otherwise double-count and prematurely cross chunkCount; recompute-from-source is idempotent.
+    // One aggregate, not two, because `vector` is in no index so each pass fetches every chunk row.
+    const {
+      terminalChunkCount: vectorizedChunkCount,
+      embeddedChunkCount,
+      embeddedCharCount,
+    } = await fabFileChunkRepository.computeChunkVectorRollup(fabFileId, contextWindow);
     const fabFile = await fabFileRepository.shareable.findAccessibleById(user, fabFileId);
     if (!fabFile) throw new NotFoundError(`FabFile ${fabFileId} not found`);
 

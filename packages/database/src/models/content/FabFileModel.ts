@@ -146,35 +146,39 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
   }
 
   /**
-   * Count a file's "terminal" chunks: those that have an embedding vector OR are
-   * oversized (token count exceeds the model context window, so they can never be
-   * embedded). Used to recompute vectorizedChunkCount from source so SQS redelivery
-   * of a partial-batch message is idempotent (no += double-counting).
+   * The file's vectorize rollup, computed in ONE pass over its chunks (the fetch is unavoidable -
+   * `vector` is in no index - so it must not be paid twice per batch):
+   *  - `terminalChunkCount`: chunks that have a vector OR are oversized past the model context window
+   *    (permanently unembeddable). This is `vectorizedChunkCount`, recomputed from source so an SQS
+   *    redelivery of a partial-batch message is idempotent (no `+=` double-counting).
+   *  - `embeddedChunkCount` / `embeddedCharCount`: only chunks that TRULY carry a vector (lake-health
+   *    P3, #1666), where an oversized-unembeddable chunk counts toward terminal but NOT here.
+   * Scoped to one file at vectorize completion, on the {fabFileId,_id} index - not a lake-wide scan.
    */
-  async countTerminalChunks(fabFileId: string, contextWindow: number): Promise<number> {
-    return this.fabFileChunkModel.countDocuments({
-      fabFileId,
-      $or: [{ 'vector.0': { $exists: true } }, { tokenCount: { $gt: contextWindow } }],
-    });
-  }
-
   async computeChunkVectorRollup(
-    fabFileId: string
-  ): Promise<{ embeddedChunkCount: number; embeddedCharCount: number }> {
-    // `vector.0` exists = vector-bearing (mirrors countTerminalChunks' cheap presence test, no $size).
-    // Scoped to one file at vectorize completion, on the {fabFileId,_id} index - not a lake-wide scan.
-    const [agg] = await this.fabFileChunkModel.aggregate<{ embeddedChunkCount: number; embeddedCharCount: number }>([
-      { $match: { fabFileId, 'vector.0': { $exists: true } } },
+    fabFileId: string,
+    contextWindow: number
+  ): Promise<{ terminalChunkCount: number; embeddedChunkCount: number; embeddedCharCount: number }> {
+    const hasVector = { $gt: [{ $size: { $ifNull: ['$vector', []] } }, 0] };
+    const isTerminal = { $or: [hasVector, { $gt: ['$tokenCount', contextWindow] }] };
+    const charLen = { $ifNull: ['$charLength', 0] };
+    const [agg] = await this.fabFileChunkModel.aggregate<{
+      terminalChunkCount: number;
+      embeddedChunkCount: number;
+      embeddedCharCount: number;
+    }>([
+      { $match: { fabFileId } },
       {
         $group: {
           _id: null,
-          embeddedChunkCount: { $sum: 1 },
-          embeddedCharCount: { $sum: { $ifNull: ['$charLength', 0] } },
+          terminalChunkCount: { $sum: { $cond: [isTerminal, 1, 0] } },
+          embeddedChunkCount: { $sum: { $cond: [hasVector, 1, 0] } },
+          embeddedCharCount: { $sum: { $cond: [hasVector, charLen, 0] } },
         },
       },
-      { $project: { _id: 0, embeddedChunkCount: 1, embeddedCharCount: 1 } },
+      { $project: { _id: 0, terminalChunkCount: 1, embeddedChunkCount: 1, embeddedCharCount: 1 } },
     ]);
-    return agg ?? { embeddedChunkCount: 0, embeddedCharCount: 0 };
+    return agg ?? { terminalChunkCount: 0, embeddedChunkCount: 0, embeddedCharCount: 0 };
   }
 
   async updateEmbeddingModel(fabFileId: string, embeddingModel: string): Promise<void> {
@@ -374,7 +378,7 @@ const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
 // instead of collecting and sorting them, which is what keeps findVectorsByFabFileIds' keyset
 // paging non-blocking. Deliberately the only declaration: this compound's leftmost prefix already
 // serves the bare `fabFileId` reads (findByFabFileId, findTextsByFabFileId, countByFabFileId,
-// deleteManyByFabFileId, countTerminalChunks),
+// deleteManyByFabFileId, computeChunkVectorRollup),
 // and a `{ _id: 1, fabFileId: 1 }` buys nothing over `_id_` since `vector` is in neither index, so
 // both plans fetch anyway. Environments deployed before this still held those two as orphans;
 // 20260810000000_drop-legacy-fabfilechunk-indexes.ts drops them. Nothing recreates them, because
@@ -1075,6 +1079,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       fileName?: string;
       chunkCount: number;
       vectorizedChunkCount: number | null;
+      error: string | null;
       chunkedCharCount: number | null;
       maxChunkCharLength: number | null;
       embeddedChunkCount: number | null;
@@ -1104,6 +1109,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           // Preserve null (UNMEASURED) rather than coalescing to 0 - the evaluator must tell "not yet
           // measured" from "measured as zero". $ifNull with null keeps an ABSENT field as null too.
           vectorizedChunkCount: { $ifNull: ['$vectorizedChunkCount', null] },
+          // Terminal-failure marker: an errored file is graded as settled (fails P3) rather than
+          // hidden as still-indexing. Preserve null so "no error" stays distinct.
+          error: { $ifNull: ['$error', null] },
           chunkedCharCount: { $ifNull: ['$chunkedCharCount', null] },
           maxChunkCharLength: { $ifNull: ['$maxChunkCharLength', null] },
           embeddedChunkCount: { $ifNull: ['$embeddedChunkCount', null] },

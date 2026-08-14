@@ -76,6 +76,12 @@ async function backfillFiles(opts: Options): Promise<number> {
       // Dry-run never needs the rollups - they only exist to be discarded - so skip the aggregate
       // entirely rather than paying for it on every file in the lake.
       if (opts.execute) {
+        // DEPENDS ON PHASE 1: computeFileChunkRollups sums `charLength` off the chunks, so a chunk
+        // still missing it aggregates as 0. Run before phase 1, this file would stamp a MEASURED
+        // maxChunkCharLength: 0 - flipping P1/P2 from `unknown` to `pass` and dropping the file from
+        // findFileIdsMissingChunkRollups (keyed on maxChunkCharLength: null) so no rerun trues it up.
+        // main() runs phase 1 to completion first, which is what makes a 0 here mean a genuinely empty
+        // file (correctly measured) rather than an unstamped one. Do NOT call this phase before phase 1.
         const rollups = await fabFileChunkRepository.computeFileChunkRollups(id);
         await fabFileRepository.setChunkRollups(id, rollups);
       }

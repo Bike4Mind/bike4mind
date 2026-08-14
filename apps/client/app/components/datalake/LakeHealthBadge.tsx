@@ -35,14 +35,20 @@ export function deriveLakeHealthBadge(
   health: Pick<LakeHealthApiResponse, 'reachableShare' | 'predicates'>
 ): BadgeLevel {
   const { reachableShare, predicates } = health;
-  if (reachableShare === null) return 'unknown';
-  // A serve-cap-below-policy (P4) defect short-circuits to unhealthy just below, so it is not repeated
-  // in this per-member disjunction (it would be unreachable here).
   const anyMemberPredicateFails =
     predicates.chunkWithinPolicy.fail > 0 ||
     predicates.chunkCountConsistent.fail > 0 ||
     predicates.fullyVectorized.fail > 0;
-  if (reachableShare < 0.5 || predicates.serveCapMeetsPolicy === 'fail') return 'unhealthy';
+  // Known defects are graded BEFORE the null-share early return, so a real problem never hides behind
+  // the neutral "not measured" chip (the mistake B4 caught for P4, generalized to every predicate):
+  //  - P4 (serve cap below policy) is a lake-level POLICY fact needing no measurement - and since every
+  //    lake reads unmeasured until the backfill runs, an org with an oversized DefaultChunkSize would
+  //    otherwise hide the defect on every one of its lakes.
+  //  - A failing per-file predicate (an oversized chunk on a still-indexing file, say) is a known fact
+  //    too; with nothing measurable yet the share is unknown, but "degraded" beats "not measured".
+  if (predicates.serveCapMeetsPolicy === 'fail') return 'unhealthy';
+  if (reachableShare === null) return anyMemberPredicateFails ? 'degraded' : 'unknown';
+  if (reachableShare < 0.5) return 'unhealthy';
   if (reachableShare < 0.95 || anyMemberPredicateFails) return 'degraded';
   return 'healthy';
 }
@@ -64,8 +70,15 @@ const pct = (share: number) => `${Math.round(share * 100)}%`;
 
 /** The chip label leads with the ONE headline metric: reachable content share (#1666). */
 function badgeLabel(level: BadgeLevel, health: LakeHealthApiResponse): string {
-  if (level === 'unknown') return 'Health: not measured';
-  return `Reachable ${pct(health.reachableShare as number)}`;
+  if (health.reachableShare === null) {
+    // Nothing is measured, so never render a share ("Reachable 0%" - Math.round(null) - would misread
+    // as "nothing is reachable"). The level still carries a known defect: P4 -> unhealthy, a failing
+    // per-file predicate -> degraded; only a truly clean-but-unmeasured lake is "not measured".
+    if (level === 'unhealthy') return 'Serve cap below policy';
+    if (level === 'degraded') return 'Health: needs attention';
+    return 'Health: not measured';
+  }
+  return `Reachable ${pct(health.reachableShare)}`;
 }
 
 const DRILLDOWN_ROWS = 8;
@@ -73,12 +86,20 @@ const DRILLDOWN_ROWS = 8;
 function HealthTooltip({ health }: { health: LakeHealthApiResponse }) {
   const { predicates, coverage, affectedMembers, affectedMemberCount } = health;
   const measuredGap = coverage.membersWithChunks - coverage.measuredMembers;
+  const anyMemberFails =
+    predicates.chunkWithinPolicy.fail > 0 ||
+    predicates.chunkCountConsistent.fail > 0 ||
+    predicates.fullyVectorized.fail > 0;
   return (
     <Box sx={{ p: 0.5, maxWidth: 340 }}>
       <Typography level="body-xs" sx={{ fontWeight: 'lg' }}>
-        {health.reachableShare === null
-          ? 'Not yet measured - run indexing to measure this lake.'
-          : `${pct(health.reachableShare)} of chunked content is reachable by search.`}
+        {health.reachableShare !== null
+          ? `${pct(health.reachableShare)} of chunked content is reachable by search.`
+          : predicates.serveCapMeetsPolicy === 'fail'
+            ? 'Serve cap is below the policy size - in-policy chunks are clipped before the model sees them.'
+            : anyMemberFails
+              ? 'Some files have retrievability issues; the reachable share is not measured yet.'
+              : 'Not yet measured - run indexing to measure this lake.'}
       </Typography>
       {measuredGap > 0 && (
         <Typography level="body-xs" sx={{ mt: 0.25, color: 'text.tertiary' }}>

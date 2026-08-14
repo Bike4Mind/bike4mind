@@ -54,6 +54,29 @@ describe('deriveLakeHealthBadge', () => {
       'unhealthy'
     );
   });
+
+  it('is unhealthy for a P4 defect even when NOTHING is measured yet (not "unknown")', () => {
+    // P4 is a policy fact, not a measurement; it must be graded before the null-share early return, or
+    // an org with an oversized DefaultChunkSize hides the defect behind a neutral chip on every lake.
+    expect(
+      deriveLakeHealthBadge({ reachableShare: null, predicates: predicates({ serveCapMeetsPolicy: 'fail' }) })
+    ).toBe('unhealthy');
+  });
+
+  it('is degraded (not "unknown") when a per-file predicate fails but nothing is measured yet', () => {
+    // e.g. a still-indexing file already carries an oversized chunk: the share is unknown, but a known
+    // defect must not hide behind the neutral "not measured" chip.
+    expect(
+      deriveLakeHealthBadge({
+        reachableShare: null,
+        predicates: predicates({ chunkWithinPolicy: { pass: 0, fail: 1, unknown: 0 } }),
+      })
+    ).toBe('degraded');
+  });
+
+  it('stays "unknown" only for a genuinely clean, unmeasured lake', () => {
+    expect(deriveLakeHealthBadge({ reachableShare: null, predicates: predicates() })).toBe('unknown');
+  });
 });
 
 const health = (over?: Record<string, unknown>) => ({
@@ -133,5 +156,44 @@ describe('LakeHealthBadge render', () => {
       </Wrapper>
     );
     expect(screen.getByTestId('datalake-health-badge-l1')).toHaveTextContent('not measured');
+  });
+
+  it('shows the serve-cap label (not "Reachable 0%") for an unmeasured P4-defect lake', () => {
+    useGetDataLakeHealth.mockReturnValue({
+      data: health({
+        reachableShare: null,
+        predicates: predicates({ serveCapMeetsPolicy: 'fail' }),
+        coverage: { measuredMembers: 0, membersWithChunks: 3 },
+      }),
+      isLoading: false,
+    });
+    render(
+      <Wrapper>
+        <LakeHealthBadge lakeId="l1" />
+      </Wrapper>
+    );
+    const badge = screen.getByTestId('datalake-health-badge-l1');
+    expect(badge).toHaveTextContent('Serve cap below policy');
+    expect(badge).not.toHaveTextContent('Reachable 0%');
+  });
+
+  it('shows "needs attention" (not "not measured") for an unmeasured lake with a failing predicate', () => {
+    useGetDataLakeHealth.mockReturnValue({
+      data: health({
+        reachableShare: null,
+        predicates: predicates({ chunkWithinPolicy: { pass: 0, fail: 2, unknown: 0 } }),
+        coverage: { measuredMembers: 0, membersWithChunks: 2 },
+      }),
+      isLoading: false,
+    });
+    render(
+      <Wrapper>
+        <LakeHealthBadge lakeId="l1" />
+      </Wrapper>
+    );
+    const badge = screen.getByTestId('datalake-health-badge-l1');
+    expect(badge).toHaveTextContent('needs attention');
+    expect(badge).not.toHaveTextContent('not measured');
+    expect(badge).not.toHaveTextContent('Reachable');
   });
 });

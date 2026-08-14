@@ -400,17 +400,20 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
   distinctEmbeddingModelsByFabFileIds(fabFileIds: string[]): Promise<string[]>;
   bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]): Promise<IFabFileChunkDocument[]>;
   findByFabFileId(fabFileId: string): Promise<IFabFileChunkDocument[]>;
-  /** Count chunks that are terminal (have a vector OR are oversized) - for idempotent vectorizedChunkCount recompute. */
-  countTerminalChunks(fabFileId: string, contextWindow: number): Promise<number>;
   /**
-   * Recompute the lake-health vector rollups for one file FROM the chunk rows (#1666): the count of
-   * vector-bearing chunks and the sum of their `charLength`. Deliberately distinct from
-   * countTerminalChunks - this counts only chunks that truly carry a vector (`vector.0` exists),
-   * never oversized-but-unembeddable ones, because P3 asks whether content is FINDABLE. Recompute
-   * from source (not `+=`) so an SQS redelivery of a partial-batch vectorize message is idempotent.
-   * `embeddedCharCount` reflects only chunks whose `charLength` is present.
+   * The file's vectorize rollup in ONE pass over its chunks (the `vector` fetch is unavoidable and
+   * must not be paid twice per batch):
+   *  - `terminalChunkCount`: chunks that have a vector OR are oversized past the context window
+   *    (permanently unembeddable) - i.e. `vectorizedChunkCount`, recomputed from source (not `+=`) so
+   *    an SQS redelivery of a partial-batch vectorize message is idempotent.
+   *  - `embeddedChunkCount`/`embeddedCharCount`: only chunks that TRULY carry a vector (lake-health
+   *    P3, #1666), because P3 asks whether content is FINDABLE; an oversized-unembeddable chunk counts
+   *    toward terminal but not here. `embeddedCharCount` reflects only chunks whose `charLength` is present.
    */
-  computeChunkVectorRollup(fabFileId: string): Promise<{ embeddedChunkCount: number; embeddedCharCount: number }>;
+  computeChunkVectorRollup(
+    fabFileId: string,
+    contextWindow: number
+  ): Promise<{ terminalChunkCount: number; embeddedChunkCount: number; embeddedCharCount: number }>;
   /**
    * All four lake-health (#1666) file rollups in one pass over a file's chunks - the metadata
    * backfill's per-file input. `chunkedCharCount`/`maxChunkCharLength` cover all chunks;
@@ -855,6 +858,11 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       fabFileId: string;
       fileName?: string;
       chunkCount: number;
+      // vectorizedChunkCount + error drive the in-flight vs settled decision in the pure evaluator;
+      // omitting them here would silently disable that gate (rows arrive without them -> treated as
+      // settled), re-arming the mid-ingest "0% reachable" bug at the type level. Keep in sync.
+      vectorizedChunkCount: number | null;
+      error: string | null;
       chunkedCharCount: number | null;
       maxChunkCharLength: number | null;
       embeddedChunkCount: number | null;

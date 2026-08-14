@@ -227,6 +227,48 @@ describe('evaluateMemberHealth - vectorization in flight vs settled', () => {
     expect(r.status.fullyVectorized).toBe('fail'); // still graded, not hidden as pending
   });
 
+  it('treats a permanently-FAILED file (error set) as settled, so it fails P3 instead of hiding forever', () => {
+    // A file whose vectorization errored never reaches vectorizedChunkCount >= chunkCount. Without the
+    // error signal it would read as "still indexing" forever and drop out of the ratio entirely.
+    const r = evaluateMemberHealth(
+      member({
+        chunkCount: 4,
+        vectorizedChunkCount: 1, // stuck below chunkCount
+        error: 'embedding provider rejected the request',
+        chunkedCharCount: 12000,
+        maxChunkCharLength: 3000,
+        embeddedChunkCount: 0,
+        embeddedCharCount: 0,
+      }),
+      DEFAULT_POLICY
+    );
+    expect(r.status.fullyVectorized).toBe('fail');
+    expect(r.failed).toContain('fullyVectorized');
+    expect(r.reachableChars).toBe(0); // real 0, counted - not null/excluded
+    expect(r.measured).toBe(true);
+  });
+
+  it('a lake of only failed files reports 0% reachable (unhealthy), not "not measured"', () => {
+    const report = summarizeLakeHealth(
+      [
+        member({
+          fabFileId: 'f1',
+          chunkCount: 2,
+          vectorizedChunkCount: 0,
+          error: 'boom',
+          chunkedCharCount: 6000,
+          maxChunkCharLength: 3000,
+          embeddedChunkCount: 0,
+          embeddedCharCount: 0,
+        }),
+      ],
+      DEFAULT_POLICY
+    );
+    expect(report.reachableShare).toBe(0); // NOT null
+    expect(report.coverage).toEqual({ measuredMembers: 1, membersWithChunks: 1 });
+    expect(report.predicates.fullyVectorized.fail).toBe(1);
+  });
+
   it('excludes an in-flight member from the lake reachable share (no red during ingest)', () => {
     const report = summarizeLakeHealth(
       [

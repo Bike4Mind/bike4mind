@@ -96,6 +96,16 @@ export type LakeHealthMemberInput = {
    * which counts ONLY vector-bearing rows and is what P3 itself grades.
    */
   vectorizedChunkCount?: number | null;
+  /**
+   * Terminal vectorization-failure marker (`FabFile.error`). A permanently-failed file never reaches
+   * `vectorizedChunkCount >= chunkCount`, so without this it would read as "still indexing" forever
+   * and drop out of BOTH sides of the reachable ratio - a lake where every file failed would then
+   * report "not measured" instead of unhealthy, the exact green-counters-but-broken mode this feature
+   * exists to catch. A file carrying an error is treated as SETTLED, so it fails P3 and contributes
+   * its real (0/partial) reachable figure. `isVectorizing` cannot serve as this signal: chunk-complete
+   * clears it before vectorization even starts (chunk.ts).
+   */
+  error?: string | null;
   /** Sum of the file's chunks' `charLength`; `null` until measured. */
   chunkedCharCount?: number | null;
   /** Largest single chunk's `charLength`; `null` until measured. */
@@ -146,6 +156,7 @@ export function evaluateMemberHealth(member: LakeHealthMemberInput, policy: Lake
   const embeddedCharCount = nonNegOrNull(member.embeddedCharCount);
   const embeddedChunkCount = nonNegOrNull(member.embeddedChunkCount);
   const vectorizedChunkCount = nonNegOrNull(member.vectorizedChunkCount);
+  const hasError = typeof member.error === 'string' && member.error.length > 0;
 
   // Is the file's vectorization settled, or is it still being indexed? chunk-complete stamps the char
   // rollups (making the file "measured") and zeroes the vector rollups in the SAME write, so between
@@ -153,8 +164,10 @@ export function evaluateMemberHealth(member: LakeHealthMemberInput, policy: Lake
   // reachable and fail P3 - a normal upload flashing red. `vectorizedChunkCount >= chunkCount` mirrors
   // the vectorize handler's own completion gate (terminal = has-vector OR oversized); a settled-but-
   // under-vectorized file (an un-embeddable oversized chunk reaches terminal) still fails P3 as it
-  // should. A null count predates the field, so treat it as settled to keep legacy files grading.
-  const vectorizationSettled = vectorizedChunkCount === null || vectorizedChunkCount >= member.chunkCount;
+  // should. A permanently-FAILED file (`error` set) is also settled - it will never reach the terminal
+  // count, but it is broken, not in flight, so it must grade (fail P3, count its real reachable chars)
+  // rather than hide. A null count predates the field, so treat it as settled to keep legacy files grading.
+  const vectorizationSettled = hasError || vectorizedChunkCount === null || vectorizedChunkCount >= member.chunkCount;
 
   // P1: the largest chunk must not exceed the policy size. Graded as soon as the chunk rollups exist
   // (even mid-vectorize): an oversized chunk is a structural fact, not a timing artifact.

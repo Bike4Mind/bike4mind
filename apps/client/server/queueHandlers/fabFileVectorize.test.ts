@@ -19,8 +19,7 @@ const h = vi.hoisted(() => ({
   claimFileStatus: vi.fn(),
   deferFailureIfRetryable: vi.fn(),
   fabFileUpdate: vi.fn(),
-  countTerminalChunks: vi.fn(),
-  computeChunkVectorRollup: vi.fn(async () => ({ embeddedChunkCount: 0, embeddedCharCount: 0 })),
+  computeChunkVectorRollup: vi.fn(async () => ({ terminalChunkCount: 0, embeddedChunkCount: 0, embeddedCharCount: 0 })),
   chunkUpdate: vi.fn(),
   getAtlasIndexForModel: vi.fn(() => ({ name: 'idx', numDimensions: 3 })),
   stampChunkEmbeddingModel: vi.fn(),
@@ -48,7 +47,6 @@ vi.mock('@bike4mind/database', () => ({
   embeddingCacheRepository: {},
   fabFileChunkRepository: {
     findById: vi.fn(),
-    countTerminalChunks: h.countTerminalChunks,
     computeChunkVectorRollup: h.computeChunkVectorRollup,
     update: h.chunkUpdate,
   },
@@ -337,7 +335,7 @@ describe('fabFileVectorize handler - notification failures are non-fatal (human 
     });
     h.getEmbedding.mockResolvedValue(null);
     h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
-    h.countTerminalChunks.mockResolvedValue(1);
+    h.computeChunkVectorRollup.mockResolvedValue({ terminalChunkCount: 1, embeddedChunkCount: 0, embeddedCharCount: 0 });
     h.claimFileStatus.mockResolvedValue(true);
     h.incrementCounter.mockResolvedValue({ vectorizedFiles: 1, failedFiles: 0, totalFiles: 1 });
   });
@@ -436,7 +434,7 @@ describe('fabFileVectorize handler - retry gating (#1412)', () => {
     h.getEmbedding.mockResolvedValue(null);
     h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
     h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
-    h.countTerminalChunks.mockResolvedValue(1);
+    h.computeChunkVectorRollup.mockResolvedValue({ terminalChunkCount: 1, embeddedChunkCount: 0, embeddedCharCount: 0 });
     h.claimFileStatus.mockResolvedValue(true);
     h.incrementCounter.mockResolvedValue({ vectorizedFiles: 1, failedFiles: 0, totalFiles: 1 });
 
@@ -466,7 +464,7 @@ describe('fabFileVectorize handler - embeddingModel discriminator stamp', () => 
       tokenCount: 5,
     });
     h.getEmbedding.mockResolvedValue(null);
-    h.countTerminalChunks.mockResolvedValue(1);
+    h.computeChunkVectorRollup.mockResolvedValue({ terminalChunkCount: 1, embeddedChunkCount: 0, embeddedCharCount: 0 });
   });
 
   it('stamps the chunk embeddingModel once the whole file is fully vectorized', async () => {
@@ -513,7 +511,7 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
       tokenCount: 5,
     });
     h.getEmbedding.mockResolvedValue(null);
-    h.countTerminalChunks.mockResolvedValue(1);
+    h.computeChunkVectorRollup.mockResolvedValue({ terminalChunkCount: 1, embeddedChunkCount: 0, embeddedCharCount: 0 });
     h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
     h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
   });

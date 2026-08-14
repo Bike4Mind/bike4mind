@@ -12,17 +12,21 @@ const makeFile = (fileName: string, extra: Record<string, unknown> = {}) =>
 describe('lake-health rollup primitives (#1666)', () => {
   setupMongoTest();
 
-  it('computeChunkVectorRollup counts ONLY vector-bearing chunks and sums their charLength', async () => {
-    await makeChunk('f1', { charLength: 100, vector: [0.1, 0.2] });
-    await makeChunk('f1', { charLength: 200, vector: [0.3, 0.4] });
-    await makeChunk('f1', { charLength: 999 }); // no vector - excluded from both
-    await makeChunk('f2', { charLength: 50, vector: [0.5] });
+  it('computeChunkVectorRollup: terminal = vector OR oversized; embedded = vector-bearing only', async () => {
+    const contextWindow = 100;
+    await makeChunk('f1', { charLength: 100, vector: [0.1, 0.2], tokenCount: 5 }); // vector-bearing
+    await makeChunk('f1', { charLength: 200, vector: [0.3, 0.4], tokenCount: 5 }); // vector-bearing
+    await makeChunk('f1', { charLength: 999, tokenCount: 500 }); // oversized, no vector: terminal, NOT embedded
+    await makeChunk('f1', { charLength: 40, tokenCount: 5 }); // in-window, no vector: neither
+    await makeChunk('f2', { charLength: 50, vector: [0.5], tokenCount: 5 });
 
-    expect(await fabFileChunkRepository.computeChunkVectorRollup('f1')).toEqual({
-      embeddedChunkCount: 2,
-      embeddedCharCount: 300,
+    expect(await fabFileChunkRepository.computeChunkVectorRollup('f1', contextWindow)).toEqual({
+      terminalChunkCount: 3, // 2 vector-bearing + 1 oversized-unembeddable
+      embeddedChunkCount: 2, // only vector-bearing
+      embeddedCharCount: 300, // 100 + 200
     });
-    expect(await fabFileChunkRepository.computeChunkVectorRollup('missing')).toEqual({
+    expect(await fabFileChunkRepository.computeChunkVectorRollup('missing', contextWindow)).toEqual({
+      terminalChunkCount: 0,
       embeddedChunkCount: 0,
       embeddedCharCount: 0,
     });
@@ -76,23 +80,37 @@ describe('lake-health rollup primitives (#1666)', () => {
       chunkCount: 5, // legacy: no char rollups
       tags: [{ name: tag, strength: 1 }],
     });
+    await makeFile('failed.txt', {
+      chunkCount: 4,
+      vectorizedChunkCount: 1,
+      error: 'embedding provider rejected the request',
+      chunkedCharCount: 12000,
+      maxChunkCharLength: 3000,
+      embeddedChunkCount: 0,
+      embeddedCharCount: 0,
+      tags: [{ name: tag, strength: 1 }],
+    });
     await makeFile('chunkless.txt', { chunkCount: 0, tags: [{ name: tag, strength: 1 }] });
 
     const members = await fabFileRepository.findDataLakeHealthMembers(scope);
     const byName = Object.fromEntries(members.map(m => [m.fileName, m]));
 
-    expect(members).toHaveLength(2); // chunkless excluded
+    expect(members).toHaveLength(3); // chunkless excluded
     expect(byName['measured.txt']).toMatchObject({
       vectorizedChunkCount: 3,
+      error: null,
       chunkedCharCount: 9000,
       maxChunkCharLength: 3000,
       embeddedChunkCount: 3,
     });
+    // The terminal-failure marker is projected so the evaluator can grade a failed file (not hide it).
+    expect(byName['failed.txt'].error).toBe('embedding provider rejected the request');
     // Unmeasured file: the #1666 CHAR rollups come back as null, NOT coerced to 0.
     // (vectorizedChunkCount is a pre-existing field defaulting to 0, so it is 0 here, not null - the
     // health evaluator reads that 0 as "vectorization not settled", which is inert for an unmeasured
     // file since its reachable figure is null and P3 is unknown regardless.)
     expect(byName['unmeasured.txt'].vectorizedChunkCount).toBe(0);
+    expect(byName['unmeasured.txt'].error).toBeNull();
     expect(byName['unmeasured.txt'].chunkedCharCount).toBeNull();
     expect(byName['unmeasured.txt'].maxChunkCharLength).toBeNull();
     expect(byName['unmeasured.txt'].embeddedChunkCount).toBeNull();

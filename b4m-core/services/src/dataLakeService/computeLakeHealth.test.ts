@@ -12,10 +12,14 @@ vi.mock('../settings/resolveScopedSetting', async orig => ({
 
 import { computeLakeHealth } from './computeLakeHealth';
 
+// Mirrors IFabFileRepository.findDataLakeHealthMembers' row shape EXACTLY (incl. vectorizedChunkCount
+// + error) - if this drifts from the interface, the in-flight/errored gate silently no-ops in tests.
 type Member = {
   fabFileId: string;
   fileName?: string;
   chunkCount: number;
+  vectorizedChunkCount: number | null;
+  error: string | null;
   chunkedCharCount: number | null;
   maxChunkCharLength: number | null;
   embeddedChunkCount: number | null;
@@ -25,6 +29,8 @@ type Member = {
 const healthyMember = (id: string): Member => ({
   fabFileId: id,
   chunkCount: 3,
+  vectorizedChunkCount: 3, // settled, fully vectorized
+  error: null,
   chunkedCharCount: 9000,
   maxChunkCharLength: 3000,
   embeddedChunkCount: 3,
@@ -33,6 +39,8 @@ const healthyMember = (id: string): Member => ({
 const brokenMember = (id: string): Member => ({
   fabFileId: id,
   chunkCount: 1,
+  vectorizedChunkCount: 1, // oversized chunk reaches terminal -> settled, so P3 genuinely fails
+  error: null,
   chunkedCharCount: 20000,
   maxChunkCharLength: 20000, // fails P1
   embeddedChunkCount: 0, // fails P3
@@ -118,6 +126,8 @@ describe('computeLakeHealth', () => {
     const unmeasured: Member = {
       fabFileId: 'legacy',
       chunkCount: 5,
+      vectorizedChunkCount: 5, // legacy: fully vectorized long ago, just never char-backfilled
+      error: null,
       chunkedCharCount: null,
       maxChunkCharLength: null,
       embeddedChunkCount: 5,
@@ -129,5 +139,50 @@ describe('computeLakeHealth', () => {
     expect(health.coverage).toEqual({ measuredMembers: 0, membersWithChunks: 1 });
     // P3 still grades from vector presence even with no char data.
     expect(health.predicates.fullyVectorized.pass).toBe(1);
+  });
+
+  it('excludes a still-vectorizing member from the reachable share (the mid-ingest gate is live end-to-end)', async () => {
+    // Char rollups present (measured) but vectorizedChunkCount < chunkCount: chunk-complete stamped the
+    // char rollups and zeroed the vector rollups in one write, and the first vectorize batch has not
+    // landed. This must NOT read as 0% reachable. If the repo contract dropped vectorizedChunkCount, the
+    // gate would silently no-op and this member would drag the share to ~0 - exactly what B2 guards.
+    const indexing: Member = {
+      fabFileId: 'indexing',
+      chunkCount: 3,
+      vectorizedChunkCount: 0,
+      error: null,
+      chunkedCharCount: 9000,
+      maxChunkCharLength: 3000,
+      embeddedChunkCount: 0,
+      embeddedCharCount: 0,
+    };
+    const health = await computeLakeHealth(lake, makeAdapters([healthyMember('done'), indexing]) as never);
+
+    expect(health.reachableShare).toBe(1); // only the settled file counts
+    expect(health.coverage).toEqual({ measuredMembers: 1, membersWithChunks: 2 });
+    expect(health.predicates.fullyVectorized.unknown).toBe(1); // the indexing file is pending, not failed
+    expect(health.predicates.fullyVectorized.fail).toBe(0);
+  });
+
+  it('grades a permanently-FAILED file as unhealthy, not "still indexing" (B1)', async () => {
+    // vectorizedChunkCount never reaches chunkCount, but `error` is set: the file is broken, not in
+    // flight. It must fail P3 and contribute its real 0 reachable chars, so a lake of failed files
+    // reads unhealthy rather than the neutral "not measured".
+    const failed: Member = {
+      fabFileId: 'failed',
+      chunkCount: 4,
+      vectorizedChunkCount: 1, // stuck below chunkCount forever
+      error: 'embedding provider rejected the request',
+      chunkedCharCount: 12000,
+      maxChunkCharLength: 3000,
+      embeddedChunkCount: 0,
+      embeddedCharCount: 0,
+    };
+    const health = await computeLakeHealth(lake, makeAdapters([failed]) as never);
+
+    expect(health.reachableShare).toBe(0); // measured as broken, not excluded
+    expect(health.coverage).toEqual({ measuredMembers: 1, membersWithChunks: 1 });
+    expect(health.predicates.fullyVectorized.fail).toBe(1);
+    expect(health.affectedMembers[0].failed).toContain('fullyVectorized');
   });
 });

@@ -34,6 +34,9 @@ export const dataLakeKeys = {
   filesRoot: ['dataLakeFiles'] as const,
   /** One lake's derived health report (GET /api/data-lakes/:id/health), #1666. */
   health: (dataLakeId: string) => ['dataLakeHealth', dataLakeId] as const,
+  /** Invalidation prefix covering every lake's health - used when a batch finishes ingesting, which
+   *  is the moment a pending "indexing" badge should become measured (the message carries no lake id). */
+  healthRoot: ['dataLakeHealth'] as const,
   tagCounts: (source: DataLakeBrowseSource) => ['dataLakeTagCounts', source] as const,
   tagCountsRoot: ['dataLakeTagCounts'] as const,
   articles: (source: DataLakeBrowseSource, params?: DataLakeArticlesParams) =>
