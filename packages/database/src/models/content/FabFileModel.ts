@@ -1074,6 +1074,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       fabFileId: string;
       fileName?: string;
       chunkCount: number;
+      vectorizedChunkCount: number | null;
       chunkedCharCount: number | null;
       maxChunkCharLength: number | null;
       embeddedChunkCount: number | null;
@@ -1090,6 +1091,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           chunkCount: { $gt: 0 },
         },
       },
+      // Deterministic order before the truncation bound, so which members a very large lake reports
+      // on (and therefore the headline it shows) is reproducible across refreshes rather than jittering.
+      { $sort: { _id: 1 } },
       { $limit: limit + 1 },
       {
         $project: {
@@ -1099,6 +1103,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           chunkCount: { $ifNull: ['$chunkCount', 0] },
           // Preserve null (UNMEASURED) rather than coalescing to 0 - the evaluator must tell "not yet
           // measured" from "measured as zero". $ifNull with null keeps an ABSENT field as null too.
+          vectorizedChunkCount: { $ifNull: ['$vectorizedChunkCount', null] },
           chunkedCharCount: { $ifNull: ['$chunkedCharCount', null] },
           maxChunkCharLength: { $ifNull: ['$maxChunkCharLength', null] },
           embeddedChunkCount: { $ifNull: ['$embeddedChunkCount', null] },

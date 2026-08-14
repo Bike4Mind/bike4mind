@@ -64,7 +64,12 @@ describe('evaluateMemberHealth - P1 chunkWithinPolicy', () => {
     expect(r.failed).toContain('chunkWithinPolicy');
   });
   it('is unknown when maxChunkCharLength is unmeasured (null)', () => {
-    const r = evaluateMemberHealth(member({ maxChunkCharLength: null }), DEFAULT_POLICY);
+    // A file the char-length backfill has not reached: its char AND embedded-char rollups are both
+    // absent (the backfill stamps them together), so P1 is unknown and it has no reachable figure.
+    const r = evaluateMemberHealth(
+      member({ maxChunkCharLength: null, chunkedCharCount: null, embeddedCharCount: null }),
+      DEFAULT_POLICY
+    );
     expect(r.status.chunkWithinPolicy).toBe('unknown');
     expect(r.failed).not.toContain('chunkWithinPolicy');
     expect(r.measured).toBe(false);
@@ -170,6 +175,86 @@ describe('evaluateMemberHealth - reachableChars (the headline atom)', () => {
   it('is null when embedded char data is unmeasured', () => {
     const r = evaluateMemberHealth(member({ embeddedCharCount: null }), DEFAULT_POLICY);
     expect(r.reachableChars).toBeNull();
+  });
+});
+
+describe('evaluateMemberHealth - vectorization in flight vs settled', () => {
+  it('treats a chunked-but-not-yet-vectorized file as PENDING, not 0%/failed', () => {
+    // chunk-complete stamps the char rollups (so the file is "measured") and zeroes the vector
+    // rollups in the SAME write; until the first vectorize batch commits vectorizedChunkCount < chunkCount.
+    const r = evaluateMemberHealth(
+      member({
+        chunkCount: 3,
+        chunkedCharCount: 9000,
+        maxChunkCharLength: 3000,
+        vectorizedChunkCount: 0,
+        embeddedChunkCount: 0,
+        embeddedCharCount: 0,
+      }),
+      DEFAULT_POLICY
+    );
+    expect(r.status.fullyVectorized).toBe('unknown'); // pending, NOT fail
+    expect(r.failed).not.toContain('fullyVectorized');
+    expect(r.reachableChars).toBeNull(); // excluded from the headline, not counted as zero
+    expect(r.measured).toBe(false);
+    // P1 still grades from the char rollups the moment they exist.
+    expect(r.status.chunkWithinPolicy).toBe('pass');
+  });
+
+  it('grades a SETTLED-but-under-vectorized file as a real P3 failure', () => {
+    // An un-embeddable oversized chunk counts as terminal, so vectorizedChunkCount reaches chunkCount
+    // (settled) while embeddedChunkCount stays below it - the exact defect P3 exists to catch.
+    const r = evaluateMemberHealth(
+      member({
+        chunkCount: 1,
+        chunkedCharCount: 20000,
+        maxChunkCharLength: 20000,
+        vectorizedChunkCount: 1,
+        embeddedChunkCount: 0,
+        embeddedCharCount: 0,
+      }),
+      DEFAULT_POLICY
+    );
+    expect(r.status.fullyVectorized).toBe('fail');
+    expect(r.failed).toContain('fullyVectorized');
+  });
+
+  it('treats an absent vectorizedChunkCount (legacy, predates the field) as settled', () => {
+    const r = evaluateMemberHealth(
+      member({ chunkCount: 5, vectorizedChunkCount: null, embeddedChunkCount: 3, embeddedCharCount: 100 }),
+      DEFAULT_POLICY
+    );
+    expect(r.status.fullyVectorized).toBe('fail'); // still graded, not hidden as pending
+  });
+
+  it('excludes an in-flight member from the lake reachable share (no red during ingest)', () => {
+    const report = summarizeLakeHealth(
+      [
+        member({
+          fabFileId: 'settled',
+          chunkCount: 3,
+          chunkedCharCount: 9000,
+          maxChunkCharLength: 3000,
+          vectorizedChunkCount: 3,
+          embeddedChunkCount: 3,
+          embeddedCharCount: 9000,
+        }),
+        member({
+          fabFileId: 'indexing',
+          chunkCount: 3,
+          chunkedCharCount: 9000,
+          maxChunkCharLength: 3000,
+          vectorizedChunkCount: 0,
+          embeddedChunkCount: 0,
+          embeddedCharCount: 0,
+        }),
+      ],
+      DEFAULT_POLICY
+    );
+    expect(report.reachableShare).toBe(1); // only the settled file counts, not a diluted ~50%
+    expect(report.coverage).toEqual({ measuredMembers: 1, membersWithChunks: 2 });
+    expect(report.predicates.fullyVectorized.unknown).toBe(1); // the indexing file is pending
+    expect(report.predicates.fullyVectorized.fail).toBe(0);
   });
 });
 

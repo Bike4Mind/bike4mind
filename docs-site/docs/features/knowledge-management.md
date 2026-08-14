@@ -77,8 +77,11 @@ so health is *computed* from four checkable rules, and shown on the lake in the 
 
 The four rules, per file:
 1. **No oversized chunk** - no chunk is larger than the policy passage size.
-2. **Chunk count fits the document** - a long document split into too few chunks (in the extreme, a
-   whole document in one chunk) is flagged, because most of it can never rank in search.
+2. **Chunk count fits the chunked text** - a document split into too few chunks for its size (in the
+   extreme, a whole document in one oversized chunk) is flagged, because most of it can never rank in
+   search. This rule is measured against the text that was actually chunked, so in practice it moves
+   together with rule 1 (an under-chunked file is an oversized-chunk file); it is reported separately
+   so the drill-down still names the shape explicitly.
 3. **Fully vectorized** - every chunk carries a vector; a chunk with no vector is invisible to
    semantic search even though it was "processed".
 4. **Serve cap meets policy** - the retrieval serve limit is at least the policy passage size, so an

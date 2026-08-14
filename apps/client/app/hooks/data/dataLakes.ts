@@ -66,9 +66,9 @@ export function useGetDataLakes(
  * One lake's derived health report (#1666): the four retrievability predicates and the
  * reachable-content headline, computed on demand from per-file rollups. Advisory only.
  *
- * Fetched lazily (pass `enabled` when the detail view opens) and cached for a few minutes - health
- * shifts only as content is re-ingested, so it does not need to be live. Like the other lake reads
- * it does not retry the feature-gate 403.
+ * Fetched only where the badge mounts (the lake detail view) and cached for a few minutes - health
+ * shifts only as content is re-ingested, so it does not need to be live. `enabled` stays available
+ * for callers that mount it earlier. Like the other lake reads it does not retry the feature-gate 403.
  */
 export function useGetDataLakeHealth(dataLakeId: string | null, enabled = true) {
   return useQuery({

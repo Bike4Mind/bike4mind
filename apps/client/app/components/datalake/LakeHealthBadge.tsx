@@ -36,13 +36,14 @@ export function deriveLakeHealthBadge(
 ): BadgeLevel {
   const { reachableShare, predicates } = health;
   if (reachableShare === null) return 'unknown';
-  const anyPredicateFails =
+  // A serve-cap-below-policy (P4) defect short-circuits to unhealthy just below, so it is not repeated
+  // in this per-member disjunction (it would be unreachable here).
+  const anyMemberPredicateFails =
     predicates.chunkWithinPolicy.fail > 0 ||
     predicates.chunkCountConsistent.fail > 0 ||
-    predicates.fullyVectorized.fail > 0 ||
-    predicates.serveCapMeetsPolicy === 'fail';
+    predicates.fullyVectorized.fail > 0;
   if (reachableShare < 0.5 || predicates.serveCapMeetsPolicy === 'fail') return 'unhealthy';
-  if (reachableShare < 0.95 || anyPredicateFails) return 'degraded';
+  if (reachableShare < 0.95 || anyMemberPredicateFails) return 'degraded';
   return 'healthy';
 }
 
@@ -93,7 +94,9 @@ function HealthTooltip({ health }: { health: LakeHealthApiResponse }) {
       <Typography level="body-xs">
         Oversized chunks: {predicates.chunkWithinPolicy.fail} &middot; Under-chunked:{' '}
         {predicates.chunkCountConsistent.fail} &middot; Unvectorized: {predicates.fullyVectorized.fail}
-        {predicates.serveCapMeetsPolicy === 'fail' && ' · Serve cap below policy'}
+        {/* JS string literal, not JSX text, so the middot is written as its unicode escape to stay
+            ASCII-only per CLAUDE.md (an &middot; entity would not resolve inside a string). */}
+        {predicates.serveCapMeetsPolicy === 'fail' && ' \u00B7 Serve cap below policy'}
       </Typography>
       {affectedMembers.length > 0 && (
         <>
@@ -117,8 +120,10 @@ function HealthTooltip({ health }: { health: LakeHealthApiResponse }) {
   );
 }
 
-export default function LakeHealthBadge({ lakeId, enabled = true }: { lakeId: string; enabled?: boolean }) {
-  const { data: health, isLoading } = useGetDataLakeHealth(lakeId, enabled);
+export default function LakeHealthBadge({ lakeId }: { lakeId: string }) {
+  // The badge only mounts inside the lake detail view, so the query is already scoped to "open"; no
+  // `enabled` gate is needed here.
+  const { data: health, isLoading } = useGetDataLakeHealth(lakeId);
   // No content to grade (empty lake) or the feature/endpoint declined: render nothing rather than a
   // misleading "unknown" chip. isLoading is silent for the same reason - the badge is advisory.
   if (isLoading || !health || health.coverage.membersWithChunks === 0) return null;

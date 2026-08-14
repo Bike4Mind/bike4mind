@@ -30,6 +30,8 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     useGetDeletedDataLakes: () => useGetDeletedDataLakes(),
     useActiveDataLakeBatches: () => useActiveDataLakeBatches(),
     useGetDataLakes: () => useGetDataLakes(),
+    // LakeInfoPanel renders <LakeHealthBadge> unconditionally; the badge renders null on no data.
+    useGetDataLakeHealth: () => ({ data: undefined, isLoading: false }),
     // Per-lake files: only the selected lake queries (id != null).
     useDataLakeFiles: (id: string | null) => ({
       data: id ? { data: lakeFiles } : undefined,

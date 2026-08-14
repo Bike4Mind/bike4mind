@@ -88,6 +88,14 @@ export type LakeHealthMemberInput = {
   fileName?: string;
   /** Chunks created for the file (`FabFile.chunkCount`). */
   chunkCount: number;
+  /**
+   * Terminal (has-vector OR oversized-unembeddable) chunk rows, `FabFile.vectorizedChunkCount`. Used
+   * only to tell "still indexing" from "settled": while it is below `chunkCount` the file is mid-
+   * vectorization, so P3 and reachability are PENDING rather than failing. `null`/absent (predates
+   * the field) is treated as settled so legacy files keep grading. Distinct from `embeddedChunkCount`,
+   * which counts ONLY vector-bearing rows and is what P3 itself grades.
+   */
+  vectorizedChunkCount?: number | null;
   /** Sum of the file's chunks' `charLength`; `null` until measured. */
   chunkedCharCount?: number | null;
   /** Largest single chunk's `charLength`; `null` until measured. */
@@ -102,7 +110,11 @@ export type LakeHealthMemberResult = {
   fabFileId: string;
   fileName?: string;
   chunkCount: number;
-  /** True when the char rollups are present, so P1/P2 and reachable chars are real numbers. */
+  /**
+   * True when this file contributes a REAL reachable figure to the headline: its char and vector
+   * rollups are present AND its vectorization has settled. A file still being indexed is `false`
+   * (pending), NOT measured-as-zero - counting it would drag a lake to 0% mid-ingest.
+   */
   measured: boolean;
   status: {
     chunkWithinPolicy: PredicateStatus;
@@ -112,13 +124,15 @@ export type LakeHealthMemberResult = {
   /** The subset of P1-P3 this member FAILS - the drill-down's "which predicate" list. */
   failed: LakeHealthPredicate[];
   /**
-   * Characters of this file that can actually reach the model, or `null` when unmeasured.
+   * Characters of this file that can actually reach the model, or `null` when unmeasured/pending.
    * `min(embeddedCharCount, embeddedChunkCount * serveCap)`: a chunk contributes its length only if
    * it is vector-bearing (else it is never retrieved) and only up to the serve cap (the rest is
    * clipped before the model sees it). Exact whenever the file's vector-bearing chunks are uniformly
    * within-cap or uniformly over-cap - which live data shows is >99.8% of files, since the chunker
-   * packs to a uniform target. A file mixing both is the only approximation, and it always also
-   * fails P1, so it is already surfaced.
+   * packs to a uniform target. A file mixing both is the only approximation, and its direction is
+   * always an OVER-estimate (the file reads healthier than reality, never worse) because
+   * `min(sum, n * cap) >= sum(min(len_i, cap))`; such a file also always fails P1, so it is
+   * surfaced anyway.
    */
   reachableChars: number | null;
   /** Denominator contribution: the file's measured chunked characters, or `null` when unmeasured. */
@@ -131,32 +145,56 @@ export function evaluateMemberHealth(member: LakeHealthMemberInput, policy: Lake
   const maxChunkCharLength = nonNegOrNull(member.maxChunkCharLength);
   const embeddedCharCount = nonNegOrNull(member.embeddedCharCount);
   const embeddedChunkCount = nonNegOrNull(member.embeddedChunkCount);
-  const measured = chunkedCharCount !== null && maxChunkCharLength !== null;
+  const vectorizedChunkCount = nonNegOrNull(member.vectorizedChunkCount);
 
-  // P1: the largest chunk must not exceed the policy size.
+  // Is the file's vectorization settled, or is it still being indexed? chunk-complete stamps the char
+  // rollups (making the file "measured") and zeroes the vector rollups in the SAME write, so between
+  // chunk-complete and the first vectorize batch a file would otherwise read as measured-but-0%-
+  // reachable and fail P3 - a normal upload flashing red. `vectorizedChunkCount >= chunkCount` mirrors
+  // the vectorize handler's own completion gate (terminal = has-vector OR oversized); a settled-but-
+  // under-vectorized file (an un-embeddable oversized chunk reaches terminal) still fails P3 as it
+  // should. A null count predates the field, so treat it as settled to keep legacy files grading.
+  const vectorizationSettled = vectorizedChunkCount === null || vectorizedChunkCount >= member.chunkCount;
+
+  // P1: the largest chunk must not exceed the policy size. Graded as soon as the chunk rollups exist
+  // (even mid-vectorize): an oversized chunk is a structural fact, not a timing artifact.
   const chunkWithinPolicy: PredicateStatus =
     maxChunkCharLength === null ? 'unknown' : maxChunkCharLength <= policy.policyChars ? 'pass' : 'fail';
 
-  // P2: chunkCount must be at least what the document length implies at the policy size. This is what
-  // catches the whole-document-in-one-chunk case without special-casing it.
+  // P2: chunkCount must be at least what the CHUNKED length implies at the policy size - catches the
+  // whole-document-in-one-chunk case without special-casing. Note the denominator is the sum of the
+  // chunks' own lengths, so as implemented P2 is a corollary of P1 (it cannot fail unless some chunk
+  // already exceeds the policy size); it is kept as a distinct, separately-reported signal. The
+  // document-length counterpart is `extractedCharCount`, which a different extractor writes lazily and
+  // which the codebase explicitly warns must not be conflated with `chunkedCharCount`.
   const expectedChunks = chunkedCharCount === null ? null : Math.ceil(chunkedCharCount / policy.policyChars);
   const chunkCountConsistent: PredicateStatus =
     expectedChunks === null ? 'unknown' : member.chunkCount >= expectedChunks ? 'pass' : 'fail';
 
   // P3: every chunk must carry a vector. `embeddedChunkCount` is the count of vector-bearing ROWS,
   // deliberately NOT `vectorizedChunkCount` (which also counts un-embeddable oversized chunks as done).
-  const fullyVectorized: PredicateStatus =
-    embeddedChunkCount === null ? 'unknown' : embeddedChunkCount >= member.chunkCount ? 'pass' : 'fail';
+  // While vectorization is still in flight the answer is genuinely PENDING, not a failure.
+  const fullyVectorized: PredicateStatus = !vectorizationSettled
+    ? 'unknown'
+    : embeddedChunkCount === null
+      ? 'unknown'
+      : embeddedChunkCount >= member.chunkCount
+        ? 'pass'
+        : 'fail';
 
   const failed: LakeHealthPredicate[] = [];
   if (chunkWithinPolicy === 'fail') failed.push('chunkWithinPolicy');
   if (chunkCountConsistent === 'fail') failed.push('chunkCountConsistent');
   if (fullyVectorized === 'fail') failed.push('fullyVectorized');
 
+  // Reachability is a real number only once the char and vector rollups are present AND vectorization
+  // has settled; otherwise it is pending (null), so the summarizer excludes it from BOTH the numerator
+  // and the denominator rather than counting it as zero-reachable.
   const reachableChars =
-    embeddedCharCount === null || embeddedChunkCount === null
+    !vectorizationSettled || chunkedCharCount === null || embeddedCharCount === null || embeddedChunkCount === null
       ? null
       : Math.min(embeddedCharCount, embeddedChunkCount * policy.serveCap);
+  const measured = reachableChars !== null;
 
   return {
     fabFileId: member.fabFileId,

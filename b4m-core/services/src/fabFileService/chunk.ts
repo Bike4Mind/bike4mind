@@ -96,8 +96,10 @@ export const chunkFabfile = async (
   fabFile.chunkCount = chunks.length;
   fabFile.chunkedCharCount = chunkCharLengths.reduce((sum, len) => sum + len, 0);
   // Lake-health P1 rollup (#1666): the largest chunk, so health checks "no chunk exceeds the policy
-  // size" without rescanning the chunk collection. 0 for a file that produced no chunks.
-  fabFile.maxChunkCharLength = chunkCharLengths.length > 0 ? Math.max(...chunkCharLengths) : 0;
+  // size" without rescanning the chunk collection. 0 for a file that produced no chunks. `reduce`, not
+  // `Math.max(...spread)`: a file can carry tens of thousands of chunks and the spread would risk a
+  // call-stack RangeError - and it matches the sum just above.
+  fabFile.maxChunkCharLength = chunkCharLengths.reduce((max, len) => (len > max ? len : max), 0);
 
   fabFile.isVectorizing = false;
   fabFile.vectorized = chunks.length > 0;

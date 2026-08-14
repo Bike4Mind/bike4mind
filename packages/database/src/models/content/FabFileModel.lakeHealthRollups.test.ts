@@ -65,6 +65,7 @@ describe('lake-health rollup primitives (#1666)', () => {
     const scope = { datalakeTag: tag, fileTagPrefix: 'acme:', creatorUserId: 'u1' };
     await makeFile('measured.txt', {
       chunkCount: 3,
+      vectorizedChunkCount: 3,
       chunkedCharCount: 9000,
       maxChunkCharLength: 3000,
       embeddedChunkCount: 3,
@@ -82,11 +83,16 @@ describe('lake-health rollup primitives (#1666)', () => {
 
     expect(members).toHaveLength(2); // chunkless excluded
     expect(byName['measured.txt']).toMatchObject({
+      vectorizedChunkCount: 3,
       chunkedCharCount: 9000,
       maxChunkCharLength: 3000,
       embeddedChunkCount: 3,
     });
-    // Unmeasured file: char rollups come back as null, NOT coerced to 0.
+    // Unmeasured file: the #1666 CHAR rollups come back as null, NOT coerced to 0.
+    // (vectorizedChunkCount is a pre-existing field defaulting to 0, so it is 0 here, not null - the
+    // health evaluator reads that 0 as "vectorization not settled", which is inert for an unmeasured
+    // file since its reachable figure is null and P3 is unknown regardless.)
+    expect(byName['unmeasured.txt'].vectorizedChunkCount).toBe(0);
     expect(byName['unmeasured.txt'].chunkedCharCount).toBeNull();
     expect(byName['unmeasured.txt'].maxChunkCharLength).toBeNull();
     expect(byName['unmeasured.txt'].embeddedChunkCount).toBeNull();

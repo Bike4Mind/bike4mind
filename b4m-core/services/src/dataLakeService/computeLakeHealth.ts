@@ -61,6 +61,15 @@ export async function computeLakeHealth(
 
   const policy = resolveLakeHealthPolicy({ explicitTarget: lake.requiredPassageTokenTarget, inheritedTarget });
 
+  // Defense in depth: `datalakeTag` is `required: true` on the lake, but an absent one would serialize
+  // to `null` in the membership `$match` and degrade the query to "files with no tags" across every
+  // tenant - and this endpoint returns fileNames. Report an empty (well-formed) health instead of ever
+  // scanning on a null tag. Mirrors the same guard in GET /api/data-lakes/:id/articles.
+  if (!lake.datalakeTag) {
+    const empty = summarizeLakeHealth([], policy);
+    return { ...empty, affectedMembers: [], affectedMemberCount: 0, scanTruncated: false };
+  }
+
   const rows = await db.fabFiles.findDataLakeHealthMembers(lakeMembershipScope(lake), MEMBER_SCAN_LIMIT);
   const scanTruncated = rows.length > MEMBER_SCAN_LIMIT;
   const members = scanTruncated ? rows.slice(0, MEMBER_SCAN_LIMIT) : rows;
