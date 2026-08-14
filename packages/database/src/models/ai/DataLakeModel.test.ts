@@ -1425,12 +1425,17 @@ describe('DataLakeRepository.activateIfDraft', () => {
   });
 });
 
-describe('DataLakeRepository config-write actor stamp', () => {
+describe('DataLakeRepository teardown stamp', () => {
   setupMongoTest();
 
-  // Every service-level test of this stamp mocks the repository, so a missing schema path would be
+  // The config-write actor stamp shares this block rather than opening its own: every
+  // `setupMongoTest()` starts another `mongod` (see __test__/utils.ts), this file already starts
+  // ~30, and the whole shard competes for the same runner. Same server, same reasoning about
+  // schema-level round trips, no extra process.
+  //
+  // Every service-level test of the stamp mocks the repository, so a missing schema path would be
   // invisible there: mongoose drops an unknown field on write without complaint, and the lake would
-  // silently keep answering "nobody has ever changed me". Same reasoning as the teardown stamp below.
+  // silently keep answering "nobody has ever changed me".
   it('round-trips lastUpdatedByUserId through the schema', async () => {
     const created = await dataLakeRepository.create(baseLake({ slug: 'stamped' }));
 
@@ -1439,16 +1444,12 @@ describe('DataLakeRepository config-write actor stamp', () => {
     expect((await dataLakeRepository.findById(created.id))?.lastUpdatedByUserId).toBe('admin1');
   });
 
-  it('leaves it unset on a lake nobody has reconfigured', async () => {
+  it('leaves lastUpdatedByUserId unset on a lake nobody has reconfigured', async () => {
     // Absent, not '': the reader of this field must be able to tell "never reconfigured" from
     // "reconfigured by a principal we could not name".
     const created = await dataLakeRepository.create(baseLake({ slug: 'never-touched' }));
     expect((await dataLakeRepository.findById(created.id))?.lastUpdatedByUserId ?? null).toBeNull();
   });
-});
-
-describe('DataLakeRepository teardown stamp', () => {
-  setupMongoTest();
 
   // Phase-1 delete keys the restore to the stamp it records here. If the schema were missing the
   // field mongoose would drop it on write without complaint, and every restore would silently fall
