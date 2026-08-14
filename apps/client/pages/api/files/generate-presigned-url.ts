@@ -2,6 +2,7 @@ import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { createS3Client } from '@bike4mind/fab-pipeline';
 import {
+  FabFileSourceType,
   FileGeneratePresignedUrlRequestInput,
   FileGeneratePresignedUrlRequestInputType,
   FileGeneratePresignedUrlResponseType,
@@ -122,6 +123,9 @@ const handler = baseApi().post(
           fileName: data.fileName,
           mimeType: mimeType,
           type: KnowledgeType.FILE,
+          // Admission provenance (#1679): stamp the door - the web upload path the lake previously
+          // could not identify. Mirrors the batch door and the connector/chat-platform doors.
+          sourceType: FabFileSourceType.MANUAL_UPLOAD,
           ...(data.contentHash && { contentHash: data.contentHash }),
           ...(data.batchId && { batchId: data.batchId }),
           ...(data.relativePath && { relativePath: data.relativePath }),

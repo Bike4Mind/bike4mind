@@ -33,6 +33,7 @@ export * from './deleteDataLake';
 export * from './lakeMembership';
 export * from './prefixArmMembership';
 export * from './chunkPolicyConflict';
+export * from './admissionContract';
 export * from './removeFileFromDataLake';
 export * from './cleanupDeletedDataLake';
 export * from './recomputeLakeStats';

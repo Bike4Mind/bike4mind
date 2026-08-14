@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, Mock } from 'vitest';
 import { chunkFabfile } from './chunk';
 import { ChunkClaimLostError } from '@bike4mind/common';
+import { computeServerTextHash } from '../dataLakeService/admissionContract';
 import type { IUserDocument } from '@bike4mind/common';
 
 vi.mock('@bike4mind/utils', async importOriginal => {
@@ -227,5 +228,42 @@ describe('chunkFabfile', () => {
       // caller that doesn't, so it must be loud rather than silent.
       expect(mockAdapter.logger.warn).toHaveBeenCalledWith(expect.stringContaining('no claim stamp'));
     });
+  });
+
+  it('stamps the server-verified text hash over the extracted chunk text (admission contract #1679)', async () => {
+    (SmartChunker as unknown as Mock).mockImplementation(function MockSmartChunker(this: unknown) {
+      return {
+        chunkFile: vi.fn().mockResolvedValue([
+          { text: 'the quick brown', tokenCount: 3 },
+          { text: 'fox jumps', tokenCount: 2 },
+        ]),
+        freeEncoder: vi.fn(),
+      };
+    });
+
+    await chunkFabfile(
+      mockUser,
+      { fabFileId: 'file-1', embeddingModel: 'text-embedding-ada-002' },
+      mockAdapter as never
+    );
+
+    const updatedFile = mockAdapter.db.fabFiles.update.mock.calls[0][0] as { serverTextHash?: string };
+    expect(updatedFile.serverTextHash).toBe(computeServerTextHash(['the quick brown', 'fox jumps']));
+    expect(updatedFile.serverTextHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('leaves serverTextHash unset for a file that yields no extractable text', async () => {
+    (SmartChunker as unknown as Mock).mockImplementation(function MockSmartChunker(this: unknown) {
+      return { chunkFile: vi.fn().mockResolvedValue([]), freeEncoder: vi.fn() };
+    });
+
+    await chunkFabfile(
+      mockUser,
+      { fabFileId: 'file-1', embeddingModel: 'text-embedding-ada-002' },
+      mockAdapter as never
+    );
+
+    const updatedFile = mockAdapter.db.fabFiles.update.mock.calls[0][0] as { serverTextHash?: string };
+    expect(updatedFile.serverTextHash).toBeUndefined();
   });
 });

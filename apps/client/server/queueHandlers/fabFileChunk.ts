@@ -386,7 +386,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // oscillate a file in two disagreeing lakes). Best-effort: a detection failure must not fail an
     // otherwise-successful chunk and force a wasted re-chunk on redelivery.
     try {
-      await dataLakeService.recomputeFileChunkPolicyConflict(
+      const conflict = await dataLakeService.recomputeFileChunkPolicyConflict(
         { id: fabFileId, userId: fabFile.userId, tags: fabFile.tags },
         effectivePassageTokenTarget,
         {
@@ -395,6 +395,19 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           logger,
         }
       );
+
+      // Lake admission decision (#1679), report-only: a member whose chunks cannot honor a lake it
+      // belongs to is quarantined - admitted content that will never be retrievable. We record the
+      // conflict (above) but do not yet block it; the hard gate is #1680, which reads the same
+      // signal. Log the verdict with the DOOR the member came through, which the policy recompute
+      // cannot see - so a smoke test can tell a quarantined member from one that was never checked.
+      const admissionStatus = dataLakeService.deriveAdmissionStatus(conflict);
+      if (admissionStatus === 'quarantined') {
+        logger.warn(
+          `[admission] file ${fabFileId} quarantined (report-only) via ${dataLakeService.admissionDoorLabel(fabFile.sourceType)}: ` +
+            `chunks at target ${effectivePassageTokenTarget} cannot honor ${conflict!.lakes.length} lake policy(ies)`
+        );
+      }
     } catch (err) {
       logger.error(`Error computing chunk-policy conflict for ${fabFileId}: ${err}`);
     }

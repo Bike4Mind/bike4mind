@@ -69,6 +69,10 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     resolveSpendLevers: vi.fn(async () => ({ vectorizeChunkBatchSize: 50 })),
     recomputeFileChunkPolicyConflict: h.recomputeFileChunkPolicyConflict,
+    // Pure admission-contract helpers (#1679); mirror the real implementations so the handler's
+    // admission-decision branch is exercised, not swallowed by a missing-export TypeError.
+    deriveAdmissionStatus: (conflict: unknown) => (conflict ? 'quarantined' : 'admitted'),
+    admissionDoorLabel: (sourceType: string | undefined) => sourceType ?? 'unknown',
   },
 }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })) }));
@@ -386,6 +390,41 @@ describe('fabFileChunk handler - cross-lake chunk-policy conflict (#1662)', () =
     h.chunkFabfile.mockResolvedValue([{ id: 'c1' }]);
     h.recomputeFileChunkPolicyConflict.mockRejectedValue(new Error('lake read failed'));
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+  });
+
+  it('logs a report-only quarantine diagnostic naming the door when the member cannot honor a policy (#1679)', async () => {
+    // The member came through the Drive connector; recompute reports a conflict against one lake.
+    h.findAccessibleById.mockResolvedValue({
+      id: 'ff1',
+      userId: 'u1',
+      tags: [{ name: 'datalake:sales' }],
+      sourceType: 'google_drive',
+    });
+    h.chunkFabfile.mockResolvedValue([{ id: 'c1' }]);
+    h.recomputeFileChunkPolicyConflict.mockResolvedValue({
+      effectiveTarget: 512,
+      embeddingModel: 'text-embedding-3-small',
+      lakes: [{ lakeId: 'l1', name: 'Sales' }],
+      detectedAt: new Date(),
+    });
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    const warned = (mockLogger.warn as unknown as { mock: { calls: unknown[][] } }).mock.calls.map(c => String(c[0]));
+    const admissionLine = warned.find(line => line.includes('[admission]'));
+    expect(admissionLine).toBeDefined();
+    expect(admissionLine).toContain('quarantined');
+    expect(admissionLine).toContain('google_drive');
+  });
+
+  it('does not log an admission quarantine when the member honors every applicable policy (#1679)', async () => {
+    h.chunkFabfile.mockResolvedValue([{ id: 'c1' }]);
+    h.recomputeFileChunkPolicyConflict.mockResolvedValue(null); // no conflict -> admitted
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    const warned = (mockLogger.warn as unknown as { mock: { calls: unknown[][] } }).mock.calls.map(c => String(c[0]));
+    expect(warned.some(line => line.includes('[admission]'))).toBe(false);
   });
 });
 

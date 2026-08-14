@@ -308,6 +308,19 @@ export interface IFabFile {
 
   /** SHA-256 hash of file content for deduplication */
   contentHash?: string;
+
+  /**
+   * SHA-256 (hex) over the file's normalized SERVER-EXTRACTED text, computed by the admission
+   * contract at chunk time (`computeServerTextHash`) - the one moment every ingestion door's file
+   * converges on. This is the trustworthy dedup input for the acquisition proposal queue (#1671),
+   * and is deliberately distinct from `contentHash`: that is written by only the upload doors,
+   * hashed over raw file BYTES on the client, and never verified server-side, so it is absent on
+   * research/connector-created files and can never equal a hash of the text extracted from a PDF.
+   * Absent until a file is chunked; absent on a file that yields no extractable text. Nulled by
+   * FAB_FILE_CONTENT_REWRITE_PATCH on a byte rewrite so a stale fingerprint never outlives its text.
+   */
+  serverTextHash?: string | null;
+
   /** Batch ID linking this file to a data lake upload batch */
   batchId?: string;
   /** Original relative path from folder upload (preserves directory structure) */
@@ -358,9 +371,11 @@ export interface IFabFileDocument extends IFabFile, IShareableDocument {}
  * the stale number in place and only looks correct.
  *
  * Also clears the chunk-derived rollups (`chunkedCharCount`, `maxChunkCharLength`, `embeddedChunkCount`,
- * `embeddedCharCount`): a content rewrite invalidates the chunks they were summed from, and the
- * re-chunk / re-vectorize that follows re-stamps them. Leaving them would grade lake health (#1666)
- * against the PREVIOUS content's chunks - reporting a reachability the current bytes do not have.
+ * `embeddedCharCount`) and `serverTextHash`, the admission contract's fingerprint of the extracted text
+ * (#1679): each is derived from the file's content, so a byte rewrite invalidates them, and the
+ * re-chunk / re-vectorize that follows re-stamps them. Leaving the rollups would grade lake health
+ * (#1666) against the PREVIOUS content's chunks - reporting a reachability the current bytes do not
+ * have; leaving the hash would let a stale fingerprint claim text the file no longer holds.
  */
 export const FAB_FILE_CONTENT_REWRITE_PATCH = {
   extractedCharCount: null,
@@ -368,6 +383,7 @@ export const FAB_FILE_CONTENT_REWRITE_PATCH = {
   maxChunkCharLength: null,
   embeddedChunkCount: null,
   embeddedCharCount: null,
+  serverTextHash: null,
 } as const;
 
 export interface IFabFileListItem {

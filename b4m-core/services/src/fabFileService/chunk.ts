@@ -9,6 +9,7 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { NotFoundError, secureParameters, SmartChunker } from '@bike4mind/utils';
 import { z } from 'zod';
+import { computeServerTextHash } from '../dataLakeService/admissionContract';
 
 const chunkFileSchema = z.object({
   fabFileId: z.string(),
@@ -136,6 +137,14 @@ export const chunkFabfile = async (
 
   const chunked = chunks.length > 0;
 
+  // Lake admission contract (#1679): fingerprint the freshly-extracted chunk text - the one moment
+  // every ingestion door's file converges here and its text exists server-side. Left unset for a
+  // file with no extractable text (nothing to dedup on) rather than recording a hash of the empty
+  // string, which would collide across every such file. See dataLakeService/admissionContract.ts
+  // for why this is the trustworthy dedup input, not contentHash. Stamped in the explicit payload
+  // below (#1802), not on the loaded fabFile.
+  const serverTextHash = computeServerTextHash(chunks.map(chunk => chunk.text));
+
   // Explicit payload naming only the fields this function owns (#1802): `isChunking` and
   // `chunkClaimedAt` are the WORKER's claim, acquired by its CAS and released in its `finally`
   // (fabFileChunk.ts). Passing the whole loaded `fabFile` through `update()` - a `$set` of every
@@ -167,6 +176,9 @@ export const chunkFabfile = async (
     // before the new chunks are re-stamped, silently returning zero results (see
     // vectorSearchEligibility.ts).
     chunkEmbeddingModelStampedAt: null,
+
+    // Only stamp when there is extractable text; see the computeServerTextHash note above.
+    ...(serverTextHash ? { serverTextHash } : {}),
   });
 
   await db.fabFileChunks.deleteManyByFabFileId(fabFileId);
