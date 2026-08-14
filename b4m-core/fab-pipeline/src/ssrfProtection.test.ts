@@ -44,6 +44,16 @@ describe('SSRF - bracketed IPv6 literals', () => {
     expect(isPrivateIP('::ffff:10.0.0.1')).toBe(true);
   });
 
+  it('does not refuse public addresses that merely contain an ffff hextet', () => {
+    // Boundary for the mapped branch: matching `ffff:` as a SUBSTRING refused these, which is an
+    // over-block rather than a hole but a real regression on the live fetch path - and a wide one,
+    // since `validateUrlForFetch` sinks a hostname when ANY resolved IP is private, so one `ffff`
+    // hextet in a dual-stack host's AAAA would take its healthy A record down with it.
+    expect(isPrivateIP('2606:4700:ffff::1')).toBe(false);
+    expect(isPrivateIP('2001:4860:ffff::8888')).toBe(false);
+    expect(isPrivateOrInternalHostname('[2606:4700:ffff::1]')).toBe(false);
+  });
+
   it('blocks the bracketed forms at the hostname level too', () => {
     expect(isPrivateOrInternalHostname('[::1]')).toBe(true);
     expect(isPrivateOrInternalHostname('[fd00::1]')).toBe(true);
