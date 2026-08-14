@@ -3,15 +3,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // The @datalake grammar parser is unit-tested in the slack package; here we mock it and exercise
 // the handler's dispatch, listing and ingest-reply behavior in isolation.
 const { parseDataLakeCommand } = vi.hoisted(() => ({ parseDataLakeCommand: vi.fn() }));
-const { ingestSlackFilesIntoLake, buildSlackAccessContext } = vi.hoisted(() => ({
+const { ingestSlackFilesIntoLake, ingestSlackLinkIntoLake, buildSlackAccessContext } = vi.hoisted(() => ({
   ingestSlackFilesIntoLake: vi.fn(),
+  ingestSlackLinkIntoLake: vi.fn(),
   buildSlackAccessContext: vi.fn(),
 }));
 const { listDataLakes } = vi.hoisted(() => ({ listDataLakes: vi.fn() }));
 
 vi.mock('@bike4mind/slack', () => ({ parseDataLakeCommand }));
 vi.mock('@bike4mind/services', () => ({ dataLakeService: { listDataLakes } }));
-vi.mock('./dataLakeFileIngest', () => ({ ingestSlackFilesIntoLake, buildSlackAccessContext }));
+// Both ingest paths and the shared AccessContext builder are stubbed, so these tests exercise
+// dispatch and reply composition only. Each path's own behavior has its own test file.
+vi.mock('./dataLakeIngestAuthz', () => ({ buildSlackAccessContext }));
+vi.mock('./dataLakeFileIngest', () => ({ ingestSlackFilesIntoLake }));
+vi.mock('./dataLakeLinkIngest', () => ({ ingestSlackLinkIntoLake }));
 
 import { handleDataLakeCommand, runDataLakeSlackCommand, formatIngestOutcome } from './handleDataLakeCommand';
 
@@ -101,13 +106,47 @@ describe('handleDataLakeCommand', () => {
       expect(ingestSlackFilesIntoLake).not.toHaveBeenCalled();
     });
 
-    it('refuses a bare link (LINK ingest is M3) instead of silently ingesting nothing', async () => {
+    it('ingests a bare link through the LINK path, not the file path', async () => {
       parseDataLakeCommand.mockReturnValue({ subcommand: 'add', lakeSlug: 'sales', link: 'https://x', rawArgs: '' });
+      ingestSlackLinkIntoLake.mockResolvedValue({
+        ok: true,
+        lakeName: 'Sales',
+        fileName: 'An Article',
+        sourceUrl: 'https://x',
+      });
 
       const reply = await handleDataLakeCommand(baseParams({ files: [] }));
 
-      expect(reply).toMatch(/link is not supported yet/i);
+      expect(ingestSlackLinkIntoLake).toHaveBeenCalledWith(
+        { actor, lakeSlug: 'sales', link: 'https://x', channel: 'C1', messageTs: '1700000000.0001' },
+        ingestDeps
+      );
+      // No attachments, so the file path must not run at all.
       expect(ingestSlackFilesIntoLake).not.toHaveBeenCalled();
+      expect(reply).toContain('Added 1 file to *Sales*: "An Article"');
+    });
+
+    it('surfaces a link refusal verbatim', async () => {
+      parseDataLakeCommand.mockReturnValue({ subcommand: 'add', lakeSlug: 'sales', link: 'https://x', rawArgs: '' });
+      ingestSlackLinkIntoLake.mockResolvedValue({
+        ok: false,
+        reason: 'link_fetch_failed',
+        message: 'Could not fetch that link.',
+      });
+
+      const reply = await handleDataLakeCommand(baseParams({ files: [] }));
+
+      expect(reply).toBe('Could not fetch that link.');
+    });
+
+    it('asks for a file or a link when the message carries neither', async () => {
+      parseDataLakeCommand.mockReturnValue({ subcommand: 'add', lakeSlug: 'sales', rawArgs: '' });
+
+      const reply = await handleDataLakeCommand(baseParams({ files: [] }));
+
+      expect(reply).toMatch(/attach a file or include a link/i);
+      expect(ingestSlackFilesIntoLake).not.toHaveBeenCalled();
+      expect(ingestSlackLinkIntoLake).not.toHaveBeenCalled();
     });
 
     it('passes the actor, files and Slack origin through to the ingest', async () => {
@@ -143,7 +182,9 @@ describe('handleDataLakeCommand', () => {
       expect(reply).toBe('You can only add files to a data lake you created.');
     });
 
-    it('says the link was ignored when a message carries BOTH a file and a link', async () => {
+    it('ingests BOTH when a message carries a file and a link, reporting each', async () => {
+      // M2 replied "Ignored the link" here because LINK ingest did not exist. Now both run, so the
+      // reply must account for both - under-reporting would be the new version of that same lie.
       parseDataLakeCommand.mockReturnValue({
         subcommand: 'add',
         lakeSlug: 'sales',
@@ -157,18 +198,95 @@ describe('handleDataLakeCommand', () => {
         duplicates: [],
         rejected: [],
       });
+      ingestSlackLinkIntoLake.mockResolvedValue({
+        ok: true,
+        lakeName: 'Sales',
+        fileName: 'A Doc',
+        sourceUrl: 'https://example.com/doc',
+      });
 
       const reply = await handleDataLakeCommand(baseParams({ files: [{ id: 'F1', name: 'a.pdf' }] }));
 
-      // The files-present case falls past the bare-link refusal, so silence about the URL would
-      // read as if the link had been taken too.
-      expect(reply).toContain('Added 1 file to *Sales*');
-      expect(reply).toMatch(/ignored the link/i);
+      expect(ingestSlackFilesIntoLake).toHaveBeenCalled();
+      expect(ingestSlackLinkIntoLake).toHaveBeenCalled();
+      expect(reply).toContain('"a.pdf"');
+      expect(reply).toContain('"A Doc"');
+      expect(reply).not.toMatch(/ignored the link/i);
     });
 
-    it('does NOT mention the ignored link when the ingest was refused', async () => {
-      // Appending it to a refusal tells someone denied by the write gate that their link was
-      // "ignored", which implies the rest of the request went through.
+    it('still reports the file when the link half fails', async () => {
+      // One half failing must not swallow the other, in either direction.
+      parseDataLakeCommand.mockReturnValue({
+        subcommand: 'add',
+        lakeSlug: 'sales',
+        link: 'https://example.com/doc',
+        rawArgs: '',
+      });
+      ingestSlackFilesIntoLake.mockResolvedValue({
+        ok: true,
+        lakeName: 'Sales',
+        added: ['a.pdf'],
+        duplicates: [],
+        rejected: [],
+      });
+      ingestSlackLinkIntoLake.mockResolvedValue({
+        ok: false,
+        reason: 'link_fetch_failed',
+        message: 'Could not fetch that link.',
+      });
+
+      const reply = await handleDataLakeCommand(baseParams({ files: [{ id: 'F1', name: 'a.pdf' }] }));
+
+      expect(reply).toContain('"a.pdf"');
+      expect(reply).toContain('Could not fetch that link.');
+    });
+
+    it('does not print the SAME refusal twice on a mixed message', async () => {
+      // Both halves authorize independently, so an unauthorized actor is refused by each. Two
+      // identical sentences read as a stutter rather than as two half-outcomes.
+      parseDataLakeCommand.mockReturnValue({
+        subcommand: 'add',
+        lakeSlug: 'sales',
+        link: 'https://example.com/doc',
+        rawArgs: '',
+      });
+      const refusal = 'You do not have permission to add to *Sales*. Ask a lake admin.';
+      ingestSlackFilesIntoLake.mockResolvedValue({ ok: false, reason: 'not_authorized', message: refusal });
+      ingestSlackLinkIntoLake.mockResolvedValue({ ok: false, reason: 'not_authorized', message: refusal });
+
+      const reply = await handleDataLakeCommand(baseParams({ files: [{ id: 'F1', name: 'a.pdf' }] }));
+
+      expect(reply).toBe(refusal);
+      expect(reply.split(refusal).length - 1).toBe(1);
+    });
+
+    it('does NOT collapse two identical SUCCESS lines, only refusals', async () => {
+      // A swallowed success would misreport what is actually in the lake, so de-duplication is scoped
+      // to refusals. Contrived here, but the collision is possible when a file name coincides with the
+      // link's page title in the same lake.
+      parseDataLakeCommand.mockReturnValue({
+        subcommand: 'add',
+        lakeSlug: 'sales',
+        link: 'https://example.com/doc',
+        rawArgs: '',
+      });
+      ingestSlackFilesIntoLake.mockResolvedValue({
+        ok: true,
+        lakeName: 'Sales',
+        added: ['same.pdf'],
+        duplicates: [],
+        rejected: [],
+      });
+      ingestSlackLinkIntoLake.mockResolvedValue({ ok: true, lakeName: 'Sales', fileName: 'same.pdf' });
+
+      const reply = await handleDataLakeCommand(baseParams({ files: [{ id: 'F1', name: 'same.pdf' }] }));
+
+      expect(reply.split('\n').length).toBe(2);
+    });
+
+    it('still reports two DIFFERENT outcomes separately', async () => {
+      // The de-duplication must not collapse genuine half-outcomes, which always differ because each
+      // names its own file or link.
       parseDataLakeCommand.mockReturnValue({
         subcommand: 'add',
         lakeSlug: 'sales',
@@ -177,14 +295,19 @@ describe('handleDataLakeCommand', () => {
       });
       ingestSlackFilesIntoLake.mockResolvedValue({
         ok: false,
-        reason: 'not_authorized',
-        message: 'You can only add files to a data lake you created.',
+        reason: 'link_fetch_failed',
+        message: 'First problem.',
+      });
+      ingestSlackLinkIntoLake.mockResolvedValue({
+        ok: false,
+        reason: 'link_fetch_failed',
+        message: 'Second problem.',
       });
 
-      const reply = await handleDataLakeCommand(baseParams({ files: [{ id: 'F1' }] }));
+      const reply = await handleDataLakeCommand(baseParams({ files: [{ id: 'F1', name: 'a.pdf' }] }));
 
-      expect(reply).toBe('You can only add files to a data lake you created.');
-      expect(reply).not.toMatch(/ignored the link/i);
+      expect(reply).toContain('First problem.');
+      expect(reply).toContain('Second problem.');
     });
   });
 });
