@@ -18,6 +18,10 @@ export interface MembershipRequest {
  *
  * `??=` is correct here: an empty membership list is a valid, non-nullish result that must
  * memoize (`||=` would re-query on every org-less user's request).
+ *
+ * No request path resolves membership more than once today, so this memo is not currently
+ * saving a query - it exists as parity with `getRequestEntitlements` so that a second gate
+ * added later cannot silently double the membership lookup.
  */
 export async function getRequestMembershipOrgIds(req: MembershipRequest): Promise<string[]> {
   // Fail closed: a nullish user belongs to nothing.

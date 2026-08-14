@@ -31,7 +31,7 @@
 
 **Interfaces:**
 - Consumes: `organizationRepository.findMembershipOrgIds(userId: string): Promise<string[]>` (exists).
-- Produces: `getRequestMembershipOrgIds(req: MembershipRequest): Promise<string[]>` and `interface MembershipRequest { user?: IUserDocument; membershipOrgIds?: string[] }` — no later task consumes them.
+- Produces: `getRequestMembershipOrgIds(req: MembershipRequest): Promise<string[]>` and `interface MembershipRequest { user?: IUserDocument; membershipOrgIds?: string[] }` - no later task consumes them.
 
 - [ ] **Step 1: Write the failing test**
 
