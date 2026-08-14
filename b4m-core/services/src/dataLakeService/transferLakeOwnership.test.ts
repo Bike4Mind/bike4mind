@@ -104,6 +104,24 @@ describe('transferLakeOwnership', () => {
     );
   });
 
+  it('reports a stamp that matched no document, which resolves null instead of throwing', async () => {
+    // `BaseModel.update` is a findOneAndUpdate: a lake deleted between this function's opening
+    // findById and the final stamp write resolves NULL rather than throwing, so the catch never sees
+    // it. Without the result check that failure is completely silent.
+    const { adapters, update } = makeAdapters();
+    update.mockResolvedValueOnce(null as never);
+    const logger = { warn: vi.fn() };
+
+    await expect(transferLakeOwnership(owner, 'lake1', 'newOwner', { ...adapters, logger } as never)).resolves.toEqual({
+      newOwnerUserId: 'newOwner',
+      demotedUserIds: ['creator'],
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('not found for the actor stamp'),
+      expect.objectContaining({ dataLakeId: 'lake1' })
+    );
+  });
+
   it('still reports the failed stamp when no logger is wired, rather than going silent', async () => {
     // `logger` is optional on the adapters, so a caller that omits it must not turn a swallowed
     // failure into no output at all - the only other symptom is a stamp naming an older, smaller edit.
