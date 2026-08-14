@@ -369,10 +369,15 @@ export function isDagAggregationWake(args: {
  * The aggregation-wake exemption above only excuses the wake's own read-and-splice
  * work (no new billable work of its own) - it does not license the run to keep
  * iterating past it. If the member is still over cap once the DAG's own
- * already-paid-for cost has settled, this caps the loop to the one iteration that
- * turns the aggregated result into an answer, so a capped-out member can't chain
- * `coordinate_task` calls into unbounded further billable work through the
- * exemption. A no-op (returns `maxIterations` unchanged) outside that exact case.
+ * already-paid-for cost has settled, this caps the PARENT's own loop to the one
+ * iteration that turns the aggregated result into an answer. A no-op (returns
+ * `maxIterations` unchanged) outside that exact case.
+ *
+ * Scope note: this only bounds the parent's own further LLM iterations. If that
+ * one grace iteration itself dispatches a new subagent or DAG fan-out, those
+ * children are gated by `processSubagentDispatch`'s org-pool check, not by this
+ * per-member cap - closing that gap is tracked separately (per-member enforcement
+ * on agent-tool/dispatch spend paths), not attempted here.
  */
 export function clampMaxIterationsForOverCapAggregationWake(args: {
   isAggregationOnlyWake: boolean;
