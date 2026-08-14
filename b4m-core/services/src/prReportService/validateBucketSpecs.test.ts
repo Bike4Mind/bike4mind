@@ -61,9 +61,11 @@ describe('validateBucketSpecs', () => {
 
     const errors = validateBucketSpecs(specs, VALID_LOOKUP);
 
-    expect(errors.some(error => error.bucket === 'awaitingReview' && error.reason.includes('specificOwner'))).toBe(
-      true
+    const specificOwnerError = errors.find(
+      error => error.bucket === 'awaitingReview' && error.reason.includes('specificOwner')
     );
+    expect(specificOwnerError).toBeDefined();
+    expect(specificOwnerError?.severity).toBe('blocking');
   });
 
   it('rejects a roleRoster spec with no roleKey', () => {
@@ -89,7 +91,9 @@ describe('validateBucketSpecs', () => {
 
     const errors = validateBucketSpecs(specs, VALID_LOOKUP);
 
-    expect(errors.some(error => error.reason.includes('catchAll'))).toBe(true);
+    const catchAllError = errors.find(error => error.reason.includes('catchAll'));
+    expect(catchAllError).toBeDefined();
+    expect(catchAllError?.severity).toBe('blocking');
   });
 
   it('rejects duplicate orders, which would make precedence ambiguous', () => {
@@ -100,7 +104,9 @@ describe('validateBucketSpecs', () => {
 
     const errors = validateBucketSpecs(specs, VALID_LOOKUP);
 
-    expect(errors.some(error => error.reason.includes('already used by'))).toBe(true);
+    const dupOrderError = errors.find(error => error.reason.includes('already used by'));
+    expect(dupOrderError).toBeDefined();
+    expect(dupOrderError?.severity).toBe('blocking');
   });
 });
 

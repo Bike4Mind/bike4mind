@@ -64,6 +64,27 @@ describe('createPostReport - webhook delivery classification', () => {
     expect((result as { delivery: string }).delivery).toBe('unknown');
   });
 
+  it('refuses a redirect - never follows it, and classifies it as notDelivered', async () => {
+    // undici's default redirect:'follow' would resend the whole report body to the 3xx
+    // target with no allowlist re-check. The post must pass redirect:'manual' and refuse.
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 0, type: 'opaqueredirect' });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await createPostReport(logger)('digest', DESTINATION);
+
+    expect(result.accepted).toBe(false);
+    expect((result as { delivery: string }).delivery).toBe('notDelivered');
+    // Exactly one request - the redirect Location is never fetched.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(WEBHOOK, expect.objectContaining({ redirect: 'manual' }));
+  });
+
+  it('refuses a raw 3xx status as a redirect', async () => {
+    stubFetchResolved({ ok: false, status: 307 });
+    const result = await createPostReport(logger)('digest', DESTINATION);
+    expect((result as { delivery: string }).delivery).toBe('notDelivered');
+  });
+
   it('never puts the webhook URL in the result or the log line', async () => {
     stubFetchRejected(Object.assign(new TypeError(`connect failed to ${WEBHOOK}`), { cause: { code: 'ECONNRESET' } }));
     const result = await createPostReport(logger)('digest', DESTINATION);
@@ -72,5 +93,21 @@ describe('createPostReport - webhook delivery classification', () => {
     expect(JSON.stringify(result)).not.toContain('example-webhook-token');
     const logged = JSON.stringify(vi.mocked(logger.error).mock.calls);
     expect(logged).not.toContain('example-webhook-token');
+  });
+
+  it('redacts a self-hosted webhook URL that does not match the Slack path shape', async () => {
+    // The egress guard supports an operator-named host; its webhook path need not follow
+    // /services/T.../B.../..., so the shape regex alone would leak it - the literal match must.
+    const selfHosted = 'https://chat.internal.test/hooks/verysecretpath';
+    stubFetchRejected(
+      Object.assign(new TypeError(`connect failed to ${selfHosted}`), { cause: { code: 'ECONNRESET' } })
+    );
+
+    const result = await createPostReport(logger)('digest', { webhookUrl: selfHosted });
+
+    expect(JSON.stringify(result)).not.toContain(selfHosted);
+    expect(JSON.stringify(result)).not.toContain('verysecretpath');
+    const logged = JSON.stringify(vi.mocked(logger.error).mock.calls);
+    expect(logged).not.toContain('verysecretpath');
   });
 });

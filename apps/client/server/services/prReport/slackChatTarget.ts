@@ -40,6 +40,26 @@ function redactSecrets(text: string): string {
 }
 
 /**
+ * Redact the specific destination from a would-be log line, LITERAL-first.
+ *
+ * A self-hosted webhook (the egress guard supports an operator-named host) need not follow
+ * Slack's `/services/T.../B.../...` path shape, so the shape regex alone can miss it. Match
+ * the exact URL and its origin first, then fall back to the general token/shape redaction.
+ */
+function redactDestination(text: string, webhookUrl: string): string {
+  let out = text;
+  if (webhookUrl) {
+    out = out.split(webhookUrl).join('[redacted-webhook]');
+    try {
+      out = out.split(new URL(webhookUrl).origin).join('[redacted-webhook]');
+    } catch {
+      // Not a valid URL - the literal split above still applied.
+    }
+  }
+  return redactSecrets(out);
+}
+
+/**
  * Reduce a provider error to server-side-loggable detail.
  *
  * Even though this never crosses the wire (the send endpoint's `notDelivered` arm
@@ -125,17 +145,34 @@ export function createPostReport(logger: Logger) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text }),
+          // NEVER follow a redirect. The egress guard vetted only THIS host; undici's
+          // default `follow` would resend the entire report body to whatever a 3xx
+          // Location names, with no re-validation against the allowlist - the exact
+          // exfiltration channel the guard exists to close. 'manual' returns an opaque
+          // redirect we refuse rather than following.
+          redirect: 'manual',
         }),
         POST_TIMEOUT_MS,
         'Slack incoming webhook'
       );
     } catch (error) {
       const delivery = classifyPostFailure(error);
-      const reason = scrubReason(error);
+      // Literal-first redaction: a self-hosted webhook path need not match Slack's URL
+      // shape, so scrub the exact destination before the shape-regex backstop.
+      const reason = redactDestination(scrubReason(error), destination.webhookUrl);
       // Server-side only. Never returned to the client and never naming the URL - the
       // webhook URL is the authentication.
       logger.error('[PrReport] Slack webhook post failed', { delivery, reason });
       return { accepted: false, delivery, reason };
+    }
+
+    // A refused redirect ('manual' yields an opaque response; some runtimes surface the raw
+    // 3xx). The body reached only the vetted host and was NOT followed onward. A webhook
+    // signals success with 200 "ok", so a 3xx posted nothing - safe to retry, not uncertain.
+    if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+      const reason = `redirect refused (status=${response.status || 'opaque'})`;
+      logger.error('[PrReport] Slack webhook returned a redirect - refused, not followed', { reason });
+      return { accepted: false, delivery: 'notDelivered', reason };
     }
 
     // A 2xx (webhooks answer 200 with the body "ok") is acceptance.

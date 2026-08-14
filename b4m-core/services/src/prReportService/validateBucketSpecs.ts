@@ -24,6 +24,22 @@ export interface BucketSpecValidationError {
 }
 
 /**
+ * Tag helpers so a push site cannot pair a reason with the wrong severity by hand. The
+ * severity travels with the KIND of check, not with the individual call: structural
+ * failures are blocking, an unmapped role key is advisory.
+ */
+const blockingError = (bucket: Bucket, reason: string): BucketSpecValidationError => ({
+  bucket,
+  reason,
+  severity: 'blocking',
+});
+const advisoryError = (bucket: Bucket, reason: string): BucketSpecValidationError => ({
+  bucket,
+  reason,
+  severity: 'advisory',
+});
+
+/**
  * Validate the specs against the resolved identity lookup.
  *
  * @returns the errors found; empty means valid. Callers reject the settings save
@@ -36,11 +52,7 @@ export function validateBucketSpecs(specs: BucketSpecs, lookup: IdentityLookup):
   // Totality. Without a catch-all, an unmatched PR has nowhere to go and the
   // report's "no open PR silently vanishes" promise is void.
   if (!buckets.some(bucket => specs[bucket].role === 'catchAll')) {
-    errors.push({
-      bucket: 'none',
-      reason: 'no bucket has role "catchAll" - classification would not be total',
-      severity: 'blocking',
-    });
+    errors.push(blockingError('none', 'no bucket has role "catchAll" - classification would not be total'));
   }
 
   // Duplicate orders make precedence - and therefore categorization - depend on
@@ -49,11 +61,12 @@ export function validateBucketSpecs(specs: BucketSpecs, lookup: IdentityLookup):
   for (const bucket of buckets) {
     const existing = seenOrders.get(specs[bucket].order);
     if (existing) {
-      errors.push({
-        bucket,
-        reason: `order ${specs[bucket].order} is already used by "${existing}" - precedence would be ambiguous`,
-        severity: 'blocking',
-      });
+      errors.push(
+        blockingError(
+          bucket,
+          `order ${specs[bucket].order} is already used by "${existing}" - precedence would be ambiguous`
+        )
+      );
     }
     seenOrders.set(specs[bucket].order, bucket);
   }
@@ -66,17 +79,18 @@ export function validateBucketSpecs(specs: BucketSpecs, lookup: IdentityLookup):
     // is simply never told anything. This check is the whole mitigation when the
     // map is held as structured config with no free-text parser to report on.
     if (!spec.roleKey) {
-      errors.push({ bucket, reason: 'mention is "roleRoster" but no roleKey is set', severity: 'blocking' });
+      errors.push(blockingError(bucket, 'mention is "roleRoster" but no roleKey is set'));
     } else if (!lookup[spec.roleKey.toLowerCase()]) {
       // ADVISORY, not blocking: the renderer already omits the pool mention for an
       // unresolved roleKey (buildReport), so a blank or partial identity map still
       // produces a valid digest. Surfaced as a warning so the admin knows the pool
       // will not be pinged until they add the entry.
-      errors.push({
-        bucket,
-        reason: `roleKey "${spec.roleKey}" has no entry in the identity map - the roster will post without an @-mention until you add it`,
-        severity: 'advisory',
-      });
+      errors.push(
+        advisoryError(
+          bucket,
+          `roleKey "${spec.roleKey}" has no entry in the identity map - the roster will post without an @-mention until you add it`
+        )
+      );
     }
 
     // No implicit default, deliberately. 'requestedReviewer' is the default any
@@ -85,12 +99,12 @@ export function validateBucketSpecs(specs: BucketSpecs, lookup: IdentityLookup):
     // already finished so the list is empty by construction. That is an
     // always-open gate that blanket-pings the entire pool on every digest.
     if (!spec.specificOwner) {
-      errors.push({
-        bucket,
-        reason:
-          'mention is "roleRoster" but no specificOwner is set - defaulting it would blanket-ping the whole pool on every report',
-        severity: 'blocking',
-      });
+      errors.push(
+        blockingError(
+          bucket,
+          'mention is "roleRoster" but no specificOwner is set - defaulting it would blanket-ping the whole pool on every report'
+        )
+      );
     }
   }
 
@@ -129,12 +143,12 @@ export function validateSpecificOwnerFieldsPopulated(
       // (GitHub returns `[]` for a PR with nobody requested), so only a total
       // absence is diagnostic.
       if (prs.every(pr => pr.requestedReviewerLogins === undefined)) {
-        errors.push({
-          bucket,
-          reason:
-            'specificOwner is "requestedReviewer" but no PR carries requestedReviewerLogins - the provider or query does not populate it, so the roster gate would be permanently open',
-          severity: 'blocking',
-        });
+        errors.push(
+          blockingError(
+            bucket,
+            'specificOwner is "requestedReviewer" but no PR carries requestedReviewerLogins - the provider or query does not populate it, so the roster gate would be permanently open'
+          )
+        );
       }
     }
   }

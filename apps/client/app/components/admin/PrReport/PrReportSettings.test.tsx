@@ -89,6 +89,10 @@ describe('PrReportSettings', () => {
     const user = userEvent.setup();
     render(<PrReportSettings />, { wrapper });
 
+    // The mask must never round-trip into the input - only a fresh entry can be submitted.
+    expect(screen.getByTestId('pr-report-webhook-input')).not.toHaveValue('********');
+    expect(screen.getByTestId('pr-report-webhook-input')).toHaveValue('');
+
     await user.click(screen.getByTestId('pr-report-webhook-clear-btn'));
 
     expect(updateMutate).toHaveBeenCalledWith(
