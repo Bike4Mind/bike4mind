@@ -391,6 +391,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
   const artifactData = useSessionLayout(s => s.artifactData);
   const recentArtifacts = useSessionLayout(s => s.recentArtifacts);
   const selectedArtifactId = useSessionLayout(s => s.selectedArtifactId);
+  const previewFile = useSessionLayout(s => s.previewFile);
   const { canUseAdminTools } = useAdminTools();
   const isMobile = useIsMobile();
   const { selectedTabIndex, showLineNumbers } = useKnowledgeViewer();
@@ -594,6 +595,24 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
         });
       });
 
+    // Data-lake View preview: a file being looked at WITHOUT being attached to the session
+    // (see useSessionLayout.previewFile). Skipped when the same file already has a tab through
+    // any attached list, so attaching a previewed file never duplicates it.
+    if (
+      previewFile &&
+      !workBenchFileIds.has(previewFile.id) &&
+      !systemFileIds.has(previewFile.id) &&
+      !messageFileIds.has(previewFile.id)
+    ) {
+      items.push({
+        id: previewFile.id,
+        type: 'file' as const,
+        content: previewFile,
+        title: previewFile.fileName,
+        timestamp: previewFile.createdAt ? new Date(previewFile.createdAt).getTime() : 0,
+      });
+    }
+
     // Stable timestamp derived from the artifact ID (avoids infinite loops).
     // IDs follow artifact_type_identifier_timestamp_index; extract the timestamp part.
     const getStableTimestamp = (id: string): number => {
@@ -723,7 +742,15 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
 
     return items;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recentArtifacts, workBenchFiles, systemFiles, messageFiles, pendingMessageFiles, latestArtifact?.artifact.id]);
+  }, [
+    recentArtifacts,
+    workBenchFiles,
+    systemFiles,
+    messageFiles,
+    pendingMessageFiles,
+    previewFile,
+    latestArtifact?.artifact.id,
+  ]);
 
   // Effect: Reset view when no selection
   useEffect(() => {
@@ -768,6 +795,11 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
     // Only clear if session ID actually changed (not just on re-render)
     if (prevSessionIdRef.current !== currentSessionId) {
       clearRecentArtifacts();
+      // The data-lake View preview is just as session-transient: leaving it set would surface a
+      // stale "just looking" tab inside a different notebook's viewer.
+      if (useSessionLayout.getState().previewFile) {
+        setSessionLayout({ previewFile: null });
+      }
       prevSessionIdRef.current = currentSessionId;
     }
   }, [currentSessionId]);
