@@ -145,8 +145,11 @@ const EMPTY_RESULT = {
 };
 
 // req.on is required by the client-disconnect listener; the logger by the usage-recording catch.
-const makeReq = (body: unknown, user: Record<string, unknown> = { id: 'u1', tags: [] }) =>
-  ({ user, body, on: vi.fn(), logger: { warn: vi.fn(), debug: vi.fn(), error: vi.fn() } }) as never;
+const makeReq = (
+  body: unknown,
+  user: Record<string, unknown> = { id: 'u1', tags: [] },
+  apiKeyInfo?: Record<string, unknown>
+) => ({ user, apiKeyInfo, body, on: vi.fn(), logger: { warn: vi.fn(), debug: vi.fn(), error: vi.fn() } }) as never;
 
 const makeRes = () => {
   const res: Record<string, unknown> = { writableEnded: false };
@@ -781,6 +784,24 @@ describe('POST /api/data-lakes/semantic-search access-event audit', () => {
         fileIds: ['f1'],
         surface: 'data-lake-semantic-search',
         queryText: 'pto policy',
+      })
+    );
+  });
+
+  // baseApi() accepts both a session and a b4m_live_ API key on this route - the audit row must
+  // name the KEY as principal (not the human owner it authenticates), or an API-key-driven read
+  // is permanently indistinguishable from an in-app human one in this immutable, floor-retained
+  // trail. Confirms the route actually wires req.apiKeyInfo through, not just the pure helper.
+  it('records the API key as principal, with the human owner preserved separately, when authenticated by key', async () => {
+    mockSemanticSearch.mockResolvedValue(RESULT_WITH_LAKE_TAG);
+
+    await handler(makeReq({ query: 'pto policy' }, { id: 'u1', tags: [] }, { keyId: 'key-abc' }), makeRes());
+
+    expect(mockRecordLakeAccessEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principalKind: 'apiKey',
+        principalId: 'key-abc',
+        onBehalfOfUserId: 'u1',
       })
     );
   });

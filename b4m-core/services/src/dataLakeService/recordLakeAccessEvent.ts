@@ -14,11 +14,20 @@ import { resolveLakeAuditRetention } from './resolveLakeAuditRetention';
  * ToolContext['db'].lakeAccessEvents); a host that never wired one in gets a silent no-op rather
  * than a crash.
  *
- * Whether to await: a serverless/per-request route handler should `await` this before responding
- * - once the response is sent, the runtime may freeze or recycle the execution environment before
- * an un-awaited write completes, silently dropping the audit row. A long-lived process turn (chat
- * tools, forced retrieval) should NOT await it - the write would add its own latency to a response
- * the model/user is actively waiting on, and the process outlives the request regardless.
+ * Whether to await: a per-request API route should `await` this before responding - once the
+ * response is sent, the runtime may freeze or recycle the execution environment before an
+ * un-awaited write completes, silently dropping the audit row. The chat-tool / forced-retrieval
+ * call sites do NOT await it, for a narrower reason than "no freeze risk": `agentExecutor` and
+ * `slackQuestProcessor` are genuine `sst.aws.Function` Lambdas, so the same freeze risk exists
+ * there in principle (`questProcessor` is not - it moved to an always-on Fargate worker, see
+ * `apps/client/server/chatCompletion/server.ts`). Where the risk is real, several more seconds of
+ * LLM work (completion, streaming) follow the tool call before that Lambda invocation can return,
+ * so in practice the write has already landed well before any freeze - awaiting there would only
+ * add this write's own latency to a response the model/user is actively waiting on, for a risk
+ * window that in practice does not occur on this path today. Revisit if that call shape ever
+ * changes (e.g. a tool call becomes the last thing an invocation does) - `knowledgeBaseRetrieve`'s
+ * Path A already widened this once: its attribution now resolves dynamic lake access in this same
+ * un-awaited tail too, not just the write, since that lookup used to block the tool's own return.
  *
  * `adminSettings` is required, not optional, on purpose: `record()` defaults `retentionDays`/
  * `queryTextRetentionDays` to the platform FLOOR when neither is passed, and nothing was passing
@@ -35,6 +44,11 @@ export function recordLakeAccessEvent(
 ): Promise<void> {
   if (!recorder) return Promise.resolve();
   const write = async () => {
+    // The cast is required, not just convenient: this function only needs error/warn, but
+    // resolveLakeAuditRetention forwards `logger` on into getSettingsByNames's cache layer,
+    // which constructs `logger || new Logger()` and genuinely needs the full Logger shape - so
+    // resolveLakeAuditRetention's own param can't be narrowed to match this function's signature
+    // without breaking that chain.
     const retention = await resolveLakeAuditRetention({ adminSettings }, { logger: logger as Logger });
     await recorder.record({
       ...input,

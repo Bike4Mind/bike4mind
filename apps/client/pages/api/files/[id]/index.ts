@@ -19,10 +19,11 @@ import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
-import { isFileInAccessibleLake, resolveAccessibleLakes } from '@server/dataLakes';
+import { grantingLakes, resolveAccessibleLakes } from '@server/dataLakes';
 import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
 import { getFilesStorage } from '@server/utils/storage';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
+import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import { Request } from 'express';
 import { Types } from 'mongoose';
 
@@ -63,31 +64,27 @@ const handler = baseApi()
       // helper that would re-run resolveAccessibleLakes's own DB read - the same one-resolve,
       // reuse-everywhere shape as files/byIds.ts's lake fallback.
       const candidate = lakes.length > 0 ? await fabFileRepository.findById(req.query.id) : null;
-      const lakeFile = candidate && !candidate.deletedAt && isFileInAccessibleLake(lakes, candidate) ? candidate : null;
+      // The SAME computation grants access and names the grantor, so an open-prefix match (no
+      // tag to reverse) attributes to the specific lake whose prefix matched rather than falling
+      // back to every accessible lake - a false row in an immutable, 450-day-floor audit trail is
+      // worse than a missing one.
+      const grantors =
+        candidate && !candidate.deletedAt ? grantingLakes(lakes, candidate.tags?.map(t => t.name) ?? []) : [];
       // No accessible lake serves this id either - never an audit-worthy read, so nothing is
       // recorded; preserve the original 404 exactly as getFabFile raised it.
-      if (!lakeFile) throw error;
-      const fabFile = await fabFilesService.generateSignedUrl(lakeFile, adapter);
+      if (!candidate || grantors.length === 0) throw error;
+      const fabFile = await fabFilesService.generateSignedUrl(candidate, adapter);
       // Best-effort audit write - this is the same single-file metadata + URL read as the
       // articles `?id=` deep link, just reached through the direct-fetch fallback door instead.
-      // Sound in kind but imprecise in degree for an open-prefix match: `lakeFile` is confirmed
-      // lake content by isFileInAccessibleLake above, but when access came from a static-registry
-      // prefix (not an exact meta-tag), there is no tag to reverse to one lake, so this falls back
-      // to every accessible lake rather than the one whose prefix matched. Left as-is rather than
-      // special-cased: attributeAccessedLakeIds treats a prefix match as non-reversible everywhere
-      // else in this codebase (a caller-chosen dynamic-lake prefix genuinely cannot be reversed
-      // safely), and reversing it only for the static/open case here would be a one-off
-      // inconsistency for a precision gain, not a correctness one - the file IS lake content
-      // either way. Awaited (never rethrows): a per-request serverless route must not race a
-      // post-response freeze of the execution environment.
+      // Awaited (never rethrows): a per-request serverless route must not race a post-response
+      // freeze of the execution environment.
       await dataLakeService.recordLakeAccessEvent(
         lakeAccessEventRepository,
         {
-          principalKind: 'user',
-          principalId: req.user.id,
+          ...resolveAuditPrincipal(req.user, req.apiKeyInfo),
           organizationId: normalizeId(req.user.organizationId),
-          resolvedLakeIds: dataLakeService.attributeAccessedLakeIds([lakeFile.tags?.map(t => t.name) ?? []], lakes),
-          fileIds: [lakeFile.id],
+          resolvedLakeIds: grantors.map(lake => lake.id),
+          fileIds: [candidate.id],
           surface: 'data-lake-file-fallback',
         },
         req.logger,

@@ -391,39 +391,55 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             );
           }
 
-          // Best-effort audit write. dynamicAccess() only runs here when neither Path A nor Path B
-          // already resolved it above (both memoize into the same promise) AND there's actually a
-          // recorder wired AND this isn't the agent-scoped branch (which never consults lake
-          // access, same as the search tool's scoped arm) - otherwise it's a wasted round trip for
-          // a lookup nothing will use.
-          const attributionLakes = scope || !context.db.lakeAccessEvents ? [] : (await dynamicAccess()).lakes;
-          // This tool's corpus is always mixed (a direct id can be owned, shared, or lake; Path B's
-          // search is owner+shared+org+lake too), so a retrieved file with no recoverable datalake
-          // tag may just be the caller's own private file - never fall back to the full scope, and
-          // skip the row entirely if nothing retrieved is actually attributable to a lake. The
-          // scoped branch has no lake concept at all (attributionLakes is always []) but is
-          // recorded regardless, same as the search tool's scoped arm.
-          const resolvedLakeIds = attributeAccessedLakeIds(
-            retrievedFiles.map(f => f.tags?.map(t => t.name) ?? []),
-            attributionLakes,
-            { allowFullScopeFallback: false }
-          );
-          if (scope || resolvedLakeIds.length > 0) {
+          // Best-effort audit write, computed and recorded OFF the critical path: Path A's owned-
+          // file fast path (the common case - a caller retrieving their own file_id) never touches
+          // dynamicAccess() at all, so awaiting it here would add a full entitlement-resolution
+          // round trip to that common case purely for the audit's sake. Deferred into the same
+          // fire-and-forget shape as the write itself instead, with its own .catch() so a failure
+          // resolving dynamic access can only ever drop the audit row - never (as an inline
+          // `await` here would) propagate into the outer catch and turn a successful retrieval
+          // into "An error occurred while retrieving document content."
+          // Shared by both branches below - only resolvedLakeIds and the await-vs-defer timing differ.
+          const baseAuditPayload = {
+            // Always 'user', including an agent-executor run - see ToolContext.userId's doc comment.
+            principalKind: 'user' as const,
+            principalId: context.userId,
+            organizationId: normalizeId(context.user.organizationId),
+            fileIds: retrievedFiles.map(f => f.id),
+            surface: 'chat-kb-retrieve' as const,
+            ...(query ? { queryText: query } : {}),
+          };
+          if (scope) {
+            // Scoped branch has no lake concept at all (resolvedLakeIds is always []) but is
+            // recorded regardless, same as the search tool's scoped arm - membership IS the
+            // authorization, so there is nothing to await here either.
             recordLakeAccessEvent(
               context.db.lakeAccessEvents,
-              {
-                // Always 'user', including an agent-executor run - see ToolContext.userId's doc comment.
-                principalKind: 'user',
-                principalId: context.userId,
-                organizationId: normalizeId(context.user.organizationId),
-                resolvedLakeIds,
-                fileIds: retrievedFiles.map(f => f.id),
-                surface: 'chat-kb-retrieve',
-                ...(query ? { queryText: query } : {}),
-              },
+              { ...baseAuditPayload, resolvedLakeIds: [] },
               context.logger,
               context.db.adminSettings
             );
+          } else if (context.db.lakeAccessEvents) {
+            const fileTagLists = retrievedFiles.map(f => f.tags?.map(t => t.name) ?? []);
+            dynamicAccess()
+              .then(({ lakes }) => {
+                // This tool's corpus is always mixed (a direct id can be owned, shared, or lake;
+                // Path B's search is owner+shared+org+lake too), so a retrieved file with no
+                // recoverable datalake tag may just be the caller's own private file - never fall
+                // back to the full scope, and skip the row entirely if nothing retrieved is
+                // actually attributable to a lake.
+                const resolvedLakeIds = attributeAccessedLakeIds(fileTagLists, lakes, {
+                  allowFullScopeFallback: false,
+                });
+                if (resolvedLakeIds.length === 0) return;
+                return recordLakeAccessEvent(
+                  context.db.lakeAccessEvents,
+                  { ...baseAuditPayload, resolvedLakeIds },
+                  context.logger,
+                  context.db.adminSettings
+                );
+              })
+              .catch(err => context.logger.error('[lakeAccessAudit] failed to resolve retrieve attribution', err));
           }
 
           // Create citable source chips for the UI - mirrors web_search pattern

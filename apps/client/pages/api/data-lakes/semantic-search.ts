@@ -27,6 +27,7 @@ import {
 import { createTokenizer, getSettingsByNames, normalizeId, type ITokenizer } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import { resolveRetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
+import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 
 // Reused across requests so the tiktoken encoder is resolved once, not per search.
 let sharedTokenizer: ITokenizer | undefined;
@@ -336,8 +337,7 @@ const handler = baseApi()
         await dataLakeService.recordLakeAccessEvent(
           lakeAccessEventRepository,
           {
-            principalKind: 'user',
-            principalId: req.user.id,
+            ...resolveAuditPrincipal(req.user, req.apiKeyInfo),
             organizationId: normalizeId(req.user.organizationId),
             resolvedLakeIds,
             chunkIds: search.results.map(r => r.chunkId),

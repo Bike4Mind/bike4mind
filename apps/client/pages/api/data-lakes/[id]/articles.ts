@@ -15,6 +15,8 @@ import { getFilesStorage } from '@server/utils/storage';
 import { fabFilesService } from '@bike4mind/services';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
+import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
+import { firstQueryValue } from '@server/dataLakes/firstQueryValue';
 
 interface ArticlesQuery {
   id: string;
@@ -50,11 +52,7 @@ const handler = baseApi()
 
     const rawTags = req.query.tags;
     const filterTags: string[] = rawTags ? (Array.isArray(rawTags) ? rawTags : [rawTags]) : [];
-    // Same array-vs-single narrowing as tags above - a repeated ?search= would otherwise reach
-    // record()'s queryText.trim() below as an array and get silently swallowed by the
-    // fire-and-forget catch.
-    const rawSearch = req.query.search;
-    const search = (Array.isArray(rawSearch) ? rawSearch[0] : rawSearch) ?? '';
+    const search = firstQueryValue(req.query.search) ?? '';
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
     const sortBy = req.query.sortBy === 'createdAt' ? ('createdAt' as const) : ('fileName' as const);
@@ -126,8 +124,7 @@ const handler = baseApi()
       await dataLakeService.recordLakeAccessEvent(
         lakeAccessEventRepository,
         {
-          principalKind: 'user',
-          principalId: userId,
+          ...resolveAuditPrincipal(req.user, req.apiKeyInfo),
           organizationId: normalizeId(req.user.organizationId),
           resolvedLakeIds: [dataLake.id],
           fileIds: (result.data as Array<{ id: string }>).map(f => f.id),

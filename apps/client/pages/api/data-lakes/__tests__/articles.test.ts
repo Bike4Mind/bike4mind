@@ -15,9 +15,14 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/dataLakes', () => ({
+vi.mock('@server/dataLakes', async () => ({
   resolveAccessibleLakes: mockResolveAccessibleLakes,
   queryDataLakeArticles: mockQueryDataLakeArticles,
+  // Real implementation (already unit-tested on its own) so the deep-link attribution test below
+  // asserts on the actual predicate rather than a reimplementation. Imported from its own
+  // lightweight file, not `importOriginal` of this whole barrel - the barrel pulls in
+  // toAccessContext's entitlements/Subscription-model chain, which this test does not mock.
+  grantingLakes: (await import('../../../../server/dataLakes/grantingLakes')).grantingLakes,
 }));
 vi.mock('@bike4mind/database', () => ({
   lakeAccessEventRepository: { record: mockRecord },
@@ -113,19 +118,22 @@ describe('GET /api/data-lakes/articles access-event audit', () => {
     expect(mockRecord).not.toHaveBeenCalled();
   });
 
-  // The deep-link (?id=) branch IS sound for the fallback: queryDataLakeArticles authorizes it
-  // via isFileInAccessibleLake, so the one file it returns is guaranteed lake content even when
-  // prefix-matched (no recoverable tag).
-  it('falls back to the full accessible-lake scope on a deep-link fetch with no recoverable tag', async () => {
+  // The deep-link (?id=) branch's own attribution narrowing (grantingLakes, naming the specific
+  // grantor rather than falling back to the full scope) is unit-tested directly against the real
+  // implementation in queryDataLakeArticles.test.ts - this route mocks queryDataLakeArticles
+  // wholesale, so it only needs to prove the route reuses `result.grantedLakeIds` as-is rather
+  // than recomputing it (or dropping it) on the way into the audit write.
+  it('reuses grantedLakeIds from queryDataLakeArticles for the deep-link attribution', async () => {
     mockQueryDataLakeArticles.mockResolvedValue({
       data: [{ id: 'f1', tags: [{ name: 'opti:policy' }] }],
       total: 1,
       hasMore: false,
+      grantedLakeIds: ['opti-knowledge'],
     });
 
     await route(makeReq({ id: 'f1' }), makeRes().res);
 
-    expect(mockRecord).toHaveBeenCalledWith(expect.objectContaining({ resolvedLakeIds: ['lake1', 'lake2'] }));
+    expect(mockRecord).toHaveBeenCalledWith(expect.objectContaining({ resolvedLakeIds: ['opti-knowledge'] }));
   });
 
   it('does not record an event when nothing was returned', async () => {

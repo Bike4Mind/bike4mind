@@ -12,6 +12,7 @@ import { dataLakeService } from '@bike4mind/services';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
+import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 
 const HASH_QUERY_CHUNK = 500;
 
@@ -84,8 +85,7 @@ const handler = baseApi()
       await dataLakeService.recordLakeAccessEvent(
         lakeAccessEventRepository,
         {
-          principalKind: 'user',
-          principalId: req.user.id,
+          ...resolveAuditPrincipal(req.user, req.apiKeyInfo),
           organizationId: normalizeId(req.user.organizationId),
           resolvedLakeIds: [dataLake.id],
           fileIds: [...existingHashMap.values()].map(f => f.fileId),

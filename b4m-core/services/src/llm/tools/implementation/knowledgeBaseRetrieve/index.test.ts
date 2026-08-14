@@ -803,6 +803,23 @@ describe('retrieve_knowledge_content access-event audit', () => {
     });
   });
 
+  // The regression this guards against: attribution used to await dynamicAccess() inline, so
+  // Path A's owned-file fast path (which never itself calls dynamicAccess) paid a full
+  // entitlement-resolution round trip before returning, purely for the audit's sake. If that
+  // await ever comes back, this test hangs instead of resolving, since getDynamicDataLakeAccess
+  // here never settles.
+  it('returns the retrieved content without waiting on dynamic-lake-access resolution', async () => {
+    getDynamicDataLakeAccessMock.mockReturnValue(new Promise(() => {})); // deliberately never settles
+    const ctx = auditContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Clean.pdf', tags: [] })
+    );
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('Clean.pdf');
+  });
+
   it('records a chat-kb-retrieve event attributed to the tag-matched lake', async () => {
     const ctx = auditContext({ user: { id: 'u1', groups: [], organizationId: 'org1' } as never });
     (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
@@ -895,5 +912,23 @@ describe('retrieve_knowledge_content access-event audit', () => {
 
     expect(out).toContain('Retrieved content from');
     expect(record).toHaveBeenCalled();
+  });
+
+  // The attribution's own dynamicAccess() call is a separate failure point from record() above -
+  // deferred off the critical path with its own .catch(), so a rejection there can now only ever
+  // drop the audit row, not (as an inline `await` would) propagate into the tool's outer catch
+  // and turn a successful retrieval into "An error occurred while retrieving document content."
+  it('still returns retrieved content when resolving dynamic lake access for attribution rejects', async () => {
+    getDynamicDataLakeAccessMock.mockRejectedValueOnce(new Error('entitlements lookup failed'));
+    const ctx = auditContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Clean.pdf', tags: [{ name: 'datalake:x' }] })
+    );
+
+    const out = await runById(ctx);
+    await flushAsync();
+
+    expect(out).toContain('Retrieved content from');
+    expect(record).not.toHaveBeenCalled();
   });
 });

@@ -66,11 +66,21 @@ export interface ILakeAccessEvent {
   organizationId?: string;
   /**
    * Best-effort attribution: lakes whose `datalake:<slug>` meta-tag appears on a returned
-   * result, narrowed from the full authorized scope where that tag is recoverable.
-   * Falls back to the FULL authorized/searched scope when nothing in the result set carries a
-   * recoverable tag (e.g. every match came from a content-tag-prefix arm, which cannot be
-   * reversed to one lake) - callers must never drop a lake from its own audit trail just
-   * because attribution was inconclusive. One retrieval call commonly spans several lakes.
+   * result, narrowed from the full authorized scope where that tag is recoverable. One retrieval
+   * call commonly spans several lakes.
+   *
+   * When nothing in the result set carries a recoverable tag, `attributeAccessedLakeIds`'s
+   * `allowFullScopeFallback` option decides what happens: `true` (the default) falls back to the
+   * FULL authorized/searched scope, so a lake is never dropped from its own audit trail just
+   * because attribution was inconclusive - sound ONLY where every possible result is guaranteed
+   * lake content. Every other retrieval surface searches a corpus mixed with owned/shared
+   * content, where an inconclusive match may be the caller's own private file; those pass `false`
+   * and skip the row entirely rather than fabricate a lake read that never happened. As of this
+   * writing every non-scoped call site is mixed-corpus and passes `false` - the `true` default
+   * exists for a genuinely lake-only search, not because one is wired to it today. A single
+   * already-authorized file (the `?id=` deep link, the `/api/files/:id` lake fallback) does not
+   * go through this fallback at all; it is attributed via `grantingLakes`, which names the
+   * specific granting lake(s) directly rather than falling back to the full scope.
    */
   resolvedLakeIds: string[];
   /** Identifiers only - chunk TEXT must never reach this model. */

@@ -5,7 +5,7 @@ const h = vi.hoisted(() => ({
   getFabFile: vi.fn(),
   generateSignedUrl: vi.fn(),
   findById: vi.fn(),
-  isFileInAccessibleLake: vi.fn(),
+  grantingLakes: vi.fn(),
   resolveAccessibleLakes: vi.fn(),
   record: vi.fn().mockResolvedValue(undefined),
 }));
@@ -29,7 +29,7 @@ vi.mock('@server/utils/storage', () => ({
   getFilesStorage: () => ({ upload: vi.fn(), getSignedUrl: vi.fn(), getMetadata: vi.fn() }),
 }));
 vi.mock('@server/dataLakes', () => ({
-  isFileInAccessibleLake: h.isFileInAccessibleLake,
+  grantingLakes: h.grantingLakes,
   resolveAccessibleLakes: h.resolveAccessibleLakes,
 }));
 vi.mock('@server/dataLakes/recomputeStatsForLakeTags', () => ({ recomputeStatsForLakeTags: vi.fn() }));
@@ -91,16 +91,17 @@ describe('GET /api/files/:id access-event audit - lake-accessible fallback', () 
     expect(h.record).not.toHaveBeenCalled();
   });
 
-  it('records an event attributed to the tag-matched lake when the lake fallback serves the file', async () => {
+  it('records an event attributed to the specific lake(s) grantingLakes names', async () => {
     h.getFabFile.mockRejectedValue(new NotFoundError('not found'));
     h.findById.mockResolvedValue({ id: 'file-1', fileName: 'handbook.pdf', tags: [{ name: 'datalake:lake1' }] });
-    h.isFileInAccessibleLake.mockReturnValue(true);
+    h.grantingLakes.mockReturnValue(LAKES);
 
     await route(makeReq(), makeRes().res);
 
     // Lakes are resolved once and reused for both the access gate and the attribution below -
-    // findById/isFileInAccessibleLake receive the SAME resolved list, not a re-resolved one.
-    expect(h.isFileInAccessibleLake).toHaveBeenCalledWith(LAKES, expect.objectContaining({ id: 'file-1' }));
+    // grantingLakes receives the SAME resolved list and the candidate's tag names, not a
+    // re-resolved list or the whole file document.
+    expect(h.grantingLakes).toHaveBeenCalledWith(LAKES, ['datalake:lake1']);
     expect(h.record).toHaveBeenCalledWith(
       expect.objectContaining({
         principalKind: 'user',
@@ -115,7 +116,7 @@ describe('GET /api/files/:id access-event audit - lake-accessible fallback', () 
   it('does not record when the file is not lake-accessible either (original 404 preserved)', async () => {
     h.getFabFile.mockRejectedValue(new NotFoundError('not found'));
     h.findById.mockResolvedValue({ id: 'file-1', fileName: 'handbook.pdf', tags: [] });
-    h.isFileInAccessibleLake.mockReturnValue(false);
+    h.grantingLakes.mockReturnValue([]);
 
     await expect(route(makeReq(), makeRes().res)).rejects.toThrow(NotFoundError);
 
@@ -135,7 +136,7 @@ describe('GET /api/files/:id access-event audit - lake-accessible fallback', () 
   it('still returns the signed-url response when the audit write rejects', async () => {
     h.getFabFile.mockRejectedValue(new NotFoundError('not found'));
     h.findById.mockResolvedValue({ id: 'file-1', fileName: 'handbook.pdf', tags: [] });
-    h.isFileInAccessibleLake.mockReturnValue(true);
+    h.grantingLakes.mockReturnValue(LAKES);
     h.record.mockRejectedValueOnce(new Error('mongo blip'));
     const { res, json } = makeRes();
 
