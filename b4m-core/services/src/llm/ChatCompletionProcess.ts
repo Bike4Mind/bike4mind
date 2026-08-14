@@ -2876,9 +2876,9 @@ export class ChatCompletionProcess {
             if (!trimmed) break; // only the most-recent turn left: system/tools/prompt itself is oversized
             recoveryHistory = trimmed;
             // messageTruncationInfo is deliberately not refreshed here - it stays pinned to the first build.
-            // Reserve toolSchemaTokens up front: further down this iteration, inputTokens is recomputed
-            // as effectiveTotalTokens + toolSchemaTokens, so a rebuild budgeted on the raw
-            // maxSafeInputTokens can report "fits" and still overflow once the tools block is added back.
+            // Reserve toolSchemaTokens up front: this loop recomputes inputTokens as effectiveTotalTokens
+            // + toolSchemaTokens at the bottom of every iteration, so budgeting this rebuild on the raw
+            // maxSafeInputTokens would let it report "fits" and still overflow once tools are added back.
             const { messages: rebuilt, injectedBlocks: rebuiltBlocks } = await buildAndSortMessages(
               recoveryHistory,
               contextAndSystemMessages,
