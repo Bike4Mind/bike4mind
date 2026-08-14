@@ -19,7 +19,6 @@ const actor = {
   id: 'user-1',
   isAdmin: false,
   tags: ['beta'],
-  organizationId: 'org-1',
   email: 'a@example.com',
   emailVerified: true,
 };
