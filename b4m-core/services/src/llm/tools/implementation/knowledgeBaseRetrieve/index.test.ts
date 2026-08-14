@@ -774,7 +774,7 @@ describe('retrieve_knowledge_content untrusted-content delimiter (#1659)', () =>
   });
 });
 
-describe('retrieve_knowledge_content access-event audit (#1678)', () => {
+describe('retrieve_knowledge_content access-event audit', () => {
   const record = vi.fn().mockResolvedValue(undefined);
   // recordLakeAccessEvent awaits a platform-retention settings read before calling record(), so
   // the call lands one microtask after the tool itself returns - flush before asserting on it.
@@ -804,7 +804,7 @@ describe('retrieve_knowledge_content access-event audit (#1678)', () => {
   });
 
   it('records a chat-kb-retrieve event attributed to the tag-matched lake', async () => {
-    const ctx = auditContext();
+    const ctx = auditContext({ user: { id: 'u1', groups: [], organizationId: 'org1' } as never });
     (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
       makeFile({ fileName: 'Clean.pdf', tags: [{ name: 'datalake:x' }] })
     );
@@ -816,6 +816,7 @@ describe('retrieve_knowledge_content access-event audit (#1678)', () => {
       expect.objectContaining({
         principalKind: 'user',
         principalId: 'u1',
+        organizationId: 'org1',
         resolvedLakeIds: ['lake-x'],
         fileIds: [FILE_ID],
         surface: 'chat-kb-retrieve',
@@ -863,6 +864,21 @@ describe('retrieve_knowledge_content access-event audit (#1678)', () => {
     (ctx.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockResolvedValue(null);
 
     await runById(ctx);
+
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  // This tool's corpus is always mixed (a direct id can be owned, shared, or lake; the tag/query
+  // search is owner+shared+org+lake too) - a retrieved file with no recoverable datalake tag may
+  // just be the caller's own private file, so this must NOT fall back to the full authorized scope.
+  it('does not record when the retrieved file carries no recoverable datalake tag (mixed corpus, no fallback)', async () => {
+    const ctx = auditContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'MyOwnFile.pdf' })
+    );
+
+    await runById(ctx);
+    await flushAsync();
 
     expect(record).not.toHaveBeenCalled();
   });

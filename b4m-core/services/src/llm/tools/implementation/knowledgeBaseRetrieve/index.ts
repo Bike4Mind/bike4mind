@@ -1,6 +1,7 @@
 import { ToolDefinition } from '../../base/types';
 import { CitableSource, IFabFileDocument } from '@bike4mind/common';
 import { filterRetrievalExcluded, isRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
+import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
 import {
@@ -414,6 +415,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                 // Always 'user', including an agent-executor run - see ToolContext.userId's doc comment.
                 principalKind: 'user',
                 principalId: context.userId,
+                organizationId: normalizeId(context.user.organizationId),
                 resolvedLakeIds,
                 fileIds: retrievedFiles.map(f => f.id),
                 surface: 'chat-kb-retrieve',

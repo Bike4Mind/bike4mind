@@ -9,15 +9,18 @@ export interface AttributableLake {
 export interface AttributeAccessedLakeIdsOptions {
   /**
    * Whether an inconclusive attribution falls back to the full `lakes` scope. Default `true` -
-   * sound ONLY when every possible result is guaranteed to be lake content (a search that was
-   * itself restricted to lake-tagged/prefixed files, e.g. `semanticDataLakeSearch` or a
-   * `restrictToDataLake` browse): there, a no-tag hit means "prefix-matched, not attributable",
-   * never "not a lake file at all".
+   * sound ONLY when every possible result is guaranteed to be lake content (a search genuinely
+   * restricted to lake-tagged/prefixed files, e.g. a browse with `restrictToDataLake: true`, or a
+   * single already-authorized file reached via a lake gate): there, a no-tag hit means
+   * "prefix-matched, not attributable", never "not a lake file at all".
    *
-   * Pass `false` for a MIXED corpus (owned + shared + org-shared + data lake, e.g. the keyword
-   * fallback search or a browse without `restrictToDataLake`) - there, a no-tag hit commonly means
-   * the result is the caller's own private file, and falling back to the full scope would record a
-   * lake read that never happened.
+   * Pass `false` for a MIXED corpus (owned + shared + org-shared + data lake together) - there, a
+   * no-tag hit commonly means the result is the caller's own private file, and falling back to the
+   * full scope would record a lake read that never happened. This includes `semanticDataLakeSearch`
+   * itself: its `collectScopedFiles` calls `fabfiles.search` with `includeShared: true` and no
+   * `restrictToDataLake`, so `buildOwnershipConditions` ORs the caller's own/shared files into the
+   * ranked corpus alongside the lake arms - it is NOT lake-only, despite ranking by a lake-scoped
+   * embedding query.
    */
   allowFullScopeFallback?: boolean;
 }

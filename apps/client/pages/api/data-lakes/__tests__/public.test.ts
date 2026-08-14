@@ -184,7 +184,7 @@ describe('GET /api/data-lakes/public - search and pass-through', () => {
   });
 });
 
-describe('GET /api/data-lakes/public access-event audit (#1678)', () => {
+describe('GET /api/data-lakes/public access-event audit', () => {
   beforeEach(() => vi.clearAllMocks());
   it('records an event with every browsed lake id, no attribution step needed', async () => {
     mockBrowse.mockResolvedValue({ data: [{ id: 'lake1' }, { id: 'lake2' }], total: 2 });

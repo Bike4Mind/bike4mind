@@ -1523,7 +1523,7 @@ describe('KnowledgeRetrievalFeature untrusted-content delimiter (#1659)', () => 
   });
 });
 
-describe('KnowledgeRetrievalFeature access-event audit (#1678)', () => {
+describe('KnowledgeRetrievalFeature access-event audit', () => {
   const embeddingFactory = {
     createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
     getDefaultEmbeddingModel: () => 'text-embedding-ada-002',

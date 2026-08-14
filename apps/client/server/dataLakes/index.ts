@@ -98,24 +98,6 @@ export function isFileInAccessibleLake(lakes: DataLakeConfig[], file: IFabFileDo
   return hasMetaTagAccess || hasOpenPrefixAccess;
 }
 
-/**
- * Resolve + authorize a single FabFile by id against the caller's accessible lakes. Returns the
- * FabFile doc when it belongs to a lake the caller can access, else null. Used as the fallback
- * for GET /api/files/:id so curated/shared lake files (which are authorized by lake tag/prefix,
- * NOT by per-file ACL) open in the shared file viewer. Does NOT itself mint a signed URL - the
- * caller passes the returned doc through fabFilesService.generateSignedUrl. (#836)
- */
-export async function findLakeAccessibleFabFile(
-  req: EntitlementRequest,
-  fileId: string
-): Promise<IFabFileDocument | null> {
-  const lakes = await resolveAccessibleLakes(req);
-  if (lakes.length === 0) return null;
-  const file = await fabFileRepository.findById(fileId);
-  if (!file || file.deletedAt) return null;
-  return isFileInAccessibleLake(lakes, file) ? file : null;
-}
-
 export interface DataLakeArticlesQuery {
   id?: string;
   tags?: string | string[];

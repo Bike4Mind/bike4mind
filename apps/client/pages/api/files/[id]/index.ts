@@ -59,9 +59,9 @@ const handler = baseApi()
       // browse endpoints use and, if granted, mint a fresh signed URL through the same path so
       // the shared file viewer (KnowledgeModal) can render it. (#836)
       const lakes = await resolveAccessibleLakes(req);
-      // Fetched directly and checked against the already-resolved `lakes` rather than calling
-      // findLakeAccessibleFabFile, which would re-run resolveAccessibleLakes's own DB read - the
-      // same one-resolve, reuse-everywhere shape as files/byIds.ts's lake fallback.
+      // Fetched directly and checked against the already-resolved `lakes` rather than a per-id
+      // helper that would re-run resolveAccessibleLakes's own DB read - the same one-resolve,
+      // reuse-everywhere shape as files/byIds.ts's lake fallback.
       const candidate = lakes.length > 0 ? await fabFileRepository.findById(req.query.id) : null;
       const lakeFile = candidate && !candidate.deletedAt && isFileInAccessibleLake(lakes, candidate) ? candidate : null;
       // No accessible lake serves this id either - never an audit-worthy read, so nothing is
@@ -70,8 +70,16 @@ const handler = baseApi()
       const fabFile = await fabFilesService.generateSignedUrl(lakeFile, adapter);
       // Best-effort audit write - this is the same single-file metadata + URL read as the
       // articles `?id=` deep link, just reached through the direct-fetch fallback door instead.
-      // Awaited (never rethrows): a per-request serverless route must not race a post-response
-      // freeze of the execution environment.
+      // Sound in kind but imprecise in degree for an open-prefix match: `lakeFile` is confirmed
+      // lake content by isFileInAccessibleLake above, but when access came from a static-registry
+      // prefix (not an exact meta-tag), there is no tag to reverse to one lake, so this falls back
+      // to every accessible lake rather than the one whose prefix matched. Left as-is rather than
+      // special-cased: attributeAccessedLakeIds treats a prefix match as non-reversible everywhere
+      // else in this codebase (a caller-chosen dynamic-lake prefix genuinely cannot be reversed
+      // safely), and reversing it only for the static/open case here would be a one-off
+      // inconsistency for a precision gain, not a correctness one - the file IS lake content
+      // either way. Awaited (never rethrows): a per-request serverless route must not race a
+      // post-response freeze of the execution environment.
       await dataLakeService.recordLakeAccessEvent(
         lakeAccessEventRepository,
         {

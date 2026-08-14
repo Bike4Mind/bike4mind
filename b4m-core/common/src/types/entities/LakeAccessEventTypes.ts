@@ -10,6 +10,12 @@ import { IMongoDocument } from './common';
 //
 // SCOPE: this module is the event shape and vocabulary. The write path lives on
 // LakeAccessEventModel.record(); the retrieval surfaces call it via recordLakeAccessEvent.
+//
+// PRODUCT DECISION: a query that returns zero lake content is not recorded at all, even though
+// the query itself happened - every retrieval surface skips the write on an empty/unattributable
+// result (see each call site's own guard). This trail answers "what was read", not "what was
+// asked" - a principal probing a lake's contents with queries that happen to match nothing leaves
+// no row here. Revisit if that gap ever needs closing; it is deliberate, not an oversight.
 
 /** Who performed the retrieval. Flat fields (not a nested object), mirroring
  * MemoryLedgerEventModel's principalKind/principalId shape. */

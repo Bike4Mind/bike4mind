@@ -29,8 +29,7 @@ const handler = baseApi()
     const policy = data.conflictResolution ?? 'skip';
 
     // Shared access gate (resolves by slug; not-found-style denial).
-    const accessContext = await toAccessContext(req);
-    const dataLake = await dataLakeService.assertLakeAccess(data.dataLakeSlug, accessContext, {
+    const dataLake = await dataLakeService.assertLakeAccess(data.dataLakeSlug, await toAccessContext(req), {
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 

@@ -29,9 +29,8 @@ const handler = baseApi()
   .get(async (req: Request, res) => {
     const { q, limit, offset } = BrowseQuery.parse(req.query);
 
-    const accessContext = await toAccessContext(req);
     const result = await dataLakeService.browsePublicDataLakes(
-      accessContext,
+      await toAccessContext(req),
       { search: q, limit, offset },
       {
         db: {
@@ -44,7 +43,11 @@ const handler = baseApi()
 
     // Best-effort audit write - the browsed lakes themselves ARE the result, so no
     // tag-attribution step is needed; every returned lake goes straight into resolvedLakeIds.
-    // Skipped entirely on an empty page: zero lakes browsed is not a lake access. Awaited (never
+    // Deliberately recorded as an access even though it is metadata (name/description), not
+    // content: this catalog listing reveals which lakes exist, and data-lake-public-browse is its
+    // own surface precisely so a discovery listing here never gets conflated with an actual
+    // content read on data-lake-articles/chat-kb-* when someone reads listByLake later. Skipped
+    // entirely on an empty page: zero lakes browsed is not a lake access. Awaited (never
     // rethrows): a per-request serverless route must not race a post-response environment freeze.
     if (result.data.length > 0) {
       await dataLakeService.recordLakeAccessEvent(

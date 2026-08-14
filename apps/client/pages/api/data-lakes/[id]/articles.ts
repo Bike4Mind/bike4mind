@@ -39,8 +39,7 @@ const handler = baseApi()
     const { id } = req.query;
 
     // Single shared gate (org-aware; not-found-style denial).
-    const accessContext = await toAccessContext(req);
-    const dataLake = await dataLakeService.assertLakeAccess(id, accessContext, {
+    const dataLake = await dataLakeService.assertLakeAccess(id, await toAccessContext(req), {
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 

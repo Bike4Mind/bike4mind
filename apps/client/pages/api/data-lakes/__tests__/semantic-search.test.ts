@@ -737,7 +737,7 @@ describe('POST /api/data-lakes/semantic-search mixed-model payload shape', () =>
   });
 });
 
-describe('POST /api/data-lakes/semantic-search access-event audit (#1678)', () => {
+describe('POST /api/data-lakes/semantic-search access-event audit', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockResolveScope.mockResolvedValue(DYNAMIC_SCOPE);
@@ -785,7 +785,11 @@ describe('POST /api/data-lakes/semantic-search access-event audit (#1678)', () =
     );
   });
 
-  it('falls back to the full authorized scope when no result carries a recoverable datalake tag', async () => {
+  // semanticDataLakeSearch's own file search is a MIXED corpus (includeShared: true, no
+  // restrictToDataLake - collectScopedFiles ORs the caller's own/shared files in alongside the
+  // lake arms), despite ranking by a lake-scoped embedding query - a hit with no recoverable tag
+  // may be the caller's own private file, so this must NOT fall back to the full authorized scope.
+  it('does not record when no result carries a recoverable datalake tag (mixed corpus, no fallback)', async () => {
     mockSemanticSearch.mockResolvedValue({
       ...RESULT_WITH_LAKE_TAG,
       results: [{ ...RESULT_WITH_LAKE_TAG.results[0], fileTags: ['opti:policy'] }],
@@ -793,9 +797,7 @@ describe('POST /api/data-lakes/semantic-search access-event audit (#1678)', () =
 
     await handler(makeReq({ query: 'pto policy' }), makeRes());
 
-    expect(mockRecordLakeAccessEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ resolvedLakeIds: DYNAMIC_SCOPE.lakes.map(l => l.id) })
-    );
+    expect(mockRecordLakeAccessEvent).not.toHaveBeenCalled();
   });
 
   it('does not record an event on the empty-scope short-circuit (nothing was read)', async () => {

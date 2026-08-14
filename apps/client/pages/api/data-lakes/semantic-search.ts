@@ -317,26 +317,29 @@ const handler = baseApi()
         }
       );
 
-      // Best-effort audit write, only when something was actually returned - a zero-hit
-      // search reflects no lake content read (and would otherwise fall back to logging the WHOLE
-      // authorized scope as accessed, per attributeAccessedLakeIds's empty-attribution fallback).
-      // Attribute to a specific lake where the datalake tag is recoverable, falling back to the
-      // whole authorized scope otherwise (see the doc comment on resolvedLakeIds). Awaited (never
-      // rethrows - see recordLakeAccessEvent's doc comment): a per-request serverless route must
-      // not race a post-response freeze of the execution environment. Recorded here, right as the
-      // search results come back - NOT after the later isAborted() check - because the read already
-      // happened at this point regardless of whether the client is still there for the response.
-      if (search.results.length > 0) {
+      // semanticDataLakeSearch's file search is a MIXED corpus (includeShared: true, no
+      // restrictToDataLake - collectScopedFiles ORs the caller's own/shared files in alongside
+      // the lake arms), so a hit with no recoverable tag may be the caller's own private file -
+      // this must NOT fall back to the full scope, and is skipped entirely when nothing returned
+      // is actually attributable to a lake (not merely when nothing was returned at all).
+      // Awaited (never rethrows - see recordLakeAccessEvent's doc comment): a per-request
+      // serverless route must not race a post-response freeze of the execution environment.
+      // Recorded here, right as the search results come back - NOT after the later isAborted()
+      // check - because the read already happened at this point regardless of whether the client
+      // is still there for the response.
+      const resolvedLakeIds = dataLakeService.attributeAccessedLakeIds(
+        search.results.map(r => r.fileTags),
+        lakes,
+        { allowFullScopeFallback: false }
+      );
+      if (resolvedLakeIds.length > 0) {
         await dataLakeService.recordLakeAccessEvent(
           lakeAccessEventRepository,
           {
             principalKind: 'user',
             principalId: req.user.id,
             organizationId: normalizeId(req.user.organizationId),
-            resolvedLakeIds: dataLakeService.attributeAccessedLakeIds(
-              search.results.map(r => r.fileTags),
-              lakes
-            ),
+            resolvedLakeIds,
             chunkIds: search.results.map(r => r.chunkId),
             fileIds: [...new Set(search.results.map(r => r.fileId))],
             surface: 'data-lake-semantic-search',

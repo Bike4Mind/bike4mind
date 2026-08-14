@@ -44,9 +44,9 @@ const handler = baseApi().get(async (req: Request<{}, {}, {}, { ids: string[] }>
   // of the single-file fallback in files/[id] (#836); without it, hydrating a session whose
   // knowledgeIds point at lake files zeroes the workbench for every non-owner.
   //
-  // The lakes are resolved ONCE and the candidates fetched in one $in query - a per-id
-  // findLakeAccessibleFabFile would re-run lake resolution per miss, making bogus ids the
-  // most expensive input the endpoint accepts.
+  // The lakes are resolved ONCE and the candidates fetched in one $in query - a per-id lookup
+  // helper would re-run lake resolution per miss, making bogus ids the most expensive input the
+  // endpoint accepts.
   const found = new Set(results.map((f: IFabFileDocument) => f.id));
   const missing = ids.filter(id => isObjectIdHex(id) && !found.has(id));
   if (missing.length > 0) {

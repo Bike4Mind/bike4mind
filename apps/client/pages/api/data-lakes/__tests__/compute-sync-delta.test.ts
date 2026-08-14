@@ -68,7 +68,7 @@ const REQ_BODY = {
   currentFiles: [{ relativePath: 'a.md', fileName: 'a.md', contentHash: HASH_A, fileSize: 10 }],
 };
 
-describe('POST /api/data-lakes/compute-sync-delta access-event audit (#1678)', () => {
+describe('POST /api/data-lakes/compute-sync-delta access-event audit', () => {
   it('records an event with the ids of every hash-matched (already-existing) file', async () => {
     h.findByContentHashesInDataLake.mockResolvedValue([{ id: 'f1', fileName: 'a.md', contentHash: HASH_A }]);
     const { res } = makeRes();

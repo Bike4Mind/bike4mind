@@ -157,7 +157,7 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
   });
 });
 
-describe('GET /api/data-lakes/:id/articles access-event audit (#1678)', () => {
+describe('GET /api/data-lakes/:id/articles access-event audit', () => {
   it('records an event scoped to the resolved lake, with file ids from the result', async () => {
     h.search.mockResolvedValue({ data: [{ id: 'f1' }, { id: 'f2' }], total: 2, hasMore: false });
     const { res } = makeRes();

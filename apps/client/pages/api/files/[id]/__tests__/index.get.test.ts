@@ -81,7 +81,7 @@ beforeEach(() => {
   h.generateSignedUrl.mockResolvedValue({ id: 'file-1', fileUrl: 'https://signed.example/file-1' });
 });
 
-describe('GET /api/files/:id access-event audit (#1678) - lake-accessible fallback', () => {
+describe('GET /api/files/:id access-event audit - lake-accessible fallback', () => {
   it('does not record when the file is directly accessible (no fallback reached)', async () => {
     h.getFabFile.mockResolvedValue({ id: 'file-1', fileName: 'mine.pdf' });
 

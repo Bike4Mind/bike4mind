@@ -1413,7 +1413,7 @@ describe('search_knowledge_base clip order vs the untrusted-content defense (#16
   });
 });
 
-describe('search_knowledge_base access-event audit (#1678)', () => {
+describe('search_knowledge_base access-event audit', () => {
   const record = vi.fn().mockResolvedValue(undefined);
   // recordLakeAccessEvent awaits a platform-retention settings read before calling record(), so
   // the call lands one microtask after the tool itself returns - flush before asserting on it.
@@ -1429,6 +1429,7 @@ describe('search_knowledge_base access-event audit (#1678)', () => {
       lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
     });
     const ctx = makeContext({
+      user: { id: 'u1', groups: [], organizationId: 'org1' } as never,
       retrievalFilter: undefined,
       db: {
         lakeAccessEvents: { record },
@@ -1450,12 +1451,42 @@ describe('search_knowledge_base access-event audit (#1678)', () => {
       expect.objectContaining({
         principalKind: 'user',
         principalId: 'u1',
+        organizationId: 'org1',
         resolvedLakeIds: ['lake-x'],
         fileIds: ['f1'],
         surface: 'chat-kb-search',
         queryText: 'retired notes',
       })
     );
+  });
+
+  // The keyword arm's corpus is mixed (owned + shared + org-shared + data lake, since the search
+  // never sets restrictToDataLake) - a hit with no recoverable tag may be the caller's own private
+  // file, so this must NOT fall back to the full authorized scope, and must not record at all.
+  it('does not record when a keyword-arm hit carries no recoverable datalake tag (mixed corpus, no fallback)', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      db: {
+        lakeAccessEvents: { record },
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'f1', fileName: 'MyOwnFile.pdf', tags: [] }],
+            total: 1,
+          }),
+        },
+      } as never,
+    });
+
+    await run(ctx);
+    await flushAsync();
+
+    expect(record).not.toHaveBeenCalled();
   });
 
   it('does not record an event when the keyword arm finds nothing', async () => {
@@ -1510,6 +1541,7 @@ describe('search_knowledge_base access-event audit (#1678)', () => {
       },
     });
     const ctx = makeContext({
+      user: { id: 'u1', groups: [], organizationId: 'org1' } as never,
       retrievalFilter: undefined,
       db: {
         lakeAccessEvents: { record },
@@ -1526,12 +1558,73 @@ describe('search_knowledge_base access-event audit (#1678)', () => {
 
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
+        organizationId: 'org1',
         resolvedLakeIds: ['lake-x'],
         chunkIds: ['c1'],
         fileIds: ['f1'],
         surface: 'chat-kb-search',
       })
     );
+  });
+
+  // semanticDataLakeSearch's own file search is a MIXED corpus too (includeShared: true, no
+  // restrictToDataLake - collectScopedFiles ORs the caller's own/shared files in alongside the
+  // lake arms), despite ranking by a lake-scoped embedding query - a hit with no recoverable tag
+  // may be the caller's own private file, so this must NOT fall back to the full scope.
+  it('does not record when a semantic-arm hit carries no recoverable datalake tag (mixed corpus, no fallback)', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [
+        {
+          chunkId: 'c1',
+          fileId: 'f1',
+          fileName: 'MyOwnFile.pdf',
+          fileTags: [],
+          chunkText: 'a private note',
+          score: 0.81,
+        },
+      ],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      chunksScored: 9,
+      embeddingModel: ADA,
+      embeddingMismatch: emptyEmbeddingMismatchReport(),
+      alternateModelsEmbedded: [],
+      scan: {
+        truncated: false,
+        fileBudgetHit: false,
+        chunkBudgetHit: false,
+        filesMatching: 3,
+        filesScoped: 3,
+        filesScanned: 3,
+        chunksScanned: 9,
+        chunksSkippedDimensionMismatch: 0,
+        annFilesQueried: 0,
+        annHits: 0,
+        budgets: { maxFiles: 20000, maxChunks: 100000 },
+      },
+    });
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      db: {
+        lakeAccessEvents: { record },
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+
+    await run(ctx);
+    await flushAsync();
+
+    expect(record).not.toHaveBeenCalled();
   });
 
   it('records under chat-kb-search-scoped, with no lake attribution, for an agent-scoped call', async () => {

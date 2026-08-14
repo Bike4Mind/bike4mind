@@ -63,7 +63,7 @@ beforeEach(() => {
   mockResolveAccessibleLakes.mockResolvedValue(LAKES);
 });
 
-describe('GET /api/data-lakes/articles access-event audit (#1678)', () => {
+describe('GET /api/data-lakes/articles access-event audit', () => {
   it('records an event attributed to the tag-matched lake(s) among the returned files', async () => {
     mockQueryDataLakeArticles.mockResolvedValue({
       data: [{ id: 'f1', tags: [{ name: 'datalake:lake1' }] }],
