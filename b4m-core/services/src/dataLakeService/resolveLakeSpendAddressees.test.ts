@@ -85,23 +85,48 @@ describe('resolveLakeSpendAddressees', () => {
     expect(result.map(a => a.userId).sort()).toEqual(['admin-1', 'billing-owner', 'manager-1']);
   });
 
-  it('also includes an org-principal owner/curator GRANT on the lake, alongside org-wide admins', async () => {
+  it('resolves an org-principal owner/curator GRANT to ITS OWN org admins, distinct from the lake org', async () => {
     const db = makeDb({
       dataLakes: { findById: vi.fn().mockResolvedValue(lake({ organizationId: 'org-1' })) },
       dataLakeAccessGrants: {
-        listByLake: vi.fn().mockResolvedValue([{ principalType: 'organization', principalId: 'org-1', role: 'owner' }]),
+        listByLake: vi.fn().mockResolvedValue([{ principalType: 'organization', principalId: 'org-2', role: 'owner' }]),
       },
-      organizations: { findById: vi.fn().mockResolvedValue({ userId: 'billing-owner' }) },
+      organizations: {
+        findById: vi.fn(async (id: string) =>
+          id === 'org-1' ? { userId: 'org1-owner' } : id === 'org-2' ? { userId: 'org2-owner' } : null
+        ),
+      },
       users: {
-        findActiveEmailsByIds: emailRows([{ id: 'billing-owner', email: 'billing@example.com' }]),
+        findActiveEmailsByIds: emailRows([
+          { id: 'org1-owner', email: 'org1@example.com' },
+          { id: 'org2-owner', email: 'org2@example.com' },
+        ]),
       },
     });
 
-    // The org-grant principal is the org id itself, not a user id - findActiveEmailsByIds
-    // simply won't resolve it to an email, so it's silently absent (not a crash).
     const result = await resolveLakeSpendAddressees('lake-1', db, logger);
 
-    expect(result).toEqual([{ userId: 'billing-owner', email: 'billing@example.com' }]);
+    // Union of both the lake's own org admins AND the grant's org admins - the grant's
+    // principalId is resolved through organizations.findById like any other org id, never
+    // pushed directly into the user lookup (which would silently drop it).
+    expect(result.map(a => a.userId).sort()).toEqual(['org1-owner', 'org2-owner']);
+  });
+
+  it('resolves an org-principal grant on an org-LESS lake to that grant org admins (no lake.organizationId needed)', async () => {
+    const db = makeDb({
+      dataLakes: { findById: vi.fn().mockResolvedValue(lake({ organizationId: null })) },
+      dataLakeAccessGrants: {
+        listByLake: vi
+          .fn()
+          .mockResolvedValue([{ principalType: 'organization', principalId: 'org-2', role: 'curator' }]),
+      },
+      organizations: { findById: vi.fn().mockResolvedValue({ userId: 'org2-owner' }) },
+      users: { findActiveEmailsByIds: emailRows([{ id: 'org2-owner', email: 'org2@example.com' }]) },
+    });
+
+    const result = await resolveLakeSpendAddressees('lake-1', db, logger);
+
+    expect(result).toEqual([{ userId: 'org2-owner', email: 'org2@example.com' }]);
   });
 
   it('falls through to the individual-owner path when the org has no resolvable admin set', async () => {

@@ -28,16 +28,17 @@ export const MAX_LAKE_SPEND_ADDRESSEES = 20;
  * so the notified set agrees by construction with `canManageLake`'s org-admin rung - an
  * addressee is never mailed a link to a spend view they'd then be 403'd from. Also folds in
  * any org-principal owner/curator GRANT on this specific lake (canManageLake's org-grant
- * rung), a second, independent path to org-level management. If that combined set is empty
- * (org missing/soft-deleted, or none of those fields populated), falls through to the
- * individual-owner path below rather than returning nothing - a fallback recipient beats
+ * rung) - each such grant's `principalId` is itself an ORG id, so it is resolved through the
+ * same org-admin-fields lookup, never pushed directly into the user-id lookup (an org id can
+ * never match a user, which would otherwise silently drop that source with no addressee and
+ * no error). This also covers an org-LESS lake carrying an org-principal grant - the grant's
+ * own org is resolved regardless of `lake.organizationId`. If the combined set is empty (every
+ * resolvable org missing/soft-deleted, or none of those fields populated), falls through to
+ * the individual-owner path below rather than returning nothing - a fallback recipient beats
  * silence.
  *
  * Individual/fallback path reuses the EXISTING `resolveEffectiveOwnerIds` (owner-role grant,
  * else the immutable creator) - not re-derived - with grants filtered to non-expired.
- *
- * Documented gap (out of scope, touches #1667's membership model itself): an org-principal
- * owner grant on an org-LESS lake resolves to the creator, not the org.
  */
 export async function resolveLakeSpendAddressees(
   dataLakeId: string,
@@ -52,18 +53,26 @@ export async function resolveLakeSpendAddressees(
       await db.dataLakeAccessGrants.listByLake(dataLakeId, { activeAsOf: new Date() })
     ).map(g => ({ principalType: g.principalType, principalId: g.principalId, role: g.role }));
 
-    let candidateIds: string[] = [];
-
+    // Every org this lake's admin set could come from: the lake's own organizationId, plus
+    // any org-principal owner/curator grant's principalId (which may be a different org, or
+    // the same one - deduped below so it's resolved once either way).
+    const orgIdsToResolve = new Set<string>();
     const lakeOrgId = normalizeId(lake.organizationId);
-    if (lakeOrgId) {
-      const org = await db.organizations.findById(lakeOrgId);
-      const orgAdminIds = [org?.userId, org?.managerId, ...(org?.adminUserIds ?? [])].filter(
-        (id): id is string => !!id && id.trim().length > 0
+    if (lakeOrgId) orgIdsToResolve.add(lakeOrgId);
+    for (const g of activeGrants) {
+      if (g.principalType === 'organization' && (g.role === 'owner' || g.role === 'curator')) {
+        orgIdsToResolve.add(g.principalId);
+      }
+    }
+
+    let candidateIds: string[] = [];
+    if (orgIdsToResolve.size > 0) {
+      const orgs = await Promise.all(Array.from(orgIdsToResolve).map(id => db.organizations.findById(id)));
+      candidateIds = orgs.flatMap(org =>
+        [org?.userId, org?.managerId, ...(org?.adminUserIds ?? [])].filter(
+          (id): id is string => !!id && id.trim().length > 0
+        )
       );
-      const orgGrantIds = activeGrants
-        .filter(g => g.principalType === 'organization' && (g.role === 'owner' || g.role === 'curator'))
-        .map(g => g.principalId);
-      candidateIds = [...orgAdminIds, ...orgGrantIds];
     }
 
     if (candidateIds.length === 0) {
