@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { DataLakeConfig } from '@bike4mind/common';
 
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
@@ -150,6 +150,12 @@ describe('resolveRetrievalLakeScope', () => {
     mockGetDynamicDataLakeAccess.mockResolvedValue(scopeOf());
   });
 
+  afterEach(() => {
+    // A couple of tests below assign a spy directly onto the mocked module singleton (it has no
+    // findMembershipOrgIds by default); strip it so a later test never inherits a leftover spy.
+    delete (organizationRepository as unknown as { findMembershipOrgIds?: unknown }).findMembershipOrgIds;
+  });
+
   it('calls the shared resolver with exactly the context the chat tool passes', async () => {
     mockGetRequestEntitlements.mockResolvedValue(['optihashi:pro']);
 
@@ -241,7 +247,7 @@ describe('resolveRetrievalLakeScope', () => {
     });
   });
 
-  it('serves the resolver membership lookup from the request memo (one repository call per request)', async () => {
+  it('serves the resolver membership lookup from the request memo for the requesting user', async () => {
     const req = asReq({ id: 'u1', tags: ['Opti'] }) as EntitlementRequest & { membershipOrgIds?: string[] };
     // The repository mock is the __marker stub; give it a spy so a fall-through call is visible.
     organizationRepository.findMembershipOrgIds = vi.fn().mockResolvedValue([]);
@@ -252,5 +258,20 @@ describe('resolveRetrievalLakeScope', () => {
     req.membershipOrgIds = ['memoized-org'];
     await expect(db.organizations.findMembershipOrgIds(req.user!.id)).resolves.toEqual(['memoized-org']);
     expect(organizationRepository.findMembershipOrgIds).not.toHaveBeenCalled();
+  });
+
+  it('does not serve another user id from the request memo (cross-user leak guard)', async () => {
+    const req = asReq({ id: 'u1', tags: ['Opti'] }) as EntitlementRequest & { membershipOrgIds?: string[] };
+    organizationRepository.findMembershipOrgIds = vi.fn().mockResolvedValue(['other-org']);
+
+    await resolveRetrievalLakeScope(req);
+    const { db } = mockGetDynamicDataLakeAccess.mock.calls.at(-1)![0];
+
+    // The memo was seeded for 'u1'; a lookup for a different user must still hit the repository
+    // rather than fall through to the memoized value - collapsing this to "always use the memo"
+    // would leak one user's org membership onto another's request.
+    req.membershipOrgIds = ['memoized-org'];
+    await expect(db.organizations.findMembershipOrgIds('other-user')).resolves.toEqual(['other-org']);
+    expect(organizationRepository.findMembershipOrgIds).toHaveBeenCalledWith('other-user');
   });
 });
