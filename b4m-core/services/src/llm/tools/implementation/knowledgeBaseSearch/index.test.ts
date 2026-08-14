@@ -34,7 +34,7 @@ vi.mock('../../../../apiKeyService', () => ({
 
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import { RETRIEVED_CONTENT_BEGIN } from '../../../../dataLakeService/renderRetrievedContentBlock';
-import { knowledgeBaseSearchTool } from './index';
+import { knowledgeBaseSearchTool, KB_SEARCH_MAX_RESULTS, KB_SEARCH_DEFAULT_RESULTS } from './index';
 import { emptyEmbeddingMismatchReport } from '../../../../dataLakeService/embeddingMismatch';
 import type { ToolContext } from '../../base/types';
 
@@ -1402,5 +1402,258 @@ describe('search_knowledge_base clip order vs the untrusted-content defense (#16
     expect(out).toContain('SENTINEL-INSIDE-BUDGET');
     // And the defense is still applied to what survived: no forged separator at column 0.
     expect(out).not.toMatch(/^--- f$/m);
+  });
+});
+
+/**
+ * max_results clamp (#1757). The tool schema declares `minimum: 1, maximum: 10` and the
+ * description states the bound, but nothing in tool dispatch validates params - model arguments are
+ * JSON.parsed and handed to the handler as-is. Unclamped, an eager model asking for 100 got 100
+ * passages injected into the turn, at up to maxChunkChars each (#1661 raised that from 1200 to 3072
+ * by default, up to an 8000 ceiling - so the same request became 2.6x-6.7x more expensive).
+ *
+ * Asserted on the tool OUTPUT, never on an internal variable: the output is what costs tokens, and a
+ * test reading the clamped local would still pass if a consumer went back to the raw param.
+ */
+describe('search_knowledge_base max_results clamp (#1757)', () => {
+  const scan = {
+    truncated: false,
+    fileBudgetHit: false,
+    chunkBudgetHit: false,
+    filesMatching: 200,
+    filesScoped: 200,
+    filesScanned: 200,
+    chunksScanned: 400,
+    chunksSkippedDimensionMismatch: 0,
+    annFilesQueried: 0,
+    annHits: 0,
+    budgets: { maxFiles: 20000, maxChunks: 100000 },
+  };
+
+  /** Distinct fileName per hit so a numbered-block count cannot be inflated by dedup or repetition. */
+  const hits = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      chunkId: `c${i}`,
+      fileId: `f${i}`,
+      fileName: `Doc ${i}.pdf`,
+      fileTags: [],
+      chunkText: `passage body ${i}`,
+      score: 0.9 - i / 1000,
+    }));
+
+  /** Full logger surface: the settings cache calls debug, and the resolver would swallow the
+   *  resulting TypeError as a settings outage, passing the test for the wrong reason (#1661). */
+  const clampLogger = { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), info: vi.fn() } as never;
+
+  function semanticContext(overrides: Partial<ToolContext> = {}): ToolContext {
+    return makeContext({
+      logger: clampLogger,
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002') },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+      ...overrides,
+    });
+  }
+
+  /** Passages are emitted as "1. **Name** (relevance x.xx)", so the markers count the served set. */
+  const passageCount = (out: string) => (out.match(/^\d+\. \*\*Doc /gm) ?? []).length;
+
+  async function runWith(params: Record<string, unknown>, context = semanticContext()) {
+    const tool = knowledgeBaseSearchTool.implementation(context, undefined);
+    return (await tool.toolFn({ query: 'anything', ...params })) as string;
+  }
+
+  beforeEach(() => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+    });
+    invalidateSettingsCache();
+  });
+
+  it('serves at most KB_SEARCH_MAX_RESULTS passages when the model asks for far more', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: hits(100),
+      totalChunksSearched: 400,
+      filesInScope: 200,
+      scan,
+    });
+
+    const out = await runWith({ max_results: 100 });
+
+    expect(passageCount(out)).toBe(KB_SEARCH_MAX_RESULTS);
+    expect(out).toContain(`Found ${KB_SEARCH_MAX_RESULTS} relevant passage(s)`);
+    // Both sides of the boundary, against the RENDERED label: hits are named through
+    // prettyFileName, which strips the extension, so asserting on "Doc 10.pdf" would be a
+    // string the output can never contain and would pass at any served count.
+    expect(out).toContain('**Doc 9**');
+    expect(out).not.toContain('**Doc 10**');
+  });
+
+  it('is not a floor - an in-range request still gets exactly what it asked for', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: hits(100),
+      totalChunksSearched: 400,
+      filesInScope: 200,
+      scan,
+    });
+
+    const out = await runWith({ max_results: 3 });
+
+    expect(passageCount(out)).toBe(3);
+    expect(out).toContain('Found 3 relevant passage(s)');
+  });
+
+  it('enforces the same number the schema advertises to the model', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: hits(100),
+      totalChunksSearched: 400,
+      filesInScope: 200,
+      scan,
+    });
+    const tool = knowledgeBaseSearchTool.implementation(semanticContext(), undefined);
+    // ICompletionOptionTools' property type declares no minimum/maximum (the adapters pass the
+    // schema through verbatim), so reading the bound back needs a cast - narrow, and only here.
+    const schema = tool.toolSchema.parameters.properties.max_results as { description: string; maximum: number };
+
+    const out = await runWith({ max_results: KB_SEARCH_MAX_RESULTS + 1 });
+
+    // Both sides read the exported constant, so a future edit to either cannot leave the number the
+    // model is told and the number it is held to disagreeing - the failure #1661 was itself about.
+    expect(schema.maximum).toBe(KB_SEARCH_MAX_RESULTS);
+    expect(schema.description).toContain(String(KB_SEARCH_MAX_RESULTS));
+    expect(passageCount(out)).toBe(schema.maximum);
+  });
+
+  it('does not widen the candidate pool either - topK is sized from the clamped value', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: hits(100),
+      totalChunksSearched: 400,
+      filesInScope: 200,
+      scan,
+    });
+
+    await runWith({ max_results: 100 });
+
+    // An inflated request pulled 100 chunks into embedding-similarity scoring, not just into the
+    // reply, so clamping only the slice would have left the scan cost untouched.
+    expect(semanticDataLakeSearchMock.mock.calls[0][0].topK).toBe(KB_SEARCH_MAX_RESULTS);
+  });
+
+  it('clamps the agent-scoped arm too - neither surface may serve past the bound', async () => {
+    fileScopedSemanticSearchMock.mockResolvedValue({
+      results: hits(100),
+      totalChunksSearched: 400,
+      filesInScope: 200,
+      scan,
+    });
+
+    const out = await runWith({ max_results: 100 }, semanticContext({ kbScope: { fileIds: ['f1'] } as never }));
+
+    expect(fileScopedSemanticSearchMock).toHaveBeenCalled();
+    expect(passageCount(out)).toBe(KB_SEARCH_MAX_RESULTS);
+  });
+
+  it('clamps the keyword fallback arm, which the semantic tests never reach', async () => {
+    // Semantic returns nothing, so the keyword path owns the reply. Its slice reads the same value.
+    semanticDataLakeSearchMock.mockResolvedValue(emptySemanticResult());
+    const files = Array.from({ length: 100 }, (_, i) => ({
+      id: `k${i}`,
+      fileName: `Keyword doc ${i}.pdf`,
+      tags: [],
+      vectorized: true,
+      mimeType: 'application/pdf',
+    }));
+    const context = semanticContext({
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({ data: files, total: 100 }),
+          getAccessibleFiles: vi.fn(),
+        },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue('text-embedding-ada-002') },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+
+    const out = await runWith({ max_results: 100 }, context);
+
+    expect(out).toContain(`Found ${KB_SEARCH_MAX_RESULTS} document(s)`);
+    expect((out.match(/^\d+\. \*\*Keyword doc /gm) ?? []).length).toBe(KB_SEARCH_MAX_RESULTS);
+  });
+
+  /**
+   * The low end. Every one of these fails SILENTLY without the floor: the model is told nothing and
+   * the reply simply contains less than it should, which is indistinguishable from a thin corpus.
+   */
+  describe('values below the advertised minimum', () => {
+    beforeEach(() => {
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: hits(100),
+        totalChunksSearched: 400,
+        filesInScope: 200,
+        scan,
+      });
+    });
+
+    it('serves one passage for 0, not zero passages', async () => {
+      expect(passageCount(await runWith({ max_results: 0 }))).toBe(1);
+    });
+
+    it('serves one passage for a negative, not a slice that drops the best-ranked hits', async () => {
+      // slice(0, -5) returns everything EXCEPT the last five, so unclamped this served 95 passages
+      // - the opposite of what a negative request could possibly mean.
+      expect(passageCount(await runWith({ max_results: -5 }))).toBe(1);
+    });
+
+    it('floors a fractional request rather than passing it to slice', async () => {
+      expect(passageCount(await runWith({ max_results: 4.7 }))).toBe(4);
+    });
+  });
+
+  /**
+   * Non-numeric input. The declared `number` is a claim about JSON we parsed, not a guarantee -
+   * models do emit stringified numbers, and NaN propagated into topK as well as into the slice.
+   */
+  describe('non-numeric input', () => {
+    beforeEach(() => {
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: hits(100),
+        totalChunksSearched: 400,
+        filesInScope: 200,
+        scan,
+      });
+    });
+
+    it('accepts a stringified number at its numeric value', async () => {
+      expect(passageCount(await runWith({ max_results: '8' }))).toBe(8);
+    });
+
+    it('clamps a stringified out-of-range number too', async () => {
+      expect(passageCount(await runWith({ max_results: '100' }))).toBe(KB_SEARCH_MAX_RESULTS);
+    });
+
+    it('falls back to the default for an unparseable value instead of serving nothing', async () => {
+      // Number('lots') is NaN: slice(0, NaN) is empty AND Math.max(NaN, 6) sent NaN to the engine.
+      const out = await runWith({ max_results: 'lots' });
+
+      expect(passageCount(out)).toBe(KB_SEARCH_DEFAULT_RESULTS);
+      expect(semanticDataLakeSearchMock.mock.calls[0][0].topK).toBe(6);
+    });
+
+    it('treats null as unset rather than as zero', async () => {
+      expect(passageCount(await runWith({ max_results: null }))).toBe(KB_SEARCH_DEFAULT_RESULTS);
+    });
+
+    it('keeps the documented default when the param is omitted entirely', async () => {
+      expect(passageCount(await runWith({}))).toBe(KB_SEARCH_DEFAULT_RESULTS);
+    });
   });
 });
