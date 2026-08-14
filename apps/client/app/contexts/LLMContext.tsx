@@ -404,6 +404,7 @@ export const LLMProvider: React.FC = () => {
   const accessibleModelsRef = useRef(accessibleModels);
   const isModelAccessibleRef = useRef(isModelAccessible);
   const getFallbackModelRef = useRef(getFallbackModel);
+  const modelInfoRepoRef = useRef(modelInfoRepo);
 
   // Keep refs current after every render so stable closures always read the latest values.
   // useLayoutEffect (synchronous, before paint) ensures refs are updated before any
@@ -412,6 +413,7 @@ export const LLMProvider: React.FC = () => {
     accessibleModelsRef.current = accessibleModels;
     isModelAccessibleRef.current = isModelAccessible;
     getFallbackModelRef.current = getFallbackModel;
+    modelInfoRepoRef.current = modelInfoRepo;
   });
 
   // Stable functions - identity never changes, reads from refs at call time
@@ -505,7 +507,13 @@ export const LLMProvider: React.FC = () => {
           // switch goes through buildModelSelectionPatch, which sets the new model's default
           // explicitly, so nothing depends on this branch raising. refitMaxTokensForModel still
           // corrects an unset or too-high value down to what the resolved model can actually serve.
-          const nextMaxTokens = refitMaxTokensForModel(state.max_tokens, modelToUse, { allowRaise: false });
+          // Fit against the LIVE catalog entry, not `modelToUse`: the accessible list is
+          // `{ ...modelInfo, ...savedConfig }` (llmModelConfig.ts:82-86), so an admin-saved snapshot can
+          // carry a stale, lower `max_tokens`. Clamping to that with allowRaise off would strand the
+          // user below what the model can actually serve, and the sibling refit effect reads the live
+          // repo, so both paths must agree on the ceiling. Falls back to `modelToUse` before the repo loads.
+          const liveModelInfo = modelInfoRepoRef.current?.find(m => m.id === modelToUse.id) ?? modelToUse;
+          const nextMaxTokens = refitMaxTokensForModel(state.max_tokens, liveModelInfo, { allowRaise: false });
           // Tell the refit effect below that THIS transition was resolved for the user, not chosen by
           // them. Without it that effect sees a model change, sets allowRaise, and raises the ceiling
           // straight back to the new model's default - undoing the line above.
