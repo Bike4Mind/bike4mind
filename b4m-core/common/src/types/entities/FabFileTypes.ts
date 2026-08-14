@@ -593,12 +593,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
 
   /**
    * Count the number of files by tag for a user. Widens to shared/group/data-lake files when
-   * options are supplied. Pass `excludePersonalShares: true` to additionally drop a file merely
-   * shared 1:1 with the user (not owned by them) - such a file's tags can never be kept in sync
-   * by the user's own tag rename/delete, so a caller backing a per-user tally the user is
-   * expected to clear (e.g. WORKSPACES) should opt in to avoid an orphan bucket. A caller whose
-   * count must agree with a file LIST that still shows personal shares (e.g. the tag sidebar)
-   * must NOT opt in.
+   * options are supplied. `excludePersonalShares` additionally drops a file merely shared 1:1
+   * with the user - see buildOwnershipConditions (packages/database) for the full why and which
+   * kind of caller should or should not opt in.
    * @param userId - The ID of the user.
    * @returns A promise that resolves to the number of files.
    */
