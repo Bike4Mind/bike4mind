@@ -304,6 +304,21 @@ describe('DataLakeSettingsModal — per-lake system prompt', () => {
     expect(help).toHaveTextContent(/only people who can manage this lake can read this text/i);
   });
 
+  it('states the retrieval-scoped condition, so the copy cannot regress to always-on wording', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={promptedLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    const help = screen.getByTestId('datalake-systemprompt-help');
+    // The two halves of the real contract: fires on retrieval turns, never otherwise.
+    expect(help).toHaveTextContent(/pull content from this lake/i);
+    expect(help).toHaveTextContent(/never fire on turns that don't use the lake/i);
+    // The pre-#1108 always-on wording must not come back.
+    expect(help).not.toHaveTextContent(/not only when the lake is used/i);
+  });
+
   // The QA carry-forward from PR 1: a user who can only READ a shared/public lake must never
   // see the wording of its prompt, only its effect on answers.
   it('NEVER shows the prompt to a non-editor on a shared/public lake', () => {

@@ -225,7 +225,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                     data-testid="datalake-systemprompt-input"
                   />
                   <FormHelperText data-testid="datalake-systemprompt-help">
-                    {`Extra instructions applied to your chats, and to your organization's chats, while this lake is accessible - not only when the lake is used. Your organization's prompt stays authoritative on conflict, and only people who can manage this lake can read this text in the app.${
+                    {`Extra instructions added to answers on turns that actually pull content from this lake. They apply to you and to members of this lake's organization - not to users granted access by tag or entitlement - and never fire on turns that don't use the lake. Your organization's prompt stays authoritative on conflict, and only people who can manage this lake can read this text in the app.${
                       // Count what SAVE will persist (trimmed), not the raw field contents.
                       systemPrompt.trim() ? ` (${systemPrompt.trim().length} characters)` : ''
                     }`}

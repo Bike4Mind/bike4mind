@@ -45,8 +45,9 @@ const DataLakeSchema = new mongoose.Schema(
     // with each other on slug - this is the desired behavior.
     slug: { type: String, required: true },
     description: { type: String },
-    // Per-lake system prompt (see IDataLake.systemPrompt). Not yet consumed; a later PR (#843)
-    // injects it at answer time. Stored uncapped, matching the other system-prompt fields.
+    // Per-lake system prompt, injected RETRIEVAL-SCOPED at answer time (see
+    // IDataLake.systemPrompt for the full contract). Stored uncapped, matching the other
+    // system-prompt fields.
     systemPrompt: { type: String },
     // Preferred registry system-prompt id for sessions created for this lake (see
     // IDataLake.preferredSystemPromptId). Validated against the session-activatable allowlist at

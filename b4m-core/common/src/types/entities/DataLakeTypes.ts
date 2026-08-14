@@ -66,10 +66,15 @@ export interface IDataLake {
   description?: string;
   /**
    * Optional per-lake system prompt, so a lake can carry its own answering instructions.
-   * Not yet consumed: a later PR (#843) injects it as a labeled system message whenever this
-   * lake is active in a chat turn, refining behavior WITHIN the org prompt (which stays
-   * authoritative on conflict). Editable only by the lake creator or an admin (canManageLake);
-   * uncapped, matching the other system prompts in the codebase. Absent/empty = no per-lake prompt.
+   * Injected RETRIEVAL-SCOPED: it rides only on turns that actually retrieved content from
+   * this lake, on both channels - forced retrieval (KnowledgeRetrievalFeature) and the
+   * model-driven knowledge tools (prependRetrievedLakePrompts) - resolved by
+   * getAccessibleDataLakePrompts and rendered with the renderDataLakePromptSection defenses.
+   * Injected only for TRUSTED actors (the lake's creator, or a member of the lake's
+   * organization - see isTrustedForInjection); users reached via tag/entitlement grants read
+   * the lake WITHOUT this prompt. The org prompt stays authoritative on conflict. Editable
+   * only via canManageLake and withheld from non-managers by the server; uncapped, matching
+   * the other system prompts in the codebase. Absent/empty = no per-lake prompt.
    */
   systemPrompt?: string;
   /**
