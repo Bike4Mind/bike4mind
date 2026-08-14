@@ -278,6 +278,16 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * its EFFECT via the create-time resolver, never the setting itself).
    */
   groundingMode?: DataLakeGroundingMode;
+  /**
+   * Lifetime embedding-spend meter (see IDataLake.embeddingSpendMicroUsd). EDITOR-ONLY, same
+   * gate as the fields above: a reader gets none of a lake's financial telemetry. ALWAYS present
+   * (defaulted to 0, never omitted) when the caller can manage this lake, even with zero spend -
+   * unlike the other editor-only fields above, its mere presence vs. absence is itself the
+   * client's signal to show the spend view, so a manageable-but-unspent lake must not look
+   * identical to a non-manageable one. `GET /api/data-lakes/:id/spend` independently re-checks
+   * manage access as the real security boundary; this field only decides whether to show the tab.
+   */
+  embeddingSpendMicroUsd?: number;
 }
 
 /**

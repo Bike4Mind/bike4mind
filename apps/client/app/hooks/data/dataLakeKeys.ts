@@ -37,4 +37,10 @@ export const dataLakeKeys = {
   articles: (source: DataLakeBrowseSource, params?: DataLakeArticlesParams) =>
     ['dataLakeArticles', source, params] as const,
   articlesRoot: ['dataLakeArticles'] as const,
+  /**
+   * One lake's spend view (GET /api/data-lakes/:id/spend). Deliberately NOT nested under
+   * `list` - `list` is a shared invalidation prefix for renames/visibility changes, and keying
+   * spend under it would refetch spend on every unrelated lake mutation.
+   */
+  spend: (dataLakeId: string | null, days: number) => ['dataLakeSpend', dataLakeId, { days }] as const,
 };

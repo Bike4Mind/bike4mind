@@ -3,10 +3,12 @@ import type {
   DataLakeConfig,
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
+  IDataLakeSpendResponse,
   IFabFileDocument,
   ManageableDataLakeConfig,
   TaxonomyTag,
 } from '@bike4mind/common';
+import { isAxiosError } from 'axios';
 import { DATA_LAKES, normalizeTagPrefix, tagPrefixesOverlap } from '@bike4mind/common';
 import type { CreateDataLakeRequestInputType, UpdateDataLakeRequestInputType } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
@@ -639,4 +641,32 @@ export function useGetDataLakeArticles(params?: DataLakeArticlesParams | null, s
     refetchOnWindowFocus: false,
     staleTime: 1000 * 60 * 5,
   });
+}
+
+/**
+ * One lake's spend view (#1677): lifetime meter, live budget levers, and the byModel/byFeature/
+ * overTime ledger breakdown. `enabled` is passed by the caller so the modal can fetch lazily -
+ * only once the Spend tab is actually opened, not on every settings-modal mount.
+ *
+ * A 4xx (not just 403) is treated as "forbidden": a fallback/hardcoded lake has a slug id, not
+ * an ObjectId, and has no grantable document, so that path 400s/404s too and must not paint a
+ * red error either - it just means no spend view for this lake.
+ */
+export function useDataLakeSpend(dataLakeId: string | null, days: number, opts?: { enabled?: boolean }) {
+  const query = useQuery({
+    queryKey: dataLakeKeys.spend(dataLakeId, days),
+    queryFn: async () => {
+      const { data } = await api.get<IDataLakeSpendResponse>(`/api/data-lakes/${dataLakeId}/spend`, {
+        params: { days },
+      });
+      return data;
+    },
+    enabled: !!dataLakeId && (opts?.enabled ?? true),
+    // A permission rejection must never be retried - matches useGetDataLakes' own rationale.
+    retry: false,
+    staleTime: 1000 * 60,
+    placeholderData: keepPreviousData,
+  });
+  const isForbidden = isAxiosError(query.error) && (query.error.response?.status ?? 0) >= 400;
+  return { ...query, isForbidden };
 }

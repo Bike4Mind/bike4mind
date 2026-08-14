@@ -21,6 +21,7 @@ import { useSearchOrganizations } from '@client/app/hooks/data/organizations';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { formatCredits, formatUsd, numberCell } from '../utils/format';
 import { useOwnerUsage } from '../hooks/useOwnerUsage';
+import { BreakdownTable } from './BreakdownTable';
 
 const DAY_RANGES = [30, 60, 90] as const;
 type DayRange = (typeof DAY_RANGES)[number];
@@ -344,56 +345,3 @@ export const UsageDashboard: React.FC<{ ownerType: UsageOwnerType; ownerId?: str
     </Box>
   );
 };
-
-type BreakdownRow = {
-  key: string;
-  label: string;
-  title?: string;
-  requests: number;
-  cogsUsd: number;
-  creditsCharged: number;
-};
-
-const BreakdownTable: React.FC<{
-  title: string;
-  keyLabel: string;
-  testid: string;
-  rows: BreakdownRow[];
-}> = ({ title, keyLabel, testid, rows }) => (
-  <Box>
-    <Typography level="title-sm" sx={{ mb: 1 }}>
-      {title}
-    </Typography>
-    <Sheet sx={{ maxHeight: 320, overflow: 'auto' }}>
-      <Table stickyHeader hoverRow size="sm" data-testid={testid}>
-        <thead>
-          <tr>
-            <th>{keyLabel}</th>
-            <th style={{ textAlign: 'right' }}>Requests</th>
-            <th style={{ textAlign: 'right' }}>COGS (USD)</th>
-            <th style={{ textAlign: 'right' }}>Credits</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(row => (
-            <tr key={row.key}>
-              <td title={row.title}>{row.label}</td>
-              <td style={{ textAlign: 'right', ...numberCell }}>{row.requests.toLocaleString()}</td>
-              <td style={{ textAlign: 'right', ...numberCell }}>{formatUsd(row.cogsUsd)}</td>
-              <td style={{ textAlign: 'right', ...numberCell }}>{formatCredits(row.creditsCharged)}</td>
-            </tr>
-          ))}
-          {rows.length === 0 && (
-            <tr>
-              <td colSpan={4}>
-                <Typography level="body-sm" color="neutral">
-                  No usage in this window.
-                </Typography>
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </Table>
-    </Sheet>
-  </Box>
-);
