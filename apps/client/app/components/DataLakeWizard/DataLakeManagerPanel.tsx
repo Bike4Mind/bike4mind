@@ -26,6 +26,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import StorageIcon from '@mui/icons-material/Storage';
 import AddIcon from '@mui/icons-material/Add';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
+import PeopleOutlineIcon from '@mui/icons-material/PeopleOutline';
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
 import UnarchiveOutlinedIcon from '@mui/icons-material/UnarchiveOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
@@ -85,6 +86,7 @@ import { RowActionsMenu, RowMenuItem } from '@client/app/components/datalake/row
 import DataLakeArticlePanel from './DataLakeArticlePanel';
 import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
 import { DataLakeSettingsModal } from './DataLakeSettingsModal';
+import { DataLakeAccessModal } from './DataLakeAccessModal';
 import type { EditableLake } from './DataLakeSettingsModal';
 import TaxonomyReviewPanel from './TaxonomyReviewPanel';
 import FieldTooltip from '@client/app/components/help/FieldTooltip';
@@ -174,6 +176,7 @@ export default function DataLakeManagerPanel() {
   const [path, setPath] = useState<string[]>([]);
   const [selectedFile, setSelectedFile] = useState<IFabFileDocument | null>(null);
   const [editingLakeId, setEditingLakeId] = useState<string | null>(null);
+  const [accessLakeId, setAccessLakeId] = useState<string | null>(null);
 
   // Derived, not effect-synced: when the active lake vanishes from the list (archived or
   // deleted), this goes null and the panel falls back to the root view on its own. The stale
@@ -207,6 +210,13 @@ export default function DataLakeManagerPanel() {
         }
       : null;
   }, [dataLakes, editingLakeId]);
+
+  // Same live-list derivation as editingLake: the access modal only needs the lake's id + name,
+  // and re-deriving from the list keeps it in step if the lake is renamed while the modal is open.
+  const accessLake = useMemo(() => {
+    const l = dataLakes?.find(d => d.id === accessLakeId);
+    return l ? { id: l.id, name: l.name } : null;
+  }, [dataLakes, accessLakeId]);
 
   const selectLake = (lake: ManagerLake) => {
     setLakeId(lake.id);
@@ -281,6 +291,7 @@ export default function DataLakeManagerPanel() {
             fileCount={lakeCount(activeLake)}
             taxonomyBatch={taxonomyBatchByLakeId.get(activeLake.id)}
             onOpenSettings={() => setEditingLakeId(activeLake.id)}
+            onOpenAccess={() => setAccessLakeId(activeLake.id)}
             onReviewTaxonomy={setReviewingBatchId}
             onArchived={() => {
               setLakeId(null);
@@ -304,6 +315,8 @@ export default function DataLakeManagerPanel() {
       )}
 
       <DataLakeSettingsModal lake={editingLake} onClose={() => setEditingLakeId(null)} />
+
+      <DataLakeAccessModal lake={accessLake} onClose={() => setAccessLakeId(null)} />
 
       {/* Review/apply the background AI tag suggestions for a batch */}
       {reviewingBatch && (
@@ -1101,6 +1114,7 @@ function LakeInfoPanel({
   fileCount,
   taxonomyBatch,
   onOpenSettings,
+  onOpenAccess,
   onReviewTaxonomy,
   onArchived,
   onDeleted,
@@ -1110,6 +1124,8 @@ function LakeInfoPanel({
   /** This lake's attention-worthy taxonomy batch, if any (see taxonomyBatchByLakeId). */
   taxonomyBatch: IDataLakeBatchSummary | undefined;
   onOpenSettings: () => void;
+  /** Opens the owner-facing access & membership view (#1672) - manager-only, like settings. */
+  onOpenAccess: () => void;
   /** Opens the review/apply panel for a batch whose taxonomy suggestions are ready or failed. */
   onReviewTaxonomy: (batchId: string) => void;
   /** Called after the active lake is archived, so the panel exits to root instead of the
@@ -1212,6 +1228,19 @@ function LakeInfoPanel({
               >
                 Settings
               </Button>
+              <Tooltip title="See who can access this lake, and who has read it" size="sm">
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  color="neutral"
+                  startDecorator={<PeopleOutlineIcon sx={{ fontSize: 16 }} />}
+                  data-testid={`datalake-access-btn-${lake.id}`}
+                  onClick={onOpenAccess}
+                  sx={{ flexShrink: 0, fontSize: '13px' }}
+                >
+                  Access
+                </Button>
+              </Tooltip>
               <Tooltip title="Archive (restorable from the manager home)" size="sm">
                 <Button
                   size="sm"

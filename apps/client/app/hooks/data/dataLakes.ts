@@ -5,6 +5,7 @@ import type {
   IDataLakeBatchSummary,
   IDataLakeSpendResponse,
   IFabFileDocument,
+  LakeAccessView,
   LakeHealthApiResponse,
   ManageableDataLakeConfig,
   TaxonomyTag,
@@ -85,6 +86,50 @@ export function useGetDataLakeHealth(dataLakeId: string | null, enabled = true) 
       return response.data;
     },
   });
+}
+
+/**
+ * The owner-facing access & membership view for one lake (#1672): who can reach it (grants +
+ * gate-based channels, expiry resolved live) and who actually read it (the audit trail). Manager-
+ * only server-side (403 for a mere reader), so callers gate the entry point on `canManage` and pass
+ * `enabled` only when a manageable lake is open. Short staleTime: this is a compliance surface an
+ * owner refreshes intentionally, not a display hint. The 403/404 is never retried.
+ */
+export function useLakeAccessView(dataLakeId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: dataLakeKeys.access(dataLakeId ?? ''),
+    enabled: enabled && !!dataLakeId,
+    retry: false,
+    queryFn: async () => {
+      const response = await api.get<{ data: LakeAccessView }>(`/api/data-lakes/${dataLakeId}/access`);
+      return response.data.data;
+    },
+    staleTime: 1000 * 30,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/**
+ * Download the same access view as a CSV compliance artifact. Fetched through the authenticated
+ * axios instance (Bearer token in localStorage, not a cookie) as a blob, so a plain link/window.open
+ * would not carry auth - hence the object-URL + anchor click, with the URL revoked afterward.
+ */
+export async function downloadLakeAccessCsv(dataLakeId: string): Promise<void> {
+  const response = await api.get(`/api/data-lakes/${dataLakeId}/access`, {
+    params: { format: 'csv' },
+    responseType: 'blob',
+  });
+  const url = URL.createObjectURL(response.data as Blob);
+  try {
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `lake-access-${dataLakeId}.csv`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 /**

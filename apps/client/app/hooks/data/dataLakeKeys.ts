@@ -19,6 +19,8 @@ import type { DataLakeArticlesParams, DataLakeBrowseSource } from '@client/app/h
 export const dataLakeKeys = {
   /** The lake list (GET /api/data-lakes). */
   list: ['data-lakes'] as const,
+  /** One lake's owner-facing access & membership view (GET /api/data-lakes/:id/access). */
+  access: (dataLakeId: string) => ['data-lakes', 'access', dataLakeId] as const,
   /** One page-set of the public-lake discovery catalog, per search term. */
   public: (search: string) => ['data-lakes', 'public', { search }] as const,
   archived: ['data-lakes', 'archived'] as const,

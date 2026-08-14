@@ -10,6 +10,7 @@ export * from './ports';
 export * from './assertLakeAccess';
 export * from './classifyLakeAccess';
 export * from './resolveLakeReadAccess';
+export * from './assembleLakeAccessView';
 export * from './authorizeLakeWrite';
 // canManageLake + ManageActor are already surfaced via authorizeLakeWrite's re-export; export the
 // rest of the pure decision core (owner resolution) by name to avoid a duplicate-export clash.

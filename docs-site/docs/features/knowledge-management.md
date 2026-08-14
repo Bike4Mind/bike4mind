@@ -253,6 +253,41 @@ Knowledge becomes memory:
 - **HIPAA Compatible** - Healthcare data (Enterprise)
 - **Data Residency** - Choose storage location
 
+### Data lake access and membership view
+
+If you can manage a data lake, its manager view has an **Access** button (next to Settings) that
+opens a read-only compliance surface answering the two questions a lake owner is asked first:
+
+- **Who can see this?**
+  - **Members and grants** - every explicit grant on the lake (owner / curator / reader), who
+    granted it and when, and its expiry. A grant past its expiry is shown as **expired**, resolved
+    live at the moment you open the view - never as if it were still live.
+  - **Access channels** - the gate-based ways in that are not explicit grants: a required tag, a
+    required entitlement, an organization (shown with its member count), or public. These are
+    resolved live on every request, so they are shown as channels rather than as member rows.
+- **Who actually has?**
+  - **Access history** - who has read the lake, how many times, when they last read it, and through
+    which surface, aggregated from the access-audit trail.
+
+Use **Export CSV** for a downloadable artifact suitable for a compliance review; it contains the
+same three sections plus a note when the history was truncated.
+
+### Troubleshooting the access view
+
+- **"You must be able to manage this data lake to view its access."** The view is manager-only
+  (owner, curator, org admin, or platform admin). Someone who can only read the lake will see this
+  message - it is not an error.
+- **A channel shows no holder count.** Only the organization channel carries a member count. Tag and
+  entitlement channels deliberately show none: counting their holders would mean scanning every user
+  in the install, which this feature is designed to avoid. A missing count means "not counted", not
+  "zero".
+- **"Showing the most recent reads only".** The history read is capped for performance. When you see
+  this banner, the on-screen list is the most recent window, not the whole trail - export the CSV for
+  the complete retained window (audit retention is at least ~15 months).
+- **A reader you expected is missing from Members.** Reader-role and organization grants only take
+  effect once the platform enables read-time grant enforcement; until then they are recorded but do
+  not yet open the lake. Tag/entitlement/org access appears under Access channels, not as grants.
+
 ## Coming Soon
 
 - **OCR Enhancement** - Better text extraction

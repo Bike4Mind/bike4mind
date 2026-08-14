@@ -3215,6 +3215,63 @@
       "accessLevel": "public"
     },
     {
+      "slug": "features/tavern",
+      "title": "The Tavern",
+      "description": "Autonomous AI agent simulation in Bike4Mind",
+      "category": "features",
+      "sidebarPosition": 1,
+      "tags": [],
+      "headings": [
+        {
+          "level": 1,
+          "text": "The Tavern",
+          "anchor": "the-tavern"
+        },
+        {
+          "level": 2,
+          "text": "How It Works",
+          "anchor": "how-it-works"
+        },
+        {
+          "level": 3,
+          "text": "Agents",
+          "anchor": "agents"
+        },
+        {
+          "level": 3,
+          "text": "Heartbeats",
+          "anchor": "heartbeats"
+        },
+        {
+          "level": 3,
+          "text": "Quest Board",
+          "anchor": "quest-board"
+        },
+        {
+          "level": 3,
+          "text": "Confidence Gates",
+          "anchor": "confidence-gates"
+        },
+        {
+          "level": 3,
+          "text": "Agent-to-Agent Communication",
+          "anchor": "agent-to-agent-communication"
+        },
+        {
+          "level": 2,
+          "text": "Interfaces",
+          "anchor": "interfaces"
+        },
+        {
+          "level": 2,
+          "text": "Creating Agents",
+          "anchor": "creating-agents"
+        }
+      ],
+      "filePath": "features/tavern/index.md",
+      "accessLevel": "public"
+    },
+    {
       "slug": "features/integrations/slack-integration",
       "title": "Slack Integration",
       "description": "Use AI agents in Slack with @mentions, thread intelligence, and natural language commands for GitHub, Jira, and Confluence",
@@ -3749,63 +3806,6 @@
       "accessLevel": "public"
     },
     {
-      "slug": "features/tavern",
-      "title": "The Tavern",
-      "description": "Autonomous AI agent simulation in Bike4Mind",
-      "category": "features",
-      "sidebarPosition": 1,
-      "tags": [],
-      "headings": [
-        {
-          "level": 1,
-          "text": "The Tavern",
-          "anchor": "the-tavern"
-        },
-        {
-          "level": 2,
-          "text": "How It Works",
-          "anchor": "how-it-works"
-        },
-        {
-          "level": 3,
-          "text": "Agents",
-          "anchor": "agents"
-        },
-        {
-          "level": 3,
-          "text": "Heartbeats",
-          "anchor": "heartbeats"
-        },
-        {
-          "level": 3,
-          "text": "Quest Board",
-          "anchor": "quest-board"
-        },
-        {
-          "level": 3,
-          "text": "Confidence Gates",
-          "anchor": "confidence-gates"
-        },
-        {
-          "level": 3,
-          "text": "Agent-to-Agent Communication",
-          "anchor": "agent-to-agent-communication"
-        },
-        {
-          "level": 2,
-          "text": "Interfaces",
-          "anchor": "interfaces"
-        },
-        {
-          "level": 2,
-          "text": "Creating Agents",
-          "anchor": "creating-agents"
-        }
-      ],
-      "filePath": "features/tavern/index.md",
-      "accessLevel": "public"
-    },
-    {
       "slug": "features/notebooks",
       "title": "Notebooks - AI Chat Sessions",
       "description": "Complete guide to Bike4Mind's notebook chat interface - your workspace for AI conversations",
@@ -4289,6 +4289,88 @@
       "accessLevel": "public"
     },
     {
+      "slug": "features/tavern/cli",
+      "title": "CLI Integration",
+      "description": "Interact with Tavern agents from the B4M CLI",
+      "category": "features",
+      "sidebarPosition": 2,
+      "tags": [],
+      "headings": [
+        {
+          "level": 1,
+          "text": "Tavern CLI Integration",
+          "anchor": "tavern-cli-integration"
+        },
+        {
+          "level": 2,
+          "text": "Enabling Tavern",
+          "anchor": "enabling-tavern"
+        },
+        {
+          "level": 2,
+          "text": "Usage",
+          "anchor": "usage"
+        },
+        {
+          "level": 3,
+          "text": "Discovering Agents",
+          "anchor": "discovering-agents"
+        },
+        {
+          "level": 3,
+          "text": "Creating Agents",
+          "anchor": "creating-agents"
+        },
+        {
+          "level": 3,
+          "text": "Editing and Deleting Agents",
+          "anchor": "editing-and-deleting-agents"
+        },
+        {
+          "level": 3,
+          "text": "Talking to Agents",
+          "anchor": "talking-to-agents"
+        },
+        {
+          "level": 3,
+          "text": "Quest Board",
+          "anchor": "quest-board"
+        },
+        {
+          "level": 3,
+          "text": "Agent Notebooks",
+          "anchor": "agent-notebooks"
+        },
+        {
+          "level": 3,
+          "text": "Confidence Gates",
+          "anchor": "confidence-gates"
+        },
+        {
+          "level": 3,
+          "text": "Heartbeat Control",
+          "anchor": "heartbeat-control"
+        },
+        {
+          "level": 2,
+          "text": "Tools Reference",
+          "anchor": "tools-reference"
+        },
+        {
+          "level": 2,
+          "text": "Activity Stream",
+          "anchor": "activity-stream"
+        },
+        {
+          "level": 2,
+          "text": "Disabling Tavern",
+          "anchor": "disabling-tavern"
+        }
+      ],
+      "filePath": "features/tavern/cli.md",
+      "accessLevel": "public"
+    },
+    {
       "slug": "features/integrations/slack-admin-guide",
       "title": "Slack Admin Guide",
       "description": "Set up and manage the Bike4Mind Slack app for your workspace with manifest-based configuration",
@@ -4724,88 +4806,6 @@
         }
       ],
       "filePath": "features/integrations/confluence-mcp-tools.md",
-      "accessLevel": "public"
-    },
-    {
-      "slug": "features/tavern/cli",
-      "title": "CLI Integration",
-      "description": "Interact with Tavern agents from the B4M CLI",
-      "category": "features",
-      "sidebarPosition": 2,
-      "tags": [],
-      "headings": [
-        {
-          "level": 1,
-          "text": "Tavern CLI Integration",
-          "anchor": "tavern-cli-integration"
-        },
-        {
-          "level": 2,
-          "text": "Enabling Tavern",
-          "anchor": "enabling-tavern"
-        },
-        {
-          "level": 2,
-          "text": "Usage",
-          "anchor": "usage"
-        },
-        {
-          "level": 3,
-          "text": "Discovering Agents",
-          "anchor": "discovering-agents"
-        },
-        {
-          "level": 3,
-          "text": "Creating Agents",
-          "anchor": "creating-agents"
-        },
-        {
-          "level": 3,
-          "text": "Editing and Deleting Agents",
-          "anchor": "editing-and-deleting-agents"
-        },
-        {
-          "level": 3,
-          "text": "Talking to Agents",
-          "anchor": "talking-to-agents"
-        },
-        {
-          "level": 3,
-          "text": "Quest Board",
-          "anchor": "quest-board"
-        },
-        {
-          "level": 3,
-          "text": "Agent Notebooks",
-          "anchor": "agent-notebooks"
-        },
-        {
-          "level": 3,
-          "text": "Confidence Gates",
-          "anchor": "confidence-gates"
-        },
-        {
-          "level": 3,
-          "text": "Heartbeat Control",
-          "anchor": "heartbeat-control"
-        },
-        {
-          "level": 2,
-          "text": "Tools Reference",
-          "anchor": "tools-reference"
-        },
-        {
-          "level": 2,
-          "text": "Activity Stream",
-          "anchor": "activity-stream"
-        },
-        {
-          "level": 2,
-          "text": "Disabling Tavern",
-          "anchor": "disabling-tavern"
-        }
-      ],
-      "filePath": "features/tavern/cli.md",
       "accessLevel": "public"
     },
     {
@@ -5921,6 +5921,11 @@
         },
         {
           "level": 3,
+          "text": "Active Sessions",
+          "anchor": "active-sessions"
+        },
+        {
+          "level": 3,
           "text": "Blocked IPs",
           "anchor": "blocked-ips"
         },
@@ -6138,6 +6143,11 @@
         },
         {
           "level": 3,
+          "text": "Chunk Policy (passage size)",
+          "anchor": "chunk-policy-passage-size"
+        },
+        {
+          "level": 3,
           "text": "Vector Embeddings",
           "anchor": "vector-embeddings"
         },
@@ -6280,6 +6290,16 @@
           "level": 3,
           "text": "Compliance",
           "anchor": "compliance"
+        },
+        {
+          "level": 3,
+          "text": "Data lake access and membership view",
+          "anchor": "data-lake-access-and-membership-view"
+        },
+        {
+          "level": 3,
+          "text": "Troubleshooting the access view",
+          "anchor": "troubleshooting-the-access-view"
         },
         {
           "level": 2,
@@ -12652,6 +12672,63 @@
           "accessLevel": "public"
         },
         {
+          "slug": "features/tavern",
+          "title": "The Tavern",
+          "description": "Autonomous AI agent simulation in Bike4Mind",
+          "category": "features",
+          "sidebarPosition": 1,
+          "tags": [],
+          "headings": [
+            {
+              "level": 1,
+              "text": "The Tavern",
+              "anchor": "the-tavern"
+            },
+            {
+              "level": 2,
+              "text": "How It Works",
+              "anchor": "how-it-works"
+            },
+            {
+              "level": 3,
+              "text": "Agents",
+              "anchor": "agents"
+            },
+            {
+              "level": 3,
+              "text": "Heartbeats",
+              "anchor": "heartbeats"
+            },
+            {
+              "level": 3,
+              "text": "Quest Board",
+              "anchor": "quest-board"
+            },
+            {
+              "level": 3,
+              "text": "Confidence Gates",
+              "anchor": "confidence-gates"
+            },
+            {
+              "level": 3,
+              "text": "Agent-to-Agent Communication",
+              "anchor": "agent-to-agent-communication"
+            },
+            {
+              "level": 2,
+              "text": "Interfaces",
+              "anchor": "interfaces"
+            },
+            {
+              "level": 2,
+              "text": "Creating Agents",
+              "anchor": "creating-agents"
+            }
+          ],
+          "filePath": "features/tavern/index.md",
+          "accessLevel": "public"
+        },
+        {
           "slug": "features/integrations/slack-integration",
           "title": "Slack Integration",
           "description": "Use AI agents in Slack with @mentions, thread intelligence, and natural language commands for GitHub, Jira, and Confluence",
@@ -13186,63 +13263,6 @@
           "accessLevel": "public"
         },
         {
-          "slug": "features/tavern",
-          "title": "The Tavern",
-          "description": "Autonomous AI agent simulation in Bike4Mind",
-          "category": "features",
-          "sidebarPosition": 1,
-          "tags": [],
-          "headings": [
-            {
-              "level": 1,
-              "text": "The Tavern",
-              "anchor": "the-tavern"
-            },
-            {
-              "level": 2,
-              "text": "How It Works",
-              "anchor": "how-it-works"
-            },
-            {
-              "level": 3,
-              "text": "Agents",
-              "anchor": "agents"
-            },
-            {
-              "level": 3,
-              "text": "Heartbeats",
-              "anchor": "heartbeats"
-            },
-            {
-              "level": 3,
-              "text": "Quest Board",
-              "anchor": "quest-board"
-            },
-            {
-              "level": 3,
-              "text": "Confidence Gates",
-              "anchor": "confidence-gates"
-            },
-            {
-              "level": 3,
-              "text": "Agent-to-Agent Communication",
-              "anchor": "agent-to-agent-communication"
-            },
-            {
-              "level": 2,
-              "text": "Interfaces",
-              "anchor": "interfaces"
-            },
-            {
-              "level": 2,
-              "text": "Creating Agents",
-              "anchor": "creating-agents"
-            }
-          ],
-          "filePath": "features/tavern/index.md",
-          "accessLevel": "public"
-        },
-        {
           "slug": "features/notebooks",
           "title": "Notebooks - AI Chat Sessions",
           "description": "Complete guide to Bike4Mind's notebook chat interface - your workspace for AI conversations",
@@ -13726,6 +13746,88 @@
           "accessLevel": "public"
         },
         {
+          "slug": "features/tavern/cli",
+          "title": "CLI Integration",
+          "description": "Interact with Tavern agents from the B4M CLI",
+          "category": "features",
+          "sidebarPosition": 2,
+          "tags": [],
+          "headings": [
+            {
+              "level": 1,
+              "text": "Tavern CLI Integration",
+              "anchor": "tavern-cli-integration"
+            },
+            {
+              "level": 2,
+              "text": "Enabling Tavern",
+              "anchor": "enabling-tavern"
+            },
+            {
+              "level": 2,
+              "text": "Usage",
+              "anchor": "usage"
+            },
+            {
+              "level": 3,
+              "text": "Discovering Agents",
+              "anchor": "discovering-agents"
+            },
+            {
+              "level": 3,
+              "text": "Creating Agents",
+              "anchor": "creating-agents"
+            },
+            {
+              "level": 3,
+              "text": "Editing and Deleting Agents",
+              "anchor": "editing-and-deleting-agents"
+            },
+            {
+              "level": 3,
+              "text": "Talking to Agents",
+              "anchor": "talking-to-agents"
+            },
+            {
+              "level": 3,
+              "text": "Quest Board",
+              "anchor": "quest-board"
+            },
+            {
+              "level": 3,
+              "text": "Agent Notebooks",
+              "anchor": "agent-notebooks"
+            },
+            {
+              "level": 3,
+              "text": "Confidence Gates",
+              "anchor": "confidence-gates"
+            },
+            {
+              "level": 3,
+              "text": "Heartbeat Control",
+              "anchor": "heartbeat-control"
+            },
+            {
+              "level": 2,
+              "text": "Tools Reference",
+              "anchor": "tools-reference"
+            },
+            {
+              "level": 2,
+              "text": "Activity Stream",
+              "anchor": "activity-stream"
+            },
+            {
+              "level": 2,
+              "text": "Disabling Tavern",
+              "anchor": "disabling-tavern"
+            }
+          ],
+          "filePath": "features/tavern/cli.md",
+          "accessLevel": "public"
+        },
+        {
           "slug": "features/integrations/slack-admin-guide",
           "title": "Slack Admin Guide",
           "description": "Set up and manage the Bike4Mind Slack app for your workspace with manifest-based configuration",
@@ -14161,88 +14263,6 @@
             }
           ],
           "filePath": "features/integrations/confluence-mcp-tools.md",
-          "accessLevel": "public"
-        },
-        {
-          "slug": "features/tavern/cli",
-          "title": "CLI Integration",
-          "description": "Interact with Tavern agents from the B4M CLI",
-          "category": "features",
-          "sidebarPosition": 2,
-          "tags": [],
-          "headings": [
-            {
-              "level": 1,
-              "text": "Tavern CLI Integration",
-              "anchor": "tavern-cli-integration"
-            },
-            {
-              "level": 2,
-              "text": "Enabling Tavern",
-              "anchor": "enabling-tavern"
-            },
-            {
-              "level": 2,
-              "text": "Usage",
-              "anchor": "usage"
-            },
-            {
-              "level": 3,
-              "text": "Discovering Agents",
-              "anchor": "discovering-agents"
-            },
-            {
-              "level": 3,
-              "text": "Creating Agents",
-              "anchor": "creating-agents"
-            },
-            {
-              "level": 3,
-              "text": "Editing and Deleting Agents",
-              "anchor": "editing-and-deleting-agents"
-            },
-            {
-              "level": 3,
-              "text": "Talking to Agents",
-              "anchor": "talking-to-agents"
-            },
-            {
-              "level": 3,
-              "text": "Quest Board",
-              "anchor": "quest-board"
-            },
-            {
-              "level": 3,
-              "text": "Agent Notebooks",
-              "anchor": "agent-notebooks"
-            },
-            {
-              "level": 3,
-              "text": "Confidence Gates",
-              "anchor": "confidence-gates"
-            },
-            {
-              "level": 3,
-              "text": "Heartbeat Control",
-              "anchor": "heartbeat-control"
-            },
-            {
-              "level": 2,
-              "text": "Tools Reference",
-              "anchor": "tools-reference"
-            },
-            {
-              "level": 2,
-              "text": "Activity Stream",
-              "anchor": "activity-stream"
-            },
-            {
-              "level": 2,
-              "text": "Disabling Tavern",
-              "anchor": "disabling-tavern"
-            }
-          ],
-          "filePath": "features/tavern/cli.md",
           "accessLevel": "public"
         },
         {
@@ -15358,6 +15378,11 @@
             },
             {
               "level": 3,
+              "text": "Active Sessions",
+              "anchor": "active-sessions"
+            },
+            {
+              "level": 3,
               "text": "Blocked IPs",
               "anchor": "blocked-ips"
             },
@@ -15575,6 +15600,11 @@
             },
             {
               "level": 3,
+              "text": "Chunk Policy (passage size)",
+              "anchor": "chunk-policy-passage-size"
+            },
+            {
+              "level": 3,
               "text": "Vector Embeddings",
               "anchor": "vector-embeddings"
             },
@@ -15717,6 +15747,16 @@
               "level": 3,
               "text": "Compliance",
               "anchor": "compliance"
+            },
+            {
+              "level": 3,
+              "text": "Data lake access and membership view",
+              "anchor": "data-lake-access-and-membership-view"
+            },
+            {
+              "level": 3,
+              "text": "Troubleshooting the access view",
+              "anchor": "troubleshooting-the-access-view"
             },
             {
               "level": 2,
@@ -18865,5 +18905,5 @@
       "accessLevel": "public"
     }
   ],
-  "version": "2026-07-29T13:14:08.393Z"
+  "version": "2026-08-14T12:23:16.373Z"
 }
