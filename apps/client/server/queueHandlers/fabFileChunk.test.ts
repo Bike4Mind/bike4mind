@@ -56,6 +56,11 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: vi.fn((fn: () => unknown) => fn()),
 }));
 
+// Whole-module mock, NOT importActual: importActual('@bike4mind/services') loads the package barrel
+// (services/dist/index.mjs), whose top-level creditService import throws in this environment - it
+// can't even collect. The two admission helpers below are pure and dependency-free; their real
+// implementations are covered in admissionContract.test.ts, so this mirror only needs to stay
+// behaviorally faithful (deriveAdmissionStatus: conflict->quarantined; admissionDoorLabel: ?? unknown).
 vi.mock('@bike4mind/services', () => ({
   fabFilesService: { chunkFabfile: h.chunkFabfile },
   // Owner-altitude chunk-policy resolution (#1662). The resolver never throws; default it to the
@@ -69,8 +74,6 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     resolveSpendLevers: vi.fn(async () => ({ vectorizeChunkBatchSize: 50 })),
     recomputeFileChunkPolicyConflict: h.recomputeFileChunkPolicyConflict,
-    // Pure admission-contract helpers (#1679); mirror the real implementations so the handler's
-    // admission-decision branch is exercised, not swallowed by a missing-export TypeError.
     deriveAdmissionStatus: (conflict: unknown) => (conflict ? 'quarantined' : 'admitted'),
     admissionDoorLabel: (sourceType: string | undefined) => sourceType ?? 'unknown',
   },

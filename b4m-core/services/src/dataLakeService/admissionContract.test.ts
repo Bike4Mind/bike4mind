@@ -27,32 +27,29 @@ describe('normalizeTextForHash', () => {
 
 describe('computeServerTextHash', () => {
   it('is deterministic for the same extracted text', () => {
-    const a = computeServerTextHash(['hello', 'world']);
-    const b = computeServerTextHash(['hello', 'world']);
+    const a = computeServerTextHash('hello world');
+    const b = computeServerTextHash('hello world');
     expect(a).toBeDefined();
     expect(a).toBe(b);
     expect(a).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('is order-sensitive: reordered chunks are materially different content', () => {
-    expect(computeServerTextHash(['a', 'b'])).not.toBe(computeServerTextHash(['b', 'a']));
-  });
-
   it('ignores insignificant whitespace differences (a "materially changed" signal, not byte identity)', () => {
-    // Same words, different line wrapping / spacing between and within chunks.
-    const wrapped = computeServerTextHash(['the quick brown', 'fox jumps']);
-    const reflowed = computeServerTextHash(['the   quick\nbrown', '  fox jumps  ']);
+    // Same words, different line wrapping / spacing - e.g. two extractions of the same document.
+    const wrapped = computeServerTextHash('the quick brown fox jumps');
+    const reflowed = computeServerTextHash('the   quick\nbrown   fox\n\njumps  ');
     expect(wrapped).toBe(reflowed);
   });
 
   it('changes when the text materially changes', () => {
-    expect(computeServerTextHash(['the quick brown fox'])).not.toBe(computeServerTextHash(['the quick red fox']));
+    expect(computeServerTextHash('the quick brown fox')).not.toBe(computeServerTextHash('the quick red fox'));
   });
 
   it('returns undefined for text-less input rather than hashing the empty string', () => {
     // A hashed empty string would collide across every extraction that yields no text.
-    expect(computeServerTextHash([])).toBeUndefined();
-    expect(computeServerTextHash(['', '   ', '\n'])).toBeUndefined();
+    expect(computeServerTextHash(undefined)).toBeUndefined();
+    expect(computeServerTextHash('')).toBeUndefined();
+    expect(computeServerTextHash('  \n\t ')).toBeUndefined();
   });
 });
 

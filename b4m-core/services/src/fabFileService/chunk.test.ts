@@ -45,6 +45,7 @@ describe('chunkFabfile', () => {
     (SmartChunker as unknown as Mock).mockImplementation(function MockSmartChunker(this: unknown) {
       return {
         chunkFile: vi.fn().mockResolvedValue([{ text: 'chunk one', tokenCount: 2 }]),
+        getExtractedText: vi.fn().mockReturnValue('chunk one'),
         freeEncoder: vi.fn(),
       };
     });
@@ -141,6 +142,7 @@ describe('chunkFabfile', () => {
           { text: 'chunk one', tokenCount: 2 }, // 9 code points
           { text: 'four\u{1F600}', tokenCount: 2 }, // 5 code points, 6 UTF-16 units
         ]),
+        getExtractedText: vi.fn().mockReturnValue('chunk one four\u{1F600}'),
         freeEncoder: vi.fn(),
       };
     });
@@ -230,13 +232,16 @@ describe('chunkFabfile', () => {
     });
   });
 
-  it('stamps the server-verified text hash over the extracted chunk text (admission contract #1679)', async () => {
+  it('stamps the server-verified text hash over the CANONICAL EXTRACTED TEXT, not the chunk output (admission contract #1679)', async () => {
     (SmartChunker as unknown as Mock).mockImplementation(function MockSmartChunker(this: unknown) {
       return {
+        // Chunk output is deliberately unlike the extracted text (policy-dependent boundaries); the
+        // hash must derive from getExtractedText, so a mismatch here would fail the assertion.
         chunkFile: vi.fn().mockResolvedValue([
-          { text: 'the quick brown', tokenCount: 3 },
-          { text: 'fox jumps', tokenCount: 2 },
+          { text: 'the quick', tokenCount: 2 },
+          { text: 'brown fox jumps', tokenCount: 3 },
         ]),
+        getExtractedText: vi.fn().mockReturnValue('the quick brown fox jumps'),
         freeEncoder: vi.fn(),
       };
     });
@@ -248,13 +253,17 @@ describe('chunkFabfile', () => {
     );
 
     const updatedFile = mockAdapter.db.fabFiles.update.mock.calls[0][0] as { serverTextHash?: string };
-    expect(updatedFile.serverTextHash).toBe(computeServerTextHash(['the quick brown', 'fox jumps']));
+    expect(updatedFile.serverTextHash).toBe(computeServerTextHash('the quick brown fox jumps'));
     expect(updatedFile.serverTextHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('clears serverTextHash to null for a file that yields no extractable text', async () => {
     (SmartChunker as unknown as Mock).mockImplementation(function MockSmartChunker(this: unknown) {
-      return { chunkFile: vi.fn().mockResolvedValue([]), freeEncoder: vi.fn() };
+      return {
+        chunkFile: vi.fn().mockResolvedValue([]),
+        getExtractedText: vi.fn().mockReturnValue(undefined),
+        freeEncoder: vi.fn(),
+      };
     });
 
     await chunkFabfile(
@@ -280,7 +289,11 @@ describe('chunkFabfile', () => {
       serverTextHash: stale,
     });
     (SmartChunker as unknown as Mock).mockImplementation(function MockSmartChunker(this: unknown) {
-      return { chunkFile: vi.fn().mockResolvedValue([]), freeEncoder: vi.fn() };
+      return {
+        chunkFile: vi.fn().mockResolvedValue([]),
+        getExtractedText: vi.fn().mockReturnValue(undefined),
+        freeEncoder: vi.fn(),
+      };
     });
 
     await chunkFabfile(

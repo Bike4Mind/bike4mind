@@ -2,59 +2,39 @@ import { createHash } from 'crypto';
 import type { FabFileChunkPolicyConflict, FabFileSourceType } from '@bike4mind/common';
 
 /**
- * The lake admission contract (#1679).
- *
- * A data lake is written to through a growing set of doors - the batch/wizard upload, the direct
- * file API, the S3 event pipeline, the chat-platform add command, and the cloud-storage folder
- * connector (#1586). Left to themselves each door re-derives its own chunking, its own idea of
- * "done", and its own (or no) provenance, which is why four chunk sizes are in play and the lake
- * cannot say which door a member came through.
- *
- * This module is the shared idea of "done" those doors converge on. It does NOT try to make every
- * door call one create function - they upload bytes in genuinely different ways - it defines the
- * guarantees a member must satisfy once admitted, evaluated at the ONE checkpoint every door's file
- * already flows through: the chunk pipeline (even the S3 door merely re-enqueues chunking). At that
- * checkpoint the contract:
- *
- *   1. computes a server-verified text hash over the extracted text (`computeServerTextHash`), the
- *      trustworthy dedup input the acquisition proposal queue (#1671) needs - unlike the client
- *      byte-hash `contentHash`, which only two doors write and none verify server-side; and
- *   2. decides the member's retrievability against the applicable chunk policy
- *      (`deriveAdmissionStatus`): a member whose chunks cannot honor a lake it belongs to is
- *      `quarantined` rather than silently admitted as content that will never be retrievable.
- *
- * REPORT-ONLY. Per the epic's report-only-before-enforcing rule (#1658), this contract RECORDS the
- * admission decision and computes the hash; it does not yet block a quarantined member. Turning the
- * decision into a hard gate is #1680, which reads the same `chunkPolicyConflict` signal this derives
- * `quarantined` from - so there is a single source of truth for "cannot be honored", not two.
- *
- * Provenance ("which door") is carried by the existing `FabFile.sourceType`, stamped by each door at
- * create time; `admissionDoorLabel` renders it for the checkpoint's diagnostic.
+ * The lake admission contract (#1679): the shared idea of "done" every ingestion door converges on,
+ * evaluated at the ONE checkpoint every door's file already flows through - the chunk pipeline. It
+ * does not funnel the structurally-different doors through one create call; it (1) fingerprints the
+ * extracted text (`computeServerTextHash`) and (2) derives the member's retrievability against the
+ * applicable chunk policy (`deriveAdmissionStatus`). REPORT-ONLY per #1658 - #1680 turns the same
+ * `chunkPolicyConflict` signal into the hard gate. Provenance is carried by `FabFile.sourceType`.
  */
 
 /** Whether an admitted member's chunks honor every lake policy that applies to it. */
 export type AdmissionStatus = 'admitted' | 'quarantined';
 
 /**
- * Collapse insignificant text differences so the hash is a "materially changed" signal (#1671),
- * not a byte-identity check: normalize to NFC, fold every run of Unicode whitespace to a single
- * space, and trim. Two extractions of the same document that differ only in line wrapping or
- * trailing whitespace hash equal; a real content change does not.
+ * Collapse insignificant text differences so the hash is a "materially changed" signal, not a
+ * byte-identity check: NFC, fold Unicode whitespace runs to one space, trim. Same document differing
+ * only in wrapping/trailing whitespace hashes equal; a real content change does not.
  */
 export function normalizeTextForHash(text: string): string {
   return text.normalize('NFC').replace(/\s+/g, ' ').trim();
 }
 
 /**
- * Server-verified SHA-256 (hex) over a file's extracted text. Fed the per-chunk texts the pipeline
- * produced - the exact content that became retrievable - joined in chunk order so the hash is
- * deterministic for a given extraction. Returns undefined when there is no extractable text (a file
- * that chunked to nothing), so a caller never records an empty-string hash that would collide across
- * every text-less file. This is computed on the server from bytes we hold, which is what makes it
- * trustworthy where `contentHash` (client-supplied, unverified) is not.
+ * Server-verified SHA-256 (hex) over a file's CANONICAL EXTRACTED TEXT - the text as extracted from
+ * the document (SmartChunker.getExtractedText), NOT the chunker's output. That distinction is load-
+ * bearing: chunk boundaries, structural JSON/CSV/XLSX envelopes, and data-URL redaction all move with
+ * chunkTokenLimit/model, so hashing chunk output would make two byte-identical files under different
+ * chunk policies fingerprint differently - the exact false "materially changed" signal this field
+ * exists to be immune to. Trustworthy for #1671 dedup where the client byte-hash `contentHash` is not
+ * (unverified, absent on connector files). Undefined when there is no extractable text, so a caller
+ * never records an empty-string hash that collides across every text-less file.
  */
-export function computeServerTextHash(chunkTexts: readonly string[]): string | undefined {
-  const normalized = normalizeTextForHash(chunkTexts.join('\n'));
+export function computeServerTextHash(extractedText: string | undefined): string | undefined {
+  if (!extractedText) return undefined;
+  const normalized = normalizeTextForHash(extractedText);
   if (!normalized) return undefined;
   return createHash('sha256').update(normalized).digest('hex');
 }

@@ -137,15 +137,16 @@ export const chunkFabfile = async (
 
   const chunked = chunks.length > 0;
 
-  // Lake admission contract (#1679): fingerprint the freshly-extracted chunk text - the one moment
-  // every ingestion door's file converges here and its text exists server-side. computeServerTextHash
-  // returns undefined for a file with no extractable text (nothing to dedup on) rather than hashing
-  // the empty string, which would collide across every such file; persist that as an explicit null so
-  // the field is ALWAYS written in the payload below. Skipping the write on a text-less re-chunk (e.g.
-  // a reprocess dropping N chunks to 0) would leave the prior chunking's stale hash in place and let
-  // the fingerprint outlive its text. See dataLakeService/admissionContract.ts for why this is the
+  // Lake admission contract (#1679): fingerprint the CANONICAL EXTRACTED TEXT (chunker.getExtractedText()),
+  // NOT the chunk output - whose boundaries, envelopes, and redaction move with chunk policy, so two
+  // byte-identical files under different owner policies would fingerprint differently. computeServerTextHash
+  // returns undefined for a file with no extractable text (nothing to dedup on) rather than hashing the
+  // empty string, which would collide across every such file; persist that as an explicit null so the
+  // field is ALWAYS written in the payload below. Skipping the write on a text-less re-chunk (e.g. a
+  // reprocess dropping N chunks to 0) would leave the prior chunking's stale hash in place and let the
+  // fingerprint outlive its text. See dataLakeService/admissionContract.ts for why this is the
   // trustworthy dedup input, not contentHash.
-  const serverTextHash = computeServerTextHash(chunks.map(chunk => chunk.text)) ?? null;
+  const serverTextHash = computeServerTextHash(chunker.getExtractedText()) ?? null;
 
   // Explicit payload naming only the fields this function owns (#1802): `isChunking` and
   // `chunkClaimedAt` are the WORKER's claim, acquired by its CAS and released in its `finally`
