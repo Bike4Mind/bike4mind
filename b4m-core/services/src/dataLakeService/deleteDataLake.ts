@@ -8,6 +8,7 @@ import type {
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { type ManageActor } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
+import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
 import { bestEffortIndexRemove, type RetrievalIndexPort } from './ports';
@@ -85,7 +86,8 @@ export const deleteDataLake = async (
   // soft-deleted members too and stays stable across re-runs.
   await bestEffortIndexRemove(retrievalIndex, scope, () => db.fabFiles.findIdsByDataLakeTag(scope), logger);
 
-  const updated = await db.dataLakes.update({ id: dataLakeId, status: 'deleted' });
+  // Terminal transition only - see the note on archiveDataLake's settle step.
+  const updated = await db.dataLakes.update({ id: dataLakeId, status: 'deleted', ...lakeConfigWriteStamp(actor) });
   if (!updated) {
     throw new NotFoundError('Data lake not found after delete');
   }
