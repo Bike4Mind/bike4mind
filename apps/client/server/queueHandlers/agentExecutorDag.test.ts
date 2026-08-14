@@ -86,7 +86,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 // Import AFTER mocks are registered so the module picks up our stubs.
-const { buildDagResumeReport, onDagNodeTerminal } = await import('./agentExecutorDag');
+const { buildDagResumeReport, isDagAggregationWake, onDagNodeTerminal } = await import('./agentExecutorDag');
 
 const spec: IDagSpec = {
   toolUseId: 'tool_use_1',
@@ -208,6 +208,36 @@ describe('buildDagResumeReport', () => {
     expect(report.failedNodes).toContain('explore');
     expect(report.summary).toContain('Failed Tasks (1)');
     expect(report.summary).toMatch(/Aborted|Unknown error/);
+  });
+});
+
+describe('isDagAggregationWake', () => {
+  it('is true only when resuming a DAG wake with both dagSpec and waitingOnDagChildren present', () => {
+    expect(
+      isDagAggregationWake({ isDagResume: true, dagSpec: spec, waitingOnDagChildren: { toolUseId: 'tool_use_1' } })
+    ).toBe(true);
+  });
+
+  it('is false when not a DAG resume, even with a stale dagSpec/waitingOnDagChildren left on the doc', () => {
+    expect(
+      isDagAggregationWake({ isDagResume: false, dagSpec: spec, waitingOnDagChildren: { toolUseId: 'tool_use_1' } })
+    ).toBe(false);
+  });
+
+  it('is false when resuming but dagSpec is missing', () => {
+    expect(
+      isDagAggregationWake({ isDagResume: true, dagSpec: undefined, waitingOnDagChildren: { toolUseId: 'tool_use_1' } })
+    ).toBe(false);
+  });
+
+  it('is false when resuming but waitingOnDagChildren is missing', () => {
+    expect(isDagAggregationWake({ isDagResume: true, dagSpec: spec, waitingOnDagChildren: undefined })).toBe(false);
+  });
+
+  it('is false when both are missing', () => {
+    expect(isDagAggregationWake({ isDagResume: true, dagSpec: undefined, waitingOnDagChildren: undefined })).toBe(
+      false
+    );
   });
 });
 

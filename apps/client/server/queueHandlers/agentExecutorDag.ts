@@ -347,3 +347,20 @@ export function buildDagResumeReport(args: {
 
   return { summary, success, failedNodes };
 }
+
+/**
+ * Whether this invocation is a DAG parent waking ONLY to aggregate children
+ * that have already finished, with no new billable work of its own to start.
+ * Shared by the per-member credit cap gate (skip - an aggregation wake should
+ * not be blocked, it just returns work the org already paid for) and the
+ * resume-trigger check below in `agentExecutor.ts` (fire - inject the
+ * aggregated result and clear `waitingOnDagChildren`), so the two decisions
+ * can never drift apart.
+ */
+export function isDagAggregationWake(args: {
+  isDagResume: boolean;
+  dagSpec: unknown;
+  waitingOnDagChildren: unknown;
+}): boolean {
+  return args.isDagResume && args.dagSpec != null && args.waitingOnDagChildren != null;
+}

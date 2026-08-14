@@ -88,7 +88,7 @@ import { buildTruncatedRunReply } from './agentExecutorUtils/truncatedReply';
 import { guardPlanCompletion } from './agentExecutorUtils/planCompletionGuard';
 import { injectBriefContext } from './agentExecutorUtils/briefContextInjector';
 import { rehydrateOptiPlanState, ledgerForWrite } from './agentExecutorUtils/optiPlanLedger';
-import { buildDagResumeReport, makeDagDispatcher, onDagNodeTerminal } from './agentExecutorDag';
+import { buildDagResumeReport, isDagAggregationWake, makeDagDispatcher, onDagNodeTerminal } from './agentExecutorDag';
 import { collectDagChildArtifactBlocks } from './agentExecutor.dagArtifacts';
 import type { DagHandoffSignal } from '@bike4mind/services';
 // `buildFirstIterationQuery` lives in its own module so it can be
@@ -634,6 +634,14 @@ async function processExecution(
     // Phase 4a - accept `awaiting_dag_children -> running` so the continuation
     // Lambda woken by the last-child completion hook can resume the parent.
     const isDagResume = !isNewExecution && execution.status === 'awaiting_dag_children';
+    // Computed once and reused by both the credit-cap gate (skip) and the DAG
+    // resume-trigger below (fire) so the two can never disagree about whether
+    // this wake is aggregation-only.
+    const isAggregationOnlyWake = isDagAggregationWake({
+      isDagResume,
+      dagSpec: execution.dagSpec,
+      waitingOnDagChildren: execution.waitingOnDagChildren,
+    });
     const expectedStatuses = isNewExecution
       ? (['pending'] as const)
       : isSubagentResume
@@ -775,7 +783,14 @@ async function processExecution(
     // so it re-runs on every continuation/subagent-resume/DAG-wake: a run that crosses the
     // cap mid-execution IS stopped, at its next handoff (like the pool gate above). Started,
     // in-flight iterations still settle - this bounds the overshoot, it does not refund it.
-    if (organization && creditService.isMemberAtOrOverCap(organization, execution.userId)) {
+    //
+    // Exception: a DAG parent waking ONLY to aggregate children that have already
+    // finished (`isAggregationOnlyWake`) does no new billable work of its own, so
+    // gating it would hard-fail the parent and strand completed, already-paid-for
+    // child work with no aggregated result returned. Skipping the gate here is bounded
+    // to this one handoff - if the parent needs another continuation afterward, that
+    // next invocation is a normal `continuing` status and this gate applies in full.
+    if (organization && !isAggregationOnlyWake && creditService.isMemberAtOrOverCap(organization, execution.userId)) {
       logger.warn('[Credits] Member credit cap reached; refusing to start execution', {
         used: creditService.getMemberUsedCredits(organization, execution.userId),
         cap: organization.maxCreditsPerMember,
@@ -1807,7 +1822,7 @@ async function processExecution(
     // the last terminal DAG child enqueued this continuation; load all child
     // results, build the aggregated markdown via shared `buildPipelineResult`,
     // and surgically replace the `coordinate_task` placeholder observation.
-    if (isDagResume && execution.dagSpec && execution.waitingOnDagChildren) {
+    if (isAggregationOnlyWake && execution.dagSpec && execution.waitingOnDagChildren) {
       // NOTE (merge): combined with main's first-iteration CASL scope below -
       // these are independent additions in the same spot; both are kept.
       const children = await agentExecutionRepository.findDagChildrenLean(executionId);
