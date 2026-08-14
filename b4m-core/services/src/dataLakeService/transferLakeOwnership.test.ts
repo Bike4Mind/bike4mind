@@ -25,11 +25,13 @@ const makeAdapters = (
   } = {}
 ) => {
   const upsertGrant = vi.fn(async input => activeGrant(input));
+  const update = vi.fn(async () => (over.lakeDoc === undefined ? lake() : over.lakeDoc));
   return {
     upsertGrant,
+    update,
     adapters: {
       db: {
-        dataLakes: { findById: vi.fn(async () => (over.lakeDoc === undefined ? lake() : over.lakeDoc)) },
+        dataLakes: { findById: vi.fn(async () => (over.lakeDoc === undefined ? lake() : over.lakeDoc)), update },
         dataLakeAccessGrants: {
           listByLake: vi.fn(async () => over.grants ?? []),
           upsertGrant,
@@ -65,7 +67,7 @@ describe('transferLakeOwnership', () => {
   });
 
   it('transfers by granting the new owner and demoting the prior (fallback) creator to curator', async () => {
-    const { adapters, upsertGrant } = makeAdapters();
+    const { adapters, upsertGrant, update } = makeAdapters();
     const result = await transferLakeOwnership(owner, 'lake1', 'newOwner', adapters);
 
     expect(upsertGrant).toHaveBeenCalledWith(
@@ -75,8 +77,40 @@ describe('transferLakeOwnership', () => {
       expect.objectContaining({ principalType: 'user', principalId: 'creator', role: 'curator' })
     );
     expect(result).toEqual({ newOwnerUserId: 'newOwner', demotedUserIds: ['creator'] });
-    // createdByUserId is never mutated: the service issues NO write against the dataLakes repo.
-    expect((adapters as { db: { dataLakes: Record<string, unknown> } }).db.dataLakes).not.toHaveProperty('update');
+    // createdByUserId is never mutated. The service does now write the lake document - but only to
+    // carry the config-write actor stamp - so the guard is on the PAYLOAD, not on the absence of a
+    // write: ownership still moves entirely through the grants.
+    expect(update).toHaveBeenCalledWith({ id: 'lake1', lastUpdatedByUserId: 'creator' });
+    for (const [payload] of update.mock.calls) {
+      expect(payload).not.toHaveProperty('createdByUserId');
+    }
+  });
+
+  it('still reports a completed transfer when the stamp write fails, and says so', async () => {
+    // The grants above have already moved ownership, so throwing here would report a failure that
+    // did not happen and invite a retry of a finished operation - but a silent swallow would leave
+    // the stamp quietly naming an older, smaller edit.
+    const { adapters, update } = makeAdapters();
+    update.mockRejectedValueOnce(new Error('mongo down'));
+    const logger = { warn: vi.fn() };
+
+    await expect(transferLakeOwnership(owner, 'lake1', 'newOwner', { ...adapters, logger } as never)).resolves.toEqual({
+      newOwnerUserId: 'newOwner',
+      demotedUserIds: ['creator'],
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('actor stamp did not persist'),
+      expect.objectContaining({ dataLakeId: 'lake1' })
+    );
+  });
+
+  it('does not write the lake at all when the actor has no id to attribute', async () => {
+    // The stamp write exists only to record WHO; with nobody to record it must not cost a round
+    // trip, and it must not clear a prior stamp that WAS attributable.
+    const { adapters, update } = makeAdapters();
+    await transferLakeOwnership({ userId: '', isAdmin: true }, 'lake1', 'newOwner', adapters);
+
+    expect(update).not.toHaveBeenCalled();
   });
 
   it('demotes a PRIOR owner-grant holder (not the creator) when ownership was already transferred once', async () => {
