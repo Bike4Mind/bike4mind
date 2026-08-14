@@ -402,10 +402,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // signal. Log the verdict with the DOOR the member came through, which the policy recompute
       // cannot see - so a smoke test can tell a quarantined member from one that was never checked.
       const admissionStatus = dataLakeService.deriveAdmissionStatus(conflict);
-      if (admissionStatus === 'quarantined') {
+      if (conflict && admissionStatus === 'quarantined') {
         logger.warn(
           `[admission] file ${fabFileId} quarantined (report-only) via ${dataLakeService.admissionDoorLabel(fabFile.sourceType)}: ` +
-            `chunks at target ${effectivePassageTokenTarget} cannot honor ${conflict!.lakes.length} lake policy(ies)`
+            `chunks at target ${effectivePassageTokenTarget} cannot honor ${conflict.lakes.length} lake policy(ies)`
         );
       }
     } catch (err) {

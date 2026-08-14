@@ -252,7 +252,7 @@ describe('chunkFabfile', () => {
     expect(updatedFile.serverTextHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('leaves serverTextHash unset for a file that yields no extractable text', async () => {
+  it('clears serverTextHash to null for a file that yields no extractable text', async () => {
     (SmartChunker as unknown as Mock).mockImplementation(function MockSmartChunker(this: unknown) {
       return { chunkFile: vi.fn().mockResolvedValue([]), freeEncoder: vi.fn() };
     });
@@ -263,7 +263,36 @@ describe('chunkFabfile', () => {
       mockAdapter as never
     );
 
-    const updatedFile = mockAdapter.db.fabFiles.update.mock.calls[0][0] as { serverTextHash?: string };
-    expect(updatedFile.serverTextHash).toBeUndefined();
+    const updatedFile = mockAdapter.db.fabFiles.update.mock.calls[0][0] as {
+      serverTextHash?: string | null;
+    };
+    // null, not undefined: db.update does a full-document $set and Mongoose strips undefined, so
+    // undefined would leave any prior hash in place (see next test).
+    expect(updatedFile.serverTextHash).toBeNull();
+  });
+
+  it('nulls a previously-stamped serverTextHash when a re-chunk yields no text (never outlives its text)', async () => {
+    // A reprocess resets chunked/chunkCount but not serverTextHash; if extraction now yields nothing
+    // (parser regression, mimeType change), the full-document $set must not re-persist the old hash.
+    const stale = 'a'.repeat(64);
+    mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({
+      ...mockFabFile,
+      serverTextHash: stale,
+    });
+    (SmartChunker as unknown as Mock).mockImplementation(function MockSmartChunker(this: unknown) {
+      return { chunkFile: vi.fn().mockResolvedValue([]), freeEncoder: vi.fn() };
+    });
+
+    await chunkFabfile(
+      mockUser,
+      { fabFileId: 'file-1', embeddingModel: 'text-embedding-ada-002' },
+      mockAdapter as never
+    );
+
+    const updatedFile = mockAdapter.db.fabFiles.update.mock.calls[0][0] as {
+      serverTextHash?: string | null;
+    };
+    expect(updatedFile.serverTextHash).toBeNull();
+    expect(updatedFile.serverTextHash).not.toBe(stale);
   });
 });
