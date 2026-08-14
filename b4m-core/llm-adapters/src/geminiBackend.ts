@@ -1207,7 +1207,11 @@ export class GeminiBackend implements ICompletionBackend {
           // of which model the history was originally fetched for. Scoped to the gemini-3 family:
           // that is the one this repo has observed actually rejects a missing signature (see the
           // pre-existing warn below this branch), so a 2.x/1.x model isn't degraded for no reason.
-          if (this.currentModel.includes('gemini-3') && !toolUseBlocks[0]?.thought_signature) {
+          // /^gemini-3(\D|$)/ rather than a plain substring match: matches gemini-3-pro-preview,
+          // gemini-3.1-pro-preview, gemini-3.5-flash (a non-digit or end follows "gemini-3" in
+          // every real id), but not a hypothetical future gemini-30/gemini-33 family, which this
+          // repo has never observed to need the guard.
+          if (/^gemini-3(\D|$)/.test(this.currentModel) && !toolUseBlocks[0]?.thought_signature) {
             this.logger.warn(
               '[Gemini] Dropping replayed tool_use block(s) with no thought_signature on the first call:',
               { names: toolUseBlocks.map(t => t.name), messageRole: message.role }

@@ -22,6 +22,7 @@ import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { executeToolsBatch } from './executeToolsBatch';
 import { truncateToolResult } from './recordToolResult';
 import { normalizeOllamaDoneReason } from './stopReason';
+import { v4 as uuidv4 } from 'uuid';
 
 /** A tool call normalized across native (message.tool_calls) and content-embedded forms. */
 interface NormalizedToolCall {
@@ -305,9 +306,9 @@ export class OllamaBackend implements ICompletionBackend {
 
       // Prefer native tool_calls; fall back to a tool call the model emitted as
       // plain content (some smaller models do this instead of using tool_calls).
-      let toolCalls = this.normalizeToolCalls(round.toolCalls, priorToolsUsed.length);
+      let toolCalls = this.normalizeToolCalls(round.toolCalls);
       if (toolCalls.length === 0 && offerTools) {
-        toolCalls = this.parseContentToolCall(round.content, options.tools ?? [], priorToolsUsed.length);
+        toolCalls = this.parseContentToolCall(round.content, options.tools ?? []);
       }
       const toolsUsed = [
         ...priorToolsUsed,
@@ -549,16 +550,18 @@ export class OllamaBackend implements ICompletionBackend {
   /**
    * Normalize Ollama's native tool_calls into the shared NormalizedToolCall shape.
    *
-   * `idOffset` (pass the accumulated tool count from prior rounds, i.e.
-   * `priorToolsUsed.length`) is what keeps ids unique ACROSS rounds, not just within one -
-   * without it, round 1's call 0 and round 3's call 0 of the same tool mint the identical
-   * id, and replayableToolCalls' id-based dedup silently drops the later entry.
+   * Ids are real uuids, not a position-derived string. A prior version keyed ids off
+   * `accumulated-count + round-local-index`, but the accumulated count is measured AFTER
+   * hallucinated calls are filtered out while the round-local index is assigned BEFORE that
+   * filter runs, so the two can drift and mint the same id for two different real calls across
+   * rounds - replayableToolCalls dedupes by id and silently drops the later one. A uuid makes
+   * the whole collision class unrepresentable, matching how the other backends already mint ids.
    */
-  private normalizeToolCalls(toolCalls: ToolCall[], idOffset: number): NormalizedToolCall[] {
-    return toolCalls.map((tc, i) => ({
+  private normalizeToolCalls(toolCalls: ToolCall[]): NormalizedToolCall[] {
+    return toolCalls.map(tc => ({
       name: tc.function.name,
       arguments: JSON.stringify(tc.function.arguments ?? {}),
-      id: `ollama-tool-${idOffset + i}-${tc.function.name}`,
+      id: `ollama-tool-${uuidv4()}`,
     }));
   }
 
@@ -582,11 +585,7 @@ export class OllamaBackend implements ICompletionBackend {
    * authorized tools (tryParseToolCallJson requires a name present in `tools`),
    * so there is no privilege escalation - only a wider trigger surface.
    */
-  private parseContentToolCall(
-    content: string,
-    tools: ICompletionOptionTools[],
-    idOffset: number
-  ): NormalizedToolCall[] {
+  private parseContentToolCall(content: string, tools: ICompletionOptionTools[]): NormalizedToolCall[] {
     const withoutThink = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
     const fenced = this.extractFencedBlocks(withoutThink);
     const source = [withoutThink.startsWith('{') ? withoutThink : '', ...fenced].join('\n');
@@ -600,9 +599,8 @@ export class OllamaBackend implements ICompletionBackend {
       const key = `${call.name}:${call.arguments}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      // idOffset (accumulated tool count from prior rounds) keeps this id unique across
-      // rounds - see normalizeToolCalls' doc comment for why a round-local index collides.
-      calls.push({ ...call, id: `ollama-content-tool-${idOffset + calls.length}-${call.name}` });
+      // Real uuid, not a position-derived string - see normalizeToolCalls' doc comment.
+      calls.push({ ...call, id: `ollama-content-tool-${uuidv4()}` });
     }
     return calls;
   }

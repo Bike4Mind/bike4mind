@@ -11,7 +11,11 @@
  * redacted alongside it.
  *
  * This list is the single source of truth: add a field here and every response boundary that
- * routes through {@link redactFunctionCallsForViewer} inherits the redaction.
+ * routes through {@link redactFunctionCallsForViewer} inherits the redaction - PROVIDED the field
+ * is a top-level, directly-owned-content field like these two. The redaction itself is a shallow
+ * `delete` per field (see below), so a future owner-only value nested inside another field (e.g. a
+ * private blob inside `parameters`) would NOT be caught by adding its name here; that shape needs
+ * its own per-field handling, not just a new entry in this array.
  */
 export const OWNER_ONLY_FUNCTION_CALL_FIELDS = ['returnValue', 'error'] as const;
 
