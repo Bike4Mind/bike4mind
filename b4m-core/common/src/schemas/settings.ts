@@ -189,6 +189,7 @@ export const SettingKeySchema = z.enum([
   'EnableLakeMemory',
   'EnableDataLakeVectorSearch',
   'PauseLakeConvergence',
+  'EnforceLakeReadGrants',
   'EnableBriefcase',
   'EnableBriefcaseDefault',
   'EnableImageTemplates',
@@ -1913,6 +1914,17 @@ export const settingsMap = {
     // via scopeForLake, and the scheme requires Owner wherever Lake is settable) so an operator can
     // also pause all of an org's/owner's lake convergence, not only one lake at a time.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
+  }),
+  EnforceLakeReadGrants: makeBooleanSetting({
+    key: 'EnforceLakeReadGrants',
+    name: 'Data Lakes: Enforce read-time grant resolution',
+    defaultValue: false,
+    description:
+      'Read-time grant cutover (#1673). OFF by default = report-only: the read gate resolves a persisted READER grant into an ephemeral membership view and logs where it WOULD change access ([lakeReadGrantCutover] lines), but the enforced decision stays the legacy owner/org/tag/entitlement/public rule so no one gains or loses access yet. Turn ON only after the report-only logs confirm the diff is the intended set - then a reader-role grant actually opens the lake at the single gate and lists it. Platform altitude on purpose: this is a one-time install-wide migration cutover, not a per-lake lever. Tag and entitlement grants always resolve live and are never affected by this flag; only persisted reader rows are gated by it.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 94,
+    dependsOn: 'EnableDataLakes',
   }),
   EnableBriefcase: makeBooleanSetting({
     key: 'EnableBriefcase',

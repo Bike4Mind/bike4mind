@@ -1,5 +1,6 @@
 import type {
   AccessContext,
+  IAdminSettingsRepository,
   IDataLakeAccessGrantRepository,
   IDataLakeDocument,
   IDataLakeRepository,
@@ -9,9 +10,13 @@ import type {
 import { DATA_LAKES, toDataLakeConfig, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
 import { canManageLake, isEffectiveOwner, type LakeGrant } from './manageRule';
 import { redactLakesForActor, type ReaderDataLake } from './redactLakeForActor';
+import { resolveEnforceReadGrants } from './resolveLakeReadAccess';
 
 /** Grant-repo slice the list labels need: batch-read a set of lakes' grants, and one principal's. */
 type GrantLookup = Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes' | 'listByPrincipal'>;
+
+/** Settings slice for the read-time grant cutover flag - governs reader-grant inclusion in the list. */
+type SettingsLookup = Pick<IAdminSettingsRepository, 'getSettingsValue'>;
 
 /**
  * The active grants for a set of lakes, grouped by lake id, so per-lake `canManage`/`isOwn` labels
@@ -38,20 +43,24 @@ const grantsByLakeIdFor = async (
 };
 
 /**
- * Lake ids the caller holds an active MANAGE grant on (owner or curator) - fed to findAccessible so
- * a transferred/delegated lake lists. Role-filtered ON PURPOSE to stay consistent with the single
- * read gate: `canAccessLake` admits a grant only via `canManageLake`, which recognizes owner/curator
- * (not reader). Listing a `reader`-granted lake the gate would then 404 on open would be incoherent;
- * reader-grant read access is #1673's job (read-time grant resolution), so it is excluded here too.
- * Only resolves USER-principal grants - org-principal grants (rung 5) are not surfaced to the list
- * yet (they are manageable by direct id); see the epic's Lane B follow-ups. This PR only ever writes
- * owner/curator user grants, so the filter changes nothing today - it is a guard for when Lane B lands.
+ * Lake ids the caller holds an active USER-principal grant on - fed to findAccessible so a
+ * transferred/delegated lake lists. Stays in lockstep with the single read gate (#1673):
+ *  - owner/curator ALWAYS included: the gate admits them via `canManageLake`.
+ *  - reader included ONLY when `includeReaders` (the enforced read-time grant cutover): matching the
+ *    gate, which honors a reader grant only once EnforceLakeReadGrants is on. In report-only, a
+ *    reader-granted lake would 404 on open, so listing it would be incoherent - it is excluded.
+ * Only resolves USER-principal grants - org-principal grants (rung 5) are a deferred Lane B follow-up
+ * (manageable by direct id today); membership never crosses orgs regardless (epic decision 12).
  */
-const grantedLakeIdsFor = async (userId: string, grants?: GrantLookup): Promise<string[]> => {
+const grantedLakeIdsFor = async (userId: string, grants?: GrantLookup, includeReaders = false): Promise<string[]> => {
   if (!grants) return [];
   const rows = await grants.listByPrincipal('user', userId, { activeAsOf: new Date() });
   return Array.from(
-    new Set(rows.filter(row => row.role === 'owner' || row.role === 'curator').map(row => row.dataLakeId))
+    new Set(
+      rows
+        .filter(row => row.role === 'owner' || row.role === 'curator' || (includeReaders && row.role === 'reader'))
+        .map(row => row.dataLakeId)
+    )
   );
 };
 
@@ -80,6 +89,12 @@ interface ListDataLakesAdapters {
      * rung + createdByUserId fallback only.
      */
     dataLakeAccessGrants?: GrantLookup;
+    /**
+     * Optional settings repo for the read-time grant cutover flag (#1673). When present and
+     * EnforceLakeReadGrants is on, reader-granted lakes list too (in lockstep with the single gate).
+     * Absent OR a failed read -> report-only, so reader-granted lakes are NOT listed (legacy behavior).
+     */
+    settings?: SettingsLookup;
   };
 }
 
@@ -170,7 +185,8 @@ export const listDataLakes = async (
   ctx: AccessContext,
   { db }: ListDataLakesAdapters
 ): Promise<ManageableDataLakeConfig[]> => {
-  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants);
+  const includeReaders = await resolveEnforceReadGrants(db.settings);
+  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants, includeReaders);
   let dynamicLakes: IDataLakeDocument[] = [];
   try {
     dynamicLakes = await db.dataLakes.findAccessible(ctx, { statuses: ['draft', 'active'], grantedLakeIds });
@@ -251,7 +267,8 @@ export const listArchivedDataLakes = async (
   ctx: AccessContext,
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
-  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants);
+  const includeReaders = await resolveEnforceReadGrants(db.settings);
+  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants, includeReaders);
   const lakes = await db.dataLakes.findAccessible(ctx, {
     statuses: ['archived'],
     includePublic: false,
@@ -270,7 +287,8 @@ export const listDeletedDataLakes = async (
   ctx: AccessContext,
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
-  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants);
+  const includeReaders = await resolveEnforceReadGrants(db.settings);
+  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants, includeReaders);
   const lakes = await db.dataLakes.findAccessible(ctx, { statuses: ['deleted'], includePublic: false, grantedLakeIds });
   const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
   return redactLakesForActor(lakes, ctx, grantsByLake);
