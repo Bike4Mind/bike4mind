@@ -127,7 +127,9 @@ describe('LLMProvider default-model effect - the ceiling it writes for a model t
   });
 
   it('fits a deprecation fallback against the live catalog, not a stale admin-saved snapshot', async () => {
-    // getFallbackModel returns the accessible-list entry, which carries the frozen admin ceiling.
+    // getFallbackModel returns the accessible-list entry, which carries the frozen admin ceiling, so the
+    // list must serve the same stale entry - the real hook has one source for both and cannot disagree.
+    h.staleSnapshot = true;
     h.fallbackModel = MINI_STALE_SNAPSHOT;
     useLLM.getState().setLLM({ model: GONE.id, max_tokens: 50_000 });
 
