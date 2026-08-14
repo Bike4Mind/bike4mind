@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render } from '@testing-library/react';
 import { AxiosError, type AxiosAdapter, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
-import { ApiProvider, api, resetRefreshPromise, resetRedirectingGuard } from './ApiContext';
+import { ApiProvider, api, resetRedirectingGuard } from './ApiContext';
+import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
 import { useAccessToken } from '../hooks/useAccessToken';
 
 // clearClientCaches touches localStorage/IndexedDB; the redirect chain doesn't depend
@@ -52,7 +53,7 @@ describe('ApiProvider 401 interceptor -> login redirect', () => {
   let realAdapter: AxiosAdapter | undefined;
 
   beforeEach(() => {
-    resetRefreshPromise();
+    resetRefreshCoordinator();
     resetRedirectingGuard();
     replace = vi.fn();
     // Replace window.location with a plain stub so the interceptor reads a known,
@@ -456,55 +457,51 @@ describe('ApiProvider 401 interceptor -> login redirect', () => {
     expect(refreshCalls).toBe(1);
   });
 
-  // Known pre-existing gap (FP-4), tracked separately - not fixed by this PR. refreshPromise
-  // nulls in its `finally` as soon as the initiating request's refresh settles, so a second,
-  // already-in-flight request whose own 401 lands just after that clears the guard sees
-  // refreshPromise === null and starts its OWN second refresh - against a refresh token the
-  // first request's rotation already consumed. The server rejects that second attempt with a
-  // 400, which the interceptor currently treats as a genuine revocation and logs the user out,
-  // even though the session is actually fine (the first refresh succeeded moments earlier).
-  it.fails(
-    'does not spuriously log the user out when a second, near-simultaneous 401 starts a refresh against an already-rotated cookie',
-    async () => {
-      let refreshCalls = 0;
-      let releaseB: (() => void) | undefined;
-      const bGate = new Promise<void>(resolve => {
-        releaseB = resolve;
-      });
+  // Was FP-4: the in-flight guard clears as soon as the initiating request's refresh settles, so a
+  // second request whose own 401 lands just after that started its OWN exchange - against a cookie
+  // the first rotation had already consumed. The server rejected it with a 400, which reads as a
+  // revocation, and the user was logged out of a healthy session. Now the interceptor notices the
+  // 401 names a token we have already replaced and simply retries with the current one.
+  it('does not spuriously log the user out when a second, near-simultaneous 401 starts a refresh against an already-rotated cookie', async () => {
+    let refreshCalls = 0;
+    let releaseB: (() => void) | undefined;
+    const bGate = new Promise<void>(resolve => {
+      releaseB = resolve;
+    });
 
-      api.defaults.adapter = (async (config: InternalAxiosRequestConfig) => {
-        if (config.url === '/api/auth/refreshToken') {
-          refreshCalls += 1;
-          if (refreshCalls === 1) {
-            return ok(config, { accessToken: 'rotated' });
-          }
-          // Second refresh attempt: the refresh token was already consumed by the first
-          // request's rotation - the server sees this as an invalid_grant, not a fluke.
-          throw makeStatus(config, 400);
+    api.defaults.adapter = (async (config: InternalAxiosRequestConfig) => {
+      if (config.url === '/api/auth/refreshToken') {
+        refreshCalls += 1;
+        if (refreshCalls === 1) {
+          return ok(config, { accessToken: 'rotated' });
         }
-        if (config.url === '/api/x') {
-          if (config.headers?.Authorization === 'Bearer rotated') {
-            return ok(config, { ok: true });
-          }
-          throw make401(config);
-        }
-        // '/api/y' is "already in flight": held open here until request A's refresh has
-        // fully landed and cleared refreshPromise, then rejects with the same stale-token 401.
-        await bGate;
-        throw make401(config);
-      }) as AxiosAdapter;
+        // Second refresh attempt: the refresh token was already consumed by the first
+        // request's rotation - the server sees this as an invalid_grant, not a fluke.
+        throw makeStatus(config, 400);
+      }
+      // '/api/y' is "already in flight": held open until request A's refresh has fully landed and
+      // cleared the in-flight guard, then rejects the STALE token it was sent with. Like any real
+      // endpoint it accepts the rotated one, so a retry is all it ever needed.
+      if (config.url === '/api/y') await bGate;
+      if (config.headers?.Authorization === 'Bearer rotated') {
+        return ok(config, { ok: true });
+      }
+      throw make401(config);
+    }) as AxiosAdapter;
 
-      const bPromise = api.get('/api/y');
-      const aResult = await api.get('/api/x');
+    const bPromise = api.get('/api/y');
+    const aResult = await api.get('/api/x');
 
-      expect(aResult.data).toEqual({ ok: true });
-      expect(useAccessToken.getState().accessToken).toBe('rotated');
+    expect(aResult.data).toEqual({ ok: true });
+    expect(useAccessToken.getState().accessToken).toBe('rotated');
 
-      releaseB?.();
-      await expect(bPromise).rejects.toBeTruthy();
+    releaseB?.();
+    await expect(bPromise).resolves.toMatchObject({ data: { ok: true } });
 
-      expect(replace).not.toHaveBeenCalled();
-      expect(useAccessToken.getState().expired).toBe(false);
-    }
-  );
+    // One exchange for the pair: B's 401 named a token already replaced, so it retried rather
+    // than spending a second rotation on a cookie the first one consumed.
+    expect(refreshCalls).toBe(1);
+    expect(replace).not.toHaveBeenCalled();
+    expect(useAccessToken.getState().expired).toBe(false);
+  });
 });

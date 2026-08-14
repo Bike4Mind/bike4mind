@@ -65,24 +65,28 @@ class AuthSessionRepository extends BaseRepository<IAuthSessionDocument> impleme
 
   async rotateHash(
     sid: string,
-    nextHash: string,
-    previousHash: string,
-    graceExpiresAt: Date
+    params: { expectedCurrentHash: string; nextHash: string; replayExpiresAt: Date }
   ): Promise<IAuthSessionDocument | null> {
     const now = new Date();
-    // Atomic + scoped to a live session so a revoked/expired row is never resurrected by a rotate.
+    // `refreshTokenHash` in the FILTER is the compare-and-swap: it makes this a conditional write
+    // that only the first of N concurrent rotations can win. Scoped to a live session too, so a
+    // revoked/expired row is never resurrected by a rotate.
     return AuthSessionModel.findOneAndUpdate(
-      { sid, revokedAt: null, expiresAt: { $gt: now } },
+      { sid, refreshTokenHash: params.expectedCurrentHash, revokedAt: null, expiresAt: { $gt: now } },
       {
         $set: {
-          refreshTokenHash: nextHash,
-          previousRefreshTokenHash: previousHash,
-          graceExpiresAt,
+          refreshTokenHash: params.nextHash,
+          previousRefreshTokenHash: params.expectedCurrentHash,
+          graceExpiresAt: params.replayExpiresAt,
           lastUsedAt: now,
         },
       },
       { new: true }
     ).exec();
+  }
+
+  async touchLastUsed(sid: string): Promise<void> {
+    await AuthSessionModel.updateOne({ sid, revokedAt: null }, { $set: { lastUsedAt: new Date() } }).exec();
   }
 
   async revokeBySid(sid: string): Promise<IAuthSessionDocument | null> {

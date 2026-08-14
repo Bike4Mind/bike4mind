@@ -36,7 +36,10 @@ const handler = baseApi({ auth: false })
         });
         return res.json({
           access_token: rotated.accessToken,
-          refresh_token: rotated.refreshToken,
+          // Omitted when a concurrent sibling already advanced the chain. RFC 6749 s6 makes
+          // refresh_token optional in a refresh response precisely for this: absent means "keep
+          // the one you have", and the client MUST NOT discard its existing token.
+          ...(rotated.status === 'rotated' ? { refresh_token: rotated.refreshToken } : {}),
           token_type: 'Bearer',
           expires_in: 604800, // 7 days
         });

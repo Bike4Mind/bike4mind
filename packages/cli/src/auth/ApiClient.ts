@@ -138,10 +138,12 @@ export class ApiClient {
             // Calculate new expiry time
             const expiresAt = new Date(Date.now() + newTokens.expires_in * 1000).toISOString();
 
-            // Store new tokens
+            // Store new tokens. `refresh_token` is absent when the server did not rotate the chain
+            // (RFC 6749 s6) - keep the one we presented rather than persisting undefined, which
+            // would erase the credential and force a re-login on the next call.
             await this.configStore.setAuthTokens({
               accessToken: newTokens.access_token,
-              refreshToken: newTokens.refresh_token,
+              refreshToken: newTokens.refresh_token ?? tokens.refreshToken,
               expiresAt,
               userId: tokens.userId, // Preserve userId
             });

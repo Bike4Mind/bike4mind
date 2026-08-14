@@ -24,6 +24,7 @@ import { TranslationProvider } from '@client/app/contexts/TranslationProvider';
 import { QuestPreparationOverlay } from '@client/app/components/QuestPreparationOverlay';
 import { runLocalStorageCleanup } from '@client/app/utils/localStorageCleanup';
 import { revalidateSessionOnFocus, scheduleSessionRevalidation } from '@client/app/utils/sessionBootstrap';
+import { listenForSiblingRefresh } from '@client/app/utils/refreshCoordinator';
 
 // Lazy load DevTools only when needed (development only)
 const ReactQueryDevtools = lazy(() =>
@@ -174,6 +175,11 @@ export function ClientProviders({ children }: { children: ReactNode }) {
   // is the belt to that listener's braces: it probes near the token's actual exp claim
   // regardless of focus, so recovery doesn't depend on the tab ever having lost focus at all.
   useEffect(() => scheduleSessionRevalidation(queryClient), []);
+
+  // Adopt an access token a sibling tab just refreshed. Every tab's revalidation timer is armed
+  // against the SAME exp claim (their tokens came from one login), so without this they all wake
+  // within seconds of each other and each exchanges the one shared refresh cookie.
+  useEffect(() => listenForSiblingRefresh(), []);
 
   return (
     <CoreProviders>

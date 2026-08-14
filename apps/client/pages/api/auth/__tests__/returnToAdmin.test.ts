@@ -51,6 +51,7 @@ describe('POST /api/auth/returnToAdmin', () => {
     vi.clearAllMocks();
     mockRevokeBySid.mockResolvedValue(undefined);
     mockRotateSession.mockResolvedValue({
+      status: 'rotated',
       user: { id: 'admin-1' },
       accessToken: 'admin-access',
       refreshToken: 'admin-refresh-rotated',
@@ -90,6 +91,28 @@ describe('POST /api/auth/returnToAdmin', () => {
     await handler(req as any, res as any);
 
     expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('leaves the primary cookie alone when a concurrent return already rotated the session', async () => {
+    // A double-clicked "Return to safety": the sibling call won the rotation and already set the
+    // primary cookie to the live token. Writing the one we presented would put the jar a generation
+    // behind and strand the admin at their next refresh.
+    mockRotateSession.mockResolvedValue({
+      status: 'coalesced',
+      user: { id: 'admin-1' },
+      accessToken: 'admin-access',
+      sid: 'admin-sid',
+      impersonatedBy: null,
+    });
+    const { req, res } = post('b4m_rt=cust-sid.cust-secret; b4m_rt_admin=admin-sid.admin-secret');
+
+    await handler(req as any, res as any);
+
+    const cookies = [res.getHeader('Set-Cookie')].flat().map(String);
+    expect(cookies.some(c => c.startsWith('b4m_rt='))).toBe(false);
+    // The return slot is still emptied, and the admin still gets a working access token.
+    expect(cookies.some(c => c.startsWith('b4m_rt_admin=;') && c.includes('Max-Age=0'))).toBe(true);
+    expect(res._getJSONData()).toMatchObject({ accessToken: 'admin-access', impersonating: false });
   });
 
   it('rejects when there is no parked admin session', async () => {

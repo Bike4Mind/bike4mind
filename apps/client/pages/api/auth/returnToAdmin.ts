@@ -52,7 +52,14 @@ const handler = baseApi({ auth: false })
         .catch(err => req.logger.error('Failed to revoke impersonation session on return to admin', err));
     }
 
-    setRefreshCookie(res, restored.refreshToken);
+    // Only ever write a cookie we just minted. `coalesced` means a concurrent return (a
+    // double-clicked "Return to safety") already rotated this session and set the primary cookie to
+    // the winning token - writing the token we presented would put the jar one generation behind
+    // and strand the admin at the next refresh. Leaving it alone lets the winner's value stand
+    // whichever response lands last.
+    if (restored.status === 'rotated') {
+      setRefreshCookie(res, restored.refreshToken);
+    }
     clearAdminReturnCookie(res);
 
     return res.status(200).json({
