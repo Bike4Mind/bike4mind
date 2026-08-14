@@ -543,6 +543,9 @@ export const LLMProvider: React.FC = () => {
     // their identity is stable and they don't need to be in deps. accessibleModels
     // IS in deps so we re-run when models arrive after isAdminSettingsLoading has
     // already flipped false (see comment above).
+    // modelInfoRepo is read (via modelInfoRepoRef) but deliberately NOT in deps: it and accessibleModels
+    // derive from the same cached catalog query, so accessibleModels already covers its arrival. Adding
+    // it would re-run this effect on every catalog refetch for no new decision.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setState, adminDefaultTextModel, isAdminSettingsLoading, accessibleModels]);
 
@@ -556,6 +559,11 @@ export const LLMProvider: React.FC = () => {
   // not a stale carry-over. Raising unconditionally discarded a lowered budget on every reload.
   const refitModelRef = useRef<string | null>(null);
   useEffect(() => {
+    // The early returns below deliberately do NOT clear autoResolvedModelRef. The flag must survive until
+    // the run that actually refits the model it names, and these returns are exactly the runs that have
+    // not happened yet: the catalog is still loading, or the active model is an image model this effect
+    // does not fit. Clearing here would drop the flag before its run, and the next run would see a model
+    // change with allowRaise on - the reset this fix exists to prevent.
     if (!activeModel || !modelInfoRepo) return;
     if (isImageModel(activeModel)) return;
     const info = modelInfoRepo.find(m => m.id === activeModel);
