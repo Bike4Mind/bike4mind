@@ -2581,6 +2581,30 @@ async function processSubagentDispatch(
       return;
     }
 
+    // Org-billed per-member cap, mirroring the parent gate in processExecution. Every
+    // DAG node and every delegated subagent lands here as a fresh execution (never an
+    // aggregation-only wake, since only the top-level parent can be resumed from
+    // `awaiting_dag_children`), so this always applies - no exemption needed. Without
+    // it, a capped-out member could dispatch unlimited child work through the
+    // org-pool-only check above, which does not see the per-member limit at all.
+    if (organization && creditService.isMemberAtOrOverCap(organization, child.userId)) {
+      logger.warn('[Credits] Member credit cap reached; refusing to start subagent', {
+        used: creditService.getMemberUsedCredits(organization, child.userId),
+        cap: organization.maxCreditsPerMember,
+      });
+      await agentExecutionRepository.markFailed(childExecutionId, {
+        message: 'Organization member credit limit reached',
+      });
+      await sendWs('subagent_failed', {
+        executionId: parentId,
+        childExecutionId,
+        agentName,
+        error: 'insufficient_credits',
+        isTimeout: false,
+      });
+      return;
+    }
+
     // Resolve LLM + models.
     const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(child.userId, {
       db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
