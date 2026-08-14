@@ -2761,6 +2761,109 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  describe('overflow-recovery reserves tool-schema budget', () => {
+    // Small-context model (see safeInputWindow in @bike4mind/utils' contextBudget) so a realistic
+    // MCP tool-schema block is a meaningful fraction of the safe input window.
+    const smallContextModel = {
+      id: ChatModels.GPT4,
+      type: 'text',
+      name: 'small-context-model',
+      backend: ModelBackend.OpenAI,
+      max_tokens: 512,
+      contextWindow: 8000,
+      can_stream: false,
+      pricing: { 8000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+      supportsImageVariation: false,
+    };
+
+    const manyMcpTools = Array.from({ length: 20 }, (_, i) => ({
+      toolSchema: {
+        name: `mcp_tool_${i}`,
+        description: 'a schema-heavy MCP tool',
+        parameters: { type: 'object', properties: { arg: { type: 'string' } } },
+      },
+    }));
+
+    // Three prior turns give dropOldestHistoryTurn (needs >= 2 user-turn boundaries) room to shed.
+    const priorHistory: IMessage[] = [
+      { role: 'user', content: 'turn one' },
+      { role: 'assistant', content: 'reply one' },
+      { role: 'user', content: 'turn two' },
+      { role: 'assistant', content: 'reply two' },
+      { role: 'user', content: 'turn three' },
+      { role: 'assistant', content: 'reply three' },
+    ];
+
+    const TOOL_SCHEMA_TOKENS = 3000;
+
+    const runRecoveryScenario = async (opts: { recoveryTokenCounts: number[] }): Promise<any> => {
+      const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(manyMcpTools as any);
+      const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
+
+      mockedCalculateTotalTokenLength.mockReset();
+      // Initial totals: a huge messages total forces the recovery loop to trigger regardless of the
+      // exact small-context budget; mementos/fab/url/userPrompt are irrelevant to this scenario.
+      for (const n of [100_000, 0, 0, 0, 90_000, 10]) mockedCalculateTotalTokenLength.mockResolvedValueOnce(n);
+      // Queued per recovery-loop iteration as [effectiveTotalTokens, effectiveHistoryTokens] pairs.
+      for (const n of opts.recoveryTokenCounts) mockedCalculateTotalTokenLength.mockResolvedValueOnce(n);
+
+      mockTokenizer.countTokens
+        .mockReset()
+        .mockImplementation(async (text: any) => (typeof text === 'string' ? TOOL_SCHEMA_TOKENS : 7));
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
+          await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([smallContextModel] as any);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([priorHistory, priorHistory.length, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      buildToolsSpy.mockRestore();
+      buildToolPromptSpy.mockRestore();
+
+      const updateCall = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      return { updateCall, buildCalls: mockedBuildAndSortMessages.mock.calls };
+    };
+
+    it('reserves toolSchemaTokens before rebuilding, so a rebuild that reports "fits" actually fits', async () => {
+      // One shed turn is enough: effectiveTotalTokens(100) + toolSchemaTokens(3000) = 3100, comfortably
+      // under the small-context budget, so the loop exits after exactly one iteration.
+      const { updateCall, buildCalls } = await runRecoveryScenario({ recoveryTokenCounts: [100, 50] });
+
+      expect(buildCalls.length).toBeGreaterThanOrEqual(2);
+      const firstBuildBudget = buildCalls[0][3];
+      const recoveryBuildBudget = buildCalls[1][3];
+      // The regression: unpatched code passes the SAME raw maxSafeInputTokens to both calls.
+      expect(recoveryBuildBudget).toBe(firstBuildBudget - TOOL_SCHEMA_TOKENS);
+      expect(updateCall?.type).not.toBe('error');
+    });
+
+    it('still fails with the existing clear message when tool schemas alone exceed the budget', async () => {
+      // No queued total ever lets effectiveTotalTokens + toolSchemaTokens fit, and history is short
+      // enough that dropOldestHistoryTurn eventually returns null, so the loop breaks and the
+      // pre-existing hard-overflow check fires -- a clear failure, not a silent overrun.
+      const { updateCall } = await runRecoveryScenario({
+        recoveryTokenCounts: [50_000, 40_000, 50_000, 40_000],
+      });
+
+      expect(updateCall?.type).toBe('error');
+      expect(updateCall?.reply).toMatch(/too large for/);
+    });
+  });
+
   // LakeMemoryFeature computes a real belief card (entitlement resolution, DB lake lookup, the
   // recallLakeMemory call) but the drop was in the ASSEMBLY: 'lakeMemory' was never a
   // PromptSourceId and never spread into contextAndSystemMessages, so the card silently vanished
