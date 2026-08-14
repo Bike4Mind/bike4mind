@@ -972,9 +972,10 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * transition is one-way. Same exclusion as findByContentHashes, for the same reason.
    *
    * The `{ 'tags.name': 1, archivedAt: 1, deletedAt: 1 }` index bounds the meta-tag arm fully.
-   * The prefix arm only gets a range on the leading key (an anchored regex) and its `userId`
-   * conjunct is not in that index, so a prefix-heavy lake fetches its candidate documents to
-   * check ownership.
+   * The prefix arm is bounded by the `{ userId: 1, 'tags.name': 1, archivedAt: 1, deletedAt: 1 }`
+   * index declared further down this file: `userId` equality narrows the scan to the lake
+   * creator's own files before the `tags.name` range is applied, so a prefix-heavy lake no longer
+   * fetches every other user's matching documents to check ownership.
    */
   async computeDataLakeStats(
     scope: DataLakeMembershipScope
@@ -1488,6 +1489,12 @@ FabFileSchema.index({ 'tags.name': 1, archivedAt: 1, deletedAt: 1 });
 // Bounds the prefix arm of buildDataLakeMembershipFilter (see computeDataLakeStats above): that
 // query's userId conjunct is not covered by the index above, so without this one Mongo scans the
 // tag-prefix range across every user before filtering userId in memory.
+//
+// `tags.name` leads over `archivedAt`/`deletedAt` (not strict equality-sort-range order) because
+// some callers of buildDataLakeMembershipFilter - findIdsByDataLakeTag, hardDeleteByDataLakeTag -
+// filter on nothing but this predicate, with no archivedAt/deletedAt condition at all; putting
+// those two ahead of tags.name would leave this index unable to bound the tag range for those
+// callers, only the userId equality.
 FabFileSchema.index({ userId: 1, 'tags.name': 1, archivedAt: 1, deletedAt: 1 });
 
 // Content hash deduplication lookups

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vites
 import mongoose from 'mongoose';
 import { KnowledgeType, type DataLakeMembershipScope } from '@bike4mind/common';
 import { createMongoServer } from '../../__test__/createMongoServer';
+import { buildDataLakeMembershipFilter } from '../../queries/dataLakeLifecycleScope';
 import { FabFile, fabFileRepository } from './FabFileModel';
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
@@ -166,11 +167,18 @@ describe('FabFile data lake lifecycle membership', () => {
       // Sanity: the 50 strangers must not be counted, matching the exclusion pinned above.
       expect(stats.fileCount).toBe(2);
 
-      // The prefix arm's own predicate (buildDataLakeMembershipFilter's second $or branch),
-      // isolated from the meta-tag arm so the comparison below is not muddied by an $or plan.
+      // Derived from the REAL buildDataLakeMembershipFilter output (its second $or branch is the
+      // prefix arm's $and of [tag regex, userId]), isolated from the meta-tag arm so the
+      // comparison below is not muddied by an $or plan. Deriving rather than hand-copying means
+      // this test cannot drift out of sync if that predicate's shape ever changes.
+      type PrefixArmShape = {
+        $or: [Record<string, unknown>, { $and: [Record<string, unknown>, Record<string, unknown>] }];
+      };
+      const membership = buildDataLakeMembershipFilter(scope) as PrefixArmShape;
+      const [tagCondition, userCondition] = membership.$or[1].$and;
       const prefixArmFilter = {
-        'tags.name': { $regex: new RegExp('^acme:') },
-        userId: CREATOR,
+        ...tagCondition,
+        ...userCondition,
         deletedAt: null,
         archivedAt: null,
         status: { $ne: 'pending' },
