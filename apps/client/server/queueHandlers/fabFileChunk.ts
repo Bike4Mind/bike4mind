@@ -1,15 +1,20 @@
 import {
   adminSettingsRepository,
   dataLakeBatchRepository,
+  dataLakeRepository,
   fabFileChunkRepository,
   fabFileRepository,
+  scopedSettingsRepository,
   FabFile,
   User,
   withTransaction,
 } from '@bike4mind/database';
 import { sendToClient } from '@server/websocket/utils';
 import { z } from 'zod';
-import { fabFilesService } from '@bike4mind/services';
+import { dataLakeService, fabFilesService, scopedSettingsService } from '@bike4mind/services';
+import { DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT } from '@bike4mind/common';
+import { effectiveChunkTokenLimit, FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
+import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { getFilesStorage } from '@server/utils/storage';
 import { sendToQueue } from '@server/utils/sqs';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
@@ -22,6 +27,8 @@ import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDeliv
 import { isSupportedEmbeddingModel } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { NO_EXTRACTABLE_TEXT_NOTE_PREFIX } from '@server/worker/chunkScan';
+import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
+import { provenancePayloadShape } from '@server/queueHandlers/convergenceProvenance';
 import { Resource } from 'sst';
 
 const ChunkFabFilePayload = z.object({
@@ -34,19 +41,42 @@ const ChunkFabFilePayload = z.object({
   // value from a legacy or hand-crafted message falls back to the default instead of turning
   // the whole message into a DLQ poison pill.
   chunkSize: z.coerce.number().int().positive().optional().catch(undefined),
+  // Provenance for the convergence kill switch (#1676): distinguishes background lake work
+  // (haltable) from real-time user uploads (never halted). Absent => user work.
+  ...provenancePayloadShape,
 });
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = event.Records[0].body;
-  const { fabFileId, userId, chunkSize } = ChunkFabFilePayload.parse(JSON.parse(body));
+  const { fabFileId, userId, chunkSize, origin, lakeId } = ChunkFabFilePayload.parse(JSON.parse(body));
+
+  logger.updateMetadata({ fabFileId, userId });
+
+  // Convergence kill switch (#1676): re-check inside the SHARED handler so a paused switch stops
+  // background work already on the queue. Gated before any DB read, so a user upload (origin absent)
+  // short-circuits with zero I/O. Returning drops the message; the file stays un-chunked (chunkCount
+  // 0), so the rescue sweep re-selects it once convergence resumes - never a lost user upload.
+  if (
+    await isConvergenceHalted(
+      { origin, lakeId },
+      {
+        adminSettings: adminSettingsRepository,
+        scopedSettings: scopedSettingsRepository,
+        dataLakes: dataLakeRepository,
+      },
+      logger
+    )
+  ) {
+    logger.log(
+      `[convergenceKillSwitch] Paused background chunk work for fabFileId ${fabFileId}` +
+        (lakeId ? ` (lake ${lakeId})` : '') +
+        ' - kill switch on; message dropped, will re-run when convergence resumes'
+    );
+    return;
+  }
 
   const user = await User.findById(userId);
   if (!user) throw new Error(`User not found for userId: ${userId}`);
-
-  logger.updateMetadata({
-    fabFileId,
-    userId,
-  });
 
   logger.log('====================================');
   logger.log(`Started chunk queue handler for fabFileId: ${fabFileId}`);
@@ -74,6 +104,36 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     return;
   }
 
+  // Chunk policy at file-owner altitude (#1662). Resolve the owner's DefaultChunkSize (falling
+  // through to the platform default) UNLESS this delivery carried an explicit chunkSize override -
+  // only the UI reprocess door (/api/files/chunk) sends one; every automatic door omits it and now
+  // inherits the owner-altitude policy. The resolver never throws (degrades to the platform value).
+  // The chunker re-derives the same effective limit internally; we compute it here via the shared
+  // helper for the cross-lake conflict check below and to log when a lever exceeds the model window.
+  const ownerScope = scopedSettingsService.scopeForFileOwner({ userId: fabFile.userId });
+  const resolvedChunkPolicy = await scopedSettingsService.resolveScopedSetting(
+    'DefaultChunkSize',
+    ownerScope,
+    { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository },
+    { logger }
+  );
+  const requestedPassageTokenTarget = chunkSize ?? resolvedChunkPolicy.value;
+  const effectivePassageTokenTarget = effectiveChunkTokenLimit({
+    model: defaultEmbeddingModel,
+    passageTokenTarget: requestedPassageTokenTarget,
+  });
+  logger.log(
+    `Chunk policy for ${fabFileId}: requested=${requestedPassageTokenTarget} ` +
+      `(source=${chunkSize !== undefined ? 'payload' : resolvedChunkPolicy.source}) ` +
+      `effective=${effectivePassageTokenTarget} model=${defaultEmbeddingModel}`
+  );
+  if (effectivePassageTokenTarget !== requestedPassageTokenTarget) {
+    logger.warn(
+      `Chunk policy ${requestedPassageTokenTarget} for ${fabFileId} exceeds the ${defaultEmbeddingModel} ` +
+        `embedding window; reduced to ${effectivePassageTokenTarget}.`
+    );
+  }
+
   // Mark the file as actively chunking so the self-host safety-net scan (worker) doesn't
   // re-enqueue it mid-run - a duplicate would re-chunk and re-embed the whole file. Cleared
   // in `finally` on success AND failure so it can still be retried/reprocessed. Default: false.
@@ -90,7 +150,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         {
           fabFileId,
           embeddingModel: defaultEmbeddingModel,
-          passageTokenTarget: chunkSize,
+          passageTokenTarget: requestedPassageTokenTarget,
         },
         {
           db: {
@@ -104,6 +164,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             },
           },
           logger,
+          searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
         }
       )
     ).catch(async (err: unknown) => {
@@ -248,15 +309,44 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       return;
     }
 
+    // Cross-lake chunk-policy conflict (#1662): record the effective target these chunks were built
+    // with and report any member lake whose REQUIRED policy they do not satisfy. A report, not a
+    // failure - the file stays chunked at its owner-altitude policy; a lake is only a constraint, so
+    // we never re-chunk to satisfy one lake (which would rewrite shared chunks for non-members and
+    // oscillate a file in two disagreeing lakes). Best-effort: a detection failure must not fail an
+    // otherwise-successful chunk and force a wasted re-chunk on redelivery.
+    try {
+      await dataLakeService.recomputeFileChunkPolicyConflict(
+        { id: fabFileId, userId: fabFile.userId, tags: fabFile.tags },
+        effectivePassageTokenTarget,
+        {
+          db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
+          embeddingModel: defaultEmbeddingModel,
+          logger,
+        }
+      );
+    } catch (err) {
+      logger.error(`Error computing chunk-policy conflict for ${fabFileId}: ${err}`);
+    }
+
     const queueUrl = Resource.fabFileVectorizeQueue.url;
     if (!queueUrl) throw new Error('Vectorize queue URL not found');
 
-    // Target batch size: aim for ~50 chunks or ~100K tokens per batch (conservative)
-    const BATCH_SIZE = 50;
+    // How many chunks per vectorize message is the operator's dataLakeVectorizeChunkBatchSize
+    // lever. Unlike the spend levers, this is not a money value, so a resolution failure
+    // falls back to the coded default instead of halting - chunking itself spends nothing,
+    // and the spend gate in fabFileVectorize.ts is where money is actually guarded.
+    const batchSize = await dataLakeService
+      .resolveSpendLevers({ adminSettings: adminSettingsRepository }, logger)
+      .then(levers => levers.vectorizeChunkBatchSize)
+      .catch((err: unknown) => {
+        logger.warn(`Could not resolve vectorize batch size; using default: ${err}`);
+        return DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT;
+      });
     const batches: (typeof fabFileChunks)[] = [];
 
-    for (let i = 0; i < fabFileChunks.length; i += BATCH_SIZE) {
-      batches.push(fabFileChunks.slice(i, i + BATCH_SIZE));
+    for (let i = 0; i < fabFileChunks.length; i += batchSize) {
+      batches.push(fabFileChunks.slice(i, i + batchSize));
     }
 
     logger.updateMetadata({ batchCount: batches.length });
@@ -270,6 +360,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           userId,
           embeddingModel: defaultEmbeddingModel,
           batchSize: batch.length,
+          // Carry provenance downstream: the switch may flip while these vectorize messages sit
+          // in-flight, so the vectorize handler re-checks with the same origin/lakeId (#1676).
+          origin,
+          lakeId,
         });
       })
     );

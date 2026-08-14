@@ -12,15 +12,8 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { OperationsModelService } from '@client/services/operationsModelService';
-import {
-  AiEvents,
-  ChatModelName,
-  DATALAKE_TAG_PREFIX,
-  IMessage,
-  KnowledgeType,
-  SupportedFabFileMimeTypes,
-} from '@bike4mind/common';
-import { fabFilesService } from '@bike4mind/services';
+import { AiEvents, ChatModelName, IMessage, KnowledgeType, SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { getFilesStorage } from '@server/utils/storage';
 import { logEvent } from '@server/utils/analyticsLog';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
@@ -206,20 +199,9 @@ export const handler = withEventContext(async (event, logger) => {
       // falls through to createFabFile - a duplicate beats clobbering someone else's file.
       const fabfile = await fabFileRepository.findOne({ sessionId: session.id, userId: session.userId });
       if (fabfile) {
-        // Re-summarizing must not change which data lakes this file belongs to. The tags here are
-        // the SESSION's, which never carry a `datalake:` meta-tag, and a whole-array tag write
-        // omitting one reads as leaving that lake - so without carrying the file's existing
-        // meta-tags through, every re-summarization would evict a lake-indexed summary (and fail
-        // outright for a summariser who cannot manage the lake).
-        //
-        // reconcileLakeTags may stamp a content tag for one of these lakes if this file lacks
-        // one - never a NEW membership, since `lakeTags` only ever carries through tags already
-        // stored on the file. Harmless either way: this FabFile always carries a sessionId,
-        // which both tag counters exclude unless it is a curated notebook, so a stamp here could
-        // never reach the tag tree.
-        const lakeTags = (fabfile.tags ?? []).filter(
-          t => typeof t?.name === 'string' && t.name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX)
-        );
+        // Re-summarizing sends only the session's own tags - reconcileLakeTags preserves any
+        // `datalake:` meta-tag or prefix-arm content tag this file already holds regardless, so
+        // there is nothing to carry through by hand here.
         await fabFilesService.updateFabFile(
           user,
           {
@@ -229,7 +211,7 @@ export const handler = withEventContext(async (event, logger) => {
             type: fabFileData.type,
             fileContent: fabFileData.fileContent,
             sessionId: fabFileData.sessionId,
-            tags: [...(fabFileData.tags ?? []), ...lakeTags],
+            tags: fabFileData.tags ?? [],
           },
           {
             db: {
@@ -249,11 +231,51 @@ export const handler = withEventContext(async (event, logger) => {
         );
       } else {
         logger.info(`Creating Summary File`);
+        // A session's tags are carried forward, not a fresh self-tag action - #1101 asks that this
+        // path not SILENTLY join a lake, not that one stale/unmanageable datalake: tag (from before
+        // the session's user lost access, or was never granted it) takes the whole summary down.
+        // createFabFile's gate now refuses such a tag outright, so drop it here first and log it;
+        // the summary is the primary value this handler exists to preserve.
+        const sessionMetaTagNames = new Set(
+          dataLakeService.extractDataLakeMetaTags((fabFileData.tags ?? []).map(t => t.name))
+        );
+        const unmanageableMetaTags: string[] = [];
+        for (const tag of sessionMetaTagNames) {
+          // Mirror assertCanWriteDataLakeTags' own static-registry arm rather than re-deriving it:
+          // a static-registry lake (e.g. datalake:opti-knowledge) has no DB document at all, so
+          // findByDatalakeTag always returns null for it - treating that as "unmanageable" would
+          // drop the tag even for an admin the real gate would have let keep it.
+          if (dataLakeService.isStaticRegistryDatalakeTag(tag)) {
+            if (!user?.isAdmin) unmanageableMetaTags.push(tag);
+            continue;
+          }
+          const lake = await dataLakeRepository.findByDatalakeTag(tag);
+          if (!lake || !dataLakeService.canManageLake(lake, { userId: session.userId, isAdmin: !!user?.isAdmin })) {
+            unmanageableMetaTags.push(tag);
+          }
+        }
+        // A legacy static-registry content tag (e.g. opti:foo) predating this fix can also be
+        // sitting on a session from before #1101 closed this gap - same "don't take the summary
+        // down" reasoning as the meta-tag case above, no DB lookup needed since this arm is
+        // admin-only.
+        const unmanageablePrefixTags = user?.isAdmin
+          ? []
+          : dataLakeService.extractStaticRegistryPrefixedTags((fabFileData.tags ?? []).map(t => t.name));
+        const droppedTagNames = [...unmanageableMetaTags, ...unmanageablePrefixTags];
+        if (droppedTagNames.length > 0) {
+          logger.warn(
+            `Dropping unmanageable data-lake tag(s) from session ${session.id} summary: ${droppedTagNames.join(', ')}`
+          );
+          fabFileData.tags = (fabFileData.tags ?? []).filter(
+            t => !unmanageableMetaTags.includes(t.name.toLowerCase()) && !unmanageablePrefixTags.includes(t.name)
+          );
+        }
         const newFabFile = await fabFilesService.createFabFile(session.userId, fabFileData, {
           db: {
             fabFiles: fabFileRepository,
             adminSettings: adminSettingsRepository,
             users: userRepository,
+            dataLakes: dataLakeRepository,
           },
           storage: {
             upload: (filepath, content, option) => {

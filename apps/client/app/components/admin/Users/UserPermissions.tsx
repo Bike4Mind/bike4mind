@@ -1,3 +1,4 @@
+import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { EditedFieldsState } from '@client/app/components/admin/Users/Views/FullUsersView';
 import { allKnownEntitlementKeys, grantTagForEntitlement } from '@client/lib/entitlements/registry';
 import { DEVELOPER_USER_TAGS, IUserDocument, hasDeveloperUserTag } from '@bike4mind/common';
@@ -24,7 +25,7 @@ const isManagedTag = (tag: string): boolean => {
 };
 
 interface UserPermissionsProps {
-  user: IUserDocument;
+  user: AdminUserListItem;
   handleUserLevelButtonChange: (userId: string) => void;
   editedFields: EditedFieldsState;
   onFieldChange: (fieldName: keyof IUserDocument, value: unknown) => void;
@@ -56,7 +57,7 @@ const ROLE_OPTIONS: { value: Role; label: string }[] = [
 const withoutDeveloperTags = (tags: readonly string[]): string[] =>
   tags.filter(tag => !(DEVELOPER_USER_TAGS as readonly string[]).includes(tag));
 
-const userLevelColor = (user: IUserDocument) => {
+const userLevelColor = (user: AdminUserListItem) => {
   switch (user.level) {
     case 'DemoUser':
       return 'neutral';
@@ -73,7 +74,7 @@ const userLevelColor = (user: IUserDocument) => {
   }
 };
 
-const userLevelDisplay = (user: IUserDocument) => {
+const userLevelDisplay = (user: AdminUserListItem) => {
   switch (user.level) {
     case 'DemoUser':
       return 'Demo User';

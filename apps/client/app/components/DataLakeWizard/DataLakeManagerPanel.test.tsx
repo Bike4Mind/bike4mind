@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -9,17 +9,25 @@ import DataLakeManagerPanel from './DataLakeManagerPanel';
 
 // Archive resolves synchronously so the onSuccess (exit-to-root) wiring is exercised.
 const archiveMutate = vi.fn((_id: string, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
+// Same for the active-lake delete button, so its onSuccess (exit-to-root) wiring is exercised too.
+const deleteMutate = vi.fn((_id: string, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
+// Same for purge, so the confirm dialog's close-on-success wiring is exercised.
+const cleanupMutate = vi.fn((_id: string, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
 const useActiveDataLakeBatches = vi.fn(() => ({ data: [] as unknown[] }));
+// Lifecycle lists default to in-flight (undefined); a test can resolve them to drive the
+// empty-section rendering.
+const useGetArchivedDataLakes = vi.fn(() => ({ data: undefined as unknown[] | undefined }));
+const useGetDeletedDataLakes = vi.fn(() => ({ data: undefined as unknown[] | undefined }));
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });
   return {
     useArchiveDataLake: () => ({ mutate: archiveMutate, isPending: false }),
     useUnarchiveDataLake: mutation,
     useRestoreDeletedDataLake: mutation,
-    usePermanentDeleteDataLake: mutation,
-    useCleanupDataLake: mutation,
-    useGetArchivedDataLakes: () => ({ data: undefined }),
-    useGetDeletedDataLakes: () => ({ data: undefined }),
+    usePermanentDeleteDataLake: () => ({ mutate: deleteMutate, isPending: false }),
+    useCleanupDataLake: () => ({ mutate: cleanupMutate, isPending: false }),
+    useGetArchivedDataLakes: () => useGetArchivedDataLakes(),
+    useGetDeletedDataLakes: () => useGetDeletedDataLakes(),
     useActiveDataLakeBatches: () => useActiveDataLakeBatches(),
     useGetDataLakes: () => useGetDataLakes(),
     // Per-lake files: only the selected lake queries (id != null).
@@ -75,6 +83,14 @@ const lakeFiles = [
   // uncategorized and the backfill stamps it. This bucket has to agree, or the file is reachable
   // from neither the tree nor here.
   { id: 'f4', fileName: 'bare.md', tags: [{ name: 'datalake:mine' }, { name: 'lk:' }] },
+  // Tagged with "genre" itself, not a deeper child - "genre" is ALSO the parent of war/peace
+  // above, so this file must stay reachable once genre has subfolders.
+  { id: 'f5', fileName: 'genre-overview.md', tags: [{ name: 'lk:genre' }] },
+  // Bracket-prefixed source names, all under one leaf - group by category then title, not the
+  // raw leading "[" (which would put every one of these in the same "no signal" bucket).
+  { id: 'f6', fileName: '[Marketing] Zebra Plan.md', tags: [{ name: 'lk:briefs:x' }] },
+  { id: 'f7', fileName: '[Marketing] Apple Plan.md', tags: [{ name: 'lk:briefs:x' }] },
+  { id: 'f8', fileName: '[Sales] Intro.md', tags: [{ name: 'lk:briefs:x' }] },
 ];
 
 const useGetDataLakes = vi.fn(() => ({ data: [] as unknown[], isLoading: false }));
@@ -98,6 +114,12 @@ vi.mock('./DataLakeSettingsModal', () => ({
 vi.mock('./DataLakeDiscoverPanel', () => ({
   default: () => <div data-testid="mock-discover" />,
 }));
+// LakeInfoPanel's "Start chat with this lake" button pulls in this hook, which reaches
+// SessionsContext, react-router and react-query. This suite exercises the manager's navigation
+// and affordance wiring, not the create-and-navigate flow, so stub the hook to a no-op.
+vi.mock('@client/app/hooks/useStartChatWithLake', () => ({
+  default: () => vi.fn(),
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => (
@@ -113,6 +135,7 @@ const mineLake = {
   datalakeTag: 'datalake:mine',
   description: 'my lake',
   canManage: true,
+  isOwn: true,
 };
 
 const theirsLake = {
@@ -124,6 +147,8 @@ const theirsLake = {
   fileCount: 1,
   isPublic: true,
   canManage: false,
+  isOwn: false,
+  ownerDisplayName: 'Ada Owner',
 };
 
 const renderPanel = () =>
@@ -146,8 +171,16 @@ beforeEach(() => {
   useGetDataLakes.mockReset();
   useGetDataLakes.mockReturnValue({ data: [mineLake, theirsLake], isLoading: false });
   archiveMutate.mockClear();
+  deleteMutate.mockClear();
+  cleanupMutate.mockClear();
+  useGetDeletedDataLakes.mockReset();
+  useGetDeletedDataLakes.mockReturnValue({ data: undefined });
   useActiveDataLakeBatches.mockReset();
   useActiveDataLakeBatches.mockReturnValue({ data: [] });
+  useGetArchivedDataLakes.mockReset();
+  useGetArchivedDataLakes.mockReturnValue({ data: undefined });
+  useGetDeletedDataLakes.mockReset();
+  useGetDeletedDataLakes.mockReturnValue({ data: undefined });
   // managerTab is module state in the real store, so a test left in Discover would otherwise
   // decide what the next one renders.
   useDataLakeWizardStore.setState({ managerTab: 'mine' });
@@ -186,6 +219,24 @@ describe('DataLakeManagerPanel - root view', () => {
     expect(screen.getByTestId('datalake-manager-create-btn')).toBeInTheDocument();
   });
 
+  it('states an empty lifecycle section on its header instead of offering an accordion', async () => {
+    const user = userEvent.setup();
+    useGetArchivedDataLakes.mockReturnValue({ data: [] });
+    useGetDeletedDataLakes.mockReturnValue({ data: [] });
+    renderPanel();
+
+    const archived = screen.getByTestId('datalake-archived-section-toggle');
+    expect(archived).toHaveTextContent('Archived');
+    expect(archived).toHaveTextContent('No files');
+    expect(screen.getByTestId('datalake-deleted-section-toggle')).toHaveTextContent('No files');
+    // Not a control: nothing to expand, so no button semantics and no chevron.
+    expect(archived).not.toHaveAttribute('role', 'button');
+
+    // Clicking it does nothing rather than toggling an empty body open.
+    await user.click(archived);
+    expect(archived).toHaveTextContent('No files');
+  });
+
   it('opens the public Discover catalog from the footer and returns to it via the store tab', async () => {
     const user = userEvent.setup();
     renderPanel();
@@ -209,25 +260,33 @@ describe('DataLakeManagerPanel - root view', () => {
     await user.click(screen.getByTestId('datalake-manager-discover-btn'));
     // The catalog shows on THIS click: the activeLake branch used to outrank the tab and swallow it.
     expect(screen.getByTestId('mock-discover')).toBeInTheDocument();
-    // The lake is really closed, so a later Back cannot drop the user into Discover by surprise.
+    // The lake is really closed, so no in-lake Back row survives into the catalog.
     expect(screen.queryByTestId('datalake-manager-back')).not.toBeInTheDocument();
   });
 
-  it('toggles back out of Discover - the one exit that needs no lake of your own to click', async () => {
+  it('reads as a plain destination, never as a pressed mode', async () => {
     const user = userEvent.setup();
-    // No lakes: selectLake, the only other route back to the overview, has no row to click.
-    useGetDataLakes.mockReturnValue({ data: [], isLoading: false });
     renderPanel();
     const discover = screen.getByTestId('datalake-manager-discover-btn');
-    expect(discover).toHaveAttribute('aria-pressed', 'false');
+    expect(discover).not.toHaveAttribute('aria-pressed');
 
     await user.click(discover);
+
     expect(screen.getByTestId('mock-discover')).toBeInTheDocument();
-    expect(discover).toHaveAttribute('aria-pressed', 'true');
+    // Same button, same look: it navigated rather than latching a mode on.
+    expect(discover).not.toHaveAttribute('aria-pressed');
+    expect(discover.className).toMatch(/MuiButton-variantOutlined/);
+  });
 
-    await user.click(discover);
+  it('leaves the catalog by opening one of your own lakes', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(screen.getByTestId('datalake-manager-discover-btn'));
+    expect(screen.getByTestId('mock-discover')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+
     expect(screen.queryByTestId('mock-discover')).not.toBeInTheDocument();
-    expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
   });
 
   it('collapses the Data Lakes accordion, hiding the lake rows', async () => {
@@ -311,6 +370,38 @@ describe('DataLakeManagerPanel - lake navigation', () => {
     expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
   });
 
+  it('lists a category-tagged file alongside its own subfolders, not just inside them', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-manager-node-genre'));
+
+    // war/peace are genre's children; f5 is tagged "lk:genre" itself - all three must be
+    // reachable from this one folder, or f5 has no path to it anywhere in the tree.
+    expect(screen.getByTestId('datalake-manager-node-war')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-manager-node-peace')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-manager-file-f5')).toHaveTextContent('genre-overview');
+
+    // Selecting it opens the file directly - no extra navigation hop.
+    await user.click(screen.getByTestId('datalake-manager-file-f5'));
+    expect(screen.getByTestId('mock-article')).toHaveTextContent('genre-overview.md');
+  });
+
+  it('sorts bracket-prefixed file names by category then title, not the raw leading "["', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-manager-node-briefs'));
+    await user.click(screen.getByTestId('datalake-manager-node-x'));
+
+    // Marketing group (Apple before Zebra within it) sorts before Sales - a raw-name sort would
+    // instead tiebreak on the shared "[" and give a different, meaningless order.
+    const fileRows = screen.getAllByTestId(/^datalake-manager-file-/).map(el => el.getAttribute('data-testid'));
+    expect(fileRows).toEqual(['datalake-manager-file-f7', 'datalake-manager-file-f6', 'datalake-manager-file-f8']);
+  });
+
   it('opens the Uncategorized bucket and lists the untagged file', async () => {
     const user = userEvent.setup();
     renderPanel();
@@ -359,7 +450,7 @@ describe('DataLakeManagerPanel - lake navigation', () => {
 });
 
 describe('DataLakeManagerPanel - management affordances gate on canManage', () => {
-  it('shows Add files / Settings / Archive on a lake the caller can manage', async () => {
+  it('shows Add files / Settings / Archive / Delete on a lake the caller can manage', async () => {
     const user = userEvent.setup();
     renderPanel();
 
@@ -368,9 +459,10 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     expect(screen.getByTestId('datalake-addfiles-btn-mine')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-settings-btn-mine')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-archive-btn-mine')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-delete-active-btn-mine')).toBeInTheDocument();
   });
 
-  it("hides all three on a lake the caller cannot manage (someone else's public lake)", async () => {
+  it("hides all four on a lake the caller cannot manage (someone else's public lake)", async () => {
     const user = userEvent.setup();
     renderPanel();
 
@@ -381,6 +473,7 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     expect(screen.queryByTestId('datalake-addfiles-btn-theirs')).toBeNull();
     expect(screen.queryByTestId('datalake-settings-btn-theirs')).toBeNull();
     expect(screen.queryByTestId('datalake-archive-btn-theirs')).toBeNull();
+    expect(screen.queryByTestId('datalake-delete-active-btn-theirs')).toBeNull();
   });
 
   it('archiving the active lake exits to the root overview (no re-entry on a later restore)', async () => {
@@ -397,6 +490,20 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
   });
 
+  it('deleting the active lake directly (skipping archive) exits to the root overview', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-delete-active-btn-mine'));
+
+    // Same lifecycle action the archived row's Delete button calls - deleteDataLake has no
+    // archived-status precondition, so this reaches the same recoverable soft-delete.
+    expect(deleteMutate).toHaveBeenCalledWith('mine', expect.objectContaining({ onSuccess: expect.any(Function) }));
+    expect(screen.queryByTestId('datalake-manager-lakeinfo')).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-manager-overview')).toBeInTheDocument();
+  });
+
   it('opens the settings editor for the selected lake', async () => {
     const user = userEvent.setup();
     renderPanel();
@@ -405,6 +512,61 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     await user.click(screen.getByTestId('datalake-settings-btn-mine'));
 
     expect(screen.getByTestId('mock-settings')).toHaveTextContent('Mine');
+  });
+
+  it("flags a lake the caller does not own with the creator's name, so it can't be mistaken for their own", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-theirs'));
+
+    const chip = screen.getByTestId('datalake-manager-owner-chip-theirs');
+    expect(chip).toHaveTextContent('Owner: Ada Owner');
+  });
+
+  it("shows no owner marker on the caller's own lake", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+
+    expect(screen.queryByTestId('datalake-manager-owner-chip-mine')).toBeNull();
+  });
+
+  it('marks not-own lakes in the sidebar list itself, but not own ones (no need to open each)', () => {
+    renderPanel();
+
+    // The confusion the issue reports starts in the list ("both appeared in the admin's My
+    // lakes tab"), so the owner cue must live on the row, before anything is opened.
+    expect(screen.getByTestId('datalake-manager-owner-icon-theirs')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-manager-owner-icon-mine')).toBeNull();
+  });
+
+  it('keeps the owner chip AND the management buttons on an admin-managed lake owned by someone else', async () => {
+    // The case the feature exists for: a global admin on another tenant's lake, where canManage
+    // is true (Add files / Settings / Archive are live) AND isOwn is false. The marker must
+    // coexist with the controls - a chip that vanished whenever canManage held would leave
+    // exactly the QA scenario unmarked, and nothing here would fail.
+    const adminView = {
+      ...theirsLake,
+      id: 'adminview',
+      name: 'Admin View',
+      slug: 'adminview',
+      datalakeTag: 'datalake:adminview',
+      canManage: true,
+      isOwn: false,
+      ownerDisplayName: 'Ada Owner',
+    };
+    useGetDataLakes.mockReturnValue({ data: [adminView], isLoading: false });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-adminview'));
+
+    expect(screen.getByTestId('datalake-manager-owner-chip-adminview')).toHaveTextContent('Owner: Ada Owner');
+    expect(screen.getByTestId('datalake-addfiles-btn-adminview')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-settings-btn-adminview')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-archive-btn-adminview')).toBeInTheDocument();
   });
 });
 
@@ -529,5 +691,30 @@ describe('DataLakeManagerPanel - background AI-tag suggestion status', () => {
 
     await user.click(screen.getByTestId('datalake-manager-taxonomy-review-mine'));
     expect(screen.getByTestId('mock-taxonomy-review-panel')).toHaveAttribute('data-batch-id', 'b1');
+  });
+});
+
+describe('DataLakeManagerPanel - purge confirmation', () => {
+  const deletedLake = { id: 'gone', name: 'Gone', fileTagPrefix: 'gn' };
+
+  it('purges the confirmed lake by id and closes the dialog', async () => {
+    useGetDeletedDataLakes.mockReturnValue({ data: [deletedLake] });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-deleted-section-toggle'));
+    expect(screen.getByTestId('datalake-deleted-section-card-gone')).toBeInTheDocument();
+
+    // Lifecycle row actions moved behind a RowActionsMenu trigger on main; open it before the item.
+    await user.click(screen.getByTestId('datalake-deleted-section-menu-btn-gone'));
+    await user.click(screen.getByTestId('datalake-purge-btn-gone'));
+    expect(screen.getByTestId('datalake-purge-confirm')).toBeInTheDocument();
+    await user.click(screen.getByTestId('datalake-purge-confirm-btn'));
+
+    // The lake id is this panel's whole contract with useCleanupDataLake: the purge answers
+    // 202-queued, so that hook clears the row by filtering the deleted-list cache on exactly
+    // this argument rather than refetching (see dataLakes.test.ts).
+    expect(cleanupMutate).toHaveBeenCalledWith('gone', expect.objectContaining({ onSuccess: expect.any(Function) }));
+    await waitFor(() => expect(screen.queryByTestId('datalake-purge-confirm')).not.toBeInTheDocument());
   });
 });

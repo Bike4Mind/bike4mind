@@ -210,6 +210,24 @@ describe('nextRouteForContract', () => {
       expect(handlerFn).not.toHaveBeenCalled();
     });
 
+    it('runs the rateLimit option BEFORE validation, so a malformed body counts against it', async () => {
+      // The option lives at the front of the prelude, so unlike a caller-mounted
+      // `.use()` it beats validation as a hard guarantee - a flood of malformed
+      // bodies still meters instead of 422ing for free ahead of the limiter.
+      const limiter = vi.fn((_req: unknown, _res: unknown, next: () => void) => next());
+      const handlerFn = vi.fn();
+      // any: the fixture limiter isn't typed as the adapter's ValidatedReq handler.
+      const route = nextRouteForContract(makeContract(), { rateLimit: limiter as any }).post(handlerFn);
+
+      validKey([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ apiKey: 'b4m_live_key', body: { message: 'hi', count: -1 } });
+      await route(req, res);
+
+      expect(res._getStatusCode()).toBe(422);
+      expect(limiter).toHaveBeenCalledTimes(1);
+      expect(handlerFn).not.toHaveBeenCalled();
+    });
+
     it('validates and exposes the parsed body as req.validated', async () => {
       validKey([ApiKeyScope.AI_CHAT]);
       let seen: unknown;

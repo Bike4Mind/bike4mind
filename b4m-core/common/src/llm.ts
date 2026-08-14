@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ChatCompletionCreateInputSchema, OpenAIImageGenerationInput } from './schemas/openai';
 import { b4mLLMTools, B4MLLMTools } from './schemas/llm';
+import { supportedVoiceGenerationVendor, voiceOutputFormatSchema } from './voiceGeneration';
 
 // Re-export LLM tools for external use
 export { b4mLLMTools };
@@ -90,6 +91,35 @@ export const GenerateImageToolCallSchema = OpenAIImageGenerationInput.extend({
 });
 export type GenerateImageToolCall = z.infer<typeof GenerateImageToolCallSchema>;
 
+/**
+ * Current audio-generation selections threaded into chat dispatch so the
+ * `audio_generation` tool has defaults without the model having to pick a
+ * provider/voice. Mirrors how `imageConfig` (GenerateImageToolCall) threads the
+ * image selections. Assembled client-side from the `useAudioGenSettings` store
+ * (the single source of truth - see #1055/PR #1183); every field is optional so
+ * the tool falls back to its own defaults when a caller sends nothing.
+ */
+export const AudioGenerationToolCallSchema = z.object({
+  /** TTS provider for speech. Defaults to openai when unset. */
+  ttsProvider: supportedVoiceGenerationVendor.optional(),
+  /** Provider voice id/name; empty/unset falls back to the provider default. */
+  voice: z.string().optional(),
+  /** Output container for speech. Defaults to mp3. */
+  format: voiceOutputFormatSchema.optional(),
+  /** ISO 639-1 language pin for ElevenLabs speech; unset lets the provider auto-detect. */
+  languageCode: z.string().optional(),
+  /**
+   * Sound-effect clip length in seconds; null/unset lets the provider auto-select.
+   * Bounded to the same 0.5-30 range the direct sound-effects endpoint enforces
+   * (`soundGeneration.ts`) so a crafted client can't ship a huge duration that
+   * scales the per-second credit charge linearly.
+   */
+  durationSeconds: z.number().min(0.5).max(30).nullable().optional(),
+  /** Sound-effect prompt adherence (0-1), matching the direct endpoint's bound. */
+  promptInfluence: z.number().min(0).max(1).optional(),
+});
+export type AudioGenerationToolCall = z.infer<typeof AudioGenerationToolCallSchema>;
+
 export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   sessionId: z.string(),
   questId: z.string().optional(),
@@ -148,6 +178,7 @@ export const ChatCompletionInvokeParamsSchema = z.object({
   /** Epoch ms when the client submitted the prompt (for the request-lifecycle status log). */
   clientSubmittedAt: z.number().optional(),
   imageConfig: GenerateImageToolCallSchema.optional(),
+  audioConfig: AudioGenerationToolCallSchema.optional(),
   deepResearchConfig: z
     .object({
       maxDepth: z.number().optional(),

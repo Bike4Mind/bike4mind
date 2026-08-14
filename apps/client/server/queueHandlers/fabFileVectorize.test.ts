@@ -23,17 +23,31 @@ const h = vi.hoisted(() => ({
   chunkUpdate: vi.fn(),
   getAtlasIndexForModel: vi.fn(() => ({ name: 'idx', numDimensions: 3 })),
   stampChunkEmbeddingModel: vi.fn(),
+  indexChunks: vi.fn(),
+  selfHostOpenSearchEnabled: vi.fn(() => false),
+  enforceEmbeddingSpendGate: vi.fn(async () => undefined),
+  batchFindById: vi.fn(async () => ({ id: 'batch-1', dataLakeId: 'lake-1' })),
+  batchReleaseSpend: vi.fn(async () => true),
+  lakeReleaseSpend: vi.fn(async () => true),
+  getSettingsValue: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  adminSettingsRepository: { getSettingsValue: vi.fn() },
+  adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   apiKeyRepository: {},
   dataLakeBatchRepository: {
     updateFileStatus: h.updateFileStatus,
     incrementCounter: h.incrementCounter,
     incrementCounters: h.incrementCounters,
     claimFileStatus: h.claimFileStatus,
+    findById: h.batchFindById,
+    releaseEmbeddingSpend: h.batchReleaseSpend,
   },
+  // dataLakeRepository/scopedSettingsRepository also feed the convergence kill switch (#1676),
+  // built eagerly on every message.
+  dataLakeRepository: { releaseEmbeddingSpend: h.lakeReleaseSpend, findById: vi.fn() },
+  scopedSettingsRepository: { findOverrides: vi.fn() },
+  cacheRepository: {},
   embeddingCacheRepository: {},
   fabFileChunkRepository: { findById: vi.fn(), countTerminalChunks: h.countTerminalChunks, update: h.chunkUpdate },
   fabFileRepository: {
@@ -49,6 +63,19 @@ vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn(async () => ({})) },
   embeddingCacheService: { getEmbedding: h.getEmbedding, setEmbedding: vi.fn().mockResolvedValue(undefined) },
   fabFilesService: { stampChunkEmbeddingModel: h.stampChunkEmbeddingModel },
+  dataLakeService: {
+    enforceEmbeddingSpendGate: h.enforceEmbeddingSpendGate,
+    // Mirror the real class's retryable flag so the handler's terminal-denial branch classifies correctly.
+    EmbeddingSpendDeniedError: class EmbeddingSpendDeniedError extends Error {
+      retryable: boolean;
+      constructor(reason: string, options?: { retryable?: boolean }) {
+        super(reason);
+        this.name = 'EmbeddingSpendDeniedError';
+        this.retryable = options?.retryable ?? false;
+      }
+    },
+  },
+  scopedSettingsService: { resolveScopedSetting: vi.fn(), scopeForLake: vi.fn() },
 }));
 vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: vi.fn(),
@@ -59,7 +86,10 @@ vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => unde
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@server/utils/errors', () => ({ NotFoundError: class NotFoundError extends Error {} }));
 // Module-load zod schemas used by VectorizePayload.
-vi.mock('@bike4mind/common', () => ({ SupportedEmbeddingModelSchema: z.string() }));
+vi.mock('@bike4mind/common', () => ({
+  SupportedEmbeddingModelSchema: z.string(),
+  getEmbeddingModelCost: vi.fn(() => 0.0001),
+}));
 vi.mock('@bike4mind/fab-pipeline', () => ({
   ChunkSchema: z.object({}).passthrough(),
   EmbeddingFactory: class {
@@ -72,7 +102,9 @@ vi.mock('@bike4mind/fab-pipeline', () => ({
   // Mirror the real name-based guard so any test that reaches the failure branch classifies correctly.
   isEmbeddingAuthError: (e: unknown) => e instanceof Error && e.name === 'EmbeddingAuthError',
   getAtlasIndexForModel: h.getAtlasIndexForModel,
+  FabFileChunkSearchIndex: { indexChunks: h.indexChunks },
 }));
+vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpenSearchEnabled }));
 vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => new Proxy({}, { get: () => 'mock' }) }) }));
 
 const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() } as never;
@@ -80,7 +112,7 @@ const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(),
 import { fabFileChunkRepository } from '@bike4mind/database';
 import { sendToClient } from '@server/websocket/utils';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from './sqsDelivery';
-import { dispatch } from './fabFileVectorize';
+import { dispatch, CONVERGENCE_PAUSED_NOTE } from './fabFileVectorize';
 
 const makeEvent = (body: Record<string, unknown>) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
 // Fully-vectorized file -> idempotency early-return right after the batchId metadata attach.
@@ -106,6 +138,60 @@ describe('fabFileVectorize handler - batchId log metadata', () => {
     h.findAccessibleById.mockResolvedValue(vectorizedFile(undefined));
     await dispatch(makeEvent(payload), {} as never, mockLogger);
     expect(mockLogger.updateMetadata).not.toHaveBeenCalledWith({ batchId: 'batch-1' });
+  });
+});
+
+describe('fabFileVectorize handler - convergence kill switch (#1676)', () => {
+  // A partially-vectorized file passes the already-vectorized idempotency guard and reaches the
+  // halt check that sits just after it.
+  const unvectorizedFile = (batchId?: string) => ({
+    id: 'ff1',
+    batchId,
+    vectorized: false,
+    chunkCount: 1,
+    vectorizedChunkCount: 0,
+  });
+  const convergencePayload = { ...payload, origin: 'convergence' as const };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.fabFileUpdate.mockResolvedValue(undefined); // the flag-write is `.update(...).catch(...)`
+  });
+
+  it('flags the file and skips embedding when a convergence message hits the paused switch', async () => {
+    h.getSettingsValue.mockResolvedValue(true); // PauseLakeConvergence on (global read)
+
+    await dispatch(makeEvent(convergencePayload), {} as never, mockLogger);
+
+    expect(h.fabFileUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ff1', notes: CONVERGENCE_PAUSED_NOTE, isVectorizing: false })
+    );
+    // Embedding is gated: neither the chunk load nor the provider call runs.
+    expect(fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+    expect(h.getVector).not.toHaveBeenCalled();
+  });
+
+  it('never halts user work even when the switch is on, and does not flag the file', async () => {
+    h.getSettingsValue.mockResolvedValue(true);
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue(null); // no chunks -> early return
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger); // payload has no origin -> user
+
+    // User work short-circuits before any settings read; the file is never flagged paused.
+    expect(h.getSettingsValue).not.toHaveBeenCalled();
+    expect(h.fabFileUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ notes: CONVERGENCE_PAUSED_NOTE }));
+  });
+
+  it('lets convergence work proceed when the switch is off', async () => {
+    h.getSettingsValue.mockResolvedValue(false);
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue(null); // no valid chunks -> early return after the halt gate
+
+    await dispatch(makeEvent(convergencePayload), {} as never, mockLogger);
+
+    expect(h.fabFileUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ notes: CONVERGENCE_PAUSED_NOTE }));
+    // Passed the gate and reached chunk loading.
+    expect(fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).toHaveBeenCalled();
   });
 });
 
@@ -176,6 +262,107 @@ describe('fabFileVectorize handler - stored error copy on vectorization failure'
     h.deferFailureIfRetryable.mockResolvedValue(false);
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
     expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', 'rate limit exceeded');
+  });
+});
+
+describe('fabFileVectorize handler - spend gate', () => {
+  const unvectorizedFile = (batchId?: string) => ({
+    id: 'ff1',
+    batchId,
+    vectorized: false,
+    chunkCount: 1,
+    vectorizedChunkCount: 0,
+  });
+  // Same shape the mocked services module produces - the handler classifies via instanceof.
+  const denial = async (reason: string, retryable: boolean) => {
+    const { dataLakeService } = await import('@bike4mind/services');
+    return new dataLakeService.EmbeddingSpendDeniedError(reason, { retryable });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text: 'hello world',
+      tokenCount: 5,
+    });
+    h.getEmbedding.mockResolvedValue(null); // cache miss -> the gate is in play
+    h.markFailedIfNotAlready.mockResolvedValue(true);
+    // clearAllMocks resets calls but not replaced implementations - re-grant so a
+    // denial mocked in one test can never leak into later describes.
+    h.enforceEmbeddingSpendGate.mockResolvedValue(undefined);
+  });
+
+  it('runs the gate for a data-lake file before any provider call', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.enforceEmbeddingSpendGate).toHaveBeenCalledWith(
+      expect.objectContaining({ batchId: 'batch-1', dataLakeId: 'lake-1' })
+    );
+  });
+
+  it('skips the gate entirely for a turn-attached file (no batchId)', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.enforceEmbeddingSpendGate).not.toHaveBeenCalled();
+  });
+
+  it('a terminal denial accounts the failure immediately and CONSUMES the message', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.enforceEmbeddingSpendGate.mockRejectedValueOnce(await denial('budget exhausted', false));
+
+    // Resolves (no rethrow): the message must not ride SQS retries into the DLQ.
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', expect.stringContaining('budget exhausted'));
+    expect(h.getVector).not.toHaveBeenCalled();
+  });
+
+  it('releases the reservation from the run and lake meters when the provider call fails', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.getVector.mockRejectedValueOnce(new Error('openai 500'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('openai 500');
+
+    // getEmbeddingModelCost is mocked to 0.0001 USD -> ceil(100) microUSD for the message.
+    expect(h.batchReleaseSpend).toHaveBeenCalledWith('batch-1', 100);
+    expect(h.lakeReleaseSpend).toHaveBeenCalledWith('lake-1', 100);
+  });
+
+  it('does NOT release when embeddings succeeded and a later step fails (money truly spent)', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+    h.chunkUpdate.mockRejectedValueOnce(new Error('mongo write failed'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
+
+    expect(h.batchReleaseSpend).not.toHaveBeenCalled();
+    expect(h.lakeReleaseSpend).not.toHaveBeenCalled();
+  });
+
+  it('a release failure is logged, never masks the provider error', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.getVector.mockRejectedValueOnce(new Error('openai 500'));
+    h.batchReleaseSpend.mockRejectedValueOnce(new Error('mongo down'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('openai 500');
+  });
+
+  it('a retryable (rate-limit) denial keeps the normal SQS retry path', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.enforceEmbeddingSpendGate.mockRejectedValueOnce(await denial('rate limit stayed exhausted', true));
+    h.deferFailureIfRetryable.mockResolvedValue(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow();
+    expect(h.deferFailureIfRetryable).toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
   });
 });
 
@@ -358,5 +545,69 @@ describe('fabFileVectorize handler - embeddingModel discriminator stamp', () => 
 
     expect(h.chunkUpdate).not.toHaveBeenCalled();
     expect(h.stampChunkEmbeddingModel).not.toHaveBeenCalled();
+  });
+});
+
+describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
+  const unvectorizedFile = (batchId?: string) => ({
+    id: 'ff1',
+    batchId,
+    vectorized: false,
+    chunkCount: 1,
+    vectorizedChunkCount: 0,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getAtlasIndexForModel.mockReturnValue({ name: 'idx', numDimensions: 3 });
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text: 'hello world',
+      tokenCount: 5,
+    });
+    h.getEmbedding.mockResolvedValue(null);
+    h.countTerminalChunks.mockResolvedValue(1);
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+  });
+
+  it('indexes the vectorized chunks when self-host OpenSearch is enabled', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.indexChunks.mockResolvedValue(undefined);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.indexChunks).toHaveBeenCalledTimes(1);
+    expect(h.chunkUpdate).toHaveBeenCalled();
+  });
+
+  it('stamps embeddingModel onto the chunks passed to indexChunks - not persisted per-chunk in Mongo yet at this point', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.indexChunks.mockResolvedValue(undefined);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    const indexedChunks = h.indexChunks.mock.calls[0][0];
+    expect(indexedChunks).toEqual([expect.objectContaining({ id: 'c1', embeddingModel: 'text-embedding-3-small' })]);
+  });
+
+  it('never calls indexChunks when self-host OpenSearch is disabled', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(false);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.indexChunks).not.toHaveBeenCalled();
+  });
+
+  it('fails open on an indexing error - the Mongo write and stamp still complete, no throw', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    h.indexChunks.mockRejectedValue(new Error('cluster unreachable'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.chunkUpdate).toHaveBeenCalled();
+    expect(h.stampChunkEmbeddingModel).toHaveBeenCalled();
+    expect(mockLogger.warn).toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
   });
 });

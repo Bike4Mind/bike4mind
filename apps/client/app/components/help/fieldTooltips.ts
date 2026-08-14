@@ -11,18 +11,15 @@ export const FIELD_TOOLTIPS = {
     'Average credits consumed per day over your recent activity. Use this to estimate how long your balance will last.',
   temperature: 'Controls randomness: lower values are more deterministic, higher values are more creative.',
   fixedTemperature: 'This model only supports temperature 1.0.',
-  maxTokensInput:
-    'Tokens reserved for your prompt and conversation history. Increasing this leaves fewer tokens for the response.',
   maxTokensOutput:
     'Maximum tokens the model can generate in a single response. Higher values allow longer answers but cost more credits.',
   responseHistory: 'How many recent messages from this conversation are sent back to the model as context.',
   spokenWords: 'Approximate length the model targets for voice replies, in spoken words.',
+  reasoningEffort: 'How much reasoning the model does before answering. Lower is faster, higher is more thorough.',
   modelPicker:
     'Pick which AI model handles this request. Different models have different speeds, costs, and capabilities.',
   researchMode:
     'Enables multi-step research with source citations. Sends your prompt to several model configurations in parallel — uses more credits.',
-  researchModeToggle:
-    'Run the same prompt against up to four model/parameter configurations side-by-side. Token usage scales with the number of configurations.',
   imageModelTemperature:
     'Controls how loosely the image model interprets your prompt. Higher values yield more varied results.',
   imageSize:
@@ -36,7 +33,7 @@ export const FIELD_TOOLTIPS = {
   safetyTolerance:
     'How permissive content moderation is (Flux only). Lower is stricter, higher is more permissive (hard-capped).',
   promptEnhancement:
-    'Prompt enhancement (Flux only): the model rewrites and expands your prompt before generating, often adding detail. Turn off to use your prompt exactly as written.',
+    'The provider rewrites and expands your prompt before generating, often adding detail. Turn off to use your prompt exactly as written.',
 } as const;
 
 export type FieldTooltipKey = keyof typeof FIELD_TOOLTIPS;

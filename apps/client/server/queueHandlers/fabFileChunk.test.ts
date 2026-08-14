@@ -23,6 +23,10 @@ const h = vi.hoisted(() => ({
   isBatchComplete: vi.fn(),
   deferFailureIfRetryable: vi.fn(),
   fabFileUpdateOne: vi.fn(() => ({ catch: vi.fn() })),
+  selfHostOpenSearchEnabled: vi.fn(() => false),
+  recomputeFileChunkPolicyConflict: vi.fn(async () => null),
+  resolveScopedSetting: vi.fn(async () => ({ value: 512, source: 'platform' })),
+  sendToQueue: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -38,23 +42,50 @@ vi.mock('@bike4mind/database', () => ({
     shareable: { findAccessibleById: h.findAccessibleById },
     markFailedIfNotAlready: h.markFailedIfNotAlready,
   },
+  // Deps for the convergence kill switch (#1676), built eagerly on every message. Never exercised
+  // by these user-origin payloads (origin absent -> user work short-circuits before any read), but
+  // the named exports must exist so the deps object can be constructed.
+  dataLakeRepository: { findById: vi.fn() },
+  scopedSettingsRepository: { findOverrides: vi.fn() },
   FabFile: { updateOne: h.fabFileUpdateOne },
   User: { findById: vi.fn(async () => ({ id: 'u1' })) },
   // Run the callback so chunkFabfile actually executes (and rejects) under test.
   withTransaction: vi.fn((fn: () => unknown) => fn()),
 }));
 
-vi.mock('@bike4mind/services', () => ({ fabFilesService: { chunkFabfile: h.chunkFabfile } }));
+vi.mock('@bike4mind/services', () => ({
+  fabFilesService: { chunkFabfile: h.chunkFabfile },
+  // Owner-altitude chunk-policy resolution (#1662). The resolver never throws; default it to the
+  // platform value so the handler proceeds exactly as before these seams existed. scopeForLake
+  // (#1676) is only reached for background lake work; stubbed so the deps object can be constructed.
+  scopedSettingsService: {
+    scopeForFileOwner: vi.fn(() => ({ owner: { id: 'u1', type: 'user' } })),
+    resolveScopedSetting: h.resolveScopedSetting,
+    scopeForLake: vi.fn(),
+  },
+  dataLakeService: {
+    resolveSpendLevers: vi.fn(async () => ({ vectorizeChunkBatchSize: 50 })),
+    recomputeFileChunkPolicyConflict: h.recomputeFileChunkPolicyConflict,
+  },
+}));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })) }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: vi.fn() }));
+vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h.sendToClient(...a) }));
 vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: (...a: unknown[]) => h.finalizeBatchIfComplete(...a),
   isBatchComplete: (...a: unknown[]) => h.isBatchComplete(...a),
   deferFailureIfRetryable: (...a: unknown[]) => h.deferFailureIfRetryable(...a),
 }));
-vi.mock('@bike4mind/common', () => ({ isSupportedEmbeddingModel: vi.fn(() => true) }));
+vi.mock('@bike4mind/common', () => ({
+  isSupportedEmbeddingModel: vi.fn(() => true),
+  DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT: 50,
+}));
 vi.mock('@bike4mind/utils', () => ({ BadRequestError: class BadRequestError extends Error {} }));
+vi.mock('@bike4mind/fab-pipeline', () => ({
+  FabFileChunkSearchIndex: { deleteByFabFileId: vi.fn() },
+  effectiveChunkTokenLimit: vi.fn(() => 512),
+}));
+vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpenSearchEnabled }));
 vi.mock('sst', () => ({
   Resource: new Proxy({}, { get: () => new Proxy({}, { get: () => 'mock' }) }),
 }));
@@ -252,16 +283,19 @@ describe('fabFileChunk handler - notification failures are non-fatal (human revi
   });
 });
 
-describe('fabFileChunk handler - passage target passthrough (#1420)', () => {
+describe('fabFileChunk handler - passage target: payload override vs owner-altitude (#1420, #1662)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
-    h.findAccessibleById.mockResolvedValue({ id: 'ff1' });
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', userId: 'u1' });
     h.chunkFabfile.mockResolvedValue([]);
+    h.resolveScopedSetting.mockResolvedValue({ value: 512, source: 'platform' });
   });
 
-  it('forwards a payload chunkSize to chunkFabfile as passageTokenTarget', async () => {
-    // chunkSize was historically transported and silently dropped; it must reach the service.
+  it('forwards an explicit payload chunkSize as passageTokenTarget, overriding owner-altitude policy', async () => {
+    // chunkSize was historically transported and silently dropped (#1420); an explicit value from
+    // the UI reprocess door must still reach the service and win over the resolved policy (#1662).
+    h.resolveScopedSetting.mockResolvedValue({ value: 512, source: 'owner' });
     await dispatch(makeEvent({ ...payload, chunkSize: '750' }), {} as never, mockLogger);
     expect(h.chunkFabfile).toHaveBeenCalledWith(
       expect.anything(),
@@ -270,12 +304,118 @@ describe('fabFileChunk handler - passage target passthrough (#1420)', () => {
     );
   });
 
-  it('omits passageTokenTarget when the payload has no chunkSize (chunker default applies)', async () => {
+  it('resolves the owner-altitude chunk policy when the payload has no chunkSize (#1662)', async () => {
+    // No explicit payload value: the automatic doors now inherit the owner-altitude policy (which
+    // falls through to the platform DefaultChunkSize) instead of a hard-coded chunker default.
+    h.resolveScopedSetting.mockResolvedValue({ value: 999, source: 'owner' });
     await dispatch(makeEvent(payload), {} as never, mockLogger);
     expect(h.chunkFabfile).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ passageTokenTarget: undefined }),
+      expect.objectContaining({ passageTokenTarget: 999 }),
       expect.anything()
+    );
+  });
+});
+
+describe('fabFileChunk handler - cross-lake chunk-policy conflict (#1662)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', userId: 'u1', tags: [{ name: 'datalake:sales' }] });
+    h.resolveScopedSetting.mockResolvedValue({ value: 512, source: 'platform' });
+  });
+
+  it('recomputes the conflict with the effective target once the file is chunked', async () => {
+    h.chunkFabfile.mockResolvedValue([{ id: 'c1' }]); // non-empty -> past the zero-chunk early return
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.recomputeFileChunkPolicyConflict).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ff1', userId: 'u1' }),
+      512, // effectiveChunkTokenLimit is mocked to 512
+      expect.objectContaining({ embeddingModel: 'text-embedding-3-small' })
+    );
+  });
+
+  it('does not run the conflict check for a zero-chunk file (nothing to satisfy)', async () => {
+    h.chunkFabfile.mockResolvedValue([]); // zero chunks -> early return before the conflict check
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.recomputeFileChunkPolicyConflict).not.toHaveBeenCalled();
+  });
+
+  it('a conflict-check failure does not fail the chunk run', async () => {
+    h.chunkFabfile.mockResolvedValue([{ id: 'c1' }]);
+    h.recomputeFileChunkPolicyConflict.mockRejectedValue(new Error('lake read failed'));
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+  });
+});
+
+describe('fabFileChunk handler - self-host OpenSearch searchIndex adapter', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1' });
+    h.chunkFabfile.mockResolvedValue([]);
+  });
+
+  it('passes the searchIndex adapter when self-host OpenSearch is enabled', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(true);
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.chunkFabfile).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ searchIndex: expect.objectContaining({ deleteByFabFileId: expect.any(Function) }) })
+    );
+  });
+
+  it('omits the searchIndex adapter when self-host OpenSearch is disabled', async () => {
+    h.selfHostOpenSearchEnabled.mockReturnValue(false);
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.chunkFabfile).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ searchIndex: undefined })
+    );
+  });
+});
+
+describe('fabFileChunk handler - convergence kill switch (#1676)', () => {
+  const convergencePayload = { ...payload, origin: 'convergence' as const };
+  const switchOn = async (key: string) => (key === 'PauseLakeConvergence' ? true : 'text-embedding-3-small');
+  const switchOff = async (key: string) => (key === 'PauseLakeConvergence' ? false : 'text-embedding-3-small');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getSettingsValue.mockImplementation(switchOff);
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', chunked: false });
+    h.chunkFabfile.mockResolvedValue([{ id: 'c1' }]);
+    h.claimFileStatus.mockResolvedValue(false);
+  });
+
+  it('halts a convergence message when the switch is on, before any file work', async () => {
+    h.getSettingsValue.mockImplementation(switchOn);
+
+    await dispatch(makeEvent(convergencePayload), {} as never, mockLogger);
+
+    // Gated before the fabFile load, the chunk, and the isChunking claim; nothing fans out.
+    expect(h.findAccessibleById).not.toHaveBeenCalled();
+    expect(h.chunkFabfile).not.toHaveBeenCalled();
+    expect(h.fabFileUpdateOne).not.toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { isChunking: true } });
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('never halts user work (origin absent) even when the switch is on', async () => {
+    h.getSettingsValue.mockImplementation(switchOn);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger); // no origin -> user
+
+    expect(h.chunkFabfile).toHaveBeenCalled();
+  });
+
+  it('forwards origin + lakeId into the vectorize fan-out so the switch still bites downstream', async () => {
+    await dispatch(makeEvent({ ...convergencePayload, lakeId: 'lake-9' }), {} as never, mockLogger);
+
+    expect(h.sendToQueue).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ fabFileId: 'ff1', origin: 'convergence', lakeId: 'lake-9' })
     );
   });
 });

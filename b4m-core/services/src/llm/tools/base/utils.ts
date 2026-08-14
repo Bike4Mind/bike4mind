@@ -4,6 +4,7 @@ import { insufficientCreditsError } from '@bike4mind/common';
 import { CostInput } from '../../imageCostCalculator/types';
 import { estimateImageCredits, UnsupportedImageModelError } from '../../../imageCost';
 import { estimateMusicCredits } from '../../../musicCost';
+import { AudioCostInput, estimateAudioCredits } from '../../../audioCost';
 
 export async function validateUserCredits(
   user: any,
@@ -78,4 +79,35 @@ export function validateMusicCredits(
   }
 
   return { requiredCredits, usdCost, billedSeconds };
+}
+
+/**
+ * Audio-generation (TTS + sound-effects) parallel to validateMusicCredits: an up-front
+ * affordability gate. Speech bills per character (conservative gate estimate; settlement
+ * uses the resolved model + actual characters in ToolBuilder.settleAudioCredits), sound
+ * effects per duration second. Throws insufficient_credits before the paid provider call.
+ */
+export function validateAudioCredits(
+  user: { currentCredits?: number; id: string },
+  input: AudioCostInput,
+  logger: Logger,
+  organization?: IOrganizationDocument | null
+): { requiredCredits: number; usdCost: number; units: number } {
+  const availableCredits = organization ? organization.currentCredits : (user.currentCredits ?? 0);
+  logger.updateMetadata(
+    organization
+      ? { creditsSource: 'organization', creditsSourceId: organization.id }
+      : { creditsSource: 'user', creditsSourceId: user.id }
+  );
+
+  const { requiredCredits, usdCost, units } = estimateAudioCredits(input);
+
+  if (availableCredits < requiredCredits) {
+    const creditsType = organization ? 'organization' : 'personal';
+    throw insufficientCreditsError(
+      `You do not have enough ${creditsType} credits to generate audio. You currently have ${availableCredits} credits, and this request requires approximately ${requiredCredits} credits.`
+    );
+  }
+
+  return { requiredCredits, usdCost, units };
 }

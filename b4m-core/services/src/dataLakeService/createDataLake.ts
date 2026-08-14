@@ -1,4 +1,4 @@
-import type { IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
+import type { IDataLakeAccessGrantRepository, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
 import { CreateDataLakeRequestInput, DATA_LAKES, normalizeEntitlementKey } from '@bike4mind/common';
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import { collidesWithRegistryPrefix, findCollidingPrefixLakes } from './tagPrefixCollision';
@@ -9,7 +9,9 @@ type CreateDataLakeParams = z.infer<typeof CreateDataLakeRequestInput>;
 interface CreateDataLakeAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'create' | 'find'>;
+    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'upsertGrant'>;
   };
+  logger?: { warn: (msg: string, ...args: unknown[]) => void };
 }
 
 /**
@@ -22,6 +24,24 @@ interface CreateDataLakeAdapters {
  */
 export function buildDatalakeTag(slug: string, organizationId?: string): string {
   return organizationId ? `datalake:${organizationId}:${slug}` : `datalake:${slug}`;
+}
+
+/**
+ * Whether a persisted lake's `datalakeTag` is one its own slug/org could legitimately carry.
+ * Tolerant of BOTH forms on purpose: a lake created org-less keeps its `datalake:<slug>` tag after
+ * being promoted into an org, because setLakeVisibility deliberately does NOT re-mint the tag - it
+ * is the membership join key, and re-minting would orphan every file that already carries it. So an
+ * org-scoped lake is well-formed if its tag matches EITHER the org-qualified form OR the org-less
+ * form. Safe because `datalakeTag` is globally unique (a sparse unique index), so accepting the
+ * historical org-less form admits no cross-lake collision. Without this tolerance a promoted lake
+ * would silently fail the well-formedness screen on the owner-exemption path in
+ * getDynamicDataLakeTags and drop out of its own owner's dynamic lake set.
+ */
+export function isDatalakeTagWellFormed(lake: { datalakeTag: string; slug: string; organizationId?: string }): boolean {
+  return (
+    lake.datalakeTag === buildDatalakeTag(lake.slug, lake.organizationId) ||
+    lake.datalakeTag === buildDatalakeTag(lake.slug, undefined)
+  );
 }
 
 /**
@@ -92,7 +112,7 @@ async function assertPrefixAvailable(
 export const createDataLake = async (
   userId: string,
   parameters: CreateDataLakeParams,
-  { db }: CreateDataLakeAdapters,
+  { db, logger }: CreateDataLakeAdapters,
   // The lake's org scope. The route resolves this from the caller's active-switcher org and
   // authorization-validates it (resolveActiveOrg) before passing it here - the service trusts
   // it as an already-checked value and never re-derives it from the raw request body.
@@ -122,7 +142,30 @@ export const createDataLake = async (
       status: 'draft',
       fileCount: 0,
       totalSizeBytes: 0,
+      totalChunkedChars: 0,
     } as Omit<IDataLakeDocument, 'id' | 'createdAt' | 'updatedAt'>);
+
+    // Seed the creator's explicit owner grant so the lake is self-describing for the membership
+    // view (#1672), succession, and transfer (transfer moves this owner row rather than mutating
+    // the immutable createdByUserId). Best-effort by design: management/ownership resolution falls
+    // back to createdByUserId when no owner grant exists, so a failed seed leaves the lake correctly
+    // owned - it just isn't yet listed as an explicit row. A hard failure here would strand an
+    // already-created lake, which is the worse outcome; log so a missing seed is diagnosable rather
+    // than silent.
+    try {
+      await db.dataLakeAccessGrants.upsertGrant({
+        dataLakeId: dataLake.id,
+        principalType: 'user',
+        principalId: userId,
+        role: 'owner',
+        grantedByUserId: userId,
+      });
+    } catch (grantErr) {
+      logger?.warn(
+        '[dataLakes] failed to seed owner access grant for new lake; ownership falls back to createdByUserId',
+        { dataLakeId: dataLake.id, err: grantErr }
+      );
+    }
 
     return dataLake;
   } catch (err) {

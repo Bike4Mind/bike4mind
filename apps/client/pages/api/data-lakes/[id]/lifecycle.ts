@@ -1,7 +1,15 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository, dataLakeBatchRepository, fabFileRepository } from '@bike4mind/database';
+import {
+  dataLakeRepository,
+  dataLakeBatchRepository,
+  dataLakeAccessGrantRepository,
+  fabFileRepository,
+  fabFileChunkRepository,
+} from '@bike4mind/database';
+import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
+import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
@@ -11,6 +19,19 @@ import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 const LifecycleInput = z.object({
   action: z.enum(['archive', 'unarchive', 'restore', 'delete', 'cleanup']),
 });
+
+/**
+ * Undefined everywhere except self-host OpenSearch (see ports.ts) - Atlas's vector index lives
+ * on the FabFileChunk collection itself, so removing chunks there already removes it; only a
+ * genuinely separate store needs this port wired.
+ */
+const retrievalIndex = () =>
+  selfHostOpenSearchEnabled()
+    ? dataLakeService.openSearchRetrievalIndex({
+        db: { fabFileChunks: fabFileChunkRepository },
+        searchIndex: FabFileChunkSearchIndex,
+      })
+    : undefined;
 
 /**
  * POST /api/data-lakes/:id/lifecycle  { action }
@@ -27,34 +48,58 @@ const handler = baseApi()
 
     // Resolve + access-gate the lake first (not-found-style denial). Writes are then
     // further restricted to owner/admin inside each service.
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, { db: { dataLakes: dataLakeRepository } });
+    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+    });
     dataLakeService.assertLakeWritable(lake);
-    const actor = { userId: ctx.userId, isAdmin: ctx.isAdmin };
+    // Minimal ManageActor: carries administeredOrgIds for the org-manageable rung, and is small
+    // enough to ride in the cleanup queue payload below.
+    const actor = { userId: ctx.userId, isAdmin: ctx.isAdmin, administeredOrgIds: ctx.administeredOrgIds };
 
     switch (action) {
       case 'archive': {
         const result = await dataLakeService.archiveDataLake(actor, lake.id, {
-          db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
+          db: {
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            batches: dataLakeBatchRepository,
+            fabFiles: fabFileRepository,
+          },
+          retrievalIndex: retrievalIndex(),
           logger: req.logger,
         });
         return res.json(result);
       }
       case 'unarchive': {
         const result = await dataLakeService.unarchiveDataLake(actor, lake.id, {
-          db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
+          db: {
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            fabFiles: fabFileRepository,
+          },
         });
         return res.json(result);
       }
       case 'restore': {
         // Recover a soft-deleted (phase-1) lake back to active.
         const result = await dataLakeService.restoreDeletedDataLake(actor, lake.id, {
-          db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
+          db: {
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            fabFiles: fabFileRepository,
+          },
         });
         return res.json(result);
       }
       case 'delete': {
         const result = await dataLakeService.deleteDataLake(actor, lake.id, {
-          db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
+          db: {
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            batches: dataLakeBatchRepository,
+            fabFiles: fabFileRepository,
+          },
+          retrievalIndex: retrievalIndex(),
           // The prefix-overlap warning is the point of logging here: without a sink it no-ops.
           logger: req.logger,
         });
@@ -63,11 +108,14 @@ const handler = baseApi()
       case 'cleanup': {
         // Phase-2 hard delete can fan out over every file/chunk in the lake, which blows the
         // request Lambda's timeout on a large lake. Offload to the background consumer instead.
-        // Mirror the service's owner/admin + soft-deleted guards synchronously so a non-owner or
+        // Mirror the service's manage + soft-deleted guards synchronously so a non-manager or
         // a not-deleted request gets an immediate 4xx rather than a 202 for a message the consumer
         // would just drop (the consumer re-checks the same guards, so a stale message is still safe).
-        if (!actor.isAdmin && lake.createdByUserId !== actor.userId) {
-          return res.status(403).json({ error: 'Only the creator can clean up this data lake' });
+        const grants = await dataLakeService.loadActiveLakeGrants(lake, {
+          db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
+        });
+        if (!dataLakeService.canManageLake(lake, actor, grants)) {
+          return res.status(403).json({ error: 'You do not have permission to clean up this data lake' });
         }
         if (lake.status !== 'deleted') {
           return res.status(400).json({ error: 'Data lake must be soft-deleted before cleanup' });

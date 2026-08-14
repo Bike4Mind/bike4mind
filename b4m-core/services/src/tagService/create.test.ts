@@ -208,4 +208,23 @@ describe('tagService - create', () => {
       await expect(create(userId, { name: 'datalakes-todo', type: TagType.FILE }, adapters)).resolves.toBeTruthy();
     });
   });
+
+  // 'opti:' is the hardcoded opti-knowledge entry in DATA_LAKES - a static registry lake with no
+  // owning document. Refusing this document outright (no admin exemption, unlike the write gates
+  // elsewhere) closes the door tagService/update's rename gate would otherwise have to treat as
+  // carefully as a file's own content tags.
+  describe('static-registry lake prefixes', () => {
+    it('refuses to create a tag under a static-registry prefix', async () => {
+      await expect(create(userId, { name: 'opti:report', type: TagType.FILE }, adapters)).rejects.toThrow(
+        "a data lake's tag prefix cannot be created here"
+      );
+      expect(mockFileTagRepo.create).not.toHaveBeenCalled();
+    });
+
+    it('allows a name that merely starts with the same letters', async () => {
+      (mockFileTagRepo.create as Mock).mockResolvedValueOnce({ id: 'new-1' });
+
+      await expect(create(userId, { name: 'optimism', type: TagType.FILE }, adapters)).resolves.toBeTruthy();
+    });
+  });
 });

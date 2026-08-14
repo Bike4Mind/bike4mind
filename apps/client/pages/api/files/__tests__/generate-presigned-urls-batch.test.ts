@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   getSettingsValue: vi.fn(),
   batchFindById: vi.fn(),
   appendFiles: vi.fn(),
+  s3ClientConfigs: [] as unknown[],
 }));
 
 // Callable chain routed by req.method, same shape as the batches lifecycle test.
@@ -27,7 +28,11 @@ vi.mock('@server/middlewares/baseApi', () => ({
 // The global setup mocks `sst` without a fabFileBucket, and the route reads its name.
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-bucket' } } }));
 vi.mock('@aws-sdk/client-s3', () => ({
-  S3Client: class {},
+  S3Client: class {
+    constructor(config: unknown) {
+      h.s3ClientConfigs.push(config);
+    }
+  },
   PutObjectCommand: class {
     constructor(public input: unknown) {}
   },
@@ -45,6 +50,15 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   dataLakeBatchRepository: { findById: h.batchFindById, appendFiles: h.appendFiles },
   dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag, find: h.lakeFind },
+  dataLakeAccessGrantRepository: {
+    listByLake: vi.fn().mockResolvedValue([]),
+    listActiveByLakes: vi.fn().mockResolvedValue([]),
+    listByPrincipal: vi.fn().mockResolvedValue([]),
+    findGrant: vi.fn().mockResolvedValue(null),
+    upsertGrant: vi.fn().mockResolvedValue({}),
+    removeGrant: vi.fn().mockResolvedValue(true),
+    removeAllForLake: vi.fn().mockResolvedValue(0),
+  },
 }));
 
 // Partial: only the lake-authorization collaborators are stubbed. The fallback tagger is the
@@ -112,6 +126,14 @@ const file = (overrides: Record<string, unknown> = {}) => ({
 
 const tagNamesOf = (callIndex = 0) =>
   ((h.createFabFile.mock.calls[callIndex][0] as { tags?: { name: string }[] }).tags ?? []).map(t => t.name).sort();
+
+describe('POST /api/files/generate-presigned-urls-batch - S3 client config', () => {
+  it('sets requestChecksumCalculation to WHEN_REQUIRED (#1535)', () => {
+    // Without this, getSignedUrl signs in a checksum of the empty sign-time body, which then
+    // mismatches whatever the browser actually PUTs.
+    expect(h.s3ClientConfigs[0]).toMatchObject({ requestChecksumCalculation: 'WHEN_REQUIRED' });
+  });
+});
 
 describe('POST /api/files/generate-presigned-urls-batch - data-lake tags', () => {
   beforeEach(() => {
@@ -216,6 +238,18 @@ describe('POST /api/files/generate-presigned-urls-batch - data-lake tags', () =>
 
     const persisted = (h.createFabFile.mock.calls[0][0] as { tags: { name: string; strength: number }[] }).tags;
     expect(persisted.find(t => t.name === 'datalake:orga:acme-2026')?.strength).toBe(1.0);
+  });
+
+  // This route creates each FabFile through the manager's direct FabFile.create(), not the
+  // fabFileService.createFabFile door that gates this namespace centrally - it needs its own
+  // check, same as the meta-tag one above. assertCanWriteDataLakeTags is mocked to a no-op above,
+  // so a throw here can only come from the real assertCanWriteStaticRegistryTags.
+  it('refuses a non-admin self-applying a static-registry-prefixed tag (e.g. opti:)', async () => {
+    const { res } = makeRes();
+    await expect(run({ files: [file({ tags: [{ name: 'opti:report', strength: 1 }] })] }, res)).rejects.toThrow(
+      /only an admin can change this data lake/i
+    );
+    expect(h.createFabFile).not.toHaveBeenCalled();
   });
 });
 

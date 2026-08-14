@@ -1,11 +1,13 @@
 import {
   DATALAKE_TAG_PREFIX,
   DataLakeMembershipScope,
+  FabFileChunkPolicyConflict,
   IFabFileChunkDocument,
   IFabFileChunkRepository,
   IFabFileDocument,
   IFabFileRepository,
   IFabFileVersion,
+  FabFileSourceType,
   KnowledgeType,
 } from '@bike4mind/common';
 import mongoose, { Model, Schema } from 'mongoose';
@@ -15,7 +17,7 @@ import BaseRepository from '@bike4mind/db-core';
 import { addLowercaseField } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
 import { buildFabFileSearchQuery, buildOwnershipConditions, escapeRegex } from '../../queries/fabFileSearchQuery';
-import { buildDataLakeMembershipFilter } from '../../queries/dataLakeLifecycleScope';
+import { buildDataLakeMembershipFilter, buildNoOtherLakeMetaTagFilter } from '../../queries/dataLakeLifecycleScope';
 
 /**
  * "not a lake membership tag", derived from the one constant rather than spelled out, so a change
@@ -53,6 +55,15 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
 
   async deleteManyByFabFileId(fabFileId: string) {
     await this.fabFileChunkModel.deleteMany({ fabFileId });
+  }
+
+  async distinctEmbeddingModelsByFabFileIds(fabFileIds: string[]): Promise<string[]> {
+    if (fabFileIds.length === 0) return [];
+    // Uses the { fabFileId: 1, _id: 1 } compound index below for the filter half of the scan.
+    return this.fabFileChunkModel.distinct('embeddingModel', {
+      fabFileId: { $in: fabFileIds },
+      embeddingModel: { $ne: null },
+    });
   }
 
   async bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]) {
@@ -235,6 +246,45 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
   async getAtlasIndexStatus(model: string): Promise<{ queryable: boolean; status: string } | null> {
     return getAtlasIndexStatusForModel(mongoose.connection, model);
   }
+
+  /**
+   * One page of chunk ids still missing `charLength`, ascending by `_id` - the char-length
+   * backfill's keyset cursor (packages/scripts/datalake/backfill-chunk-char-length.ts).
+   * `charLength: null` deliberately matches missing AND explicit null.
+   */
+  async findChunkIdsMissingCharLength(options: { limit?: number; afterChunkId?: string } = {}): Promise<string[]> {
+    const { limit = 5_000, afterChunkId } = options;
+    const docs = await this.fabFileChunkModel
+      .find({ charLength: null, ...(afterChunkId ? { _id: { $gt: afterChunkId } } : {}) })
+      .select({ _id: 1 })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean();
+    return docs.map(d => String(d._id));
+  }
+
+  /**
+   * Stamp `charLength` on the given chunks server-side: a pipeline update computing $strLenCP
+   * over the stored text, so chunk text never leaves the database. Counts Unicode code points -
+   * the same number countCodePoints produces on the live write path (see that helper's comment
+   * for why the two must agree).
+   */
+  async backfillCharLengthByIds(chunkIds: string[]): Promise<number> {
+    if (chunkIds.length === 0) return 0;
+    const result = await this.fabFileChunkModel.updateMany({ _id: { $in: chunkIds } }, [
+      { $set: { charLength: { $strLenCP: '$text' } } },
+    ]);
+    return result.modifiedCount;
+  }
+
+  /** Sum of a file's chunks' charLength, unstamped chunks counted as 0 - backfill phase 2 input. */
+  async sumChunkCharLengthByFabFileId(fabFileId: string): Promise<number> {
+    const [agg] = await this.fabFileChunkModel.aggregate<{ total: number }>([
+      { $match: { fabFileId } },
+      { $group: { _id: null, total: { $sum: { $ifNull: ['$charLength', 0] } } } },
+    ]);
+    return agg?.total ?? 0;
+  }
 }
 
 const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
@@ -246,6 +296,8 @@ const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
       required: true,
     },
     tokenCount: { type: Number, required: true },
+    // Unicode code points of `text` (countCodePoints / $strLenCP); see IFabFileChunk.charLength.
+    charLength: { type: Number, required: false },
     vector: { type: [Number], required: false },
     embeddingModel: { type: String, required: false },
   },
@@ -273,9 +325,9 @@ const FabFileChunkSchema = new Schema<IFabFileChunkDocument, IFabFileModel>(
 // serves the bare `fabFileId` reads (findByFabFileId, findTextsByFabFileId, countByFabFileId,
 // deleteManyByFabFileId, countTerminalChunks),
 // and a `{ _id: 1, fabFileId: 1 }` buys nothing over `_id_` since `vector` is in neither index, so
-// both plans fetch anyway. Environments deployed before this still hold those two as orphans until
-// a drop migration removes them; nothing recreates them, because autoIndex only builds what is
-// declared here. fabFileChunkIndexes.test.ts pins the set.
+// both plans fetch anyway. Environments deployed before this still held those two as orphans;
+// 20260810000000_drop-legacy-fabfilechunk-indexes.ts drops them. Nothing recreates them, because
+// autoIndex only builds what is declared here. fabFileChunkIndexes.test.ts pins the set.
 FabFileChunkSchema.index({ fabFileId: 1, _id: 1 });
 
 export const FabFileChunk =
@@ -474,6 +526,23 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async findByUserId(userId: string): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({ userId, deletedAt: null });
     return result.map(d => d.toJSON());
+  }
+
+  /**
+   * Total `fileSize` of a user's non-deleted files, summed in the database so no
+   * documents are hydrated - the only thing recalculateUserStorage needs is the
+   * integer. `$ifNull` makes a missing or null `fileSize` count as 0, matching the
+   * `|| 0` the load-all-and-reduce caller used to apply (the schema types `fileSize`
+   * as a Number, so a non-numeric value is unreachable). Same live-file filter
+   * as findByUserId; mirrors the aggregate shape in computeDataLakeStats.
+   */
+  async sumFileSizeByUserId(userId: string): Promise<number> {
+    const [row] = await this.fabFileModel.aggregate<{ total: number }>([
+      { $match: { userId, deletedAt: null } },
+      { $group: { _id: null, total: { $sum: { $ifNull: ['$fileSize', 0] } } } },
+      { $project: { _id: 0, total: 1 } },
+    ]);
+    return row?.total ?? 0;
   }
 
   async findByBatchId(batchId: string): Promise<IFabFileDocument[]> {
@@ -823,6 +892,19 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result !== null;
   }
 
+  async setChunkPolicyConflict(
+    fabFileId: string,
+    chunkedPassageTokenTarget: number,
+    conflict: FabFileChunkPolicyConflict | null
+  ): Promise<void> {
+    // One atomic $set so the recorded target and the conflict decided from it can never disagree
+    // (#1662). `null` clears a now-resolved conflict; the target is always recorded.
+    await this.fabFileModel.updateOne(
+      { _id: fabFileId },
+      { $set: { chunkedPassageTokenTarget, chunkPolicyConflict: conflict } }
+    );
+  }
+
   async findByContentHashes(userId: string, hashes: string[]): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({
       userId,
@@ -851,6 +933,29 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.map(d => d.toJSON());
   }
 
+  async findByDriveFileIdsInDataLake(driveFileIds: string[], datalakeTag: string): Promise<IFabFileDocument[]> {
+    if (driveFileIds.length === 0) return [];
+    // The recursive Drive walk can surface up to 100k children PER folder, so an unchunked $in
+    // would risk Mongo's 16 MB BSON query ceiling and a degraded plan long before it. Query in
+    // id-chunks and concatenate.
+    const CHUNK_SIZE = 5000;
+    const results: IFabFileDocument[] = [];
+    for (let i = 0; i < driveFileIds.length; i += CHUNK_SIZE) {
+      const chunk = driveFileIds.slice(i, i + CHUNK_SIZE);
+      const docs = await this.fabFileModel.find({
+        driveFileId: { $in: chunk },
+        deletedAt: null,
+        archivedAt: null,
+        tags: { $elemMatch: { name: datalakeTag } },
+        // Same orphan-pending exclusion as findByContentHashesInDataLake: a failed prior ingest
+        // left 'pending' must not block a legit re-ingest of the same Drive file.
+        status: { $ne: 'pending' },
+      });
+      results.push(...docs.map(d => d.toJSON()));
+    }
+    return results;
+  }
+
   // Data lake lifecycle. Membership is the two-signal rule in buildDataLakeMembershipFilter
   // (meta-tag OR a fileTagPrefix match on a file the lake's creator owns), shared with the
   // single-lake browse so a read and a whole-lake write never disagree about who is a member.
@@ -871,8 +976,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * conjunct is not in that index, so a prefix-heavy lake fetches its candidate documents to
    * check ownership.
    */
-  async computeDataLakeStats(scope: DataLakeMembershipScope): Promise<{ fileCount: number; totalSizeBytes: number }> {
-    const [agg] = await this.fabFileModel.aggregate<{ fileCount: number; totalSizeBytes: number }>([
+  async computeDataLakeStats(
+    scope: DataLakeMembershipScope
+  ): Promise<{ fileCount: number; totalSizeBytes: number; totalChunkedChars: number }> {
+    const [agg] = await this.fabFileModel.aggregate<{
+      fileCount: number;
+      totalSizeBytes: number;
+      totalChunkedChars: number;
+    }>([
       {
         $match: {
           ...buildDataLakeMembershipFilter(scope),
@@ -881,10 +992,41 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           status: { $ne: 'pending' },
         },
       },
-      { $group: { _id: null, fileCount: { $sum: 1 }, totalSizeBytes: { $sum: { $ifNull: ['$fileSize', 0] } } } },
-      { $project: { _id: 0, fileCount: 1, totalSizeBytes: 1 } },
+      {
+        $group: {
+          _id: null,
+          fileCount: { $sum: 1 },
+          totalSizeBytes: { $sum: { $ifNull: ['$fileSize', 0] } },
+          totalChunkedChars: { $sum: { $ifNull: ['$chunkedCharCount', 0] } },
+        },
+      },
+      { $project: { _id: 0, fileCount: 1, totalSizeBytes: 1, totalChunkedChars: 1 } },
     ]);
-    return agg ?? { fileCount: 0, totalSizeBytes: 0 };
+    return agg ?? { fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 };
+  }
+
+  /**
+   * One page of file ids that have chunks but no `chunkedCharCount` (missing or nulled by a
+   * content rewrite), ascending by `_id` - the char-length backfill's phase-2 cursor.
+   */
+  async findFileIdsMissingChunkedCharCount(options: { limit?: number; afterFileId?: string } = {}): Promise<string[]> {
+    const { limit = 1_000, afterFileId } = options;
+    const docs = await this.fabFileModel
+      .find({
+        chunkedCharCount: null,
+        chunkCount: { $gt: 0 },
+        ...(afterFileId ? { _id: { $gt: afterFileId } } : {}),
+      })
+      .select({ _id: 1 })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean();
+    return docs.map(d => String(d._id));
+  }
+
+  /** Stamp a file's recomputed `chunkedCharCount` - the char-length backfill's phase-2 write. */
+  async setChunkedCharCount(id: string, chunkedCharCount: number): Promise<void> {
+    await this.fabFileModel.updateOne({ _id: id }, { $set: { chunkedCharCount } });
   }
 
   /**
@@ -917,33 +1059,68 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   // Omitting `stampedAt` matches every stamped row, which is the pre-mark behavior and the fallback
   // for a lake torn down before the mark existed.
   //
-  // The archive axis deliberately stays unstamped: `archiveByDataLakeTag` is the only writer of a
-  // non-null `archivedAt`, so there is no independently-archived file to protect, and bounding it
-  // would strand any row still holding a stamp its lake no longer names.
+  // The archive axis is stamped the same way (`at`, from `IDataLake.filesArchivedAt`), because
+  // restore now also clears `archivedAt` (an archive->delete->restore must not leave files
+  // archived-and-invisible) - so equality-bounding that clear against the stamp is what stops it
+  // from freeing a prefix-sharing sibling's independently-archived files, the same way the delete
+  // axis avoids reviving a file the creator deleted on their own. `unarchiveByDataLakeTag` and
+  // `findArchivedByDataLakeTag` bound themselves the same way, over the WHOLE membership filter -
+  // a meta-tag match is not exempt: `addFileToLake` lets one file carry more than one lake's
+  // meta-tag with no exclusivity check, so a meta-tagged row can just as easily belong to a
+  // co-owning lake's own archive as a prefix-tagged row can belong to a sibling's.
 
-  async archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number> {
+  async archiveByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<number> {
     const result = await this.fabFileModel.updateMany(
       { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: null },
-      { $set: { archivedAt: new Date() } }
+      { $set: { archivedAt: at } }
     );
     return result.modifiedCount;
   }
 
-  async unarchiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number> {
+  async unarchiveByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<number> {
     const result = await this.fabFileModel.updateMany(
-      { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: { $ne: null } },
+      { ...buildDataLakeMembershipFilter(scope), deletedAt: null, archivedAt: stampedAt ?? { $ne: null } },
       { $set: { archivedAt: null } }
     );
     return result.modifiedCount;
   }
 
-  async findArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]> {
+  // `stampedAt` narrows the dedup read the same way it narrows the reversal above - omitting it
+  // (a lake with no recorded stamp) matches every archived row, same as before this parameter
+  // existed. Without this, the dedup pass could read a co-owning or sibling lake's own archived
+  // member and, if it happens to share a contentHash with one of THIS lake's live files,
+  // soft-delete that other lake's row as a "duplicate" it never owned.
+  async findArchivedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]> {
     const result = await this.fabFileModel.find({
       ...buildDataLakeMembershipFilter(scope),
       deletedAt: null,
-      archivedAt: { $ne: null },
+      archivedAt: stampedAt ?? { $ne: null },
     });
     return result.map(d => d.toJSON());
+  }
+
+  // Unbounded existence probe, deliberately with no `stampedAt` param unlike
+  // findArchivedByDataLakeTag above - its one caller (archiveDataLake's hasUnstampedArchive
+  // guard) needs to know whether ANY member is already archived, stamped or not, to decide
+  // whether claiming a fresh stamp would strand a pre-existing one; scoping it by a stamp that
+  // does not exist yet would defeat the check.
+  //
+  // EXCLUSIVE to this lake's own meta-tag: a row also carrying another lake's meta-tag is that
+  // lake's under that lake's own stamp, not this lake's orphan (addFileToLake has no exclusivity
+  // check, so one file can carry more than one lake's tag). Counting it here would make this
+  // lake skip claiming its own stamp, stay permanently unstamped, and fall back to the pre-fix
+  // unbounded restore on every one of its OWN future unarchive calls - freeing the co-owner's
+  // legitimately-archived row. Says nothing about a prefix-ARM collision, which carries no lake
+  // attribution at all and remains a known, accepted limitation (#1729).
+  async hasArchivedMemberExclusiveToDataLakeTag(scope: DataLakeMembershipScope): Promise<boolean> {
+    return (
+      (await this.fabFileModel.exists({
+        ...buildDataLakeMembershipFilter(scope),
+        ...buildNoOtherLakeMetaTagFilter(scope.datalakeTag),
+        deletedAt: null,
+        archivedAt: { $ne: null },
+      })) != null
+    );
   }
 
   async findDeletedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]> {
@@ -959,15 +1136,39 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async undeleteByDataLakeTag(
     scope: DataLakeMembershipScope,
     excludeIds: string[] = [],
-    stampedAt?: Date
+    stampedAt?: Date,
+    archiveStampToClear?: Date
   ): Promise<number> {
-    const filter: Record<string, unknown> = {
+    const base: Record<string, unknown> = {
       ...buildDataLakeMembershipFilter(scope),
       deletedAt: stampedAt ?? { $ne: null },
     };
-    if (excludeIds.length > 0) filter._id = { $nin: excludeIds };
-    const result = await this.fabFileModel.updateMany(filter, { $set: { deletedAt: null } });
-    return result.modifiedCount;
+    if (excludeIds.length > 0) base._id = { $nin: excludeIds };
+
+    if (!archiveStampToClear) {
+      const result = await this.fabFileModel.updateMany(base, { $set: { deletedAt: null } });
+      return result.modifiedCount;
+    }
+
+    // Two parallel queries partitioned on `archivedAt`, not one update followed by another - not
+    // for snapshot isolation (Mongo gives none across separate updateMany calls), but because the
+    // shared `deletedAt: stampedAt` base filter is a barrier: once either query flips a row's
+    // `deletedAt` to null, that row no longer matches EITHER filter, so it cannot be picked up
+    // twice. A row stamped by THIS lake's own archive gets both fields cleared; any other value (a
+    // different lake's stamp, or none) only un-deletes, leaving its archive marker exactly as it
+    // was - the equality bound that keeps this from freeing a prefix-sharing sibling's
+    // independently-archived files.
+    const [ownStamp, otherStamp] = await Promise.all([
+      this.fabFileModel.updateMany(
+        { ...base, archivedAt: archiveStampToClear },
+        { $set: { deletedAt: null, archivedAt: null } }
+      ),
+      this.fabFileModel.updateMany(
+        { ...base, archivedAt: { $ne: archiveStampToClear } },
+        { $set: { deletedAt: null } }
+      ),
+    ]);
+    return ownStamp.modifiedCount + otherStamp.modifiedCount;
   }
 
   async softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<string[]> {
@@ -1175,9 +1376,18 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
 
     chunkCount: { type: Number, default: 0 },
     vectorizedChunkCount: { type: Number, default: 0 },
+    // Sum of the file's chunks' charLength; nulled on content rewrite. See IFabFile.chunkedCharCount.
+    chunkedCharCount: { type: Number, required: false },
 
     isChunking: { type: Boolean, default: false },
     chunked: { type: Boolean, default: false },
+    // Chunk policy at file-owner altitude (#1662). chunkedPassageTokenTarget: the effective target
+    // (post model-window clamp) the current chunks were built with, so a later lake-membership
+    // change can check a lake's requirement without re-chunking. chunkPolicyConflict: the cross-lake
+    // conflict report (Mixed, like sourceMetadata; null when no conflict). A report, not a failure -
+    // the file stays chunked at its owner-altitude policy.
+    chunkedPassageTokenTarget: { type: Number, required: false },
+    chunkPolicyConflict: { type: Schema.Types.Mixed, required: false, default: null },
     isVectorizing: { type: Boolean, default: false },
     vectorized: { type: Boolean, default: false },
     embeddingModel: { type: String, required: false },
@@ -1210,6 +1420,18 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     contentHash: { type: String },
     batchId: { type: String },
     relativePath: { type: String },
+    // Provenance. Declared because strict mode drops undeclared paths silently: `sourceType` was
+    // already being written by the Slack file intake and discarded on every save, so anything
+    // reading it back saw MANUAL_UPLOAD-shaped nothing. Free-form `sourceMetadata` carries the
+    // per-source origin (for Slack: channel + message ts) that makes an ingested file auditable.
+    sourceType: { type: String, enum: Object.values(FabFileSourceType), required: false },
+    sourceMetadata: { type: Schema.Types.Mixed, required: false },
+    // Google Drive ingest provenance (#1589). Populated when sourceType === GOOGLE_DRIVE.
+    driveFileId: { type: String },
+    driveModifiedTime: { type: Date },
+    driveMd5Checksum: { type: String },
+    sourceLakeId: { type: String },
+    driveConnectionId: { type: String },
     archivedAt: { type: Date },
     // Absent until the first AI edit of a docx/xlsx; each edit appends an entry.
     versions: { type: [FabFileVersionSchema], default: undefined },
@@ -1265,6 +1487,9 @@ FabFileSchema.index({ 'tags.name': 1, archivedAt: 1, deletedAt: 1 });
 
 // Content hash deduplication lookups
 FabFileSchema.index({ contentHash: 1, userId: 1 });
+
+// Google Drive ingest dedup (driveFileId is the stable re-sync key; contentHash changes on edit)
+FabFileSchema.index({ driveFileId: 1 });
 
 // Un-chunked rescue sweep (buildFabFileChunkScanFilter: self-host worker scan + the hosted
 // dataLakeBatchReconcile cron). Equality prefix, createdAt range last; without it the daily

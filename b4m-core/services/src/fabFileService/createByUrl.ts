@@ -1,4 +1,10 @@
-import { IAdminSettingsRepository, IFabFileDocument, IUserDocument, KnowledgeType } from '@bike4mind/common';
+import {
+  IAdminSettingsRepository,
+  IDataLakeRepository,
+  IFabFileDocument,
+  IUserDocument,
+  KnowledgeType,
+} from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { BadRequestError, secureParameters } from '@bike4mind/utils';
 import { fetchAndParseURL } from '@bike4mind/utils';
@@ -25,6 +31,7 @@ type CreateFabFileByUrlAdapters = {
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
     };
+    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'>;
   };
   storage: {
     upload: CreateFabFileAdapters['storage']['upload'];

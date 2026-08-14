@@ -49,8 +49,10 @@ import {
   buildImageModelPicker,
   isDataLakeCommand,
 } from '@bike4mind/slack';
-import { adminSettingsRepository, dataLakeRepository } from '@bike4mind/database';
+import { adminSettingsRepository } from '@bike4mind/database';
+import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { runDataLakeSlackCommand } from '@server/slack/handleDataLakeCommand';
+import { buildSlackLakeIngestDeps } from '@server/slack/dataLakeIngestDeps';
 import { logEvent } from '@server/utils/analyticsLog';
 import { slackChannelConfigRepository } from '@bike4mind/database';
 import { decryptToken } from '@server/security/tokenEncryption';
@@ -713,11 +715,24 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
   if (isDataLakeCommand(commandHandler.parsedCommand)) {
     await runDataLakeSlackCommand({
       command: commandHandler.parsedCommand.command,
-      organizationId: user.organizationId ?? undefined,
+      // Identity comes from the resolved B4M user record, never from the Slack event body.
+      actor: {
+        id: user.id,
+        isAdmin: user.isAdmin,
+        tags: user.tags,
+        organizationId: normalizeId(user.organizationId),
+        email: user.email,
+        emailVerified: user.emailVerified,
+      },
+      files: slackEvent.files,
       channel: slackEvent.channel,
+      messageTs: slackEvent.ts,
       threadTs: replyThreadTs,
       adminSettings: adminSettingsRepository,
-      dataLakes: dataLakeRepository,
+      ingest: buildSlackLakeIngestDeps({
+        downloadFile: (url, fileName) => slackClient.downloadFile(url, fileName),
+        logger,
+      }),
       sendMessage: args => slackClient.sendMessage(args),
       logger,
     });

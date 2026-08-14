@@ -1,7 +1,13 @@
 import mongoose, { Model, model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from '../content/SharableDocumentModel';
-import { ISession, ISessionDocument, ISessionRepository, SearchOptions } from '@bike4mind/common';
+import {
+  DATA_LAKE_GROUNDING_MODES,
+  ISession,
+  ISessionDocument,
+  ISessionRepository,
+  SearchOptions,
+} from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
 import User from './UserModel';
 import { NotFoundError } from '@bike4mind/utils';
@@ -47,6 +53,10 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     disableUserIntegrations: { type: Boolean, required: false },
     forceKnowledgeRetrieval: { type: Boolean, required: false },
     retrievalTags: [{ type: String, required: false }],
+    // Resolved from the lake at create time (resolveLakeSessionDefaults). DELIBERATELY no default -
+    // a session not created for a lake must read back undefined, which the completion path's corpus
+    // defer plan treats as its pre-existing size-only behavior (a default here would change that).
+    corpusGroundingMode: { type: String, enum: [...DATA_LAKE_GROUNDING_MODES], required: false },
     retrievalExcludeFilenameMarkers: [{ type: String, required: false }],
     retrievalVectorizedOnly: { type: Boolean, required: false },
     citationStyle: { type: String, enum: ['named', 'indexed'], required: false },
@@ -191,6 +201,13 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
 
 export class SessionRepository extends BaseRepository<ISessionDocument> implements ISessionRepository {
   shareable: ISessionRepository['shareable'];
+  /**
+   * Explicit session for the queries below. Null means "let transactionAsyncLocalStorage decide",
+   * which is what callers should want: this instance is shared, so a session assigned here
+   * outlives the transaction that created it and the next reader fails with "Use of expired
+   * sessions". Nothing sets it today.
+   */
+  ctx: mongoose.mongo.ClientSession | null;
   private questModel?: Model<unknown>;
 
   constructor(
@@ -204,10 +221,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     this.sessionModel = sessionModel;
     this.shareable = extensions.shareable;
     this.questModel = extensions.questModel;
-  }
-
-  set ctx(ctx: mongoose.mongo.ClientSession | null) {
-    this.ctx = ctx;
+    this.ctx = null;
   }
 
   async search(

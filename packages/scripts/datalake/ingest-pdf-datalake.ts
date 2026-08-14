@@ -47,6 +47,7 @@ import {
   connectDB,
   adminSettingsRepository,
   dataLakeRepository,
+  dataLakeAccessGrantRepository,
   fabFileRepository,
   FabFile,
   Organization,
@@ -340,6 +341,7 @@ async function ingest(lake: LakeTarget, opts: Options): Promise<number> {
       // Wrap instead of passing the model: createFabFile detaches this method
       // (`db.organizations?.findById`), and an unbound Model.findById throws.
       organizations: { findById: (id: string) => Organization.findById(id).exec() },
+      dataLakes: dataLakeRepository,
     },
     storage: {
       upload: async (
@@ -444,7 +446,10 @@ async function main(opts: Options): Promise<number> {
   // Pass the org through: the org-less overload only matches lakes with no organizationId,
   // so an org-scoped lake is invisible without it. Static registry lakes (opti-knowledge,
   // premium overlay entries) have no DB doc at all and resolve from DATA_LAKES.
-  const dbLake = await dataLakeRepository.findBySlug(opts.slug, opts.organizationId);
+  const dbLake = await dataLakeRepository.findBySlug(
+    opts.slug,
+    opts.organizationId ? [opts.organizationId] : undefined
+  );
   const lake = resolveLakeTarget(
     opts.slug,
     dbLake
@@ -475,7 +480,7 @@ async function main(opts: Options): Promise<number> {
     await dataLakeService.assertCanWriteDataLakeTags(
       { userId: opts.userId, isAdmin: !!owner?.isAdmin },
       [lake.datalakeTag],
-      { db: { dataLakes: dataLakeRepository } }
+      { db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository } }
     );
   } else if (!owner?.isAdmin) {
     // Static lakes have no creator to authorize against; the API rejects their tags

@@ -1,10 +1,11 @@
-import { S3Client, PutObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import { PutObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import { createS3Client } from '@bike4mind/fab-pipeline';
 import { Resource } from 'sst';
 import crypto from 'crypto';
 import { withRetry, isRetryableError } from '@bike4mind/utils';
 import { validateTargetUrl } from './ssrfProtection';
 
-const s3Client = new S3Client({});
+const s3Client = createS3Client();
 
 // Generate a deterministic key from the URL for caching
 function generateCacheKey(url: string): string {

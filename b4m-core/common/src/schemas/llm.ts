@@ -9,6 +9,8 @@ export const b4mLLMTools = z.enum([
   'edit_image',
   // Background-music generation (ElevenLabs); mirrors image_generation
   'music_generation',
+  // Model-callable TTS + sound effects (OpenAI / ElevenLabs); mirrors image_generation
+  'audio_generation',
   'weather_info',
   'web_search',
   'web_fetch',

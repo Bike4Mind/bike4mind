@@ -2,6 +2,7 @@ import { FileEvents, IFabFile, KnowledgeType } from '@bike4mind/common';
 import {
   changeStorageSize,
   dataLakeRepository,
+  dataLakeAccessGrantRepository,
   fabFileChunkRepository,
   fabFileRepository,
   fileTagRepository,
@@ -13,6 +14,8 @@ import {
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { NotFoundError } from '@bike4mind/utils';
+import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
+import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { findLakeAccessibleFabFile } from '@server/dataLakes';
@@ -77,12 +80,18 @@ const handler = baseApi()
     // Data-lake membership is conferred by the lake's `datalake:*` meta-tag. Applying one is a
     // WRITE into that lake, so gate it with the same creator/admin check the remove path uses -
     // otherwise a read-only member could inject files via Send-to-Data-Lake.
+    //
+    // A `fileTagPrefix` content tag is membership too, but this route-level gate is NOT extended
+    // to cover it: it has no resolved file, so it cannot know the owner a prefix-arm join is
+    // anchored to. `reconcileLakeTags` (inside `updateFabFile` below) gates that join - a whole-
+    // array write can only ever join or preserve membership through either mechanism, never
+    // leave one; see that function's docstring.
     const candidateTagNames = [
       ...(req.body.tags?.map(t => t.name) ?? []),
       ...(req.body.primaryTag ? [req.body.primaryTag] : []),
     ];
     await dataLakeService.assertCanWriteDataLakeTags({ userId, isAdmin: !!req.user.isAdmin }, candidateTagNames, {
-      db: { dataLakes: dataLakeRepository },
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
     const updatedFabFile = await withTransaction(async () => {
@@ -106,7 +115,11 @@ const handler = baseApi()
             error: req.body.error,
           },
           {
-            db: { fabFiles: fabFileRepository, dataLakes: dataLakeRepository },
+            db: {
+              fabFiles: fabFileRepository,
+              dataLakes: dataLakeRepository,
+              dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            },
             logger: req.logger,
             storage: {
               upload: (filepath, content, option) => {
@@ -179,6 +192,7 @@ const handler = baseApi()
           onDeleteComplete: async (_fabFile, size) => {
             sizeToDeduct = size;
           },
+          searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
         }
       );
 

@@ -12,6 +12,7 @@ import {
   resolveCatalogRecords,
 } from '@bike4mind/llm-adapters';
 import { modelDiscoveryService } from '@bike4mind/services';
+import { toPerMTokRate, type IModelPrice, type PerMTokRate } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 
 /**
@@ -36,6 +37,19 @@ const LIFECYCLE_STATUSES = ['discovered', 'active', 'legacy', 'deprecated', 'ret
 /** The catalog's date format. A docs parser can produce anything, and the append throws on it. */
 const CALENDAR_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
+/**
+ * The rates the queue prices successors against, per MTok for display. Read
+ * through the discovery service's own accessor so the delta an operator sees is
+ * computed from the same rows the auto-remap cost clause refuses on.
+ */
+function perMTokRatesInForce(priceRows: readonly IModelPrice[]): Record<string, PerMTokRate> {
+  const rates: Record<string, PerMTokRate> = {};
+  for (const [modelId, rate] of modelDiscoveryService.perTokenRatesInForce(priceRows)) {
+    rates[modelId] = toPerMTokRate(rate);
+  }
+  return rates;
+}
+
 const ResolveBody = z.object({
   modelId: z.string().min(1),
   action: z.enum(['accept', 'dismiss']),
@@ -56,11 +70,12 @@ const handler = baseApi()
 
     const daysAhead = parseInt(req.query.daysAhead as string) || 90;
 
-    const [liveModels, rows, pending] = await Promise.all([
+    const [liveModels, rows, pending, priceRows] = await Promise.all([
       // Private included: this is an operator view, not the picker.
       getAvailableModels(null, { includePrivate: true }),
       modelCatalogRepository.rowsInForce(),
       modelDiscoveryStateRepository.pendingSuggestions(),
+      modelPriceRepository.rowsInForce(),
     ]);
 
     const lifecycles = catalogLifecycles(rows);
@@ -68,6 +83,10 @@ const handler = baseApi()
     res.json({
       daysAhead,
       totalModels: liveModels.length,
+      // Every model's rate, not just the queue's: the accept modal recomputes
+      // the delta for whatever successor the operator types over the suggested
+      // one, and that override is exactly the decision worth pricing.
+      perMTokRates: perMTokRatesInForce(priceRows),
       expiringOrExpired: getExpiringModels(liveModels, daysAhead),
       expired: getExpiredCatalogModels(lifecycles),
       queue: pending.map(state => ({ modelId: state.modelId, suggestion: state.suggestion })),

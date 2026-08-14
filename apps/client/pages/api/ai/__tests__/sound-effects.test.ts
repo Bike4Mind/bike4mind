@@ -76,11 +76,21 @@ vi.mock('@bike4mind/database', () => ({
     incrementCredits: (...a: unknown[]) => userIncrement(...a),
   },
 }));
-vi.mock('@bike4mind/services', () => ({
-  apiKeyService: { getEffectiveApiKey: (...a: unknown[]) => getEffectiveApiKey(...a) },
-  creditService: { deductCreditsWithOrgSupport: (...a: unknown[]) => deductCredits(...a) },
-  estimateSoundCredits: (...a: unknown[]) => estimateSoundCredits(...a),
-}));
+// Keep the real pure cap helper so org-billed tests exercise the actual cap decision
+// the handler depends on; only the write (deductCreditsWithOrgSupport) is stubbed.
+vi.mock('@bike4mind/services', async () => {
+  const creditService = await vi.importActual<typeof import('@bike4mind/services/creditService')>(
+    '@bike4mind/services/creditService'
+  );
+  return {
+    apiKeyService: { getEffectiveApiKey: (...a: unknown[]) => getEffectiveApiKey(...a) },
+    creditService: {
+      ...creditService,
+      deductCreditsWithOrgSupport: (...a: unknown[]) => deductCredits(...a),
+    },
+    estimateSoundCredits: (...a: unknown[]) => estimateSoundCredits(...a),
+  };
+});
 vi.mock('@bike4mind/utils', () => ({
   aiSoundService: () => ({ generate: (...a: unknown[]) => generate(...a) }),
   getSettingsMap: vi.fn(async () => ({})),

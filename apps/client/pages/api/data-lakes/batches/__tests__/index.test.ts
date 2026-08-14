@@ -8,7 +8,7 @@ const h = vi.hoisted(() => ({
   findActiveByUserId: vi.fn(),
   findActiveTaxonomyByUserId: vi.fn(),
   findTaxonomyAttentionByUserId: vi.fn(),
-  setTaxonomyStatusIfActive: vi.fn(),
+  forceFailStuckTaxonomy: vi.fn(),
   markTerminalIfActive: vi.fn(),
   dlFindById: vi.fn(),
   dlSetStats: vi.fn(),
@@ -40,7 +40,7 @@ vi.mock('@bike4mind/database', async importOriginal => {
       findActiveByUserId: h.findActiveByUserId,
       findActiveTaxonomyByUserId: h.findActiveTaxonomyByUserId,
       findTaxonomyAttentionByUserId: h.findTaxonomyAttentionByUserId,
-      setTaxonomyStatusIfActive: h.setTaxonomyStatusIfActive,
+      forceFailStuckTaxonomy: h.forceFailStuckTaxonomy,
       markTerminalIfActive: h.markTerminalIfActive,
     },
     dataLakeRepository: { ...actual.dataLakeRepository, findById: h.dlFindById, setStats: h.dlSetStats },
@@ -79,16 +79,16 @@ describe('GET /api/data-lakes/batches - reconciler wiring', () => {
       taxonomyStartedAt: new Date(Date.now() - 15 * 60 * 1000), // 15 min ago > 10 min timeout
     };
     h.findActiveTaxonomyByUserId.mockResolvedValue([staleBatch]);
-    h.setTaxonomyStatusIfActive.mockResolvedValue({ ...staleBatch, taxonomyStatus: 'failed' });
+    h.forceFailStuckTaxonomy.mockResolvedValue({ ...staleBatch, taxonomyStatus: 'failed' });
 
     const { res } = makeRes();
     await run(res);
 
-    expect(h.setTaxonomyStatusIfActive).toHaveBeenCalledWith(
+    expect(h.forceFailStuckTaxonomy).toHaveBeenCalledWith(
       'stale1',
       expect.arrayContaining(['queued', 'analyzing', 'applying']),
-      'failed',
-      expect.objectContaining({ taxonomyError: expect.any(String) })
+      expect.any(Date),
+      expect.any(String)
     );
   });
 
@@ -105,6 +105,6 @@ describe('GET /api/data-lakes/batches - reconciler wiring', () => {
     const { res } = makeRes();
     await run(res);
 
-    expect(h.setTaxonomyStatusIfActive).not.toHaveBeenCalled();
+    expect(h.forceFailStuckTaxonomy).not.toHaveBeenCalled();
   });
 });

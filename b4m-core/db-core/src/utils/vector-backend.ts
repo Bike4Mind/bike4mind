@@ -5,7 +5,8 @@ import { USE_DOCUMENTDB } from './documentdb-compat';
  * - `atlas`: MongoDB Atlas, indexed automatically by `mongot` - can use `$vectorSearch`.
  * - `documentdb`: AWS DocumentDB - no Atlas Search, no `$vectorSearch`; permanent brute-force fallback.
  * - `community`: self-host on community MongoDB - no `$vectorSearch` unless the optional
- *   self-host OpenSearch container is wired up (tracked separately); brute-force fallback otherwise.
+ *   self-host OpenSearch container is wired up (see `selfHostOpenSearchEnabled`); brute-force
+ *   fallback otherwise.
  */
 export enum VectorBackend {
   ATLAS = 'atlas',
@@ -25,3 +26,13 @@ export const getVectorBackend = (): VectorBackend => {
 };
 
 export const supportsAtlasVectorSearch = (): boolean => getVectorBackend() === VectorBackend.ATLAS;
+
+/**
+ * Whether a self-host deployment has an OpenSearch container wired up for ANN retrieval.
+ * `B4M_SELF_HOST=true` alone does not imply the container exists - it must be opted into
+ * separately, and `OPENSEARCH_ENDPOINT` must actually be set for there to be somewhere to query.
+ */
+export const selfHostOpenSearchEnabled = (): boolean =>
+  getVectorBackend() === VectorBackend.COMMUNITY &&
+  process.env.B4M_SELF_HOST_OPENSEARCH === 'true' &&
+  !!process.env.OPENSEARCH_ENDPOINT;

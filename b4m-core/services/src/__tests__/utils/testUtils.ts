@@ -80,12 +80,17 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   bulkUpdateTags: vi.fn(),
   findByContentHashes: vi.fn(),
   findByContentHashesInDataLake: vi.fn(),
+  findByDriveFileIdsInDataLake: vi.fn(),
   markFailedIfNotAlready: vi.fn(),
+  setChunkPolicyConflict: vi.fn(),
   computeDataLakeStats: vi.fn(),
+  findFileIdsMissingChunkedCharCount: vi.fn(),
+  setChunkedCharCount: vi.fn(),
   countDataLakeFilesByMembership: vi.fn(),
   archiveByDataLakeTag: vi.fn(),
   unarchiveByDataLakeTag: vi.fn(),
   findArchivedByDataLakeTag: vi.fn(),
+  hasArchivedMemberExclusiveToDataLakeTag: vi.fn(),
   findDeletedByDataLakeTag: vi.fn(),
   undeleteByDataLakeTag: vi.fn(),
   softDeleteByDataLakeTag: vi.fn(),
@@ -93,6 +98,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   hardDeleteByIds: vi.fn(),
   findIdsByDataLakeTag: vi.fn(),
   findByUserId: vi.fn(),
+  sumFileSizeByUserId: vi.fn(),
 });
 
 export const createMockUser = (overrides = {}) => ({
@@ -183,11 +189,13 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     addMemberRaisingSeats: vi.fn(),
     addMemberIfUnderCeiling: vi.fn(),
     findIdsAdministeredBy: vi.fn(),
+    findIdsWithAdminRights: vi.fn(),
     incrementCredits: vi.fn(),
     incrementCurrentStorage: vi.fn(),
     findByIdAndUserId: vi.fn(),
     ensureUserDetails: vi.fn(),
     updateUserDetails: vi.fn(),
+    findMembershipOrgIds: vi.fn(),
   });
 
 export const createMockCreditTransactionRepository = (): MockedObject<ICreditTransactionRepository> =>

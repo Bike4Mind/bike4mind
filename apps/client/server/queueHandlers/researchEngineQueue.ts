@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { researchTaskService } from '@bike4mind/services';
 import {
   adminSettingsRepository,
+  dataLakeRepository,
+  organizationRepository,
   researchTaskRepository,
   researchDataRepository,
   withTransaction,
@@ -92,6 +94,8 @@ const process = async (parameters: { id: string; userId: string }, logger: Logge
             adminSettings: adminSettingsRepository,
             taskSchedules: taskScheduleRepository,
             apiKeys: apiKeyRepository,
+            dataLakes: dataLakeRepository,
+            organizations: organizationRepository,
           },
           llm,
           scraper: {
@@ -235,6 +239,7 @@ const downloadRelevantLinks = async (parameters: { id: string; userId: string },
           },
         } as unknown as IUserRepository,
         fileTags: fileTagRepository,
+        dataLakes: dataLakeRepository,
       },
       logger,
       storage: {

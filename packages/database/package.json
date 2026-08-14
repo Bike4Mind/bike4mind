@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/database",
-  "version": "0.1.57",
+  "version": "0.1.60",
   "private": true,
   "type": "module",
   "main": "dist/index.mjs",
@@ -63,6 +63,7 @@
     "@bike4mind/fab-pipeline": "workspace:*",
     "@bike4mind/hearth": "workspace:*",
     "@bike4mind/llm-adapters": "workspace:*",
+    "@bike4mind/resource": "workspace:*",
     "@bike4mind/utils": "workspace:*",
     "@casl/ability": "^6.8.1",
     "@casl/mongoose": "^8.0.5",
@@ -70,6 +71,7 @@
     "dayjs": "^1.11.21",
     "mongoose": "^8.24.1",
     "mongoose-lean-virtuals": "^2.1.0",
+    "sst": "4.17.1",
     "typescript": "^5.9.3"
   },
   "devDependencies": {

@@ -1,5 +1,11 @@
 /**
- * Passage-chunking limits, in TOKENS.
+ * Passage-chunking limits, in TOKENS, plus the SERVE-side character budget derived from them.
+ *
+ * The two halves live together because they must agree: the retrieval path used to clip served
+ * passages at a character constant of its own, unaware of the token target the chunker had been
+ * given, so a full-size chunk lost a large fraction of itself on the way to the model. Deriving one
+ * from the other (deriveServeCharBudget) is what keeps that from recurring - do not add a second,
+ * independently-configured serve cap anywhere.
  *
  * These live in `common` rather than next to `SmartChunker` because the values are needed by three
  * layers that cannot all reach the chunker: the admin-settings schema in this package (importing
@@ -24,3 +30,77 @@ export const DEFAULT_PASSAGE_TOKEN_TARGET = 512;
 
 /** Floor for caller-supplied passage targets; below this, chunks lose usable context. */
 export const MIN_PASSAGE_TOKEN_TARGET = 64;
+
+/**
+ * Model-INDEPENDENT sanity ceiling for a configured passage target, in tokens. A passage larger
+ * than a full typical embedding context window (~8K) defeats retrieval granularity - one vector
+ * would average a whole document (see DEFAULT_PASSAGE_TOKEN_TARGET). This bounds the scoped
+ * `DefaultChunkSize` setting (#1662) where the specific embedding model is NOT known (the resolver
+ * clamp is pure); the EXACT per-model embedding-window cap is enforced downstream by the chunker
+ * (`effectiveChunkTokenLimit` in fab-pipeline), which knows the model and reduces further if needed.
+ */
+export const MAX_PASSAGE_TOKEN_TARGET = 8192;
+
+/**
+ * Characters per token used to turn a chunk's TOKEN target into the SERVE path's CHARACTER budget.
+ *
+ * Deliberately an upper bound, not the ~4 chars/token average for English prose. The number exists
+ * to guarantee an invariant - the serve path never clips a chunk the chunk policy would produce -
+ * and an average satisfies that for only about half of in-policy chunks by construction. The
+ * expensive direction is text whose tokens each carry many characters (indentation and whitespace
+ * runs, padded markdown tables, long common words); dense alphanumeric runs go the other way,
+ * tokenizing into MORE tokens per character, so they are not the risk case.
+ *
+ * Not derived from the real tokenizer on purpose: ITokenizer exposes countTokens/encodeTokens with
+ * no decode, so there is no way to clip on a token boundary and reassemble the text, and tokenizing
+ * every served passage would land on the hot chat path (KB search runs up to 3x per turn).
+ */
+export const CHARS_PER_TOKEN_SERVE_BOUND = 6;
+
+/**
+ * Never serve less than this, whatever the chunk policy says. Equal to the historical hard-coded
+ * serve cap, so no existing configuration can be made worse by deriving the budget instead.
+ */
+export const SERVE_CHUNK_CHARS_FLOOR = 1200;
+
+/**
+ * Hard rail on one passage's characters, so a very large configured chunk target cannot turn a
+ * multi-passage search result into an unbounded context bill. The value was chosen to equal the
+ * retrieve tool's per-request default (`DEFAULT_MAX_CHARS` in
+ * `services/src/llm/tools/implementation/knowledgeBaseRetrieve/index.ts`) on the principle that a
+ * single PASSAGE should not out-spend what a whole DOCUMENT retrieve returns by default. That is the
+ * rationale for the number, not an invariant anything enforces - the two are free to diverge, and
+ * this comment names the counterpart so a future reader can find it. When this binds, the cap is
+ * below the configured chunk size - the very disagreement this module exists to remove - so the
+ * resolver that applies it must say so rather than clip in silence.
+ */
+export const SERVE_CHUNK_CHARS_CEILING = 8000;
+
+export interface ServeCharBudget {
+  /** Characters of one chunk the serve path may emit before it has to clip. */
+  maxChunkChars: number;
+  /** The token target the budget was derived from, after the chunker's own clamp. */
+  chunkTokenTarget: number;
+  /** True when SERVE_CHUNK_CHARS_CEILING clamped the derivation, i.e. the cap is BELOW the policy. */
+  ceilingBound: boolean;
+}
+
+/**
+ * Derive the per-chunk serve budget from the chunk policy, so the two cannot disagree.
+ *
+ * The input clamp mirrors SmartChunker's own (fab-pipeline `chunk.ts`): an unusable or absent target
+ * means the chunker default applies, and a below-floor target is raised, not honored. Keep the two
+ * clamps in sync or the serve path will size itself against a target the chunker never used.
+ */
+export function deriveServeCharBudget(chunkTokenTarget?: number | null): ServeCharBudget {
+  const target =
+    typeof chunkTokenTarget === 'number' && Number.isFinite(chunkTokenTarget) && chunkTokenTarget > 0
+      ? Math.max(Math.floor(chunkTokenTarget), MIN_PASSAGE_TOKEN_TARGET)
+      : DEFAULT_PASSAGE_TOKEN_TARGET;
+  const derived = target * CHARS_PER_TOKEN_SERVE_BOUND;
+  return {
+    maxChunkChars: Math.min(Math.max(derived, SERVE_CHUNK_CHARS_FLOOR), SERVE_CHUNK_CHARS_CEILING),
+    chunkTokenTarget: target,
+    ceilingBound: derived > SERVE_CHUNK_CHARS_CEILING,
+  };
+}

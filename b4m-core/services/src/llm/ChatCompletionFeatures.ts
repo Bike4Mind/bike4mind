@@ -38,6 +38,7 @@ import {
   b4mLLMTools,
   ResearchModeParamsSchema,
   GenerateImageToolCallSchema,
+  AudioGenerationToolCallSchema,
   ILatticeModel,
   IDataLakeRepository,
   CitableSource,
@@ -58,6 +59,12 @@ import {
 } from '../dataLakeService/embeddingMismatch';
 import { getAccessibleDataLakePrompts, datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
 import { renderDataLakePromptSection } from '../dataLakeService/renderDataLakePromptBlock';
+import {
+  defangRetrievedContent,
+  renderRetrievedContentBlock,
+  toContentLabel,
+} from '../dataLakeService/renderRetrievedContentBlock';
+import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { getRelevantMementos } from '../mementoService';
 import {
   BaseStorage,
@@ -148,7 +155,10 @@ interface DatabaseAdapters {
     findById: (id: string) => Promise<ILatticeModel | null>;
     update: (data: any) => Promise<ILatticeModel | null>;
   };
-  dataLakes?: Pick<IDataLakeRepository, 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements'>;
+  dataLakes?: Pick<
+    IDataLakeRepository,
+    'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag'
+  >;
   /**
    * Audit-trail repo for images blocked by the image_generation/edit_image tools'
    * moderation gate. Optional - the gate itself is unconditional (the tools
@@ -171,6 +181,30 @@ export type featureNames =
   | 'lakeMemory'
   | 'contextSummarization'
   | 'skills';
+
+/**
+ * Every featureNames value, enumerated at runtime. Kept in sync with the type the same way
+ * PROMPT_SOURCE_METADATA is: the Record below forces the compiler to cover the whole union, so a
+ * renamed or newly added feature that is missed here fails to build rather than silently
+ * dropping out of the reconciliation guard in systemPromptSources.ts.
+ */
+const ALL_FEATURE_NAMES_MAP: Record<featureNames, true> = {
+  slack: true,
+  mementos: true,
+  questMaster: true,
+  autoNameSession: true,
+  project: true,
+  summarizeNotebook: true,
+  agentDetection: true,
+  organizationPrompt: true,
+  sessionPrompt: true,
+  knowledgeRetrieval: true,
+  lakeMemory: true,
+  contextSummarization: true,
+  skills: true,
+};
+export const ALL_FEATURE_NAMES = Object.keys(ALL_FEATURE_NAMES_MAP) as featureNames[];
+
 export interface IChatCompletionServiceOptions {
   db: DatabaseAdapters & GetEffectiveApiKeyAdapters['db'];
   storage: BaseStorage;
@@ -334,6 +368,7 @@ export const QuestStartBodySchema = z.object({
   embeddingModel: z.string().optional(),
   queryComplexity: z.string(),
   imageConfig: GenerateImageToolCallSchema.optional(),
+  audioConfig: AudioGenerationToolCallSchema.optional(),
   deepResearchConfig: z
     .object({
       maxDepth: z.number().optional(),
@@ -357,6 +392,12 @@ export const QuestStartBodySchema = z.object({
   allowedAgents: z.array(z.string()).optional(),
   /** When true, Quest Processor injects Slack-specific tool configs (help, notebooks, curated files) */
   enableSlackTools: z.boolean().optional(),
+  /**
+   * Disclose the system prompt text this completion was assembled from. Exposed on the process
+   * instance for the direct response of the request that asked for it, and never persisted -
+   * the derived breakdown (`promptMeta.context.systemPromptDetails`) is the persisted half.
+   */
+  includeSystemPrompt: z.boolean().optional(),
 });
 
 // Type for what features need from the chat completion service
@@ -1879,7 +1920,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         if (used >= FORCED_RETRIEVAL_CHAR_BUDGET) break;
         const file = fileById.get(candidate.fabFileId);
         const remaining = FORCED_RETRIEVAL_CHAR_BUDGET - used;
-        const text = candidate.text.length > remaining ? candidate.text.slice(0, remaining) : candidate.text;
+        // Defang BEFORE the budget slice, not after: the defang adds one space per line-initial
+        // marker, so slicing the raw text and defanging the result would emit more characters than
+        // `used` counts and overshoot FORCED_RETRIEVAL_CHAR_BUDGET. Slicing the defanged string
+        // keeps `used` equal to what is actually injected.
+        const defanged = defangRetrievedContent(candidate.text);
+        const text = defanged.length > remaining ? defanged.slice(0, remaining) : defanged;
         const name = file?.fileName || candidate.fabFileId;
         // Distinct-file first-appearance order IS the citation index order: the
         // citables emitted below follow sourceFileIds, so [N] -> citables[N-1].
@@ -1888,10 +1934,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           sourceFileIds.push(candidate.fabFileId);
           fileIdx = sourceFileIds.length - 1;
         }
+        // Untrusted on every content-derived part, exactly as the two knowledge tools do - this is
+        // the THIRD injection site for retrieved content and the only always-on one. toContentLabel
+        // wraps `name` alone, never the whole heading: it strips brackets, so applying it wider
+        // would eat the `[N]` the indexed citation contract depends on.
+        const safeName = toContentLabel(name);
         const heading =
           this.citationStyle === 'indexed'
-            ? `### [${fileIdx + 1}] ${name} (ID: ${candidate.fabFileId})`
-            : `### ${name} (ID: ${candidate.fabFileId})`;
+            ? `### [${fileIdx + 1}] ${safeName} (ID: ${candidate.fabFileId})`
+            : `### ${safeName} (ID: ${candidate.fabFileId})`;
         sections.push(`${heading}\n${text}`);
         used += text.length;
       }
@@ -2008,9 +2059,17 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           : '[Knowledge Base — Retrieved Context]\n' +
             'The following content was retrieved from the curated library for this query. Ground your answer in it and ' +
             'cite documents by name. If it does not address the question, say so rather than relying on outside knowledge.\n\n';
+      // The header, capability and coverage notes are ours and stay OUTSIDE the block at column 0;
+      // only the retrieved sections go inside it. renderRetrievedContentBlock owns the same
+      // `\n\n---\n\n` join this used to do inline, so the separator is unchanged.
       const retrievedContext: IMessage = {
         role: 'system' as const,
-        content: header + capabilityNote + coverageNote + sections.join('\n\n---\n\n'),
+        content:
+          header +
+          `${GROUNDED_NO_INVENTION_RULE}\n\n` +
+          capabilityNote +
+          coverageNote +
+          renderRetrievedContentBlock(sections),
       };
 
       // Retrieval-scoped lake-prompt injection (#1108): attach the operating instructions of ONLY

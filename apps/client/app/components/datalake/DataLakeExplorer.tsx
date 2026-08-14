@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Button, Typography, useTheme } from '@mui/joy';
+import {
+  Box,
+  Button,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Modal,
+  ModalDialog,
+  Typography,
+  useTheme,
+} from '@mui/joy';
 import { alpha } from '@mui/system';
 import AddIcon from '@mui/icons-material/Add';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
@@ -8,24 +18,36 @@ import { SurfaceBreadcrumb } from '@client/app/components/datalake/SurfaceBreadc
 import DataLakeTree from './DataLakeTree';
 import DataLakeChatTree from './DataLakeChatTree';
 import DataLakeArticle from './DataLakeArticle';
+import DataLakeRailViewer from './DataLakeRailViewer';
+import { resolveManageableLake } from './resolveManageableLake';
 import { DataLakeNavProvider } from './dataLakeNavContext';
 import { StatTicker, inkFor, surfaceBackground } from '@client/app/components/datalake/surfaceChrome';
-import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
+import { humanizeSegment, useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
 import { ManageKnowledgeButton } from '@client/app/components/datalake/manageKnowledge';
-import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
+import { useSessions, useWorkBenchActions, useWorkBenchFiles } from '@client/app/contexts/SessionsContext';
 import useSetDataLakeMode from '@client/app/hooks/useSetDataLakeMode';
-import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import type { DefaultLayoutType } from '@client/app/hooks/useSessionLayout';
 import { useNotebookLayout } from '@client/app/components/layouts/Notebook';
-import { useGetDataLakeArticles, useGetDataLakeTagCounts } from '@client/app/hooks/data/dataLakes';
+import {
+  useGetDataLakeArticles,
+  useGetDataLakes,
+  useGetDataLakeTagCounts,
+  useRemoveFileFromDataLake,
+} from '@client/app/hooks/data/dataLakes';
 import type { DataLakeBrowseSource } from '@client/app/hooks/data/dataLakes';
-import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
+import {
+  buildTagTree,
+  getNodeAtPath,
+  getNodesAtPath,
+} from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import DataLakeIngestPickerModal from '@client/app/components/DataLakeWizard/DataLakeIngestPickerModal';
 import { readDroppedItems } from '@client/app/utils/dropReader';
 import { DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
 import { toast } from 'sonner';
 import FieldTooltip from '@client/app/components/help/FieldTooltip';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
-import type { IFabFileDocument } from '@bike4mind/common';
+import type { IFabFileDocument, ManageableDataLakeConfig } from '@bike4mind/common';
 
 /**
  * Data Lake browser with two host arrangements, chosen by whether a `chatSlot` is supplied:
@@ -34,9 +56,10 @@ import type { IFabFileDocument } from '@bike4mind/common';
  *   create/manage/discover, stat ticker) over the brand-agnostic DataLakeTree and an inline
  *   DataLakeArticle reader. Themed via the DataLakeSurface tokens.
  * - CHAT mode (chatSlot set): the in-chat Data Lake surface (main app + premium /opti) - the
- *   DataLakeChatTree rail beside the chat, files open in the KnowledgeViewer split (embedded)
- *   or the chat's workbench (docked). Exposes the tree's richest branches + navigate to the
- *   chatSlot via DataLakeNavProvider so a host idle pane (e.g. the sonar) can drive the tree.
+ *   DataLakeChatTree rail beside the chat; file rows carry explicit actions (attach to chat,
+ *   view in the rail reader, remove from lake) - browsing never mutates the chat. Exposes the
+ *   tree's richest branches + navigate to the chatSlot via DataLakeNavProvider so a host idle
+ *   pane (e.g. the sonar) can drive the tree.
  */
 interface DataLakeExplorerProps {
   /** Root breadcrumb crumb handler (page mode). */
@@ -67,20 +90,23 @@ interface DataLakeExplorerProps {
    */
   chatSlot?: React.ReactNode;
   /**
-   * True when `chatSlot` holds the chat's SessionContainer (main app): clicking a tree file
-   * opens it inline in the KnowledgeViewer split (layout `vertical`) via the session workbench,
-   * rather than a modal - the parent owns/pre-creates the session (see issue #836) - and tree
-   * navigation closes that split. When omitted (overlay), the chat lives OUTSIDE this component
-   * (docked), so the global layout is never touched - switching it would collapse the docked
-   * chat into a 0x0 branch - and a clicked file is added to the chat's workbench with a toast.
+   * True when `chatSlot` holds the chat's SessionContainer (main app): the View action opens the
+   * file in the KnowledgeViewer split (layout `vertical`), and tree navigation closes that split.
+   * When omitted (overlay), the chat lives OUTSIDE this component (docked), so the global layout
+   * must never be touched - switching it would collapse the docked chat into a 0x0 branch - and
+   * View falls back to the in-rail reader.
    */
   chatEmbedded?: boolean;
   /**
-   * Called when a file is clicked with NO active session (/new, where creation is deferred to
-   * the first message): must create + adopt the session and resolve its id so the click can
-   * proceed into the normal open-in-viewer flow. Omitted (overlay) -> a guidance toast instead.
+   * Called when a file is ATTACHED or VIEWED with no active session (/new, where creation is
+   * deferred to the first message): must create + adopt the session and resolve its id so the
+   * file can land in a real workbench. Omitted (overlay) -> a guidance toast instead.
+   *
+   * Receives the file so the session can be created ALREADY HOLDING it (knowledgeIds): adoption
+   * rehydrates the workbench from the session's knowledgeIds, so a file merely written into the
+   * store after creation is wiped by that reset on hosts with a longer adoption path.
    */
-  createSessionForFile?: () => Promise<string>;
+  createSessionForFile?: (file: IFabFileDocument) => Promise<string>;
   /**
    * Whether the chat tree header shows the close (X) that turns Data Lake mode off. Default true.
    * Hosts entered/left by navigation rather than a per-session toggle pass false.
@@ -90,6 +116,9 @@ interface DataLakeExplorerProps {
 
 /** True only for drags carrying real files (not text/image-from-page drags). */
 const isFileDrag = (e: React.DragEvent) => Array.from(e.dataTransfer.types ?? []).includes('Files');
+
+/** Stable identity so a Set-typed prop doesn't churn every render when nothing is selected. */
+const EMPTY_FILE_IDS: ReadonlySet<string> = new Set();
 
 export default function DataLakeExplorer({
   onBack,
@@ -111,19 +140,34 @@ export default function DataLakeExplorer({
   const chatMode = chatSlot != null;
   const muiTheme = useTheme();
   const isDark = muiTheme.palette.mode === 'dark';
-  const { theme, copy } = useDataLakeSurface();
+  const { theme, copy, taxonomy } = useDataLakeSurface();
   const acceptedHint = copy.dropAcceptedHint;
   const accentInk = inkFor(theme.accent, isDark);
   const [breadcrumb, setBreadcrumb] = useState<string[]>([]);
   // Page mode: file shown in the inline article reader.
   const [userSelectedFile, setUserSelectedFile] = useState<IFabFileDocument | null>(null);
-  // Chat mode: id of the file most recently opened in the viewer, kept to highlight it in the tree.
-  const [viewerFileId, setViewerFileId] = useState<string | null>(articleId ?? null);
+  // External-chat hosts only: our own KnowledgeViewer is open beside the tree (View action).
+  const [railViewerOpen, setRailViewerOpen] = useState(false);
+  // Ref twin of railViewerOpen for the layout subscription below (a store listener would
+  // otherwise close over a stale render's value).
+  const railViewerOpenRef = useRef(false);
+  // The layout the external host was running when the rail viewer opened, restored when the
+  // viewer's Close writes `hide` (leaving `hide` in place would collapse the docked chat).
+  const hostLayoutRef = useRef<DefaultLayoutType | null>(null);
+  // Chat mode: pending remove-from-lake confirmation.
+  const [deleteTarget, setDeleteTarget] = useState<{ file: IFabFileDocument; lake: ManageableDataLakeConfig } | null>(
+    null
+  );
 
-  // Chat-mode wiring: attach clicked files to the current session's workbench (#836). The hooks
-  // are always called (React rules); page mode simply never invokes openFileInViewer.
+  // Chat-mode wiring: attach files to the current session's workbench (#836). The hooks are
+  // always called (React rules); page mode simply never invokes attachFileToChat.
   const { currentSessionId } = useSessions();
   const { setWorkBenchFiles } = useWorkBenchActions();
+  // Files currently attached to the chat's prompt - drives the tree's persistent highlight in
+  // chat mode, so a file stays marked "already added" regardless of which action attached it
+  // (View or the menu's Attach) or how far the user has since navigated the tree (#1693).
+  const workBenchFiles = useWorkBenchFiles(currentSessionId);
+  const attachedFileIds = useMemo(() => new Set(workBenchFiles.map(f => f.id)), [workBenchFiles]);
   const setDataLakeMode = useSetDataLakeMode();
   // When the sidenav is collapsed its floating expand control overlaps the top-left, so the
   // chat tree needs extra left clearance past it (same 48px the deck top bar uses).
@@ -131,42 +175,98 @@ export default function DataLakeExplorer({
   // Guards double-clicks while createSessionForFile's POST is in flight - a second click
   // would otherwise mint a second session.
   const creatingSessionRef = useRef(false);
-  const openFileInViewer = useCallback(
-    async (file: IFabFileDocument) => {
-      let sessionId = currentSessionId;
-      if (!sessionId) {
-        // /new: session creation is deferred to the first message, so there is no workbench
-        // to attach the file to and the viewer would render empty (then auto-hide). Hosts
-        // that can mint the grounded session do so here; otherwise guide instead of silently
-        // no-oping. The highlight below still marks the pick either way.
-        if (!createSessionForFile || creatingSessionRef.current) {
-          if (!createSessionForFile) {
-            toast.info('Start the chat with a first message - lake files will then open right here.');
-            setViewerFileId(file.id);
-          }
-          return;
+  // The session both chat actions need. On /new creation is deferred to the first message, so
+  // hosts that can mint the grounded session do it here; the rest get guidance. Returns null
+  // when there is no session to be had (already explained to the user), so callers just bail.
+  const ensureSessionId = useCallback(
+    async (file: IFabFileDocument): Promise<string | null> => {
+      if (currentSessionId) return currentSessionId;
+      if (!createSessionForFile || creatingSessionRef.current) {
+        if (!createSessionForFile) {
+          toast.info('Start the chat with a first message - then lake files can be added to it.');
         }
-        creatingSessionRef.current = true;
-        try {
-          sessionId = await createSessionForFile();
-        } catch (error) {
-          console.error('Data Lake session create failed:', error);
-          toast.error("Couldn't start the chat - please try again.");
-          return;
-        } finally {
-          creatingSessionRef.current = false;
-        }
+        return null;
       }
-      setWorkBenchFiles(sessionId, prev => (prev.some(f => f.id === file.id) ? prev : [...prev, file]));
+      creatingSessionRef.current = true;
+      try {
+        return await createSessionForFile(file);
+      } catch (error) {
+        console.error('Data Lake session create failed:', error);
+        toast.error("Couldn't start the chat - please try again.");
+        return null;
+      } finally {
+        creatingSessionRef.current = false;
+      }
+    },
+    [currentSessionId, createSessionForFile]
+  );
+
+  // Returns whether the file was newly added (false = already in the workbench), so callers
+  // can toast only on an actual attachment. The zustand updater runs synchronously.
+  const addToWorkBench = useCallback(
+    (sessionId: string, file: IFabFileDocument) => {
+      let added = false;
+      setWorkBenchFiles(sessionId, prev => {
+        if (prev.some(f => f.id === file.id)) return prev;
+        added = true;
+        return [...prev, file];
+      });
+      return added;
+    },
+    [setWorkBenchFiles]
+  );
+
+  // Explicit [+] action. Comment at the hooks above (#836) still applies: hooks always run,
+  // page mode never calls this.
+  const attachFileToChat = useCallback(
+    async (file: IFabFileDocument) => {
+      const sessionId = await ensureSessionId(file);
+      if (!sessionId) return;
+      addToWorkBench(sessionId, file);
+      toast.success(`Added "${file.fileName.replace(/\.[^/.]+$/, '')}" to the chat's files`);
+    },
+    [ensureSessionId, addToWorkBench]
+  );
+
+  // View opens the file in the KnowledgeViewer on both hosts. The viewer builds its tabs FROM
+  // the session workbench, so the file has to be attached for it to have a tab at all - and
+  // since that attachment is a side effect of "just looking", it is toasted so it never
+  // happens silently (this path also serves ?article= deep links, where there is no click).
+  //
+  // How the viewer gets on screen differs, and only by necessity: with the chat embedded, the
+  // chat's own SessionContainer renders it once the layout is `vertical`. External-chat hosts
+  // dock the chat, a mode in which SessionContainer renders NO viewer and whose layout must not
+  // be touched - the host renders its chat 0x0 in any non-docked layout, and nothing on that
+  // surface restores it. So we set the selected artifact WITHOUT touching `layout` and mount
+  // the viewer in our own rail (with its layout-switching controls hidden, for the same reason).
+  const handleViewFile = useCallback(
+    async (file: IFabFileDocument) => {
+      const sessionId = await ensureSessionId(file);
+      if (!sessionId) return;
+      const added = addToWorkBench(sessionId, file);
+      if (added) toast.success(`Added "${file.fileName.replace(/\.[^/.]+$/, '')}" to the chat's files`);
       if (chatEmbedded) {
-        // Chat is embedded in our right pane: show the KnowledgeViewer split with this file's tab.
         setSessionLayout({ layout: 'vertical', selectedArtifactId: file.id });
       } else {
-        toast.info(`Added "${file.fileName.replace(/\.[^/.]+$/, '')}" to the chat's files`);
+        hostLayoutRef.current = useSessionLayout.getState().layout;
+        setSessionLayout({ selectedArtifactId: file.id });
+        railViewerOpenRef.current = true;
+        setRailViewerOpen(true);
       }
-      setViewerFileId(file.id);
     },
-    [currentSessionId, setWorkBenchFiles, chatEmbedded, createSessionForFile]
+    [chatEmbedded, ensureSessionId, addToWorkBench, setRailViewerOpen]
+  );
+
+  // Delete gating: the lake list is only needed in chat mode (page mode has no row actions).
+  const { data: lakes } = useGetDataLakes(chatMode);
+  const removeFile = useRemoveFileFromDataLake(deleteTarget?.lake.id ?? null);
+  const canDeleteFile = useCallback((file: IFabFileDocument) => resolveManageableLake(file, lakes) != null, [lakes]);
+  const handleDeleteFile = useCallback(
+    (file: IFabFileDocument) => {
+      const lake = resolveManageableLake(file, lakes);
+      if (lake) setDeleteTarget({ file, lake });
+    },
+    [lakes, setDeleteTarget]
   );
 
   // Drag-to-ingest: an overlay invites dropping files/folders, which then open a lake
@@ -218,19 +318,30 @@ export default function DataLakeExplorer({
   const { data: tagCountsData, isLoading: tagCountsLoading, isError: tagCountsError } = useGetDataLakeTagCounts(source);
   const tree = useMemo(() => buildTagTree(tagCountsData?.tagCounts ?? []), [tagCountsData]);
 
-  // Derive the current leaf tag from breadcrumb + tree state
-  const currentNodes = getNodesAtPath(tree, breadcrumb);
-  const leafTag = breadcrumb.length > 0 && currentNodes.length === 0 ? breadcrumb.join(':') : null;
+  // Derive the current leaf tag from breadcrumb + tree state. A branch node (has children) can
+  // ALSO carry files tagged with its own exact path, which DataLakeTreeView renders mixed into
+  // the folder list - so this must fetch whenever there's anything to show at this breadcrumb,
+  // not only at a true leaf, or those own-tagged files never even reach the tree.
+  const currentNodes = useMemo(() => getNodesAtPath(tree, breadcrumb), [tree, breadcrumb]);
+  const currentNode = useMemo(() => getNodeAtPath(tree, breadcrumb), [tree, breadcrumb]);
+  const leafTag =
+    breadcrumb.length > 0 && (currentNodes.length === 0 || (currentNode?.ownFileCount ?? 0) > 0)
+      ? breadcrumb.join(':')
+      : null;
 
-  // Phase 2: Fetch articles only when at a leaf node (filtered by tag, paginated)
+  // Phase 2: Fetch articles only when there's a tag at this breadcrumb to filter by (paginated)
   const { data: leafArticlesResult, isLoading: leafLoading } = useGetDataLakeArticles(
     leafTag ? { tags: [leafTag], limit: 50 } : null,
     source
   );
   const leafArticles = leafTag ? (leafArticlesResult?.data ?? []) : [];
+  // isLoading passed to the tree below only waits on leafLoading at a true leaf
+  // (currentNodes.length === 0): a branch node's subfolder list needs no fetch at all, so
+  // blocking it on the own-tagged-files fetch would blank an already-renderable folder list
+  // behind a skeleton every time a mixed node is opened.
 
   // Deep-link: fetch the specific article by ID when the URL param is present. Page mode shows
-  // it in the inline reader; chat mode opens it in the viewer (effect below).
+  // it in the inline reader; chat mode shows it in the rail reader (effect below).
   const { data: deepLinkResult } = useGetDataLakeArticles(
     articleId && !userSelectedFile ? { id: articleId, limit: 1 } : null,
     source
@@ -239,41 +350,57 @@ export default function DataLakeExplorer({
 
   // Page mode: user's explicit click takes priority, then the deep-link result. Pure derivation.
   const selectedFile = userSelectedFile ?? (articleId ? deepLinkTarget : null);
+  const pageSelectedFileIds = useMemo(
+    () => (selectedFile ? new Set([selectedFile.id]) : EMPTY_FILE_IDS),
+    [selectedFile]
+  );
 
-  // Chat mode: open the URL's article in the inline viewer once it resolves, once per id.
+  // Chat mode: track global layout changes so the rail viewer follows the viewer actually on
+  // screen. Only relevant to external-chat hosts - railViewerOpenRef is set only from the
+  // non-embedded branch of handleViewFile below, so an embedded host's layout changes always
+  // take the early return here and this effect is a no-op for that host.
+  //
+  // The host's layout must never change while our rail viewer is up, so ANY departure closes it.
+  // The viewer's own Close writes `hide` - the one write that means "close me" rather than a
+  // host-driven layout change - and `hide` would collapse the docked chat, so it is answered by
+  // restoring the layout captured when the viewer opened. Any other write is the host
+  // rearranging itself: close the viewer and let the new value stand.
+  useEffect(() => {
+    if (!chatMode) return;
+    return useSessionLayout.subscribe((state, prev) => {
+      if (state.layout === prev.layout) return;
+      if (!railViewerOpenRef.current) return;
+      railViewerOpenRef.current = false;
+      setRailViewerOpen(false);
+      const hostLayout = hostLayoutRef.current;
+      if (state.layout === 'hide' && hostLayout && hostLayout !== 'hide') {
+        setSessionLayout({ layout: hostLayout });
+      }
+    });
+  }, [chatMode]);
+
   const openedDeepLinkRef = useRef<string | null>(null);
   useEffect(() => {
     if (chatMode && deepLinkTarget && openedDeepLinkRef.current !== deepLinkTarget.id) {
       openedDeepLinkRef.current = deepLinkTarget.id;
-      void openFileInViewer(deepLinkTarget);
+      void handleViewFile(deepLinkTarget);
     }
-  }, [chatMode, deepLinkTarget, openFileInViewer]);
+  }, [chatMode, deepLinkTarget, handleViewFile]);
 
+  // Chat mode deliberately leaves the open file alone: the tree and the viewer are separate panels,
+  // so browsing categories - including back out of one - must not dismiss what you are reading. The
+  // viewer closes on its own Close button (see the layout subscription above). The highlight also
+  // stays, so returning to the file's category still shows which one is open.
   const handleNavigate = useCallback(
     (newBreadcrumb: string[]) => {
       setBreadcrumb(newBreadcrumb);
-      if (chatMode) {
-        // Browsing away closes the inline file viewer, returning to the full-width chat. Only
-        // when the chat is embedded, and only resetting a layout WE opened ('vertical') - an
-        // unconditional 'hide' would collapse a docked/floating chat on external-chat hosts.
-        if (chatEmbedded) {
-          setSessionLayout(prev => (prev.layout === 'vertical' ? { layout: 'hide' } : {}));
-        }
-        setViewerFileId(null);
-      } else {
-        setUserSelectedFile(null);
-      }
+      if (!chatMode) setUserSelectedFile(null);
     },
-    [chatMode, chatEmbedded]
+    [chatMode, setBreadcrumb, setUserSelectedFile]
   );
 
-  const handleSelectFile = useCallback(
-    (file: IFabFileDocument) => {
-      if (chatMode) void openFileInViewer(file);
-      else setUserSelectedFile(file);
-    },
-    [chatMode, openFileInViewer]
-  );
+  // Page mode only: the chat tree's rows carry explicit actions instead of a click handler.
+  const handleSelectFile = useCallback((file: IFabFileDocument) => setUserSelectedFile(file), []);
 
   // Truthful distinct-file count (the tree's fileCounts are tag-occurrence sums, which
   // overcount multi-tagged articles ~2x); branch count stays tree-derived.
@@ -364,11 +491,13 @@ export default function DataLakeExplorer({
             data-testid="field-tooltip-data-lake-explorer"
             sx={{ mb: 2 }}
           />
+          {/* Create is the surface's primary action (solid) and leads the header row; Manage /
+              Discover stay outlined-neutral so creating a lake is never buried inside Manage. */}
           {onCreate && (
             <Button
               data-testid="datalake-create-btn"
               size="sm"
-              variant="soft"
+              variant="solid"
               color="primary"
               startDecorator={<AddIcon sx={{ fontSize: 16 }} />}
               onClick={onCreate}
@@ -427,7 +556,12 @@ export default function DataLakeExplorer({
                 {
                   label: copy.statDepthLabel,
                   value: String(breadcrumb.length),
-                  sub: breadcrumb.length === 0 ? copy.depthRootLabel : breadcrumb.join(' : '),
+                  // Humanized like the tree beside it - a raw segment here would disagree with
+                  // the branch label whenever a taxonomy is injected. Index = depth.
+                  sub:
+                    breadcrumb.length === 0
+                      ? copy.depthRootLabel
+                      : breadcrumb.map((segment, depth) => humanizeSegment(segment, depth, taxonomy)).join(' : '),
                 },
               ]}
               isDark={isDark}
@@ -476,6 +610,11 @@ export default function DataLakeExplorer({
             overflow: 'hidden',
             p: '12px',
             pl: sidenavOpen ? '12px' : '48px',
+            // With the viewer in the centre pane, the host's splitter is immediately to our right.
+            // Keeping the padding would leave a gap between the two, so the splitter reads as part
+            // of the chat dock rather than the boundary between the viewer and the chat - which is
+            // how the embedded host's splitter reads, sitting flush against both panes.
+            pr: railViewerOpen ? 0 : '12px',
             gap: '8px',
             transition: 'padding-left 0.2s ease',
           }}
@@ -485,16 +624,34 @@ export default function DataLakeExplorer({
             articles={leafArticles}
             breadcrumb={breadcrumb}
             onNavigate={handleNavigate}
-            selectedFileId={viewerFileId}
-            onSelectFile={handleSelectFile}
-            isLoading={tagCountsLoading || (!!leafTag && leafLoading)}
+            source={source}
+            selectedFileIds={attachedFileIds}
+            onAttachFile={attachFileToChat}
+            onViewFile={handleViewFile}
+            canDeleteFile={canDeleteFile}
+            onDeleteFile={handleDeleteFile}
+            isLoading={tagCountsLoading || (!!leafTag && leafLoading && currentNodes.length === 0)}
             isError={tagCountsError}
             title={rootLabel ?? copy.rootLabel}
             onManage={onManage}
             onCreateLake={onCreateLake}
             onClose={showModeClose ? () => setDataLakeMode(false) : undefined}
           />
-          <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
+          {/* The tree stays put; the viewer takes the centre pane, which on an external-chat host
+              is the page's own content rather than the chat (that is docked outside). The pane is
+              hidden, not unmounted, so in-progress state in that subtree survives a look at a
+              file and closing the viewer brings it back as it was. */}
+          {railViewerOpen && <DataLakeRailViewer />}
+          <Box
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              minHeight: 0,
+              height: '100%',
+              display: railViewerOpen ? 'none' : 'flex',
+              flexDirection: 'column',
+            }}
+          >
             <DataLakeNavProvider value={nav}>{chatSlot}</DataLakeNavProvider>
           </Box>
         </Box>
@@ -505,9 +662,10 @@ export default function DataLakeExplorer({
             articles={leafArticles}
             breadcrumb={breadcrumb}
             onNavigate={handleNavigate}
-            selectedFileId={selectedFile?.id ?? null}
+            source={source}
+            selectedFileIds={pageSelectedFileIds}
             onSelectFile={handleSelectFile}
-            isLoading={tagCountsLoading || (!!leafTag && leafLoading)}
+            isLoading={tagCountsLoading || (!!leafTag && leafLoading && currentNodes.length === 0)}
             isError={tagCountsError}
           />
           <DataLakeArticle
@@ -520,10 +678,39 @@ export default function DataLakeExplorer({
         </Box>
       )}
 
+      {/* Remove-from-lake confirmation for the tree's [x] action. Same contract as the
+          Discover viewer's remove: membership + prefix tags go, the file itself stays. */}
+      <Modal open={deleteTarget != null} onClose={() => setDeleteTarget(null)}>
+        <ModalDialog data-testid="datalake-tree-removefile-confirm" role="alertdialog">
+          <DialogTitle>Remove file from data lake?</DialogTitle>
+          <DialogContent>
+            &ldquo;{deleteTarget ? deleteTarget.file.fileName.replace(/\.[^/.]+$/, '') : ''}&rdquo; will be removed from
+            &ldquo;{deleteTarget?.lake.name}&rdquo; and stops appearing here right away. The file stays in your Files
+            list and in any chats that use it.
+          </DialogContent>
+          <DialogActions>
+            <Button
+              variant="solid"
+              color="danger"
+              data-testid="datalake-tree-removefile-confirm-btn"
+              loading={removeFile.isPending}
+              onClick={() =>
+                deleteTarget && removeFile.mutate(deleteTarget.file.id, { onSuccess: () => setDeleteTarget(null) })
+              }
+            >
+              Remove
+            </Button>
+            <Button variant="plain" color="neutral" onClick={() => setDeleteTarget(null)}>
+              Cancel
+            </Button>
+          </DialogActions>
+        </ModalDialog>
+      </Modal>
+
       {/* Drag-to-ingest: pick a destination lake, then the append wizard takes over.
           The wizard modal is a store-driven singleton already mounted by FileBrowser
           via ProviderBundle (live on the /opti route too), so we drive it through the
-          store and must NOT mount a second instance here — that would stack a
+          store and must NOT mount a second instance here - that would stack a
           duplicate wizard. */}
       <DataLakeIngestPickerModal
         open={droppedFiles !== null}

@@ -84,6 +84,13 @@ const handler = baseApi({ auth: true }).delete(
             deleteManyByFabFileId: async fabFileId => {
               await FabFileChunk.deleteMany({ fabFileId });
             },
+            distinctEmbeddingModelsByFabFileIds: async fabFileIds => {
+              if (fabFileIds.length === 0) return [];
+              return FabFileChunk.distinct('embeddingModel', {
+                fabFileId: { $in: fabFileIds },
+                embeddingModel: { $ne: null },
+              });
+            },
           },
         },
         storage: {
