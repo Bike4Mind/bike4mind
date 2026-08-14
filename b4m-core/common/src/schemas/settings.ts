@@ -188,6 +188,7 @@ export const SettingKeySchema = z.enum([
   'EnableDataLakeGroundingMode',
   'EnableLakeMemory',
   'EnableDataLakeVectorSearch',
+  'PauseLakeConvergence',
   'EnableBriefcase',
   'EnableBriefcaseDefault',
   'EnableImageTemplates',
@@ -1896,6 +1897,22 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 92,
     dependsOn: 'EnableDataLakes',
+  }),
+  PauseLakeConvergence: makeBooleanSetting({
+    key: 'PauseLakeConvergence',
+    name: 'Data Lakes: Pause background convergence work',
+    defaultValue: false,
+    description:
+      'Kill switch for background data-lake ingestion work (convergence sweeps, rescue re-chunking) - NOT real-time user uploads, which are always honored. Off by default. Turn ON to halt in-flight background chunk/vectorize messages the next time the handler picks them up (a re-check inside the shared handler, so it takes effect on work already queued, not just the next scheduling pass). The platform value pauses every lake at once; a per-lake (or per-org / per-owner) override pauses a subset while the rest keep running. A platform-level flip applies immediately to lake-wide work and within ~5 min to per-lake-scoped work (settings cache).',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 93,
+    dependsOn: 'EnableDataLakes',
+    // Per-lake override (#1676): the platform value is the global kill switch; a narrower override
+    // pauses just that scope. Org/Owner rungs ride along (the resolver derives them from the lake
+    // via scopeForLake, and the scheme requires Owner wherever Lake is settable) so an operator can
+    // also pause all of an org's/owner's lake convergence, not only one lake at a time.
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
   }),
   EnableBriefcase: makeBooleanSetting({
     key: 'EnableBriefcase',
