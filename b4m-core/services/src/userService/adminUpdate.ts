@@ -116,9 +116,9 @@ export async function adminUpdateUser(
   }
 
   // Route a credit change through the audited ledger when the adapter is wired.
-  // The atomic increment (below, after the base doc write) then owns the balance,
-  // so `currentCredits` must NOT also be spread onto the doc - a full-doc write
-  // carrying the stale balance would clobber the increment.
+  // The ledger `$inc` (run below, BEFORE the base doc write) owns the balance, so
+  // `currentCredits` is stripped from the doc-write payload - a full-doc `$set`
+  // carrying the balance would clobber the increment.
   const previousBalance = user.currentCredits ?? 0;
   const creditDelta =
     params.currentCredits !== undefined && params.currentCredits !== previousBalance
@@ -130,12 +130,15 @@ export async function adminUpdateUser(
   // call and the credit ledger, respectively) - pull them out so they never land
   // as stray top-level fields on the user doc.
   const { moderationStatus, creditReason, ...baseParams } = params;
-  // When auditing the credit change, drop `currentCredits` from the doc write so
-  // the atomic increment below is the sole balance mutation.
-  if (auditCreditChange) {
-    delete baseParams.currentCredits;
-  }
   const updatedUser = applyBaseUserUpdates(user, { ...baseParams, lastCreditsPurchasedAt });
+  // When auditing, the ledger owns the balance: drop `currentCredits` from the
+  // doc write so its `$set` cannot clobber the ledger `$inc` (which now runs
+  // first). `applyBaseUserUpdates` re-adds it via the `...user` spread, so it
+  // must be stripped here, not just from `baseParams`. The legacy (unaudited)
+  // path keeps it and overwrites the balance directly.
+  if (auditCreditChange) {
+    delete (updatedUser as { currentCredits?: number }).currentCredits;
+  }
 
   if (!!params.organizationId && user.organizationId !== params.organizationId) {
     if (user.organizationId) {
@@ -161,21 +164,12 @@ export async function adminUpdateUser(
     }
   }
 
-  await db.users.update(updatedUser);
-
-  // Apply the moderation escalation transition last so it authoritatively sets
-  // `moderation.status`, `throttledUntil`, and the `isModerated` mirror.
-  if (moderationStatus) {
-    await db.users.setModerationStatus(params.id, moderationStatus, {
-      throttledUntil:
-        moderationStatus === 'throttled' ? new Date(Date.now() + MODERATION_POLICY.throttleDurationMs) : null,
-    });
-  }
-
-  // Audited credit adjustment: runs AFTER the base doc write so the atomic
-  // increment is the final word on the balance. Records who (actorId = the
-  // acting admin), the delta (the transaction `credits`), the resulting
-  // balance, and the reason, as a generic_add / generic_deduct CreditTransaction.
+  // Audited credit adjustment: runs BEFORE the base doc write so a ledger failure
+  // aborts the operation before `lastCreditsPurchasedAt` or any bundled non-credit
+  // fields are persisted (#913). The ledger `$inc` is the final word on the
+  // balance. Records who (actorId = the acting admin), the delta (the transaction
+  // `credits`), the resulting balance, and the reason, as a
+  // generic_add / generic_deduct CreditTransaction.
   if (auditCreditChange && db.creditTransactions) {
     const note = creditReason?.trim() || undefined;
     const resultingBalance = params.currentCredits as number;
@@ -214,6 +208,17 @@ export async function adminUpdateUser(
         creditAdapters
       );
     }
+  }
+
+  await db.users.update(updatedUser);
+
+  // Apply the moderation escalation transition last so it authoritatively sets
+  // `moderation.status`, `throttledUntil`, and the `isModerated` mirror.
+  if (moderationStatus) {
+    await db.users.setModerationStatus(params.id, moderationStatus, {
+      throttledUntil:
+        moderationStatus === 'throttled' ? new Date(Date.now() + MODERATION_POLICY.throttleDurationMs) : null,
+    });
   }
 
   const finalUser = await db.users.findById(params.id);
