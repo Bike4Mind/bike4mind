@@ -86,7 +86,8 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 // Import AFTER mocks are registered so the module picks up our stubs.
-const { buildDagResumeReport, isDagAggregationWake, onDagNodeTerminal } = await import('./agentExecutorDag');
+const { buildDagResumeReport, clampMaxIterationsForOverCapAggregationWake, isDagAggregationWake, onDagNodeTerminal } =
+  await import('./agentExecutorDag');
 
 const spec: IDagSpec = {
   toolUseId: 'tool_use_1',
@@ -238,6 +239,52 @@ describe('isDagAggregationWake', () => {
     expect(isDagAggregationWake({ isDagResume: true, dagSpec: undefined, waitingOnDagChildren: undefined })).toBe(
       false
     );
+  });
+});
+
+describe('clampMaxIterationsForOverCapAggregationWake', () => {
+  it('caps to the next iteration when the wake is aggregation-only and the member is over cap', () => {
+    expect(
+      clampMaxIterationsForOverCapAggregationWake({
+        isAggregationOnlyWake: true,
+        isOverCap: true,
+        maxIterations: 25,
+        iterationIndex: 7,
+      })
+    ).toBe(8);
+  });
+
+  it('never raises the ceiling above the original maxIterations', () => {
+    expect(
+      clampMaxIterationsForOverCapAggregationWake({
+        isAggregationOnlyWake: true,
+        isOverCap: true,
+        maxIterations: 5,
+        iterationIndex: 20,
+      })
+    ).toBe(5);
+  });
+
+  it('leaves maxIterations untouched when not an aggregation-only wake, even if over cap', () => {
+    expect(
+      clampMaxIterationsForOverCapAggregationWake({
+        isAggregationOnlyWake: false,
+        isOverCap: true,
+        maxIterations: 25,
+        iterationIndex: 7,
+      })
+    ).toBe(25);
+  });
+
+  it('leaves maxIterations untouched on an aggregation-only wake when under cap', () => {
+    expect(
+      clampMaxIterationsForOverCapAggregationWake({
+        isAggregationOnlyWake: true,
+        isOverCap: false,
+        maxIterations: 25,
+        iterationIndex: 7,
+      })
+    ).toBe(25);
   });
 });
 

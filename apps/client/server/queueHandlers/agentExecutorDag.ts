@@ -364,3 +364,24 @@ export function isDagAggregationWake(args: {
 }): boolean {
   return args.isDagResume && args.dagSpec != null && args.waitingOnDagChildren != null;
 }
+
+/**
+ * The aggregation-wake exemption above only excuses the wake's own read-and-splice
+ * work (no new billable work of its own) - it does not license the run to keep
+ * iterating past it. If the member is still over cap once the DAG's own
+ * already-paid-for cost has settled, this caps the loop to the one iteration that
+ * turns the aggregated result into an answer, so a capped-out member can't chain
+ * `coordinate_task` calls into unbounded further billable work through the
+ * exemption. A no-op (returns `maxIterations` unchanged) outside that exact case.
+ */
+export function clampMaxIterationsForOverCapAggregationWake(args: {
+  isAggregationOnlyWake: boolean;
+  isOverCap: boolean;
+  maxIterations: number;
+  iterationIndex: number;
+}): number {
+  if (args.isAggregationOnlyWake && args.isOverCap) {
+    return Math.min(args.maxIterations, args.iterationIndex + 1);
+  }
+  return args.maxIterations;
+}

@@ -88,7 +88,13 @@ import { buildTruncatedRunReply } from './agentExecutorUtils/truncatedReply';
 import { guardPlanCompletion } from './agentExecutorUtils/planCompletionGuard';
 import { injectBriefContext } from './agentExecutorUtils/briefContextInjector';
 import { rehydrateOptiPlanState, ledgerForWrite } from './agentExecutorUtils/optiPlanLedger';
-import { buildDagResumeReport, isDagAggregationWake, makeDagDispatcher, onDagNodeTerminal } from './agentExecutorDag';
+import {
+  buildDagResumeReport,
+  clampMaxIterationsForOverCapAggregationWake,
+  isDagAggregationWake,
+  makeDagDispatcher,
+  onDagNodeTerminal,
+} from './agentExecutorDag';
 import { collectDagChildArtifactBlocks } from './agentExecutor.dagArtifacts';
 import type { DagHandoffSignal } from '@bike4mind/services';
 // `buildFirstIterationQuery` lives in its own module so it can be
@@ -1635,7 +1641,7 @@ async function processExecution(
     // when the payload doesn't pin one - agentless dispatches (Agent-mode
     // toggle path) land on the profile's `defaultThoroughness` ceiling rather
     // than the legacy 25-iteration fallback.
-    const maxIterations = orchestrationProfile
+    let maxIterations = orchestrationProfile
       ? pickEffectiveMaxIterations(startPayload?.maxIterations, orchestrationProfile)
       : (startPayload?.maxIterations ?? 25);
 
@@ -1879,6 +1885,13 @@ async function processExecution(
     // --- Iteration loop ---
     let iterationResult: IterationResult | undefined;
     let iterationIndex = isNewExecution ? 0 : ((execution.checkpoint as AgentCheckpoint)?.iteration ?? 0);
+
+    maxIterations = clampMaxIterationsForOverCapAggregationWake({
+      isAggregationOnlyWake,
+      isOverCap: Boolean(organization && creditService.isMemberAtOrOverCap(organization, execution.userId)),
+      maxIterations,
+      iterationIndex,
+    });
 
     // Confidence-gate plumbing. The agent calls this callback after
     // tool execution with the iteration's average tool-result confidence;
