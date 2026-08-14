@@ -180,11 +180,19 @@ export function buildOwnershipConditions(
     lakeMembership?: DataLakeMembershipScope;
     /**
      * Drop the "shared 1:1 with this user" arm from base access, keeping owned + group +
-     * data-lake arms. For a per-user tag/namespace count: the write paths that keep a tag's
-     * denormalized name in sync only ever touch files the user owns, so a tag string that
-     * survives solely on a file merely shared with them (not owned) can never be reconciled
-     * by renaming/deleting their own tag - it would keep counting as an orphan bucket. Group
-     * and data-lake access stay in, since those are the user's own persistent workspaces.
+     * data-lake arms, for the per-user WORKSPACES tag/namespace count only (GET
+     * /api/files/tags/counts opts in; GET /api/files/tags does not - see userFileScope.ts).
+     *
+     * The write paths that keep a tag's denormalized name in sync (removeTagByUserId,
+     * updateTagsByUserId) only ever touch files the user owns, so a tag string surviving solely
+     * on a file merely shared with them can never be cleared by renaming/deleting their own tag -
+     * it keeps counting as an orphan bucket (the bug this flag fixes).
+     *
+     * That reconciliation argument is EQUALLY true of a group-shared or data-lake file owned by
+     * someone else - the write paths can't fix those either. Group/data-lake access stays IN as
+     * a deliberate product choice (they are the user's own persistent, subscribed-to workspaces,
+     * not an incidental share), not because it is more reconcilable. The group/data-lake orphan
+     * case this does not cover is a known, accepted gap - see issue #1353's own options 1-3.
      */
     excludePersonalShares?: boolean;
   }

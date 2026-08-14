@@ -65,9 +65,25 @@ describe('GET /api/files/tags/counts', () => {
 
     await mockRefs.getHandler!(req, res);
 
-    const expectedScope = { userGroups: ['group-a'], dataLakeTags: getDataLakeTags(USER_TAGS) };
+    const expectedScope = {
+      userGroups: ['group-a'],
+      dataLakeTags: getDataLakeTags(USER_TAGS),
+      excludePersonalShares: true,
+    };
     expect(mockRefs.tagArgs).toEqual(['user-1', expectedScope]);
     expect(mockRefs.namespaceArgs).toEqual(['user-1', expectedScope]);
+  });
+
+  // The regression a human review caught: this route is the ONLY caller that must opt into the
+  // exclusion (GET /api/files/tags does not) - a route change that dropped this flag would silently
+  // widen WORKSPACES back to counting personally-shared files.
+  it('opts into excludePersonalShares - the property that makes WORKSPACES exclude personal shares', async () => {
+    const { req, res } = invokeGet({ id: 'user-1', groups: ['group-a'], tags: USER_TAGS });
+
+    await mockRefs.getHandler!(req, res);
+
+    expect((mockRefs.tagArgs?.[1] as { excludePersonalShares?: boolean }).excludePersonalShares).toBe(true);
+    expect((mockRefs.namespaceArgs?.[1] as { excludePersonalShares?: boolean }).excludePersonalShares).toBe(true);
   });
 
   // The namespace aggregate falls back to owner-only when called with no scope, so forgetting the
@@ -100,7 +116,7 @@ describe('GET /api/files/tags/counts', () => {
 
     await mockRefs.getHandler!(req, res);
 
-    const expectedScope = { userGroups: [], dataLakeTags: getDataLakeTags([]) };
+    const expectedScope = { userGroups: [], dataLakeTags: getDataLakeTags([]), excludePersonalShares: true };
     expect(mockRefs.tagArgs?.[1]).toEqual(expectedScope);
     expect(mockRefs.namespaceArgs?.[1]).toEqual(expectedScope);
   });

@@ -12,8 +12,13 @@ const handler = baseApi().get(
 
     // One scope for both halves of the response: the client keys workspace rows off the tag
     // counts and sizes them from the namespace counts, so a narrower scope on either one shows
-    // a shared or data-lake workspace as empty. Also shared with the tag list in ./index.ts.
-    const scope = buildUserFileScope(req.user);
+    // a shared or data-lake workspace as empty.
+    //
+    // excludePersonalShares is opted into HERE, not inside buildUserFileScope: ./index.ts
+    // (GET /api/files/tags, backing the TagSidebar and the "Shared with me" view) uses the same
+    // scope builder but must NOT narrow, since its fileCount has to agree with the file list it
+    // renders beside - including files reachable only via a personal share.
+    const scope = { ...buildUserFileScope(req.user), excludePersonalShares: true };
 
     const [tagCounts, namespaceCounts] = await Promise.all([
       fabFileRepository.countFilesByTagForUser(req.user.id, scope),

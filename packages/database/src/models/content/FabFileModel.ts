@@ -573,14 +573,13 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
       scopedTagPrefixes?: string[];
+      excludePersonalShares?: boolean;
     }
   ): Promise<{ tag: string; count: number }[]> {
-    // When options are provided, include group/data-lake files, but never a file merely shared
-    // 1:1 with this user - see buildOwnershipConditions.excludePersonalShares.
+    // When options are provided, include shared/group/data-lake files (narrowed by
+    // excludePersonalShares when the caller opts in - see buildOwnershipConditions).
     // Without options, only count files owned by the user (backward compatible).
-    const ownershipFilter = options
-      ? { $or: buildOwnershipConditions(userId, { ...options, excludePersonalShares: true }) }
-      : { userId };
+    const ownershipFilter = options ? { $or: buildOwnershipConditions(userId, options) } : { userId };
     const sessionFilter = {
       $or: [
         { sessionId: null },
@@ -597,9 +596,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           // archivedAt must mirror buildFabFileSearchQuery's baseFilter: this count is rendered
           // as a badge beside the list that filter produces. Equality to null matches missing
           // too, leaving files that were never archived alone. Ownership scope is the one
-          // deliberate exception: excludePersonalShares (above) narrows this count below the
-          // list's own includeShared scope, so a tag living only on a 1:1-shared file drops its
-          // WORKSPACES row while the file itself still appears in the list/search results.
+          // deliberate exception, and only for a caller that opts into excludePersonalShares
+          // (WORKSPACES via counts.ts) - see buildOwnershipConditions for why. listFileTags does
+          // NOT opt in, so its fileCount stays in step with the file list it is rendered beside.
           archivedAt: null,
           tags: { $exists: true, $ne: [] },
         },
@@ -748,13 +747,12 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
       scopedTagPrefixes?: string[];
+      excludePersonalShares?: boolean;
     }
   ): Promise<{ namespace: string; fileCount: number }[]> {
-    // excludePersonalShares: true to stay in lockstep with countFilesByTagForUser - see that
-    // function's comment on why a merely-shared file must not keep a namespace alive here.
-    const ownershipFilter = options
-      ? { $or: buildOwnershipConditions(userId, { ...options, excludePersonalShares: true }) }
-      : { userId };
+    // Caller must pass the SAME options (including excludePersonalShares) as
+    // countFilesByTagForUser - see that function's doc comment.
+    const ownershipFilter = options ? { $or: buildOwnershipConditions(userId, options) } : { userId };
     // Exclude session summaries (unless curated-notebook) to match search behavior. Both this and
     // the ownership filter can be an $or, so they go under $and rather than into one object where
     // the second $or key would overwrite the first.

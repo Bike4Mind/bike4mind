@@ -19,12 +19,11 @@ import { getDataLakeTags } from '@bike4mind/common';
  * `dataLakeTags` reaches an ownership-bypass arm in buildOwnershipConditions, so it must stay the
  * registry-derived set for lakes this user can reach - never the user's raw tags.
  *
- * One deliberate exception to "the three agree": countFilesByTagForUser (and its namespace
- * sibling) additionally excludes files reachable ONLY via a personal 1:1 share - a tag living
- * solely on such a file gets no badge/workspace row, even though GET /api/files/search still
- * lists the file (includeShared has no such exclusion). That narrowing lives inside those two
- * repository methods, not in this scope object, so it applies uniformly to both callers that
- * pass this scope into them (GET /api/files/tags and GET /api/files/tags/counts).
+ * One deliberate exception to "the three agree": GET /api/files/tags/counts additionally passes
+ * `excludePersonalShares: true` (see buildOwnershipConditions for the full why) on top of this
+ * scope, so WORKSPACES drops a tag living only on a file merely shared with the caller. GET
+ * /api/files/tags does NOT opt in - its fileCount must keep agreeing with GET /api/files/search,
+ * which still lists such a file. This function itself stays exclusion-free; each caller decides.
  */
 // `groups` and `tags` are nullable on IUserDocument, not merely optional - a user record can hold
 // an explicit null, so the parameter has to admit it rather than only `undefined`.
