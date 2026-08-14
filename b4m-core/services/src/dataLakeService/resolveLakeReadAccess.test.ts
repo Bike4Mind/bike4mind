@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import type { AccessContext, IDataLakeDocument } from '@bike4mind/common';
 import { classifyLakeAccess } from './classifyLakeAccess';
 import {
-  resolveUserReadGrant,
+  resolveReadGrant,
   resolveLakeReadAccess,
   resolveEnforceReadGrants,
   ENFORCE_LAKE_READ_GRANTS_KEY,
@@ -27,6 +27,7 @@ const ctx = (over: Partial<AccessContext> = {}): AccessContext => ({
   userId: 'stranger',
   isAdmin: false,
   userTags: [],
+  organizationIds: [],
   ...over,
 });
 
@@ -92,21 +93,35 @@ describe('classifyLakeAccess - the five arms the cutover diffs against', () => {
   });
 });
 
-describe('resolveUserReadGrant - the new explicit read-grant arm', () => {
+describe('resolveReadGrant - the new explicit read-grant arm (user + org principals)', () => {
   it('true for a user-principal grant matching the caller (any role)', () => {
-    expect(resolveUserReadGrant(ctx(), [grant('reader')])).toBe(true);
+    expect(resolveReadGrant(ctx(), [grant('reader')])).toBe(true);
   });
 
-  it('false for an org-principal grant (user-principal only in v1)', () => {
-    expect(resolveUserReadGrant(ctx({ userId: 'u1' }), [grant('reader', 'orgA', 'organization')])).toBe(false);
+  it('true for an org-principal grant when the caller is a MEMBER of that org', () => {
+    expect(resolveReadGrant(ctx({ userId: 'u1', organizationIds: ['orgA'] }), [grant('reader', 'orgA', 'organization')])).toBe(
+      true
+    );
+  });
+
+  it('true for an org owner/curator grant reaching a plain member (read follows membership)', () => {
+    const c = ctx({ userId: 'u1', organizationIds: ['orgA'] });
+    expect(resolveReadGrant(c, [grant('owner', 'orgA', 'organization')])).toBe(true);
+    expect(resolveReadGrant(c, [grant('curator', 'orgA', 'organization')])).toBe(true);
+  });
+
+  it('false for an org-principal grant when the caller is NOT a member of that org', () => {
+    expect(resolveReadGrant(ctx({ userId: 'u1', organizationIds: ['orgB'] }), [grant('reader', 'orgA', 'organization')])).toBe(
+      false
+    );
   });
 
   it('false for a grant belonging to a different user', () => {
-    expect(resolveUserReadGrant(ctx({ userId: 'u1' }), [grant('reader', 'u2')])).toBe(false);
+    expect(resolveReadGrant(ctx({ userId: 'u1' }), [grant('reader', 'u2')])).toBe(false);
   });
 
   it('false when the caller has no userId (fails closed on a blank identity)', () => {
-    expect(resolveUserReadGrant(ctx({ userId: '' }), [grant('reader', '')])).toBe(false);
+    expect(resolveReadGrant(ctx({ userId: '' }), [grant('reader', '')])).toBe(false);
   });
 });
 
@@ -130,6 +145,24 @@ describe('resolveLakeReadAccess - report-only vs enforce', () => {
   it('enforce: the same reader grant now opens the private lake', () => {
     const d = resolveLakeReadAccess(lake(), readerCtx, readerGrant, { enforceReadGrants: true });
     expect(d).toMatchObject({ allowed: true, resolvedAllowed: true, diverges: true, enforced: true });
+  });
+
+  it('org grant to a member: diverges in report-only, opens under enforce', () => {
+    const memberCtx = ctx({ userId: 'm1', organizationIds: ['orgA'] });
+    const orgGrant = [grant('reader', 'orgA', 'organization')];
+    expect(resolveLakeReadAccess(lake(), memberCtx, orgGrant, { enforceReadGrants: false })).toMatchObject({
+      allowed: false,
+      readGrantAllows: true,
+      diverges: true,
+      enforced: false,
+    });
+    expect(resolveLakeReadAccess(lake(), memberCtx, orgGrant, { enforceReadGrants: true }).allowed).toBe(true);
+  });
+
+  it('org grant to a NON-member: no divergence, stays denied', () => {
+    const outsider = ctx({ userId: 'x1', organizationIds: ['orgB'] });
+    const d = resolveLakeReadAccess(lake(), outsider, [grant('reader', 'orgA', 'organization')], { enforceReadGrants: true });
+    expect(d).toMatchObject({ allowed: false, readGrantAllows: false, diverges: false });
   });
 
   it('owner grant does not diverge (already allowed by the legacy owner-admin arm)', () => {

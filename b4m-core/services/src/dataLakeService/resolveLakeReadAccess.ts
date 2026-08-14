@@ -12,20 +12,32 @@ export interface LakeAccessLogger {
 }
 
 /**
- * The NEW explicit read-grant arm (#1673): true when the caller's USER principal holds ANY active
- * grant row on this lake. The grant row IS the authorization - it needs none of the org/gate
- * constraints (the analog of the createdByUserId owner bypass, extended to a delegated
- * reader/curator/owner) and it bypasses Private-by-default. Owner and curator already pass the legacy
- * `owner-admin` arm (via canManageLake), so the ONLY outcome this flips from the legacy gate is a
- * `reader`-role grant - exactly the gap #1673 closes. `grants` is pre-filtered to ACTIVE (expiry) by
- * the caller, so a lapsed grant never reaches here.
+ * The NEW explicit read-grant arm (#1673): true when the caller holds a grant on this lake, either
+ * as a USER principal (matching `userId`) or as a member of an ORGANIZATION principal (the granted
+ * org is one of `ctx.organizationIds`). The grant row IS the authorization - it needs none of the
+ * org/gate constraints (the analog of the createdByUserId owner bypass, extended to a delegated
+ * reader/curator/owner and to org-shared lakes) and it bypasses Private-by-default. `grants` is
+ * pre-filtered to ACTIVE (expiry) by the caller, so a lapsed grant never reaches here.
  *
- * User-principal only in v1: org-principal read grants are a deferred Lane B follow-up (see
- * grantedLakeIdsFor). Membership never crosses orgs (epic decision 12) - enforced at grant-WRITE
- * time, so an existing row is honored unconditionally at read time.
+ * Role is intentionally not inspected here: any grant a principal holds admits a READ. Owner/curator
+ * (and org owner/curator for an org ADMIN) already pass the legacy `owner-admin` arm via
+ * canManageLake, so the outcomes this newly flips are (a) a user `reader` grant and (b) an org grant
+ * of any role reaching a plain member - the gaps #1673 closes. The org read arm keys off MEMBERSHIP
+ * (`ctx.organizationIds`), distinct from canManageLake's org-MANAGE arm, which keys off admin rights.
+ *
+ * Org membership never crosses orgs (epic decision 12) - enforced at grant-WRITE time, so an existing
+ * row is honored unconditionally at read time.
  */
-export function resolveUserReadGrant(ctx: Pick<AccessContext, 'userId'>, grants: readonly LakeGrant[]): boolean {
-  return !!ctx.userId && grants.some(g => g.principalType === 'user' && g.principalId === ctx.userId);
+export function resolveReadGrant(
+  ctx: Pick<AccessContext, 'userId' | 'organizationIds'>,
+  grants: readonly LakeGrant[]
+): boolean {
+  const orgIds = ctx.organizationIds ?? [];
+  return grants.some(g =>
+    g.principalType === 'user'
+      ? !!ctx.userId && g.principalId === ctx.userId
+      : g.principalType === 'organization' && orgIds.includes(g.principalId)
+  );
 }
 
 /** The decomposed read decision: the legacy arm, the new read-grant arm, and what each would allow. */
@@ -62,7 +74,7 @@ export function resolveLakeReadAccess(
   opts: { enforceReadGrants: boolean }
 ): LakeReadAccessDecision {
   const legacy = classifyLakeAccess(lake, ctx, grants);
-  const readGrantAllows = resolveUserReadGrant(ctx, grants);
+  const readGrantAllows = resolveReadGrant(ctx, grants);
   const resolvedAllowed = legacy.allowed || readGrantAllows;
   return {
     allowed: opts.enforceReadGrants ? resolvedAllowed : legacy.allowed,

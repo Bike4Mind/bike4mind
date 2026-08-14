@@ -43,25 +43,44 @@ const grantsByLakeIdFor = async (
 };
 
 /**
- * Lake ids the caller holds an active USER-principal grant on - fed to findAccessible so a
- * transferred/delegated lake lists. Stays in lockstep with the single read gate (#1673):
- *  - owner/curator ALWAYS included: the gate admits them via `canManageLake`.
- *  - reader included ONLY when `includeReaders` (the enforced read-time grant cutover): matching the
- *    gate, which honors a reader grant only once EnforceLakeReadGrants is on. In report-only, a
- *    reader-granted lake would 404 on open, so listing it would be incoherent - it is excluded.
- * Only resolves USER-principal grants - org-principal grants (rung 5) are a deferred Lane B follow-up
- * (manageable by direct id today); membership never crosses orgs regardless (epic decision 12).
+ * Lake ids the caller can reach via an active grant - fed to findAccessible so a transferred,
+ * delegated, or shared lake lists. Stays in lockstep with the single read gate (#1673):
+ *  - USER owner/curator ALWAYS included: the gate admits them via `canManageLake`.
+ *  - USER reader AND any ORG-principal grant (for an org the caller is a MEMBER of) included ONLY
+ *    when `includeReaders` (the enforced read-time grant cutover), matching resolveReadGrant at the
+ *    gate. In report-only the gate returns the legacy decision, so a lake reachable only by these
+ *    would 404 on open - listing it would be incoherent, so it is excluded until enforce.
+ * The org arm keys off MEMBERSHIP (`organizationIds`), distinct from the org-MANAGE rung (admin
+ * rights); org membership never crosses orgs regardless (epic decision 12).
  */
-const grantedLakeIdsFor = async (userId: string, grants?: GrantLookup, includeReaders = false): Promise<string[]> => {
+const grantedLakeIdsFor = async (
+  userId: string,
+  organizationIds: string[],
+  grants?: GrantLookup,
+  includeReaders = false
+): Promise<string[]> => {
   if (!grants) return [];
-  const rows = await grants.listByPrincipal('user', userId, { activeAsOf: new Date() });
-  return Array.from(
-    new Set(
-      rows
-        .filter(row => row.role === 'owner' || row.role === 'curator' || (includeReaders && row.role === 'reader'))
-        .map(row => row.dataLakeId)
-    )
-  );
+  const activeAsOf = new Date();
+  const ids = new Set<string>();
+
+  const userRows = await grants.listByPrincipal('user', userId, { activeAsOf });
+  for (const row of userRows) {
+    if (row.role === 'owner' || row.role === 'curator' || (includeReaders && row.role === 'reader')) {
+      ids.add(row.dataLakeId);
+    }
+  }
+
+  // Org-principal grants resolve only under enforce: membership in an org holding ANY grant on a
+  // lake grants read (mirrors the gate's org read arm). One query per membership org - bounded by
+  // how many orgs the caller belongs to.
+  if (includeReaders && organizationIds.length > 0) {
+    const orgRowSets = await Promise.all(
+      organizationIds.map(orgId => grants.listByPrincipal('organization', orgId, { activeAsOf }))
+    );
+    for (const rows of orgRowSets) for (const row of rows) ids.add(row.dataLakeId);
+  }
+
+  return Array.from(ids);
 };
 
 /**
@@ -186,7 +205,7 @@ export const listDataLakes = async (
   { db }: ListDataLakesAdapters
 ): Promise<ManageableDataLakeConfig[]> => {
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants, includeReaders);
+  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, ctx.organizationIds ?? [], db.dataLakeAccessGrants, includeReaders);
   let dynamicLakes: IDataLakeDocument[] = [];
   try {
     dynamicLakes = await db.dataLakes.findAccessible(ctx, { statuses: ['draft', 'active'], grantedLakeIds });
@@ -268,7 +287,7 @@ export const listArchivedDataLakes = async (
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants, includeReaders);
+  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, ctx.organizationIds ?? [], db.dataLakeAccessGrants, includeReaders);
   const lakes = await db.dataLakes.findAccessible(ctx, {
     statuses: ['archived'],
     includePublic: false,
@@ -288,7 +307,7 @@ export const listDeletedDataLakes = async (
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants, includeReaders);
+  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, ctx.organizationIds ?? [], db.dataLakeAccessGrants, includeReaders);
   const lakes = await db.dataLakes.findAccessible(ctx, { statuses: ['deleted'], includePublic: false, grantedLakeIds });
   const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
   return redactLakesForActor(lakes, ctx, grantsByLake);
