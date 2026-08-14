@@ -187,6 +187,11 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     });
   }
 
+  // scopedFields feeds this hash, so a subscription created before fieldLimits existed and one
+  // created after hash to DIFFERENT queryIds - the fields write below is $setOnInsert only, so an
+  // old subscription is never mutated in place with the new exclusion; a client that reconnects
+  // (getting a fresh scopedFields) lands on a new document instead. This is what keeps
+  // $setOnInsert safe here rather than leaving pre-deploy subscriptions permanently unredacted.
   const uniqueQuerySelector = crypto
     .createHash('sha256')
     .update(JSON.stringify(collectionName))
