@@ -936,7 +936,12 @@ describe('updateDataLake - config-write actor stamp', () => {
     await updateDataLake({ userId: 'platformAdmin', isAdmin: true }, 'lake1', { groundingMode: 'inline' }, { db });
 
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ lastUpdatedByUserId: 'platformAdmin' }));
-    expect(update).toHaveBeenCalledWith(expect.not.objectContaining({ createdByUserId: expect.anything() }));
+    // Every call, not just one of them: `toHaveBeenCalledWith(not.objectContaining(...))` passes as
+    // soon as ANY recorded call lacks the key, so it would go vacuous the moment a second update is
+    // added. Same loop shape as the guard in transferLakeOwnership.test.ts.
+    for (const [payload] of update.mock.calls) {
+      expect(payload).not.toHaveProperty('createdByUserId');
+    }
   });
 
   it('ignores a lastUpdatedByUserId supplied in the request body', async () => {
@@ -1356,6 +1361,13 @@ describe('unarchiveDataLake — dedup pass (live re-upload wins)', () => {
       activateIfDraft: vi.fn(),
     };
     await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { db: { dataLakes, fabFiles } });
+
+    // Both calls, not just the last: reading only `.at(-1)` would let someone add
+    // `...lakeConfigWriteStamp(actor)` to the transitional 'restoring' hop without any test failing,
+    // which is exactly the one-stamp-per-operator-action rule this design exists to hold. Archive and
+    // delete already pin their transitional payload this way.
+    const [transitional] = dataLakes.update.mock.calls[0];
+    expect(transitional).toEqual({ id: 'lake1', status: 'restoring' });
 
     const settle = dataLakes.update.mock.calls.at(-1)?.[0];
     expect(settle).toEqual({ id: 'lake1', status: 'active', filesArchivedAt: null, lastUpdatedByUserId: 'owner' });
@@ -1864,6 +1876,10 @@ describe('teardown stamp bookkeeping', () => {
     it('clears the spent delete AND archive stamps with null as it settles', async () => {
       const adapters = reversalAdapters(lake({ status: 'deleted', filesDeletedAt: RECORDED }));
       await restoreDeletedDataLake(owner, 'lake1', adapters);
+
+      // The transitional hop stays unstamped - see the same assertion on unarchive/archive/delete.
+      const [transitional] = adapters.db.dataLakes.update.mock.calls[0];
+      expect(transitional).toEqual({ id: 'lake1', status: 'restoring' });
 
       const settle = adapters.db.dataLakes.update.mock.calls.at(-1)?.[0];
       expect(settle).toEqual({
