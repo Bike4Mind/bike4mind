@@ -175,7 +175,10 @@ const ToolsUsed = memo<ToolsUsedProps>(({ functionCalls = [], size = 'sm' }) => 
                 Error
               </Typography>
               <Typography level="body-sm" color="danger" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                {selectedTool?.error ?? selectedTool?.returnValue ?? '(no error message)'}
+                {/* Absent error/returnValue is ambiguous here - a genuinely detail-less failure
+                    reads identically to a non-owner viewer whose functionCalls redaction strips
+                    both fields. Neutral copy covers both without implying a bug. */}
+                {selectedTool?.error ?? selectedTool?.returnValue ?? 'Details not available.'}
               </Typography>
             </Box>
           )}

@@ -15,19 +15,20 @@ describe('buildSystemPromptSourceFiles', () => {
     });
 
     expect(result).toEqual([
-      { fileId: 'file-admin', fileName: 'admin-prompt.md', source: 'admin', enabled: true },
-      { fileId: 'file-user', fileName: 'user-prompt.md', source: 'user', enabled: true },
-      { fileId: 'file-project', fileName: undefined, source: 'project', enabled: true },
+      { fileId: 'file-admin', fileName: 'admin-prompt.md', source: 'admin' },
+      { fileId: 'file-user', fileName: 'user-prompt.md', source: 'user' },
+      { fileId: 'file-project', fileName: undefined, source: 'project' },
     ]);
   });
 
-  it('never populates a content field, even when the caller tries to pass one through', () => {
+  it('never populates an enabled or content field - enabled carried no information (always true) and content is deliberately never persisted', () => {
     const result = buildSystemPromptSourceFiles(new Map(), {
       global: ['file-1'],
       userEnabled: [],
       project: [],
     });
-    expect(result[0]).not.toHaveProperty('content');
+    expect(result?.[0]).not.toHaveProperty('content');
+    expect(result?.[0]).not.toHaveProperty('enabled');
   });
 
   it('returns undefined (not an empty array) when every bucket is empty', () => {
@@ -43,7 +44,7 @@ describe('buildSystemPromptSourceFiles', () => {
       userEnabled: [],
       project: ['deleted-file-id'],
     });
-    expect(result).toEqual([{ fileId: 'deleted-file-id', fileName: undefined, source: 'project', enabled: true }]);
+    expect(result).toEqual([{ fileId: 'deleted-file-id', fileName: undefined, source: 'project' }]);
   });
 
   it('does not include a session bucket - session-scoped file ids are workbench attachments, not system prompts', () => {

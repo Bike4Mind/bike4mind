@@ -1128,6 +1128,14 @@ export class GeminiBackend implements ICompletionBackend {
   private formatMessagesIntoGeminiContent(messages: IMessage[]): any[] {
     const toolUseIdToName = new Map<string, string>();
     void toolUseIdToName;
+    // Populated below when a tool_use message's FIRST call has no thought_signature - Gemini
+    // requires one on the first call of a parallel batch, and a caller-side check (whichever
+    // model fetchAndProcessPreviousMessages was called with) cannot see a LATER cross-provider
+    // fallback hop onto Gemini (utils.ts's disableToolReplay is fixed before the fallback loop
+    // runs). Checking here instead means the guard travels with this backend regardless of why
+    // the messages ended up here - live turn, direct call, or a fallback hop mid-outage - and the
+    // paired tool_result below is dropped too, so functionCall/functionResponse counts stay equal.
+    const droppedToolUseIds = new Set<string>();
 
     return messages
       .map(message => {
@@ -1184,44 +1192,56 @@ export class GeminiBackend implements ICompletionBackend {
         if (hasToolUse) {
           // CRITICAL: Handle multiple tool_use items in one message (parallel function calls)
           // Per Gemini API docs: only the FIRST part gets thought_signature in parallel calls
+          const toolUseBlocks = message.content.filter(
+            (item): item is MessageContentToolUse => item.type === 'tool_use'
+          );
           const textParts = message.content
             .filter((item): item is MessageContentText => item.type === 'text')
             .map(item => ({ text: item.text }));
+
+          // A replayed history turn (utils.ts Priority 2) never persists thought_signature, so its
+          // reconstructed tool_use blocks always lack one. Rather than send a request Gemini 3 is
+          // documented to reject, drop the whole call set here (functionCall AND, below, its
+          // paired functionResponse) and fall back to whatever text survives - the same
+          // degradation utils.ts already does for a Gemini-primary turn, now enforced regardless
+          // of which model the history was originally fetched for. Scoped to the gemini-3 family:
+          // that is the one this repo has observed actually rejects a missing signature (see the
+          // pre-existing warn below this branch), so a 2.x/1.x model isn't degraded for no reason.
+          if (this.currentModel.includes('gemini-3') && !toolUseBlocks[0]?.thought_signature) {
+            this.logger.warn(
+              '[Gemini] Dropping replayed tool_use block(s) with no thought_signature on the first call:',
+              { names: toolUseBlocks.map(t => t.name), messageRole: message.role }
+            );
+            toolUseBlocks.forEach(t => droppedToolUseIds.add(t.id));
+            if (textParts.length === 0) return null;
+            return { role: mapRole(message.role), parts: textParts };
+          }
+
           const parts: any[] = [...textParts];
           parts.push(
-            ...message.content
-              .filter((item): item is MessageContentToolUse => item.type === 'tool_use')
-              .map((toolUse, index) => {
-                toolUseIdToName.set(toolUse.id, toolUse.name);
+            ...toolUseBlocks.map((toolUse, index) => {
+              toolUseIdToName.set(toolUse.id, toolUse.name);
 
-                const part: any = {
-                  functionCall: {
-                    name: toolUse.name,
-                    args: toolUse.input,
-                  },
-                };
+              const part: any = {
+                functionCall: {
+                  name: toolUse.name,
+                  args: toolUse.input,
+                },
+              };
 
-                // Only first tool call gets thought_signature (Gemini 3 requirement for parallel calls)
-                if (index === 0 && toolUse.thought_signature) {
-                  part.thoughtSignature = toolUse.thought_signature; // camelCase for some versions
-                  part.thought_signature = toolUse.thought_signature; // snake_case for other versions
-                  this.logger.debug('[Gemini] Including thought_signature in request (both formats):', {
-                    name: toolUse.name,
-                    id: toolUse.id,
-                    position: 'first',
-                  });
-                } else if (index === 0 && !toolUse.thought_signature) {
-                  // Only warn for the first tool call if signature is missing
-                  this.logger.warn('[Gemini] Missing thought_signature for first function call:', {
-                    name: toolUse.name,
-                    id: toolUse.id,
-                    messageRole: message.role,
-                  });
-                  this.logger.warn('[Gemini] This may cause a 400 error with Gemini 3 Pro');
-                }
+              // Only first tool call gets thought_signature (Gemini 3 requirement for parallel calls)
+              if (index === 0) {
+                part.thoughtSignature = toolUse.thought_signature; // camelCase for some versions
+                part.thought_signature = toolUse.thought_signature; // snake_case for other versions
+                this.logger.debug('[Gemini] Including thought_signature in request (both formats):', {
+                  name: toolUse.name,
+                  id: toolUse.id,
+                  position: 'first',
+                });
+              }
 
-                return part;
-              })
+              return part;
+            })
           );
 
           return {
@@ -1234,9 +1254,12 @@ export class GeminiBackend implements ICompletionBackend {
           // A replayed turn (utils.ts Priority 2) bundles N tool_result blocks into ONE
           // message when the turn made parallel calls - map every block, not just the
           // first, or Gemini rejects the request for a functionResponse/functionCall
-          // count mismatch (mirrors the same fix on the tool_use side above).
+          // count mismatch (mirrors the same fix on the tool_use side above). Results whose
+          // tool_use_id was dropped above (no thought_signature) are dropped here too, or an
+          // orphaned functionResponse would recreate the same count mismatch from the other side.
           const parts = (message.content as MessageContentObject[])
             .filter((item): item is MessageContentToolResult => item.type === 'tool_result')
+            .filter(toolResult => !droppedToolUseIds.has(toolResult.tool_use_id))
             .map(toolResult => ({
               functionResponse: {
                 name: toolUseIdToName.get(toolResult.tool_use_id) ?? toolResult.tool_use_id,
@@ -1245,6 +1268,7 @@ export class GeminiBackend implements ICompletionBackend {
                 },
               },
             }));
+          if (parts.length === 0) return null;
           return {
             role: mapRole(message.role),
             parts,

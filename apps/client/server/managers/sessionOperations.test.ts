@@ -45,7 +45,7 @@ vi.mock('@bike4mind/common', async () => {
     // @server/utils/errors re-exports NotFoundError from here, so it must be provided.
     NotFoundError: class NotFoundError extends Error {},
     // Real implementation: the redaction test below verifies the actual behavior, not a stub.
-    redactFunctionCallsForViewer: actual.redactFunctionCallsForViewer,
+    redactPromptMetaForViewer: actual.redactPromptMetaForViewer,
   };
 });
 

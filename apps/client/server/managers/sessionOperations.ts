@@ -8,7 +8,7 @@ import {
   ISessionDocument,
   IChatHistoryItem,
   IUserDocument,
-  redactFunctionCallsForViewer,
+  redactPromptMetaForViewer,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { Session as SessionModel, sessionRepository } from '@bike4mind/database/auth';
@@ -68,25 +68,15 @@ export const getMessagesFromSession = async (
   if (hasMore) result.pop();
 
   // A share grant authorizes reading the conversation, not re-reading whatever the owner's
-  // tools touched on the owner's behalf - see redactFunctionCallsForViewer. Owner reads are
+  // tools touched on the owner's behalf - see redactPromptMetaForViewer. Owner reads are
   // untouched; only the returnValue/error fields are stripped, name/parameters/success survive.
-  // The redacted shape is intentionally narrower than a full functionCalls entry (it is going
-  // straight to res.json, not back into the domain model), hence the cast at the boundary -
-  // same pattern redactSessionForClient uses for its own polymorphic return type.
+  // Both branches call .toJSON() (not just the non-owner one) so the return type doesn't
+  // diverge by viewer - this only goes straight to res.json, never back into the domain model.
   const isOwner = session.userId === user.id;
-  const data = isOwner
-    ? result
-    : result.map(quest => {
-        const plain = quest.toJSON();
-        if (!plain.promptMeta?.functionCalls) return plain;
-        return {
-          ...plain,
-          promptMeta: {
-            ...plain.promptMeta,
-            functionCalls: redactFunctionCallsForViewer(plain.promptMeta.functionCalls),
-          },
-        } as typeof plain;
-      });
+  const data = result.map(quest => {
+    const plain = quest.toJSON();
+    return { ...plain, promptMeta: redactPromptMetaForViewer(plain.promptMeta, isOwner) };
+  });
 
   return {
     data,

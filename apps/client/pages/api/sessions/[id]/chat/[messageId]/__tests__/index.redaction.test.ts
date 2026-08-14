@@ -37,12 +37,12 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 }));
 
 const mockSessionFindById = vi.fn();
-const mockQuestFindById = vi.fn();
+const mockQuestFindBySessionIdAndId = vi.fn();
 const mockQuestUpdate = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   sessionRepository: { findById: (...a: any[]) => mockSessionFindById(...a) },
   questRepository: {
-    findById: (...a: any[]) => mockQuestFindById(...a),
+    findBySessionIdAndId: (...a: any[]) => mockQuestFindBySessionIdAndId(...a),
     update: (...a: any[]) => mockQuestUpdate(...a),
   },
 }));
@@ -75,8 +75,22 @@ const messageWithFunctionCalls = () => ({
 describe('GET/PUT /api/sessions/[id]/chat/[messageId] - non-owner redaction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockQuestFindById.mockResolvedValue(messageWithFunctionCalls());
+    mockQuestFindBySessionIdAndId.mockResolvedValue(messageWithFunctionCalls());
     mockQuestUpdate.mockResolvedValue(messageWithFunctionCalls());
+  });
+
+  // The gate that matters: session access alone is not enough. A caller who owns THEIR OWN
+  // session (so userHasAccess passes) must not be able to read a quest bound to a DIFFERENT
+  // session just by naming its id - findBySessionIdAndId returns null for a mismatched pair,
+  // where a bare findById(messageId) would have returned the other session's quest.
+  it('GET 404s when messageId belongs to a different session than the one in the URL', async () => {
+    mockSessionFindById.mockResolvedValue({ id: 'sess-1', userId: 'jwt-user', users: [] });
+    mockQuestFindBySessionIdAndId.mockResolvedValue(null);
+    const { req, res } = fire();
+    await handler(req, res);
+
+    expect(mockQuestFindBySessionIdAndId).toHaveBeenCalledWith('sess-1', 'quest-1');
+    expect(res._getStatusCode()).toBe(404);
   });
 
   it('GET strips returnValue for a sharee (jwt-user is not session.userId)', async () => {

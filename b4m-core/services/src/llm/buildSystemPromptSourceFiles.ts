@@ -4,7 +4,6 @@ export type SystemPromptSourceFile = {
   fileId: string;
   fileName?: string;
   source: SystemPromptFileSource;
-  enabled: boolean;
 };
 
 /**
@@ -28,8 +27,11 @@ export function buildSystemPromptSourceFiles(
   fabFileNameById: Map<string, string>,
   buckets: { global: string[]; userEnabled: string[]; project: string[] }
 ): SystemPromptSourceFile[] | undefined {
+  // enabled was previously hardcoded true for every entry (all three buckets are already-filtered
+  // "included" sets, so it never varied) - dropped rather than kept as dead information; nothing
+  // downstream reads it and the schema field is optional.
   const toEntries = (fileIds: string[], source: SystemPromptFileSource): SystemPromptSourceFile[] =>
-    fileIds.map(fileId => ({ fileId, fileName: fabFileNameById.get(fileId), source, enabled: true }));
+    fileIds.map(fileId => ({ fileId, fileName: fabFileNameById.get(fileId), source }));
 
   const entries = [
     ...toEntries(buckets.global, 'admin'),

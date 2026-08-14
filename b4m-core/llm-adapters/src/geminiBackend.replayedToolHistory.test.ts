@@ -115,4 +115,101 @@ describe('GeminiBackend - replayed tool history (utils.ts Priority 2 shape)', ()
       response: { result: '10:00' },
     });
   });
+
+  // A cross-provider fallback hop (getLlmWithFallback's preferUntriedBackend) can land on
+  // Gemini with history fetched for a DIFFERENT primary model - fetchAndProcessPreviousMessages'
+  // disableToolReplay carve-out is fixed before that hop happens, so it cannot help here. The
+  // guard has to live in the formatter itself, checked against the model this backend is ACTUALLY
+  // completing against (gemini-3), not the one history was originally built for.
+  it('drops a replayed tool_use/tool_result pair with no thought_signature on a gemini-3 model', async () => {
+    const backend = new GeminiBackend('test-key');
+    let capturedRequest: any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (backend as unknown as { _api: any })._api = {
+      models: {
+        generateContentStream: async (request: unknown) => {
+          capturedRequest = request;
+          return (async function* () {
+            yield {
+              candidates: [{ content: { parts: [{ text: 'ok' }] } }],
+              usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+            };
+          })();
+        },
+      },
+    };
+
+    const assistantMessage: IMessage = {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'reply 1' },
+        { type: 'tool_use', id: 'toolu_1', name: 'web_search', input: { query: 'weather' } },
+      ],
+    } as IMessage;
+    const toolResultMessage: IMessage = {
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'sunny', is_error: false }],
+    } as IMessage;
+
+    await backend.complete(
+      'gemini-3-pro-preview' as never,
+      [assistantMessage, toolResultMessage, { role: 'user', content: 'and tomorrow?' }],
+      { stream: true },
+      async () => {}
+    );
+
+    const contents = capturedRequest.contents;
+    const hasFunctionCall = contents.some((c: any) => c.parts?.some((p: any) => p.functionCall));
+    const hasFunctionResponse = contents.some((c: any) => c.parts?.some((p: any) => p.functionResponse));
+    expect(hasFunctionCall).toBe(false);
+    expect(hasFunctionResponse).toBe(false);
+    // The text half of the assistant message survives even though the tool call was dropped.
+    const assistantContent = contents.find((c: any) => c.role === 'model');
+    expect(assistantContent.parts).toEqual([{ text: 'reply 1' }]);
+  });
+
+  // Positive control: the same missing-signature shape on a non-gemini-3 model is unaffected -
+  // this repo has only observed the rejection on gemini-3, so an older model shouldn't lose a
+  // legitimate tool call just because the guard fired too broadly.
+  it('still replays a tool_use/tool_result pair with no thought_signature on a non-gemini-3 model', async () => {
+    const backend = new GeminiBackend('test-key');
+    let capturedRequest: any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (backend as unknown as { _api: any })._api = {
+      models: {
+        generateContentStream: async (request: unknown) => {
+          capturedRequest = request;
+          return (async function* () {
+            yield {
+              candidates: [{ content: { parts: [{ text: 'ok' }] } }],
+              usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+            };
+          })();
+        },
+      },
+    };
+
+    const assistantMessage: IMessage = {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'reply 1' },
+        { type: 'tool_use', id: 'toolu_1', name: 'web_search', input: { query: 'weather' } },
+      ],
+    } as IMessage;
+    const toolResultMessage: IMessage = {
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'sunny', is_error: false }],
+    } as IMessage;
+
+    await backend.complete(
+      'gemini-2.5-flash' as never,
+      [assistantMessage, toolResultMessage, { role: 'user', content: 'and tomorrow?' }],
+      { stream: true },
+      async () => {}
+    );
+
+    const contents = capturedRequest.contents;
+    const assistantContent = contents.find((c: any) => c.role === 'model');
+    expect(assistantContent.parts.some((p: any) => p.functionCall?.name === 'web_search')).toBe(true);
+  });
 });
