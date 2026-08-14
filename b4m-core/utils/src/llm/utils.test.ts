@@ -1775,7 +1775,7 @@ describe('Context Management Tests', () => {
       const makeToolItem = (n: number, functionCalls: Record<string, unknown>[]) =>
         makeItem(n, { structuredReplies: undefined, promptMeta: { functionCalls } });
 
-      const runWith = async (item: Record<string, unknown>, options: { disableToolReplay?: boolean } = {}) => {
+      const runWith = async (item: Record<string, unknown>, options: { model?: string } = {}) => {
         // item 2 is the current prompt and gets popped, so the turn under test is item 1
         const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue([makeItem(2), item]) } };
         const [messages] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db, ...options });
@@ -1864,12 +1864,24 @@ describe('Context Management Tests', () => {
         expect(messages[1].content).toEqual([{ type: 'text', text: 'from structured' }]);
       });
 
-      // Gemini callers pass disableToolReplay: true (never persists thought_signature), so a
-      // returnValue being present must NOT be enough on its own to enter this branch.
-      it('falls through to the plain-text reply when disableToolReplay is set, even with a recorded returnValue', async () => {
-        const messages = await runWith(makeToolItem(1, [call()]), { disableToolReplay: true });
+      // Gemini never persists thought_signature, so a returnValue being present must NOT be
+      // enough on its own to enter this branch for a Gemini model.
+      it('falls through to the plain-text reply for a Gemini model, even with a recorded returnValue', async () => {
+        const messages = await runWith(makeToolItem(1, [call()]), { model: 'gemini-2.5-flash' });
 
         expect(messages[1]).toEqual({ role: 'assistant', content: 'reply 1' });
+      });
+
+      // Positive control for the case above: a non-Gemini model (or no model at all) still gets
+      // the real tool-pairing reconstruction, so the Gemini carve-out isn't disabling replay
+      // for everyone.
+      it('still reconstructs tool_use/tool_result for a non-Gemini model', async () => {
+        const messages = await runWith(makeToolItem(1, [call()]), { model: 'claude-opus-4-8' });
+
+        expect(messages[1].content).toEqual([
+          { type: 'text', text: 'reply 1' },
+          { type: 'tool_use', id: 'toolu_1', name: 'web_search', input: { query: 'weather' } },
+        ]);
       });
     });
   });

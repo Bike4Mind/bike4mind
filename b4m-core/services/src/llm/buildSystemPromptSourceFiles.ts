@@ -27,13 +27,17 @@ export type SystemPromptSourceFile = {
 export function buildSystemPromptSourceFiles(
   fabFileNameById: Map<string, string>,
   buckets: { global: string[]; userEnabled: string[]; project: string[] }
-): SystemPromptSourceFile[] {
+): SystemPromptSourceFile[] | undefined {
   const toEntries = (fileIds: string[], source: SystemPromptFileSource): SystemPromptSourceFile[] =>
     fileIds.map(fileId => ({ fileId, fileName: fabFileNameById.get(fileId), source, enabled: true }));
 
-  return [
+  const entries = [
     ...toEntries(buckets.global, 'admin'),
     ...toEntries(buckets.userEnabled, 'user'),
     ...toEntries(buckets.project, 'project'),
   ];
+
+  // QuestModel.ts declares this field `default: undefined` specifically so an empty result
+  // is never persisted - returning [] here would write an explicit empty array and defeat that.
+  return entries.length > 0 ? entries : undefined;
 }

@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { OWNER_ONLY_FUNCTION_CALL_FIELDS, redactFunctionCallsForViewer } from './promptMetaRedaction';
+import {
+  OWNER_ONLY_FUNCTION_CALL_FIELDS,
+  redactFunctionCallsForViewer,
+  redactPromptMetaForViewer,
+} from './promptMetaRedaction';
 
 describe('redactFunctionCallsForViewer', () => {
   const base = [
@@ -48,5 +52,32 @@ describe('redactFunctionCallsForViewer', () => {
   it('keeps OWNER_ONLY_FUNCTION_CALL_FIELDS as the single source of truth', () => {
     expect(OWNER_ONLY_FUNCTION_CALL_FIELDS).toContain('returnValue');
     expect(OWNER_ONLY_FUNCTION_CALL_FIELDS).toContain('error');
+  });
+});
+
+describe('redactPromptMetaForViewer', () => {
+  const promptMeta = {
+    model: { name: 'gpt-4' },
+    functionCalls: [{ name: 'web_search', parameters: {}, id: 'call_1', returnValue: 'SECRET RESULT', success: true }],
+  };
+
+  it('redacts functionCalls for a non-owner', () => {
+    const out = redactPromptMetaForViewer(promptMeta, false);
+    expect(JSON.stringify(out)).not.toContain('SECRET');
+    expect(out?.model).toEqual({ name: 'gpt-4' });
+  });
+
+  it('returns the SAME reference for an owner (no needless copy)', () => {
+    expect(redactPromptMetaForViewer(promptMeta, true)).toBe(promptMeta);
+  });
+
+  it('returns the SAME reference when there are no functionCalls to redact', () => {
+    const noCalls = { model: { name: 'gpt-4' } };
+    expect(redactPromptMetaForViewer(noCalls, false)).toBe(noCalls);
+  });
+
+  it('passes null/undefined through unchanged regardless of isOwner', () => {
+    expect(redactPromptMetaForViewer(null, false)).toBeNull();
+    expect(redactPromptMetaForViewer(undefined, false)).toBeUndefined();
   });
 });

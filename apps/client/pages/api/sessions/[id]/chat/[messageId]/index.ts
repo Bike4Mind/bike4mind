@@ -2,7 +2,7 @@ import { questRepository, sessionRepository } from '@bike4mind/database';
 import { sessionService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { IChatHistoryItem } from '@bike4mind/common';
+import { IChatHistoryItem, redactPromptMetaForViewer } from '@bike4mind/common';
 
 const handler = baseApi()
   /**
@@ -29,7 +29,12 @@ const handler = baseApi()
         return res.status(404).json({ error: 'Message not found' });
       }
 
-      return res.json(message);
+      // A share grant authorizes reading the conversation, not re-reading whatever the
+      // owner's tools touched on the owner's behalf - see redactPromptMetaForViewer.
+      // (message is already a plain object here - BaseRepository.findById calls .toJSON()
+      // internally before returning.)
+      const isOwner = session.userId === userId;
+      return res.json({ ...message, promptMeta: redactPromptMetaForViewer(message.promptMeta, isOwner) });
     })
   )
   /**
@@ -94,10 +99,15 @@ const handler = baseApi()
         ...allowedUpdates,
       });
 
+      // A share grant authorizes reading the conversation, not re-reading whatever the
+      // owner's tools touched on the owner's behalf - see redactPromptMetaForViewer.
+      // (updatedMessage is already a plain object here - BaseRepository.update calls
+      // .toJSON() internally before returning.)
+      const isOwner = session.userId === userId;
       return res.json({
         success: true,
         message: 'Message updated successfully',
-        data: updatedMessage,
+        data: { ...updatedMessage, promptMeta: redactPromptMetaForViewer(updatedMessage?.promptMeta, isOwner) },
       });
     })
   );

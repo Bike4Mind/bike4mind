@@ -2081,10 +2081,9 @@ export class ChatCompletionProcess {
       const previousMessagesResult = await fetchAndProcessPreviousMessages(session, historyCount, {
         db: this.db,
         verbatimTokenBudget,
-        // Gemini's replayed tool_use blocks never carry a thought_signature (the schema does not
-        // persist one), which its own formatter warns may 400 on Gemini 3 Pro - fall through to
-        // the plain-text Priority 3 reply for this backend until that can be persisted.
-        disableToolReplay: modelInfo.backend === ModelBackend.Gemini,
+        // model here decides whether Priority 2 tool replay is safe for THIS backend (currently
+        // excludes Gemini) - see fetchAndProcessPreviousMessages's own doc comment on the param.
+        model: modelInfo.id,
       });
       const [previousMessages, totalMessageCount, cacheInfo] = previousMessagesResult;
       const oldestIncludedQuestId = cacheInfo.oldestIncludedQuestId ?? null;
@@ -2092,7 +2091,7 @@ export class ChatCompletionProcess {
       // Real tool-usage signal for this window - see fetchAndProcessPreviousMessages's own doc
       // comment on this field for why `previousMessages` itself cannot answer "was this tool used
       // earlier in the conversation" for every backend (Priority 1 never fires; Priority 2 is
-      // skipped for Gemini via disableToolReplay above).
+      // skipped for Gemini models, per the `model` param above).
       const priorToolNames = cacheInfo.priorToolNames ?? [];
 
       // blog_publish/blog_edit/blog_draft and `skill` are auto-added HERE rather than at the
@@ -3556,7 +3555,11 @@ export class ChatCompletionProcess {
               this.sendStatusUpdate(quest, `Trying alternative model: ${currentModel.id}...`, { statusAt: new Date() });
             }
 
-            let toolsUsed: Array<{ name: string; arguments?: string; id?: string }> = [];
+            // NonNullable<CompletionInfo['toolsUsed']> (Array<RecordableToolUse>, not re-exported
+            // on its own) rather than a hand-rolled {name,arguments,id} shape - the old narrower
+            // annotation compiled fine (the extras are optional) but hid returnValue/success from
+            // TypeScript entirely, defeating toolsUsedToFunctionCalls's whole reason for existing.
+            let toolsUsed: NonNullable<CompletionInfo['toolsUsed']> = [];
 
             // Get idle timeout settings for Anthropic streaming hang detection
             const enableIdleTimeout = getSettingsValue('EnableStreamIdleTimeout', defaultAdminSettings) === true;

@@ -8,7 +8,12 @@ import { Logger } from '@bike4mind/observability';
  * tool and only learns the real outcome a few lines later - this is the merge-back.
  */
 
-/** Cap applied to a persisted `returnValue` before it reaches Mongo (chars, not bytes). */
+/**
+ * Cap applied to a persisted `returnValue` before it reaches Mongo (chars, not bytes). Also the
+ * cap on what a later turn replays back to the model for this call (utils.ts's Priority 2
+ * reconstruction reads the same persisted, already-truncated value) - this is not a
+ * persistence-only limit, it is what a continued conversation sees of an older tool result too.
+ */
 export const MAX_RECORDED_TOOL_RESULT_CHARS = 8_000;
 
 export const TOOL_RESULT_TRUNCATION_NOTICE = '\n[tool result truncated]';

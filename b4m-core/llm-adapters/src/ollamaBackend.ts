@@ -305,9 +305,9 @@ export class OllamaBackend implements ICompletionBackend {
 
       // Prefer native tool_calls; fall back to a tool call the model emitted as
       // plain content (some smaller models do this instead of using tool_calls).
-      let toolCalls = this.normalizeToolCalls(round.toolCalls);
+      let toolCalls = this.normalizeToolCalls(round.toolCalls, priorToolsUsed.length);
       if (toolCalls.length === 0 && offerTools) {
-        toolCalls = this.parseContentToolCall(round.content, options.tools ?? []);
+        toolCalls = this.parseContentToolCall(round.content, options.tools ?? [], priorToolsUsed.length);
       }
       const toolsUsed = [
         ...priorToolsUsed,
@@ -546,12 +546,19 @@ export class OllamaBackend implements ICompletionBackend {
     return { content, toolCalls, completionInfo: { inputTokens, outputTokens, ...(stopReason ? { stopReason } : {}) } };
   }
 
-  /** Normalize Ollama's native tool_calls into the shared NormalizedToolCall shape. */
-  private normalizeToolCalls(toolCalls: ToolCall[]): NormalizedToolCall[] {
+  /**
+   * Normalize Ollama's native tool_calls into the shared NormalizedToolCall shape.
+   *
+   * `idOffset` (pass the accumulated tool count from prior rounds, i.e.
+   * `priorToolsUsed.length`) is what keeps ids unique ACROSS rounds, not just within one -
+   * without it, round 1's call 0 and round 3's call 0 of the same tool mint the identical
+   * id, and replayableToolCalls' id-based dedup silently drops the later entry.
+   */
+  private normalizeToolCalls(toolCalls: ToolCall[], idOffset: number): NormalizedToolCall[] {
     return toolCalls.map((tc, i) => ({
       name: tc.function.name,
       arguments: JSON.stringify(tc.function.arguments ?? {}),
-      id: `ollama-tool-${i}-${tc.function.name}`,
+      id: `ollama-tool-${idOffset + i}-${tc.function.name}`,
     }));
   }
 
@@ -575,7 +582,11 @@ export class OllamaBackend implements ICompletionBackend {
    * authorized tools (tryParseToolCallJson requires a name present in `tools`),
    * so there is no privilege escalation - only a wider trigger surface.
    */
-  private parseContentToolCall(content: string, tools: ICompletionOptionTools[]): NormalizedToolCall[] {
+  private parseContentToolCall(
+    content: string,
+    tools: ICompletionOptionTools[],
+    idOffset: number
+  ): NormalizedToolCall[] {
     const withoutThink = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
     const fenced = this.extractFencedBlocks(withoutThink);
     const source = [withoutThink.startsWith('{') ? withoutThink : '', ...fenced].join('\n');
@@ -589,7 +600,9 @@ export class OllamaBackend implements ICompletionBackend {
       const key = `${call.name}:${call.arguments}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      calls.push({ ...call, id: `ollama-content-tool-${calls.length}-${call.name}` });
+      // idOffset (accumulated tool count from prior rounds) keeps this id unique across
+      // rounds - see normalizeToolCalls' doc comment for why a round-local index collides.
+      calls.push({ ...call, id: `ollama-content-tool-${idOffset + calls.length}-${call.name}` });
     }
     return calls;
   }

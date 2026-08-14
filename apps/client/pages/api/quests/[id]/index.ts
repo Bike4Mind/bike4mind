@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { questRepository, sessionRepository } from '@bike4mind/database';
-import { ApiKeyScope, redactFunctionCallsForViewer } from '@bike4mind/common';
+import { ApiKeyScope, redactPromptMetaForViewer } from '@bike4mind/common';
 import { toGeneratedFiles } from '@server/utils/generatedFiles';
 import type { Request } from 'express';
 
@@ -48,12 +48,9 @@ const handler = baseApi({
   const files = toGeneratedFiles(images);
 
   // A share grant authorizes reading the conversation, not re-reading whatever the owner's
-  // tools touched on the owner's behalf - see redactFunctionCallsForViewer.
+  // tools touched on the owner's behalf - see redactPromptMetaForViewer.
   const isOwner = session.userId === userId;
-  const promptMeta =
-    isOwner || !quest.promptMeta?.functionCalls
-      ? quest.promptMeta
-      : { ...quest.promptMeta, functionCalls: redactFunctionCallsForViewer(quest.promptMeta.functionCalls) };
+  const promptMeta = redactPromptMetaForViewer(quest.promptMeta, isOwner);
 
   return res.json({
     id: quest.id,

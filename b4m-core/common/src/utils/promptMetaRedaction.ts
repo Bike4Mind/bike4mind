@@ -40,3 +40,22 @@ export function redactFunctionCallsForViewer<T extends RedactableFunctionCall>(
     return redacted;
   });
 }
+
+type RedactablePromptMeta = { functionCalls?: RedactableFunctionCall[] | null };
+
+/**
+ * One-call wrapper around {@link redactFunctionCallsForViewer} for the common case of redacting
+ * an entire `promptMeta` object for a non-owner viewer. This is the shape every quest-returning
+ * route needs (owner sees it whole, everyone else loses `functionCalls[].returnValue`/`.error`) -
+ * inherit it here rather than re-deriving the same three-line ternary at the next route.
+ *
+ * Returns the SAME reference when `isOwner` is true or there is nothing to redact, so callers
+ * that check reference equality (or just don't want a needless copy) are unaffected.
+ */
+export function redactPromptMetaForViewer<T extends RedactablePromptMeta>(
+  promptMeta: T | null | undefined,
+  isOwner: boolean
+): T | null | undefined {
+  if (isOwner || promptMeta == null || !promptMeta.functionCalls) return promptMeta;
+  return { ...promptMeta, functionCalls: redactFunctionCallsForViewer(promptMeta.functionCalls) };
+}

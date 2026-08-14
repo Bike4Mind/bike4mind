@@ -822,4 +822,38 @@ describe('OllamaBackend tool result recording', () => {
     const returnValues = toolsUsed.map(t => t.returnValue).sort();
     expect(returnValues).toEqual(['3', '7']);
   });
+
+  // Ollama's tool ids are minted per-round (`ollama-tool-${i}-${name}`), so two SEPARATE rounds
+  // calling the same tool at the same round-local index used to mint identical ids -
+  // replayableToolCalls (utils.ts) dedupes by id and would silently drop the later entry.
+  it('gives the same tool called in two separate rounds distinct ids', async () => {
+    let callIndex = 0;
+    const results = ['3', '7'];
+    const toolFn = vi.fn(async () => results[callIndex++]);
+    const { backend } = makeBackend([
+      {
+        message: {
+          content: '',
+          tool_calls: [{ function: { name: 'math_evaluate', arguments: { expression: '1+2' } } }],
+        },
+        prompt_eval_count: 5,
+        eval_count: 1,
+      },
+      {
+        message: {
+          content: '',
+          tool_calls: [{ function: { name: 'math_evaluate', arguments: { expression: '3+4' } } }],
+        },
+        prompt_eval_count: 6,
+        eval_count: 1,
+      },
+      { message: { content: 'Done.', tool_calls: [] }, prompt_eval_count: 7, eval_count: 3 },
+    ]);
+
+    const { toolsUsed } = await run(backend, { executeTools: true, tools: [mathTool(toolFn)] });
+
+    expect(toolsUsed.length).toBe(2);
+    expect(toolsUsed[0].id).not.toBe(toolsUsed[1].id);
+    expect(toolsUsed.map(t => t.returnValue)).toEqual(['3', '7']);
+  });
 });

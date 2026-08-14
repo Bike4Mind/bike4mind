@@ -30,9 +30,11 @@ describe('buildSystemPromptSourceFiles', () => {
     expect(result[0]).not.toHaveProperty('content');
   });
 
-  it('returns an empty array when every bucket is empty', () => {
+  it('returns undefined (not an empty array) when every bucket is empty', () => {
+    // QuestModel.ts declares this field `default: undefined` specifically so it is never
+    // persisted empty - an explicit [] would defeat that.
     const result = buildSystemPromptSourceFiles(new Map(), { global: [], userEnabled: [], project: [] });
-    expect(result).toEqual([]);
+    expect(result).toBeUndefined();
   });
 
   it('leaves fileName undefined for an id missing from the map, rather than throwing', () => {
@@ -45,11 +47,13 @@ describe('buildSystemPromptSourceFiles', () => {
   });
 
   it('does not include a session bucket - session-scoped file ids are workbench attachments, not system prompts', () => {
+    // Non-empty buckets: an all-empty fixture now returns undefined (see the test above), which
+    // would make `.every(...)` vacuously true regardless of whether a session bucket exists.
     const result = buildSystemPromptSourceFiles(new Map(), {
-      global: [],
-      userEnabled: [],
-      project: [],
+      global: ['file-admin'],
+      userEnabled: ['file-user'],
+      project: ['file-project'],
     });
-    expect(result.every(entry => entry.source !== ('session' as never))).toBe(true);
+    expect(result?.every(entry => entry.source !== ('session' as never))).toBe(true);
   });
 });
