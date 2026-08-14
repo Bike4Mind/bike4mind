@@ -18,6 +18,9 @@ const h = vi.hoisted(() => ({
   // When true, the accessible list serves MINI with a stale admin-saved ceiling while the live catalog
   // (useModelInfo) still reports the real one.
   staleSnapshot: false,
+  // What getFallbackModel returns for a deprecated model. null = no admin-configured fallback, which
+  // sends the effect down the admin-default chain instead of the deprecation branch.
+  fallbackModel: null as { id: string; max_tokens: number } | null,
 }));
 
 const GONE = { id: 'gpt-5.6-sol', type: 'text', contextWindow: 1_050_000, max_tokens: 128_000 };
@@ -38,7 +41,7 @@ vi.mock('../hooks/useAccessibleModels', () => ({
   useAccessibleModels: () => ({
     accessibleModels: [GONE, h.staleSnapshot ? MINI_STALE_SNAPSHOT : MINI].filter(m => h.accessibleIds.includes(m.id)),
     isModelAccessible: (id: string) => h.accessibleIds.includes(id),
-    getFallbackModel: () => null,
+    getFallbackModel: () => h.fallbackModel,
   }),
 }));
 vi.mock('./AdminSettingsContext', () => ({
@@ -53,6 +56,7 @@ describe('LLMProvider default-model effect - the ceiling it writes for a model t
     h.adminDefaultModel = MINI.id;
     h.accessibleIds = [MINI.id];
     h.staleSnapshot = false;
+    h.fallbackModel = null;
   });
   afterEach(() => cleanup());
 
@@ -98,6 +102,44 @@ describe('LLMProvider default-model effect - the ceiling it writes for a model t
     // The v4 -> v5 persist migration writes max_tokens: 0, so "unset" must resolve to a real default
     // rather than being preserved as 0.
     useLLM.getState().setLLM({ model: GONE.id, max_tokens: 0 });
+
+    render(<LLMProvider />);
+
+    await waitFor(() => expect(useLLM.getState().model).toBe(MINI.id));
+    expect(useLLM.getState().max_tokens).toBe(100_000);
+  });
+
+  // The deprecation branch runs BEFORE the admin-default chain and resolves a model on the user's behalf
+  // just the same, so it owes the same guarantees. It fires when an admin has configured a fallbackModel
+  // for a model that has become inaccessible (useAccessibleModels.getFallbackModel).
+  it('preserves a deliberately lowered ceiling when a deprecated model falls back to its replacement', async () => {
+    h.fallbackModel = MINI;
+    useLLM.getState().setLLM({ model: GONE.id, max_tokens: 2048 });
+
+    render(<LLMProvider />);
+
+    await waitFor(() => expect(useLLM.getState().model).toBe(MINI.id));
+    // Also proves the branch records the transition as app-resolved: without that, the refit effect sees
+    // a model change, sets allowRaise, and puts MINI's 100000 default back over the 2048.
+    expect(useLLM.getState().max_tokens).toBe(2048);
+    expect(useLLM.getState().isQuestMasterEnabled).toBe(false);
+    expect(useLLM.getState().isAgentsEnabled).toBe(false);
+  });
+
+  it('fits a deprecation fallback against the live catalog, not a stale admin-saved snapshot', async () => {
+    // getFallbackModel returns the accessible-list entry, which carries the frozen admin ceiling.
+    h.fallbackModel = MINI_STALE_SNAPSHOT;
+    useLLM.getState().setLLM({ model: GONE.id, max_tokens: 50_000 });
+
+    render(<LLMProvider />);
+
+    await waitFor(() => expect(useLLM.getState().model).toBe(MINI.id));
+    expect(useLLM.getState().max_tokens).toBe(50_000);
+  });
+
+  it('still clamps a ceiling the deprecation fallback cannot serve down to its default', async () => {
+    h.fallbackModel = MINI;
+    useLLM.getState().setLLM({ model: GONE.id, max_tokens: 128_000 });
 
     render(<LLMProvider />);
 
