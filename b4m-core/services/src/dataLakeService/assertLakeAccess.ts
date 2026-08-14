@@ -160,17 +160,18 @@ export const assertLakeAccess = async (
     // so a transient glitch can never silently WIDEN access.
     const enforceReadGrants = await resolveEnforceReadGrants(db.settings, logger);
     const decision = resolveLakeReadAccess(lake, ctx, grants, { enforceReadGrants });
-    // The expected-grant-set diff: log every case where the read grant would change the legacy
-    // outcome, so an operator can watch the cutover before flipping enforce on. `enforced` tells
-    // apart "would allow once enforced" (report-only) from "did allow" (enforcing).
-    if (decision.diverges) {
-      logger?.info?.('[lakeReadGrantCutover] read grant diverges from legacy gate', {
+    // The expected-grant-set diff: while report-only, log every case where the read grant WOULD
+    // change the legacy outcome, so an operator can watch the cutover before flipping enforce on.
+    // Deliberately NOT logged once enforced: post-flip a reader read is expected behavior, so a
+    // per-access "diverges" line is just noise (grant-based access auditing is #1663's concern, not
+    // the cutover's). The gate is the diff's whole purpose, so it lives only in the report-only phase.
+    if (decision.diverges && !decision.enforced) {
+      logger?.info?.('[lakeReadGrantCutover] read grant would change access (report-only)', {
         lakeId: lake.id,
         userId: ctx.userId,
         legacyArm: decision.legacyArm,
         legacyAllowed: decision.legacyAllowed,
         resolvedAllowed: decision.resolvedAllowed,
-        enforced: decision.enforced,
       });
     }
     if (!decision.allowed) throw new NotFoundError('Data lake not found');

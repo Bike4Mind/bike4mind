@@ -27,6 +27,12 @@ export interface LakeAccessLogger {
  *
  * Org membership never crosses orgs (epic decision 12) - enforced at grant-WRITE time, so an existing
  * row is honored unconditionally at read time.
+ *
+ * MUST STAY IN SYNC WITH THE WRITE PATH: this arm honors an org-principal grant with no same-org
+ * check, because the grant row IS the authorization. So whoever builds the member-management write
+ * path (grant a reader / grant an org - no such producer exists yet; only createDataLake seeds an
+ * owner and transferLakeOwnership demotes to curator) MUST reject an org-principal grant whose org is
+ * not the lake's own org. Without that, decision 12 is only as strong as the writer.
  */
 export function resolveReadGrant(
   ctx: Pick<AccessContext, 'userId' | 'organizationIds'>,
