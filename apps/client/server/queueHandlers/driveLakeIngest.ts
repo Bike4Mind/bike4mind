@@ -38,11 +38,12 @@ const INGEST_REDRIVE_DELAY_SECONDS = 90;
 // genuinely large files is the "very large folders" follow-up.
 const MAX_INGEST_FILE_BYTES = 50 * 1024 * 1024;
 
-// Per-sync candidate cap. A folder whose new-file count can't be fetched+uploaded within the queue
-// Lambda's hard 10-minute ceiling would time out mid-loop EVERY run - a deterministic (not transient)
-// failure - and since the retry re-creates FabFiles for the un-uploaded tail (dedup excludes `pending`),
-// the duplicates accumulate without the ingest ever converging. Refuse such a folder up front, BEFORE
-// any batch or FabFile exists, so no partial state is ever created. Full support for very large folders
+// Per-sync candidate cap. A folder whose candidate count (adds + re-ingests) can't be fetched+uploaded
+// within the queue Lambda's hard 10-minute ceiling would time out mid-loop EVERY run - a deterministic
+// (not transient) failure - and since the retry re-creates FabFiles for the un-uploaded tail (dedup
+// excludes `pending`), the duplicates accumulate without the ingest ever converging. Refuse such a
+// folder up front, BEFORE any membership write, batch, or FabFile exists, so no partial state is ever
+// created (not even a premature removal). Full support for very large folders
 // (batch adoption / a streaming path) is the documented #1589 follow-up; until then this fails fast with
 // a clear message instead of spiralling. Sized well under the ~600-1800 files a 10-min sequential run
 // could realistically move.
@@ -55,7 +56,7 @@ const MAX_INGEST_CANDIDATES = 1500;
  * neither field) it returns false, so a re-sync never churns a file it cannot PROVE is stale.
  * modifiedTime uses strict-newer so a re-listed-but-unedited file (same timestamp) is unchanged.
  */
-function hasDriveFileChanged(
+export function hasDriveFileChanged(
   prior: { driveMd5Checksum?: string; driveModifiedTime?: Date | string },
   fresh: { md5Checksum?: string; modifiedTime?: string }
 ): boolean {
@@ -71,12 +72,29 @@ function hasDriveFileChanged(
 /**
  * Background reconcile of an org Google Drive folder against a data lake (#1589, #1591). Walks the
  * folder, diffs it against the files this connection has already ingested, and applies the delta:
- * ADD a new file, RE-INGEST an edited one (its stale copy leaves the lake first), and REMOVE from
- * the lake one that is gone from the folder. Adds/re-ingests fetch and upload ONE file at a time -
- * creating a lake-tagged FabFile and its batch-manifest entry BEFORE the bytes land - and let the
- * existing S3 objectCreated -> chunk -> vectorize -> finalize pipeline do the rest. Both the manual
- * Re-sync button and the scheduled poll cron (driveLakeResyncPoll) enqueue onto this one handler,
- * so there is a single delta-aware apply path.
+ * ADD a new file, RE-INGEST an edited one, and REMOVE from the lake one that is gone from the folder.
+ * Adds/re-ingests fetch and upload ONE file at a time - creating a lake-tagged FabFile and its
+ * batch-manifest entry BEFORE the bytes land - and let the existing S3 objectCreated -> chunk ->
+ * vectorize -> finalize pipeline do the rest. Both the manual Re-sync button and the scheduled poll
+ * cron (driveLakeResyncPoll) enqueue onto this one handler, so there is a single delta-aware apply path.
+ *
+ * Apply order is deliberate. The single-sync cap is enforced FIRST, before any membership write, so an
+ * over-cap folder is refused with nothing changed (an early removal on a run that then bails would evict
+ * files it never re-ingests). Genuine deletes (gone from the folder) are then unpicked up front - they
+ * have no replacement pending, so nothing is lost by removing them early. An EDITED file's stale copy is
+ * NOT retired until its fresh replacement has been uploaded in the loop below: retiring it up front would
+ * evict a working lake member for good on any run where the re-fetch then fails a deterministic gate
+ * (oversized / unsupported / export-too-large), since that skip creates no replacement.
+ *
+ * Retiring an edited file's stale copy is a SOFT-DELETE, not a membership-only unpick: a superseded Drive
+ * doc must leave the owner's Files entirely (its pre-edit content must not stay retrievable outside the
+ * lake, and one orphan copy must not accumulate per edit). A genuine delete keeps the membership-only
+ * unpick - the file left the folder but the owner keeps their copy.
+ *
+ * OUT OF SCOPE for E1 (#1589 follow-ups): a rename/move in Drive (md5 unchanged, only modifiedTime
+ * moves) is classified unchanged, so the stale fileName/relativePath is not reconciled; and a
+ * permanently-unsupported file (unsupported type, oversized Editors export) is never a durable member,
+ * so it re-appears as a candidate and re-skips on every poll - noise, not harm, but it never converges.
  *
  * Ordering is load-bearing. `storage.upload` fires `objectCreated` synchronously, which walks
  * objectCreated -> chunk -> vectorize; each stage advances batch progress by claiming its manifest
@@ -165,8 +183,17 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
     const accessToken = await getValidConnectionDriveAccessToken(connectionId, connection.organizationId);
     const drive = createDriveClient(accessToken);
 
-    // 1) Walk the folder tree (one level per Drive call, recursed).
-    const walked = await walkFolder(drive, connection.driveFolderId);
+    // 1) Walk the folder tree (one level per Drive call, recursed). De-dup by driveFileId: a legacy
+    //    multi-parented Drive file surfaces once per parent inside the walked subtree, and a duplicate
+    //    would otherwise double-ingest (two FabFiles for one add) and double-remove (the second
+    //    removeFileFromLake throws NotFoundError, aborting the reconcile mid-prune).
+    const walkedRaw = await walkFolder(drive, connection.driveFolderId);
+    const walkedIds = new Set<string>();
+    const walked = walkedRaw.filter(f => {
+      if (walkedIds.has(f.id)) return false;
+      walkedIds.add(f.id);
+      return true;
+    });
 
     // 2) Diff the walk against everything THIS connection has in the lake, keyed by the stable
     //    driveFileId, and split into ADD (new), UPDATE (same id, moved md5/modifiedTime), and
@@ -178,8 +205,6 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
     for (const doc of existingDocs) {
       if (doc.driveFileId) existingByDriveId.set(doc.driveFileId, doc);
     }
-    const walkedIds = new Set(walked.map(f => f.id));
-
     const pureAdds = walked.filter(f => !existingByDriveId.has(f.id));
     const changed = walked.filter(f => {
       const prior = existingByDriveId.get(f.id);
@@ -200,37 +225,48 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
       removed = [];
     }
 
-    // 3) Apply removals FIRST: the deletes, plus the stale copy of every edited file (re-added
-    //    below with fresh content). Pull lake membership through the shared door, then recompute the
-    //    lake's stats ONCE. A trusted system reconcile acts as admin (canManageLake) - the connection
-    //    was authorized by an org owner/manager at connect time (verifyOrgAccess) - and this only
-    //    UNPICKS lake membership: the FabFile stays in the owner's Files and its chunks are untouched.
-    const staleCopies = changed
-      .map(f => existingByDriveId.get(f.id))
-      .filter((doc): doc is (typeof existingDocs)[number] => doc != null);
-    const toRemove = [...removed, ...staleCopies];
-    if (toRemove.length > 0) {
-      const membershipActor = { userId: connection.connectedBy, isAdmin: true };
-      const membershipLake = {
-        id: lake.id,
-        datalakeTag: lake.datalakeTag,
-        fileTagPrefix: lake.fileTagPrefix,
-        createdByUserId: lake.createdByUserId,
-      };
-      for (const doc of toRemove) {
-        await dataLakeService.removeFileFromLake(membershipActor, membershipLake, doc.id, {
-          db: { fabFiles: fabFileRepository },
-        });
-      }
-      await dataLakeService.recomputeLakeStats(membershipLake, {
+    // Adds and edited files both ingest fresh; an edited file's stale copy is retired in the loop
+    // below, only after its replacement is uploaded (never up front - see the header for why).
+    const candidates = [...pureAdds, ...changed];
+
+    // A trusted system reconcile acts as admin for membership writes (canManageLake): the connection
+    // was authorized by an org owner/manager at connect time (verifyOrgAccess). Pass the resolved lake
+    // itself (not a hand-projection) so `organizationId` reaches the org-manageable manage rung.
+    const membershipActor = { userId: connection.connectedBy, isAdmin: true };
+    const recomputeStats = () =>
+      dataLakeService.recomputeLakeStats(lake, {
         db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
+      });
+
+    // 3) Enforce the single-sync cap FIRST, before any membership write. An over-cap folder would time
+    //    out mid-loop every attempt and accumulate duplicates (see MAX_INGEST_CANDIDATES); refusing here
+    //    - a deterministic condition, so return cleanly rather than DLQ-ing a retry - guarantees nothing
+    //    is changed on a run that cannot ingest, not even an early removal that would strand files.
+    if (candidates.length > MAX_INGEST_CANDIDATES) {
+      logger.warn('[driveLakeIngest] folder exceeds single-sync ingest cap; refusing', {
+        connectionId,
+        candidates: candidates.length,
+        cap: MAX_INGEST_CANDIDATES,
+      });
+      await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
+        status: 'connected',
+        lastPolledAt: new Date(),
+        lastError: `Folder has ${candidates.length} files to sync (new + re-synced), over the ${MAX_INGEST_CANDIDATES}-file limit for a single sync. Split it into subfolders and connect them separately.`,
+      });
+      return;
+    }
+
+    // 4) Apply genuine deletes now: a file gone from the folder has no replacement pending, so the
+    //    membership-only unpick loses nothing (the FabFile stays in the owner's Files, chunks untouched).
+    //    Stats recompute is deferred to the end so it also reflects the stale copies retired in the loop.
+    for (const doc of removed) {
+      await dataLakeService.removeFileFromLake(membershipActor, lake, doc.id, {
+        db: { fabFiles: fabFileRepository },
       });
     }
 
-    // Adds and edited files both ingest fresh (an edited file's stale copy left the lake above).
-    const candidates = [...pureAdds, ...changed];
-
     if (candidates.length === 0) {
+      if (removed.length > 0) await recomputeStats();
       logger.info('[driveLakeIngest] reconciled; no files to ingest', {
         walked: walked.length,
         existing: existingDocs.length,
@@ -244,25 +280,8 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
       return;
     }
 
-    // A folder too large to finish in one run would time out mid-loop every attempt and accumulate
-    // duplicates (see MAX_INGEST_CANDIDATES). Refuse it here, before any batch/FabFile is created, and
-    // record a guiding error - a deterministic condition, so return cleanly rather than DLQ-ing a retry.
-    if (candidates.length > MAX_INGEST_CANDIDATES) {
-      logger.warn('[driveLakeIngest] folder exceeds single-sync ingest cap; refusing', {
-        connectionId,
-        candidates: candidates.length,
-        cap: MAX_INGEST_CANDIDATES,
-      });
-      await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
-        status: 'connected',
-        lastPolledAt: new Date(),
-        lastError: `Folder has ${candidates.length} new files, over the ${MAX_INGEST_CANDIDATES}-file limit for a single sync. Split it into subfolders and connect them separately.`,
-      });
-      return;
-    }
-
-    // 4) Create the batch. totalFiles is the candidate count; a per-file skip is folded into
-    //    skippedFiles as it happens (see step 4), so the finalize gate is still reached exactly.
+    // 5) Create the batch. totalFiles is the candidate count; a per-file skip is folded into
+    //    skippedFiles as it happens (see the loop below), so the finalize gate is still reached exactly.
     //    totalSizeBytes is best-effort - Google Editors files carry no size at list time.
     const batch = await dataLakeBatchRepository.create({
       dataLakeId: connection.targetDataLakeId,
@@ -292,6 +311,7 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
     const storage = getFilesStorage();
     let uploaded = 0;
     let skipped = 0;
+    let retired = 0;
 
     const skip = async (driveFileId: string, reason: string, extra?: Record<string, unknown>) => {
       skipped++;
@@ -299,7 +319,7 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
       logger.info('[driveLakeIngest] skipping file', { driveFileId, reason, ...extra });
     };
 
-    // 5) One file at a time: size-gate -> fetch -> create FabFile -> append its manifest entry ->
+    // 6) One file at a time: size-gate -> fetch -> create FabFile -> append its manifest entry ->
     //    upload. Only one file's bytes are ever live, and the manifest entry precedes the upload so
     //    the objectCreated/chunk/vectorize claims the upload fires can find it (see header).
     for (const file of candidates) {
@@ -362,7 +382,25 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
 
       await storage.upload(bytes, fileKey, { ContentType: mimeType });
       uploaded++;
+
+      // Edited file: its fresh replacement is now durably uploaded, so retire the superseded copy -
+      // a SOFT-DELETE (deleteManyInIds routes through the soft-delete plugin), so the pre-edit content
+      // leaves the owner's Files entirely rather than lingering as an orphan per edit. Done PER-FILE
+      // right after the upload, not batched at the end: a later file throwing then leaves every
+      // already-processed edit fully reconciled (old retired, new uploaded) instead of stranding the
+      // old copy as a duplicate lake member the next walk can no longer see (both share driveFileId).
+      const staleCopy = existingByDriveId.get(file.id);
+      if (staleCopy) {
+        await fabFileRepository.deleteManyInIds([staleCopy.id]);
+        retired++;
+      }
     }
+
+    // Recompute stats once for every membership change this run made - genuine deletes above and the
+    // stale copies retired in the loop. The freshly-uploaded replacements are still 'pending' and
+    // excluded from the stats aggregate until the pipeline vectorizes them and finalizeBatchIfComplete
+    // recomputes again, exactly as a plain add already does.
+    if (removed.length > 0 || retired > 0) await recomputeStats();
 
     logger.info('[driveLakeIngest] uploaded; pipeline will chunk+vectorize', {
       connectionId,
@@ -373,6 +411,7 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
       updated: changed.length,
       uploaded,
       skipped,
+      retired,
     });
 
     // A batch that only skipped (or whose uploads all vectorized before the loop ended) has already

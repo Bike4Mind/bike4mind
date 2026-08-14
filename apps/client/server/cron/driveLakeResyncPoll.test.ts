@@ -71,15 +71,22 @@ describe('driveLakeResyncPoll cron', () => {
     expect(JSON.parse(res.body)).toMatchObject({ enqueued: 3 });
   });
 
-  it('scans with a past cutoff and a bounded limit', async () => {
+  it('scans with a 6h cutoff and the 200-per-run limit', async () => {
+    const before = Date.now();
     await handler();
+    const after = Date.now();
 
     expect(h.findDueForPoll).toHaveBeenCalledTimes(1);
     const [cutoff, limit] = h.findDueForPoll.mock.calls[0];
     expect(cutoff).toBeInstanceOf(Date);
-    expect((cutoff as Date).getTime()).toBeLessThan(Date.now());
-    expect(typeof limit).toBe('number');
-    expect(limit).toBeGreaterThan(0);
+    // Pin the actual interval, not just "in the past": the cutoff is now - 6h, within the window the
+    // handler ran in. A regression in POLL_INTERVAL_MS (e.g. dropping to minutes) now fails here.
+    const sixHoursMs = 6 * 60 * 60 * 1000;
+    const age = after - (cutoff as Date).getTime();
+    expect(age).toBeGreaterThanOrEqual(sixHoursMs);
+    expect(age).toBeLessThanOrEqual(sixHoursMs + (after - before) + 1000);
+    // Pin the enqueue bound, not just "positive": a regression in MAX_ENQUEUE_PER_RUN fails here.
+    expect(limit).toBe(200);
   });
 
   it('heartbeats with zero enqueued when nothing is due', async () => {

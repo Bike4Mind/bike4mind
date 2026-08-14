@@ -1822,6 +1822,11 @@ FabFileSchema.index({ contentHash: 1, userId: 1 });
 // Google Drive ingest dedup (driveFileId is the stable re-sync key; contentHash changes on edit)
 FabFileSchema.index({ driveFileId: 1 });
 
+// Drive re-sync reconcile: findByDriveConnectionIdInDataLake filters by driveConnectionId on every
+// poll. Without this the planner serves it from the tags.name index and post-filters; the equality
+// prefix keeps it per-connection bounded on the largest collection.
+FabFileSchema.index({ driveConnectionId: 1 });
+
 // Un-chunked rescue sweep (buildFabFileChunkScanFilter: self-host worker scan + the hosted
 // dataLakeBatchReconcile cron). Equality prefix, createdAt range last; without it the daily
 // sweep is a collection scan, since almost every file has chunkCount > 0.

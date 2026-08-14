@@ -238,6 +238,25 @@ describe('OrgGoogleDriveConnectionModel - sync claim (per-connection serializati
     expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBe(true);
   });
 
+  it('releaseSyncClaim stamps lastPolledAt so a hard-failing connection is not re-enqueued every tick', async () => {
+    // A deterministic failure (unlistable subtree, Mongo timeout) heals 'syncing' -> 'connected' via
+    // this release. Without stamping lastPolledAt it would stay due and be re-enqueued every hourly
+    // tick, re-walking then failing each time. Stamping keeps the 6h cadence on the failure path.
+    const created = await OrgGoogleDriveConnection.create(base);
+    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+
+    const before = Date.now();
+    const released = await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id);
+    expect(released?.status).toBe('connected');
+    expect(released?.lastPolledAt?.getTime()).toBeGreaterThanOrEqual(before);
+
+    // End-to-end: a connection just released this way is no longer due (its fresh lastPolledAt is
+    // after the poll cutoff), so the scan does not re-enqueue it until the interval elapses.
+    const cutoff = new Date(Date.now() - 60 * 60 * 1000);
+    const due = await orgGoogleDriveConnectionRepository.findDueForPoll(cutoff, 10);
+    expect(due.map(d => d.id)).not.toContain(created.id);
+  });
+
   it('releaseSyncClaim is guarded: it never clobbers a terminal status set under the claim', async () => {
     const created = await OrgGoogleDriveConnection.create(base);
     await orgGoogleDriveConnectionRepository.claimForSync(created.id);

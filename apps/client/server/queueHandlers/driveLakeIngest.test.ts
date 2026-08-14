@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   lakeFindById: vi.fn(),
   userFindById: vi.fn(),
   findByDriveConnectionIdInDataLake: vi.fn(),
+  deleteManyInIds: vi.fn(),
   removeFileFromLake: vi.fn(),
   recomputeLakeStats: vi.fn(),
   batchCreate: vi.fn(),
@@ -39,7 +40,10 @@ vi.mock('@bike4mind/database', () => ({
     appendFiles: h.appendFiles,
     incrementCounter: h.incrementCounter,
   },
-  fabFileRepository: { findByDriveConnectionIdInDataLake: h.findByDriveConnectionIdInDataLake },
+  fabFileRepository: {
+    findByDriveConnectionIdInDataLake: h.findByDriveConnectionIdInDataLake,
+    deleteManyInIds: h.deleteManyInIds,
+  },
   orgGoogleDriveConnectionRepository: {
     findById: h.connFindById,
     claimForSync: h.claimForSync,
@@ -71,7 +75,7 @@ vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('sst', () => ({ Resource: { driveLakeIngestQueue: { url: 'ingest-queue-url' } } }));
 
-import { dispatch } from './driveLakeIngest';
+import { dispatch, hasDriveFileChanged } from './driveLakeIngest';
 
 const logger = { warn: vi.fn(), error: vi.fn(), log: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() } as never;
 const makeEvent = (body: unknown) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
@@ -103,6 +107,7 @@ describe('driveLakeIngest consumer', () => {
     h.userFindById.mockResolvedValue({ id: 'user1' });
     h.findByDriveConnectionIdInDataLake.mockResolvedValue([]);
     h.removeFileFromLake.mockResolvedValue(undefined);
+    h.deleteManyInIds.mockResolvedValue(undefined);
     h.recomputeLakeStats.mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 });
     h.batchCreate.mockResolvedValue({ id: 'batch1' });
     h.batchFindById.mockResolvedValue({
@@ -227,7 +232,7 @@ describe('driveLakeIngest consumer', () => {
     expect(h.updateHealth).toHaveBeenCalledWith('conn1', expect.objectContaining({ status: 'connected' }));
   });
 
-  it('re-ingests an EDITED file: pulls the stale copy from the lake, then recreates it fresh', async () => {
+  it('re-ingests an EDITED file: recreates it fresh, THEN retires the stale copy (soft-delete)', async () => {
     // Same driveFileId, but the Drive md5 moved -> the stored copy is stale.
     h.walkFolder.mockResolvedValue([
       { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt', md5Checksum: 'NEW' },
@@ -239,19 +244,76 @@ describe('driveLakeIngest consumer', () => {
 
     await run();
 
-    // Stale copy leaves the lake (membership pull) before the fresh ingest, and stats recompute once.
-    expect(h.removeFileFromLake).toHaveBeenCalledTimes(1);
-    expect(h.removeFileFromLake).toHaveBeenCalledWith(
-      expect.objectContaining({ isAdmin: true }),
-      expect.objectContaining({ id: 'lake1', datalakeTag: 'lake-tag' }),
-      'ff-old',
-      expect.anything()
-    );
-    expect(h.recomputeLakeStats).toHaveBeenCalledTimes(1);
-    expect(h.batchCreate).toHaveBeenCalledWith(expect.objectContaining({ totalFiles: 1 }));
+    // The fresh copy is created and uploaded FIRST; only then is the superseded copy retired - a
+    // soft-delete (not a membership-only unpick) so the pre-edit content leaves the owner's Files too.
     expect(h.createFabFile).toHaveBeenCalledWith(
       expect.objectContaining({ driveFileId: 'd1', driveMd5Checksum: 'NEW' }),
       expect.anything()
+    );
+    expect(h.order).toEqual(['append', 'upload']);
+    expect(h.deleteManyInIds).toHaveBeenCalledTimes(1);
+    expect(h.deleteManyInIds).toHaveBeenCalledWith(['ff-old']);
+    // An edited file is retired via soft-delete, NOT the membership-only removeFileFromLake path.
+    expect(h.removeFileFromLake).not.toHaveBeenCalled();
+    expect(h.recomputeLakeStats).toHaveBeenCalledTimes(1);
+    expect(h.batchCreate).toHaveBeenCalledWith(expect.objectContaining({ totalFiles: 1 }));
+  });
+
+  it('does NOT retire the stale copy when the edited file fails to re-fetch (no eviction)', async () => {
+    // B2: an edit that pushes a file past a deterministic fetch gate (oversized / unsupported /
+    // export-too-large) must leave the working pre-edit copy in place, not evict it for good.
+    h.walkFolder.mockResolvedValue([
+      { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt', md5Checksum: 'NEW' },
+    ]);
+    h.findByDriveConnectionIdInDataLake.mockResolvedValue([
+      { id: 'ff-old', driveFileId: 'd1', driveMd5Checksum: 'OLD' },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue({ ok: false as const, reason: 'unsupported' });
+
+    await run();
+
+    // Nothing uploaded, so the stale copy stays: no soft-delete, no membership pull, no stats churn.
+    expect(h.upload).not.toHaveBeenCalled();
+    expect(h.deleteManyInIds).not.toHaveBeenCalled();
+    expect(h.removeFileFromLake).not.toHaveBeenCalled();
+    expect(h.recomputeLakeStats).not.toHaveBeenCalled();
+    expect(h.incrementCounter).toHaveBeenCalledWith('batch1', 'skippedFiles');
+  });
+
+  it('refuses an over-cap folder BEFORE any removal, so an edit-heavy over-cap run evicts nothing', async () => {
+    // B1: removals must not run on a run that then bails at the cap. Existing lake members + >cap
+    // candidates (adds + one edit) must leave the lake untouched - no delete, no retire, no stats.
+    const priorDocs = Array.from({ length: 3 }, (_, i) => ({
+      id: `ff-e${i}`,
+      driveFileId: `e${i}`,
+      driveMd5Checksum: 'OLD',
+    }));
+    const edits = priorDocs.map((_, i) => ({
+      id: `e${i}`,
+      name: `e${i}.txt`,
+      mimeType: 'text/plain',
+      relativePath: `e${i}.txt`,
+      md5Checksum: 'NEW',
+    }));
+    const adds = Array.from({ length: 1500 }, (_, i) => ({
+      id: `a${i}`,
+      name: `a${i}.txt`,
+      mimeType: 'text/plain',
+      relativePath: `a${i}.txt`,
+    }));
+    h.findByDriveConnectionIdInDataLake.mockResolvedValue(priorDocs);
+    h.walkFolder.mockResolvedValue([...edits, ...adds]); // 1503 candidates > 1500 cap
+
+    await run();
+
+    expect(h.removeFileFromLake).not.toHaveBeenCalled();
+    expect(h.deleteManyInIds).not.toHaveBeenCalled();
+    expect(h.recomputeLakeStats).not.toHaveBeenCalled();
+    expect(h.batchCreate).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
+    expect(h.updateHealth).toHaveBeenCalledWith(
+      'conn1',
+      expect.objectContaining({ status: 'connected', lastError: expect.stringContaining('limit for a single sync') })
     );
   });
 
@@ -317,5 +379,86 @@ describe('driveLakeIngest consumer', () => {
 
     await expect(run()).rejects.toThrow('s3 blip');
     expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1');
+  });
+
+  it('de-dups a multi-parented file so it is ingested once, not twice', async () => {
+    // A legacy multi-parented Drive file surfaces once per parent in the walk; without de-dup it
+    // would create two FabFiles for one add (and, when edited, double-remove -> NotFoundError throw).
+    h.walkFolder.mockResolvedValue([
+      { id: 'dup', name: 'a.txt', mimeType: 'text/plain', relativePath: 'p1/a.txt' },
+      { id: 'dup', name: 'a.txt', mimeType: 'text/plain', relativePath: 'p2/a.txt' },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+    await run();
+
+    expect(h.batchCreate).toHaveBeenCalledWith(expect.objectContaining({ totalFiles: 1 }));
+    expect(h.createFabFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('retires an already-processed edit even when a LATER file throws mid-loop', async () => {
+    // Per-file retirement (not batched at the end): the first edited file uploads and its stale copy
+    // is retired BEFORE the second is processed, so a later throw does not strand ff-old1 as a
+    // duplicate lake member. Both are edits, since candidates order adds before edits.
+    h.walkFolder.mockResolvedValue([
+      { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt', md5Checksum: 'NEW' },
+      { id: 'd2', name: 'b.txt', mimeType: 'text/plain', relativePath: 'b.txt', md5Checksum: 'NEW' },
+    ]);
+    h.findByDriveConnectionIdInDataLake.mockResolvedValue([
+      { id: 'ff-old1', driveFileId: 'd1', driveMd5Checksum: 'OLD' },
+      { id: 'ff-old2', driveFileId: 'd2', driveMd5Checksum: 'OLD' },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+    // d1 uploads fine (and is retired); d2's upload throws before its own retire.
+    h.upload
+      .mockImplementationOnce(async () => void h.order.push('upload'))
+      .mockRejectedValueOnce(new Error('s3 blip'));
+
+    await expect(run()).rejects.toThrow('s3 blip');
+
+    // d1's stale copy was already retired; d2's was not (it threw first) - no orphaned duplicate for d1.
+    expect(h.deleteManyInIds).toHaveBeenCalledWith(['ff-old1']);
+    expect(h.deleteManyInIds).not.toHaveBeenCalledWith(['ff-old2']);
+    expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1');
+  });
+});
+
+describe('hasDriveFileChanged', () => {
+  it('uses md5 when both sides carry it (native files)', () => {
+    expect(hasDriveFileChanged({ driveMd5Checksum: 'A' }, { md5Checksum: 'A' })).toBe(false);
+    expect(hasDriveFileChanged({ driveMd5Checksum: 'A' }, { md5Checksum: 'B' })).toBe(true);
+  });
+
+  it('falls back to modifiedTime for Google Editors files (no md5), strict-newer only', () => {
+    // The Editors path is the entire reason the function exists: Docs/Sheets/Slides carry no md5.
+    const prior = { driveModifiedTime: '2026-01-01T00:00:00.000Z' };
+    expect(hasDriveFileChanged(prior, { modifiedTime: '2026-01-02T00:00:00.000Z' })).toBe(true);
+    // Same timestamp (re-listed but unedited) is NOT a change.
+    expect(hasDriveFileChanged(prior, { modifiedTime: '2026-01-01T00:00:00.000Z' })).toBe(false);
+    // An older fresh timestamp is never treated as a change.
+    expect(hasDriveFileChanged(prior, { modifiedTime: '2025-12-31T00:00:00.000Z' })).toBe(false);
+  });
+
+  it('accepts a Date-typed prior modifiedTime (as stored on the FabFile row)', () => {
+    const prior = { driveModifiedTime: new Date('2026-01-01T00:00:00.000Z') };
+    expect(hasDriveFileChanged(prior, { modifiedTime: '2026-01-02T00:00:00.000Z' })).toBe(true);
+  });
+
+  it('prefers md5 even when a modifiedTime is also present (mixed signals)', () => {
+    // Both signals available: md5 is exact, so it wins and a moved modifiedTime does not override it.
+    expect(
+      hasDriveFileChanged(
+        { driveMd5Checksum: 'A', driveModifiedTime: '2026-01-01T00:00:00.000Z' },
+        { md5Checksum: 'A', modifiedTime: '2026-06-01T00:00:00.000Z' }
+      )
+    ).toBe(false);
+  });
+
+  it('is conservative when only one side has a comparable signal', () => {
+    // Fresh has md5 but the prior row predates provenance (no md5, no modifiedTime): cannot prove
+    // staleness, so never churn.
+    expect(hasDriveFileChanged({}, { md5Checksum: 'A' })).toBe(false);
+    // Fresh has md5, prior has ONLY modifiedTime: no comparable pair, still conservative.
+    expect(hasDriveFileChanged({ driveModifiedTime: '2026-01-01T00:00:00.000Z' }, { md5Checksum: 'A' })).toBe(false);
   });
 });

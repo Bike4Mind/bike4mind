@@ -95,6 +95,14 @@ OrgGoogleDriveConnectionSchema.index({ targetDataLakeId: 1 }, { unique: true, na
 // Org lookups - NON-unique: an org may connect several folders/lakes.
 OrgGoogleDriveConnectionSchema.index({ organizationId: 1 }, { name: 'org_gdrive_conn_org_id' });
 
+// Scheduled re-sync poll scan (findDueForPoll): enabled + status equality, then lastPolledAt for both
+// the cutoff range and the oldest-first sort. Small collection today, but the sort is served from the
+// index rather than an in-memory sort as the fleet grows.
+OrgGoogleDriveConnectionSchema.index(
+  { enabled: 1, status: 1, lastPolledAt: 1 },
+  { name: 'org_gdrive_conn_due_for_poll' }
+);
+
 export interface IOrgGoogleDriveConnectionModel extends Model<IOrgGoogleDriveConnectionDocument & IMongoDocument> {}
 
 export const OrgGoogleDriveConnection: IOrgGoogleDriveConnectionModel =
@@ -257,11 +265,17 @@ class OrgGoogleDriveConnectionRepository
    * Guarded release for the failure path: 'syncing' -> 'connected' only. The `status: 'syncing'`
    * conjunct means it no-ops if a terminal status (e.g. credential_error) was set underneath, so a
    * failed run never overwrites a real error state.
+   *
+   * Stamps `lastPolledAt` too: a connection that fails DETERMINISTICALLY (a subtree the credential
+   * cannot list, a Mongo timeout) would otherwise heal back to 'connected' with lastPolledAt
+   * unchanged, stay due, and be re-enqueued at every hourly tick - each attempt re-walking the folder
+   * before failing again. Stamping keeps the 6h poll cadence on the failure path, matching every
+   * non-throwing exit (findDueForPoll's status filter can't help once the release flips it back).
    */
   async releaseSyncClaim(id: string): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
     return this.model.findOneAndUpdate(
       { _id: id, status: 'syncing' },
-      { $set: { status: 'connected' } },
+      { $set: { status: 'connected', lastPolledAt: new Date() } },
       { new: true }
     );
   }
