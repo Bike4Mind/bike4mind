@@ -20,7 +20,7 @@ vi.mock('./dataLakeLinkIngest', () => ({ ingestSlackLinkIntoLake }));
 
 import { handleDataLakeCommand, runDataLakeSlackCommand, formatIngestOutcome } from './handleDataLakeCommand';
 
-const actor = { id: 'u1', isAdmin: false, organizationId: 'org1' };
+const actor = { id: 'u1', isAdmin: false };
 const ingestDeps = { dataLakes: {} } as never;
 
 const baseParams = (overrides: Record<string, unknown> = {}) => ({
