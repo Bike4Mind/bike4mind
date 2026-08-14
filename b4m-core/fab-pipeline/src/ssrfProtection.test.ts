@@ -1,5 +1,16 @@
-import { describe, it, expect } from 'vitest';
-import { isPrivateIP, isPrivateOrInternalHostname, validateUrlForFetch } from './ssrfProtection';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import dns from 'dns';
+import type http from 'http';
+import type https from 'https';
+import {
+  isPrivateIP,
+  isPrivateOrInternalHostname,
+  validateUrlForFetch,
+  ssrfSafeLookup,
+  ssrfSafeHttpAgent,
+  ssrfSafeHttpsAgent,
+  SSRF_BLOCKED_CODE,
+} from './ssrfProtection';
 
 /**
  * Bracketed IPv6 was a live SSRF bypass: `new URL('http://[::1]/').hostname` is `'[::1]'`, and every
@@ -115,5 +126,182 @@ describe('isPrivateIP - RFC 2544 benchmarking range (issue #8157)', () => {
   it('blocks 198.18.x.x literal hostnames', () => {
     expect(isPrivateOrInternalHostname('198.18.0.1')).toBe(true);
     expect(isPrivateOrInternalHostname('198.19.42.42')).toBe(true);
+  });
+});
+
+/**
+ * Three IPv6 families that reached the fetcher untouched. Each was confirmed against this module
+ * BEFORE the guards existed - `validateUrlForFetch` returned `{ valid: true }` for every literal
+ * below, so these are closed holes rather than defence in depth.
+ *
+ * The 6to4 case is the sharp one: hextets 2-3 of a `2002::` address ARE an IPv4 address, so
+ * `2002:a9fe:a9fe::1` is 169.254.169.254 - instance credentials - in an IPv6 spelling that matched
+ * none of the family prefixes.
+ */
+describe('SSRF - IPv6 families that bypassed the guard (site-local, 6to4, Teredo)', () => {
+  it.each([
+    ['site-local, low end', 'http://[fec0::1]/'],
+    ['site-local, high end', 'http://[feff::1]/'],
+    ['6to4 wrapping the metadata endpoint', 'http://[2002:a9fe:a9fe::1]/latest/meta-data/'],
+    ['6to4 wrapping loopback', 'http://[2002:7f00:1::1]/'],
+    ['6to4 wrapping RFC1918', 'http://[2002:a00:1::1]/'],
+    ['Teredo', 'http://[2001:0:4136:e378:8000:63bf:3fff:fdd2]/'],
+  ])('refuses %s', async (_label, url) => {
+    await expect(validateUrlForFetch(url)).resolves.toMatchObject({ valid: false });
+  });
+
+  it('blocks site-local across the whole fec0::/10, not just its first hextet', () => {
+    // fe80::/10 stops at febf, so fec0-feff was the uncovered half of the fe80::/9 span.
+    expect(isPrivateIP('fec0::1')).toBe(true);
+    expect(isPrivateIP('fed0::1')).toBe(true);
+    expect(isPrivateIP('fee0::1')).toBe(true);
+    expect(isPrivateIP('feff::1')).toBe(true);
+  });
+
+  it('judges 6to4 by its prefix, whatever the embedded IPv4 is', () => {
+    // Deliberately includes a PUBLIC-embedded address: the prefix ban is wider than "6to4 wrapping a
+    // private IPv4" on purpose, because a public-embedded 6to4 address still tunnels via a relay this
+    // process neither resolves nor validates.
+    expect(isPrivateIP('2002:a9fe:a9fe::1')).toBe(true);
+    expect(isPrivateIP('2002:0808:0808::1')).toBe(true);
+  });
+
+  it('restricts the Teredo block to a zero second hextet', () => {
+    // The boundary that matters: 2001::/16 at large is ordinary public space, so a `2001:` prefix
+    // test here would have taken Google and Cloudflare down with it.
+    expect(isPrivateIP('2001:0:4136:e378:8000:63bf:3fff:fdd2')).toBe(true);
+    expect(isPrivateIP('2001:4860:4860::8888')).toBe(false);
+    expect(isPrivateIP('2001:4860:ffff::8888')).toBe(false);
+  });
+
+  it('leaves public addresses alone, including the neighbours of each new range', () => {
+    // Regression pins. `2003::` and `2001:5::` sit immediately outside the two new prefixes, and the
+    // Cloudflare pair is the same over-block guard the mapped-form fix needed.
+    expect(isPrivateIP('2003::1')).toBe(false);
+    expect(isPrivateIP('2001:5::1')).toBe(false);
+    expect(isPrivateIP('2606:4700:4700::1111')).toBe(false);
+    expect(isPrivateIP('2606:4700:ffff::1')).toBe(false);
+    expect(isPrivateOrInternalHostname('[2606:4700:4700::1111]')).toBe(false);
+  });
+
+  it('blocks the new families at the hostname level too', () => {
+    expect(isPrivateOrInternalHostname('[fec0::1]')).toBe(true);
+    expect(isPrivateOrInternalHostname('[2002:a9fe:a9fe::1]')).toBe(true);
+    expect(isPrivateOrInternalHostname('[2001:0:4136:e378:8000:63bf:3fff:fdd2]')).toBe(true);
+  });
+});
+
+/**
+ * The connect-time pin. `validateUrlForFetch` resolving a hostname proves nothing about the address
+ * the socket later dials, because the HTTP client resolves it again - so a name answering public then
+ * private (DNS rebinding) defeated every URL-level check the module had. These tests drive the two
+ * resolutions apart deliberately: the pre-flight is told the name is public, the connect-time lookup
+ * is told it is private, and the connection must still be refused.
+ */
+describe('SSRF - connect-time lookup pin (DNS rebinding)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** Drive `ssrfSafeLookup` with a stubbed resolver and collect what it hands back to `net.connect`. */
+  const lookupWith = (
+    addresses: dns.LookupAddress[] | Error,
+    options: dns.LookupOptions = {}
+  ): Promise<{ err: NodeJS.ErrnoException | null; address: unknown; family?: number }> => {
+    vi.spyOn(dns, 'lookup').mockImplementation(((_host: string, _opts: unknown, cb: unknown) => {
+      const done = cb as (e: Error | null, a?: dns.LookupAddress[]) => void;
+      if (addresses instanceof Error) done(addresses);
+      else done(null, addresses);
+    }) as unknown as typeof dns.lookup);
+
+    return new Promise(resolve => {
+      ssrfSafeLookup('host.example.com', options, (err, address, family) => {
+        resolve({ err, address, family });
+      });
+    });
+  };
+
+  it('refuses the rebind: a name that resolves to the metadata endpoint at connect time', async () => {
+    const { err, address } = await lookupWith([{ address: '169.254.169.254', family: 4 }]);
+    expect(err?.code).toBe(SSRF_BLOCKED_CODE);
+    expect(err?.message).toContain('169.254.169.254');
+    // The address must NOT be handed onward - returning it alongside an error would still let a
+    // caller that ignores the error dial the blocked host.
+    expect(address).toBe('');
+  });
+
+  it.each([
+    ['loopback', '127.0.0.1'],
+    ['RFC1918', '10.0.0.5'],
+    ['link-local', '169.254.169.254'],
+  ])('refuses a connect-time %s answer', async (_label, ip) => {
+    const { err } = await lookupWith([{ address: ip, family: 4 }]);
+    expect(err?.code).toBe(SSRF_BLOCKED_CODE);
+  });
+
+  it('refuses when only ONE address of a dual-stack record is private', async () => {
+    // A dual-stack host must not become reachable just because Node happened to prefer the healthy
+    // family on this attempt - which is why the lookup asks for `all` even when the caller did not.
+    const { err } = await lookupWith([
+      { address: '93.184.216.34', family: 4 },
+      { address: '::1', family: 6 },
+    ]);
+    expect(err?.code).toBe(SSRF_BLOCKED_CODE);
+    expect(err?.message).toContain('::1');
+  });
+
+  it('blocks the IPv6 families the literal guard blocks, at connect time too', async () => {
+    // Same judgement function on both paths, so 6to4 wrapping the metadata endpoint cannot be
+    // reintroduced by a DNS answer.
+    const { err } = await lookupWith([{ address: '2002:a9fe:a9fe::1', family: 6 }]);
+    expect(err?.code).toBe(SSRF_BLOCKED_CODE);
+  });
+
+  it('passes a public address through in the single-address shape', async () => {
+    const { err, address, family } = await lookupWith([{ address: '93.184.216.34', family: 4 }]);
+    expect(err).toBeNull();
+    expect(address).toBe('93.184.216.34');
+    expect(family).toBe(4);
+  });
+
+  it('preserves the array shape when the caller asked for all addresses', async () => {
+    // Node's own connect path requests `all`, so returning a bare string here would break it.
+    const resolved: dns.LookupAddress[] = [
+      { address: '93.184.216.34', family: 4 },
+      { address: '2606:4700:4700::1111', family: 6 },
+    ];
+    const { err, address } = await lookupWith(resolved, { all: true });
+    expect(err).toBeNull();
+    expect(address).toEqual(resolved);
+  });
+
+  it('errors rather than throwing when a lookup succeeds with no addresses', async () => {
+    // Reading addresses[0] on an empty record would throw inside Node's own callback, where there is
+    // no caller frame to catch it - so it is reported as an ordinary resolution failure instead.
+    const { err, address } = await lookupWith([]);
+    expect(err?.code).toBe('ENOTFOUND');
+    expect(address).toBe('');
+  });
+
+  it('propagates a genuine resolution failure unchanged', async () => {
+    // Must stay distinguishable from a block: an unresolvable host is not an attack.
+    const { err } = await lookupWith(new Error('ENOTFOUND'));
+    expect(err?.message).toBe('ENOTFOUND');
+    expect(err?.code).not.toBe(SSRF_BLOCKED_CODE);
+  });
+
+  it('installs the pin on both agents and keeps them unpooled', () => {
+    // Not cosmetic: a keep-alive socket outlives the lookup that approved it, so a pooled connection
+    // would skip the connect-time check on every request after the first.
+    //
+    // `Agent#options` is populated at runtime but is not on the type @types/node exposes, so reading
+    // it needs a cast. Narrowed to the two fields asserted rather than `any`.
+    const agentOptions = (agent: http.Agent | https.Agent) =>
+      (agent as unknown as { options: { lookup?: unknown; keepAlive?: boolean } }).options;
+
+    expect(agentOptions(ssrfSafeHttpAgent).lookup).toBe(ssrfSafeLookup);
+    expect(agentOptions(ssrfSafeHttpsAgent).lookup).toBe(ssrfSafeLookup);
+    expect(agentOptions(ssrfSafeHttpAgent).keepAlive).toBe(false);
+    expect(agentOptions(ssrfSafeHttpsAgent).keepAlive).toBe(false);
   });
 });
