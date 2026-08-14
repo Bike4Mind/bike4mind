@@ -29,9 +29,11 @@ const TOKEN_PATTERN = /xox[abposr]-[A-Za-z0-9-]+/g;
 /**
  * An incoming-webhook URL or its secret `/services/T.../B.../...` tail, in case a
  * network error echoes the destination. The URL is bearer-equivalent, so it must not
- * reach a log line any more than a bot token may.
+ * reach a log line any more than a bot token may. The host group matches scheme+host
+ * only (no slashes) and the token segment stops at the first non-token char, so a
+ * whitespace-free run of several URLs cannot be redacted as one over-broad span.
  */
-const WEBHOOK_URL_PATTERN = /(https?:\/\/\S*)?\/services\/[A-Za-z0-9]+\/[A-Za-z0-9]+\/\S+/g;
+const WEBHOOK_URL_PATTERN = /(?:https?:\/\/[^\s/]+)?\/services\/[A-Za-z0-9]+\/[A-Za-z0-9]+\/[A-Za-z0-9_-]+/g;
 
 function redactSecrets(text: string): string {
   return text.replace(TOKEN_PATTERN, '[redacted]').replace(WEBHOOK_URL_PATTERN, '[redacted-webhook]');

@@ -95,6 +95,7 @@ describe('PrReportSettings', () => {
       { key: 'prReportWebhookUrl', value: '', confirmClear: true },
       expect.any(Object)
     );
+    expect(screen.getByText('Cleared')).toBeInTheDocument();
   });
 
   it('edits the egress allowlist as hosts and saves an object value', async () => {

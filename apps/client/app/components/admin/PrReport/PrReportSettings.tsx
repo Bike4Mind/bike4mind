@@ -72,6 +72,7 @@ function useStringSetting(key: SettingKey, { sensitive = false }: { sensitive?: 
   const update = useUpdateSettings();
   const [draft, setDraft] = useState<string | null>(null);
   const [justSaved, setJustSaved] = useState(false);
+  const [justCleared, setJustCleared] = useState(false);
 
   const hasStoredSecret = sensitive && saved.length > 0;
   // A sensitive field shows a fresh draft only, never the stored mask.
@@ -83,10 +84,12 @@ function useStringSetting(key: SettingKey, { sensitive = false }: { sensitive?: 
     isDirty,
     hasStoredSecret,
     justSaved: justSaved && !isDirty,
+    justCleared: justCleared && !isDirty,
     saving: update.isPending,
     onChange: (next: string) => {
       setDraft(next);
       setJustSaved(false);
+      setJustCleared(false);
     },
     save: () => {
       if (draft === null) return;
@@ -96,6 +99,7 @@ function useStringSetting(key: SettingKey, { sensitive = false }: { sensitive?: 
           onSuccess: () => {
             setDraft(null);
             setJustSaved(true);
+            setJustCleared(false);
           },
         }
       );
@@ -109,6 +113,7 @@ function useStringSetting(key: SettingKey, { sensitive = false }: { sensitive?: 
           onSuccess: () => {
             setDraft(null);
             setJustSaved(false);
+            setJustCleared(true);
           },
         }
       );
@@ -216,13 +221,19 @@ function StringSettingField({
               Clear
             </Button>
           )}
-          <SaveAffordance
-            isDirty={field.isDirty}
-            saving={field.saving}
-            justSaved={field.justSaved}
-            onSave={field.save}
-            testId={`${testId}-save-btn`}
-          />
+          {field.justCleared ? (
+            <Chip size="sm" variant="soft" color="neutral" startDecorator={<CheckIcon fontSize="small" />}>
+              Cleared
+            </Chip>
+          ) : (
+            <SaveAffordance
+              isDirty={field.isDirty}
+              saving={field.saving}
+              justSaved={field.justSaved}
+              onSave={field.save}
+              testId={`${testId}-save-btn`}
+            />
+          )}
         </Stack>
       }
     >
