@@ -36,6 +36,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
+  dataLakeAccessGrantRepository: {},
   fabFileRepository: {
     claimFilesForRechunkByIds: h.claimFilesForRechunkByIds,
     releaseChunkClaimByIds: h.releaseChunkClaimByIds,
