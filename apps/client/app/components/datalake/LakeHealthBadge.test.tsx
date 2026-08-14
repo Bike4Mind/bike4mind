@@ -1,5 +1,18 @@
-import { describe, it, expect } from 'vitest';
-import { deriveLakeHealthBadge } from './LakeHealthBadge';
+import type { ReactNode } from 'react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { getThemeConfig } from '@client/app/utils/themes';
+
+const useGetDataLakeHealth = vi.fn();
+vi.mock('@client/app/hooks/data/dataLakes', () => ({ useGetDataLakeHealth: () => useGetDataLakeHealth() }));
+
+import LakeHealthBadge, { deriveLakeHealthBadge } from './LakeHealthBadge';
+
+const appTheme = extendTheme({ ...getThemeConfig() });
+const Wrapper = ({ children }: { children: ReactNode }) => (
+  <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+);
 
 const predicates = (over?: Partial<Record<string, unknown>>) => ({
   chunkWithinPolicy: { pass: 1, fail: 0, unknown: 0 },
@@ -40,5 +53,85 @@ describe('deriveLakeHealthBadge', () => {
     expect(deriveLakeHealthBadge({ reachableShare: 1, predicates: predicates({ serveCapMeetsPolicy: 'fail' }) })).toBe(
       'unhealthy'
     );
+  });
+});
+
+const health = (over?: Record<string, unknown>) => ({
+  policy: { chunkTokenTarget: 512, source: 'inherited', policyChars: 3072, serveCap: 3072, serveCapBelowPolicy: false },
+  predicates: predicates(),
+  reachableShare: 1,
+  reachableChars: 100,
+  measuredChunkedChars: 100,
+  coverage: { measuredMembers: 1, membersWithChunks: 1 },
+  affectedMembers: [],
+  affectedMemberCount: 0,
+  scanTruncated: false,
+  ...over,
+});
+
+describe('LakeHealthBadge render', () => {
+  it('renders nothing while loading or before data', () => {
+    useGetDataLakeHealth.mockReturnValue({ data: undefined, isLoading: true });
+    const { container } = render(
+      <Wrapper>
+        <LakeHealthBadge lakeId="l1" />
+      </Wrapper>
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('renders nothing for a lake with no chunked members (empty lake)', () => {
+    useGetDataLakeHealth.mockReturnValue({
+      data: health({ coverage: { measuredMembers: 0, membersWithChunks: 0 }, reachableShare: null }),
+      isLoading: false,
+    });
+    const { container } = render(
+      <Wrapper>
+        <LakeHealthBadge lakeId="l1" />
+      </Wrapper>
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('leads with the reachable-content headline for a degraded lake', () => {
+    useGetDataLakeHealth.mockReturnValue({
+      data: health({
+        reachableShare: 0.25,
+        predicates: predicates({ chunkWithinPolicy: { pass: 0, fail: 3, unknown: 0 } }),
+        affectedMembers: [
+          {
+            fabFileId: 'f1',
+            fileName: 'big.txt',
+            chunkCount: 1,
+            measured: true,
+            status: {},
+            failed: ['chunkWithinPolicy'],
+            reachableChars: 3072,
+            chunkedChars: 12000,
+          },
+        ],
+        affectedMemberCount: 1,
+      }),
+      isLoading: false,
+    });
+    render(
+      <Wrapper>
+        <LakeHealthBadge lakeId="l1" />
+      </Wrapper>
+    );
+    expect(screen.getByTestId('datalake-health-badge-l1')).toHaveTextContent('Reachable 25%');
+  });
+
+  it('shows "not measured" (not 0%) for an unmeasured lake', () => {
+    useGetDataLakeHealth.mockReturnValue({
+      data: health({ reachableShare: null, coverage: { measuredMembers: 0, membersWithChunks: 4 } }),
+      isLoading: false,
+    });
+    render(
+      <Wrapper>
+        <LakeHealthBadge lakeId="l1" />
+      </Wrapper>
+    );
+    expect(screen.getByTestId('datalake-health-badge-l1')).toHaveTextContent('not measured');
   });
 });
