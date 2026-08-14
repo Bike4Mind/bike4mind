@@ -64,9 +64,18 @@ describe('recordToolResult', () => {
     expect(toolsUsed).toHaveLength(1);
   });
 
-  it('is a silent no-op when no entry matches', () => {
+  it('is a silent no-op when neither id nor name matches anything', () => {
     const toolsUsed: RecordableToolUse[] = [{ name: 'web_search', id: 'call_1' }];
     expect(() => recordToolResult(toolsUsed, { id: 'call_9', name: 'other_tool' }, 'result', true)).not.toThrow();
+    expect(toolsUsed[0].returnValue).toBeUndefined();
+  });
+
+  // Isolates the id-mismatch case a real mis-wiring would actually produce: a backend that
+  // passes the WRONG id field but the RIGHT name. The case above varies both id and name at
+  // once, which can't tell "id lookup is correct" from "nothing matched at all".
+  it('is a silent no-op when the id does not match, even though the name does', () => {
+    const toolsUsed: RecordableToolUse[] = [{ name: 'web_search', id: 'call_1' }];
+    expect(() => recordToolResult(toolsUsed, { id: 'call_9', name: 'web_search' }, 'result', true)).not.toThrow();
     expect(toolsUsed[0].returnValue).toBeUndefined();
   });
 

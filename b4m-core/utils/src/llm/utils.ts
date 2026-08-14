@@ -491,6 +491,7 @@ export async function fetchAndProcessPreviousMessages(
   {
     db,
     verbatimTokenBudget,
+    disableToolReplay,
   }: {
     db: {
       quests: Pick<IChatHistoryItemRepository, 'getMostRecentChatHistory'>;
@@ -502,6 +503,15 @@ export async function fetchAndProcessPreviousMessages(
      * contextSummary. Omit to keep the legacy count-only behavior.
      */
     verbatimTokenBudget?: number;
+    /**
+     * Skips Priority 2 tool-pairing reconstruction (falls through to the Priority 3 text-only
+     * reply) regardless of whether a recorded returnValue exists. Callers set this when the
+     * target backend cannot safely receive a replayed tool_use block - e.g. Gemini, whose
+     * PromptMetaFunctionCallSchema never persists thought_signature, so every replayed call
+     * reaches it without one, which its own formatter warns "may cause a 400 error with Gemini
+     * 3 Pro". Revisit once thought_signature is persisted.
+     */
+    disableToolReplay?: boolean;
   }
 ): Promise<
   [
@@ -518,12 +528,11 @@ export async function fetchAndProcessPreviousMessages(
       recentGeneratedImages?: { key: string; prompt: string }[];
       /**
        * Names of tools actually invoked across the returned window, read straight off each
-       * turn's `promptMeta.functionCalls` rather than the reconstructed IMessage history: neither
-       * of `convertedMessages`' two tool_use-replay paths fires in production today (Priority 1
-       * needs `structuredReplies`, which nothing writes; Priority 2 needs a recorded
-       * `returnValue`, which nothing writes either - see replayableToolCalls), so a caller that
-       * scanned `convertedMessages` for a prior tool call would never find one. This reads the
-       * raw field instead, at no extra DB cost since chatHistoryItems is already in hand.
+       * turn's `promptMeta.functionCalls` rather than the reconstructed IMessage history. Priority
+       * 1 (`structuredReplies`) still never fires (nothing writes that field); Priority 2 now does
+       * fire once a backend records `returnValue` - but `disableToolReplay` callers (Gemini) still
+       * skip it, so scanning `convertedMessages` would still miss a prior tool call for them. This
+       * reads the raw field instead, at no extra DB cost since chatHistoryItems is already in hand.
        */
       priorToolNames?: string[];
     },
@@ -626,7 +635,7 @@ export async function fetchAndProcessPreviousMessages(
     // information the model can use, and replaying it would cost the turn its real text reply:
     // this branch and Priority 3 are mutually exclusive, so entering here on result-less calls
     // replaces a genuine answer with a list of tool invocations and empty outcomes.
-    else if (toolCalls.length > 0) {
+    else if (toolCalls.length > 0 && !disableToolReplay) {
       // Get text reply (excluding thinking blocks)
       const textReply = cur.replies?.find((reply: string) => !reply.trim().startsWith('<think>')) || '';
 

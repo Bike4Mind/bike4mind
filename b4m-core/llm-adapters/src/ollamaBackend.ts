@@ -395,7 +395,10 @@ export class OllamaBackend implements ICompletionBackend {
           name: tc.name,
           arguments: tc.arguments,
           id: tc.id,
-          returnValue: truncateToolResult(observations[i]),
+          // String(...) matches recordToolResult's own defensive wrap on the other backends -
+          // observations[i] is already a string here (executeToolsBatch<string>), but keeping
+          // the same guard means a future change to that generic can't silently drop it.
+          returnValue: truncateToolResult(String(observations[i])),
           success: outcomes[i].ok,
         })),
       ];

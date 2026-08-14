@@ -859,7 +859,19 @@ export class AnthropicBackend implements ICompletionBackend {
       this.logger.debug(
         `[Pre-API #6181] Sending ${filteredMessages.length} messages with ${toolUseCount} tool_use and ${toolResultCount} tool_result blocks`
       );
-      if (toolUseCount !== toolResultCount) {
+      // A replayed history turn (utils.ts Priority 2) can carry perfectly-paired tool blocks from
+      // a PRIOR turn that had tools, even when THIS turn offers none (e.g. toolMode switched off
+      // between turns) - Anthropic rejects any tool_use/tool_result block when `tools` is absent
+      // from the request regardless of pairing, and a balanced count means the mismatch repair
+      // below never fires. Strip proactively instead of relying on the post-400 retry in
+      // ChatCompletionProcess's isToolPairingError net to recover a request we can predict fails.
+      if (!options.tools?.length) {
+        this.logger.warn(
+          `[Pre-API #6181] Tool blocks present (tool_use: ${toolUseCount}, tool_result: ${toolResultCount}) but no tools offered this turn. Stripping all tool blocks.`
+        );
+        filteredMessages = stripAllToolBlocks(filteredMessages, this.logger);
+        ({ useCount: toolUseCount, resultCount: toolResultCount } = countToolBlocks(filteredMessages));
+      } else if (toolUseCount !== toolResultCount) {
         this.logger.warn(
           `[Pre-API #6181] Tool block mismatch! tool_use: ${toolUseCount}, tool_result: ${toolResultCount}. Attempting auto-repair...`
         );
@@ -1703,8 +1715,8 @@ export class AnthropicBackend implements ICompletionBackend {
                 // Normalize the toolsUsed entry so callers can safely JSON.parse arguments
                 const entry = toolsUsed.find(t => t.name === name && t.id === id);
                 if (entry) entry.arguments = '{}';
-                // tryParseToolParams already pushed this exact observation into messages - record
-                // it here too so a call that never ran (not merely failed) still shows as such.
+                // Mirrors the non-streaming site below: stamp toolsUsed too, so a call that
+                // never ran (not merely failed) still shows as such in promptMeta.
                 recordToolResult(
                   toolsUsed,
                   { id, name },
@@ -2065,9 +2077,7 @@ export class AnthropicBackend implements ICompletionBackend {
                 messages
               );
               if (!parsedParams) {
-                // tryParseToolParams already pushed this exact observation into messages (see the
-                // streaming path's identical site) - record it here too so a call that never ran
-                // still shows as such, rather than falling through as an unstamped entry.
+                // Non-streaming twin of the streaming site above.
                 recordToolResult(
                   toolsUsed,
                   { id, name },

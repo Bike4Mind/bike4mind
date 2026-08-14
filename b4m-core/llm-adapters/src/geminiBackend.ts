@@ -12,6 +12,7 @@ import {
   PermissionDeniedError,
   type CacheUsageStats,
   type IMessage,
+  type MessageContentObject,
   type MessageContentText,
   type MessageContentToolResult,
   type MessageContentToolUse,
@@ -1230,19 +1231,23 @@ export class GeminiBackend implements ICompletionBackend {
         }
 
         if (message.content?.[0].type === 'tool_result') {
-          const toolResult = message.content[0] as MessageContentToolResult;
-          return {
-            role: mapRole(message.role),
-            parts: [
-              {
-                functionResponse: {
-                  name: toolUseIdToName.get(toolResult.tool_use_id) ?? toolResult.tool_use_id,
-                  response: {
-                    result: (message.content?.[0] as MessageContentToolResult).content,
-                  },
+          // A replayed turn (utils.ts Priority 2) bundles N tool_result blocks into ONE
+          // message when the turn made parallel calls - map every block, not just the
+          // first, or Gemini rejects the request for a functionResponse/functionCall
+          // count mismatch (mirrors the same fix on the tool_use side above).
+          const parts = (message.content as MessageContentObject[])
+            .filter((item): item is MessageContentToolResult => item.type === 'tool_result')
+            .map(toolResult => ({
+              functionResponse: {
+                name: toolUseIdToName.get(toolResult.tool_use_id) ?? toolResult.tool_use_id,
+                response: {
+                  result: toolResult.content,
                 },
               },
-            ],
+            }));
+          return {
+            role: mapRole(message.role),
+            parts,
           };
         }
 

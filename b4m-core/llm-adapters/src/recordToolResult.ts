@@ -1,3 +1,5 @@
+import { Logger } from '@bike4mind/observability';
+
 /**
  * Attaches a tool call's outcome onto its `toolsUsed` entry so it survives into
  * `promptMeta.functionCalls.returnValue`/`.success` (see ChatCompletionProcess.ts's mapper
@@ -44,7 +46,14 @@ export function recordToolResult(
   const entry = toolsUsed.find(
     t => t.success === undefined && t.name === call.name && (wantId === undefined || t.id === wantId)
   );
-  if (!entry) return;
+  if (!entry) {
+    // Tolerated (see doc comment above), but a future backend wired with the wrong id field
+    // would silently record nothing forever with no signal anywhere - this is that signal.
+    Logger.globalInstance.debug(
+      `[recordToolResult] no unstamped toolsUsed entry matched name=${call.name} id=${call.id ?? '(none)'} - result not recorded`
+    );
+    return;
+  }
   entry.returnValue = truncateToolResult(String(observation));
   entry.success = success;
 }

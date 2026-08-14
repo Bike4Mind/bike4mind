@@ -1775,10 +1775,10 @@ describe('Context Management Tests', () => {
       const makeToolItem = (n: number, functionCalls: Record<string, unknown>[]) =>
         makeItem(n, { structuredReplies: undefined, promptMeta: { functionCalls } });
 
-      const runWith = async (item: Record<string, unknown>) => {
+      const runWith = async (item: Record<string, unknown>, options: { disableToolReplay?: boolean } = {}) => {
         // item 2 is the current prompt and gets popped, so the turn under test is item 1
         const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue([makeItem(2), item]) } };
-        const [messages] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+        const [messages] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db, ...options });
         return messages;
       };
 
@@ -1862,6 +1862,14 @@ describe('Context Management Tests', () => {
         const messages = await runWith(item);
 
         expect(messages[1].content).toEqual([{ type: 'text', text: 'from structured' }]);
+      });
+
+      // Gemini callers pass disableToolReplay: true (never persists thought_signature), so a
+      // returnValue being present must NOT be enough on its own to enter this branch.
+      it('falls through to the plain-text reply when disableToolReplay is set, even with a recorded returnValue', async () => {
+        const messages = await runWith(makeToolItem(1, [call()]), { disableToolReplay: true });
+
+        expect(messages[1]).toEqual({ role: 'assistant', content: 'reply 1' });
       });
     });
   });

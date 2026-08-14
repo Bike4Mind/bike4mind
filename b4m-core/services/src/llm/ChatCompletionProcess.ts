@@ -2081,13 +2081,18 @@ export class ChatCompletionProcess {
       const previousMessagesResult = await fetchAndProcessPreviousMessages(session, historyCount, {
         db: this.db,
         verbatimTokenBudget,
+        // Gemini's replayed tool_use blocks never carry a thought_signature (the schema does not
+        // persist one), which its own formatter warns may 400 on Gemini 3 Pro - fall through to
+        // the plain-text Priority 3 reply for this backend until that can be persisted.
+        disableToolReplay: modelInfo.backend === ModelBackend.Gemini,
       });
       const [previousMessages, totalMessageCount, cacheInfo] = previousMessagesResult;
       const oldestIncludedQuestId = cacheInfo.oldestIncludedQuestId ?? null;
       const verbatimExcludedCount = cacheInfo.excludedOlderQuestCount ?? 0;
       // Real tool-usage signal for this window - see fetchAndProcessPreviousMessages's own doc
       // comment on this field for why `previousMessages` itself cannot answer "was this tool used
-      // earlier in the conversation" (neither of its tool_use-replay paths fires in production).
+      // earlier in the conversation" for every backend (Priority 1 never fires; Priority 2 is
+      // skipped for Gemini via disableToolReplay above).
       const priorToolNames = cacheInfo.priorToolNames ?? [];
 
       // blog_publish/blog_edit/blog_draft and `skill` are auto-added HERE rather than at the

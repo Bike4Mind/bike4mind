@@ -58,4 +58,61 @@ describe('GeminiBackend - replayed tool history (utils.ts Priority 2 shape)', ()
       response: { result: 'sunny' },
     });
   });
+
+  // A parallel-tool-call turn bundles N tool_result blocks into ONE message
+  // (utils.ts:653-662). Gemini rejects a request whose functionResponse count
+  // does not match its functionCall count, so every block must survive, not
+  // just the first - this is the gap the single-call test above cannot catch.
+  it('converts ALL tool_result blocks in a parallel-call turn, not just the first', async () => {
+    const backend = new GeminiBackend('test-key');
+    let capturedRequest: any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (backend as unknown as { _api: any })._api = {
+      models: {
+        generateContentStream: async (request: unknown) => {
+          capturedRequest = request;
+          return (async function* () {
+            yield {
+              candidates: [{ content: { parts: [{ text: 'ok' }] } }],
+              usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+            };
+          })();
+        },
+      },
+    };
+
+    const assistantMessage: IMessage = {
+      role: 'assistant',
+      content: [
+        { type: 'tool_use', id: 'toolu_1', name: 'web_search', input: { query: 'weather' } },
+        { type: 'tool_use', id: 'toolu_2', name: 'get_time', input: {} },
+      ],
+    } as IMessage;
+    const toolResultMessage: IMessage = {
+      role: 'user',
+      content: [
+        { type: 'tool_result', tool_use_id: 'toolu_1', content: 'sunny', is_error: false },
+        { type: 'tool_result', tool_use_id: 'toolu_2', content: '10:00', is_error: false },
+      ],
+    } as IMessage;
+
+    await backend.complete(
+      'gemini-2.5-flash' as never,
+      [assistantMessage, toolResultMessage, { role: 'user', content: 'and tomorrow?' }],
+      { stream: true },
+      async () => {}
+    );
+
+    const contents = capturedRequest.contents;
+    const toolResultContent = contents.find((c: any) => c.parts?.[0]?.functionResponse);
+    expect(toolResultContent.parts).toHaveLength(2);
+    expect(toolResultContent.parts[0].functionResponse).toMatchObject({
+      name: 'web_search',
+      response: { result: 'sunny' },
+    });
+    expect(toolResultContent.parts[1].functionResponse).toMatchObject({
+      name: 'get_time',
+      response: { result: '10:00' },
+    });
+  });
 });
