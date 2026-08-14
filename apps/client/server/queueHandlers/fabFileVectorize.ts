@@ -43,6 +43,7 @@ import {
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
+import { makeDataLakeSpendNotifier } from '@server/utils/dataLakeSpendNotifier';
 import { provenancePayloadShape } from '@server/queueHandlers/convergenceProvenance';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getProviderFromModel } from '@bike4mind/fab-pipeline';
@@ -261,6 +262,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             dataLakeBatches: dataLakeBatchRepository,
           },
           logger,
+          notify: makeDataLakeSpendNotifier(logger),
         });
         grantedReservation = { estimatedMicroUsd, batchId: existingFabFile.batchId, dataLakeId: batch?.dataLakeId };
         logger.log(`[spendGate] granted ~${estimatedMicroUsd} microUSD for ${missTokens} tokens`);

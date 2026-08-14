@@ -4,8 +4,16 @@ import type {
   IDataLakeBatchRepository,
   IDataLakeRepository,
 } from '@bike4mind/common';
+import { EMBEDDING_SPEND_NOTIFY_THRESHOLD_PCT } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { resolveSpendLevers } from './resolveSpendLevers';
+import {
+  periodKeyForClock,
+  periodKeyForLakeBudget,
+  periodKeyForRun,
+  periodKeyForWindow,
+} from './spendNotificationKeys';
+import type { DataLakeSpendNotificationEvent } from './sendDataLakeSpendNotification';
 
 /** Cache keys for the platform-wide meters. One period window, one rate window. */
 export const EMBEDDING_SPEND_PERIOD_KEY = 'dataLakeEmbeddingSpend:period';
@@ -48,7 +56,7 @@ export class EmbeddingSpendDeniedError extends Error {
 export interface SpendGateDb {
   adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'>;
   cache: Pick<ICacheRepository, 'tryAddWithinLimitFixedWindow'>;
-  dataLakes: Pick<IDataLakeRepository, 'tryAddEmbeddingSpend'>;
+  dataLakes: Pick<IDataLakeRepository, 'tryAddEmbeddingSpendMetered'>;
   dataLakeBatches: Pick<IDataLakeBatchRepository, 'tryAddEmbeddingSpend'>;
 }
 
@@ -95,13 +103,36 @@ export async function enforceEmbeddingSpendGate(params: {
   logger?: Logger;
   /** Injectable for tests; defaults to a real setTimeout sleep. */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Optional notification PORT (never a db/mailer handle - keeps this gate free of those
+   * dependencies). Called and AWAITED (not fire-and-forget - a floating promise is dropped
+   * when a Lambda container freezes) at every denial site before the throw, and once after
+   * every reservation succeeds to check the approaching-cap threshold. A `notify` failure is
+   * caught and logged; it never changes the gate's own grant/deny decision.
+   */
+  notify?: (event: DataLakeSpendNotificationEvent) => Promise<unknown>;
 }): Promise<void> {
-  const { estimatedMicroUsd, batchId, dataLakeId, db, logger } = params;
+  const { estimatedMicroUsd, batchId, dataLakeId, db, logger, notify } = params;
   const sleep = params.sleep ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
+
+  const fire = async (event: Omit<DataLakeSpendNotificationEvent, 'dataLakeId'>): Promise<void> => {
+    if (!notify || !dataLakeId) return;
+    try {
+      await notify({ dataLakeId, ...event });
+    } catch (err) {
+      logger?.warn?.(`[spendGate] spend notification failed: ${err}`);
+    }
+  };
 
   const levers = await resolveSpendLevers(db, logger);
 
   if (!levers.spendEnabled) {
+    await fire({
+      kind: 'stopped',
+      scope: 'switch',
+      periodKey: periodKeyForClock(new Date()),
+      detail: { reason: 'the embedding spend switch is off' },
+    });
     throw new EmbeddingSpendDeniedError('the embedding spend switch is off');
   }
 
@@ -110,7 +141,9 @@ export async function enforceEmbeddingSpendGate(params: {
   // message - the SQS retry budget is only 3 deliveries and must be kept for real errors.
   // The wait is bounded by RATE_WAIT_TOTAL_MS across ALL attempts (see its comment for why
   // sleeping on reserved concurrency is itself a cost); past that the denial is retryable
-  // and the remaining wait happens on the queue instead.
+  // and the remaining wait happens on the queue instead. A wait that resolves on its own
+  // (grant after sleeping) is the rate limiter working as designed - deliberately no
+  // notification on that path, only on the two throws below.
   for (let waitedMs = 0; ;) {
     const rate = await db.cache.tryAddWithinLimitFixedWindow(
       EMBEDDING_SPEND_RATE_KEY,
@@ -120,15 +153,25 @@ export async function enforceEmbeddingSpendGate(params: {
     );
     if (rate.success) break;
     if (levers.maxCallsPerMinute <= 0) {
+      await fire({
+        kind: 'stopped',
+        scope: 'rate',
+        periodKey: periodKeyForClock(new Date()),
+        detail: { reason: 'the embedding rate limit is 0 (stopped)' },
+      });
       throw new EmbeddingSpendDeniedError('the embedding rate limit is 0 (stopped)');
     }
     const waitMs = Math.min(Math.max(rate.expiresAt.getTime() - Date.now(), 250), MINUTE_MS);
     if (waitedMs + waitMs > RATE_WAIT_TOTAL_MS) {
+      const reason = `the embedding rate limit (${levers.maxCallsPerMinute}/min) stayed exhausted after waiting ${waitedMs}ms`;
       // Retryable: the window drains on its own, so a later SQS delivery can be granted.
-      throw new EmbeddingSpendDeniedError(
-        `the embedding rate limit (${levers.maxCallsPerMinute}/min) stayed exhausted after waiting ${waitedMs}ms`,
-        { retryable: true }
-      );
+      await fire({
+        kind: 'throttled',
+        scope: 'rate',
+        periodKey: periodKeyForClock(new Date()),
+        detail: { reason, retryable: true },
+      });
+      throw new EmbeddingSpendDeniedError(reason, { retryable: true });
     }
     logger?.log?.(`[spendGate] rate window full (${rate.count}); waiting ${waitMs}ms (${waitedMs}ms waited so far)`);
     await sleep(waitMs);
@@ -138,19 +181,37 @@ export async function enforceEmbeddingSpendGate(params: {
   if (batchId) {
     const ok = await db.dataLakeBatches.tryAddEmbeddingSpend(batchId, estimatedMicroUsd, levers.perRunBudgetMicroUsd);
     if (!ok) {
+      await fire({
+        kind: 'budget_exhausted',
+        scope: 'run',
+        periodKey: periodKeyForRun(batchId),
+        detail: { batchId, budgetMicroUsd: levers.perRunBudgetMicroUsd },
+      });
       throw new EmbeddingSpendDeniedError(
         `the per-run embedding budget ($${levers.perRunBudgetMicroUsd / 1e6}) is exhausted for this upload batch`
       );
     }
   }
 
+  let lakeSpendMicroUsd: number | null = null;
   if (dataLakeId) {
-    const ok = await db.dataLakes.tryAddEmbeddingSpend(dataLakeId, estimatedMicroUsd, levers.perLakeBudgetMicroUsd);
-    if (!ok) {
+    const result = await db.dataLakes.tryAddEmbeddingSpendMetered(
+      dataLakeId,
+      estimatedMicroUsd,
+      levers.perLakeBudgetMicroUsd
+    );
+    if (!result.granted) {
+      await fire({
+        kind: 'budget_exhausted',
+        scope: 'lake',
+        periodKey: periodKeyForLakeBudget(levers.perLakeBudgetMicroUsd),
+        detail: { budgetMicroUsd: levers.perLakeBudgetMicroUsd },
+      });
       throw new EmbeddingSpendDeniedError(
         `the per-lake embedding budget ($${levers.perLakeBudgetMicroUsd / 1e6}) is exhausted for this data lake`
       );
     }
+    lakeSpendMicroUsd = result.spendMicroUsd;
   }
 
   const period = await db.cache.tryAddWithinLimitFixedWindow(
@@ -160,8 +221,53 @@ export async function enforceEmbeddingSpendGate(params: {
     levers.periodHours * 3_600_000
   );
   if (!period.success) {
+    await fire({
+      kind: 'budget_exhausted',
+      scope: 'period',
+      periodKey: periodKeyForWindow(period.expiresAt),
+      detail: {
+        budgetMicroUsd: levers.perPeriodBudgetMicroUsd,
+        periodHours: levers.periodHours,
+        windowEndsAt: period.expiresAt,
+      },
+    });
     throw new EmbeddingSpendDeniedError(
       `the platform-wide embedding budget ($${levers.perPeriodBudgetMicroUsd / 1e6} per ${levers.periodHours}h) is exhausted`
     );
+  }
+
+  // Every reservation succeeded - check the approaching-cap threshold. Computed AFTER every
+  // reservation grants (never mid-way): a run about to be denied should not also produce an
+  // "approaching" notice. No check-then-write race here for either meter: the ONLY
+  // race-safety is the atomic claim inside `notify`'s send service - N concurrent workers may
+  // all attempt to fire, and exactly one's claim wins.
+  if (dataLakeId && lakeSpendMicroUsd !== null && levers.perLakeBudgetMicroUsd > 0) {
+    const lakePct = lakeSpendMicroUsd / levers.perLakeBudgetMicroUsd;
+    if (lakePct >= EMBEDDING_SPEND_NOTIFY_THRESHOLD_PCT) {
+      await fire({
+        kind: 'approaching_cap',
+        scope: 'lake',
+        periodKey: periodKeyForLakeBudget(levers.perLakeBudgetMicroUsd),
+        thresholdPct: EMBEDDING_SPEND_NOTIFY_THRESHOLD_PCT,
+        detail: { spentMicroUsd: lakeSpendMicroUsd, budgetMicroUsd: levers.perLakeBudgetMicroUsd },
+      });
+    }
+  }
+  if (levers.perPeriodBudgetMicroUsd > 0) {
+    const periodPct = period.count / levers.perPeriodBudgetMicroUsd;
+    if (periodPct >= EMBEDDING_SPEND_NOTIFY_THRESHOLD_PCT) {
+      await fire({
+        kind: 'approaching_cap',
+        scope: 'period',
+        periodKey: periodKeyForWindow(period.expiresAt),
+        thresholdPct: EMBEDDING_SPEND_NOTIFY_THRESHOLD_PCT,
+        detail: {
+          spentMicroUsd: period.count,
+          budgetMicroUsd: levers.perPeriodBudgetMicroUsd,
+          periodHours: levers.periodHours,
+          windowEndsAt: period.expiresAt,
+        },
+      });
+    }
   }
 }

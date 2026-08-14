@@ -311,6 +311,17 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    */
   tryAddEmbeddingSpend(id: string, amountMicroUsd: number, limitMicroUsd: number): Promise<boolean>;
   /**
+   * Metered twin of tryAddEmbeddingSpend: identical atomic reserve-first contract, but returns
+   * the post-increment lifetime total instead of a boolean, so a caller can compute %-of-budget
+   * without a second, racy read. `spendMicroUsd` is `null` on denial and on the amount<=0
+   * no-op-success branch (no document read happened) - never treat `null` as zero spend.
+   */
+  tryAddEmbeddingSpendMetered(
+    id: string,
+    amountMicroUsd: number,
+    limitMicroUsd: number
+  ): Promise<{ granted: boolean; spendMicroUsd: number | null }>;
+  /**
    * Return a reservation that never became a provider call (the call failed). Exact-inverse of
    * ONE tryAddEmbeddingSpend grant, guarded so it cannot drive the meter negative; false means
    * the meter was already below the amount (e.g. an admin reset raced it) and nothing changed.

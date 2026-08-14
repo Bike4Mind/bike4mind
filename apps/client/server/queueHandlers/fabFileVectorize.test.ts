@@ -32,6 +32,7 @@ const h = vi.hoisted(() => ({
   getSettingsValue: vi.fn(),
   organizationFindById: vi.fn(async () => null),
   recordOperationalUsage: vi.fn(async () => undefined),
+  spendNotifier: vi.fn(async () => undefined),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -88,6 +89,7 @@ vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   deferFailureIfRetryable: (...a: unknown[]) => h.deferFailureIfRetryable(...a),
 }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
+vi.mock('@server/utils/dataLakeSpendNotifier', () => ({ makeDataLakeSpendNotifier: () => h.spendNotifier }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@server/utils/errors', () => ({ NotFoundError: class NotFoundError extends Error {} }));
 // Module-load zod schemas used by VectorizePayload.
@@ -316,6 +318,15 @@ describe('fabFileVectorize handler - spend gate', () => {
     await dispatch(makeEvent(payload), {} as never, mockLogger);
 
     expect(h.enforceEmbeddingSpendGate).not.toHaveBeenCalled();
+  });
+
+  it('wires the spend notifier into the gate call (#1677)', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.enforceEmbeddingSpendGate).toHaveBeenCalledWith(expect.objectContaining({ notify: h.spendNotifier }));
   });
 
   it('a terminal denial accounts the failure immediately and CONSUMES the message', async () => {

@@ -1620,6 +1620,51 @@ describe('tryAddEmbeddingSpend (lake and batch spend meters)', () => {
   });
 });
 
+describe('tryAddEmbeddingSpendMetered (returns the post-reservation total, #1677)', () => {
+  setupMongoTest();
+
+  it('grants and returns the post-increment total', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'metered-lake' }));
+
+    const first = await dataLakeRepository.tryAddEmbeddingSpendMetered(lake.id, 30, 100);
+    expect(first).toEqual({ granted: true, spendMicroUsd: 30 });
+
+    const second = await dataLakeRepository.tryAddEmbeddingSpendMetered(lake.id, 40, 100);
+    expect(second).toEqual({ granted: true, spendMicroUsd: 70 });
+  });
+
+  it('never jointly breaches the budget under concurrent reservations, same as the boolean form', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'metered-race-lake' }));
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => dataLakeRepository.tryAddEmbeddingSpendMetered(lake.id, 30, 100))
+    );
+    expect(results.filter(r => r.granted).length).toBe(3);
+    expect((await dataLakeRepository.findById(lake.id))?.embeddingSpendMicroUsd).toBe(90);
+  });
+
+  it('returns spendMicroUsd: null on denial (limit exhausted)', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'metered-denied-lake' }));
+    await dataLakeRepository.tryAddEmbeddingSpendMetered(lake.id, 100, 100);
+
+    const denied = await dataLakeRepository.tryAddEmbeddingSpendMetered(lake.id, 1, 100);
+    expect(denied).toEqual({ granted: false, spendMicroUsd: null });
+  });
+
+  it('returns spendMicroUsd: null for the amount<=0 no-op-success branch (fully-cached run)', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'metered-cached-lake' }));
+    const result = await dataLakeRepository.tryAddEmbeddingSpendMetered(lake.id, 0, 100);
+    expect(result).toEqual({ granted: true, spendMicroUsd: null });
+  });
+
+  it('denies on limit 0 with spendMicroUsd: null, even for a zero-cost call', async () => {
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'metered-stopped-lake' }));
+    expect(await dataLakeRepository.tryAddEmbeddingSpendMetered(lake.id, 0, 0)).toEqual({
+      granted: false,
+      spendMicroUsd: null,
+    });
+  });
+});
+
 describe('releaseEmbeddingSpend / resetEmbeddingSpend (provider-failure compensation)', () => {
   setupMongoTest();
 

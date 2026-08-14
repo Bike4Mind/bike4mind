@@ -32,17 +32,22 @@ const grantAll = () => ({
       .fn()
       .mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) }),
   },
-  dataLakes: { tryAddEmbeddingSpend: vi.fn().mockResolvedValue(true) },
+  dataLakes: { tryAddEmbeddingSpendMetered: vi.fn().mockResolvedValue({ granted: true, spendMicroUsd: 1_000 }) },
   dataLakeBatches: { tryAddEmbeddingSpend: vi.fn().mockResolvedValue(true) },
 });
 
-const gate = (db: ReturnType<typeof grantAll>, estimatedMicroUsd = 1_000) =>
+const gate = (
+  db: ReturnType<typeof grantAll>,
+  estimatedMicroUsd = 1_000,
+  notify?: (event: unknown) => Promise<unknown>
+) =>
   enforceEmbeddingSpendGate({
     estimatedMicroUsd,
     batchId: 'batch1',
     dataLakeId: 'lake1',
     db,
     sleep: vi.fn().mockResolvedValue(undefined),
+    notify,
   });
 
 beforeEach(() => {
@@ -58,7 +63,7 @@ describe('enforceEmbeddingSpendGate', () => {
     // run -> lake -> period, with the rate check first.
     expect(db.cache.tryAddWithinLimitFixedWindow).toHaveBeenNthCalledWith(1, EMBEDDING_SPEND_RATE_KEY, 1, 120, 60_000);
     expect(db.dataLakeBatches.tryAddEmbeddingSpend).toHaveBeenCalledWith('batch1', 1_000, 5_000_000);
-    expect(db.dataLakes.tryAddEmbeddingSpend).toHaveBeenCalledWith('lake1', 1_000, 100_000_000);
+    expect(db.dataLakes.tryAddEmbeddingSpendMetered).toHaveBeenCalledWith('lake1', 1_000, 100_000_000);
     expect(db.cache.tryAddWithinLimitFixedWindow).toHaveBeenNthCalledWith(
       2,
       EMBEDDING_SPEND_PERIOD_KEY,
@@ -83,7 +88,11 @@ describe('enforceEmbeddingSpendGate', () => {
 
   it.each([
     ['per-run', (db: ReturnType<typeof grantAll>) => db.dataLakeBatches.tryAddEmbeddingSpend.mockResolvedValue(false)],
-    ['per-lake', (db: ReturnType<typeof grantAll>) => db.dataLakes.tryAddEmbeddingSpend.mockResolvedValue(false)],
+    [
+      'per-lake',
+      (db: ReturnType<typeof grantAll>) =>
+        db.dataLakes.tryAddEmbeddingSpendMetered.mockResolvedValue({ granted: false, spendMicroUsd: null }),
+    ],
   ])('denies with a user-safe message when the %s budget meter denies', async (_name, arm) => {
     const db = grantAll();
     arm(db);
@@ -104,7 +113,7 @@ describe('enforceEmbeddingSpendGate', () => {
     const db = grantAll();
     await enforceEmbeddingSpendGate({ estimatedMicroUsd: 1_000, db, sleep: vi.fn() });
     expect(db.dataLakeBatches.tryAddEmbeddingSpend).not.toHaveBeenCalled();
-    expect(db.dataLakes.tryAddEmbeddingSpend).not.toHaveBeenCalled();
+    expect(db.dataLakes.tryAddEmbeddingSpendMetered).not.toHaveBeenCalled();
   });
 
   it('waits out a full rate window and proceeds once it grants', async () => {
@@ -143,5 +152,179 @@ describe('enforceEmbeddingSpendGate', () => {
       /rate limit is 0/
     );
     expect(sleep).not.toHaveBeenCalled();
+  });
+});
+
+describe('enforceEmbeddingSpendGate - spend notifications (#1677)', () => {
+  it('notify is a no-op when omitted - every existing caller/test is unaffected', async () => {
+    const db = grantAll();
+    await expect(gate(db)).resolves.toBeUndefined();
+  });
+
+  it('fires a stopped/switch notification before the switch-off throw', async () => {
+    mockedLevers.mockResolvedValue(levers({ spendEnabled: false }));
+    const db = grantAll();
+    const notify = vi.fn().mockResolvedValue(undefined);
+    const order: string[] = [];
+    notify.mockImplementation(async () => {
+      order.push('notify');
+    });
+
+    await gate(db, 1_000, notify).catch(() => order.push('threw'));
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ dataLakeId: 'lake1', kind: 'stopped', scope: 'switch' })
+    );
+    expect(order).toEqual(['notify', 'threw']);
+  });
+
+  it('fires a stopped/rate notification when the rate limit is 0', async () => {
+    mockedLevers.mockResolvedValue(levers({ maxCallsPerMinute: 0 }));
+    const db = grantAll();
+    db.cache.tryAddWithinLimitFixedWindow.mockResolvedValue({ success: false, count: 0, expiresAt: new Date() });
+    const notify = vi.fn().mockResolvedValue(undefined);
+
+    await gate(db, 1_000, notify).catch(() => {});
+
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'stopped', scope: 'rate' }));
+  });
+
+  it('fires a throttled/rate notification when the wait budget is exhausted (retryable)', async () => {
+    const db = grantAll();
+    db.cache.tryAddWithinLimitFixedWindow.mockResolvedValue({
+      success: false,
+      count: 120,
+      expiresAt: new Date(Date.now() + 20_000),
+    });
+    const notify = vi.fn().mockResolvedValue(undefined);
+
+    await gate(db, 1_000, notify).catch(() => {});
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'throttled',
+        scope: 'rate',
+        detail: expect.objectContaining({ retryable: true }),
+      })
+    );
+  });
+
+  it('fires a budget_exhausted/run notification on a per-run denial', async () => {
+    const db = grantAll();
+    db.dataLakeBatches.tryAddEmbeddingSpend.mockResolvedValue(false);
+    const notify = vi.fn().mockResolvedValue(undefined);
+
+    await gate(db, 1_000, notify).catch(() => {});
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'budget_exhausted', scope: 'run', periodKey: 'run:batch1' })
+    );
+  });
+
+  it('fires a budget_exhausted/lake notification on a per-lake denial', async () => {
+    const db = grantAll();
+    db.dataLakes.tryAddEmbeddingSpendMetered.mockResolvedValue({ granted: false, spendMicroUsd: null });
+    const notify = vi.fn().mockResolvedValue(undefined);
+
+    await gate(db, 1_000, notify).catch(() => {});
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'budget_exhausted', scope: 'lake', periodKey: 'lake:100000000' })
+    );
+  });
+
+  it('fires a budget_exhausted/period notification on a period denial', async () => {
+    const db = grantAll();
+    const expiresAt = new Date(Date.now() + 3_600_000);
+    db.cache.tryAddWithinLimitFixedWindow.mockImplementation(async (key: string) => ({
+      success: key !== EMBEDDING_SPEND_PERIOD_KEY,
+      count: 0,
+      expiresAt,
+    }));
+    const notify = vi.fn().mockResolvedValue(undefined);
+
+    await gate(db, 1_000, notify).catch(() => {});
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'budget_exhausted', scope: 'period', periodKey: `w:${expiresAt.toISOString()}` })
+    );
+  });
+
+  it('fires approaching_cap/lake at exactly 80% of the per-lake budget', async () => {
+    const db = grantAll();
+    db.dataLakes.tryAddEmbeddingSpendMetered.mockResolvedValue({ granted: true, spendMicroUsd: 80_000_000 });
+    const notify = vi.fn().mockResolvedValue(undefined);
+
+    await gate(db, 1_000, notify);
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'approaching_cap', scope: 'lake', thresholdPct: 0.8 })
+    );
+  });
+
+  it('does NOT fire approaching_cap/lake at 79% of the per-lake budget', async () => {
+    const db = grantAll();
+    db.dataLakes.tryAddEmbeddingSpendMetered.mockResolvedValue({ granted: true, spendMicroUsd: 79_000_000 });
+    const notify = vi.fn().mockResolvedValue(undefined);
+
+    await gate(db, 1_000, notify);
+
+    expect(notify).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'approaching_cap' }));
+  });
+
+  it('fires approaching_cap/period at 80% of the platform-period budget', async () => {
+    const db = grantAll();
+    const expiresAt = new Date(Date.now() + 3_600_000);
+    db.cache.tryAddWithinLimitFixedWindow.mockImplementation(async (key: string) => ({
+      success: true,
+      count: key === EMBEDDING_SPEND_PERIOD_KEY ? 40_000_000 : 1,
+      expiresAt,
+    }));
+    const notify = vi.fn().mockResolvedValue(undefined);
+
+    await gate(db, 1_000, notify);
+
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'approaching_cap', scope: 'period' }));
+  });
+
+  it('never fires approaching_cap when a reservation was denied (checked only after every grant)', async () => {
+    const db = grantAll();
+    db.dataLakes.tryAddEmbeddingSpendMetered.mockResolvedValue({ granted: false, spendMicroUsd: null });
+    const notify = vi.fn().mockResolvedValue(undefined);
+
+    await gate(db, 1_000, notify).catch(() => {});
+
+    expect(notify).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'approaching_cap' }));
+  });
+
+  it("notify rejecting does not change the gate's own resolve/reject outcome (grant path)", async () => {
+    const db = grantAll();
+    const notify = vi.fn().mockRejectedValue(new Error('mailer down'));
+
+    await expect(gate(db, 1_000, notify)).resolves.toBeUndefined();
+  });
+
+  it("notify rejecting does not change the gate's own resolve/reject outcome (deny path)", async () => {
+    mockedLevers.mockResolvedValue(levers({ spendEnabled: false }));
+    const db = grantAll();
+    const notify = vi.fn().mockRejectedValue(new Error('mailer down'));
+
+    await expect(gate(db, 1_000, notify)).rejects.toThrow(EmbeddingSpendDeniedError);
+  });
+
+  it('suppresses every notification when dataLakeId is absent (non-lake work)', async () => {
+    const db = grantAll();
+    db.dataLakeBatches.tryAddEmbeddingSpend.mockResolvedValue(false);
+    const notify = vi.fn().mockResolvedValue(undefined);
+
+    await enforceEmbeddingSpendGate({
+      estimatedMicroUsd: 1_000,
+      batchId: 'batch1',
+      db,
+      sleep: vi.fn(),
+      notify,
+    }).catch(() => {});
+
+    expect(notify).not.toHaveBeenCalled();
   });
 });
