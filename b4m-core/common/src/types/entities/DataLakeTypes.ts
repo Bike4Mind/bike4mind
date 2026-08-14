@@ -1,6 +1,6 @@
 import { IBaseRepository, type IMongoDocument } from '.';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
-import type { IOwnerUsageSummary } from './UsageEventTypes';
+import type { ILakeUsageSummary } from './UsageEventTypes';
 
 // ── Data Lake Status ────────────────────────────────────────────────────────
 
@@ -725,5 +725,5 @@ export interface IDataLakeSpendResponse {
   perPeriodBudgetMicroUsd: number;
   periodHours: number;
   /** Actual COGS from the UsageEvent ledger (ingestion embeds attributed to this lake). */
-  ledger: IOwnerUsageSummary;
+  ledger: ILakeUsageSummary;
 }

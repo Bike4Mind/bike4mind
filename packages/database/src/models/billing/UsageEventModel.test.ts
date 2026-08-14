@@ -330,7 +330,7 @@ describe('UsageEventRepository', () => {
     const lakeEvent = (overrides: Partial<IUsageEventInput> = {}) =>
       record({ feature: 'embedding', dataLakeId: 'lake-1', ...overrides });
 
-    it('rolls up a lake spend by day, uploading member, model, and feature', async () => {
+    it('rolls up a lake spend by day, model, and feature', async () => {
       await lakeEvent({ userId: 'user-a', costUsd: 0.01, creditsCharged: 0 });
       await lakeEvent({ userId: 'user-a', provider: 'openai', model: 'gpt-4o', costUsd: 0.02, creditsCharged: 0 });
       await lakeEvent({ userId: 'user-b', costUsd: 0.05, creditsCharged: 0 });
@@ -341,10 +341,6 @@ describe('UsageEventRepository', () => {
       expect(summary.totals.cogsUsd).toBeCloseTo(0.08, 10);
 
       // Breakdowns are ordered biggest-cost first.
-      expect(summary.byMember).toMatchObject([
-        { userId: 'user-b', requests: 1 },
-        { userId: 'user-a', requests: 2 },
-      ]);
       // Sorted by cogsUsd desc: bedrock carries both user-a's first event (0.01) and
       // user-b's (0.05) = 0.06 total, ahead of openai's single 0.02 event.
       expect(summary.byModel).toMatchObject([
@@ -380,7 +376,6 @@ describe('UsageEventRepository', () => {
       const summary = await usageEventRepository.lakeUsageSummary('lake-empty');
       expect(summary).toEqual({
         overTime: [],
-        byMember: [],
         byModel: [],
         byFeature: [],
         totals: { requests: 0, cogsUsd: 0, creditsCharged: 0 },

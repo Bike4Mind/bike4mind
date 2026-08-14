@@ -142,7 +142,7 @@ export function DataLakeSpendPanel({
               />
             </Box>
           ) : (
-            <Typography level="body-sm" data-testid="datalake-spend-period-uncapped">
+            <Typography level="body-sm" data-testid="datalake-spend-lake-uncapped">
               Per-lake budget: uncapped
             </Typography>
           )}

@@ -1,4 +1,9 @@
-import type { IDataLakeAccessGrantRepository, IDataLakeRepository, IOrganizationRepository } from '@bike4mind/common';
+import type {
+  IDataLakeAccessGrantRepository,
+  IDataLakeDocument,
+  IDataLakeRepository,
+  IOrganizationRepository,
+} from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { normalizeId } from '@bike4mind/utils';
 import { resolveEffectiveOwnerIds, type LakeGrant } from './manageRule';
@@ -41,10 +46,13 @@ export const MAX_LAKE_SPEND_ADDRESSEES = 20;
 export async function resolveLakeSpendAddressees(
   dataLakeId: string,
   db: LakeSpendAddresseeDb,
-  logger?: Logger
+  logger?: Logger,
+  /** Pass the caller's already-fetched lake to skip a second findById; `undefined` (default)
+   * still fetches it here, `null` short-circuits to [] the same as a lake that no longer exists. */
+  prefetchedLake?: IDataLakeDocument | null
 ): Promise<LakeSpendAddressee[]> {
   try {
-    const lake = await db.dataLakes.findById(dataLakeId);
+    const lake = prefetchedLake !== undefined ? prefetchedLake : await db.dataLakes.findById(dataLakeId);
     if (!lake) return [];
 
     const activeGrants: LakeGrant[] = (
@@ -75,9 +83,13 @@ export async function resolveLakeSpendAddressees(
 
     // Always unioned, not gated on the org set being empty: canManageLake's owner rung and
     // org-admin rung grant independently, so an org lake's own owner must be notified too.
-    const candidateIds = [...orgAdminIds, ...resolveEffectiveOwnerIds(lake, activeGrants)];
+    // Effective owner FIRST: with a large org-admin set, the truncation below must never be
+    // the thing that drops the one party who can actually act on the alert. Dedupe with a Set,
+    // which preserves first-seen insertion order - no `.sort()`, which would re-scramble that
+    // order back to arbitrary (id-string) priority.
+    const candidateIds = [...resolveEffectiveOwnerIds(lake, activeGrants), ...orgAdminIds];
 
-    const dedupedIds = Array.from(new Set(candidateIds)).sort();
+    const dedupedIds = Array.from(new Set(candidateIds));
     const boundedIds = dedupedIds.slice(0, MAX_LAKE_SPEND_ADDRESSEES);
     if (dedupedIds.length > boundedIds.length) {
       logger?.warn?.(

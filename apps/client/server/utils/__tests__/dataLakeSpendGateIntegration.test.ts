@@ -190,4 +190,112 @@ describe('cross-milestone seam: ingest -> ledger -> notification claim -> mailer
     expect(claims).toHaveLength(1);
     expect(sendEmail).toHaveBeenCalledTimes(1);
   });
+
+  it('N racing workers crossing 80% concurrently still produce exactly one claim and one email', async () => {
+    const owner = await User.create({ username: 'lake-owner-3', name: 'Lake Owner 3', email: 'owner3@example.com' });
+    const lake = await dataLakeRepository.create({
+      name: 'spend-integration-lake-3',
+      slug: 'spend-integration-lake-3',
+      fileTagPrefix: 'spend-integration-lake-3:',
+      datalakeTag: 'datalake:spend-integration-lake-3',
+      createdByUserId: String(owner._id),
+      status: 'active',
+    } as never);
+
+    mockedGetSettings.mockResolvedValue({
+      dataLakeEmbeddingSpendEnabled: 'true',
+      dataLakeEmbeddingBudgetPerRunUsd: '5',
+      dataLakeEmbeddingBudgetPerLakeUsd: String(PER_LAKE_BUDGET_USD),
+      dataLakeEmbeddingBudgetPerPeriodUsd: '50',
+      dataLakeEmbeddingBudgetPeriodHours: '24',
+      dataLakeEmbeddingMaxCallsPerMinute: '120',
+      dataLakeVectorizeChunkBatchSize: '50',
+    });
+
+    const sendEmail = vi.fn().mockResolvedValue(undefined);
+    const notify = (event: Parameters<typeof dataLakeService.sendDataLakeSpendNotification>[0]) =>
+      dataLakeService.sendDataLakeSpendNotification(event, {
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          organizations: organizationRepository,
+          users: userRepository,
+          spendNotifications: dataLakeSpendNotificationRepository,
+        },
+        mailer: { sendEmail },
+        // Generous on purpose: 8 concurrent real-Mongo round trips can genuinely exceed the
+        // production default under test-harness load - this test is proving claim dedup under
+        // concurrency, not the send-timeout's own re-arm behavior (covered separately).
+        sendTimeoutMs: 10_000,
+      });
+    const gateDb = {
+      adminSettings: { findBySettingNames: vi.fn().mockResolvedValue([]), findAll: vi.fn().mockResolvedValue([]) },
+      cache: cacheRepository,
+      dataLakes: dataLakeRepository,
+      dataLakeBatches: { tryAddEmbeddingSpend: vi.fn().mockResolvedValue(true) },
+    };
+
+    // 8 concurrent workers, each reserving 12 microUSD (96 total, still under the 100 budget -
+    // deliberately NOT exhausting it, or a later worker's denial would fire its own separate,
+    // equally-legitimate budget_exhausted notification and confound this test's assertion).
+    // The crossing (>=80) happens strictly between the 6th and 7th grant (72 -> 84), somewhere
+    // in the middle of the race, not deterministically on a single call - this exercises the
+    // atomic claim's real concurrency guard rather than a single sequential crossing.
+    const WORKER_COUNT = 8;
+    await Promise.all(
+      Array.from({ length: WORKER_COUNT }, () =>
+        dataLakeService.enforceEmbeddingSpendGate({ estimatedMicroUsd: 12, dataLakeId: lake.id, db: gateDb, notify })
+      )
+    );
+
+    const claims = await DataLakeSpendNotificationModel.find({ dataLakeId: lake.id });
+    expect(claims).toHaveLength(1);
+    expect(claims[0]).toMatchObject({ kind: 'approaching_cap', scope: 'lake' });
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it('acknowledged: SQS redelivery can double-write the ledger row (mirrors the lake meter double-count, documented not fixed)', async () => {
+    const owner = await User.create({ username: 'lake-owner-4', name: 'Lake Owner 4', email: 'owner4@example.com' });
+    const lake = await dataLakeRepository.create({
+      name: 'spend-integration-lake-4',
+      slug: 'spend-integration-lake-4',
+      fileTagPrefix: 'spend-integration-lake-4:',
+      datalakeTag: 'datalake:spend-integration-lake-4',
+      createdByUserId: String(owner._id),
+      status: 'active',
+    } as never);
+
+    // Two redeliveries of the "same" ingestion embed both call recordOperationalUsage - there is
+    // no idempotency key on the ledger write, matching fabFileVectorize's own acknowledged
+    // double-count on the lake meter for the identical scenario (cache write races the freeze).
+    const recordOnce = () =>
+      recordOperationalUsage(
+        {
+          requestId: 'batch-redelivery',
+          user: owner as never,
+          dataLakeId: lake.id,
+          feature: 'embedding',
+          provider: 'openai',
+          model: 'text-embedding-3-small',
+          inputTokens: 10,
+          costUsd: 0.00001,
+          bypassCreditBilling: true,
+        },
+        {
+          db: {
+            usageEvents: usageEventRepository,
+            adminSettings: {
+              findAll: vi.fn().mockResolvedValue([]),
+              findBySettingNames: vi.fn().mockResolvedValue([]),
+            },
+          },
+        }
+      );
+
+    await recordOnce();
+    await recordOnce();
+
+    const ledgerRows = await UsageEvent.find({ dataLakeId: lake.id });
+    expect(ledgerRows).toHaveLength(2);
+  });
 });

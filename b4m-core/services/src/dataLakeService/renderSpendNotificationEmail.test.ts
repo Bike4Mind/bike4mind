@@ -79,6 +79,18 @@ describe('renderSpendNotificationEmail', () => {
     expect(result.html).not.toMatch(/<p>[^<]*<p>/);
     expect(result.html).toContain('the embedding rate limit is 0 (stopped)');
   });
+
+  it('throws on an unhandled kind/scope pair instead of silently rendering the last branch copy', () => {
+    expect(() =>
+      renderSpendNotificationEmail({
+        // 'stopped'/'lake' is not one of the eight valid pairings this renderer handles.
+        kind: 'stopped',
+        scope: 'lake',
+        lakeName: 'My Lake',
+        detail: {},
+      })
+    ).toThrow(/unhandled kind\/scope pair/);
+  });
 });
 
 describe('formatMicroUsd', () => {

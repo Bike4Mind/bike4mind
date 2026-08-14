@@ -188,6 +188,29 @@ describe('resolveLakeSpendAddressees', () => {
     expect(result).toEqual([]);
   });
 
+  it('uses a prefetched lake and skips its own dataLakes.findById (S3)', async () => {
+    const findById = vi.fn();
+    const db = makeDb({
+      dataLakes: { findById },
+      users: { findActiveEmailsByIds: emailRows([{ id: 'creator-1', email: 'creator@example.com' }]) },
+    });
+
+    const result = await resolveLakeSpendAddressees('lake-1', db, logger, lake());
+
+    expect(findById).not.toHaveBeenCalled();
+    expect(result).toEqual([{ userId: 'creator-1', email: 'creator@example.com' }]);
+  });
+
+  it('returns [] for a prefetched null lake without calling dataLakes.findById (S3)', async () => {
+    const findById = vi.fn();
+    const db = makeDb({ dataLakes: { findById } });
+
+    const result = await resolveLakeSpendAddressees('lake-1', db, logger, null);
+
+    expect(findById).not.toHaveBeenCalled();
+    expect(result).toEqual([]);
+  });
+
   it('returns [] when every candidate user is deleted or has no email', async () => {
     const db = makeDb({ users: { findActiveEmailsByIds: vi.fn().mockResolvedValue([]) } });
 
@@ -229,6 +252,25 @@ describe('resolveLakeSpendAddressees', () => {
     const result = await resolveLakeSpendAddressees('lake-1', db, logger);
 
     expect(result).toHaveLength(MAX_LAKE_SPEND_ADDRESSEES);
+  });
+
+  it('keeps the effective owner past the fan-out cap despite 25 org admins (S1)', async () => {
+    const adminUserIds = Array.from({ length: 25 }, (_, i) => `admin-${i}`);
+    const db = makeDb({
+      dataLakes: { findById: vi.fn().mockResolvedValue(lake({ organizationId: 'org-1' })) },
+      dataLakeAccessGrants: {
+        listByLake: vi.fn().mockResolvedValue([{ principalType: 'user', principalId: 'the-owner', role: 'owner' }]),
+      },
+      organizations: { findById: vi.fn().mockResolvedValue({ userId: null, managerId: null, adminUserIds }) },
+      users: {
+        findActiveEmailsByIds: vi.fn(async (ids: string[]) => ids.map(id => ({ id, email: `${id}@example.com` }))),
+      },
+    });
+
+    const result = await resolveLakeSpendAddressees('lake-1', db, logger);
+
+    expect(result).toHaveLength(MAX_LAKE_SPEND_ADDRESSEES);
+    expect(result.map(a => a.userId)).toContain('the-owner');
   });
 
   it('never throws - a repository failure resolves to [] and logs a warning', async () => {

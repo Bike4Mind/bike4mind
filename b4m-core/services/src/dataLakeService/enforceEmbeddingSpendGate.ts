@@ -237,10 +237,21 @@ export async function enforceEmbeddingSpendGate(params: {
     levers.periodHours * 3_600_000
   );
   if (!period.success) {
+    // The cache layer never seeds a window doc when a single call's amount alone exceeds the
+    // limit (levers.perPeriodBudgetMicroUsd <= 0, or one message's own estimate is already
+    // over budget) - every such deny falls through to a SYNTHESIZED expiresAt (now + ttl),
+    // which is millisecond-unique per call. Keying the dedup on that would mean the exact
+    // deny an operator triggers by pulling the stop lever to 0 never dedupes at all: one
+    // notification claim (and up to MAX_LAKE_SPEND_ADDRESSEES emails) per denied message.
+    // Fall back to the same hour-bucketed clock key the switch/rate stop notices already use.
+    const periodKey =
+      levers.perPeriodBudgetMicroUsd <= 0 || estimatedMicroUsd > levers.perPeriodBudgetMicroUsd
+        ? periodKeyForClock(new Date())
+        : periodKeyForWindow(period.expiresAt);
     await fire({
       kind: 'budget_exhausted',
       scope: 'period',
-      periodKey: periodKeyForWindow(period.expiresAt),
+      periodKey,
       detail: {
         budgetMicroUsd: levers.perPeriodBudgetMicroUsd,
         periodHours: levers.periodHours,

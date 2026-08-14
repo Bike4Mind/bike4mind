@@ -250,6 +250,31 @@ describe('enforceEmbeddingSpendGate - spend notifications (#1677)', () => {
     );
   });
 
+  it('keys a period denial on the clock, not a synthesized expiresAt, when the cache never seeded a window (budget 0 or a single call over budget)', async () => {
+    // Simulates CacheModel.tryAddWithinLimitFixedWindow's real behavior when the seed step is
+    // skipped (amount > limit): every call returns a FRESH expiresAt (now + ttl), which would
+    // make periodKeyForWindow msec-unique per call if used - the exact bug this test guards.
+    mockedLevers.mockResolvedValue(levers({ perPeriodBudgetMicroUsd: 0 }));
+    const db = grantAll();
+    db.cache.tryAddWithinLimitFixedWindow.mockImplementation(async (key: string) => ({
+      success: key !== EMBEDDING_SPEND_PERIOD_KEY,
+      count: 0,
+      expiresAt: new Date(Date.now() + Math.random() * 1000), // a fresh, distinct instant each call
+    }));
+    const notify = vi.fn().mockResolvedValue(undefined);
+
+    await gate(db, 1_000, notify).catch(() => {});
+    await gate(db, 1_000, notify).catch(() => {});
+
+    const periodKeys = notify.mock.calls
+      .map(([event]) => event as { scope: string; periodKey: string })
+      .filter(event => event.scope === 'period')
+      .map(event => event.periodKey);
+    expect(periodKeys).toHaveLength(2);
+    expect(periodKeys[0]).toEqual(periodKeys[1]);
+    expect(periodKeys[0]).toMatch(/^t:\d+$/);
+  });
+
   it('fires approaching_cap/lake at exactly 80% of the per-lake budget', async () => {
     const db = grantAll();
     db.dataLakes.tryAddEmbeddingSpendMetered.mockResolvedValue({ granted: true, spendMicroUsd: 80_000_000 });

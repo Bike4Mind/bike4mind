@@ -4,6 +4,7 @@ import {
   COMPLETION_SOURCES,
   CreditHolderType,
   IMongoDocument,
+  ILakeUsageSummary,
   IModelDayMargin,
   IOwnerSpendDay,
   IOwnerSpendFeature,
@@ -580,7 +581,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     return doc !== null;
   }
 
-  async lakeUsageSummary(dataLakeId: string, days: number = 30): Promise<IOwnerUsageSummary> {
+  async lakeUsageSummary(dataLakeId: string, days: number = 30): Promise<ILakeUsageSummary> {
     const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
     const spendSums = {
@@ -590,11 +591,11 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     } as const;
     const spendFields = { requests: 1, cogsUsd: 1, creditsCharged: 1 } as const;
 
-    // Same $facet shape as ownerUsageSummary - a lake is just a different $match
-    // key over the same event set (only ingestion embeds carry dataLakeId).
+    // Same $facet shape as ownerUsageSummary minus byMember - a lake is just a different
+    // $match key over the same event set (only ingestion embeds carry dataLakeId), but the
+    // owner-facing spend view has no use for raw per-uploader userIds.
     const [result] = await this.model.aggregate<{
       overTime: IOwnerSpendDay[];
-      byMember: IOwnerSpendMember[];
       byModel: IOwnerSpendModel[];
       byFeature: IOwnerSpendFeature[];
       totals: IUsageSpendBucket[];
@@ -611,11 +612,6 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
             },
             { $project: { _id: 0, day: '$_id', ...spendFields } },
             { $sort: { day: 1 } },
-          ],
-          byMember: [
-            { $group: { _id: '$userId', ...spendSums } },
-            { $project: { _id: 0, userId: '$_id', ...spendFields } },
-            { $sort: { cogsUsd: -1 } },
           ],
           byModel: [
             { $group: { _id: { provider: '$provider', model: '$model' }, ...spendSums } },
@@ -635,7 +631,6 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     const emptyTotals: IUsageSpendBucket = { requests: 0, cogsUsd: 0, creditsCharged: 0 };
     return {
       overTime: result?.overTime ?? [],
-      byMember: result?.byMember ?? [],
       byModel: result?.byModel ?? [],
       byFeature: result?.byFeature ?? [],
       totals: result?.totals?.[0] ?? emptyTotals,

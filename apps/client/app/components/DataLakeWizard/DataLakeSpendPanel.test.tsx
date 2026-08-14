@@ -13,7 +13,6 @@ const Wrapper = ({ children }: { children: ReactNode }) => (
 
 const emptyLedger = {
   overTime: [],
-  byMember: [],
   byModel: [],
   byFeature: [],
   totals: { requests: 0, cogsUsd: 0, creditsCharged: 0 },
@@ -95,7 +94,7 @@ describe('DataLakeSpendPanel', () => {
 
   it('shows an uncapped label instead of a progress bar when the per-lake budget is 0', () => {
     renderPanel({ summary: baseSummary({ perLakeBudgetMicroUsd: 0 }) });
-    expect(screen.getByTestId('datalake-spend-period-uncapped')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-spend-lake-uncapped')).toBeInTheDocument();
   });
 
   it('clamps the progress bar visually past 100% but shows the true percentage in the label', () => {

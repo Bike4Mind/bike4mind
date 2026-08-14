@@ -142,16 +142,22 @@ export function renderSpendNotificationEmail(input: SpendNotificationEmailInput)
     };
   }
 
-  // approaching_cap / period - same disclosure concern as budget_exhausted/period above:
-  // no dollar or percentage figures, since this is the platform-wide aggregate, not this
-  // lake's own spend.
-  return {
-    subject: `Indexing is approaching the platform embedding budget`,
-    html: wrap(
-      lake,
-      `<p>Indexing is approaching the platform-wide embedding budget for the current` +
-        `${detail.periodHours ? ` ${detail.periodHours}h` : ''} window` +
-        `${windowEndsAt ? `, ending ${windowEndsAt}` : ''}. It may pause automatically if the budget is reached.</p>`
-    ),
-  };
+  if (kind === 'approaching_cap' && scope === 'period') {
+    // Same disclosure concern as budget_exhausted/period above: no dollar or percentage
+    // figures, since this is the platform-wide aggregate, not this lake's own spend.
+    return {
+      subject: `Indexing is approaching the platform embedding budget`,
+      html: wrap(
+        lake,
+        `<p>Indexing is approaching the platform-wide embedding budget for the current` +
+          `${detail.periodHours ? ` ${detail.periodHours}h` : ''} window` +
+          `${windowEndsAt ? `, ending ${windowEndsAt}` : ''}. It may pause automatically if the budget is reached.</p>`
+      ),
+    };
+  }
+
+  // Every valid kind/scope pair is handled explicitly above; reaching here means a new
+  // pairing was introduced without updating this renderer, which would otherwise silently
+  // fall through to whichever branch happened to be last.
+  throw new Error(`renderSpendNotificationEmail: unhandled kind/scope pair "${kind}"/"${scope}"`);
 }

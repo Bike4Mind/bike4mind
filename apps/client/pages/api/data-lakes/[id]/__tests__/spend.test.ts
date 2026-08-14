@@ -46,7 +46,6 @@ const call = (r: unknown, res: unknown) => (handler as (req: unknown, res: unkno
 
 const emptyLedger = {
   overTime: [],
-  byMember: [],
   byModel: [],
   byFeature: [],
   totals: { requests: 0, cogsUsd: 0, creditsCharged: 0 },

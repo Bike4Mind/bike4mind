@@ -21,15 +21,25 @@ const baseEvent = {
 function makeDeps(overrides: Record<string, unknown> = {}) {
   const claimNotification = vi.fn().mockResolvedValue({ claimed: true, id: 'notif-1' });
   const markDelivered = vi.fn().mockResolvedValue(undefined);
+  const deleteNotification = vi.fn().mockResolvedValue(undefined);
   const sendEmail = vi.fn().mockResolvedValue(undefined);
   const db = {
     dataLakes: { findById: vi.fn().mockResolvedValue({ id: 'lake-1', name: 'My Lake', organizationId: null }) },
     dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) },
     organizations: { findById: vi.fn().mockResolvedValue(null) },
     users: { findActiveEmailsByIds: vi.fn().mockResolvedValue([]) },
-    spendNotifications: { claimNotification, markDelivered },
+    spendNotifications: { claimNotification, markDelivered, delete: deleteNotification },
   };
-  return { db, mailer: { sendEmail }, logger, claimNotification, markDelivered, sendEmail, ...overrides };
+  return {
+    db,
+    mailer: { sendEmail },
+    logger,
+    claimNotification,
+    markDelivered,
+    deleteNotification,
+    sendEmail,
+    ...overrides,
+  };
 }
 
 beforeEach(() => {
@@ -123,5 +133,43 @@ describe('sendDataLakeSpendNotification', () => {
     deps.claimNotification.mockRejectedValue(new Error('mongo down'));
 
     await expect(sendDataLakeSpendNotification(baseEvent, deps)).resolves.toBe('failed');
+  });
+
+  it('resolves to failed (not hung) and DELETES the claim so it re-arms when the send times out (S2)', async () => {
+    // markDelivered(deliveryFailed:true) would NOT re-arm - claimNotification's upsert keys
+    // purely on (dataLakeId, kind, scope, periodKey) and never reads deliveryFailed. Only
+    // deleting the row frees that unique-index slot for a future genuine attempt.
+    const deps = makeDeps();
+    deps.sendEmail.mockImplementation(() => new Promise(() => {})); // never resolves - simulates a hung mailer
+
+    const outcome = await sendDataLakeSpendNotification(baseEvent, { ...deps, sendTimeoutMs: 10 });
+
+    expect(outcome).toBe('failed');
+    expect(deps.deleteNotification).toHaveBeenCalledWith('notif-1');
+    expect(deps.markDelivered).not.toHaveBeenCalled();
+  });
+
+  it('never throws if the re-arm delete itself fails on timeout - the claim just stands', async () => {
+    const deps = makeDeps();
+    deps.sendEmail.mockImplementation(() => new Promise(() => {}));
+    deps.deleteNotification.mockRejectedValue(new Error('mongo down'));
+
+    await expect(sendDataLakeSpendNotification(baseEvent, { ...deps, sendTimeoutMs: 10 })).resolves.toBe('failed');
+  });
+
+  it('reads the lake exactly once and threads it into addressee resolution (S3)', async () => {
+    const deps = makeDeps();
+
+    await sendDataLakeSpendNotification(baseEvent, deps);
+
+    // The only dataLakes.findById call across the whole send is this one, made before the
+    // claim (for organizationId denormalization) - resolveLakeSpendAddressees must be handed
+    // this same lake instead of re-fetching it (see its own "uses a prefetched lake" test).
+    expect(deps.db.dataLakes.findById).toHaveBeenCalledTimes(1);
+    expect(h.resolveLakeSpendAddressees).toHaveBeenCalledWith(baseEvent.dataLakeId, deps.db, deps.logger, {
+      id: 'lake-1',
+      name: 'My Lake',
+      organizationId: null,
+    });
   });
 });

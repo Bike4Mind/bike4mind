@@ -204,6 +204,13 @@ export interface IOwnerUsageSummary {
   totals: IUsageSpendBucket;
 }
 
+/**
+ * Same rollup as IOwnerUsageSummary minus byMember: the data-lake spend view has no UI that
+ * reads per-uploader-user rows, so the wire shape omits them rather than exposing raw userIds
+ * to any owner/curator/org-admin who can view a lake's spend.
+ */
+export type ILakeUsageSummary = Omit<IOwnerUsageSummary, 'byMember'>;
+
 /** A member spend bucket with the user id resolved to a display name by the API. */
 export type NamedOwnerSpendMember = IOwnerSpendMember & { userName?: string };
 
@@ -600,10 +607,11 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
 
   /**
    * One data lake's ledgered spend (ingestion embeds only, see `dataLakeId` on
-   * UsageEvent) rolled up by day, uploading member, model, and feature, over the
-   * trailing N days (default 30). Same shape as `ownerUsageSummary` - a lake is
-   * just a different $match key over the same event set. Powers the owner-facing
+   * UsageEvent) rolled up by day, model, and feature, over the trailing N days
+   * (default 30). Same $facet shape as `ownerUsageSummary` minus byMember - a lake
+   * is just a different $match key over the same event set, but the owner-facing
+   * spend view has no use for raw per-uploader userIds. Powers the owner-facing
    * data-lake spend view.
    */
-  lakeUsageSummary(dataLakeId: string, days?: number): Promise<IOwnerUsageSummary>;
+  lakeUsageSummary(dataLakeId: string, days?: number): Promise<ILakeUsageSummary>;
 }
