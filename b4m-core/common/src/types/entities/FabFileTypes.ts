@@ -182,10 +182,6 @@ export interface IFabFile {
   /** When `isChunking` was last set true - the rescue sweep uses this to reclaim a claim stranded
    *  by a hard worker crash that never cleared it (see buildFabFileChunkScanFilter). */
   chunkClaimedAt?: Date | null;
-  /** Identity of the current chunk claim, rotated by each superseding claim. A tokened queue message
-   *  matches on THIS rather than on `chunkClaimedAt`, which is what lets pickup restamp the latter
-   *  (so the stale window measures run time, not queue wait) without breaking the SQS retry ladder. */
-  chunkLeaseId?: string | null;
   /** Whether this FabFile has been chunked */
   chunked?: boolean;
   /**
@@ -822,24 +818,24 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * true}) plus a reset of the chunk/vector flags (incl. `error`) so a re-enqueued job re-chunks
    * instead of hitting the "already chunked" guard or stranding a stale vectorize error. Returns
    * ONLY the ids actually claimed - a file a concurrent wave already claimed is skipped - each with
-   * its LEASE ID. The lease is the claim TOKEN the caller must put on the queue message: the worker
-   * proceeds only if the file still carries that lease AND is not already being chunked, so neither
-   * a duplicate nor a superseded delivery can double-process one file. A claim whose enqueue fails
-   * MUST be released (releaseChunkClaimByIds).
+   * its claim stamp (chunkClaimedAt as epoch ms). The stamp is the claim TOKEN the caller must put
+   * on the queue message: the worker only proceeds if the file still carries that exact stamp, so a
+   * duplicate or superseded delivery can't double-process one file. A claim whose enqueue fails MUST
+   * be released (releaseChunkClaimByIds).
    */
-  claimFilesForRechunkByIds(ids: string[]): Promise<{ id: string; leaseId: string }[]>;
+  claimFilesForRechunkByIds(ids: string[]): Promise<{ id: string; claimedAt: number }[]>;
   /**
    * Compare-and-set CLAIM for the rescue sweep, over ids it already selected via
    * buildFabFileChunkScanFilter. Takes the claim (isChunking:true, chunkClaimedAt=now) only if the
    * file is not being chunked or its claim is stale - mirroring that filter's stale arm - so a
    * merely-slow (not crashed) file already in flight isn't re-enqueued and chunked twice. Returns
-   * ONLY the ids won, each with its LEASE ID (the token the worker matches); the caller enqueues
-   * exactly that subset. Rotating the lease also invalidates any older in-flight message for the file.
+   * ONLY the ids won, each with its claim stamp (the token the worker matches); the caller enqueues
+   * exactly that subset.
    */
-  claimForChunkScanByIds(ids: string[], staleClaimBefore: Date): Promise<{ id: string; leaseId: string }[]>;
+  claimForChunkScanByIds(ids: string[], staleClaimBefore: Date): Promise<{ id: string; claimedAt: number }[]>;
   /**
-   * Undo a claim whose chunk message never reached the queue: clear isChunking and the lease so the
-   * file is re-detectable and not stranded. Returns the number modified.
+   * Undo a claim whose chunk message never reached the queue: restore chunked:true and clear
+   * isChunking so the file is re-detectable and not stranded. Returns the number modified.
    */
   releaseChunkClaimByIds(ids: string[]): Promise<number>;
   /**

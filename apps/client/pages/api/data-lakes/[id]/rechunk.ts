@@ -80,13 +80,12 @@ const handler = baseApi()
       const claimed = await fabFileRepository.claimFilesForRechunkByIds([...claimedById.keys()]);
       // allSettled, not all: one failed send must not fail the batch and strand the OTHER claimed
       // files with nothing on the queue. Release the claim on any file whose send didn't land so it
-      // self-heals (re-detected / re-swept) instead of sitting claimed-and-invisible. `leaseId` is
-      // the claim token: the worker re-chunks only a file that still carries this lease and is not
-      // already being chunked, so neither a duplicate delivery nor a stale rescue re-enqueue can
-      // double-process it.
+      // self-heals (re-detected / re-swept) instead of sitting claimed-and-invisible. `claimedAt` is
+      // the claim token: the worker only re-chunks a file that still carries this exact stamp, so a
+      // duplicate delivery or a stale rescue re-enqueue can't double-process it.
       const results = await Promise.allSettled(
-        claimed.map(({ id, leaseId }) =>
-          sendToQueue(queueUrl, { fabFileId: id, userId: claimedById.get(id)!, leaseId })
+        claimed.map(({ id, claimedAt }) =>
+          sendToQueue(queueUrl, { fabFileId: id, userId: claimedById.get(id)!, claimedAt })
         )
       );
       const failedIds = claimed.filter((_, i) => results[i].status === 'rejected').map(c => c.id);

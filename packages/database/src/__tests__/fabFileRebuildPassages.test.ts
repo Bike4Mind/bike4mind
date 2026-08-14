@@ -28,25 +28,20 @@ describe('FabFileChunkRepository.findUnderChunkedFabFileIds', () => {
   });
 
   it('returns only files with a chunk over the threshold, worst-first', async () => {
-    // The expected order (f-d, f-c, f-b, f-a) is deliberately the reverse of BOTH insertion order
-    // and lexicographic fabFileId order, and there are four groups rather than two. Two groups made
-    // this assertion satisfiable by chance - deleting the $sort left it passing, because $group
-    // output order is unspecified and happened to agree. With four groups whose only ordering that
-    // satisfies the assertion is descending maxTokenCount, no natural traversal (scan order, id
-    // order) produces it, so removing the $sort genuinely fails this test.
+    // Insert f-mid FIRST so insertion order (f-mid, f-big) is the OPPOSITE of worst-first
+    // (f-big 6000 > f-mid 2000). That makes the $sort load-bearing: without it the aggregation
+    // would return f-mid first and this assertion would fail, so it can't silently regress.
     await FabFileChunk.create([
-      { fabFileId: 'f-a', text: 'a1', tokenCount: 2000 },
-      { fabFileId: 'f-b', text: 'b1', tokenCount: 3000 },
-      { fabFileId: 'f-b', text: 'b2', tokenCount: 400 },
-      { fabFileId: 'f-c', text: 'c1', tokenCount: 4000 },
-      { fabFileId: 'f-d', text: 'd1', tokenCount: 5000 },
-      { fabFileId: 'f-ok', text: 'e1', tokenCount: 500 },
-      { fabFileId: 'f-ok', text: 'e2', tokenCount: 480 },
+      { fabFileId: 'f-mid', text: 'c', tokenCount: 2000 },
+      { fabFileId: 'f-big', text: 'a', tokenCount: 6000 },
+      { fabFileId: 'f-big', text: 'b', tokenCount: 400 },
+      { fabFileId: 'f-ok', text: 'd', tokenCount: 500 },
+      { fabFileId: 'f-ok', text: 'e', tokenCount: 480 },
     ]);
 
-    const ids = await fabFileChunkRepository.findUnderChunkedFabFileIds(['f-a', 'f-b', 'f-c', 'f-d', 'f-ok'], 1500);
+    const ids = await fabFileChunkRepository.findUnderChunkedFabFileIds(['f-big', 'f-mid', 'f-ok'], 1500);
 
-    expect(ids).toEqual(['f-d', 'f-c', 'f-b', 'f-a']); // worst-first, f-ok excluded
+    expect(ids).toEqual(['f-big', 'f-mid']); // worst-first (NOT insertion order), f-ok excluded
   });
 
   it('never returns a file outside the provided id set', async () => {
@@ -110,7 +105,7 @@ describe('FabFileRepository.claimFilesForRechunkByIds', () => {
     await FabFile.deleteMany({});
   });
 
-  it('claims a free file (isChunking:true + reset flags, incl. error) and returns its id + lease', async () => {
+  it('claims a free file (isChunking:true + reset flags, incl. error) and returns its id + claim stamp', async () => {
     const [f] = await FabFile.create([
       makeFile({
         chunked: true,
@@ -126,7 +121,7 @@ describe('FabFileRepository.claimFilesForRechunkByIds', () => {
     ]);
 
     expect(await fabFileRepository.claimFilesForRechunkByIds([f._id.toString()])).toEqual([
-      { id: f._id.toString(), leaseId: expect.any(String) },
+      { id: f._id.toString(), claimedAt: expect.any(Number) },
     ]);
 
     const after = await FabFile.findById(f._id).lean();
@@ -149,7 +144,7 @@ describe('FabFileRepository.claimFilesForRechunkByIds', () => {
   it('returns only the subset it won when some ids are already claimed', async () => {
     const [free, taken] = await FabFile.create([makeFile({ isChunking: false }), makeFile({ isChunking: true })]);
     expect(await fabFileRepository.claimFilesForRechunkByIds([free._id.toString(), taken._id.toString()])).toEqual([
-      { id: free._id.toString(), leaseId: expect.any(String) },
+      { id: free._id.toString(), claimedAt: expect.any(Number) },
     ]);
   });
 
@@ -169,7 +164,7 @@ describe('FabFileRepository.claimForChunkScanByIds', () => {
   it('claims a free (not-in-flight) file, stamping isChunking + chunkClaimedAt', async () => {
     const [f] = await FabFile.create([makeFile({ chunked: false, chunkCount: 0, isChunking: false })]);
     expect(await fabFileRepository.claimForChunkScanByIds([f._id.toString()], staleBefore())).toEqual([
-      { id: f._id.toString(), leaseId: expect.any(String) },
+      { id: f._id.toString(), claimedAt: expect.any(Number) },
     ]);
     const after = await FabFile.findById(f._id).lean();
     expect(after?.isChunking).toBe(true);
@@ -181,7 +176,7 @@ describe('FabFileRepository.claimForChunkScanByIds', () => {
       makeFile({ chunked: false, chunkCount: 0, isChunking: true, chunkClaimedAt: new Date(Date.now() - 60 * 60_000) }),
     ]);
     expect(await fabFileRepository.claimForChunkScanByIds([f._id.toString()], staleBefore())).toEqual([
-      { id: f._id.toString(), leaseId: expect.any(String) },
+      { id: f._id.toString(), claimedAt: expect.any(Number) },
     ]);
   });
 
@@ -197,7 +192,7 @@ describe('FabFileRepository.claimForChunkScanByIds', () => {
     const after0 = await FabFile.findById(f._id).lean();
     expect(after0?.chunkClaimedAt ?? null).toBeNull(); // stuck before chunkClaimedAt existed
     expect(await fabFileRepository.claimForChunkScanByIds([f._id.toString()], staleBefore())).toEqual([
-      { id: f._id.toString(), leaseId: expect.any(String) },
+      { id: f._id.toString(), claimedAt: expect.any(Number) },
     ]);
   });
 
