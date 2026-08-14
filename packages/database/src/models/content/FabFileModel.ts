@@ -1485,6 +1485,11 @@ FabFileSchema.index({ userId: 1, deletedAt: 1, fileName: 'text', updatedAt: -1 }
 // separate single-field `{ 'tags.name': 1 }` index is needed (dropped in a migration).
 FabFileSchema.index({ 'tags.name': 1, archivedAt: 1, deletedAt: 1 });
 
+// Bounds the prefix arm of buildDataLakeMembershipFilter (see computeDataLakeStats above): that
+// query's userId conjunct is not covered by the index above, so without this one Mongo scans the
+// tag-prefix range across every user before filtering userId in memory.
+FabFileSchema.index({ userId: 1, 'tags.name': 1, archivedAt: 1, deletedAt: 1 });
+
 // Content hash deduplication lookups
 FabFileSchema.index({ contentHash: 1, userId: 1 });
 
