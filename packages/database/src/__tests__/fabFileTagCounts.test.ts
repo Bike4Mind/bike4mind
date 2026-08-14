@@ -101,6 +101,37 @@ describe('FabFileRepository.countFilesByTagForUser', () => {
     expect(await countOf('invoices', OPTIONS)).toBe(0);
   });
 
+  // The orphan-bucket regression: a tag the caller can never rewrite (they don't own the file)
+  // must not keep counting once the caller's own tag by that name is gone, or WORKSPACES shows
+  // a bucket that renaming/deleting their tag can never clear.
+  it('does not count a tag surviving only on a file merely shared with the caller', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: 'invoices', strength: 1 }],
+      users: [{ userId, permissions: ['read'] }],
+    });
+
+    expect(await countOf('invoices', OPTIONS)).toBe(0);
+  });
+
+  // Regression guard: the fix above must be scoped to personal shares only - a group-shared
+  // file's tag still has to count, since a group workspace is the caller's own, not orphanable.
+  it('still counts a tag on a file shared via group access', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'group-shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: 'reports', strength: 1 }],
+      groups: [{ groupId: 'group-1', permissions: ['read'] }],
+    });
+
+    expect(await countOf('reports', { userGroups: ['group-1'], dataLakeTags: [] })).toBe(1);
+  });
+
   it('omits a tag no live file carries rather than reporting it as zero', async () => {
     await seed(['invoices']);
 
@@ -245,6 +276,35 @@ describe('FabFileRepository.countUniqueFilesByNamespaceForUser', () => {
     await seed(['clients:acme'], { userId: otherUserId });
 
     expect(await countOf('clients')).toBe(0);
+  });
+
+  // Mirrors the countFilesByTagForUser orphan-bucket regression: the two must move in lockstep
+  // (see this function's own doc comment) or a namespace disappears from one count but not the
+  // other, rendering a workspace row with the wrong size.
+  it('does not count a namespace surviving only on a file merely shared with the caller', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: 'clients:acme', strength: 1 }],
+      users: [{ userId, permissions: ['read'] }],
+    });
+
+    expect(await countOf('clients', { userGroups: [], dataLakeTags: [] })).toBe(0);
+  });
+
+  it('still counts a namespace on a file shared via group access', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'group-shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: 'clients:acme', strength: 1 }],
+      groups: [{ groupId: 'group-1', permissions: ['read'] }],
+    });
+
+    expect(await countOf('clients', { userGroups: ['group-1'], dataLakeTags: [] })).toBe(1);
   });
 });
 
