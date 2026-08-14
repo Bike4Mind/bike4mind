@@ -87,3 +87,4 @@ export {
   UnsupportedReactDependencyError,
   ReactArtifactTranspileError,
 } from './transpileReactArtifact';
+export { renderArtifactIndexHtml } from './renderArtifactHtml';

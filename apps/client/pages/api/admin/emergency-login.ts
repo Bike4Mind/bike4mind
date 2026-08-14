@@ -4,7 +4,7 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { UnauthorizedError } from '@server/utils/errors';
-import { issueSessionForRequest } from '@server/auth/issueSession';
+import { issueBrowserSession } from '@server/auth/issueSession';
 import { logEvent } from '@server/utils/analyticsLog';
 import { AuthEvents } from '@bike4mind/common';
 import { rateLimit } from '@server/middlewares/rateLimit';
@@ -90,11 +90,11 @@ const handler = baseApi({ auth: false })
       });
 
       // Generate auth tokens
-      const { accessToken, refreshToken } = await issueSessionForRequest(req, user.id, {
+      const { accessToken } = await issueBrowserSession(req, res, user.id, {
         createdVia: 'emergency',
         tokenVersion: user.tokenVersion ?? 0,
       });
-      const tokens = { accessToken, refreshToken };
+      const tokens = { accessToken };
 
       // Remove password from response using destructuring
       const { password: _, ...userResponse } = user.toJSON();

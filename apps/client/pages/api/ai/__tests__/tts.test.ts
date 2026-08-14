@@ -11,10 +11,9 @@ const { mocks, InsufficientTtsCreditsError, TtsProviderNotConfiguredError, Unpro
       TtsProviderNotConfiguredError,
       UnprocessableEntityError,
       mocks: {
-        resolveTtsProvider: vi.fn(),
+        synthesizeTts: vi.fn(),
         assertTtsCreditsAvailable: vi.fn(),
         deductTtsCredits: vi.fn(),
-        synthesize: vi.fn(),
         exceedsTtsResponseLimit: vi.fn(),
         persistGeneratedAudio: vi.fn(),
       },
@@ -36,13 +35,18 @@ vi.mock('@bike4mind/common', () => ({
   VOICE_VENDOR_SUPPORTED_FORMATS: { openai: ['mp3', 'wav'], elevenlabs: ['mp3', 'pcm', 'opus'] },
 }));
 
-vi.mock('@bike4mind/utils', () => ({
-  aiVoiceService: () => ({ synthesize: (...a: unknown[]) => mocks.synthesize(...a) }),
-}));
-
 vi.mock('@server/utils/resolveTtsProvider', () => ({
-  resolveTtsProvider: (...a: unknown[]) => mocks.resolveTtsProvider(...a),
   TtsProviderNotConfiguredError,
+}));
+// The provider-selection + fallback loop is covered in synthesizeTts.test.ts;
+// here it is a seam so the route's own branching is what's under test.
+vi.mock('@server/utils/synthesizeTts', () => ({
+  synthesizeTts: (...a: unknown[]) => mocks.synthesizeTts(...a),
+  upstreamStatus: (error: unknown) => (error as { status?: number })?.status,
+  isCredentialRejection: (error: unknown) => {
+    const status = (error as { status?: number })?.status;
+    return status === 401 || status === 403;
+  },
 }));
 vi.mock('@server/utils/deductTtsCredits', () => ({
   assertTtsCreditsAvailable: (...a: unknown[]) => mocks.assertTtsCreditsAvailable(...a),
@@ -75,18 +79,19 @@ const run = (
   };
 };
 
-const okSynthesis = () =>
-  mocks.synthesize.mockResolvedValue({
-    audio: Buffer.from([1, 2, 3]),
-    contentType: 'audio/mpeg',
-    format: 'mp3',
-    model: 'tts-1',
-    characters: 5,
-  });
+const synthesisResult = () => ({
+  audio: Buffer.from([1, 2, 3]),
+  contentType: 'audio/mpeg',
+  format: 'mp3',
+  model: 'tts-1',
+  characters: 5,
+});
+
+const okSynthesis = (vendor = 'openai', fallbackFrom?: string) =>
+  mocks.synthesizeTts.mockResolvedValue({ vendor, result: synthesisResult(), fallbackFrom });
 
 beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
-  mocks.resolveTtsProvider.mockResolvedValue({ apiKey: 'key', voice: 'alloy' });
   mocks.assertTtsCreditsAvailable.mockResolvedValue(undefined);
   mocks.deductTtsCredits.mockResolvedValue(undefined);
   mocks.exceedsTtsResponseLimit.mockReturnValue(false);
@@ -103,16 +108,15 @@ describe('POST /api/ai/tts', () => {
   it('rejects an unsupported (vendor, format) pair with 422 before any provider cost', async () => {
     const { promise } = run({ text: 'hi', provider: 'elevenlabs', format: 'wav' });
     await expect(promise).rejects.toBeInstanceOf(UnprocessableEntityError);
-    expect(mocks.resolveTtsProvider).not.toHaveBeenCalled();
-    expect(mocks.synthesize).not.toHaveBeenCalled();
+    expect(mocks.synthesizeTts).not.toHaveBeenCalled();
   });
 
-  it('returns 401 when the provider is not configured', async () => {
-    mocks.resolveTtsProvider.mockRejectedValue(new TtsProviderNotConfiguredError('no key'));
+  it('returns 401 with an actionable code when no provider is configured', async () => {
+    mocks.synthesizeTts.mockRejectedValue(new TtsProviderNotConfiguredError('no key'));
     const { res, promise } = run({ text: 'hi' });
     await promise;
     expect(res._getStatusCode()).toBe(401);
-    expect(mocks.synthesize).not.toHaveBeenCalled();
+    expect(res._getJSONData()).toMatchObject({ error: 'no key', errorCode: 'provider_not_configured' });
   });
 
   it('returns 402 and never calls the provider when credits are exhausted', async () => {
@@ -121,7 +125,7 @@ describe('POST /api/ai/tts', () => {
     await promise;
     expect(res._getStatusCode()).toBe(402);
     expect(res._getJSONData()).toMatchObject({ provider: 'openai' });
-    expect(mocks.synthesize).not.toHaveBeenCalled();
+    expect(mocks.synthesizeTts).not.toHaveBeenCalled();
   });
 
   it('bills for the synthesis before the size guard, then returns 413 when the audio is too large', async () => {
@@ -134,20 +138,52 @@ describe('POST /api/ai/tts', () => {
   });
 
   it('passes an upstream 4xx through with a generic body, without leaking provider text', async () => {
-    mocks.synthesize.mockRejectedValue({ status: 429, message: 'raw provider detail' });
+    mocks.synthesizeTts.mockRejectedValue({ status: 429, message: 'raw provider detail' });
     const { res, promise } = run({ text: 'hi' });
     await promise;
     expect(res._getStatusCode()).toBe(429);
     const body = res._getJSONData();
     expect(body.error).not.toContain('raw provider detail');
     expect(body).toMatchObject({ provider: 'openai' });
+    // A rate limit is not a credential problem, so no switch-provider hint.
+    expect(body.errorCode).toBeUndefined();
+  });
+
+  it('flags a credential rejection so the client can advise switching provider', async () => {
+    mocks.synthesizeTts.mockRejectedValue({ status: 401, message: 'raw provider detail' });
+    const { res, promise } = run({ text: 'hi' });
+    await promise;
+    expect(res._getStatusCode()).toBe(401);
+    const body = res._getJSONData();
+    expect(body.error).not.toContain('raw provider detail');
+    expect(body).toMatchObject({ provider: 'openai', errorCode: 'provider_rejected' });
   });
 
   it('maps a non-4xx provider failure to 502', async () => {
-    mocks.synthesize.mockRejectedValue(new Error('network blip'));
+    mocks.synthesizeTts.mockRejectedValue(new Error('network blip'));
     const { res, promise } = run({ text: 'hi' });
     await promise;
     expect(res._getStatusCode()).toBe(502);
+  });
+
+  it('reports a substituted provider in the body and headers, and bills the vendor that did the work', async () => {
+    okSynthesis('elevenlabs', 'openai');
+    const { res, promise } = run({ text: 'hi', encoding: 'base64' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ provider: 'elevenlabs', fallbackFrom: 'openai' });
+    expect(res.getHeader('X-B4M-Tts-Provider')).toBe('elevenlabs');
+    expect(res.getHeader('X-B4M-Tts-Provider-Fallback-From')).toBe('openai');
+    expect(mocks.deductTtsCredits).toHaveBeenCalledWith(expect.objectContaining({ vendor: 'elevenlabs' }));
+  });
+
+  it('omits the substitution fields when the requested provider was used', async () => {
+    const { res, promise } = run({ text: 'hi', encoding: 'base64' });
+    await promise;
+    const body = res._getJSONData();
+    expect(body.provider).toBeUndefined();
+    expect(body.fallbackFrom).toBeUndefined();
+    expect(res.getHeader('X-B4M-Tts-Provider')).toBeUndefined();
   });
 
   it('returns base64 JSON when encoding is base64 and charges once', async () => {
@@ -162,16 +198,12 @@ describe('POST /api/ai/tts', () => {
     expect(mocks.deductTtsCredits).toHaveBeenCalledTimes(1);
   });
 
-  it('forwards languageCode to the provider as the language option', async () => {
-    const { promise } = run({ text: '2', provider: 'elevenlabs', languageCode: 'en' });
+  it('forwards the request options for synthesis', async () => {
+    const { promise } = run({ text: '2', provider: 'elevenlabs', languageCode: 'en', voice: 'v1' });
     await promise;
-    expect(mocks.synthesize).toHaveBeenCalledWith('2', expect.objectContaining({ language: 'en' }));
-  });
-
-  it('passes language as undefined when languageCode is omitted (preserves default behavior)', async () => {
-    const { promise } = run({ text: 'hi' });
-    await promise;
-    expect(mocks.synthesize).toHaveBeenCalledWith('hi', expect.objectContaining({ language: undefined }));
+    expect(mocks.synthesizeTts).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'elevenlabs', text: '2', languageCode: 'en', requestedVoice: 'v1' })
+    );
   });
 
   it('does not bill a caller without a resolved user id', async () => {

@@ -24,24 +24,10 @@ export const fetchOrganizations = async (): Promise<IOrganizationDocument[]> => 
 };
 
 // Mutation hooks using react-query
-export function useCreateOrganization() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (organizationData: Partial<IOrganization>) => {
-      const { data } = await api.post('/api/organizations', organizationData);
-      return data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['organizations'] });
-      toast.success('Organization created successfully!');
-    },
-    onError: (error: unknown) => {
-      console.error('Failed to create organization:', error);
-      toast.error('Failed to create organization. Please try again.');
-    },
-  });
-}
-
+// NOTE: org creation deliberately does NOT live here. `POST /api/organizations` is admin-only,
+// and its one caller is the admin panel via `useCreateOrganization` in
+// app/hooks/data/organizations.ts. An unused duplicate here would 403 for any non-admin surface
+// that picked it up, surfacing as a generic toast rather than a permission error.
 export function useUpdateOrganization() {
   const queryClient = useQueryClient();
   return useMutation({

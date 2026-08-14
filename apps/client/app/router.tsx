@@ -14,6 +14,7 @@ import NotebookLayout from '@client/app/components/layouts/Notebook';
 import { useUser } from '@client/app/contexts/UserContext';
 import { buildRedirectTo } from '@client/app/utils/authRedirect';
 import { enforceConsentRedirect } from '@client/app/utils/consentGuard';
+import { bootstrapSession } from '@client/app/utils/sessionBootstrap';
 
 // Keep layout components as eager imports for optimal performance
 import RestrictedPage from './components/common/RestrictedPage';
@@ -179,7 +180,15 @@ const rootRoute = createRootRoute({
 const layoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: 'layout',
-  beforeLoad: ({ location }) => {
+  beforeLoad: async ({ location }) => {
+    // Cold-load ordering: the access token is memory-only, so a fresh page load has no session
+    // until the HttpOnly refresh cookie is exchanged. This guard must wait for that - firing on
+    // a not-yet-populated currentUser would redirect to /login, whose on-mount
+    // clearClientCaches() + removeQueries() tears the session down before it can establish.
+    // bootstrapSession() resolves instantly once the answer is known, so only the first
+    // navigation of a page load actually waits.
+    await bootstrapSession();
+
     const { currentUser } = useUser.getState();
     if (!currentUser) {
       const redirectTo = buildRedirectTo(
@@ -196,7 +205,7 @@ const layoutRoute = createRoute({
     // P0-B abuse gate: route an authenticated-but-not-yet-consented account (in practice a
     // brand-new OAuth/SAML/OTC user) to the acceptance interstitial. Shared with the standalone
     // rootRoute children so the guard can't drift (see enforceConsentRedirect / issue #382).
-    enforceConsentRedirect(location);
+    await enforceConsentRedirect(location);
 
     // Handle redirects stored in sessionStorage to work around CloudFront Access Denied
     // on SPA routes (CloudFront can only serve "/" directly; all other paths return 403).
@@ -614,10 +623,9 @@ const authSuccessRoute = createRoute({
   ),
   validateSearch: (
     search: Record<string, unknown>
-  ): { token?: string; refreshToken?: string; error?: string; userId?: string; redirectTo?: string } => {
+  ): { token?: string; error?: string; userId?: string; redirectTo?: string } => {
     return {
       token: search.token ? String(search.token) : undefined,
-      refreshToken: search.refreshToken ? String(search.refreshToken) : undefined,
       error: search.error ? String(search.error) : undefined,
       userId: search.userId ? String(search.userId) : undefined,
       redirectTo: search.redirectTo ? String(search.redirectTo) : undefined,

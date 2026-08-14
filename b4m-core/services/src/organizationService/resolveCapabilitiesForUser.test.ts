@@ -234,4 +234,76 @@ describe('resolveCapabilitiesForUser (#1234)', () => {
       ).resolves.toBe(false);
     });
   });
+
+  describe('consumer-injected capability map (#1178)', () => {
+    // The overlay owns the type -> capability mapping; product keys never live in core.
+    const INJECTED = {
+      research: ['analytics:read'],
+      customer: ['analytics:read', 'analytics:write'],
+    } as const;
+
+    it('resolves from the injected map, taking precedence over the catalog capabilities', async () => {
+      // research maps to analytics:read here, NOT the catalog's qwork:submit/crm:read.
+      const { adapters } = makeAdapters(org(), [group('g-research', 'research')]);
+      await expect(
+        resolveCapabilitiesForUser(
+          { user: user('member-1', ['g-research']), organizationId: ORG, capabilitiesByType: INJECTED },
+          adapters
+        )
+      ).resolves.toEqual(['analytics:read']);
+    });
+
+    it('unions the injected capabilities across a multi-group member', async () => {
+      const { adapters } = makeAdapters(org(), [group('g-research', 'research'), group('g-customer', 'customer')]);
+      await expect(
+        resolveCapabilitiesForUser(
+          { user: user('member-1', ['g-research', 'g-customer']), organizationId: ORG, capabilitiesByType: INJECTED },
+          adapters
+        )
+      ).resolves.toEqual(['analytics:read', 'analytics:write']);
+    });
+
+    it('falls back to the catalog for a type the injected map omits', async () => {
+      // `sales` is not in INJECTED, so it uses the catalog's sales capabilities.
+      const { adapters } = makeAdapters(org(), [group('g-sales', 'sales')]);
+      await expect(
+        resolveCapabilitiesForUser(
+          { user: user('member-1', ['g-sales']), organizationId: ORG, capabilitiesByType: INJECTED },
+          adapters
+        )
+      ).resolves.toEqual(['crm:read', 'sales:brief']);
+    });
+
+    it('flows through the billing-owner implicit hold', async () => {
+      const { adapters } = makeAdapters(org({ userId: OWNER, allowedGroupTypes: ['customer'] }), []);
+      await expect(
+        resolveCapabilitiesForUser(
+          { user: user(OWNER, []), organizationId: ORG, capabilitiesByType: INJECTED },
+          adapters
+        )
+      ).resolves.toEqual(['analytics:read', 'analytics:write']);
+    });
+
+    it('flows through the platform-admin override', async () => {
+      const { adapters } = makeAdapters(org(), []);
+      await expect(
+        resolveCapabilitiesForUser(
+          {
+            user: admin('admin-1', []),
+            organizationId: ORG,
+            override: { organizationId: ORG, groupTypes: ['customer'] },
+            capabilitiesByType: INJECTED,
+          },
+          adapters
+        )
+      ).resolves.toEqual(['analytics:read', 'analytics:write']);
+    });
+
+    it('gates userHasCapability off the injected map', async () => {
+      const { adapters } = makeAdapters(org(), [group('g-research', 'research')]);
+      const params = { user: user('member-1', ['g-research']), organizationId: ORG, capabilitiesByType: INJECTED };
+      await expect(userHasCapability({ ...params, capability: 'analytics:read' }, adapters)).resolves.toBe(true);
+      await expect(userHasCapability({ ...params, capability: 'analytics:write' }, adapters)).resolves.toBe(false);
+    });
+  });
 });

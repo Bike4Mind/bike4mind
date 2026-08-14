@@ -15,6 +15,30 @@ export const DATALAKE_TAG_PREFIX = 'datalake:';
 export const DATALAKE_TAG_STRENGTH = 1;
 
 /**
+ * How a lake's attached corpus is grounded into a chat turn, as a DELIBERATE per-lake product
+ * choice rather than a side effect of who is asking (see IDataLake.groundingMode):
+ * - `inline`: paste the corpus into the prompt (never defer to the search tool).
+ * - `retrieve`: leave the corpus to the offered search_knowledge_base tool (always defer the
+ *   tool-retrievable subset), so an owner and an entitlement-only reader ground identically.
+ * - `auto-by-size`: keep the size heuristic - defer only when the per-doc even-split inline depth
+ *   falls below the `CorpusRetrievalMinInlineTokensPerDoc` floor (see shouldDeferCorpusToRetrieval).
+ *
+ * The resolution seam is create-time (resolveLakeSessionDefaults -> session.corpusGroundingMode);
+ * the enforcement seam is the completion-path defer plan. Keep this tuple and DataLakeGroundingMode
+ * as the single source both the Zod schema and the Mongoose enum derive from.
+ */
+export const DATA_LAKE_GROUNDING_MODES = ['inline', 'retrieve', 'auto-by-size'] as const;
+export type DataLakeGroundingMode = (typeof DATA_LAKE_GROUNDING_MODES)[number];
+
+/**
+ * Default per-lake grounding mode: `retrieve`. Chosen so inline-vs-retrieve is a deliberate choice
+ * that defaults SAFE - an owner and a reader of the same lake behave identically (retrieval) unless
+ * an editor opts the lake into inlining. Applied to a lake that never set the field (including lakes
+ * that predate it, whose stored value is absent) at the create-time resolution seam.
+ */
+export const DEFAULT_DATA_LAKE_GROUNDING_MODE: DataLakeGroundingMode = 'retrieve';
+
+/**
  * Trim a lake's `fileTagPrefix` and return it only if it is usable as a tag prefix
  * (non-empty, ends with ':'), else null. An empty prefix would match every tag, so it is
  * rejected rather than honored.
@@ -44,6 +68,56 @@ export const isReservedTagPrefix = (prefix: string | undefined | null): boolean 
   typeof prefix === 'string' && prefix.trim().startsWith(DATALAKE_TAG_PREFIX);
 
 /**
+ * Does any of these tag names already place a file under `prefix`?
+ *
+ * The ONE satisfaction rule, so the write-door reconciler and the backfill migration cannot
+ * disagree about which files still need a content tag. `buildLacksContentPrefixTagFilter` in
+ * `@bike4mind/database` is its Mongo mirror; a parity test asserts they agree.
+ *
+ * Case-SENSITIVE on purpose, unlike the meta-tag match: the consumers that decide whether the
+ * file shows up under the prefix - `buildOwnershipConditions` and the tag-count aggregates -
+ * build their regexes with no `i` flag, so `Acme:legal` genuinely does not satisfy `acme:`
+ * for them. Lowercasing here would skip the stamp on a file those queries still see as
+ * uncategorized.
+ *
+ * A meta-tag never satisfies a prefix (the counters exclude `datalake:*` from the tree), and
+ * neither does a bare `acme:` with no suffix: that splits to `['acme', '']` and renders as an
+ * unlabeled row in the tag tree, so it is not a category a user can navigate to.
+ */
+export const satisfiesTagPrefix = (tagNames: readonly unknown[], prefix: string): boolean =>
+  tagNames.some(
+    name =>
+      typeof name === 'string' &&
+      name.startsWith(prefix) &&
+      name.length > prefix.length &&
+      !name.toLowerCase().startsWith(DATALAKE_TAG_PREFIX)
+  );
+
+/**
+ * The tag names that place a file under a lake's PREFIX ARM - the exact JS mirror of the
+ * `$regex: ^prefix` membership arm in `buildDataLakeMembershipFilter` (`@bike4mind/database`),
+ * and of the `prefixedTags` computed inline inside `removeFileFromLake`.
+ *
+ * Deliberately NOT `satisfiesTagPrefix`, which is the fallback-STAMP rule: it also requires a
+ * suffix (a bare `lk:` is not a category anyone can navigate to) and excludes meta-tags. The read
+ * arm's regex has neither restriction - a bare `lk:` tag genuinely IS membership - so a gate
+ * built on `satisfiesTagPrefix` would miss exactly the leave this predicate exists to catch.
+ *
+ * Fails closed to `[]` on an unusable or reserved-namespace prefix, matching the read arm (which
+ * drops the whole prefix clause in both cases). Case-SENSITIVE, matching the read arm's unflagged
+ * regex.
+ */
+export const prefixArmTagNames = (tagNames: readonly unknown[], fileTagPrefix: string | undefined | null): string[] => {
+  const prefix = normalizeTagPrefix(fileTagPrefix);
+  if (!prefix || isReservedTagPrefix(prefix)) return [];
+  return tagNames.filter((name): name is string => typeof name === 'string' && name.startsWith(prefix));
+};
+
+/** True when any tag names a file under a lake's prefix arm. See `prefixArmTagNames`. */
+export const matchesTagPrefixArm = (tagNames: readonly unknown[], fileTagPrefix: string | undefined | null): boolean =>
+  prefixArmTagNames(tagNames, fileTagPrefix).length > 0;
+
+/**
  * True when two `fileTagPrefix` values would match each other's tags, so two lakes carrying them
  * cannot safely coexist in one scope: they would share their prefix-tagged files, and permanently
  * deleting either would take files the other holds.
@@ -67,15 +141,39 @@ export const tagPrefixesOverlap = (a: string | undefined | null, b: string | und
   return left === right || left.startsWith(right) || right.startsWith(left);
 };
 
+// Codepoints that render blank despite carrying an "ink" Unicode category (Hangul and
+// halfwidth fillers are Lo, braille blank is So, Khmer inherent vowels are Mn) - stripped
+// before the ink test in hasBlankTagPrefixSegment.
+const INVISIBLE_INK = /\u115F|\u1160|\u17B4|\u17B5|\u2800|\u3164|\uFFA0/g;
+
+/**
+ * True when any ":"-separated segment of the prefix (ignoring the trailing colon) has no
+ * character that renders ink. A negated-whitespace test is not enough: format characters
+ * (U+200B/U+2060, category Cf) survive `trim()`, and a handful of letter/symbol codepoints
+ * (INVISIBLE_INK above) render blank too - all producing the same blank tree node. So
+ * require a letter, number, punctuation, symbol, or mark after stripping the known blanks.
+ * Shared by CreateDataLakeRequestInput's schema refine and the wizard mirror below so the
+ * server and client rules cannot drift.
+ */
+export const hasBlankTagPrefixSegment = (prefix: string): boolean => {
+  const body = prefix.endsWith(':') ? prefix.slice(0, -1) : prefix;
+  return body.split(':').some(part => !/[\p{L}\p{N}\p{P}\p{S}\p{M}]/u.test(part.replace(INVISIBLE_INK, '')));
+};
+
 /**
  * The reason a `fileTagPrefix` is unusable, as user-facing copy, or null when it is fine. Shared
  * by the wizard steps that can both edit a prefix so their wording cannot drift apart; the server
- * rejects both cases at create.
+ * rejects all three cases at create.
  */
 export const tagPrefixIssue = (
   prefix: string | undefined | null,
   overlapping?: { name: string; fileTagPrefix: string } | null
 ): string | null => {
+  // Blank-segment before reserved, matching the schema's refine order, so both surfaces
+  // name the same culprit for an input like "datalake::".
+  if (prefix && hasBlankTagPrefixSegment(prefix)) {
+    return 'Every ":" segment of the prefix needs a visible character (e.g. legal: or legal:contracts:).';
+  }
   if (isReservedTagPrefix(prefix)) {
     return `"${DATALAKE_TAG_PREFIX}" is reserved for lake membership. Pick another prefix, such as legal:`;
   }
@@ -88,9 +186,9 @@ export const tagPrefixIssue = (
 export interface DataLakeConfig {
   id: string;
   /**
-   * URL/tag slug, unique per org. Needed by clients that resolve a lake by slug - notably
-   * the Add-files (append) upload, which sends `dataLakeSlug` so the server can stamp the
-   * lake meta-tag. Omitting it here silently broke append-mode registration.
+   * URL/tag slug, unique per org. Kept on the projection because a client holding a lake still
+   * reads it - the wizard checks its length to explain a rejected create. Uploads target a lake
+   * by id instead: the server can disambiguate a slug out from under the client.
    */
   slug: string;
   name: string;
@@ -144,6 +242,42 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * so "not yours to see" and "set to blank" stay distinguishable).
    */
   systemPrompt?: string;
+  /**
+   * Whether the requesting caller CREATED this lake (createdByUserId === caller). Server-computed
+   * per request. The manager list is "lakes I can reach", not "lakes I own": it also surfaces org
+   * lakes, strangers' public lakes, and - for a global admin - every tenant's lakes. So the UI
+   * marks a not-own lake to keep an admin from mistaking someone else's (even private) lake for
+   * their own and managing it by accident. Built-in fallback lakes have no owner, so `false`.
+   *
+   * REQUIRED, not optional: both producers (toManageableConfig, toFallbackConfig) set it
+   * unconditionally, and the UI safety-gates on `isOwn === false` - an absent field would render
+   * no warning, so a future projection that forgot it would silently reintroduce the bug with a
+   * green typecheck. Required makes that a compile error instead.
+   */
+  isOwn: boolean;
+  /**
+   * Display name (name || username, never email) of the lake's creator. Populated ONLY for lakes
+   * the caller does NOT own, and ONLY when the list projection was given a user lookup (the
+   * manager list route) - the content-scope resolver and Slack omit it and pay for no extra
+   * query. Mirrors the discover catalog's owner rule: never the owner's email, so a cross-org or
+   * admin view can't leak an address. Undefined when the owner can't be resolved (deleted
+   * account), or for own/fallback lakes.
+   */
+  ownerDisplayName?: string;
+  /**
+   * Preferred registry system-prompt id (see IDataLake.preferredSystemPromptId). EDITOR-ONLY,
+   * like `systemPrompt`: surfaced only when the caller can manage the lake, so the settings
+   * picker can seed its current selection. Absent (never an empty-string stand-in) otherwise,
+   * so "not yours to see" and "no preferred prompt" stay distinguishable.
+   */
+  preferredSystemPromptId?: string;
+  /**
+   * Per-lake grounding mode (see IDataLake.groundingMode). EDITOR-ONLY, like the two prompt fields:
+   * surfaced only when the caller can manage the lake, so the settings picker can seed its current
+   * selection. Absent when the caller can't manage it OR the lake never set the field (readers get
+   * its EFFECT via the create-time resolver, never the setting itself).
+   */
+  groundingMode?: DataLakeGroundingMode;
 }
 
 /**

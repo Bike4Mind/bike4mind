@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/client",
-  "version": "0.1.62",
+  "version": "0.1.65",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/copy-tavern-assets.mjs && node scripts/copy-pdf-worker.mjs && node scripts/copy-highs-wasm.mjs && node scripts/generate-premium-glue.mjs",
@@ -66,6 +66,7 @@
     "@bike4mind/auth": "workspace:*",
     "@bike4mind/common": "workspace:*",
     "@bike4mind/database": "workspace:*",
+    "@bike4mind/db-core": "workspace:*",
     "@bike4mind/fab-pipeline": "workspace:*",
     "@bike4mind/hearth": "workspace:*",
     "@bike4mind/infra": "workspace:*",
@@ -216,7 +217,7 @@
     "sanitize-html": "^2.17.5",
     "sharp": "^0.35.3",
     "sonner": "^2.0.7",
-    "sst": "4.14.1",
+    "sst": "4.17.1",
     "stackframe": "^1.3.4",
     "stripe": "^22.3.1",
     "tiktoken": "^1.0.22",

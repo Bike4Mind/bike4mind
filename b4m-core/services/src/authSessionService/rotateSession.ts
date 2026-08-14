@@ -21,6 +21,9 @@ export interface RotatedSession {
   sid: string;
   accessToken: string;
   refreshToken: string;
+  /** Admin id when this session was created by loginAs; null otherwise. Surfaced so the refresh
+   *  endpoint can tell the client it is still inside an impersonation without decoding the JWT. */
+  impersonatedBy: string | null;
 }
 
 /**
@@ -93,5 +96,12 @@ export const rotateSession = async (
     ...(session.impersonatedBy ? { impersonatedBy: session.impersonatedBy } : {}),
   });
 
-  return { userId: user.id, user, sid, accessToken, refreshToken: buildRefreshToken(sid, nextSecret) };
+  return {
+    userId: user.id,
+    user,
+    sid,
+    accessToken,
+    refreshToken: buildRefreshToken(sid, nextSecret),
+    impersonatedBy: session.impersonatedBy ?? null,
+  };
 };

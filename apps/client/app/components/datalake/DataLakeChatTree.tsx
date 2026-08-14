@@ -1,40 +1,45 @@
-import { useState, useMemo } from 'react';
 import {
   Box,
   Button,
   Chip,
   IconButton,
-  Input,
-  List,
   ListItem,
   ListItemButton,
   ListItemContent,
-  Skeleton,
   Tooltip,
   Typography,
   useTheme,
 } from '@mui/joy';
-import SearchIcon from '@mui/icons-material/Search';
-import SwapVertIcon from '@mui/icons-material/SwapVert';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import ArticleOutlinedIcon from '@mui/icons-material/ArticleOutlined';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import AttachFileIcon from '@mui/icons-material/AttachFile';
 import CloseIcon from '@mui/icons-material/Close';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
+import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import { HEADER_ICON_BUTTON_SX } from '@client/app/components/Session/AISettings/headerIconButtonSx';
 import type { TagNode } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
-import { getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
-import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
+import FileIndexingAlert from './FileIndexingAlert';
+import DataLakeTreeView, { type DataLakeTreeChrome } from './DataLakeTreeView';
+import TreeRowLabel from './TreeRowLabel';
+import { RowActionsMenu, RowMenuItem } from './rowActionsMenu';
+import { inkFor } from '@client/app/components/datalake/deckChrome';
 import {
   COUNT_CHIP_SX,
   FOOTER_BTN_SX,
   ICON_BTN_SX,
+  SORT_MODE_ICON,
+  TREE_BACK_STICKY_SX,
   TREE_LIST_SX,
+  TREE_SCROLL_SX,
   hueForBranch,
   humanizeSegment,
+  treeBackRowSx,
   treeRowSx,
 } from '@client/app/components/datalake/treeChrome';
 import type { IFabFileDocument } from '@bike4mind/common';
+import type { DataLakeBrowseSource } from '@client/app/hooks/data/dataLakes';
 import { gray } from '@client/app/utils/themes/colors';
 
 interface DataLakeChatTreeProps {
@@ -43,8 +48,17 @@ interface DataLakeChatTreeProps {
   articles: IFabFileDocument[];
   breadcrumb: string[];
   onNavigate: (breadcrumb: string[]) => void;
-  selectedFileId: string | null;
-  onSelectFile: (file: IFabFileDocument) => void;
+  /** Threaded to DataLakeTreeView's cross-tree article search. */
+  source?: DataLakeBrowseSource;
+  selectedFileIds: ReadonlySet<string>;
+  /** Menu action: attach the file to the chat session. */
+  onAttachFile: (file: IFabFileDocument) => void;
+  /** Open the file. Runs from the row's own click as well as the menu's View item. */
+  onViewFile: (file: IFabFileDocument) => void;
+  /** Gates the menu's Remove item (owning lake resolved + manageable). */
+  canDeleteFile: (file: IFabFileDocument) => boolean;
+  /** Menu action: request removal from the owning lake (host owns the confirm). */
+  onDeleteFile: (file: IFabFileDocument) => void;
   isLoading: boolean;
   isError?: boolean;
   /** Header title (the lake root label, e.g. "Data Lakes"). */
@@ -67,8 +81,12 @@ export default function DataLakeChatTree({
   articles,
   breadcrumb,
   onNavigate,
-  selectedFileId,
-  onSelectFile,
+  source,
+  selectedFileIds,
+  onAttachFile,
+  onViewFile,
+  canDeleteFile,
+  onDeleteFile,
   isLoading,
   isError,
   title,
@@ -78,124 +96,126 @@ export default function DataLakeChatTree({
 }: DataLakeChatTreeProps) {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
-  const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<'count' | 'alpha'>('count');
 
-  const currentNodes = useMemo(() => getNodesAtPath(tree, breadcrumb), [tree, breadcrumb]);
-
-  const filteredNodes = useMemo(() => {
-    let nodes = currentNodes;
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      nodes = nodes.filter(node => node.segment.toLowerCase().includes(q));
-    }
-    return [...nodes].sort((a, b) =>
-      sortBy === 'count' ? b.fileCount - a.fileCount : a.segment.localeCompare(b.segment)
-    );
-  }, [currentNodes, searchQuery, sortBy]);
-
-  // At a leaf node (no children), filter articles locally by the leaf tag
-  const leafTag = breadcrumb.length > 0 && currentNodes.length === 0 ? breadcrumb.join(':') : null;
-  const showFiles = !!leafTag;
-  const files = useMemo(() => {
-    if (!leafTag) return [];
-    return [...articles]
-      .filter(f => (f.tags ?? []).some(t => t.name === leafTag))
-      .sort((a, b) => a.fileName.localeCompare(b.fileName));
-  }, [leafTag, articles]);
-
-  return (
+  const header = (
     <Box
-      className="datalake-tree"
-      data-testid="datalake-tree"
+      className="datalake-tree-header"
       sx={{
-        width: 260,
-        minWidth: 260,
+        height: '48px',
+        boxSizing: 'border-box',
+        p: '12px',
         display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-        // Styled to match the main app sidenav (see layouts/Notebook/Sidenav/index.tsx).
-        backgroundColor: 'background.surface2',
-        border: '1px solid',
+        alignItems: 'center',
+        gap: '10px',
+        borderBottom: '1px solid',
         borderColor: isDark ? gray[800] : gray[200],
-        borderRadius: '10px',
       }}
     >
-      {/* Header: title + close (turns Data Lake mode off for this chat). */}
-      <Box
-        className="datalake-tree-header"
-        sx={{
-          height: '48px',
-          boxSizing: 'border-box',
-          p: '12px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '10px',
-          borderBottom: '1px solid',
-          borderColor: isDark ? gray[800] : gray[200],
-        }}
-      >
-        <Box sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <Typography noWrap sx={{ fontSize: '14px', fontWeight: 300, color: 'text.primary' }}>
-            {title}
-          </Typography>
-          <Tooltip
-            title="Ground this chat in your Data Lakes - the assistant answers from the files in your lakes, with citations. Turn it on for any chat; use Create to add a lake and Manage to organize them."
-            placement="top"
-            size="sm"
-            sx={{ maxWidth: 280 }}
-          >
-            <IconButton
-              size="sm"
-              variant="plain"
-              color="neutral"
-              aria-label="About Data Lakes"
-              data-testid="datalake-info-icon"
-              sx={{ ...HEADER_ICON_BUTTON_SX, flexShrink: 0 }}
-            >
-              <HelpOutlineIcon sx={{ fontSize: 16 }} />
-            </IconButton>
-          </Tooltip>
-        </Box>
-        {onClose && (
-          <Tooltip title="Close Data Lakes" size="sm">
-            <IconButton
-              variant="plain"
-              color="neutral"
-              onClick={onClose}
-              aria-label="Close Data Lakes"
-              data-testid="datalake-close-btn"
-              sx={theme => ({
-                ...ICON_BTN_SX,
-                // No pressed/active fill - the icon brightening is the only affordance.
-                '--variant-plainActiveBg': 'transparent',
-                // Icon reads this var; the button flips it on hover so the swap can't lose a
-                // specificity fight with the icon's own color. text.icon == text.tertiary in
-                // this theme, so hover uses the brighter neutral plain color instead.
-                '--dl-close-color': theme.vars.palette.text.tertiary,
-                '&:hover': { '--dl-close-color': theme.vars.palette.neutral.plainColor },
-              })}
-            >
-              <CloseIcon sx={{ fontSize: 18, color: 'var(--dl-close-color)', transition: 'color 0.15s' }} />
-            </IconButton>
-          </Tooltip>
-        )}
-      </Box>
-
-      {/* Search bar + sort toggle */}
-      <Box
-        className="datalake-tree-toolbar"
-        sx={{ mt: '12px', mb: '20px', px: '12px', display: 'flex', gap: '10px', alignItems: 'center' }}
-      >
-        <Input
+      <Box sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '2px' }}>
+        <Typography noWrap sx={{ fontSize: '14px', fontWeight: 300, color: 'text.primary' }}>
+          {title}
+        </Typography>
+        <Tooltip
+          title="Ground this chat in your Data Lakes - the assistant answers from the files in your lakes, with citations. Turn it on for any chat; use Create to add a lake and Manage to organize them."
+          placement="top"
           size="sm"
-          placeholder="Search"
-          startDecorator={<SearchIcon sx={{ fontSize: 18 }} />}
-          value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
-          data-testid="datalake-search"
-          sx={{ flex: 1, '--Input-minHeight': '32px', color: 'text.primary', boxShadow: 'none' }}
-        />
+          sx={{ maxWidth: 280 }}
+        >
+          <IconButton
+            size="sm"
+            variant="plain"
+            color="neutral"
+            aria-label="About Data Lakes"
+            data-testid="datalake-info-icon"
+            sx={{ ...HEADER_ICON_BUTTON_SX, flexShrink: 0 }}
+          >
+            <HelpOutlineIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Tooltip>
+      </Box>
+      {onClose && (
+        <Tooltip title="Close Data Lakes" size="sm">
+          <IconButton
+            variant="plain"
+            color="neutral"
+            onClick={onClose}
+            aria-label="Close Data Lakes"
+            data-testid="datalake-close-btn"
+            sx={theme => ({
+              ...ICON_BTN_SX,
+              // No pressed/active fill - the icon brightening is the only affordance.
+              '--variant-plainActiveBg': 'transparent',
+              // Icon reads this var; the button flips it on hover so the swap can't lose a
+              // specificity fight with the icon's own color. text.icon == text.tertiary in
+              // this theme, so hover uses the brighter neutral plain color instead.
+              '--dl-close-color': theme.vars.palette.text.tertiary,
+              '&:hover': { '--dl-close-color': theme.vars.palette.neutral.plainColor },
+            })}
+          >
+            <CloseIcon sx={{ fontSize: 18, color: 'var(--dl-close-color)', transition: 'color 0.15s' }} />
+          </IconButton>
+        </Tooltip>
+      )}
+    </Box>
+  );
+
+  const footer = (onManage || onCreateLake) && (
+    // Sticky bottom bar: manage / create lakes. Pinned below the scrollable list by being
+    // TreeView's footer slot, outside the scroll pane.
+    <Box
+      className="datalake-tree-footer"
+      sx={{
+        display: 'flex',
+        gap: '8px',
+        p: '12px',
+        borderTop: '1px solid',
+        borderColor: isDark ? gray[800] : gray[200],
+      }}
+    >
+      {onManage && (
+        <Button
+          variant="outlined"
+          color="neutral"
+          onClick={onManage}
+          data-testid="datalake-manage-btn"
+          sx={FOOTER_BTN_SX}
+        >
+          Manage
+        </Button>
+      )}
+      {onCreateLake && (
+        <Button
+          variant="solid"
+          color="primary"
+          onClick={onCreateLake}
+          data-testid="datalake-create-btn"
+          sx={FOOTER_BTN_SX}
+        >
+          Create
+        </Button>
+      )}
+    </Box>
+  );
+
+  const chrome: DataLakeTreeChrome = {
+    containerSx: {
+      width: 260,
+      minWidth: 260,
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+      // Styled to match the main app sidenav (see layouts/Notebook/Sidenav/index.tsx).
+      backgroundColor: 'background.surface2',
+      border: '1px solid',
+      borderColor: isDark ? gray[800] : gray[200],
+      borderRadius: '10px',
+    },
+    toolbarSx: { mt: '12px', mb: '20px', px: '12px', display: 'flex', gap: '10px', alignItems: 'center' },
+    searchPlaceholder: 'Search',
+    searchSx: { flex: 1, '--Input-minHeight': '32px', color: 'text.primary', boxShadow: 'none' },
+    renderSortButton: (sortBy, toggle) => {
+      const SortModeIcon = SORT_MODE_ICON[sortBy];
+      return (
         <Tooltip
           title={sortBy === 'count' ? 'Sort: by count (click for A-Z)' : 'Sort: A-Z (click for count)'}
           size="sm"
@@ -203,171 +223,161 @@ export default function DataLakeChatTree({
           <IconButton
             variant="outlined"
             color="neutral"
-            onClick={() => setSortBy(prev => (prev === 'count' ? 'alpha' : 'count'))}
+            onClick={toggle}
             data-testid="datalake-sort-toggle"
             data-sort={sortBy}
             sx={{ ...ICON_BTN_SX, flexShrink: 0 }}
           >
-            <SwapVertIcon sx={{ fontSize: 18 }} />
+            <SortModeIcon sx={{ fontSize: 18 }} />
           </IconButton>
         </Tooltip>
-      </Box>
-
-      {/* Tree / file list */}
-      <Box className="datalake-tree-list" sx={{ flex: 1, overflow: 'auto', px: '8px' }}>
-        {/* Breadcrumb back - styled like the tree items (14px / gray[200]). */}
-        {breadcrumb.length > 0 && (
+      );
+    },
+    renderBackRow: (label, onBack) => (
+      <ListItemButton
+        onClick={onBack}
+        data-testid="datalake-back"
+        sx={treeBackRowSx(theme.palette.notebooklist.hoverBg)}
+      >
+        <ArrowBackIcon sx={{ fontSize: 16, color: 'text.secondary', flexShrink: 0 }} />
+        <Typography noWrap sx={{ fontSize: '14px', fontWeight: 400, color: 'text.primary' }}>
+          {label}
+        </Typography>
+      </ListItemButton>
+    ),
+    stickyBackSx: TREE_BACK_STICKY_SX,
+    scrollSx: { ...TREE_SCROLL_SX, px: '8px' },
+    nodeListSx: TREE_LIST_SX,
+    fileListSx: TREE_LIST_SX,
+    renderNodeRow: (node, depth, onOpen) => {
+      const branchInk = inkFor(hueForBranch(node.segment, breadcrumb), isDark);
+      return (
+        <ListItem key={node.segment}>
           <ListItemButton
-            onClick={() => onNavigate(breadcrumb.slice(0, -1))}
-            data-testid="datalake-back"
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              px: '8px',
-              mb: '4px',
-              height: '32px',
-              minHeight: '32px',
-              borderRadius: '8px',
-              transition: 'background 0.15s',
-              '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
-            }}
+            onClick={onOpen}
+            sx={treeRowSx(theme.palette.notebooklist.hoverBg)}
+            data-testid={`datalake-node-${node.segment}`}
           >
-            <ArrowBackIcon sx={{ fontSize: 16, color: 'text.secondary', flexShrink: 0 }} />
-            <Typography noWrap sx={{ fontSize: '14px', fontWeight: 400, color: 'text.primary' }}>
-              {breadcrumb.length === 1
-                ? 'All Categories'
-                : humanizeSegment(breadcrumb[breadcrumb.length - 2], breadcrumb.length - 2)}
-            </Typography>
+            <FolderOutlinedIcon sx={{ fontSize: 16, color: branchInk, flexShrink: 0 }} />
+            <ListItemContent>
+              <TreeRowLabel label={humanizeSegment(node.segment, depth)} />
+            </ListItemContent>
+            <Chip size="sm" variant="soft" color="neutral" sx={COUNT_CHIP_SX}>
+              {node.fileCount}
+            </Chip>
           </ListItemButton>
-        )}
-        {isError ? (
-          <Box sx={{ p: 2, textAlign: 'center' }} data-testid="datalake-error">
-            <Typography level="body-xs" sx={{ color: 'danger.400' }}>
-              Failed to load articles
-            </Typography>
-          </Box>
-        ) : isLoading ? (
-          <Box sx={{ p: 1.5, display: 'flex', flexDirection: 'column', gap: 1 }}>
-            {[1, 2, 3, 4].map(i => (
-              <Skeleton key={i} variant="rectangular" height={32} sx={{ borderRadius: 'sm' }} />
-            ))}
-          </Box>
-        ) : showFiles ? (
-          /* File list at leaf */
-          <List size="sm" sx={TREE_LIST_SX}>
-            {files.length === 0 ? (
-              <Box sx={{ p: 2, textAlign: 'center' }}>
-                <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                  No articles found
-                </Typography>
-              </Box>
-            ) : (
-              files.map(file => (
-                <ListItem key={file.id}>
-                  <ListItemButton
-                    selected={selectedFileId === file.id}
-                    onClick={() => onSelectFile(file)}
-                    data-testid={`datalake-file-${file.id}`}
-                    sx={treeRowSx(theme.palette.notebooklist.hoverBg)}
-                  >
-                    <ArticleOutlinedIcon
-                      sx={{
-                        fontSize: 16,
-                        color: selectedFileId === file.id ? inkFor(HUES.cyan, isDark) : 'text.tertiary',
-                        flexShrink: 0,
-                      }}
-                    />
-                    <ListItemContent>
-                      <Typography
-                        noWrap
-                        sx={{
-                          fontSize: '14px',
-                          fontWeight: selectedFileId === file.id ? 'lg' : 400,
-                          color: 'text.primary',
-                        }}
-                      >
-                        {file.fileName.replace(/\.[^/.]+$/, '')}
-                      </Typography>
-                    </ListItemContent>
-                  </ListItemButton>
-                </ListItem>
-              ))
-            )}
-          </List>
-        ) : (
-          /* Folder tree */
-          <List size="sm" sx={TREE_LIST_SX}>
-            {filteredNodes.length === 0 ? (
-              <Box sx={{ p: 2, textAlign: 'center' }}>
-                <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                  {searchQuery ? 'No matches' : 'No categories'}
-                </Typography>
-              </Box>
-            ) : (
-              filteredNodes.map(node => {
-                const branchInk = inkFor(hueForBranch(node.segment, breadcrumb), isDark);
-                return (
-                  <ListItem key={node.segment}>
-                    <ListItemButton
-                      onClick={() => onNavigate([...breadcrumb, node.segment])}
-                      sx={treeRowSx(theme.palette.notebooklist.hoverBg)}
-                      data-testid={`datalake-node-${node.segment}`}
-                    >
-                      <FolderOutlinedIcon sx={{ fontSize: 16, color: branchInk, flexShrink: 0 }} />
-                      <ListItemContent>
-                        <Typography noWrap sx={{ fontSize: '14px', fontWeight: 400, color: 'text.primary' }}>
-                          {humanizeSegment(node.segment, breadcrumb.length)}
-                        </Typography>
-                      </ListItemContent>
-                      <Chip size="sm" variant="soft" color="neutral" sx={COUNT_CHIP_SX}>
-                        {node.fileCount}
-                      </Chip>
-                    </ListItemButton>
-                  </ListItem>
-                );
-              })
-            )}
-          </List>
-        )}
-      </Box>
-
-      {/* Sticky bottom bar: manage / create lakes. Pinned below the scrollable list. */}
-      {(onManage || onCreateLake) && (
-        <Box
-          className="datalake-tree-footer"
+        </ListItem>
+      );
+    },
+    renderFileRow: (file, selected) => (
+      <ListItem key={file.id}>
+        {/* Clicking the row runs the View action - the same ListItemButton the folder rows use,
+            so the two lists share their geometry and hover treatment. The actions trigger
+            reveals on hover/focus, stays visible on touch (no-hover) devices, and pins while its
+            menu is open (:has on aria-expanded) so the anchor cannot fade under an open menu. */}
+        <ListItemButton
+          // Deliberately NOT Joy's `selected`: that paints its own active-variant ground, which
+          // overrides the sidebar-matching background below. aria-current carries the state.
+          aria-current={selected ? 'true' : undefined}
+          onClick={() => onViewFile(file)}
+          data-testid={`datalake-file-${file.id}`}
           sx={{
-            display: 'flex',
-            gap: '8px',
-            p: '12px',
-            borderTop: '1px solid',
-            borderColor: isDark ? gray[800] : gray[200],
+            ...treeRowSx(theme.palette.notebooklist.hoverBg),
+            // Tighter than the folder rows' 8px so the actions trigger sits closer to the edge.
+            paddingInlineEnd: '4px',
+            // Selected state mirrors the sidebar's active chat row (Session/SidenavItem): the
+            // focused ground plus a 2px primary bar at the left edge, hover leaves it alone, and
+            // the row's actions stay revealed. Keep the two in sync if either changes.
+            position: 'relative',
+            backgroundColor: selected ? theme.palette.notebooklist.focusedBackground : undefined,
+            '&::before': selected
+              ? {
+                  content: '""',
+                  position: 'absolute',
+                  left: 0,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  width: '2px',
+                  height: '80%',
+                  backgroundColor: theme.palette.primary[500],
+                  borderRadius: '1px',
+                }
+              : undefined,
+            '&:hover': selected ? { backgroundColor: theme.palette.notebooklist.focusedBackground } : undefined,
+            '@media (hover: hover)': { '& .dl-row-actions': { opacity: selected ? 1 : 0 } },
+            '&:hover .dl-row-actions, &:focus-within .dl-row-actions': { opacity: 1 },
+            '&:has([aria-expanded="true"]) .dl-row-actions': { opacity: 1 },
           }}
         >
-          {onManage && (
-            <Button
-              variant="outlined"
-              color="neutral"
-              onClick={onManage}
-              data-testid="datalake-manage-btn"
-              sx={FOOTER_BTN_SX}
-            >
-              Manage
-            </Button>
-          )}
-          {onCreateLake && (
-            <Button
-              variant="solid"
-              color="primary"
-              onClick={onCreateLake}
-              data-testid="datalake-create-btn"
-              sx={FOOTER_BTN_SX}
-            >
-              Create
-            </Button>
-          )}
-        </Box>
-      )}
-    </Box>
+          {/* Icon and label stay constant across selection, as in the sidebar - the ground and
+              the left bar carry the state on their own. A processing failure overrides both to
+              danger so an unfindable file reads as failed at a glance. */}
+          <ArticleOutlinedIcon
+            sx={{ fontSize: 16, color: file.error ? 'danger.500' : 'text.tertiary', flexShrink: 0 }}
+          />
+          <ListItemContent>
+            <TreeRowLabel
+              label={file.fileName.replace(/\.[^/.]+$/, '')}
+              color={file.error ? 'danger.500' : undefined}
+            />
+          </ListItemContent>
+          <FileIndexingAlert file={file} />
+          {/* The row itself is the View action, so an actions click must not also fire it.
+              Caught here rather than on the trigger: MenuButton owns its own onClick. */}
+          <Box
+            className="dl-row-actions"
+            onClick={e => e.stopPropagation()}
+            sx={{ display: 'flex', alignItems: 'center', gap: '2px', flexShrink: 0, transition: 'opacity 0.15s' }}
+          >
+            <RowActionsMenu testId={`datalake-row-menu-btn-${file.id}`} ariaLabel="File actions">
+              <RowMenuItem
+                testId={`datalake-attach-item-${file.id}`}
+                icon={<AttachFileIcon sx={{ fontSize: 16 }} />}
+                label="Attach to chat"
+                onClick={() => onAttachFile(file)}
+              />
+              <RowMenuItem
+                testId={`datalake-view-item-${file.id}`}
+                icon={<VisibilityOutlinedIcon sx={{ fontSize: 16 }} />}
+                label="View"
+                onClick={() => onViewFile(file)}
+              />
+              {canDeleteFile(file) && (
+                <RowMenuItem
+                  testId={`datalake-delete-item-${file.id}`}
+                  icon={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
+                  label="Remove"
+                  onClick={() => onDeleteFile(file)}
+                  danger
+                />
+              )}
+            </RowActionsMenu>
+          </Box>
+        </ListItemButton>
+      </ListItem>
+    ),
+    humanize: humanizeSegment,
+    allCategoriesLabel: 'All Categories',
+    emptyFilesLabel: 'No articles found',
+    errorLabel: 'Failed to load articles',
+  };
+
+  return (
+    // The chrome's file rows wire their own onClick straight to onViewFile, so TreeView's
+    // per-row callback is unused here (it exists for the page tree) and gets a no-op.
+    <DataLakeTreeView
+      tree={tree}
+      articles={articles}
+      breadcrumb={breadcrumb}
+      onNavigate={onNavigate}
+      source={source}
+      selectedFileIds={selectedFileIds}
+      onSelectFile={() => {}}
+      isLoading={isLoading}
+      isError={isError}
+      chrome={chrome}
+      header={header}
+      footer={footer}
+    />
   );
 }

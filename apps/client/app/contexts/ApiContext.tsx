@@ -133,7 +133,7 @@ api.interceptors.request.use(config => {
 api.interceptors.response.use(
   response => response,
   async error => {
-    const { setState, getState } = useAccessToken;
+    const { getState } = useAccessToken;
 
     // Ignore cancelled requests (user-initiated abort)
     if (axios.isCancel(error) || error.code === 'ERR_CANCELED') {
@@ -177,24 +177,42 @@ api.interceptors.response.use(
         return Promise.reject(error);
       }
 
-      const { refreshToken, expired, mfaPending } = getState();
+      const { expired, mfaPending } = getState();
 
-      // Already expired or no refresh token - don't attempt refresh.
-      if (expired || !refreshToken) {
-        // During mfaPending the login stage issues no refresh token by
-        // design (see useAccessToken.ts), so a 401 on a non-allowlisted
-        // endpoint lands here for a user who is mid-MFA-setup, not
-        // actually locked out - skip the forced redirect in that case.
-        if (!mfaPending) {
-          await forceSessionExpiredRedirect();
-        }
+      // During mfaPending the login stage issues no refresh token or cookie by design (see
+      // useAccessToken.ts), so a 401 on a non-allowlisted endpoint is the expected mid-MFA
+      // rejection, not a lockout: there is nothing to refresh and nowhere to redirect.
+      if (mfaPending) {
         return Promise.reject(error);
       }
 
-      // Prevent secondary loops: if this request was already retried after
-      // a successful refresh and still got 401, give up.
+      // Already torn down by a previous unrecoverable 401 - don't attempt refresh again.
+      if (expired) {
+        await forceSessionExpiredRedirect();
+        return Promise.reject(error);
+      }
+
+      // A refresh already succeeded (_retryCount is only bumped after refreshPromise
+      // RESOLVES) and we retried once, yet this request STILL 401s. When it is a bare
+      // auth-layer rejection, the freshly minted token is being rejected, so the session is
+      // unrecoverable - e.g. a server-side token/session mismatch where /api/auth/refreshToken
+      // keeps returning 200 but the access verifier keeps rejecting the token it mints. Left
+      // un-torn-down, the session stays alive (expired: false) and every repeating trigger -
+      // WS reconnect probes, tab-focus probes, polling queries - re-drives another
+      // refresh+retry cycle forever (the "401 storm a reload can't fix, only re-login").
+      //
+      // BUT a 401 that carries an application-level error `code` PASSED auth (a fresh token
+      // would too) and failed for a DOMAIN reason - e.g. /api/mcp-servers/notion/pages returns
+      // 401 + code NOTION_RECONNECT_REQUIRED when a user's Notion OAuth is revoked, a routine
+      // event unrelated to the JWT session. Tearing the whole session down there would log the
+      // user out of the app on a scoped, expected error. So only tear down on a code-less
+      // rejection; a coded 401 falls through to the plain reject (the pre-PR behavior, letting
+      // the caller surface its own error).
       const retryCount = error.config?._retryCount || 0;
       if (retryCount >= 1) {
+        if (!error.response?.data?.code) {
+          await forceSessionExpiredRedirect();
+        }
         return Promise.reject(error);
       }
 
@@ -212,9 +230,12 @@ api.interceptors.response.use(
       // This request initiates the refresh - all other 401s will queue on this promise
       refreshPromise = (async () => {
         try {
-          const response = await api.post<{ accessToken: string; refreshToken: string }>(
+          // No token in the body: the refresh token rides the HttpOnly cookie, which
+          // `withCredentials` on this axios instance sends. The rotated one comes back the
+          // same way and is never visible to this code.
+          const response = await api.post<{ accessToken: string }>(
             '/api/auth/refreshToken',
-            { token: refreshToken },
+            {},
             {
               skipAuthRefresh: true,
               // Bound the refresh attempt so a cold Lambda or hanging server
@@ -224,10 +245,7 @@ api.interceptors.response.use(
               timeout: 10000,
             }
           );
-          setState({
-            accessToken: response.data.accessToken,
-            refreshToken: response.data.refreshToken,
-          });
+          getState().setVerifiedSession(response.data.accessToken);
         } catch (e) {
           // Only the initiator runs the teardown. Distinguish a genuine
           // revocation from a transient outage by the refresh endpoint's

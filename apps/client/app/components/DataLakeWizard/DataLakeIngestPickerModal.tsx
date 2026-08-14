@@ -13,7 +13,7 @@ import {
   Typography,
 } from '@mui/joy';
 import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
-import { useDataLakes } from '@client/app/hooks/data/dataLakeWizard';
+import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 
 interface DataLakeIngestPickerModalProps {
@@ -30,7 +30,7 @@ interface DataLakeIngestPickerModalProps {
  * only resolves the target lake and jumps the wizard past the source-selection step.
  */
 export default function DataLakeIngestPickerModal({ open, files, onClose }: DataLakeIngestPickerModalProps) {
-  const { data: lakes, isLoading } = useDataLakes();
+  const { data: lakes, isLoading } = useGetDataLakes();
   // Only lakes the caller can write into are valid ingest targets - the list also carries
   // other users' read-only public lakes, which the write path would reject.
   const manageableLakes = lakes?.filter(l => l.canManage);

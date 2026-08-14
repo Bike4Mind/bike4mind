@@ -4,11 +4,11 @@ import React, { ReactNode, useCallback, useEffect, useMemo, useRef } from 'react
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { userIsCustomer, userIsDeveloper } from '../utils/user';
-import { api, isPublicPath } from '@client/app/contexts/ApiContext';
+import { api, isPublicPath, getAxiosErrorStatus } from '@client/app/contexts/ApiContext';
 import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
 import ExpiredSession from '../components/ExpiredSession';
 import { useSubscribeCollection } from '../utils/react-query';
-import { useGetIdentify, useReturnTokenValidation } from '@client/app/hooks/data/user';
+import { useGetIdentify } from '@client/app/hooks/data/user';
 import { persist, PersistStorage, StorageValue } from 'zustand/middleware';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
@@ -230,6 +230,11 @@ export const migrateUserContext = (persistedState: unknown, version: number | un
   return persistedState as UserContextProps;
 };
 
+/** Single-flight guard for refreshUser's imperative /api/identify call (see refreshUser
+ *  below). Module-scoped so it is shared across all callers, mirroring probeInFlight in
+ *  sessionBootstrap.ts. */
+let refreshUserInFlight: Promise<void> | null = null;
+
 export const useUser = create<UserContextProps>()(
   persist(
     set => ({
@@ -254,20 +259,34 @@ export const useUser = create<UserContextProps>()(
         });
       },
       refreshUser: async () => {
-        try {
-          const response = await api.get<{ user: IUserDocument }>('/api/identify');
-          set({
-            currentUser: response.data.user,
-            isHydrated: true,
-            isAdmin: !!response.data.user?.isAdmin,
-            isBanned: !!response.data.user?.isBanned,
-            isModerated: !!response.data.user?.isModerated,
-            isDeveloper: userIsDeveloper(response.data.user),
-            isCustomer: userIsCustomer(response.data.user),
-          });
-        } catch (error) {
-          console.error('Error refreshing user:', error);
-        }
+        // Single-flight: unlike probeIdentity (sessionBootstrap.ts) this imperative
+        // /api/identify call had no dedup, so an effect that re-runs each render could fire
+        // one identify per render. Concurrent callers share the one in-flight request; the
+        // guard clears on settle so a later, genuinely-new refresh still runs.
+        if (refreshUserInFlight) return refreshUserInFlight;
+        refreshUserInFlight = (async () => {
+          try {
+            // 10s bound matches the two sibling single-flight guards (refreshPromise in
+            // ApiContext, probeInFlight in sessionBootstrap): without it a hung identify
+            // request would never settle, the finally below would never run, and every later
+            // refreshUser() would return the same never-resolving promise for the tab's life.
+            const response = await api.get<{ user: IUserDocument }>('/api/identify', { timeout: 10000 });
+            set({
+              currentUser: response.data.user,
+              isHydrated: true,
+              isAdmin: !!response.data.user?.isAdmin,
+              isBanned: !!response.data.user?.isBanned,
+              isModerated: !!response.data.user?.isModerated,
+              isDeveloper: userIsDeveloper(response.data.user),
+              isCustomer: userIsCustomer(response.data.user),
+            });
+          } catch (error) {
+            console.error('Error refreshing user:', error);
+          } finally {
+            refreshUserInFlight = null;
+          }
+        })();
+        return refreshUserInFlight;
       },
     }),
     {
@@ -306,7 +325,11 @@ export function shouldRevokeForTokenVersion(params: {
  * unit-testable without rendering the heavily-wired UserProvider.
  *
  * - local mfaPending (this tab is mid-MFA) -> skip; the MFA modal owns the flow.
- * - identify error -> clear the user.
+ * - identify 429 (rate limited) -> skip; a rate-limit blip says nothing about session
+ *   validity, and clearing the user bounces a perfectly valid session to /login (see
+ *   RestrictedPage). The identify limit is shared across a user's tabs, so a WS-reconnect /
+ *   focus-probe flap can exhaust it without the session being bad.
+ * - identify error (non-429) -> clear the user.
  * - identify success but NO live token -> clear the user. `useGetIdentify` retains
  *   its last success in cache after the token is cleared (MFA cancelled / logout),
  *   so without this a stale cache would log the user in with no valid token.
@@ -322,10 +345,13 @@ export function resolveIdentifyEffect(params: {
   hasToken: boolean;
   isSuccess: boolean;
   isError: boolean;
+  /** HTTP status of the identify error, when isError. A 429 is transient (rate limit) and
+   *  must NOT clear the user; any other error still does. */
+  errorStatus?: number;
   tokenMfaPending?: boolean;
 }): IdentifyEffectAction {
   if (params.mfaPending) return 'skip';
-  if (params.isError) return 'clearUser';
+  if (params.isError) return params.errorStatus === 429 ? 'skip' : 'clearUser';
   if (!params.isSuccess) return 'skip';
   // identify resolved, but tokens were cleared (MFA cancel / logout) - a stale
   // success cache must never promote to a logged-in state without a live token.
@@ -341,7 +367,6 @@ export const UserProvider: React.FC<UserProviderProps> = ({ children }) => {
     useShallow(s => [s.setAccessToken, s.expired, s.accessToken, s.mfaPending, s.setMfaPending])
   );
   const identity = useGetIdentify();
-  useReturnTokenValidation();
   const { t } = useTranslation();
 
   // Real-time subscription updates instead of periodic polling
@@ -435,6 +460,7 @@ export const UserProvider: React.FC<UserProviderProps> = ({ children }) => {
       hasToken: !!accessToken,
       isSuccess: identity.isSuccess,
       isError: identity.isError,
+      errorStatus: getAxiosErrorStatus(identity.error),
       tokenMfaPending: decodeMfaPending(accessToken),
     });
     switch (action) {
@@ -458,6 +484,7 @@ export const UserProvider: React.FC<UserProviderProps> = ({ children }) => {
   }, [
     identity.isSuccess,
     identity.isError,
+    identity.error,
     identity.data,
     setCurrentUser,
     setAccessToken,

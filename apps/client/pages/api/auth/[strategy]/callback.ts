@@ -3,7 +3,7 @@
 
 import { AuthStrategy } from '@bike4mind/common';
 import { authFailLogRepository, IUserObject } from '@bike4mind/database';
-import { issueSessionForRequest } from '@server/auth/issueSession';
+import { issueBrowserSession } from '@server/auth/issueSession';
 import { verifyStateToken, BaseStatePayload } from '@server/auth/jwtStateStore';
 import { authSuccessRedirectQuery } from '@server/auth/authSuccessRedirect';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -90,11 +90,11 @@ const handler = baseApi({ auth: false })
           return res.redirect(`/login?error=${encodeURIComponent(oauthFailureRedirectMessage(reason))}`);
         }
 
-        const { accessToken, refreshToken } = await issueSessionForRequest(req, user.id, {
+        const { accessToken } = await issueBrowserSession(req, res, user.id, {
           createdVia: 'oauth',
           tokenVersion: user.tokenVersion ?? 0,
         });
-        const tokens = { accessToken, refreshToken };
+        const tokens = { accessToken };
 
         try {
           await logEvent({
@@ -153,7 +153,7 @@ const handler = baseApi({ auth: false })
         // isNewUser/signupMethod ride the same fragment: /auth/success reads and
         // clears it exactly once, firing the signup ad conversion for new accounts.
         const signupFragment = isNewUser ? `&isNewUser=1&signupMethod=${encodeURIComponent(strategy)}` : '';
-        const redirectUrl = `/auth/success${successQuery}#token=${tokens.accessToken}&refreshToken=${tokens.refreshToken}&userId=${user.id}${signupFragment}`;
+        const redirectUrl = `/auth/success${successQuery}#token=${tokens.accessToken}&userId=${user.id}${signupFragment}`;
         return res.redirect(redirectUrl);
       } catch (callbackError) {
         // Catch any unhandled errors in the callback to prevent unhandled promise rejections

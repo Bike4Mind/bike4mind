@@ -8,6 +8,52 @@ import { parseArtifacts } from './artifactParser';
  * than one that occasionally misses - every "should NOT flag" test is guarding shippability.
  */
 
+/**
+ * Times `run` at a small and a large input size and asserts growth stays roughly linear rather
+ * than quadratic. Ratio-based rather than a fixed wall-clock budget: CI contention that slows the
+ * whole runner inflates both measurements together and cancels out in the ratio, where a
+ * fixed-ms budget flakes under exactly that contention - as these assertions repeatedly did.
+ * Linear growth tracks the size ratio; quadratic growth tracks its square, so the ceiling (2.5x
+ * the linear expectation, plus a fixed floor for near-instant runs) sits clear of both.
+ *
+ * Each size is sampled 3x and the minimum is used: noise (a GC pause, a scheduler preemption) only
+ * ever adds delay, so the fastest sample is the one closest to the true cost, and taking the min
+ * survives a stray spike landing on any one sample instead of the whole measurement. The small and
+ * large samples are INTERLEAVED (small, large, small, large, ...) rather than run as two separate
+ * blocks - a contention burst confined to one block would otherwise hit only one size's samples,
+ * defeating the cancellation the ratio depends on.
+ */
+function assertScansLinearly<T>(run: (size: number) => T, smallSize: number, largeSize: number) {
+  const sizeRatio = largeSize / smallSize;
+
+  let smallElapsed = Infinity;
+  let smallResult: T | undefined;
+  let largeElapsed = Infinity;
+  let largeResult: T | undefined;
+
+  for (let sample = 0; sample < 3; sample++) {
+    const smallStarted = Date.now();
+    const thisSmallResult = run(smallSize);
+    const thisSmallElapsed = Date.now() - smallStarted;
+    if (thisSmallElapsed < smallElapsed) {
+      smallElapsed = thisSmallElapsed;
+      smallResult = thisSmallResult;
+    }
+
+    const largeStarted = Date.now();
+    const thisLargeResult = run(largeSize);
+    const thisLargeElapsed = Date.now() - largeStarted;
+    if (thisLargeElapsed < largeElapsed) {
+      largeElapsed = thisLargeElapsed;
+      largeResult = thisLargeResult;
+    }
+  }
+
+  expect(largeElapsed).toBeLessThan(smallElapsed * sizeRatio * 2.5 + 200);
+
+  return { smallResult: smallResult as T, largeResult: largeResult as T };
+}
+
 /** Verbatim shape of the artifact from the originating bug report: correct data, stubbed behaviour. */
 const REAL_ELIDED_BODY = `<!DOCTYPE html>
 <html>
@@ -230,18 +276,17 @@ describe('detectElidedContent', () => {
     it('scans a long member chain in linear time', () => {
       // Regression guard for quadratic backtracking in the dotted-chain hollow-body pattern. A chain
       // written with spaces around the dots made every space a viable match start, each re-walking the
-      // rest of the chain: 191ms / 771ms / 3119ms at 15 / 30 / 60KB through this very call, on the
-      // synchronous completion path ahead of quest save and billing settlement. A hang, so the
-      // surrounding crash guards could not have helped. Bounded chain repetition fixed it.
-      // The threshold is deliberately loose - it needs to catch a return to quadratic, not benchmark
-      // the machine, and the pre-fix number at this size was over 3000ms.
-      let chain = 'a';
-      while (chain.length < 60 * 1024) chain += ' . a';
+      // rest of the chain: 191ms / 771ms / 3119ms at 15 / 30 / 60KB through this very call - a ~16x
+      // slowdown for a 4x size increase, the signature of O(n^2). Bounded chain repetition fixed it.
+      // A hang on the synchronous completion path, so the surrounding crash guards could not have
+      // helped. See assertScansLinearly's doc comment for why this is a ratio, not a fixed budget.
+      const chainOfLength = (bytes: number) => {
+        let chain = 'a';
+        while (chain.length < bytes) chain += ' . a';
+        return chain;
+      };
 
-      const started = Date.now();
-      detectElidedContent(chain, 'react');
-
-      expect(Date.now() - started).toBeLessThan(500);
+      assertScansLinearly(size => detectElidedContent(chainOfLength(size), 'react'), 15 * 1024, 60 * 1024);
     });
   });
 
@@ -1225,17 +1270,15 @@ describe('large bodies', () => {
     // to compile a RegExp per candidate and rescan the whole body: O(names x body). Measured in
     // isolation on this exact input, that step alone took 41.8s; harvesting the declared set in one
     // pass takes 29ms. It runs synchronously on the completion worker and on the publish click, so
-    // the cost is user-visible in both places. The threshold is loose on purpose - it is here to
-    // catch a return to quadratic behaviour, not to police milliseconds.
-    const lines = Array.from({ length: 30000 }, (_, i) => `  const value_${i} = compute_${i}(${i});`).join('\n');
-    const body = `<html><body><script>\n${lines}\n  function go() { document.title = String(value_0); }\n  go();\n</script></body></html>`;
+    // the cost is user-visible in both places. See assertScansLinearly's doc comment for the ratio.
+    const namesBody = (n: number) => {
+      const lines = Array.from({ length: n }, (_, i) => `  const value_${i} = compute_${i}(${i});`).join('\n');
+      return `<html><body><script>\n${lines}\n  function go() { document.title = String(value_0); }\n  go();\n</script></body></html>`;
+    };
 
-    const startedAt = Date.now();
-    const result = detectElidedContent(body, 'html');
-    const elapsedMs = Date.now() - startedAt;
+    const { largeResult } = assertScansLinearly(n => detectElidedContent(namesBody(n), 'html'), 7500, 30000);
 
-    expect(result.signals.length).toBeGreaterThan(0);
-    expect(elapsedMs).toBeLessThan(3000);
+    expect(largeResult.signals.length).toBeGreaterThan(0);
   });
 
   it('stays fast when the body has one comment per line', () => {
@@ -1245,25 +1288,28 @@ describe('large bodies', () => {
     // steered - one trailing comment per line is ordinary LLM output - and it matters beyond the
     // single-response size cap because artifacts are expanded incrementally under one identifier and
     // the client fallback scan re-runs on every historical artifact reply at session load.
-    const lines = Array.from(
-      { length: 12000 },
-      (_, i) => `  const value_${i} = ${i}; // assignment number ${i} for the running total`
-    ).join('\n');
-    const body = `<html><body><script>\n${lines}\n  function go() { document.title = String(value_0); }\n  go();\n</script></body></html>`;
+    const commentsBody = (n: number) => {
+      const lines = Array.from(
+        { length: n },
+        (_, i) => `  const value_${i} = ${i}; // assignment number ${i} for the running total`
+      ).join('\n');
+      return `<html><body><script>\n${lines}\n  function go() { document.title = String(value_0); }\n  go();\n</script></body></html>`;
+    };
 
-    const startedAt = Date.now();
-    const result = detectElidedContent(body, 'html');
-    const elapsedMs = Date.now() - startedAt;
+    const { largeResult } = assertScansLinearly(n => detectElidedContent(commentsBody(n), 'html'), 3000, 12000);
 
-    expect(result.elided).toBe(false);
-    expect(elapsedMs).toBeLessThan(3000);
+    expect(largeResult.elided).toBe(false);
   });
 
   it('scans a large complete artifact quickly and without flagging it', () => {
-    const rows = Array.from({ length: 4000 }, (_, i) => `  { id: ${i}, name: 'row-${i}', score: ${i % 97} },`).join(
-      '\n'
-    );
-    const body = `<html><body><div id="board"></div><script>
+    // General perf smoke test, not tied to a specific documented regression like its neighbors above.
+    // See assertScansLinearly's doc comment for the ratio.
+    const artifactBody = (rowCount: number) => {
+      const rows = Array.from(
+        { length: rowCount },
+        (_, i) => `  { id: ${i}, name: 'row-${i}', score: ${i % 97} },`
+      ).join('\n');
+      return `<html><body><div id="board"></div><script>
       const DATA = [
 ${rows}
       ];
@@ -1275,16 +1321,17 @@ ${rows}
       function init() { renderBoard(); }
       init();
     </script></body></html>`;
+    };
 
-    expect(body.length).toBeGreaterThan(150_000);
+    expect(artifactBody(4000).length).toBeGreaterThan(150_000);
 
-    const started = performance.now();
-    const result = detectElidedContent(body, 'html');
-    const elapsed = performance.now() - started;
+    const { largeResult } = assertScansLinearly(
+      rowCount => detectElidedContent(artifactBody(rowCount), 'html'),
+      1000,
+      4000
+    );
 
-    expect(result.elided).toBe(false);
-    // Generous bound - the point is to catch a return to quadratic behaviour, not to benchmark.
-    expect(elapsed).toBeLessThan(1000);
+    expect(largeResult.elided).toBe(false);
   });
 
   it('still distinguishes a member call from a bare call across long whitespace', () => {

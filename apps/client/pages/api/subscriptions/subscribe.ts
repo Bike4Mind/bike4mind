@@ -7,7 +7,7 @@ import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { Config } from '@server/utils/config';
 import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
-import { isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
+import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { Request } from 'express';
 import Stripe from 'stripe';
 import { z } from 'zod';
@@ -94,7 +94,12 @@ const handler = baseApi()
         },
       ],
       customer: req.user.stripeCustomerId,
-      success_url: callbackUrl,
+      // The individual-plan success redirect used to be a bare callbackUrl, so a
+      // completed purchase came back indistinguishable from a cancel: no toast,
+      // no cache invalidation, and no way to report revenue. `{CHECKOUT_SESSION_ID}`
+      // is substituted by Stripe and is what StripeCheckoutSuccessHandler trades
+      // for the authoritative amount (see api/subscriptions/checkout-session.ts).
+      success_url: appendSuccessParams(callbackUrl),
       cancel_url: callbackUrl,
       subscription_data: {
         metadata: {

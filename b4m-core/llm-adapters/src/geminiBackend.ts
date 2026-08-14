@@ -16,6 +16,7 @@ import {
   type MessageContentToolUse,
   type ModelInfo,
 } from '@bike4mind/common';
+import { stripToolDependentMessages } from './toolPairingUtils';
 import pick from 'lodash/pick.js';
 import { v4 as uuidv4 } from 'uuid';
 import { handleToolResultStreaming } from './toolStreamingHelper';
@@ -572,7 +573,8 @@ export class GeminiBackend implements ICompletionBackend {
       // Remove tools when limit is hit and continue, preserving _internal settings
       await this.complete(
         modelName,
-        messages,
+        // Tools are going away, so the prompts that order the model to use one have to go with them.
+        stripToolDependentMessages(messages),
         {
           ...options,
           tools: undefined,

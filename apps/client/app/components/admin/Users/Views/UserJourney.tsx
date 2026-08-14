@@ -1,4 +1,4 @@
-import { IUserDocument, WithOrgRef } from '@bike4mind/common';
+import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import FormatListNumberedRtlIcon from '@mui/icons-material/FormatListNumberedRtl';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
@@ -14,7 +14,7 @@ import { useFullUserViewModal } from '@client/app/components/admin/Users/Views/F
 import { useGetUserActivityCounters } from '@client/app/hooks/data/user';
 
 interface UserJourneyProps {
-  user: WithOrgRef<IUserDocument>;
+  user: AdminUserListItem;
   index: number;
 }
 

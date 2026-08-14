@@ -1,21 +1,16 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@server/utils/config';
-import { apiKeyService } from '@bike4mind/services';
-import { resolveWebSearchProvider } from '@bike4mind/services/llm/tools/implementation/websearch';
+import {
+  resolveToolAvailability,
+  isLocalImageBackendAvailable,
+  isLocalEmbedderAvailable,
+  type ToolAvailability,
+} from '@bike4mind/services';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
-import { getSettingsByNames } from '@bike4mind/utils';
-import { ApiKeyType, isPlaceholderApiKey } from '@bike4mind/common';
-import type { B4MLLMTools } from '@bike4mind/common';
 import { Resource } from 'sst';
 
-/**
- * Presence-only availability for tools that need an external API key/config.
- * Booleans (never the key values) so the tools picker can disable a tool and
- * explain what's missing, instead of the tool silently returning empty results.
- * Keyed by the tool id (B4MLLMTools); a tool absent from the map is unconditional.
- */
-export type ToolAvailability = Partial<Record<B4MLLMTools, boolean>>;
+export { isLocalImageBackendAvailable, isLocalEmbedderAvailable, type ToolAvailability };
 
 export type ServerConfig = {
   websocketUrl: string;
@@ -85,116 +80,20 @@ const handler = baseApi({ auth: true }).get(
 );
 
 /**
- * A self-hosted local image backend (IMAGE_GEN_BASE_URL) needs no provider API
- * key, so image generation is usable whenever it's configured. The env var is
- * honored ONLY under B4M_SELF_HOST - mirroring the tool's own dispatch gate and
- * the getAvailableModels enumeration gate - so a hosted deploy that happens to
- * set it never reports the tool as available on that basis. Exported for tests.
- */
-export function isLocalImageBackendAvailable(): boolean {
-  return process.env.B4M_SELF_HOST === 'true' && !!process.env.IMAGE_GEN_BASE_URL?.trim();
-}
-
-/**
- * A self-hosted local Ollama embedder (OLLAMA_BASE_URL) needs no provider API key, so the
- * Knowledge Base tool is usable whenever one is configured under B4M_SELF_HOST - same shape as
- * isLocalImageBackendAvailable. Without this, KB stays disabled on a keyless self-host box even
- * though offline RAG embeds and retrieves locally, so the model never receives the tool's
- * instructions. Lenient by design (see the under-gate-KB note below): if an admin picks a cloud
- * embedder with no key, KB still shows and degrades to keyword search.
- */
-export function isLocalEmbedderAvailable(): boolean {
-  return process.env.B4M_SELF_HOST === 'true' && !!process.env.OLLAMA_BASE_URL?.trim();
-}
-
-/**
- * Resolves which key-gated tools are usable, mirroring the same key getters the
- * tools themselves use so the picker never disables a tool that would actually
- * work (and vice versa). Only booleans are returned - never the key values.
- * Failures degrade to "available" so a lookup error never hides a working tool.
+ * Resolves which key-gated tools are usable, for the Tools picker UI. Thin wrapper around
+ * `resolveToolAvailability` (moved to b4m-core/services so the model-facing tool-schema filter in
+ * `sharedToolBuilder.ts` can use the same resolver, not just this UI hint) - the default
+ * fail-open policy (a lookup error never hides a working tool) is what this UI wrapper wants;
+ * the enforcement filter opts into fail-closed instead.
  *
  * LOCK-STEP: the tool ids returned here must have a matching entry in
  * `MISSING_KEY_TOOLTIPS` in `apps/client/app/components/Session/AISettings/ToolsSection.tsx`,
  * which supplies the user-facing "why it's disabled" text.
- *
- * Cost: this runs ~12 admin-setting / user-key lookups per request (3 single-key
- * getters + the web-search provider resolver + Firecrawl + the batched LLM keys +
- * one per image provider). It's on
- * the /serverConfig path (which also serves the WebSocket URL), but the client
- * caches that response for ~5 min (see `useConfig`), so it touches the DB only on
- * a fresh page-load, not on every render.
  */
 export async function computeToolAvailability(userId: string | undefined): Promise<ToolAvailability> {
-  const dbAdapters = {
+  return resolveToolAvailability(userId, {
     db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
-    getSettingsByNames,
-  };
-
-  try {
-    // The image tool resolves its key via getEffectiveApiKey (user key -> admin demo
-    // key, NO self-host env fallback), so image availability must use the same path -
-    // getEffectiveLLMApiKeys would add an env fallback the tool never sees.
-    const imageProviders = [ApiKeyType.bfl, ApiKeyType.openai, ApiKeyType.gemini, ApiKeyType.xai];
-
-    const [webSearchProvider, openWeatherKey, wolframKey, fmpKey, firecrawlConfig, llmKeys, imageKeys] =
-      await Promise.all([
-        // web_search resolves to SerpAPI or a local SearXNG instance; mirror the tool's own resolver
-        // so the picker never disables a working provider (and vice versa).
-        resolveWebSearchProvider(dbAdapters),
-        apiKeyService.getOpenWeatherKey(dbAdapters),
-        apiKeyService.getWolframAlphaKey(dbAdapters),
-        apiKeyService.getFmpApiKey(dbAdapters),
-        // Deep Research uses Firecrawl (key OR self-hosted URL) - mirror the tool's own resolver.
-        apiKeyService.getFirecrawlConfig(dbAdapters),
-        // Embedding keys (for Knowledge Base) resolve per user; KB uses this same getter,
-        // so matching its self-host env fallback here is correct.
-        userId ? apiKeyService.getEffectiveLLMApiKeys(userId, dbAdapters) : Promise.resolve(null),
-        userId
-          ? Promise.all(imageProviders.map(type => apiKeyService.getEffectiveApiKey(userId, { type }, dbAdapters)))
-          : Promise.resolve<(string | undefined)[]>([]),
-      ]);
-
-    // getEffectiveLLMApiKeys returns the sentinel 'expired' (truthy) for an expired
-    // user key, which the tool then rejects - treat it as absent so we don't report
-    // a tool as available when it would actually fail.
-    const usable = (key: string | null | undefined) => !!key && key !== 'expired';
-
-    const hasFirecrawl = !!(firecrawlConfig.apiKey || firecrawlConfig.apiUrl);
-    const hasImageKey = imageKeys.some(usable);
-    // Knowledge Base semantic search needs an embeddings provider key (VoyageAI/OpenAI).
-    // Note: this checks "any embeddings key present", not the admin's `defaultEmbeddingModel`
-    // provider specifically. If the admin selects a Voyage model but only an OpenAI key is set
-    // (or vice versa), the tool still shows as available and the semantic path falls back to
-    // keyword search - deliberately lenient, since we'd rather under-gate KB than hide a tool
-    // that still returns keyword results.
-    // A placeholder/dummy key is not a working key: reject it here so this stays in lock-step
-    // with embedding.ts defaultEmbeddingModelForEnv (which treats a placeholder as no cloud key
-    // and falls back to the local Ollama embedder) - otherwise KB would report a working cloud
-    // embedder that the vectorizer can't actually use.
-    const hasRealEmbeddingKey = (key: string | null | undefined) => usable(key) && !isPlaceholderApiKey(key);
-    const hasEmbeddingKey = hasRealEmbeddingKey(llmKeys?.openai) || hasRealEmbeddingKey(llmKeys?.voyageai);
-
-    return {
-      // web_search is available when any provider (SerpAPI or local SearXNG) resolves.
-      web_search: !!webSearchProvider,
-      // Deep Research works with Firecrawl (key or self-hosted URL) OR a web-search provider
-      // (SerpAPI/SearXNG) - the latter drives search with plain-fetch extraction.
-      deep_research: hasFirecrawl || !!webSearchProvider,
-      weather_info: !!openWeatherKey,
-      wolfram_alpha: !!wolframKey,
-      fmp_financial_data: !!fmpKey,
-      // Available with a provider key OR a self-hosted local image backend (which needs none).
-      image_generation: hasImageKey || isLocalImageBackendAvailable(),
-      // Only search_knowledge_base needs an embeddings key; retrieve_knowledge_content
-      // is a direct file/keyword lookup that needs no external key, so it isn't gated.
-      // Available with a cloud embeddings key OR a self-hosted local Ollama embedder (keyless).
-      search_knowledge_base: hasEmbeddingKey || isLocalEmbedderAvailable(),
-    };
-  } catch (err) {
-    // Fail open: an availability lookup error should not disable working tools.
-    console.warn('serverConfig: tool availability lookup failed, defaulting to available', err);
-    return {};
-  }
+  });
 }
 
 export const config = {

@@ -43,6 +43,19 @@ Our AI automatically:
 - **Optimizes Size** - Balances detail with performance
 - **Handles Tables** - Special processing for structured data
 
+### Chunk Policy (passage size)
+The passage target - how large each chunk is, in tokens - is a configurable lever, not a fixed
+constant:
+- **Resolved at the file owner's altitude** - the effective target is the owner's configured
+  `Default Chunk Size` (an individual or organization may pin their own default), falling back to the
+  platform default. It is always capped to the embedding model's context window, so a value larger
+  than the model can embed is reduced automatically rather than failing vectorization.
+- **A data lake is a constraint, not an override** - chunks are shared by every consumer of a file,
+  so a lake never rewrites a file's chunks to its own size. A lake may declare a *required* passage
+  target; a file whose chunks do not meet it (including a file in two lakes whose requirements
+  disagree) is flagged with a **chunk-policy conflict** instead of being silently re-chunked. Resolve
+  a conflict by aligning the owner's chunk policy, or by removing the file from the conflicting lake.
+
 ### Vector Embeddings
 Every chunk is:
 - **Semantically Indexed** - Meaning-based search

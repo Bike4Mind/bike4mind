@@ -6,6 +6,7 @@ import { PromptMeta } from './PromptMetaTypes';
 import { SearchOptions } from '../../search';
 import { ChatModelName } from '../../models';
 import { MessageContentObject } from './MessageTypes';
+import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 
 /** Pending action for Slack/Web button-based confirmation flow */
 export interface IPendingAction {
@@ -493,6 +494,14 @@ export interface ISession {
    */
   systemPromptText?: string;
   /**
+   * Optional reference to a curated system prompt in the admin registry (SystemPromptModel), by
+   * `promptId`. When set to a session-activatable id (e.g. 'triage_router'), that registry prompt's
+   * current content is injected as the session's system message - the versioned, admin-editable
+   * counterpart to the raw `systemPromptText`, so the prompt can be tuned with no deploy. Like
+   * `systemPromptText`, it suppresses the generic brand-identity prompt.
+   */
+  systemPromptId?: string;
+  /**
    * Optional product surface that owns this session (e.g. 'libreoncology').
    * Default sessions have no surface. Generic capability - lets any product surface
    * mark its sessions so they stay out of the main B4M list and can scope their own
@@ -541,6 +550,15 @@ export interface ISession {
    * Generic capability - lets a surface focus the grounded tutor on one topic.
    */
   retrievalTags?: string[];
+  /**
+   * How this session grounds an attached data-lake corpus (inline vs retrieve vs auto-by-size),
+   * resolved ONCE at create time from the lake this session was created for (see
+   * resolveLakeSessionDefaults). The completion path's corpus defer plan reads this to decide
+   * whether to keep the corpus inlined or defer the tool-retrievable subset to
+   * search_knowledge_base, generalizing the size-only rule to an explicit per-lake choice. Unset on
+   * a session not created for a lake, which the plan treats as its pre-existing size-only behavior.
+   */
+  corpusGroundingMode?: DataLakeGroundingMode;
   /**
    * Generic retrieval exclusion: filename markers (case-insensitive, matched as a LEADING
    * marker at a word boundary - the marker must start the name and be followed by end-of-string

@@ -52,6 +52,7 @@ import {
   type ContextUsageBand,
 } from '@client/app/hooks/useSessionContextUsage';
 import { ContextUsageWarning } from '../ContextUsageWarning';
+import { useAttachmentFitWarning } from '@client/app/hooks/useAttachmentFitWarning';
 import { ContextCompactionNote } from '../ContextCompactionNote';
 import { buildSortedKnowledgeItems } from '@client/app/utils/knowledgeViewerSorting';
 import { deleteFileUtility, getFabFilesFromServerByIds } from '@client/app/utils/filesAPICalls';
@@ -119,8 +120,8 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const [, setAgentBenchCollapsed] = useState<boolean>(false);
   const [filesDropdownOpen, setFilesDropdownOpen] = useState<boolean>(false);
 
-  const [chatInputValue, setChatInputValue, setDraft, getDraft, clearDraft] = useChatInput(
-    useShallow(s => [s.chatInputValue, s.setChatInputValue, s.setDraft, s.getDraft, s.clearDraft])
+  const [chatInputValue, setChatInputValue, setDraft, getDraft, clearDraft, focusRequestId] = useChatInput(
+    useShallow(s => [s.chatInputValue, s.setChatInputValue, s.setDraft, s.getDraft, s.clearDraft, s.focusRequestId])
   );
   const [rephraseGlow, setRephraseGlow] = useState(false);
   const [showSlashSuggestions, setShowSlashSuggestions] = useState(false);
@@ -185,6 +186,18 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // the current input box against the budget.
   const contextUsage = useSessionContextUsage(currentSessionId);
   const modelName = useMemo(() => modelInfo?.find(m => m.id === model)?.name ?? model, [modelInfo, model]);
+  const attachmentFit = useAttachmentFitWarning(
+    model,
+    // Notebook-context files ride EVERY turn on this session, so they spend the budget too.
+    useMemo(() => workBenchFiles.map(f => String(f.id)).filter(Boolean), [workBenchFiles])
+  );
+  // Dismissal is per attachment set: changing the files or the model asks a new question, so the
+  // previous dismissal should not silence the new answer.
+  const [attachmentWarningDismissed, setAttachmentWarningDismissed] = useState(false);
+  const attachmentFitKey = attachmentFit ? `${attachmentFit.fileName}:${attachmentFit.deliveredPercent}` : '';
+  useEffect(() => {
+    setAttachmentWarningDismissed(false);
+  }, [attachmentFitKey]);
   // Show the warning once usage is elevated, until dismissed at that band; a
   // jump from warning -> danger re-surfaces it.
   const showContextWarning =
@@ -325,8 +338,11 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     }
   };
 
-  // Auto-focus the chat input when component mounts or session changes
-  useAutoFocus(lexicalInputRef as any, { enabled: true });
+  // Auto-focus the chat input on mount, and again whenever an external prefill (via
+  // useChatInput.requestFocus()) asks for focus without a session change. SessionBottom
+  // itself is never remounted on a session switch, so a session-change refocus is not
+  // this hook's doing -- if one is observed, it comes from elsewhere.
+  useAutoFocus(lexicalInputRef as any, { enabled: true, focusTrigger: focusRequestId });
 
   // Persists draft per session and restores it on session switch
   useMessageDraft(currentSessionId, setChatInputValue, setDraft, getDraft, clearDraft);
@@ -494,6 +510,16 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                     usage={contextUsage}
                     modelName={modelName}
                     onDismiss={() => setContextWarningDismissedBand(contextUsage.band)}
+                  />
+                )}
+                {/* Answers a different question than the meter above: not how full the session is, but
+                    whether the file attached to THIS turn survives the budget. Null whenever it fits. */}
+                {attachmentFit && !attachmentWarningDismissed && (
+                  <ContextUsageWarning
+                    show
+                    attachment={attachmentFit}
+                    modelName={modelName}
+                    onDismiss={() => setAttachmentWarningDismissed(true)}
                   />
                 )}
                 <ContextCompactionNote

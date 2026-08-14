@@ -29,10 +29,17 @@ describe('organizationService.create - Team Manager Field', () => {
   };
 
   let mockOrganizationRepository: any;
+  let mockUserRepository: any;
 
   beforeEach(() => {
     mockOrganizationRepository = {
       create: vi.fn().mockImplementation(org => Promise.resolve({ ...org, id: 'org-created-123' })),
+    };
+    // create() now resolves a provided billingOwnerId to a real user (to seed userDetails
+    // from the OWNER) and fails loud if it can't, so findById must return the billing owner.
+    mockUserRepository = {
+      findById: vi.fn().mockResolvedValue(mockBillingOwner),
+      update: vi.fn().mockResolvedValue(null),
     };
   });
 
@@ -51,6 +58,7 @@ describe('organizationService.create - Team Manager Field', () => {
         {
           db: {
             organizations: mockOrganizationRepository,
+            users: mockUserRepository,
           },
         }
       );
@@ -81,6 +89,7 @@ describe('organizationService.create - Team Manager Field', () => {
         {
           db: {
             organizations: mockOrganizationRepository,
+            users: mockUserRepository,
           },
         }
       );
@@ -109,6 +118,7 @@ describe('organizationService.create - Team Manager Field', () => {
         {
           db: {
             organizations: mockOrganizationRepository,
+            users: mockUserRepository,
           },
         }
       );
@@ -139,6 +149,7 @@ describe('organizationService.create - Team Manager Field', () => {
         {
           db: {
             organizations: mockOrganizationRepository,
+            users: mockUserRepository,
           },
         }
       );

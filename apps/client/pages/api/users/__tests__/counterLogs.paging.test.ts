@@ -66,6 +66,7 @@ vi.mock('@client/services/operationsModelService', () => ({
 }));
 
 import '@pages/api/users/counterLogs';
+import { MAX_CACHED_ROWS } from '@server/analytics/userActivityCache';
 
 const DATES = { startDate: '2026-07-21', endDate: '2026-07-28' };
 
@@ -92,16 +93,27 @@ describe('GET /api/users/counterLogs - user activity paging', () => {
   });
 
   it('returns one page plus the total instead of every matching row', async () => {
-    const { req, res } = mocks({ ...DATES, page: '2', limit: '10' });
+    const { req, res } = mocks({ ...DATES, page: '1', limit: '10' });
 
     await mockRefs.getHandler!(req, res);
 
     expect(res._getJSONData()).toEqual({
       logs: [{ date: '2026-07-28', counterName: 'Login' }],
       total: 42,
-      page: 2,
+      page: 1,
       limit: 10,
     });
+  });
+
+  it('slices the requested page out of the window it just materialized', async () => {
+    const rows = Array.from({ length: 30 }, (_, i) => ({ date: '2026-07-28', counterName: `c${i}` }));
+    mockRefs.facetResult = { rows, total: [{ value: 30 }] };
+    const { req, res } = mocks({ ...DATES, page: '3', limit: '10' });
+
+    await mockRefs.getHandler!(req, res);
+
+    expect(stageValue('$skip'), 'the window itself always starts at 0').toBe(0);
+    expect(res._getJSONData()).toMatchObject({ logs: rows.slice(20, 30), total: 30, page: 3 });
   });
 
   it('defaults to the first page, skipping nothing', async () => {
@@ -138,9 +150,23 @@ describe('GET /api/users/counterLogs - user activity paging', () => {
 
     await mockRefs.getHandler!(req, res);
 
-    expect(stageValue('$limit')).toBe(5000);
     expect(res._getJSONData().limit).toBe(5000);
+    // The window read ahead of the page is bounded too - it is held in Lambda memory and written
+    // to a single cache document.
+    expect(stageValue('$limit')).toBeLessThanOrEqual(MAX_CACHED_ROWS);
   });
+
+  it.each(['', 'not-a-date', '2026-13-01', '2026-02-30'])(
+    'rejects the date %j instead of widening the window to all time',
+    async (startDate: string) => {
+      // An unparseable date became an Invalid Date, which serializes to epoch 0 - so the query
+      // silently scanned the whole collection rather than the week the caller asked for.
+      const { req, res } = mocks({ ...DATES, startDate });
+
+      await expect(mockRefs.getHandler!(req, res)).rejects.toMatchObject({ statusCode: 400 });
+      expect(mockRefs.facetStages).toBeUndefined();
+    }
+  );
 
   it('rejects a non-positive page rather than skipping a negative number of rows', async () => {
     const { req, res } = mocks({ ...DATES, page: '0' });
@@ -157,13 +183,57 @@ describe('GET /api/users/counterLogs - user activity paging', () => {
     await expect(mockRefs.getHandler!(req, res)).rejects.toMatchObject({ statusCode: 400 });
   });
 
-  it('caches each page under its own key so page 2 cannot serve page 1', async () => {
+  it('shares one cache entry across the pages of a filter set', async () => {
+    // Page-scoped keys meant browsing N pages cost N full aggregations, because $skip/$limit only
+    // trims a result the pipeline has already materialized.
     const first = mocks({ ...DATES, page: '1', limit: '10' });
     await mockRefs.getHandler!(first.req, first.res);
     const second = mocks({ ...DATES, page: '2', limit: '10' });
     await mockRefs.getHandler!(second.req, second.res);
 
-    expect(mockRefs.cacheKeys[0]).not.toBe(mockRefs.cacheKeys[1]);
+    expect(mockRefs.cacheKeys[0]).toBe(mockRefs.cacheKeys[1]);
+  });
+
+  it('materializes a window past the requested page so later pages need no aggregation', async () => {
+    const { req, res } = mocks({ ...DATES, page: '1', limit: '10' });
+
+    await mockRefs.getHandler!(req, res);
+
+    expect(stageValue('$skip')).toBe(0);
+    expect(stageValue('$limit')).toBeGreaterThan(10);
+  });
+
+  it('slices a later page out of the cached window instead of re-aggregating', async () => {
+    const rows = Array.from({ length: 30 }, (_, i) => ({ date: '2026-07-28', counterName: `c${i}` }));
+    mockRefs.cached = { result: { rows, total: 30, truncated: false } };
+    const { req, res } = mocks({ ...DATES, page: '3', limit: '10' });
+
+    await mockRefs.getHandler!(req, res);
+
+    expect(mockRefs.facetStages, 'no aggregation should have run').toBeUndefined();
+    expect(res._getJSONData()).toMatchObject({ logs: rows.slice(20, 30), total: 30, page: 3 });
+  });
+
+  it('answers a page past the end of a fully cached result set without re-aggregating', async () => {
+    mockRefs.cached = { result: { rows: [{ date: '2026-07-28' }], total: 1, truncated: false } };
+    const { req, res } = mocks({ ...DATES, page: '9', limit: '10' });
+
+    await mockRefs.getHandler!(req, res);
+
+    expect(mockRefs.facetStages).toBeUndefined();
+    expect(res._getJSONData()).toMatchObject({ logs: [], total: 1 });
+  });
+
+  it('fetches just the page when it lies past a window the byte budget cut short', async () => {
+    // Re-materializing the window would return the same truncated prefix, so the page would never
+    // be reachable - and each attempt would pay for the larger fetch.
+    mockRefs.cached = { result: { rows: [{ date: '2026-07-28' }], total: 9000, truncated: true } };
+    const { req, res } = mocks({ ...DATES, page: '3', limit: '10' });
+
+    await mockRefs.getHandler!(req, res);
+
+    expect(stageValue('$skip')).toBe(20);
+    expect(stageValue('$limit')).toBe(10);
   });
 
   it('keeps two filter sets apart when a search term contains the key delimiter', async () => {
@@ -196,14 +266,14 @@ describe('GET /api/users/counterLogs - user activity paging', () => {
   });
 
   it('keeps the cached envelope shape when it serves a cache hit', async () => {
-    mockRefs.cached = { result: { rows: [{ date: '2026-07-27', counterName: 'Logout' }], total: 7 } };
+    mockRefs.cached = { result: { rows: [{ date: '2026-07-27', counterName: 'Logout' }], total: 1, truncated: false } };
     const { req, res } = mocks({ ...DATES, page: '1', limit: '10' });
 
     await mockRefs.getHandler!(req, res);
 
     expect(res._getJSONData()).toEqual({
       logs: [{ date: '2026-07-27', counterName: 'Logout' }],
-      total: 7,
+      total: 1,
       page: 1,
       limit: 10,
     });

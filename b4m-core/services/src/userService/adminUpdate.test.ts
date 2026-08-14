@@ -125,3 +125,20 @@ describe('adminUpdateUser — audited credit adjustments', () => {
     expect(update.mock.calls[0][0].currentCredits).toBe(150);
   });
 });
+
+describe('adminUpdateUser - preferences merge', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('merges a partial preferences write instead of replacing the stored object', async () => {
+    const { adapters, update, target } = makeAdapters(100);
+    target.preferences = { language: 'en', showDebug: true, experimentalFeatures: { agentMode: true } };
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, preferences: { showDebug: false } }, adapters);
+
+    expect(update.mock.calls[0][0].preferences).toEqual({
+      language: 'en',
+      showDebug: false,
+      experimentalFeatures: { agentMode: true },
+    });
+  });
+});

@@ -98,10 +98,14 @@ describe('AnthropicBackend non-streaming max_tokens ceiling', () => {
   it('brings a legacy thinking budget down with the ceiling', async () => {
     const { backend, getCaptured } = buildBackend();
 
-    await runComplete(backend, {
-      stream: false,
-      thinking: { enabled: true, budget_tokens: 30_000 },
-    } as Partial<ICompletionOptions>, ChatModels.CLAUDE_4_6_OPUS);
+    await runComplete(
+      backend,
+      {
+        stream: false,
+        thinking: { enabled: true, budget_tokens: 30_000 },
+      } as Partial<ICompletionOptions>,
+      ChatModels.CLAUDE_4_6_OPUS
+    );
 
     const sent = getCaptured()[0];
     const maxTokens = sent.max_tokens as number;
@@ -132,10 +136,14 @@ describe('AnthropicBackend non-streaming max_tokens ceiling', () => {
   it('leaves a legacy thinking budget alone when streaming', async () => {
     const { backend, getCaptured } = buildBackend();
 
-    await runComplete(backend, {
-      stream: true,
-      thinking: { enabled: true, budget_tokens: 30_000 },
-    } as Partial<ICompletionOptions>, ChatModels.CLAUDE_4_6_OPUS);
+    await runComplete(
+      backend,
+      {
+        stream: true,
+        thinking: { enabled: true, budget_tokens: 30_000 },
+      } as Partial<ICompletionOptions>,
+      ChatModels.CLAUDE_4_6_OPUS
+    );
 
     const sent = getCaptured()[0];
     expect((sent.thinking as { budget_tokens: number }).budget_tokens).toBe(30_000);

@@ -18,7 +18,6 @@ import {
 } from '@mui/joy';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
-import CloudIcon from '@mui/icons-material/Cloud';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import { useTheme } from '@mui/joy/styles';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -30,6 +29,7 @@ import { slugifyDataLakeName, MIN_DATA_LAKE_SLUG_LENGTH } from '@client/app/hook
 import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
+import DriveConnectAction from './DriveConnectAction';
 
 const supportsWebkitDirectory =
   typeof HTMLInputElement !== 'undefined' && 'webkitdirectory' in HTMLInputElement.prototype;
@@ -304,13 +304,7 @@ export default function SourceSelectionStep() {
           </Dropdown>
         </Box>
 
-        <Tooltip title="Coming soon">
-          <span>
-            <Button variant="outlined" color="neutral" startDecorator={<CloudIcon />} disabled>
-              Connect Google Drive
-            </Button>
-          </span>
-        </Tooltip>
+        <DriveConnectAction lake={targetLake} />
       </Stack>
 
       {/* Once files are in hand: what was picked up, plus the two opt-in steps. Both default

@@ -619,6 +619,10 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     // Bedrock/Anthropic rejects "text content blocks must contain non-whitespace text"
     const filteredMessages = messages
       .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content !== null && m.content !== undefined)
+      // Unlike the other backends this one forwards IMessage objects into the request body largely
+      // as-is, so control-only fields have to be dropped here rather than left to the invariant that
+      // nothing sets them on a user/assistant message.
+      .map(({ requiresTool: _requiresTool, ...m }) => m)
       .map(m => {
         // Handle string content - check for empty/whitespace-only
         if (typeof m.content === 'string') {
@@ -662,9 +666,13 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       .map(m => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
       .join('\n');
 
-    // Append model identity so the model correctly identifies itself when asked
-    const modelIdentity = `IMPORTANT! Only when someone asks, remember that you are specifically the ${model} model.`;
-    systemMessage = systemMessage ? `${systemMessage}\n${modelIdentity}` : modelIdentity;
+    // Append model identity so the model correctly identifies itself when asked.
+    // Skipped for bare-completion callers (API promptMode raw) - must stay in sync
+    // with the same flag in anthropicBackend.
+    if (!options.omitIdentityReminder) {
+      const modelIdentity = `IMPORTANT! Only when someone asks, remember that you are specifically the ${model} model.`;
+      systemMessage = systemMessage ? `${systemMessage}\n${modelIdentity}` : modelIdentity;
+    }
 
     // Check if model ID needs to be transformed
     const hasVendorPrefix =

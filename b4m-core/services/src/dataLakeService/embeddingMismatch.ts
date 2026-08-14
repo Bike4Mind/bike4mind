@@ -78,6 +78,20 @@ export interface EmbeddingMismatchReport {
    */
   unlabeled: { chunks: number; files: number };
   /**
+   * Files whose vectors are in a DIFFERENT embedding space than the query but were still SEARCHED,
+   * via that model's own ANN index (see alternateModelAnn.ts). Deliberately NOT part of
+   * `excludedFiles` and deliberately does NOT raise `partial`: nothing was withheld. Reported so a
+   * reader can tell "this lake is mixed-model and we covered it" apart from "this lake is
+   * single-model".
+   *
+   * This is COVERAGE, not "returned a visible result": a file counts as served once its ANN query
+   * returns any raw hit, before `minScore` is applied (see excludedForeignFiles in
+   * semanticDataLakeSearch.ts). A minScore floor tuned for the primary model's cosine scale can
+   * still filter every one of an alternate model's rows out of the final results - see the
+   * cross-model raw-cosine caveat where the merge happens.
+   */
+  alternateModelServed: { files: number; models: string[] };
+  /**
    * The query embedding came back empty, so nothing could be compared at all. Distinguished from
    * a mismatch because otherwise the report reads as a normal search with some exclusions, and
    * points the reader at re-embedding files when the embedder is what actually failed.
@@ -115,6 +129,7 @@ export function emptyEmbeddingMismatchReport(): EmbeddingMismatchReport {
       byReason: { unknownFile: 0, modelMismatch: 0, missingVector: 0, dimensionMismatch: 0 },
     },
     unlabeled: { chunks: 0, files: 0 },
+    alternateModelServed: { files: 0, models: [] },
     queryEmbeddingFailed: false,
     partial: false,
   };
@@ -143,8 +158,44 @@ export interface EmbeddingLabeledFile {
  * rest on positive evidence, so an unknown label is always given the benefit of the doubt and the
  * chunk is scored (and counted under `unlabeled`).
  *
- * No case folding: every id in the embedding-model enums is already canonical lowercase, so
- * folding would only mask a genuinely malformed label.
+ * No case folding, and the exact match is LOAD-BEARING rather than incidental - so it is worth
+ * being precise about what actually backs it, because the embedding-model enums do not. The
+ * `FabFile.embeddingModel` field this reads is a bare `String` with no `enum` and no `lowercase`
+ * (packages/database FabFileSchema), so canonical-lowercase storage rests on the write path, in
+ * two halves:
+ *  - the QUERY model can only be a canonical id: `defaultEmbeddingModel` is declared with an
+ *    `options` list, which makeStringSetting turns into a membership check that the settings
+ *    update route runs on every admin write.
+ *  - the STORED label has exactly one writer - chunkFabfile (fabFileService/chunk.ts) - whose
+ *    `chunkFileSchema` validates it against SupportedEmbeddingModelSchema before the file is
+ *    saved. Chunk labels are stamped from that same validated value by the vectorize handler and by
+ *    the chunk-model backfill script (packages/scripts/datalake).
+ *
+ * Folding here would therefore mask a malformed label without buying anything, and a malformed
+ * label is exactly what should stay visible. An unrecognized id also already fails CLOSED one
+ * layer down: fab-pipeline keys its Atlas index registry with a Map, so an unknown model yields
+ * no index target and the search degrades to the brute-force scan instead of querying a bogus one.
+ *
+ * CANONICAL LIST - six other readers compare this same field to the query's as an exact string, and
+ * each holds its OWN copy of the rule rather than calling this function. So relaxing the comparison
+ * HERE does not propagate to them - it makes them DIVERGE, which is the actual hazard: the rule
+ * moves across all seven in lockstep or not at all.
+ *
+ * Retrieval path - divergence drops content from results, silently:
+ *  - the corpus defer gate (b4m-core/services/src/llm/ChatCompletionProcess.ts),
+ *  - isFabFileCitable (apps/client/server/memory/lakeSourceReachability.ts),
+ *  - the Atlas `$vectorSearch` filter clause (packages/database/src/models/content/FabFileModel.ts),
+ *  - the self-host OpenSearch `term` clause, the same rule on the other backend
+ *    (b4m-core/services/src/dataLakeService/openSearchChunkAdapter.ts).
+ *
+ * Client badges - divergence misleads rather than loses, prompting a reprocess for a healthy file:
+ *  - apps/client/app/components/Session/AISettings/FilesSection.tsx (per-file affordance),
+ *  - apps/client/app/hooks/useEmbeddingMismatchStatus.ts (reddens the session-toolbar file count).
+ *
+ * The first two retrieval sites are deliberately STRICTER than this predicate (they count an
+ * unlabeled file as unreachable where this one scores it), and their own comments explain why they
+ * must not be consolidated onto it. packages/scripts/src/checkEmbeddingModelComparisonSites.test.ts
+ * fails when a site appears that is on neither list, so keep the two in step.
  */
 export function isForeignEmbeddingModel(parentModel: string | null | undefined, queryModel: string): boolean {
   const parent = parentModel?.trim();
@@ -157,6 +208,11 @@ export function isForeignEmbeddingModel(parentModel: string | null | undefined, 
  * known-foreign. Partitioning at the FILE level (rather than only per chunk) keeps foreign vectors
  * out of memory entirely and stops them consuming the chunk-load cap, which is unordered and would
  * otherwise let a large off-model file evict matchable chunks.
+ *
+ * Deliberately independent of `groupFilesByEmbeddingModel` below - ChatCompletionFeatures.ts's
+ * forced-retrieval path calls this function directly and must stay structurally insulated from
+ * the multi-model ANN grouping used by the Atlas/OpenSearch cutover; do not refactor one in terms
+ * of the other.
  */
 export function partitionFilesByEmbeddingModel<T extends EmbeddingLabeledFile>(
   files: T[],
@@ -169,6 +225,48 @@ export function partitionFilesByEmbeddingModel<T extends EmbeddingLabeledFile>(
     else rankable.push(file);
   }
   return { rankable, foreign };
+}
+
+export interface EmbeddingModelGroups<T> {
+  /** Query-model files, plus unlabeled/blank-labeled ones (same membership as `partitionFilesByEmbeddingModel`'s `rankable`). */
+  primary: T[];
+  /** One bucket per distinct foreign label actually present, in first-appearance order. */
+  alternates: Array<{ model: string; files: T[] }>;
+}
+
+/**
+ * Group a scoped file set by every distinct embeddingModel actually present, not just
+ * query-model-vs-foreign. Feeds the Atlas/OpenSearch multi-model ANN cutover (see
+ * alternateModelAnn.ts), which gives each alternate model its own ANN query instead of dropping
+ * it outright. `primary` is byte-identical to `partitionFilesByEmbeddingModel(...).rankable` on
+ * the same input - see the anti-drift test.
+ *
+ * Deliberately independent of `partitionFilesByEmbeddingModel` above - see that function's
+ * comment. Do not implement one in terms of the other.
+ */
+export function groupFilesByEmbeddingModel<T extends EmbeddingLabeledFile>(
+  files: T[],
+  queryModel: string
+): EmbeddingModelGroups<T> {
+  const primary: T[] = [];
+  // Keyed on the trimmed label so ' voyage-3 ' and 'voyage-3' collapse into one bucket, matching
+  // isForeignEmbeddingModel's own trim. No case folding, for the same reason isForeignEmbeddingModel
+  // doesn't fold: every registered model id is already canonical lowercase, so a case variant is a
+  // genuinely different (unsupported) label, not the same model spelled differently.
+  const alternatesByModel = new Map<string, T[]>();
+  for (const file of files) {
+    if (!isForeignEmbeddingModel(file.embeddingModel, queryModel)) {
+      primary.push(file);
+      continue;
+    }
+    // isForeignEmbeddingModel already returned true for a non-blank label, so the trim here can't
+    // produce an empty key.
+    const key = (file.embeddingModel as string).trim();
+    const bucket = alternatesByModel.get(key);
+    if (bucket) bucket.push(file);
+    else alternatesByModel.set(key, [file]);
+  }
+  return { primary, alternates: [...alternatesByModel].map(([model, bucketFiles]) => ({ model, files: bucketFiles })) };
 }
 
 /**
@@ -241,6 +339,20 @@ export function classifyLoadedChunk(args: {
   return null;
 }
 
+/**
+ * Classify an Atlas `$vectorSearch` hit: a reason to withhold it, or null to include it.
+ *
+ * Far shorter than classifyLoadedChunk because most of that function's job is already done by
+ * the query itself: the `filter: { embeddingModel: model }` clause means Atlas physically cannot
+ * return a chunk embedded under a different model, and a returned hit always carries a vector
+ * (there is nothing to compare a missing one against). The one thing the query CANNOT guarantee
+ * is that the file is still in the caller's current scope - `fileById` is built from an
+ * independent scope resolution, and a hit for a file that fell out of it must still be dropped.
+ */
+export function classifyAnnHit(args: { parentFile: unknown }): ChunkSkipReason | null {
+  return args.parentFile ? null : 'unknownFile';
+}
+
 export interface EmbeddingMismatchAccumulator {
   /** Record a withheld chunk. */
   skip(reason: ChunkSkipReason): void;
@@ -248,6 +360,8 @@ export interface EmbeddingMismatchAccumulator {
   scored(parentFile: { embeddingModel?: string | null } | undefined, fileId: string): void;
   /** Record that the query could not be embedded, so no comparison happened. */
   queryEmbeddingFailed(): void;
+  /** Record files an alternate-model ANN query actually served (see alternateModelAnn.ts). Never touches `partial`. */
+  alternateModelServed(files: number, models: string[]): void;
   report(): EmbeddingMismatchReport;
 }
 
@@ -255,6 +369,12 @@ export interface EmbeddingMismatchAccumulator {
  * Accumulate a report. Seeded with the files already excluded at the file level so the two
  * provenances stay separate: `skippedChunks` is an exact scan count, `excludedFiles.estimatedChunks`
  * is metadata-derived. Collapsing them into one number is what makes such reports untrustworthy.
+ *
+ * `foreignFiles` must already have any alternate-model-ANN-served files removed by the caller -
+ * see `excludedForeignFiles` in semanticDataLakeSearch.ts, which filters on the served set before
+ * this is ever constructed. Recomputing `excludedFiles` after the fact here would have to keep
+ * `count`/`models`/`estimatedChunks`/the sample consistent with a second filter pass; doing it
+ * once, before construction, is simpler and cannot drift.
  */
 export function createEmbeddingMismatchAccumulator(
   foreignFiles: EmbeddingLabeledFile[],
@@ -304,6 +424,11 @@ export function createEmbeddingMismatchAccumulator(
       report.queryEmbeddingFailed = true;
       recomputePartial();
     },
+    alternateModelServed(files, models) {
+      report.alternateModelServed.files += files;
+      report.alternateModelServed.models = [...new Set([...report.alternateModelServed.models, ...models])].sort();
+      // Deliberately no recomputePartial() call - nothing was withheld, so this must never raise `partial`.
+    },
     report() {
       return report;
     },
@@ -349,6 +474,16 @@ export function describeEmbeddingMismatch(
   if (report.unlabeled.chunks > 0) {
     sentences.push(
       `${report.unlabeled.chunks} chunk(s) in ${report.unlabeled.files} file(s) have no recorded embedding model and were included as-is, so their embedding space is unverified.`
+    );
+  }
+  // Only reachable when `sentences` already has something in it (this function returns null above
+  // when `report.partial` is false), so this positive-coverage note always rides alongside a
+  // genuine withholding above it - it does not by itself trigger the "partial results" framing a
+  // caller wraps this text in.
+  if (report.alternateModelServed.files > 0) {
+    const models = report.alternateModelServed.models.join(', ');
+    sentences.push(
+      `${report.alternateModelServed.files} file(s) embedded with ${models} were searched through their own vector index.`
     );
   }
 

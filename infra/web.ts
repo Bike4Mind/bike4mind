@@ -39,6 +39,10 @@ import {
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueue,
   dataLakeTaxonomyQueueDLQ,
+  lakeMemoryQueue,
+  lakeMemoryQueueDLQ,
+  driveLakeIngestQueue,
+  driveLakeIngestQueueDLQ,
   whatsNewGenerationQueue,
   whatsNewHighlightsQueue,
   notebookCurationQueue,
@@ -81,7 +85,7 @@ import {
 } from './queues';
 import { imageProcessor } from './functions';
 import { chatCompletion } from './chatCompletion';
-import { router, routerDistributionId, whatsNewDistributionId, cdnUrlForLambdaEnv } from './router';
+import { router, routerDistributionId, whatsNewDistributionId, cdnUrlForLambdaEnv, appUrlForLambdaEnv } from './router';
 import { secrets } from './secrets';
 import { migratorInvocation } from './database';
 import { websocketApi } from './websocket';
@@ -123,6 +127,8 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'bob-run': bobRunQueueDLQ.url,
     'data-lake-cleanup': dataLakeCleanupQueueDLQ.url,
     'data-lake-taxonomy': dataLakeTaxonomyQueueDLQ.url,
+    'lake-memory': lakeMemoryQueueDLQ.url,
+    'drive-lake-ingest': driveLakeIngestQueueDLQ.url,
   },
 });
 
@@ -176,6 +182,8 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     bobRunQueue: bobRunQueue.url,
     dataLakeCleanupQueue: dataLakeCleanupQueue.url,
     dataLakeTaxonomyQueue: dataLakeTaxonomyQueue.url,
+    lakeMemoryQueue: lakeMemoryQueue.url,
+    driveLakeIngestQueue: driveLakeIngestQueue.url,
   },
 });
 
@@ -228,6 +236,7 @@ export const web = new sst.aws.Nextjs(
       // without a web.ts <-> cron.ts circular import (web.ts already imports cron.ts
       // exports). Resource.dataLakeTaxonomyQueue.url resolves in both Lambdas this way.
       dataLakeTaxonomyQueue,
+      driveLakeIngestQueue,
       ...(whatsNewDistributionBucket ? [whatsNewDistributionBucket] : []),
       ...(whatsNewDistributionId ? [whatsNewDistributionId] : []),
     ],
@@ -367,7 +376,7 @@ export const web = new sst.aws.Nextjs(
       // Declared here so the lever is greppable from infra and survives a redeploy; set to
       // 'true' to fall back to plain res.json on every route using the helper.
       DISABLE_RESPONSE_GZIP: process.env.DISABLE_RESPONSE_GZIP || '',
-      APP_URL: $dev ? 'http://localhost:3000' : router.url,
+      APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
       // Direct SSE completions endpoint advertised to the CLI via /api/settings/serverConfig.
       // Local `sst dev` has no CloudFront router mapping /api/ai/v1/completions to the
       // ChatCompletion service, so point at its local port (see infra/chatCompletion.ts dev

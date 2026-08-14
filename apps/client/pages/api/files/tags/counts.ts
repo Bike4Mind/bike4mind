@@ -10,17 +10,22 @@ const handler = baseApi().get(
       throw new ForbiddenError('Unauthorized');
     }
 
-    // One scope for both halves of the response: the client keys workspace rows off the tag
-    // counts and sizes them from the namespace counts, so a narrower scope on either one shows
-    // a shared or data-lake workspace as empty. Also shared with the tag list in ./index.ts.
+    // This endpoint backs TWO surfaces that must NOT share one scope: the Tags view (tag tree +
+    // its click-through to GET /api/files/search, which counts personal shares) needs `tagCounts`
+    // unnarrowed, while WORKSPACES (Home/Overview) needs the personal-share exclusion so a tag the
+    // caller already cleared their own copy of can't stay orphaned by someone else's share.
+    // `workspaceTagCounts`/`namespaceCounts` are the WORKSPACES-only pair and must share the SAME
+    // (narrowed) scope with each other, or a workspace row's existence and its size disagree.
     const scope = buildUserFileScope(req.user);
+    const workspaceScope = { ...scope, excludePersonalShares: true };
 
-    const [tagCounts, namespaceCounts] = await Promise.all([
+    const [tagCounts, workspaceTagCounts, namespaceCounts] = await Promise.all([
       fabFileRepository.countFilesByTagForUser(req.user.id, scope),
-      fabFileRepository.countUniqueFilesByNamespaceForUser(req.user.id, scope),
+      fabFileRepository.countFilesByTagForUser(req.user.id, workspaceScope),
+      fabFileRepository.countUniqueFilesByNamespaceForUser(req.user.id, workspaceScope),
     ]);
 
-    return res.json({ tagCounts, namespaceCounts });
+    return res.json({ tagCounts, workspaceTagCounts, namespaceCounts });
   })
 );
 

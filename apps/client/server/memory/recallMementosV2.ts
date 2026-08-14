@@ -1,24 +1,11 @@
-import {
-  adminSettingsRepository,
-  apiKeyRepository,
-  memoryLedgerRepository,
-  memoryPrincipalKeyRepository,
-  mementoRepository,
-} from '@bike4mind/database';
+import { memoryLedgerRepository, memoryPrincipalKeyRepository, mementoRepository } from '@bike4mind/database';
 import { embeddingScorer, mergeStores, recall } from '@bike4mind/memory';
-import {
-  MEMENTO_EMBEDDING_ID,
-  MEMENTO_EMBEDDING_MODEL,
-  MEMENTO_MIN_SIMILARITY,
-  toMementoVector,
-} from '@bike4mind/common';
-import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
-import { apiKeyService } from '@bike4mind/services';
-import { getSettingsByNames } from '@bike4mind/utils';
+import { MEMENTO_MIN_SIMILARITY } from '@bike4mind/common';
 import { createKeyProvider } from './factCipher';
 import { createLedgerMemoryStore } from './ledgerMemoryStore';
 import { createUserMementoMemoryStore } from './userMementoMemoryStore';
 import { isMementosV2Enabled } from './mementoLedgerMirror';
+import { embedMementoQuery } from './mementoQueryEmbedding';
 
 /**
  * How many beliefs V2 injects into the prompt at most.
@@ -40,31 +27,6 @@ const V2_RECALL_K = 8;
  * only band that does both.
  */
 const V2_ACTIVATION_WEIGHT = 0.025;
-
-/**
- * Embed the query in the SAME vector space the mementos were written in - MEMENTO_EMBEDDING_MODEL,
- * which the memento write path pins and stamps. Cosine between vectors from different models is
- * meaningless, so this must stay in lockstep with `createMemento` and `getRelevantMementos`.
- *
- * Returns an empty vector on any failure (no key, provider error): recall then falls back to the
- * lexical scorer rather than breaking the chat.
- */
-async function embedQuery(userId: string, query: string): Promise<{ vector: number[]; model: string }> {
-  const none = { vector: [] as number[], model: '' };
-  if (!query.trim()) return none;
-
-  const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(userId, {
-    db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
-    getSettingsByNames,
-  });
-
-  const provider = getProviderFromModel(MEMENTO_EMBEDDING_MODEL);
-  const { config, missing } = resolveEmbeddingConfig(provider, apiKeyTable);
-  if (missing) return none;
-
-  const embeddingService = new EmbeddingFactory(config).createEmbeddingService(MEMENTO_EMBEDDING_MODEL);
-  return { vector: toMementoVector(await embeddingService.generateEmbedding(query)), model: MEMENTO_EMBEDDING_ID };
-}
 
 /**
  * Mementos V2 read seam for the chat/agent prompt. Injected into the chat completion service as
@@ -104,7 +66,7 @@ export async function recallMementosV2(
   // together they cost the slower one. This is the single biggest win on the recall path.
   const [profile, embedded] = await Promise.all([
     store.readProfile({ kind: 'user', id: userId }),
-    embedQuery(userId, query).catch(err => {
+    embedMementoQuery(userId, query).catch(err => {
       // Falling back to lexical is the right call - never fail a chat turn over recall - but do it
       // LOUDLY. Silently, an embedding-provider outage just makes memory quietly worse: the model
       // still answers, so nothing looks broken while retrieval quality has collapsed to token overlap.

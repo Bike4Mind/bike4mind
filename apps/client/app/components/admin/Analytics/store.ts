@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import dayjs from 'dayjs';
+import { DEFAULT_PAGE_SIZE } from '@server/analytics/metadataFilterContract';
 import { AnalyticsState, AnalyticsSubTab } from './types';
 
 const getLocalDate = (daysOffset = 0) => {
@@ -9,7 +10,7 @@ const getLocalDate = (daysOffset = 0) => {
 
 export const ALL_VALUE = 'all';
 
-export const DEFAULT_PAGE_SIZE = 25;
+export { DEFAULT_PAGE_SIZE };
 
 /**
  * User Activity rows are paged and filtered by the server (see server/analytics/

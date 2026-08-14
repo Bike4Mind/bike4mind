@@ -74,6 +74,19 @@ if ! bash scripts/check-no-overlay-lockfile.sh --staged; then
   FINAL_EXIT_CODE=1
 fi
 
+# Check staged source files for raw control bytes (a NUL makes a file binary/ungreppable)
+echo "Running control-byte check..."
+if ! bash scripts/check-no-control-bytes.sh; then
+  FINAL_EXIT_CODE=1
+fi
+
+# Check staged ADDED lines for smart punctuation (the other half of the ASCII-only rule).
+# Line-level, not file-level: ~645 tracked files already carry an em-dash.
+echo "Running smart-punctuation check..."
+if ! bash scripts/check-no-smart-punctuation.sh; then
+  FINAL_EXIT_CODE=1
+fi
+
 # Run gitleaks to check for secrets
 echo "Running gitleaks check..."
 if ! sh "$(dirname -- "$0")/gitleaks-pre-commit.sh"; then

@@ -14,15 +14,22 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 // AdminSettings: the full settings collection. It MUST NOT be queried on a denied call,
-// since its rows include unredacted provider API keys.
-const mockFind = vi.fn();
+// since its rows include (encrypted) provider API keys.
+const mockLean = vi.fn();
+const mockFind = vi.fn(() => ({ lean: mockLean }));
 vi.mock('@bike4mind/database/infra', () => ({
   AdminSettings: {
     find: (...args: unknown[]) => mockFind(...args),
   },
 }));
+// Sensitive values are stored encrypted; decryptAtRest passes the plaintext test fixtures
+// through unchanged (they are not in ciphertext format).
+vi.mock('@bike4mind/utils/security', () => ({
+  decryptAtRest: (v: unknown) => v,
+}));
 
 import handler from '../index';
+import { SENSITIVE_SETTING_MASK } from '@bike4mind/common';
 
 type HandlerFn = (req: unknown, res: unknown) => Promise<unknown>;
 
@@ -41,10 +48,10 @@ const SECRET_ROWS = [
   { settingName: 'EnableArtifacts', settingValue: true },
 ];
 
-describe('GET /api/settings (admin-only, full unredacted collection)', () => {
+describe('GET /api/settings (admin-only, sensitive values masked)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockFind.mockResolvedValue(SECRET_ROWS);
+    mockLean.mockResolvedValue(SECRET_ROWS);
   });
 
   it('rejects a non-admin with 403 and never queries the settings collection', async () => {
@@ -64,13 +71,21 @@ describe('GET /api/settings (admin-only, full unredacted collection)', () => {
     expect(mockFind).not.toHaveBeenCalled();
   });
 
-  it('returns the full settings collection to an admin', async () => {
+  it('returns the collection to an admin with sensitive values masked, non-sensitive in full', async () => {
     const { req, res } = makeReq({ isAdmin: true });
 
     await (handler as HandlerFn)(req, res);
 
     expect(mockFind).toHaveBeenCalledTimes(1);
     expect(res.statusCode).toBe(200);
-    expect(res._getJSONData()).toEqual(SECRET_ROWS);
+
+    const body = res._getJSONData() as Array<{ settingName: string; settingValue: unknown }>;
+    const secret = body.find(s => s.settingName === 'openaiDemoKey');
+    expect(secret?.settingValue).toBe(`${SENSITIVE_SETTING_MASK}leak`);
+    // The stored secret must never leave the server, even to an admin, through this route.
+    expect(JSON.stringify(body)).not.toContain('sk-live-should-never-leak');
+
+    const nonSensitive = body.find(s => s.settingName === 'EnableArtifacts');
+    expect(nonSensitive?.settingValue).toBe(true);
   });
 });

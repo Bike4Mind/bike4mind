@@ -7,7 +7,8 @@ import DataLakeExplorer from './DataLakeExplorer';
 
 // A 2-level tag structure so buildTagTree yields prefix -> children with counts. The Explorer
 // exposes the richest second-level branches (sorted, top 6) + tree navigation via context.
-vi.mock('@client/app/hooks/data/fabFiles', () => ({
+vi.mock('@client/app/hooks/data/dataLakes', () => ({
+  activeOrgId: () => undefined,
   useGetDataLakeTagCounts: () => ({
     data: {
       tagCounts: [
@@ -21,6 +22,8 @@ vi.mock('@client/app/hooks/data/fabFiles', () => ({
     isError: false,
   }),
   useGetDataLakeArticles: () => ({ data: { data: [] }, isLoading: false }),
+  useGetDataLakes: () => ({ data: [] }),
+  useRemoveFileFromDataLake: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 vi.mock('@client/app/contexts/SessionsContext', async importOriginal => ({

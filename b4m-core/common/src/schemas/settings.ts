@@ -1,5 +1,18 @@
 import { z } from 'zod';
 import { CREDITS_PER_USD_COST } from '../pricing';
+import {
+  DEFAULT_PASSAGE_TOKEN_TARGET,
+  MAX_PASSAGE_TOKEN_TARGET,
+  MIN_PASSAGE_TOKEN_TARGET,
+} from '../constants/chunking';
+import {
+  LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS,
+  LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS,
+  LAKE_ACCESS_AUDIT_RETENTION_MAX_DAYS,
+  LAKE_ACCESS_QUERY_TEXT_RETENTION_DEFAULT_DAYS,
+  LAKE_ACCESS_QUERY_TEXT_RETENTION_MAX_DAYS,
+  LAKE_ACCESS_QUERY_TEXT_RETENTION_MIN_DAYS,
+} from '../constants/lakeAccessAudit';
 import { CHAT_MODELS, ChatModels } from '../models';
 import {
   BedrockEmbeddingModel,
@@ -10,6 +23,7 @@ import {
 } from './embedding';
 import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } from '../types/entities/SreTypes';
 import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
+import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/ScopedSettingTypes';
 
 /**
  * Default text for the artifact-emission system prompt. Single source of truth used BOTH as the
@@ -100,6 +114,38 @@ If the full deliverable genuinely will not fit, do NOT stub the difference. REDU
  */
 export const HELP_CENTER_PROMPT = `HELP CENTER: Bike4Mind has a built-in Help Center that documents how to use the app. Users reach it from the "Help Center" item in the left sidebar, the help (?) icons beside feature titles, or the ? keyboard shortcut. When the user is clearly asking how to DO something in Bike4Mind itself (navigation, settings, files, the data lake, OptiHashi, agents, projects, sharing, billing, etc.) — as opposed to asking you to perform a task — give a brief, helpful answer and point them to the Help Center for full, up-to-date steps. If a knowledge-base/help search tool is available, use it to ground your answer in the actual help docs first. Do NOT invent menu paths, button names, or features you are not sure exist; if unsure, say so and direct them to the Help Center rather than guessing.`;
 
+/**
+ * Default text for the abstention licence. Single source of truth used BOTH as the
+ * `AbstentionPrompt` admin setting's default AND as the runtime fallback in ChatCompletionProcess -
+ * so an unset/empty/cleared DB value reverts to this and never strips the licence.
+ *
+ * Counterweight to the completeness pressure the rest of the system prompt applies: without an
+ * explicit licence to abstain, the model treats "answer fully" as unconditional and fills gaps with
+ * invented specifics - including a named customer, competitor, deal or dollar figure a leading
+ * question implied but no source supports, volunteered with citation-like framing so it reads as
+ * sourced. In internal evaluation (a harness kept outside this repo) this was among the largest
+ * quality gains on questions whose correct answer is a refusal, so it ships on every completion
+ * rather than only on the grounded surfaces (it is also the only surface covering a turn that
+ * answers WITHOUT searching the knowledge base). Kept short
+ * on purpose - it must be cheap and behaviorally light.
+ */
+export const ABSTENTION_PROMPT = `When a request is underspecified or your sources do not cover it, say so and name what is missing. "I do not have enough to answer that" is a correct, high-value answer. Never invent facts about the user, their business, or their data, and never state a specific customer, competitor, deal, or figure as fact - or cite a source for it - unless your sources support it, even when the question assumes it.`;
+
+/**
+ * Default text for the formatting system message. Runtime fallback used by
+ * `includeHardcodedSystemMessage` (b4m-core/utils/src/llm/utils.ts) when the `FormatPromptTemplate`
+ * admin setting is blank; that setting's own default is intentionally '' - keep this the sole home.
+ *
+ * Deliberately scoped to formatting ONLY. The previous wording ("Adhere to specific formatting
+ * requests...") read as a general compliance instruction and bled into WHETHER to answer: as the
+ * only system content it roughly halved refusal quality. The opening clause is the fix - it fences
+ * this message off from the answer/abstain decision. Injected only when `UseFormatPrompt` is on.
+ *
+ * NOTE: a stored settings row pins its own wording, so changing this default does not reach an
+ * existing deployment that has already saved a value - the row must be edited in admin settings too.
+ */
+export const FORMAT_PROMPT_TEMPLATE = `Formatting only - nothing here decides whether or how fully to answer. Format replies to maintain the integrity of the requested style; default to markdown for text. Preserve proper structure for poems, songs, or haikus. When the user specifies an output format (e.g. TypeScript), use that format for the parts you do answer.`;
+
 export const SettingKeySchema = z.enum([
   'openaiDemoKey',
   'anthropicDemoKey',
@@ -118,6 +164,7 @@ export const SettingKeySchema = z.enum([
   'FormatPromptTemplate',
   'ArtifactEmissionPrompt',
   'HelpCenterPrompt',
+  'AbstentionPrompt',
   'UseFormatPrompt',
   'EnableQuestMaster',
   'EnableQuestMasterDefault',
@@ -137,6 +184,11 @@ export const SettingKeySchema = z.enum([
   'EnableLatticeDefault',
   'EnableDataLakes',
   'EnableDataLakesDefault',
+  'EnableDataLakeSlackAdd',
+  'EnableDataLakeGroundingMode',
+  'EnableLakeMemory',
+  'EnableDataLakeVectorSearch',
+  'PauseLakeConvergence',
   'EnableBriefcase',
   'EnableBriefcaseDefault',
   'EnableImageTemplates',
@@ -238,6 +290,19 @@ export const SettingKeySchema = z.enum([
   'dataLakeSearchMaxFiles',
   'dataLakeSearchMaxChunks',
 
+  // DATA LAKE COST GOVERNANCE (spend levers - see resolveSpendLevers)
+  'dataLakeEmbeddingSpendEnabled',
+  'dataLakeEmbeddingBudgetPerRunUsd',
+  'dataLakeEmbeddingBudgetPerLakeUsd',
+  'dataLakeEmbeddingBudgetPerPeriodUsd',
+  'dataLakeEmbeddingBudgetPeriodHours',
+  'dataLakeEmbeddingMaxCallsPerMinute',
+  'dataLakeVectorizeChunkBatchSize',
+
+  // LAKE ACCESS AUDIT SETTINGS
+  'LakeAccessAuditRetentionDays',
+  'LakeAccessQueryTextRetentionDays',
+
   // New MaxContentLength setting
   'MaxContentLength',
 
@@ -258,6 +323,7 @@ export const SettingKeySchema = z.enum([
 
   // MFA SETTINGS
   'enforceMFA',
+  'allowTrustedDevices',
 
   // VOICE SESSION SETTINGS
   'enableVoiceSession',
@@ -325,6 +391,7 @@ export const SettingKeySchema = z.enum([
   'EnableContextTelemetry',
   'contextTelemetryAlerts',
   'ContextVerbatimWindowFraction',
+  'CorpusRetrievalMinInlineTokensPerDoc',
 
   // SRE AGENT SETTINGS
   'sreAgentConfig',
@@ -350,6 +417,11 @@ export const SettingKeySchema = z.enum([
   'modelDiscoveryAllowEgress',
   'modelDiscoveryPriceBandPct',
   'modelDiscoveryAutoRemap',
+  // PR REPORT GENERATOR
+  'prReportRepo',
+  'prReportIdentityMap',
+  'prReportSlackChannel',
+  'prReportEgressAllowlist',
 ]);
 export type SettingKey = z.infer<typeof SettingKeySchema>;
 
@@ -399,6 +471,8 @@ export const OrchestrationDefaultsSchema = z.object({
     // AGENT_MODE_TOOL_IDS (apps/client/app/utils/toolMapping.ts).
     'image_generation',
     'edit_image',
+    'music_generation',
+    'audio_generation',
     'excel_generation',
     // Inline visualization artifacts: these emit an <artifact> block in the
     // tool result and write nothing - no storage, no user-data mutation - so
@@ -614,6 +688,14 @@ interface BaseSetting {
   publicSafe?: boolean;
   /** Parent setting key - this setting is hidden in admin UI when the parent is off. */
   dependsOn?: SettingKey;
+  /**
+   * Opt-in scoping (epic #1658 lane 0 / #1660). Absent = platform-only, the historical behavior:
+   * the value lives solely in `AdminSettings` and `resolveScopedSetting` returns it unchanged at
+   * every scope. Present, the setting also honors org/owner/lake OVERRIDES per `settableAt`, with
+   * the narrower scope winning. A setting is never silently scoped - it opts in here, which is why
+   * adding this field changes no existing consumer.
+   */
+  scope?: SettingScopeConfig;
 }
 
 function makeStringSetting(
@@ -650,6 +732,28 @@ function makeStringSetting(
  */
 export const DATA_LAKE_SEARCH_MAX_FILES_DEFAULT = 5_000;
 export const DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT = 100_000;
+
+/**
+ * Data-lake embedding SPEND levers: defaults and hard rails, shared by the admin-settings
+ * definitions below and resolveSpendLevers in the dataLakeService (imported there so the two
+ * cannot drift). Unlike the scan budgets above, these govern money, so their semantics differ
+ * deliberately: 0 is a VALID operator value meaning "stop spending", only an absent setting
+ * falls back to the default, and an unparseable one halts the spend path rather than resuming.
+ * The MAX_* rails are the "adjustable is not unbounded" ceilings - the resolver clamps to them
+ * even if a larger value is somehow stored.
+ */
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_DEFAULT = 5;
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_MAX = 500;
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_DEFAULT = 100;
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_MAX = 10_000;
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_DEFAULT = 50;
+export const DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_MAX = 5_000;
+export const DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_DEFAULT = 24;
+export const DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_MAX = 720; // 30 days
+export const DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_DEFAULT = 120;
+export const DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_MAX = 10_000;
+export const DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT = 50;
+export const DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_MAX = 500;
 
 function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: number } & BaseSetting) {
   let numberSchema = z.coerce.number();
@@ -1249,6 +1353,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'SystemFiles', order: 8 },
       { key: 'ArtifactEmissionPrompt', order: 9 },
       { key: 'HelpCenterPrompt', order: 10 },
+      { key: 'AbstentionPrompt', order: 11 },
     ],
   },
   EMBEDDING: {
@@ -1260,6 +1365,23 @@ export const API_SERVICE_GROUPS = {
       { key: 'defaultEmbeddingModel', order: 1 },
       { key: 'dataLakeSearchMaxFiles', order: 2 },
       { key: 'dataLakeSearchMaxChunks', order: 3 },
+    ],
+  },
+  DATA_LAKE_COST: {
+    id: 'dataLakeCostGovernance',
+    name: 'Data Lake Cost Governance',
+    description:
+      'Spend levers for data-lake embedding work (ingestion, reprocessing, convergence). ' +
+      'Budgets are USD; 0 means stop spending, not "use the default".',
+    icon: 'Savings',
+    settings: [
+      { key: 'dataLakeEmbeddingSpendEnabled', order: 1 },
+      { key: 'dataLakeEmbeddingBudgetPerRunUsd', order: 2 },
+      { key: 'dataLakeEmbeddingBudgetPerLakeUsd', order: 3 },
+      { key: 'dataLakeEmbeddingBudgetPerPeriodUsd', order: 4 },
+      { key: 'dataLakeEmbeddingBudgetPeriodHours', order: 5 },
+      { key: 'dataLakeEmbeddingMaxCallsPerMinute', order: 6 },
+      { key: 'dataLakeVectorizeChunkBatchSize', order: 7 },
     ],
   },
   VOICE_SESSION: {
@@ -1599,6 +1721,16 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiRateLimitProPerMin', order: 3 },
     ],
   },
+  DATA_LAKE_AUDIT: {
+    id: 'dataLakeAuditService',
+    name: 'Data Lake Access Audit',
+    description: 'Retention for the lake access audit trail and its opt-in query-text log',
+    icon: 'Security',
+    settings: [
+      { key: 'LakeAccessAuditRetentionDays', order: 1 },
+      { key: 'LakeAccessQueryTextRetentionDays', order: 2 },
+    ],
+  },
   // Note: CONTEXT_TELEMETRY settings are managed in the Context Inspector tab (Admin UI)
   // to keep all telemetry controls in one place
 } satisfies {
@@ -1721,6 +1853,66 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 89,
     dependsOn: 'EnableDataLakes',
+  }),
+  EnableDataLakeSlackAdd: makeBooleanSetting({
+    key: 'EnableDataLakeSlackAdd',
+    name: 'Data Lakes: Slack "@datalake add" path',
+    defaultValue: false,
+    description:
+      'Server-side gate for adding content to a Data Lake from Slack via "@datalake add". Off by default - the Slack command is intercepted deterministically but performs no ingest until this is turned on.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 90,
+    dependsOn: 'EnableDataLakes',
+  }),
+  EnableDataLakeGroundingMode: makeBooleanSetting({
+    key: 'EnableDataLakeGroundingMode',
+    name: 'Data Lakes: Per-lake grounding mode',
+    defaultValue: true,
+    description:
+      "Global rollback lever for the per-lake grounding mode (inline vs retrieve vs auto-by-size). On by default. Turn OFF to ignore every lake's configured mode and fall back to pure size-only corpus deferral (CorpusRetrievalMinInlineTokensPerDoc), reverting the retrieve-by-default behavior for all lakes at once without editing each lake.",
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 92,
+    dependsOn: 'EnableDataLakes',
+  }),
+  EnableLakeMemory: makeBooleanSetting({
+    key: 'EnableLakeMemory',
+    name: 'Data Lakes: Lake memory profile (extraction)',
+    defaultValue: false,
+    description:
+      "Server-side gate for the lake memory producer - LLM extraction of a data lake's documents into a durable memory profile on ingest. Off by default (measurement rollout); the consumer that injects the profile is inert until this is on and a lake has been extracted.",
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 91,
+    dependsOn: 'EnableDataLakes',
+  }),
+  EnableDataLakeVectorSearch: makeBooleanSetting({
+    key: 'EnableDataLakeVectorSearch',
+    name: 'Data Lakes: Use Atlas $vectorSearch',
+    defaultValue: false,
+    description:
+      'Kill-switch for the Atlas $vectorSearch cutover on Data Lake semantic search. Off by default; even when on, only files whose chunks are fully re-indexed on an Atlas backend actually use it - everything else keeps using the brute-force scan.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 92,
+    dependsOn: 'EnableDataLakes',
+  }),
+  PauseLakeConvergence: makeBooleanSetting({
+    key: 'PauseLakeConvergence',
+    name: 'Data Lakes: Pause background convergence work',
+    defaultValue: false,
+    description:
+      'Kill switch for background data-lake ingestion work (convergence sweeps, rescue re-chunking) - NOT real-time user uploads, which are always honored. Off by default. Turn ON to halt in-flight background chunk/vectorize messages the next time the handler picks them up (a re-check inside the shared handler, so it takes effect on work already queued, not just the next scheduling pass). The platform value pauses every lake at once; a per-lake (or per-org / per-owner) override pauses a subset while the rest keep running. A platform-level flip applies immediately to lake-wide work and within ~5 min to per-lake-scoped work (settings cache).',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 93,
+    dependsOn: 'EnableDataLakes',
+    // Per-lake override (#1676): the platform value is the global kill switch; a narrower override
+    // pauses just that scope. Org/Owner rungs ride along (the resolver derives them from the lake
+    // via scopeForLake, and the scheme requires Owner wherever Lake is settable) so an operator can
+    // also pause all of an org's/owner's lake convergence, not only one lake at a time.
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
   }),
   EnableBriefcase: makeBooleanSetting({
     key: 'EnableBriefcase',
@@ -1956,10 +2148,37 @@ export const settingsMap = {
   DefaultChunkSize: makeNumberSetting({
     key: 'DefaultChunkSize',
     name: 'Default Chunk Size',
-    defaultValue: 2100,
-    description: 'The default chunk size for splitting large documents.',
+    // Must equal the chunker's own default, or a reprocess driven through the UI (which sends this
+    // as an explicit chunkSize override) produces a different granularity than one driven through
+    // /api/files/reprocess, which sends none and gets the chunker default. They disagreed by ~4x.
+    defaultValue: DEFAULT_PASSAGE_TOKEN_TARGET,
+    // Floor matches the chunker's own clamp, so the UI cannot report a value the chunker will
+    // silently raise (chunk.ts clamps to MIN_PASSAGE_TOKEN_TARGET).
+    min: MIN_PASSAGE_TOKEN_TARGET,
+    description:
+      'Passage target in TOKENS for splitting large documents. The DEFAULT matches the chunker; a ' +
+      'value stored here overrides it, and a stored value larger than the chunker default makes the ' +
+      'UI reprocess path produce coarser chunks than /api/files/reprocess. Coarser chunks measurably ' +
+      'worsen retrieval. Resolves at file-OWNER altitude: an org/individual owner may pin their own ' +
+      'default above the platform value; a data lake does NOT override it (epic decision 7) - a lake ' +
+      'declares the policy it REQUIRES and a file that cannot satisfy every lake it belongs to is ' +
+      'reported as a conflict rather than silently re-chunked.',
     category: 'AI',
     order: 3,
+    // Chunk policy at file-owner altitude (#1662). Owner-only (never lake): chunks are keyed per
+    // FabFile and shared by every consumer of that file, so a lake-owned policy would rewrite
+    // chunks for non-members and a file in two lakes with different policies would oscillate. The
+    // lake is a CONSTRAINT its consumer checks, not a narrower-wins override the resolver considers.
+    // FabFile carries no organizationId, so in practice the owner (uploading user) rung and the
+    // platform base are the reachable altitudes; Organization is registered for forward-compat.
+    // clamp: model-INDEPENDENT sanity bound only (the resolver clamp is pure and cannot know the
+    // embedding model); the exact per-model embedding-window cap is enforced downstream by the
+    // chunker (effectiveChunkTokenLimit), which reduces an over-large value further if needed.
+    scope: {
+      settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner],
+      clamp: (value: number) =>
+        Math.min(Math.max(Math.floor(value), MIN_PASSAGE_TOKEN_TARGET), MAX_PASSAGE_TOKEN_TARGET),
+    },
   }),
   ModerationEnabled: makeBooleanSetting({
     key: 'ModerationEnabled',
@@ -2002,6 +2221,15 @@ export const settingsMap = {
       'Short system prompt that makes the model aware of the in-app Help Center and tells it to point users there for app how-to questions. Injected on every chat completion. Live-editable; clearing it reverts to the built-in default.',
     category: 'AI',
     order: 10,
+  }),
+  AbstentionPrompt: makeStringSetting({
+    key: 'AbstentionPrompt',
+    name: 'Abstention Prompt',
+    defaultValue: ABSTENTION_PROMPT,
+    description:
+      'Short system prompt licensing the model to say "I do not have enough to answer that" and to name what is missing instead of inventing facts about the user or their data. Injected on every chat completion. Live-editable; clearing it reverts to the built-in default. After an upgrade, diff a saved copy against that default: a saved copy pins the wording from whenever it was saved and will not pick up fixes made since.',
+    category: 'AI',
+    order: 11,
   }),
   UseFormatPrompt: makeBooleanSetting({
     key: 'UseFormatPrompt',
@@ -2871,6 +3099,8 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 2,
+    // A scan budget an org/owner/lake may tighten below the platform ceiling (#1661 org/lake rungs).
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
   }),
   dataLakeSearchMaxChunks: makeNumberSetting({
     key: 'dataLakeSearchMaxChunks',
@@ -2882,6 +3112,124 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 3,
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
+  }),
+  LakeAccessAuditRetentionDays: makeNumberSetting({
+    key: 'LakeAccessAuditRetentionDays',
+    name: 'Lake Access Audit Retention (days)',
+    defaultValue: LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS,
+    // The enforced floor: the admin API rejects a save below this, and the write path
+    // (lakeAccessEventRepository.record) clamps to it unconditionally regardless of what is
+    // stored, so this control cannot be used to shorten the audit trail below the floor.
+    min: LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS,
+    max: LAKE_ACCESS_AUDIT_RETENTION_MAX_DAYS,
+    description:
+      'How long a lake access audit event (who read a lake, and when) is retained, in days. Has a ' +
+      'floor of 450 days (12 months live plus a Type II observation tail) - this is a platform-wide ' +
+      'value, not per-organization, until a scoped settings resolver exists.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.DATA_LAKE_AUDIT.id,
+    order: 1,
+  }),
+  LakeAccessQueryTextRetentionDays: makeNumberSetting({
+    key: 'LakeAccessQueryTextRetentionDays',
+    name: 'Lake Access Query Text Retention (days)',
+    defaultValue: LAKE_ACCESS_QUERY_TEXT_RETENTION_DEFAULT_DAYS,
+    min: LAKE_ACCESS_QUERY_TEXT_RETENTION_MIN_DAYS,
+    max: LAKE_ACCESS_QUERY_TEXT_RETENTION_MAX_DAYS,
+    description:
+      'How long the opt-in query-text log (the natural-language question behind a lake retrieval) ' +
+      'is retained, in days. Always resolved shorter than the audit event retention itself, ' +
+      'regardless of this value, since the query text is more sensitive than the event metadata.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.DATA_LAKE_AUDIT.id,
+    order: 2,
+  }),
+  // Data-lake cost governance. These are SPEND levers, not scan budgets: 0 is a valid value
+  // meaning "stop spending" (min: 0, unlike the search budgets above), the defaults apply only
+  // when a setting is absent, and resolveSpendLevers (dataLakeService) halts - never resumes at
+  // a default - on an unparseable stored value. Rails (max) mirror the MAX_* constants.
+  dataLakeEmbeddingSpendEnabled: makeBooleanSetting({
+    key: 'dataLakeEmbeddingSpendEnabled',
+    name: 'Data Lake Embedding Spend Enabled',
+    defaultValue: true,
+    description:
+      'Master switch for data-lake embedding spend (ingestion, reprocessing, convergence). Off halts all provider embedding calls on those paths; cached embeddings still apply.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 1,
+  }),
+  dataLakeEmbeddingBudgetPerRunUsd: makeNumberSetting({
+    key: 'dataLakeEmbeddingBudgetPerRunUsd',
+    name: 'Embedding Budget Per Run (USD)',
+    defaultValue: DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_MAX,
+    description:
+      'Most USD one ingestion/reprocess run (upload batch) may spend on embedding calls. 0 stops runs from spending at all.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 2,
+  }),
+  dataLakeEmbeddingBudgetPerLakeUsd: makeNumberSetting({
+    key: 'dataLakeEmbeddingBudgetPerLakeUsd',
+    name: 'Embedding Budget Per Lake (USD)',
+    defaultValue: DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_MAX,
+    description:
+      'Most USD one data lake may spend on embedding calls over its lifetime. 0 stops all spend for every lake.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 3,
+  }),
+  dataLakeEmbeddingBudgetPerPeriodUsd: makeNumberSetting({
+    key: 'dataLakeEmbeddingBudgetPerPeriodUsd',
+    name: 'Embedding Budget Per Period (USD)',
+    defaultValue: DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_MAX,
+    description:
+      'Most USD the whole platform may spend on data-lake embedding calls per rolling period (see the period-hours setting). 0 stops all spend.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 4,
+  }),
+  dataLakeEmbeddingBudgetPeriodHours: makeNumberSetting({
+    key: 'dataLakeEmbeddingBudgetPeriodHours',
+    name: 'Embedding Budget Period (hours)',
+    defaultValue: DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_DEFAULT,
+    min: 1,
+    max: DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_MAX,
+    description:
+      'Length of the per-period budget window in hours. Not a spend value itself, so 0 is not meaningful here (min 1).',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 5,
+  }),
+  dataLakeEmbeddingMaxCallsPerMinute: makeNumberSetting({
+    key: 'dataLakeEmbeddingMaxCallsPerMinute',
+    name: 'Embedding Max Calls Per Minute',
+    defaultValue: DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_DEFAULT,
+    min: 0,
+    max: DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_MAX,
+    description:
+      'Most provider embedding API calls per minute across all data-lake work. The real throttle in front of the embed call (the queue concurrency in infra is a deploy-time constant, not this lever). 0 stops all calls.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 6,
+  }),
+  dataLakeVectorizeChunkBatchSize: makeNumberSetting({
+    key: 'dataLakeVectorizeChunkBatchSize',
+    name: 'Vectorize Chunk Batch Size',
+    defaultValue: DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT,
+    min: 1,
+    max: DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_MAX,
+    description:
+      'How many chunks the chunk handler packs into one vectorize-queue message. Smaller batches smooth the fan-out; not a spend value, so min 1.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DATA_LAKE_COST.id,
+    order: 7,
   }),
   // Analytics Bot (existing production bot - DO NOT CHANGE)
   slackSigningSecret: makeStringSetting({
@@ -2913,6 +3261,17 @@ export const settingsMap = {
     category: 'Users',
     // publicSafe: gates the startup "Checking security settings..." spinner (M2.5).
     // A policy boolean - exposing it reveals nothing exploitable.
+    publicSafe: true,
+  }),
+  allowTrustedDevices: makeBooleanSetting({
+    key: 'allowTrustedDevices',
+    name: 'Allow "Remember This Device"',
+    description:
+      'Let users mark a device as trusted at the MFA prompt so a fresh login from it skips the TOTP challenge for 30 days. The emailed one-time code is still required every time. Turning this off stops new grants and ignores existing ones immediately.',
+    defaultValue: true,
+    category: 'Users',
+    // publicSafe: the login UI needs it before authentication to decide whether to
+    // render the checkbox. A policy boolean - it reveals nothing exploitable.
     publicSafe: true,
   }),
   FirecrawlApiKey: makeStringSetting({
@@ -3506,6 +3865,17 @@ export const settingsMap = {
     category: 'AI',
     order: 121,
   }),
+  CorpusRetrievalMinInlineTokensPerDoc: makeNumberSetting({
+    key: 'CorpusRetrievalMinInlineTokensPerDoc',
+    name: 'Corpus Retrieval Min Inline Tokens Per Doc',
+    defaultValue: 0,
+    min: 0,
+    max: 100000,
+    description:
+      'When a session has a large RETRIEVABLE knowledge corpus attached, stop force-inlining it and let the offered search_knowledge_base tool fetch the relevant docs on demand, IF the even-split inline depth (attached-content budget / retrievable doc count) would fall below this many tokens per doc. 0 disables (always inline). Only documents the retrieval tool can actually reach are ever deferred; other attachments always inline.',
+    category: 'AI',
+    order: 122,
+  }),
   sreAgentConfig: makeObjectSetting({
     key: 'sreAgentConfig',
     name: 'SRE Agent Config',
@@ -3646,6 +4016,45 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
     order: 6,
   }),
+  prReportRepo: makeStringSetting({
+    key: 'prReportRepo',
+    name: 'PR Report Repository',
+    defaultValue: '',
+    description:
+      'The `owner/repo` whose open pull requests the PR status digest reports on. Validated against an anchored GitHub repo grammar before it is interpolated into any authenticated outbound URL (SSRF guard) - a value with an empty or `..` segment is rejected.',
+    category: 'Admin',
+    order: 141,
+  }),
+  prReportIdentityMap: makeStringSetting({
+    key: 'prReportIdentityMap',
+    name: 'PR Report Identity Map',
+    defaultValue: '',
+    description:
+      'Maps GitHub logins and synthetic role keys (`qa_*`, `devops_*`, `reviewer_*`) to Slack member IDs, one mapping per line. Accepts `key value`, `key=value` or `key: value`; blank and `#` comment lines are ignored. Values must be real Slack member IDs - display names do not produce notification mentions.',
+    category: 'Admin',
+    order: 142,
+  }),
+  prReportSlackChannel: makeStringSetting({
+    key: 'prReportSlackChannel',
+    name: 'PR Report Slack Channel',
+    defaultValue: '',
+    description:
+      'Slack channel ID the PR status digest posts to. The bot token itself is resolved from the credential store, never from admin settings.',
+    category: 'Slack',
+    order: 143,
+  }),
+  prReportEgressAllowlist: makeObjectSetting({
+    key: 'prReportEgressAllowlist',
+    name: 'PR Report Egress Allowlist',
+    defaultValue: { hosts: ['slack.com', 'www.slack.com'] },
+    description:
+      'Hosts the PR digest may post to. FAILS CLOSED: an empty list rejects every send rather than degrading to allow-any, because the post body carries PR titles, author logins and the staffing implied by the role rosters. Validated against the Slack API origin, so the default lists slack.com; self-hosted (non-Slack) origins are not yet supported.',
+    category: 'Slack',
+    order: 144,
+    schema: z.object({
+      hosts: z.array(z.string()).default([]),
+    }),
+  }),
   // Add more settings as needed
 } satisfies {
   [key in SettingKey]: BaseSetting & {
@@ -3753,6 +4162,24 @@ export function redactSettingSecrets(setting: AdminSettingDoc): AdminSettingDoc 
       })),
     },
   };
+}
+
+/**
+ * Redact a setting for a WebSocket / change-stream broadcast, where the payload is the RAW
+ * stored document. Post-encryption an isSensitive value is ciphertext the browser cannot
+ * decrypt, so it collapses to the bare mask with NO trailing characters: masking the
+ * ciphertext tail (as maskSensitiveSettingValue would) surfaces a wrong "last 4" and lets an
+ * admin watching a live cross-admin update mis-verify which credential is loaded. An unset
+ * value stays empty. The authoritative mask carrying the real last-4 still comes from
+ * /api/settings/fetch. Non-sensitive shapes (sreAgentConfig) fall through to redactSettingSecrets.
+ */
+export function redactSettingSecretsForBroadcast(setting: AdminSettingDoc): AdminSettingDoc {
+  const definition = (settingsMap as Record<string, { isSensitive?: boolean } | undefined>)[setting.settingName];
+  if (definition?.isSensitive) {
+    const hasValue = typeof setting.settingValue === 'string' && setting.settingValue.length > 0;
+    return { ...setting, settingValue: hasValue ? SENSITIVE_SETTING_MASK : '' };
+  }
+  return redactSettingSecrets(setting);
 }
 
 /** Setting keys explicitly tagged `publicSafe` - the only keys allowed in the public artifact. */

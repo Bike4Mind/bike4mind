@@ -4,14 +4,15 @@ import {
   calculateTotalTokenLength,
   processFabFilesServer,
   computeCosineSimilarity,
-  getLastBuildDebugInfo,
   fetchAndProcessPreviousMessages,
   fetchAgentConversationHistory,
   includeHardcodedSystemMessage,
+  includeImagePromptSystemMessage,
   TOOL_RESULT_NOT_RECORDED,
+  ATTACHMENT_DELIVERED_NOTICE,
 } from './utils';
 import { ensureToolPairingIntegrity, stripAllToolBlocks } from '@bike4mind/llm-adapters';
-import { DEFAULT_HISTORY_FETCH_LIMIT, UNLIMITED_HISTORY_COUNT } from '@bike4mind/common';
+import { DEFAULT_HISTORY_FETCH_LIMIT, FORMAT_PROMPT_TEMPLATE, UNLIMITED_HISTORY_COUNT } from '@bike4mind/common';
 import type { IMessage, ISessionDocument } from '@bike4mind/common';
 
 // Define ITokenizer type locally since it's in @bike4mind/utils
@@ -108,7 +109,7 @@ describe('Context Management Tests', () => {
 
       for (const { maxInputTokens } of testCases) {
         const tokenizer = createMockTokenizer();
-        const result = await buildAndSortMessages(
+        const { messages: result } = await buildAndSortMessages(
           [],
           [],
           [{ role: 'user', content: 'test' }],
@@ -135,7 +136,7 @@ describe('Context Management Tests', () => {
       const tokenBudget = 300; // Only enough for system + one other
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         [messages[0], messages[2]], // previous messages (assistant, user)
         [messages[1]], // fab messages (system)
         [],
@@ -164,7 +165,7 @@ describe('Context Management Tests', () => {
       const tokenBudget = 50;
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         messages,
         [],
         [],
@@ -192,7 +193,7 @@ describe('Context Management Tests', () => {
       const tokenBudget = 1000; // Plenty of budget
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         messages,
         [],
         [],
@@ -216,7 +217,7 @@ describe('Context Management Tests', () => {
       const tokenBudget = 100; // Very small budget
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         messages,
         [],
         [],
@@ -243,9 +244,16 @@ describe('Context Management Tests', () => {
       const tokenBudget = 50; // Force some removal
       const tokenizer = createMockTokenizer();
 
-      await buildAndSortMessages(messages, [], [], tokenBudget + 1000, {}, 14, mockLogger as any, tokenizer);
-
-      const debugInfo = getLastBuildDebugInfo();
+      const { messageTruncation: debugInfo } = await buildAndSortMessages(
+        messages,
+        [],
+        [],
+        tokenBudget + 1000,
+        {},
+        14,
+        mockLogger as any,
+        tokenizer
+      );
       expect(debugInfo).toBeDefined();
 
       if (debugInfo?.removedMessages && debugInfo.removedMessages.length > 0) {
@@ -271,7 +279,7 @@ describe('Context Management Tests', () => {
       const tokenBudget = 800;
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         messages,
         [],
         [],
@@ -307,7 +315,7 @@ describe('Context Management Tests', () => {
       const tokenBudget = 400;
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         messages,
         [],
         [],
@@ -351,7 +359,7 @@ describe('Context Management Tests', () => {
       const tokenBudget = 1000;
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         messages,
         [],
         [],
@@ -392,7 +400,7 @@ describe('Context Management Tests', () => {
       const historyCount = 20; // Reduced history for simple queries
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         previousMessages,
         [],
         [{ role: 'user', content: 'Current prompt' }],
@@ -419,7 +427,7 @@ describe('Context Management Tests', () => {
 
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(
+      const { messages: result, messageTruncation } = await buildAndSortMessages(
         previousMessages,
         [],
         [{ role: 'user', content: 'Current prompt' }],
@@ -435,7 +443,7 @@ describe('Context Management Tests', () => {
         .filter(m => m.content !== 'Current prompt');
 
       expect(historyInResult).toHaveLength(previousMessages.length);
-      expect(getLastBuildDebugInfo()?.truncationMethod).not.toBe('history-limit');
+      expect(messageTruncation?.truncationMethod).not.toBe('history-limit');
     });
 
     // The pair below is the allocation policy the old in-range sentinel could flip by accident:
@@ -452,7 +460,7 @@ describe('Context Management Tests', () => {
     });
 
     const hasFileContent = (messages: IMessage[]) =>
-      messages.some(m => typeof m.content === 'string' && m.content.startsWith('File content:'));
+      messages.some(m => typeof m.content === 'string' && m.content.includes('File content:'));
 
     it('should split the budget between files and history when no window is set', async () => {
       const { previousMessages, fabMessages } = oversubscribed();
@@ -461,7 +469,7 @@ describe('Context Management Tests', () => {
       // for a 401-token file, which is now declared undeliverable rather than sent as an unusable
       // fragment, so there is no split left to observe. At 2100 the file fits inside its 70% share and
       // history takes the rest, which is the division this test is named for.
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         previousMessages,
         fabMessages,
         [{ role: 'user', content: 'Current prompt' }],
@@ -493,7 +501,7 @@ describe('Context Management Tests', () => {
         })) as IMessage[];
       const fabMessages = [{ role: 'user', content: 'File content: ' + 'X'.repeat(200) }] as IMessage[];
 
-      const windowed = await buildAndSortMessages(
+      const { messages: windowed } = await buildAndSortMessages(
         previousMessages,
         fabMessages,
         [{ role: 'user', content: 'Current prompt' }],
@@ -503,7 +511,7 @@ describe('Context Management Tests', () => {
         mockLogger as any,
         createMockTokenizer()
       );
-      const unlimited = await buildAndSortMessages(
+      const { messages: unlimited } = await buildAndSortMessages(
         previousMessages,
         fabMessages,
         [{ role: 'user', content: 'Current prompt' }],
@@ -536,7 +544,7 @@ describe('Context Management Tests', () => {
       const maxInputTokens = 2000; // Set limit that will be exceeded after processing
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         previousMessages,
         [],
         [{ role: 'user', content: 'Y'.repeat(1000) }],
@@ -561,7 +569,7 @@ describe('Context Management Tests', () => {
 
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         [],
         [],
         [{ role: 'user', content: safeContent }],
@@ -583,9 +591,16 @@ describe('Context Management Tests', () => {
 
       const tokenizer = createMockTokenizer();
 
-      await buildAndSortMessages(messages, [], [], maxInputTokens, {}, 14, mockLogger as any, tokenizer);
-
-      const debugInfo = getLastBuildDebugInfo();
+      const { messageTruncation: debugInfo } = await buildAndSortMessages(
+        messages,
+        [],
+        [],
+        maxInputTokens,
+        {},
+        14,
+        mockLogger as any,
+        tokenizer
+      );
       expect(debugInfo).toBeDefined();
     });
   });
@@ -604,7 +619,7 @@ describe('Context Management Tests', () => {
       const tokenBudget = 100; // Tight budget
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         messages,
         [],
         [],
@@ -634,9 +649,19 @@ describe('Context Management Tests', () => {
 
       const tokenizer = createMockTokenizer();
 
-      const resultZero = await buildAndSortMessages(messages, [], [], 0, {}, 14, mockLogger as any, tokenizer);
+      const { messages: resultZero, messageTruncation } = await buildAndSortMessages(
+        messages,
+        [],
+        [],
+        0,
+        {},
+        14,
+        mockLogger as any,
+        tokenizer
+      );
 
       expect(resultZero).toBeDefined();
+      expect(messageTruncation).toBeNull();
       expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('Invalid maxInputTokens'));
     });
 
@@ -651,7 +676,7 @@ describe('Context Management Tests', () => {
       const tokenBudget = 1000; // Enough for all
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         messages,
         [],
         [],
@@ -678,7 +703,7 @@ describe('Context Management Tests', () => {
     it('should handle empty message arrays without errors', async () => {
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages([], [], [], 1000, {}, 14, mockLogger as any, tokenizer);
+      const { messages: result } = await buildAndSortMessages([], [], [], 1000, {}, 14, mockLogger as any, tokenizer);
 
       expect(result).toBeDefined();
       expect(Array.isArray(result)).toBe(true);
@@ -695,9 +720,16 @@ describe('Context Management Tests', () => {
       const tokenBudget = 200;
       const tokenizer = createMockTokenizer();
 
-      await buildAndSortMessages(messages, [], [], tokenBudget + 1000, {}, 14, mockLogger as any, tokenizer);
-
-      const debugInfo = getLastBuildDebugInfo();
+      const { messageTruncation: debugInfo } = await buildAndSortMessages(
+        messages,
+        [],
+        [],
+        tokenBudget + 1000,
+        {},
+        14,
+        mockLogger as any,
+        tokenizer
+      );
 
       expect(debugInfo).toBeDefined();
       expect(debugInfo?.wasTruncated).toBeDefined();
@@ -723,7 +755,7 @@ describe('Context Management Tests', () => {
       const tokenBudget = 1000;
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         previousMessages,
         fabMessages,
         [{ role: 'user', content: 'Current' }],
@@ -762,7 +794,16 @@ describe('Context Management Tests', () => {
 
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages([], messages, [], 10000, {}, 14, mockLogger as any, tokenizer);
+      const { messages: result } = await buildAndSortMessages(
+        [],
+        messages,
+        [],
+        10000,
+        {},
+        14,
+        mockLogger as any,
+        tokenizer
+      );
 
       // Should handle array content without errors
       expect(result).toBeDefined();
@@ -781,7 +822,16 @@ describe('Context Management Tests', () => {
 
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(messages, [], [], maxInputTokens, {}, 14, mockLogger as any, tokenizer);
+      const { messages: result } = await buildAndSortMessages(
+        messages,
+        [],
+        [],
+        maxInputTokens,
+        {},
+        14,
+        mockLogger as any,
+        tokenizer
+      );
 
       // Should handle large context without errors
       expect(result).toBeDefined();
@@ -797,7 +847,16 @@ describe('Context Management Tests', () => {
 
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(messages, [], [], 1000, {}, 14, mockLogger as any, tokenizer);
+      const { messages: result } = await buildAndSortMessages(
+        messages,
+        [],
+        [],
+        1000,
+        {},
+        14,
+        mockLogger as any,
+        tokenizer
+      );
 
       expect(result).toBeDefined();
     });
@@ -1667,6 +1726,40 @@ describe('Context Management Tests', () => {
       });
     });
 
+    describe('priorToolNames', () => {
+      const makeToolCallItem = (n: number, names: string[]) =>
+        makeItem(n, { promptMeta: { functionCalls: names.map((name, i) => ({ id: `${n}-${i}`, name })) } });
+
+      it('collects tool names from promptMeta.functionCalls across the returned window', async () => {
+        // Item 4 is the current prompt (popped, per the newest-first/pop-current convention
+        // established above); history after pop = [1, 2, 3].
+        const items = [makeItem(4), makeToolCallItem(3, ['blog_draft']), makeToolCallItem(2, ['skill']), makeItem(1)];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(meta.priorToolNames).toEqual(['skill', 'blog_draft']);
+      });
+
+      it('returns an empty array when no turn recorded a function call', async () => {
+        const items = [makeItem(2), makeItem(1)];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(meta.priorToolNames).toEqual([]);
+      });
+
+      it('drops a call with no recorded name rather than pushing undefined', async () => {
+        const items = [makeItem(1, { promptMeta: { functionCalls: [{ id: 'x' }] } })];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, , meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(meta.priorToolNames).toEqual([]);
+      });
+    });
+
     // Priority 2 rebuilds tool_use/tool_result pairs from promptMeta.functionCalls when
     // structuredReplies is absent. It was unreachable for as long as the Mongoose subschema
     // dropped functionCalls[].id, so these pin the shape Anthropic requires.
@@ -1891,8 +1984,10 @@ describe('Token budget allocation', () => {
     content: ATTACHED_FILE_PREFIX + 'C'.repeat(totalChars - ATTACHED_FILE_PREFIX.length),
   });
 
+  // The delivered-content notice (see ATTACHMENT_DELIVERED_NOTICE) rides ahead of the file's own
+  // framing, so the message no longer starts with ATTACHED_FILE_PREFIX - it contains it.
   const findAttachedFile = (messages: IMessage[]) =>
-    messages.find(m => typeof m.content === 'string' && m.content.startsWith(ATTACHED_FILE_PREFIX));
+    messages.find(m => typeof m.content === 'string' && m.content.includes(ATTACHED_FILE_PREFIX));
   const historyLabels = (messages: IMessage[]) =>
     messages
       .filter(m => typeof m.content === 'string' && (m.content as string).startsWith('history-'))
@@ -1904,7 +1999,7 @@ describe('Token budget allocation', () => {
       // Six would be "protected" (3 pairs) at 2400 tokens, which the budget cannot cover.
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         makeHistory(8, 1400),
         [],
         [],
@@ -1926,7 +2021,16 @@ describe('Token budget allocation', () => {
       history[5] = { role: 'assistant', content: 'history-5-' + 'X'.repeat(99990) };
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(history, [], [], 1250, {}, 4, mockLogger as any, tokenizer);
+      const { messages: result } = await buildAndSortMessages(
+        history,
+        [],
+        [],
+        1250,
+        {},
+        4,
+        mockLogger as any,
+        tokenizer
+      );
 
       // history-3 is an assistant message. It survives only because the reservation walks
       // newest-first past the oversized message; the priority-ordered greedy pass would have taken
@@ -1938,7 +2042,7 @@ describe('Token budget allocation', () => {
     it('truncates a single message that is larger than the entire budget', async () => {
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         [{ role: 'user', content: 'A'.repeat(100000) }],
         [],
         [],
@@ -1960,7 +2064,7 @@ describe('Token budget allocation', () => {
       // yields empty strings, which providers reject outright.
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         makeHistory(10, 350),
         [],
         [],
@@ -1982,7 +2086,7 @@ describe('Token budget allocation', () => {
       // assistant turns at all.
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         makeHistory(20, 350),
         [],
         [],
@@ -2025,7 +2129,7 @@ describe('Token budget allocation', () => {
       // Before the floor, content was zeroed outright and the model answered as if no file existed.
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(
+      const { messages: result, messageTruncation } = await buildAndSortMessages(
         makeHistory(40, 1400),
         [makeAttachedFile(35000)],
         [{ role: 'user', content: 'Summarize the attached file' }],
@@ -2037,12 +2141,14 @@ describe('Token budget allocation', () => {
       );
 
       // floor = floor(6992 * 0.35) = 2447, so the file is truncated to 7708 chars (~2203 tokens)
-      // rather than dropped.
+      // rather than dropped. Offset by the delivered-content notice, which rides ahead of the file.
       const file = findAttachedFile(result);
       expect(file).toBeDefined();
       // 7708 chars of the file, plus the notice telling the model this is not where the file ends.
       expect(file!.content as string).toContain('Content truncated to fit the context window');
-      expect((file!.content as string).indexOf('\n\n[Content truncated')).toBe(7708);
+      expect((file!.content as string).indexOf('\n\n[Content truncated')).toBe(
+        7708 + ATTACHMENT_DELIVERED_NOTICE.length
+      );
 
       // History still holds the majority of the budget and keeps its newest exchange.
       const labels = historyLabels(result);
@@ -2050,24 +2156,34 @@ describe('Token budget allocation', () => {
       expect(labels).toContain('history-39');
       expect(labels).toContain('history-38');
 
-      // The primary allocation kept us in bounds, so the final safety net never had to fire.
-      expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBe(6661);
+      // The primary allocation kept us in bounds, so the final safety net never had to fire. 6661 plus
+      // the delivered-content and anti-inference notices' own real token cost (both fixed, both counted).
+      expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBe(6723);
       expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('exceeds maxInputTokens'));
 
       // The squeeze is reported, and it names the file so a support engineer can see which one lost.
       expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('quarterly.csv'));
-      expect(getLastBuildDebugInfo()?.truncationMethod).toBe('token-budget');
+      expect(messageTruncation?.truncationMethod).toBe('token-budget');
     });
 
     it('leaves a fitting attachment untouched and stays silent', async () => {
       const attached = makeAttachedFile(700);
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages([], [attached], [], 8000, {}, 10, mockLogger as any, tokenizer);
+      const { messages: result } = await buildAndSortMessages(
+        [],
+        [attached],
+        [],
+        8000,
+        {},
+        10,
+        mockLogger as any,
+        tokenizer
+      );
 
-      // Byte-identical, not merely present: the squeeze check compares estimates against estimates,
-      // so an attachment that fits can never be reported as squeezed.
-      expect(findAttachedFile(result)?.content).toBe(attached.content);
+      // Byte-identical past the delivered-content notice, not merely present: the squeeze check
+      // compares estimates against estimates, so an attachment that fits can never be reported as squeezed.
+      expect(findAttachedFile(result)?.content).toBe(ATTACHMENT_DELIVERED_NOTICE + attached.content);
       expect(mockLogger.warn).not.toHaveBeenCalled();
     });
 
@@ -2077,7 +2193,7 @@ describe('Token budget allocation', () => {
       // consumed, so history is sized after it - that is why this is 118 and not 119.
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         makeHistory(200, 140),
         [makeAttachedFile(35000)],
         [{ role: 'user', content: 'Summarize the attached file' }],
@@ -2094,7 +2210,7 @@ describe('Token budget allocation', () => {
     it('gives history the whole budget when nothing is attached', async () => {
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         makeHistory(200, 140),
         [],
         [{ role: 'user', content: 'Summarize the attached file' }],
@@ -2115,7 +2231,7 @@ describe('Token budget allocation', () => {
       const attached = makeAttachedFile(350);
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         makeHistory(200, 140),
         [attached],
         [{ role: 'user', content: 'Summarize the attached file' }],
@@ -2126,7 +2242,7 @@ describe('Token budget allocation', () => {
         tokenizer
       );
 
-      expect(findAttachedFile(result)?.content).toBe(attached.content);
+      expect(findAttachedFile(result)?.content).toBe(ATTACHMENT_DELIVERED_NOTICE + attached.content);
       expect(historyLabels(result)).toHaveLength(172);
       expect(mockLogger.warn).not.toHaveBeenCalled();
     });
@@ -2134,7 +2250,7 @@ describe('Token budget allocation', () => {
     it('survives a budget the buffer has driven negative', async () => {
       const tokenizer = createMockTokenizer();
 
-      const result = await buildAndSortMessages(
+      const { messages: result } = await buildAndSortMessages(
         makeHistory(4, 350),
         [makeAttachedFile(3500)],
         [{ role: 'user', content: 'Summarize the attached file' }],
@@ -2155,7 +2271,7 @@ describe('Token budget allocation', () => {
     it('reports a budget loss as token-budget, not as history windowing', async () => {
       const tokenizer = createMockTokenizer();
 
-      await buildAndSortMessages(
+      const { messageTruncation } = await buildAndSortMessages(
         makeHistory(40, 1400),
         [makeAttachedFile(35000)],
         [{ role: 'user', content: 'Summarize the attached file' }],
@@ -2168,7 +2284,7 @@ describe('Token budget allocation', () => {
 
       // Previously this reported 'history-limit' for any finite historyCount, making a file the
       // budget had silently zeroed indistinguishable from history being windowed as configured.
-      expect(getLastBuildDebugInfo()?.truncationMethod).toBe('token-budget');
+      expect(messageTruncation?.truncationMethod).toBe('token-budget');
     });
 
     it('reports token-budget when the attachment was cut mid-message and nothing was dropped', async () => {
@@ -2176,7 +2292,7 @@ describe('Token budget allocation', () => {
       // attachment is still cut down, which is a budget loss telemetry must not miss.
       const tokenizer = createMockTokenizer();
 
-      await buildAndSortMessages(
+      const { messageTruncation: debug } = await buildAndSortMessages(
         makeHistory(4, 350),
         [makeAttachedFile(35000)],
         [{ role: 'user', content: 'go' }],
@@ -2187,7 +2303,6 @@ describe('Token budget allocation', () => {
         tokenizer
       );
 
-      const debug = getLastBuildDebugInfo();
       expect(debug?.removedMessages).toBeUndefined();
       expect(debug?.truncationMethod).toBe('token-budget');
     });
@@ -2195,10 +2310,19 @@ describe('Token budget allocation', () => {
     it('reports history-limit when only the historyCount window dropped messages', async () => {
       const tokenizer = createMockTokenizer();
 
-      await buildAndSortMessages(makeHistory(40, 100), [], [], 100000, {}, 2, mockLogger as any, tokenizer);
+      const { messageTruncation } = await buildAndSortMessages(
+        makeHistory(40, 100),
+        [],
+        [],
+        100000,
+        {},
+        2,
+        mockLogger as any,
+        tokenizer
+      );
 
       // slice(-4) drops 36 messages, and the generous budget removes nothing.
-      expect(getLastBuildDebugInfo()?.truncationMethod).toBe('history-limit');
+      expect(messageTruncation?.truncationMethod).toBe('history-limit');
     });
   });
 });
@@ -2210,9 +2334,28 @@ describe('processFabFilesServer chunk retrieval', () => {
     vi.clearAllMocks();
   });
 
+  /**
+   * Keyset-paging stand-in for the chunk repository, implementing the REAL cursor arithmetic rather
+   * than returning a canned page per call: a page-keyed mock structurally cannot observe a wrong
+   * cursor, which is the defect paging introduces. Ids are zero-padded so lexicographic order matches
+   * insertion order, the same property a real 24-char ObjectId string has.
+   */
+  const pagedChunkRepo = (rows: Array<{ id: string; text: string; vector: number[] }>) => ({
+    findVectorsByFabFileIds: vi.fn(async (_ids: string[], opts?: { limit?: number; afterChunkId?: string }) =>
+      rows
+        .filter(r => r.vector && r.vector.length > 0)
+        .filter(r => (opts?.afterChunkId ? r.id > opts.afterChunkId : true))
+        .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .slice(0, opts?.limit ?? rows.length)
+        .map(r => ({ id: r.id, fabFileId: 'file-1', text: r.text, vector: r.vector }))
+    ),
+    // The FILE's chunk count, vectorless included - what the caller compares "delivered" against.
+    countByFabFileId: vi.fn(async () => rows.length),
+  });
+
   const makeChunks = (count: number, charsEach: number) =>
     Array.from({ length: count }, (_, i) => ({
-      id: `chunk-${i}`,
+      id: `chunk-${String(i).padStart(4, '0')}`,
       text: `chunk-${i}-` + 'c'.repeat(Math.max(0, charsEach - `chunk-${i}-`.length)),
       // Descending similarity to the query vector [1, 0], so ranking order is chunk-0 first.
       vector: [1, i / count],
@@ -2246,7 +2389,7 @@ describe('processFabFilesServer chunk retrieval', () => {
         logger: mockLogger as any,
         storage: {} as any,
         db: {
-          fabfilechunks: { findByFabFileId: vi.fn(async () => chunks) },
+          fabfilechunks: pagedChunkRepo(chunks),
           fabfiles: { update: vi.fn() },
           caches: {} as any,
         } as any,
@@ -2277,6 +2420,154 @@ describe('processFabFilesServer chunk retrieval', () => {
     expect(content).toContain('chunk-0-');
     expect(content).not.toContain('chunk-1-');
   });
+
+  it("tells the model a filename's digits are not a row count on the vectorized body header", async () => {
+    const messages = await runRetrieval(makeChunks(3, 200), 4000);
+
+    const content = messages[0].content as string;
+    expect(content).toContain('Data for roster.csv:');
+    expect(content).toContain(
+      'Digits in the file name are part of the name, not a count of its rows, records, or sections.'
+    );
+  });
+});
+
+// The default mock tokenizer is ceil(len / 3.5), byte-identical to the internal estimator, so any
+// "it fits" assertion made with it is close to a tautology. Real tokenizers disagree with the
+// estimate - code, CSV and CJK run denser - and that disagreement is the entire reason the final
+// safety pass exists. These cases use a denser tokenizer so the pass is actually exercised.
+describe('final safety pass under a denser-than-estimated tokenizer', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const createDenseTokenizer = (charsPerToken: number): ITokenizer => ({
+    countTokens: vi.fn(async (text: string) => Math.ceil(text.length / charsPerToken)),
+    encodeTokens: vi.fn(async (text: string) => Array(Math.ceil(text.length / charsPerToken)).fill(1)),
+    clearCache: vi.fn(),
+    getCacheStats: vi.fn(() => ({ size: 0, keys: [] })),
+    warmUpCache: vi.fn(async () => {}),
+  });
+
+  const makeHistory = (count: number, charsEach: number): IMessage[] =>
+    Array.from({ length: count }, (_, i) => ({
+      role: i % 2 === 0 ? ('user' as const) : ('assistant' as const),
+      content: `history-${i}-` + 'h'.repeat(Math.max(0, charsEach - `history-${i}-`.length)),
+    }));
+
+  it('brings a dense payload under the limit instead of handing the overflow to the caller', async () => {
+    // A small Bedrock-class window: 8000 context - 2048 max_tokens - 1000 reserve. CSV at 2.5
+    // chars/token means every budget decision upstream was made on numbers ~40% low, so the primary
+    // allocation cannot be trusted to have fit.
+    const maxInputTokens = 4952;
+    const tokenizer = createDenseTokenizer(2.5);
+
+    const { messages: result } = await buildAndSortMessages(
+      makeHistory(60, 1000),
+      [
+        {
+          role: 'user',
+          content: 'Here is the content from the attached file "roster.csv" for context:\n\n' + 'C'.repeat(29930),
+        },
+      ],
+      [{ role: 'user', content: 'Summarize the attached file' }],
+      maxInputTokens,
+      {},
+      20,
+      mockLogger as any,
+      tokenizer
+    );
+
+    // The contract that matters: whatever it had to drop, the payload fits. Before this the pass
+    // could only shrink content, so a history-driven overflow passed straight through to the throw.
+    expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(
+      maxInputTokens
+    );
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('exceeds maxInputTokens'));
+    expect(mockLogger.warn).not.toHaveBeenCalledWith(expect.stringContaining('could not bring the payload under'));
+  });
+
+  it('reports fresh truncation info on the overflow path, not the previous call/s', async () => {
+    // buildAndSortMessages returns early from the overflow block, and lastDebugInfo lives on the
+    // function object, so a warm container used to serve the previous request/s numbers here.
+    const clean = createDenseTokenizer(3.5);
+    const { messageTruncation: first } = await buildAndSortMessages(
+      makeHistory(40, 100),
+      [],
+      [],
+      100000,
+      {},
+      2,
+      mockLogger as any,
+      clean
+    );
+    expect(first?.truncationMethod).toBe('history-limit');
+
+    const dense = createDenseTokenizer(2.5);
+    const { messageTruncation: second } = await buildAndSortMessages(
+      makeHistory(60, 1000),
+      [{ role: 'user', content: 'F'.repeat(30000) }],
+      [{ role: 'user', content: 'Summarize the attached file' }],
+      5200,
+      {},
+      20,
+      mockLogger as any,
+      dense
+    );
+
+    // originalMessageCount is not asserted here: the safety pass can now shrink history itself, so
+    // the fixed "40 windowed history + 1 attachment" arithmetic no longer holds.
+    expect(second?.truncationMethod).toBe('token-budget');
+  });
+
+  it('reports content the safety pass dropped, not just what the primary allocation removed', async () => {
+    // Tuned so the primary allocation removes NOTHING: short history, and two attachments that fit
+    // their estimated budget exactly. Only the real tokenizer sees the overflow, so the safety pass is
+    // the sole thing that drops a message here - if it does not report that, removedMessages stays
+    // empty and the whole turn looks untruncated.
+    const tokenizer = createDenseTokenizer(2.0);
+
+    const { messageTruncation: debug } = await buildAndSortMessages(
+      makeHistory(2, 350),
+      [
+        { role: 'user', content: 'A'.repeat(3143) },
+        { role: 'user', content: 'B'.repeat(3143) },
+      ],
+      [],
+      3000,
+      {},
+      2,
+      mockLogger as any,
+      tokenizer
+    );
+
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('exceeds maxInputTokens'));
+    // A re-measuring loop may cut more than one message per round rather than dropping exactly one.
+    expect(debug?.removedMessages?.length).toBeGreaterThanOrEqual(1);
+    expect(debug?.wasTruncated).toBe(true);
+    expect(debug?.truncationMethod).toBe('token-budget');
+  });
+
+  it('keeps wasTruncated consistent with truncationMethod when content was cut mid-message', async () => {
+    const tokenizer = createDenseTokenizer(3.5);
+
+    const { messageTruncation: debug } = await buildAndSortMessages(
+      makeHistory(4, 350),
+      [{ role: 'user', content: 'F'.repeat(35000) }],
+      [{ role: 'user', content: 'go' }],
+      4000,
+      {},
+      2,
+      mockLogger as any,
+      tokenizer
+    );
+
+    // No message was dropped, so removedMessages is empty - but the file WAS cut, and a consumer
+    // gating on wasTruncated would otherwise never look at truncationMethod at all.
+    expect(debug?.removedMessages).toBeUndefined();
+    expect(debug?.truncationMethod).toBe('token-budget');
+    expect(debug?.wasTruncated).toBe(true);
+  });
 });
 
 describe('history windowing edge cases', () => {
@@ -2293,7 +2584,7 @@ describe('history windowing edge cases', () => {
       content: `history-${i}`,
     }));
 
-    const result = await buildAndSortMessages(
+    const { messages: result } = await buildAndSortMessages(
       previousMessages,
       [],
       [{ role: 'user', content: 'draw a cat' }],
@@ -2317,7 +2608,16 @@ describe('history windowing edge cases', () => {
       { role: 'assistant', content: [{ type: 'text', text: 'B'.repeat(50000) }] as any },
     ];
 
-    const result = await buildAndSortMessages(previousMessages, [], [], 2000, {}, 4, mockLogger as any, tokenizer);
+    const { messages: result } = await buildAndSortMessages(
+      previousMessages,
+      [],
+      [],
+      2000,
+      {},
+      4,
+      mockLogger as any,
+      tokenizer
+    );
 
     for (const message of result) {
       if (Array.isArray(message.content)) expect(message.content.length).toBeGreaterThan(0);
@@ -2331,7 +2631,7 @@ describe('history windowing edge cases', () => {
     // so this attachment is the only thing that could report a loss.
     const tokenizer = createMockTokenizer();
 
-    await buildAndSortMessages(
+    const { messageTruncation } = await buildAndSortMessages(
       [],
       [{ role: 'user', content: '' }],
       [{ role: 'user', content: 'hello' }],
@@ -2342,8 +2642,235 @@ describe('history windowing edge cases', () => {
       tokenizer
     );
 
-    expect(getLastBuildDebugInfo()?.truncationMethod).toBeUndefined();
-    expect(getLastBuildDebugInfo()?.wasTruncated).toBe(false);
+    expect(messageTruncation?.truncationMethod).toBeUndefined();
+    expect(messageTruncation?.wasTruncated).toBe(false);
+  });
+});
+
+describe('array-content fabMessages that carry no image block', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const warnings = () => mockLogger.warn.mock.calls.map(call => String(call[0])).join('\n');
+
+  it('delivers a text-only array-content message to the model (fails against the old two-filter split)', async () => {
+    const fab: IMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'MARKER-TEXT-BLOCK from the caller' }] }];
+
+    const { messages: result } = await buildAndSortMessages(
+      [],
+      fab,
+      [{ role: 'user', content: 'ASK-MARKER' }],
+      10000,
+      {},
+      5,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    const blocks = result.flatMap(m => (Array.isArray(m.content) ? m.content : []));
+    expect(
+      blocks.some(block => block.type === 'text' && (block as { text: string }).text.includes('MARKER-TEXT-BLOCK'))
+    ).toBe(true);
+    // Assembled ahead of the prompt, like any other content message.
+    const contentIndex = result.findIndex(m => Array.isArray(m.content));
+    const promptIndex = result.findIndex(m => m.content === 'ASK-MARKER');
+    expect(contentIndex).toBeGreaterThanOrEqual(0);
+    expect(contentIndex).toBeLessThan(promptIndex);
+    expect(mockLogger.warn).not.toHaveBeenCalled();
+  });
+
+  it('drops a tool_result-bearing array-content message with a warning naming what and why', async () => {
+    const fab: IMessage[] = [
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_x', content: 'TOOL-PAYLOAD-DO-NOT-LOG' }] },
+    ];
+
+    const { messages: result } = await buildAndSortMessages(
+      [],
+      fab,
+      [{ role: 'user', content: 'ASK-MARKER' }],
+      10000,
+      {},
+      5,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    const blocks = result.flatMap(m => (Array.isArray(m.content) ? m.content : []));
+    expect(blocks.some(block => block.type === 'tool_result')).toBe(false);
+    expect(warnings()).toContain('tool_result');
+    expect(warnings()).toContain('Dropped 1');
+    expect(warnings()).toContain('message 1');
+    expect(warnings()).not.toContain('TOOL-PAYLOAD-DO-NOT-LOG');
+    expect(result.some(m => m.content === 'ASK-MARKER')).toBe(true);
+  });
+
+  it('drops a mixed text+tool_result message whole, not just the tool_result block', async () => {
+    const fab: IMessage[] = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'PARTNER-TEXT' },
+          { type: 'tool_result', tool_use_id: 'toolu_y', content: 'irrelevant' },
+        ],
+      },
+    ];
+
+    const { messages: result } = await buildAndSortMessages(
+      [],
+      fab,
+      [],
+      10000,
+      {},
+      5,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    const text = result
+      .flatMap(m => (Array.isArray(m.content) ? m.content : []))
+      .filter(block => block.type === 'text')
+      .map(block => (block as { text: string }).text)
+      .join('');
+    expect(text).not.toContain('PARTNER-TEXT');
+    expect(warnings()).toContain('text');
+    expect(warnings()).toContain('tool_result');
+  });
+
+  it('keeps image priority when an image block shares an array with a tool_result block', async () => {
+    const fab: IMessage[] = [
+      {
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } },
+          { type: 'tool_result', tool_use_id: 'toolu_z', content: 'irrelevant' },
+        ],
+      },
+    ];
+
+    const { messages: result } = await buildAndSortMessages(
+      [],
+      fab,
+      [],
+      10000,
+      {},
+      5,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    // Classified as an image message (not dropped as "undeliverable blocks") - the image-priority
+    // check runs before the allowlist/drop check. The tool_result block riding alongside it is then
+    // stripped by ensureToolPairingIntegrity's orphan cleanup at the very end (no tool_use exists
+    // anywhere in this call to pair it with), which is correct and separate from classification.
+    const imageMessage = result.find(
+      m => Array.isArray(m.content) && m.content.some(block => (block as { type?: string }).type === 'image')
+    );
+    expect(imageMessage).toBeDefined();
+    expect(warnings()).not.toContain('Dropped');
+  });
+
+  it('drops empty array content with a warning, never as a blank message', async () => {
+    const fab: IMessage[] = [{ role: 'user', content: [] }];
+
+    const { messages: result } = await buildAndSortMessages(
+      [],
+      fab,
+      [],
+      10000,
+      {},
+      5,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    expect(result.every(m => !Array.isArray(m.content) || m.content.length > 0)).toBe(true);
+    expect(warnings()).toContain('Ignored 1');
+    expect(warnings()).toContain('empty content array');
+  });
+
+  it('drops a thinking-only array-content message with a named warning', async () => {
+    const fab: IMessage[] = [{ role: 'user', content: [{ type: 'thinking', thinking: 'internal reasoning' }] }];
+
+    const { messages: result } = await buildAndSortMessages(
+      [],
+      fab,
+      [],
+      10000,
+      {},
+      5,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    const blocks = result.flatMap(m => (Array.isArray(m.content) ? m.content : []));
+    expect(blocks.some(block => block.type === 'thinking')).toBe(false);
+    expect(warnings()).toContain('thinking');
+    expect(warnings()).toContain('Dropped 1');
+  });
+
+  it('delivers two qualifying text-only array-content messages in order', async () => {
+    const fab: IMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'MARKER-A' }] },
+      { role: 'user', content: [{ type: 'text', text: 'MARKER-B' }] },
+    ];
+
+    const { messages: result } = await buildAndSortMessages(
+      [],
+      fab,
+      [],
+      10000,
+      {},
+      5,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    const text = (m: IMessage) => (Array.isArray(m.content) ? ((m.content[0] as { text?: string }).text ?? '') : '');
+    const indexA = result.findIndex(m => text(m).includes('MARKER-A'));
+    const indexB = result.findIndex(m => text(m).includes('MARKER-B'));
+    expect(indexA).toBeGreaterThanOrEqual(0);
+    expect(indexB).toBeGreaterThanOrEqual(0);
+    expect(indexA).toBeLessThan(indexB);
+  });
+
+  it('ignores a non-user-role fabMessage with a named warning (the split-filter hole beyond user array content)', async () => {
+    const fab: IMessage[] = [{ role: 'assistant', content: 'ROLE-MARKER should never reach the model this way' }];
+
+    const { messages: result } = await buildAndSortMessages(
+      [],
+      fab,
+      [],
+      10000,
+      {},
+      5,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    expect(result.some(m => typeof m.content === 'string' && m.content.includes('ROLE-MARKER'))).toBe(false);
+    expect(warnings()).toContain('Ignored 1');
+    expect(warnings()).toContain('role assistant');
+  });
+
+  it('does not throw on an untyped content block', async () => {
+    const fab: IMessage[] = [{ role: 'user', content: [{}] as any }];
+
+    await expect(
+      buildAndSortMessages([], fab, [], 10000, {}, 5, mockLogger as any, createMockTokenizer())
+    ).resolves.toBeDefined();
+    expect(warnings()).toContain('untyped');
+    expect(warnings()).toContain('Dropped 1');
+  });
+
+  it('does not throw on a null content block', async () => {
+    const fab: IMessage[] = [{ role: 'user', content: [null] as any }];
+
+    await expect(
+      buildAndSortMessages([], fab, [], 10000, {}, 5, mockLogger as any, createMockTokenizer())
+    ).resolves.toBeDefined();
+    expect(warnings()).toContain('untyped');
+    expect(warnings()).toContain('Dropped 1');
   });
 });
 
@@ -2363,11 +2890,19 @@ describe('truncated attachments are marked', () => {
 
   const NOTICE = 'Content truncated to fit the context window';
 
+  const createDenseTokenizer = (charsPerToken: number): ITokenizer => ({
+    countTokens: vi.fn(async (text: string) => Math.ceil(text.length / charsPerToken)),
+    encodeTokens: vi.fn(async (text: string) => Array(Math.ceil(text.length / charsPerToken)).fill(1)),
+    clearCache: vi.fn(),
+    getCacheStats: vi.fn(() => ({ size: 0, keys: [] })),
+    warmUpCache: vi.fn(async () => {}),
+  });
+
   it('tells the model where a cut file stops', async () => {
     const tokenizer = createMockTokenizer();
     const body = 'row-data,'.repeat(3000) + '\nFINAL_ROW_MARKER: pineapple';
 
-    const result = await buildAndSortMessages(
+    const { messages: result } = await buildAndSortMessages(
       makeHistory(40, 1400),
       [{ role: 'user', content: body }],
       [{ role: 'user', content: 'What is FINAL_ROW_MARKER?' }],
@@ -2378,11 +2913,15 @@ describe('truncated attachments are marked', () => {
       tokenizer
     );
 
-    const file = result.find(m => typeof m.content === 'string' && (m.content as string).startsWith('row-data,'));
+    const file = result.find(m => typeof m.content === 'string' && (m.content as string).includes('row-data,'));
     expect(file).toBeDefined();
     const text = file!.content as string;
     expect(text).toContain(NOTICE);
-    expect(text.endsWith(NOTICE + '. This is NOT the end of the file - later content was not sent.]')).toBe(true);
+    expect(
+      text.endsWith(
+        'later content was not sent. Do not infer a total row, record, or section count, or a final row, from what is above.]'
+      )
+    ).toBe(true);
     // The tail the marker lives in genuinely did not survive, which is exactly why the notice matters.
     expect(text).not.toContain('FINAL_ROW_MARKER');
   });
@@ -2396,7 +2935,7 @@ describe('truncated attachments are marked', () => {
     const small = 'id,name\nrow,1\n';
     const large = small + 'row,2\nrow,3\n';
 
-    const result = await buildAndSortMessages(
+    const { messages: result } = await buildAndSortMessages(
       [],
       [
         { role: 'user', content: small },
@@ -2410,17 +2949,53 @@ describe('truncated attachments are marked', () => {
       tokenizer
     );
 
-    const delivered = result.filter(m => typeof m.content === 'string' && (m.content as string).startsWith('id,name'));
+    const delivered = result.filter(m => typeof m.content === 'string' && (m.content as string).includes('id,name'));
     expect(delivered).toHaveLength(2);
-    expect(delivered.map(m => m.content)).toEqual(expect.arrayContaining([small, large]));
+    expect(delivered.map(m => m.content)).toEqual(
+      expect.arrayContaining([ATTACHMENT_DELIVERED_NOTICE + small, ATTACHMENT_DELIVERED_NOTICE + large])
+    );
     for (const m of delivered) expect(m.content as string).not.toContain(NOTICE);
+  });
+
+  it('never leaves more than one truncation notice, even when the safety pass cuts twice', async () => {
+    // A dense tokenizer forces the safety pass to run after the primary pass already cut and marked the
+    // file. Cutting notice-carrying content again lands mid-notice, so appending another one would leave
+    // a mangled fragment followed by a whole notice. Budget nudged up from the original 4952: the fixed
+    // per-file overhead (the delivered-content and anti-inference notices) now costs more under this
+    // dense 2.0-chars/token tokenizer, and the old figure squeezed the file below the useful-content
+    // floor entirely rather than leaving it cut-but-delivered.
+    const tokenizer = createDenseTokenizer(2.0);
+    const body = 'row-data,'.repeat(4000) + '\nFINAL_ROW_MARKER: pineapple';
+
+    const { messages: result } = await buildAndSortMessages(
+      makeHistory(60, 1000),
+      [{ role: 'user', content: body }],
+      [{ role: 'user', content: 'What is FINAL_ROW_MARKER?' }],
+      5200,
+      {},
+      20,
+      mockLogger as any,
+      tokenizer
+    );
+
+    const file = result.find(m => typeof m.content === 'string' && (m.content as string).includes('row-data,'));
+    expect(file).toBeDefined();
+    const text = file!.content as string;
+    expect(text.split(NOTICE)).toHaveLength(2); // exactly one occurrence
+    expect(
+      text.endsWith(
+        'later content was not sent. Do not infer a total row, record, or section count, or a final row, from what is above.]'
+      )
+    ).toBe(true);
+    // No fragment of a notice stranded earlier in the payload.
+    expect(text.slice(0, text.indexOf(NOTICE))).not.toContain('[Content truncated');
   });
 
   it('stays quiet when the whole file fits', async () => {
     const tokenizer = createMockTokenizer();
     const whole = 'row-data,'.repeat(50) + '\nFINAL_ROW_MARKER: apricot';
 
-    const result = await buildAndSortMessages(
+    const { messages: result } = await buildAndSortMessages(
       [],
       [{ role: 'user', content: whole }],
       [{ role: 'user', content: 'What is FINAL_ROW_MARKER?' }],
@@ -2431,8 +3006,8 @@ describe('truncated attachments are marked', () => {
       tokenizer
     );
 
-    const file = result.find(m => typeof m.content === 'string' && (m.content as string).startsWith('row-data,'));
-    expect(file!.content).toBe(whole);
+    const file = result.find(m => typeof m.content === 'string' && (m.content as string).includes('row-data,'));
+    expect(file!.content).toBe(ATTACHMENT_DELIVERED_NOTICE + whole);
     expect(file!.content as string).not.toContain(NOTICE);
     expect(file!.content as string).toContain('FINAL_ROW_MARKER: apricot');
   });
@@ -2444,7 +3019,7 @@ describe('truncated attachments are marked', () => {
     const tokenizer = createMockTokenizer();
     const file = 'row,value\n' + 'a,1\n'.repeat(980) + 'FINAL_ROW_MARKER: apricot';
 
-    const result = await buildAndSortMessages(
+    const { messages: result } = await buildAndSortMessages(
       makeHistory(20, 1400),
       [{ role: 'user', content: file }],
       [{ role: 'user', content: 'What is FINAL_ROW_MARKER?' }],
@@ -2455,10 +3030,106 @@ describe('truncated attachments are marked', () => {
       tokenizer
     );
 
-    const delivered = result.find(m => typeof m.content === 'string' && (m.content as string).startsWith('row,value'));
-    expect(delivered!.content).toBe(file);
+    const delivered = result.find(m => typeof m.content === 'string' && (m.content as string).includes('row,value'));
+    expect(delivered!.content).toBe(ATTACHMENT_DELIVERED_NOTICE + file);
     expect(delivered!.content as string).toContain('FINAL_ROW_MARKER: apricot');
     expect(delivered!.content as string).not.toContain(NOTICE);
+  });
+});
+
+// A model handed real content still opens some replies by denying it can read attachments. The notice
+// must ride on content that genuinely survived to the final payload, never on a message that says
+// content was dropped - that exact false claim is why an earlier, differently-placed attempt at this
+// was reverted.
+describe('attachment access notice', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('marks a delivered attachment as readable', async () => {
+    const { messages: result } = await buildAndSortMessages(
+      [],
+      [{ role: 'user', content: 'id,fruit\nr,apple\n' }],
+      [{ role: 'user', content: 'summarize' }],
+      8000,
+      {},
+      10,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    const delivered = result.find(m => typeof m.content === 'string' && (m.content as string).includes('id,fruit'));
+    expect(delivered!.content as string).toMatch(
+      new RegExp(`^${ATTACHMENT_DELIVERED_NOTICE.replace(/[[\]().]/g, '\\$&')}`)
+    );
+  });
+
+  it('never marks the note that says content could not be delivered', async () => {
+    const tokenizer: ITokenizer = {
+      countTokens: vi.fn(async (text: string) => Math.ceil(text.length / 3.5)),
+      encodeTokens: vi.fn(async (text: string) => Array(Math.ceil(text.length / 3.5)).fill(1)),
+      clearCache: vi.fn(),
+      getCacheStats: vi.fn(() => ({ size: 0, keys: [] })),
+      warmUpCache: vi.fn(async () => {}),
+    };
+    const history = Array.from({ length: 40 }, (_, i) => ({
+      role: i % 2 === 0 ? ('user' as const) : ('assistant' as const),
+      content: `history-${i}-` + 'h'.repeat(240),
+    }));
+
+    const { messages: result } = await buildAndSortMessages(
+      history,
+      [
+        { role: 'system', content: 'S'.repeat(1500 * 3.5) },
+        { role: 'user', content: 'alpha,col\n' + 'r,1\n'.repeat(3000) },
+        { role: 'user', content: 'bravo,col\n' + 'r,1\n'.repeat(3000) },
+      ],
+      [{ role: 'user', content: 'What do the attached files contain?' }],
+      2200,
+      {},
+      20,
+      mockLogger as any,
+      tokenizer
+    );
+
+    const note = result.find(
+      m => typeof m.content === 'string' && (m.content as string).includes('could not be included')
+    );
+    expect(note).toBeDefined();
+    expect(note!.content as string).not.toContain(ATTACHMENT_DELIVERED_NOTICE.trim());
+  });
+
+  it('marks one delivered file while its dropped sibling is only named in the undelivered note', async () => {
+    const tokenizer: ITokenizer = {
+      countTokens: vi.fn(async (text: string) => Math.ceil(text.length / 3.5)),
+      encodeTokens: vi.fn(async (text: string) => Array(Math.ceil(text.length / 3.5)).fill(1)),
+      clearCache: vi.fn(),
+      getCacheStats: vi.fn(() => ({ size: 0, keys: [] })),
+      warmUpCache: vi.fn(async () => {}),
+    };
+
+    const { messages: result } = await buildAndSortMessages(
+      [],
+      [
+        { role: 'user', content: 'small,file\nrow,1\n' },
+        { role: 'system', content: 'S'.repeat(1500 * 3.5) },
+        { role: 'user', content: 'big,file\n' + 'row,1\n'.repeat(3000) },
+      ],
+      [{ role: 'user', content: 'summarize both' }],
+      2200,
+      {},
+      20,
+      mockLogger as any,
+      tokenizer
+    );
+
+    const small = result.find(m => typeof m.content === 'string' && (m.content as string).includes('small,file'));
+    const note = result.find(
+      m => typeof m.content === 'string' && (m.content as string).includes('could not be included')
+    );
+    expect(small!.content as string).toContain(ATTACHMENT_DELIVERED_NOTICE.trim());
+    expect(note).toBeDefined();
+    expect(result.some(m => typeof m.content === 'string' && (m.content as string).includes('big,file'))).toBe(false);
   });
 });
 
@@ -2500,7 +3171,7 @@ describe('allocation under a production-shaped system-prompt load', () => {
     const tokenizer = createMockTokenizer();
     const file = csv(2052);
 
-    const result = await buildAndSortMessages(
+    const { messages: result } = await buildAndSortMessages(
       history(18),
       [systemLoad(), file],
       question,
@@ -2512,9 +3183,9 @@ describe('allocation under a production-shaped system-prompt load', () => {
     );
 
     const delivered = result.find(
-      m => typeof m.content === 'string' && (m.content as string).startsWith('id,fruit,color')
+      m => typeof m.content === 'string' && (m.content as string).includes('id,fruit,color')
     );
-    expect(delivered!.content).toBe(file.content);
+    expect(delivered!.content).toBe(ATTACHMENT_DELIVERED_NOTICE + file.content);
     expect(delivered!.content as string).toContain('FINAL_ROW_MARKER: apricot');
     expect(delivered!.content as string).not.toContain(NOTICE);
     expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(
@@ -2522,13 +3193,14 @@ describe('allocation under a production-shaped system-prompt load', () => {
     );
   });
 
-  it('truncates a 4k file on an 8k model and says so, rather than faking the tail', async () => {
-    // QA attached exactly this and expected the trailing marker. It cannot arrive: after 1.5k of system
-    // instructions the content share is around 900 tokens, so roughly 2.9k of 4k characters is the
-    // ceiling. What matters is that the cut is declared.
+  it('delivers a 4k file whole on an 8k model under a full system load', async () => {
+    // QA attached exactly this and expected the trailing marker. It used to be unreachable: the content
+    // floor was a share of what survived the system stack, about 900 tokens, so ~2.9k of 4k characters
+    // was the ceiling. The floor is now a share of the pre-system budget - ~1,445 tokens against the
+    // file's ~1,143 - so the whole file fits and the marker arrives.
     const tokenizer = createMockTokenizer();
 
-    const result = await buildAndSortMessages(
+    const { messages: result } = await buildAndSortMessages(
       history(40),
       [systemLoad(), csv(4004)],
       question,
@@ -2540,24 +3212,29 @@ describe('allocation under a production-shaped system-prompt load', () => {
     );
 
     const delivered = result.find(
-      m => typeof m.content === 'string' && (m.content as string).startsWith('id,fruit,color')
+      m => typeof m.content === 'string' && (m.content as string).includes('id,fruit,color')
     );
     expect(delivered).toBeDefined();
     const text = delivered!.content as string;
-    expect(text).toContain(NOTICE);
-    expect(text).not.toContain('FINAL_ROW_MARKER');
+    expect(text).toContain('FINAL_ROW_MARKER: apricot');
+    expect(text).not.toContain(NOTICE);
+    // The system load fits alongside it rather than being traded away for the file.
+    expect(result.some(m => m.role === 'system')).toBe(true);
+    // Nothing was lost, so nothing should be reported as lost.
+    expect(mockLogger.warn).not.toHaveBeenCalled();
     expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(
       LLAMA_8K_INPUT_BUDGET
     );
   });
 
-  it('states the file could not be included rather than sending an unusable sliver', async () => {
-    // GPT-4's 4k output reserve leaves so little that the file's share collapses to a few dozen tokens.
-    // A fragment that small does not read as a truncated file - it reads as no file, and the model then
-    // tells the user it cannot see attachments at all. That is the failure this replaces.
+  it('sheds system instructions rather than the file when both cannot fit', async () => {
+    // GPT-4's 4k output reserve leaves ~2,081 tokens to divide. The file's floor is 35% of that, and
+    // system instructions are capped at the remaining 65% (~1,353), which this 1,500-token load exceeds
+    // - so it is dropped deliberately and the file still arrives usefully cut rather than being
+    // declared undeliverable. The trade is the point: the user attached the file.
     const tokenizer = createMockTokenizer();
 
-    const result = await buildAndSortMessages(
+    const { messages: result } = await buildAndSortMessages(
       history(40),
       [systemLoad(), csv(4004)],
       question,
@@ -2568,17 +3245,216 @@ describe('allocation under a production-shaped system-prompt load', () => {
       tokenizer
     );
 
-    const note = result.find(
-      m => typeof m.content === 'string' && (m.content as string).includes('could not be included')
+    const delivered = result.find(
+      m => typeof m.content === 'string' && (m.content as string).includes('id,fruit,color')
     );
-    expect(note).toBeDefined();
-    // The model must not be left free to report the file as absent.
-    expect(note!.content as string).toContain('do not tell the user that no file was provided');
-    // And no unusable fragment of the CSV is sent alongside it.
-    expect(result.some(m => typeof m.content === 'string' && (m.content as string).startsWith('id,fruit,color'))).toBe(
-      false
+    expect(delivered).toBeDefined();
+    // Cut, and said so - a silent cut is the failure this area exists to prevent.
+    expect(delivered!.content as string).toContain(NOTICE);
+    // Not the pre-fix outcome, where the file's share collapsed and it was declared undeliverable.
+    expect(
+      result.some(m => typeof m.content === 'string' && (m.content as string).includes('could not be included'))
+    ).toBe(false);
+    expect(result.some(m => m.role === 'system')).toBe(false);
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('No system instructions fit the budget'));
+    expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(
+      GPT4_8K_INPUT_BUDGET
     );
-    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('could not be delivered usefully'));
+  });
+});
+
+// Which system messages survive a squeeze, and in what order they are sent. Before this the answer to
+// both was "assembly position", so a caller's org prompt lost to whatever happened to precede it.
+describe('system-message retention under a capped budget', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const sysOf = (tokens: number, tag: string): IMessage => ({
+    role: 'system',
+    content: `${tag}:` + 'S'.repeat(Math.max(0, tokens * 3.5 - tag.length - 1)),
+  });
+  const ask: IMessage[] = [{ role: 'user', content: 'hello' }];
+  const tagsIn = (result: IMessage[]) =>
+    result.filter(m => m.role === 'system').map(m => (m.content as string).split(':')[0]);
+
+  it('sends survivors in assembly order, not in priority order', async () => {
+    const first = sysOf(100, 'first');
+    const second = sysOf(100, 'second');
+    const third = sysOf(100, 'third');
+    // Priorities deliberately disagree with assembly order; all three fit, so nothing is dropped and
+    // only the ordering is under test. Reordering the payload would cost the Anthropic cached prefix.
+    const priority = new Map<IMessage, number>([
+      [first, 2],
+      [second, 0],
+      [third, 1],
+    ]);
+
+    const { messages: result } = await buildAndSortMessages(
+      [],
+      [first, second, third],
+      ask,
+      20_000,
+      {},
+      20,
+      mockLogger as any,
+      createMockTokenizer(),
+      { verbose: false, systemMessagePriority: m => priority.get(m) }
+    );
+
+    expect(tagsIn(result)).toEqual(['first', 'second', 'third']);
+  });
+
+  it('skips an oversized prompt and still admits a smaller one behind it', async () => {
+    const oversized = sysOf(6000, 'oversized');
+    const small = sysOf(50, 'small');
+    // Priority puts the oversized one first, which is exactly the case the old `break` mishandled: it
+    // stopped at the first message over budget and discarded everything after it.
+    const priority = new Map<IMessage, number>([
+      [oversized, 0],
+      [small, 1],
+    ]);
+
+    const { messages: result } = await buildAndSortMessages(
+      [],
+      [oversized, small],
+      ask,
+      6000,
+      {},
+      20,
+      mockLogger as any,
+      createMockTokenizer(),
+      { verbose: false, systemMessagePriority: m => priority.get(m) }
+    );
+
+    expect(tagsIn(result)).toEqual(['small']);
+  });
+
+  it('drops the lowest-priority prompt first when they cannot all fit', async () => {
+    const keep = sysOf(2000, 'keep');
+    const shed = sysOf(2000, 'shed');
+    const priority = new Map<IMessage, number>([
+      [keep, 10],
+      [shed, 30],
+    ]);
+
+    // Room for one of the two, so the choice between them is the whole assertion.
+    const { messages: result } = await buildAndSortMessages(
+      [],
+      [shed, keep],
+      ask,
+      3600,
+      {},
+      20,
+      mockLogger as any,
+      createMockTokenizer(),
+      { verbose: false, systemMessagePriority: m => priority.get(m) }
+    );
+
+    expect(tagsIn(result)).toEqual(['keep']);
+  });
+
+  // Array content is legal on a system message and arrives that way from extraContextMessages, a public
+  // request field. Sized by a bare `content as string` cast, an array's ELEMENT COUNT was divided by
+  // CHARS_PER_TOKEN, so one huge block measured ~1 token: it cleared the cap for free and the file paid
+  // for it at the safety pass, which shrinks content but never system messages.
+  it('measures a system message with array content by its text, not its block count', async () => {
+    const huge: IMessage = { role: 'system', content: [{ type: 'text', text: 'S'.repeat(25_000) }] as any };
+    const marker = 'FINAL_ROW_MARKER: apricot';
+    const csv = 'id,fruit,color\n' + 'r,apple,red\n'.repeat(100) + marker;
+
+    const { messages: result } = await buildAndSortMessages(
+      [],
+      [huge, { role: 'user', content: csv }],
+      ask,
+      6000,
+      {},
+      20,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    // ~7,150 real tokens against a cap near 3,250: too big to admit, so it is dropped deliberately.
+    expect(result.some(m => m.role === 'system')).toBe(false);
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('No system instructions fit the budget'));
+    // And the attachment keeps its budget rather than paying for an unmeasured block.
+    const delivered = result.find(m => typeof m.content === 'string' && m.content.includes('id,fruit,color'));
+    expect(delivered?.content as string).toContain(marker);
+  });
+
+  it('still admits a small array-content system message', async () => {
+    const small: IMessage = { role: 'system', content: [{ type: 'text', text: 'be brief' }] as any };
+
+    const { messages: result } = await buildAndSortMessages(
+      [],
+      [small],
+      ask,
+      6000,
+      {},
+      20,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    expect(result.some(m => m.role === 'system')).toBe(true);
+    expect(mockLogger.warn).not.toHaveBeenCalled();
+  });
+
+  // The unlimited-history path splits the budget 70/30 instead of using the floor, and 70% of what
+  // survived a heavy system stack is LESS than 35% of the budget before it. Without the floor on this
+  // branch too, the same file that arrives whole on a windowed turn was cut on an unwindowed one.
+  it('honours the content floor on an unwindowed request as well', async () => {
+    const heavy = sysOf(2600, 'heavy');
+    const csv = 'id,fruit,color\n' + 'r,apple,red\n'.repeat(330) + 'FINAL_ROW_MARKER: apricot';
+
+    const { messages: result } = await buildAndSortMessages(
+      Array.from({ length: 40 }, (_, i) => ({
+        role: i % 2 === 0 ? ('user' as const) : ('assistant' as const),
+        content: `history-${i}-` + 'h'.repeat(240),
+      })),
+      [heavy, { role: 'user', content: csv }],
+      ask,
+      5144,
+      {},
+      // UNLIMITED_HISTORY_COUNT, so allocation takes the 70/30 branch rather than the windowed floor.
+      // It is -1, not a large count: the in-range sentinel it replaced could collide with a real one.
+      -1,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    const delivered = result.find(
+      m => typeof m.content === 'string' && (m.content as string).includes('id,fruit,color')
+    );
+    expect(delivered).toBeDefined();
+    expect(delivered!.content as string).toContain('FINAL_ROW_MARKER: apricot');
+  });
+
+  // The reserve only exists to protect an attachment, so a turn without one must not pay for it. This
+  // is the pair of assertions that pins the condition in both directions.
+  it('caps system instructions only when the turn carries an attachment', async () => {
+    const heavy = () => sysOf(4000, 'heavy');
+    const run = async (fabMessages: IMessage[]) => {
+      const { messages } = await buildAndSortMessages(
+        [],
+        fabMessages,
+        ask,
+        6000,
+        {},
+        20,
+        mockLogger as any,
+        createMockTokenizer()
+      );
+      return messages;
+    };
+
+    const withoutAttachment = await run([heavy()]);
+    const withAttachment = await run([heavy(), { role: 'user', content: 'id,fruit\n' + 'r,apple\n'.repeat(50) }]);
+
+    // ~4,990 of pre-system budget, so 4,000 tokens of instructions fit when nothing is reserved.
+    expect(tagsIn(withoutAttachment)).toEqual(['heavy']);
+    // With a file present the cap falls to ~3,244 and the same stack no longer fits.
+    expect(tagsIn(withAttachment)).toEqual([]);
   });
 });
 
@@ -2605,11 +3481,14 @@ describe('unusable attachments are judged one at a time', () => {
     }));
     const bigCsv = (tag: string) => ({ role: 'user' as const, content: `${tag},col\n` + 'r,1\n'.repeat(3000) });
 
-    const result = await buildAndSortMessages(
+    // 2200 rather than the 3096 this used at first: raising the content floor to a share of the
+    // pre-system budget lifted both files clear of the usability threshold, so the sliver case this
+    // test exists for now needs a genuinely smaller window to reach.
+    const { messages: result } = await buildAndSortMessages(
       history,
       [{ role: 'system', content: 'S'.repeat(1500 * 3.5) }, bigCsv('alpha'), bigCsv('bravo')],
       [{ role: 'user', content: 'What do the attached files contain?' }],
-      3096,
+      2200,
       {},
       20,
       mockLogger as any,
@@ -2631,17 +3510,297 @@ describe('unusable attachments are judged one at a time', () => {
   });
 });
 
-describe('includeHardcodedSystemMessage - format prompt scoping (#1320)', () => {
-  it('prepends the built-in scoped default when no template is stored', () => {
-    const result = includeHardcodedSystemMessage([], '');
-    expect(result).toHaveLength(1);
-    expect(result[0].role).toBe('system');
-    // The scope guard is the load-bearing part of the fix: the previous wording read as a
-    // general compliance instruction and degraded refusal behavior on underspecified asks.
-    expect(result[0].content as string).toMatch(
-      /^Formatting only - nothing here decides whether or how fully to answer/
+describe('the safety pass on paths the primary allocation does not reach', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const CONTENT_TRUNCATION_NOTICE =
+    '\n\n[Content truncated to fit the context window. This is NOT the end of the file - later content was not sent.]';
+
+  const tokenizerAt = (charsPerToken: number): ITokenizer => ({
+    countTokens: vi.fn(async (text: string) => Math.ceil(text.length / charsPerToken)),
+    encodeTokens: vi.fn(async (text: string) => Array(Math.ceil(text.length / charsPerToken)).fill(1)),
+    clearCache: vi.fn(),
+    getCacheStats: vi.fn(() => ({ size: 0, keys: [] })),
+    warmUpCache: vi.fn(async () => {}),
+  });
+
+  const history = (count: number, charsEach: number): IMessage[] =>
+    Array.from({ length: count }, (_, i) => ({
+      role: i % 2 === 0 ? ('user' as const) : ('assistant' as const),
+      content: `h${i}-`.padEnd(charsEach, 'x'),
+    }));
+
+  const attachment = (fileName: string, chars: number): IMessage => ({
+    role: 'user',
+    content: `Here is the content from the attached file "${fileName}" for context:\n\n` + 'C'.repeat(chars),
+  });
+
+  const delivered = (messages: IMessage[]): string =>
+    messages.map(m => (typeof m.content === 'string' ? m.content : '')).join('');
+
+  const warnings = (): string => (mockLogger.warn.mock.calls as unknown[][]).map(call => String(call[0])).join('\n');
+
+  it('trims proportionally on an image turn instead of asking content for everything', async () => {
+    // The estimator used to JSON-stringify base64 image data as text while the real tokenizer charged
+    // a flat 1600, so the ratio converting the overage between the two units collapsed and round 1
+    // zeroed the attachment when a ~200-token trim was enough.
+    const tokenizer = tokenizerAt(3.5);
+    const { messages: result } = await buildAndSortMessages(
+      history(10, 500),
+      [
+        attachment('roster.csv', 10000),
+        {
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'A'.repeat(300000) } },
+          ] as unknown as IMessage['content'],
+        },
+      ],
+      [{ role: 'user', content: 'Summarize the attached file' }],
+      5700,
+      {},
+      5,
+      mockLogger as any,
+      tokenizer
     );
-    expect(result[0].content as string).not.toContain('Adhere to specific formatting requests');
+
+    // Most of the file still reaches the model, and it is never reduced to the could-not-be-included note.
+    expect(delivered(result)).toContain('C'.repeat(7000));
+    expect(delivered(result)).not.toContain('could not be included');
+    expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(5700);
+  });
+
+  it('declares an attachment the safety pass drops, not just one the allocation drops', async () => {
+    // The allocation delivers the file, then the safety pass drops it whole. The note is applied before
+    // that pass, so the file used to vanish with nothing said and the model denied it was ever attached.
+    const { messages: result } = await buildAndSortMessages(
+      history(40, 1000),
+      [attachment('roster.csv', 3000)],
+      [{ role: 'user', content: 'Summarize the attached file' }],
+      12000,
+      {},
+      20,
+      mockLogger as any,
+      tokenizerAt(1.5)
+    );
+
+    expect(delivered(result)).toContain('could not be included in this request');
+    expect(delivered(result)).toContain('do not tell the user that no file was provided');
+    // Names no file: which one was lost is not knowable once processMessages has replaced the objects,
+    // and listing them all let the model disclaim a file it did receive.
+    expect(delivered(result)).not.toContain('roster.csv');
+  });
+
+  it('keeps a history reduction that frees tokens without changing the message count', async () => {
+    // processMessages' fallback shrinks messages in place. The pass compared message counts, so it read
+    // "same count" as "cannot shrink", discarded a valid reduction and handed the caller an oversized
+    // payload for its hard throw.
+    // 20k window so the 1000-token reserve stays small next to it, one history message the allocation
+    // can afford whole, and 2.0 chars/token so only the real count overflows.
+    const maxInputTokens = 20000;
+    const tokenizer = tokenizerAt(2.0);
+    const { messages: result } = await buildAndSortMessages(
+      [{ role: 'user', content: 'H'.repeat(63000) }],
+      [],
+      [{ role: 'user', content: 'Carry on' }],
+      maxInputTokens,
+      {},
+      3,
+      mockLogger as any,
+      tokenizer
+    );
+
+    expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(
+      maxInputTokens
+    );
+    expect(warnings()).not.toContain('could not bring the payload under');
+  });
+
+  it('reports a mid-message cut made by the safety pass as a budget truncation', async () => {
+    // The allocation delivers the file whole and removes nothing, so allRemovedMessages stays empty and
+    // only the safety pass's cut is evidence of loss. Telemetry used to call this turn untruncated.
+    // Sized so the allocation delivers the file whole (17143 est. tokens against an 18881 content
+    // budget) and only the 2.5-chars/token real count overflows, so the pass's cut is the sole loss.
+    const { messageTruncation: debug } = await buildAndSortMessages(
+      history(2, 200),
+      [attachment('roster.csv', 60000)],
+      [{ role: 'user', content: 'Summarize' }],
+      20000,
+      {},
+      5,
+      mockLogger as any,
+      tokenizerAt(2.5)
+    );
+
+    expect(debug?.wasTruncated).toBe(true);
+    expect(debug?.truncationMethod).toBe('token-budget');
+  });
+
+  it('keeps fetched page content out of the warning it logs', async () => {
+    // A URL-derived attachment's first line is raw fetched body, not a filename header, so logging the
+    // first 120 chars of it put page content into warn-level logs.
+    await buildAndSortMessages(
+      history(10, 500),
+      [{ role: 'user', content: 'For context: ' + 'PAGEBODY-'.repeat(2000) }],
+      [{ role: 'user', content: 'Summarize it' }],
+      1500,
+      {},
+      5,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    expect(warnings()).toContain('squeezed to fit the token budget');
+    expect(warnings()).not.toContain('PAGEBODY');
+    expect(warnings()).toContain('attachment 1');
+  });
+
+  it('declares a dropped file even when an empty attachment survives in its place', async () => {
+    // droppedCount compared the delivered message count against attachments that had content. An
+    // attachment with nothing extractable is absent from the second set but still present in the
+    // first, so it stood in for the dropped sibling one-for-one and the drop went undeclared.
+    const { messages: result } = await buildAndSortMessages(
+      history(20, 3000),
+      [{ role: 'user', content: '' }, attachment('roster.csv', 40000)],
+      [{ role: 'user', content: 'Summarize the attached file' }],
+      20000,
+      {},
+      15,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    expect(delivered(result)).toContain('could not be included in this request');
+  });
+
+  it('does not mistake a file ending in the notice text for a cut one', async () => {
+    // Truncation was detected by sniffing for the appended notice, so a small file whose own last line
+    // happened to be that sentence was judged an unusable sliver and replaced - losing a file that fit.
+    const { messages: result } = await buildAndSortMessages(
+      history(2, 100),
+      [
+        {
+          role: 'user',
+          content:
+            'Here is the content from the attached file "small.csv" for context:\n\n' +
+            'row-a\nrow-b\nrow-c\n' +
+            CONTENT_TRUNCATION_NOTICE,
+        },
+      ],
+      [{ role: 'user', content: 'What is in the file' }],
+      100000,
+      {},
+      5,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    expect(delivered(result)).toContain('row-a\nrow-b\nrow-c');
+    expect(delivered(result)).not.toContain('could not be included');
+  });
+
+  it('shrinks a tool-call turn without orphaning the pairing', async () => {
+    // A tool-call turn takes the other assembly order, and the pass now rewrites both the content and
+    // the history that order is applied to. Nothing else in this suite drives an overflow through that
+    // branch, so this is the only cover for it.
+    const maxInputTokens = 6000;
+    const tokenizer = tokenizerAt(1.5);
+    const toolUseHistory: IMessage[] = [
+      ...history(6, 800),
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'tool-1', name: 'read_file', input: {} }] as unknown as IMessage['content'],
+      },
+    ];
+    const { messages: result } = await buildAndSortMessages(
+      toolUseHistory,
+      [attachment('roster.csv', 20000)],
+      [
+        {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'ok' }] as unknown as IMessage['content'],
+        },
+        { role: 'user', content: 'ASK-MARKER summarize the attached file' },
+      ],
+      maxInputTokens,
+      {},
+      10,
+      mockLogger as any,
+      tokenizer
+    );
+
+    const blocks = result.flatMap(message => (Array.isArray(message.content) ? message.content : []));
+    const toolUseIds = new Set(blocks.filter((block: any) => block.type === 'tool_use').map((block: any) => block.id));
+    // Whatever survived, no tool_result may reference a tool_use that did not.
+    for (const block of blocks.filter((b: any) => b.type === 'tool_result')) {
+      expect(toolUseIds.has((block as any).tool_use_id)).toBe(true);
+    }
+
+    // The question still reaches the model: an overflow that silently ate the prompt would be worse than
+    // the overflow.
+    expect(result.some(m => typeof m.content === 'string' && m.content.includes('ASK-MARKER'))).toBe(true);
+    expect(await calculateTotalTokenLength(result, { estimateOnly: false, tokenizer })).toBeLessThanOrEqual(
+      maxInputTokens
+    );
+  });
+
+  it('declares the loss once, however many rounds the pass spends', async () => {
+    // The pass re-declares every round so the note tracks what it has dropped so far, which only works if
+    // the call replaces the previous note instead of appending another. Appending is worse than a stale
+    // note: each copy costs about 100 tokens the pass is trying to free, and a stale note itself passes
+    // the delivered-attachment predicate, so every extra copy claims one fewer lost file than the last -
+    // ending with the model told one file is missing when three are.
+    const { messages: result } = await buildAndSortMessages(
+      history(40, 1000),
+      [attachment('a.csv', 3000), attachment('b.csv', 3000), attachment('c.csv', 3000)],
+      [{ role: 'user', content: 'Summarize the attached files' }],
+      12000,
+      {},
+      20,
+      mockLogger as any,
+      tokenizerAt(1.5)
+    );
+
+    const text = delivered(result);
+    expect(text.split('could not be included in this request').length - 1).toBe(1);
+    // The surviving note has to state the real number, not what is left after stale copies were counted
+    // as delivered files.
+    expect(text).toContain('3 attached file(s) could not be included');
+  });
+
+  it('logs the composition when nothing left is droppable, rather than returning quietly', async () => {
+    // Images are assembled in at a flat rate and neither branch can touch them, so an overflow made of
+    // images cannot be shrunk. The caller's hard throw is reachable from more than the composer, so the
+    // one thing this path must not do is hand back an oversized payload with nothing said.
+    const { messages: result } = await buildAndSortMessages(
+      [],
+      Array.from({ length: 8 }, () => ({
+        role: 'user' as const,
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'A'.repeat(200) } },
+        ] as unknown as IMessage['content'],
+      })),
+      [{ role: 'user', content: 'What do these show?' }],
+      1200,
+      {},
+      5,
+      mockLogger as any,
+      tokenizerAt(3.5)
+    );
+
+    expect(warnings()).toContain('could not bring the payload under maxInputTokens');
+    expect(warnings()).toContain('image message(s)');
+    expect(result.length).toBeGreaterThan(0);
+  });
+});
+
+describe('includeHardcodedSystemMessage - format prompt scoping', () => {
+  it('prepends the shared default when no template is stored', () => {
+    const result = includeHardcodedSystemMessage([{ role: 'user', content: 'hi' }], '');
+    expect(result[0]).toEqual({ role: 'system', content: FORMAT_PROMPT_TEMPLATE });
+    expect(result[1]).toEqual({ role: 'user', content: 'hi' });
   });
 
   it('uses the stored template verbatim when provided, prepended ahead of existing messages', () => {
@@ -2650,5 +3809,350 @@ describe('includeHardcodedSystemMessage - format prompt scoping (#1320)', () => 
     expect(result).toHaveLength(2);
     expect(result[0]).toEqual({ role: 'system', content: 'Custom template.' });
     expect(result[1]).toEqual(existing[0]);
+  });
+
+  it('keeps the default scoped to formatting so it cannot bleed into whether to answer', () => {
+    // The prior wording ("Adhere to specific formatting requests...") read as general compliance
+    // and roughly halved refusal quality when it was the only system content.
+    expect(FORMAT_PROMPT_TEMPLATE).toMatch(/^Formatting only - nothing here decides whether or how fully to answer/);
+    expect(FORMAT_PROMPT_TEMPLATE).not.toMatch(/adhere to/i);
+  });
+});
+
+const IMAGE_PROMPT_MATCH = /MUST use the image_generation tool/;
+const hasImagePrompt = (messages: IMessage[]) =>
+  messages.some(m => typeof m.content === 'string' && IMAGE_PROMPT_MATCH.test(m.content));
+
+describe('includeImagePromptSystemMessage - tool availability gate', () => {
+  it('injects nothing when image_generation is not on the turn, even on an explicit image request', () => {
+    expect(includeImagePromptSystemMessage([], 'draw me a picture of a cat', false)).toEqual([]);
+  });
+
+  it('injects the instruction when the tool is available', () => {
+    const result = includeImagePromptSystemMessage([], 'draw me a picture of a cat', true);
+    expect(result).toHaveLength(1);
+    expect(result[0].role).toBe('system');
+    expect(result[0].content as string).toMatch(IMAGE_PROMPT_MATCH);
+  });
+
+  it('prepends ahead of the messages it is given', () => {
+    const existing: IMessage[] = [{ role: 'system', content: 'other block' }];
+    const result = includeImagePromptSystemMessage(existing, 'a painting of a fox', true);
+    expect(result).toHaveLength(2);
+    expect(result[1]).toEqual(existing[0]);
+  });
+
+  it('leaves the messages untouched when the prompt asks for no image at all', () => {
+    const existing: IMessage[] = [{ role: 'user', content: 'what is the capital of France' }];
+    expect(includeImagePromptSystemMessage(existing, 'what is the capital of France', true)).toEqual(existing);
+  });
+});
+
+describe('includeImagePromptSystemMessage - request trigger', () => {
+  const fires = (prompt: string) => includeImagePromptSystemMessage([], prompt, true).length === 1;
+
+  // The substring scan matched these as `visual`, `graphic` and `diagram`, so a MUST-generate-an-image
+  // instruction landed on prompts that only talked about visualizing or diagrams.
+  it.each([
+    'help me visualize this data',
+    'a visualization of the deploy pipeline',
+    'the graphical output is wrong',
+    'can you explain what this diagram means',
+    'draw a diagram of the auth flow',
+    'give me a snapshot of the metrics table',
+  ])('does not fire on %j', prompt => {
+    expect(fires(prompt)).toBe(false);
+  });
+
+  it.each([
+    'draw me a picture of a cat',
+    'an image of a cat',
+    'generate some photos of the coast',
+    'An Illustration Of A Fox',
+    'a comic book cover for this story',
+    'paint a watercolour of the harbour',
+  ])('fires on %j', prompt => {
+    expect(fires(prompt)).toBe(true);
+  });
+
+  // A `g` flag on the module-scope pattern would carry lastIndex between calls, making the result
+  // depend on whatever prompt came before.
+  it('matches the same prompt on repeated calls', () => {
+    expect(fires('a picture of a cat')).toBe(true);
+    expect(fires('a picture of a cat')).toBe(true);
+  });
+});
+
+describe('buildAndSortMessages - image prompt threading', () => {
+  const buildWithOptions = async (options?: { verbose: boolean; imageGenerationAvailable?: boolean }) => {
+    const { messages } = await buildAndSortMessages(
+      [],
+      [],
+      [{ role: 'user', content: 'draw me a picture of a cat' }],
+      100000,
+      { UseImagePrompt: 'true' },
+      0,
+      mockLogger,
+      createMockTokenizer(),
+      options
+    );
+    return messages;
+  };
+
+  it('injects the image prompt when the caller reports the tool available', async () => {
+    expect(hasImagePrompt(await buildWithOptions({ verbose: false, imageGenerationAvailable: true }))).toBe(true);
+  });
+
+  it('injects nothing when the caller reports the tool unavailable', async () => {
+    expect(hasImagePrompt(await buildWithOptions({ verbose: false, imageGenerationAvailable: false }))).toBe(false);
+  });
+
+  // Fails closed: a caller that never threads availability through gets no instruction, rather than
+  // one aimed at a tool the model may not hold.
+  it('injects nothing when the caller passes no options at all', async () => {
+    expect(hasImagePrompt(await buildWithOptions())).toBe(false);
+  });
+
+  // The two options are independent: skipping the admin templates removes the image prompt whatever
+  // availability says, so a raw-mode turn must not carry it even with the tool attached.
+  it('injects nothing when the admin templates are skipped, even with the tool available', async () => {
+    expect(
+      hasImagePrompt(
+        await buildWithOptions({
+          verbose: false,
+          imageGenerationAvailable: true,
+          skipAdminPromptTemplates: true,
+        } as any)
+      )
+    ).toBe(false);
+  });
+});
+
+describe('admin prompt templates', () => {
+  const FORMAT_TEMPLATE = 'Adhere to specific formatting requests such as TypeScript.';
+  const settings = { UseFormatPrompt: 'true', FormatPromptTemplate: FORMAT_TEMPLATE };
+
+  const build = async (options?: { verbose: boolean; skipAdminPromptTemplates?: boolean }) => {
+    const { messages } = await buildAndSortMessages(
+      [],
+      [],
+      [{ role: 'user', content: 'hello' }],
+      100000,
+      settings,
+      0,
+      mockLogger as any,
+      createMockTokenizer(),
+      options
+    );
+    return messages;
+  };
+
+  const carriesFormatTemplate = (messages: IMessage[]) =>
+    messages.some(m => typeof m.content === 'string' && m.content.includes(FORMAT_TEMPLATE));
+
+  it('injects the admin format template by default, since in-app completions expect it', async () => {
+    expect(carriesFormatTemplate(await build())).toBe(true);
+  });
+
+  // This template is invisible from ChatCompletionProcess - it is appended here - and it measurably
+  // suppressed the model's willingness to refuse an underspecified request. A caller asking for an
+  // unadorned completion has to be able to reach it.
+  it('omits the admin format template when the caller opts out', async () => {
+    expect(carriesFormatTemplate(await build({ verbose: false, skipAdminPromptTemplates: true }))).toBe(false);
+  });
+});
+
+describe('buildAndSortMessages - injectedBlocks reporting', () => {
+  const findBlock = (blocks: Awaited<ReturnType<typeof buildAndSortMessages>>['injectedBlocks'], id: string) =>
+    blocks.find(b => b.id === id);
+
+  it('reports both blocks injected and delivered when triggered on a normal turn', async () => {
+    const settings = { UseFormatPrompt: 'true', FormatPromptTemplate: 'Formatting only.', UseImagePrompt: 'true' };
+    const { messages, injectedBlocks } = await buildAndSortMessages(
+      [],
+      [],
+      [{ role: 'user', content: 'draw me a picture of a cat' }],
+      100000,
+      settings,
+      0,
+      mockLogger as any,
+      createMockTokenizer(),
+      { verbose: false, imageGenerationAvailable: true }
+    );
+
+    const format = findBlock(injectedBlocks, 'formatPrompt');
+    const image = findBlock(injectedBlocks, 'imagePrompt');
+    expect(format).toEqual({ id: 'formatPrompt', injected: true, delivered: true, content: 'Formatting only.' });
+    expect(image?.injected).toBe(true);
+    expect(image?.delivered).toBe(true);
+    // Read back off the same messages the model actually received, not re-derived.
+    expect(messages.some(m => m.content === format?.content)).toBe(true);
+    expect(messages.some(m => m.content === image?.content)).toBe(true);
+  });
+
+  it('reports both blocks not injected (mode_skipped) when the caller opts out, and neither string reaches the model', async () => {
+    const settings = { UseFormatPrompt: 'true', FormatPromptTemplate: 'Formatting only.', UseImagePrompt: 'true' };
+    const { messages, injectedBlocks } = await buildAndSortMessages(
+      [],
+      [],
+      [{ role: 'user', content: 'draw me a picture of a cat' }],
+      100000,
+      settings,
+      0,
+      mockLogger as any,
+      createMockTokenizer(),
+      { verbose: false, imageGenerationAvailable: true, skipAdminPromptTemplates: true } as any
+    );
+
+    expect(findBlock(injectedBlocks, 'formatPrompt')).toEqual({
+      id: 'formatPrompt',
+      injected: false,
+      delivered: false,
+      reason: 'mode_skipped',
+    });
+    expect(findBlock(injectedBlocks, 'imagePrompt')).toEqual({
+      id: 'imagePrompt',
+      injected: false,
+      delivered: false,
+      reason: 'mode_skipped',
+    });
+    expect(messages.some(m => typeof m.content === 'string' && m.content.includes('Formatting only'))).toBe(false);
+  });
+
+  it('reports the format prompt setting_disabled when UseFormatPrompt is off (the default)', async () => {
+    const { injectedBlocks } = await buildAndSortMessages(
+      [],
+      [],
+      [{ role: 'user', content: 'hello' }],
+      100000,
+      {},
+      0,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    expect(findBlock(injectedBlocks, 'formatPrompt')).toEqual({
+      id: 'formatPrompt',
+      injected: false,
+      delivered: false,
+      reason: 'setting_disabled',
+    });
+  });
+
+  it('reports the image prompt not_triggered when the message does not request an image', async () => {
+    const { injectedBlocks } = await buildAndSortMessages(
+      [],
+      [],
+      [{ role: 'user', content: 'what is the capital of France?' }],
+      100000,
+      { UseImagePrompt: 'true' },
+      0,
+      mockLogger as any,
+      createMockTokenizer(),
+      { verbose: false, imageGenerationAvailable: true }
+    );
+
+    expect(findBlock(injectedBlocks, 'imagePrompt')).toEqual({
+      id: 'imagePrompt',
+      injected: false,
+      delivered: false,
+      reason: 'not_triggered',
+    });
+  });
+
+  // The delivery case that matters most: injected does not imply delivered. A long enough format
+  // template can still be injected and then dropped by the system-token cap on a small window.
+  it('reports the format prompt injected but not delivered when the budget cannot fit it', async () => {
+    const settings = { UseFormatPrompt: 'true', FormatPromptTemplate: 'x'.repeat(2000) };
+    const { messages, injectedBlocks } = await buildAndSortMessages(
+      [],
+      [],
+      [{ role: 'user', content: 'hello' }],
+      1500,
+      settings,
+      0,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    const format = findBlock(injectedBlocks, 'formatPrompt');
+    expect(format?.injected).toBe(true);
+    expect(format?.delivered).toBe(false);
+    expect(messages.some(m => typeof m.content === 'string' && m.content.includes('x'.repeat(2000)))).toBe(false);
+  });
+
+  it('returns an empty injectedBlocks array on the non-positive-budget early exit', async () => {
+    const { injectedBlocks } = await buildAndSortMessages(
+      [],
+      [],
+      [{ role: 'user', content: 'hello' }],
+      0,
+      { UseFormatPrompt: 'true', FormatPromptTemplate: 'Formatting only.' },
+      0,
+      mockLogger as any,
+      createMockTokenizer()
+    );
+
+    expect(injectedBlocks).toEqual([]);
+  });
+});
+
+describe('buildAndSortMessages - concurrent calls do not share truncation telemetry', () => {
+  // A tokenizer whose countTokens resolution order is caller-controlled, so two overlapping
+  // buildAndSortMessages calls can be made to finish their internal awaits out of start order -
+  // the exact interleave that let one call's telemetry overwrite another's when it lived on a
+  // property of the shared function object instead of on each call's own return value.
+  const orderedTokenizer = (resolveOrder: 'immediate' | 'deferred'): ITokenizer => ({
+    countTokens: vi.fn(async (text: string) => {
+      if (resolveOrder === 'deferred') {
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      return Math.ceil(text.length / 3.5);
+    }),
+    encodeTokens: vi.fn(async (text: string) => Array(Math.ceil(text.length / 3.5)).fill(1)),
+    clearCache: vi.fn(),
+    getCacheStats: vi.fn(() => ({ size: 0, keys: [] })),
+    warmUpCache: vi.fn(async () => {}),
+  });
+
+  it("resolves each call's own messageTruncation, unaffected by a slower overlapping call", async () => {
+    const slowTokenizer = orderedTokenizer('deferred');
+    const fastTokenizer = orderedTokenizer('immediate');
+
+    // Truncated: a small budget against a long history. Slow tokenizer, so this call's final
+    // safety pass resolves AFTER the untruncated call below has already returned.
+    const truncatedCall = buildAndSortMessages(
+      Array.from({ length: 20 }, (_, i) => ({ role: 'user' as const, content: `history ${i} ` + 'x'.repeat(500) })),
+      [],
+      [{ role: 'user', content: 'ASK-A' }],
+      500,
+      {},
+      20,
+      mockLogger as any,
+      slowTokenizer
+    );
+
+    // Untouched: a large budget against a short prompt. Fast tokenizer, so this call's own
+    // buildDebugInfo runs and this promise resolves first.
+    const untouchedCall = buildAndSortMessages(
+      [],
+      [],
+      [{ role: 'user', content: 'ASK-B' }],
+      100000,
+      {},
+      5,
+      mockLogger as any,
+      fastTokenizer
+    );
+
+    const [truncated, untouched] = await Promise.all([truncatedCall, untouchedCall]);
+
+    // Each result reflects only its own inputs, regardless of which call's internal tokenizer
+    // resolves last (here, the truncated one, since its tokenizer is slow). Locks the return-value
+    // contract that replaced the old shared-property implementation, where the two calls would
+    // have raced to overwrite the same slot.
+    expect(untouched.messageTruncation?.wasTruncated).toBe(false);
+    expect(truncated.messageTruncation?.wasTruncated).toBe(true);
+    expect(truncated.messageTruncation?.truncationMethod).toBe('token-budget');
   });
 });

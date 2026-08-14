@@ -480,6 +480,8 @@ const ListItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
                 return (
                   <Chip
                     key={tag.name}
+                    data-testid="file-browser-item-tag-chip"
+                    data-tag-name={tag.name}
                     size="sm"
                     variant="soft"
                     title={tag.name}
@@ -833,6 +835,8 @@ const GridItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
                 return (
                   <Chip
                     key={tag.name}
+                    data-testid="file-browser-item-tag-chip"
+                    data-tag-name={tag.name}
                     size="sm"
                     variant="soft"
                     title={tag.name}

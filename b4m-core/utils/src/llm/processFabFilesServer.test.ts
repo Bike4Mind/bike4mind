@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { IFabFileDocument, ModelInfo } from '@bike4mind/common';
+import { CorruptedFileError, type IFabFileDocument, type ModelInfo } from '@bike4mind/common';
 
 const mockGetFileContent = vi.fn();
 vi.mock('../fabfile', () => ({ getFileContent: (...a: unknown[]) => mockGetFileContent(...a) }));
@@ -55,7 +55,10 @@ const deps = () => ({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- storage is unused on the raw-content path
   storage: {} as any,
   db: {
-    fabfilechunks: { findByFabFileId: vi.fn().mockResolvedValue([]) },
+    fabfilechunks: {
+      findVectorsByFabFileIds: vi.fn().mockResolvedValue([]),
+      countByFabFileId: vi.fn().mockResolvedValue(0),
+    },
     fabfiles: { update: vi.fn().mockResolvedValue(undefined) },
     caches: {},
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal adapter shape
@@ -68,11 +71,12 @@ const emittedChars = (userMessages: Array<{ content: unknown }>) =>
 
 /**
  * Each included file carries a short label ("Here is the content from the attached
- * file ...") that is not charged against the content budget. It is tens of characters
- * per file against a budget in the thousands, and assembly re-counts everything with
- * the real tokenizer afterwards, so it is allowed for rather than engineered away.
+ * file ...") plus the anti-inference/truncation notices, none of which are charged
+ * against the content budget. It is roughly a hundred characters per file against a
+ * budget in the thousands, and assembly re-counts everything with the real tokenizer
+ * afterwards, so it is allowed for rather than engineered away.
  */
-const FRAMING_ALLOWANCE_PER_FILE = 200;
+const FRAMING_ALLOWANCE_PER_FILE = 300;
 
 describe('processFabFilesServer attached-content budget', () => {
   beforeEach(() => {
@@ -212,5 +216,176 @@ describe('processFabFilesServer attached-content budget', () => {
     );
 
     expect(emittedChars(userMessages)).toBeLessThan(MAX_FILE_SIZE);
+  });
+});
+
+/**
+ * #1163: `deliveredFileIds` must name only files that actually contributed content, not every
+ * file this call was given - a caller (e.g. a knowledge tool telling the model "this file's
+ * content is already above") trusting the input list instead would assert something false about
+ * a silently-skipped file.
+ */
+describe('processFabFilesServer deliveredFileIds', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetFileContent.mockResolvedValue('hello world');
+  });
+
+  it('lists every text file that was actually delivered, in full', async () => {
+    const { deliveredFileIds, fullyDeliveredFileIds } = await processFabFilesServer(
+      embeddingFactory,
+      [textFile('a'), textFile('b')],
+      'prompt',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    expect(deliveredFileIds.sort()).toEqual(['a', 'b']);
+    // 'hello world' fits comfortably under the budget, so neither file was truncated.
+    expect(fullyDeliveredFileIds.sort()).toEqual(['a', 'b']);
+  });
+
+  it('a raw-content file truncated to fit the token budget is delivered but not FULLY delivered', async () => {
+    mockGetFileContent.mockResolvedValue('x'.repeat(50_000));
+
+    const { deliveredFileIds, fullyDeliveredFileIds } = await processFabFilesServer(
+      embeddingFactory,
+      [textFile('big')],
+      'prompt',
+      // A tiny budget forces the raw-content truncation branch (see finalMaxFileSize).
+      10,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    expect(deliveredFileIds).toEqual(['big']);
+    expect(fullyDeliveredFileIds).toEqual([]);
+  });
+
+  it('excludes an image skipped because the model does not support vision', async () => {
+    const { deliveredFileIds, userMessages } = await processFabFilesServer(
+      embeddingFactory,
+      [textFile('a'), imageFile('img-1')],
+      'prompt',
+      4000,
+      modelInfo, // supportsVision: false
+      async () => {},
+      deps()
+    );
+
+    // Sanity: the image really did take the silent-skip arm, not an error path.
+    expect(userMessages.some(m => typeof m.content === 'string' && m.content.includes('img-1'))).toBe(false);
+    expect(deliveredFileIds).toEqual(['a']);
+  });
+
+  it('excludes a corrupted file from delivery while a sibling file still succeeds', async () => {
+    // Only this one file's read fails - a shared per-turn mock keyed by call order would let
+    // the corrupted file "succeed" on retry via cache reuse, so key it by filename instead.
+    mockGetFileContent.mockImplementation(async (file: IFabFileDocument) => {
+      if (file.id === 'bad') throw new CorruptedFileError(file.fileName, 'PDF', 'unreadable stream');
+      return 'hello world';
+    });
+
+    const { deliveredFileIds, fullyDeliveredFileIds, userMessages } = await processFabFilesServer(
+      embeddingFactory,
+      [textFile('good'), textFile('bad')],
+      'prompt',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    // The corrupted file is silently skipped (caught, not rethrown) - the turn as a whole
+    // still succeeds and the sibling file's content still reaches the model.
+    expect(deliveredFileIds).toEqual(['good']);
+    expect(fullyDeliveredFileIds).toEqual(['good']);
+    expect(emittedChars(userMessages)).toBeGreaterThan(0);
+  });
+});
+
+describe('filename handling in the delivered-content wrapper', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetFileContent.mockResolvedValue('some file content');
+  });
+
+  it('keeps digits in a filename out of the wrapper header un-flagged', async () => {
+    // A number embedded in the filename (e.g. 30000.txt) sits right next to the content; the model
+    // must be told it is part of the name, not a row/record count it can echo back.
+    const { userMessages } = await processFabFilesServer(
+      embeddingFactory,
+      [textFile('30000')],
+      'prompt',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    const content = userMessages[0].content as string;
+    expect(content).toContain('Here is the content from the attached file "30000.txt" for context:');
+    expect(content).toContain(
+      'Digits in the file name are part of the name, not a count of its rows, records, or sections.'
+    );
+  });
+
+  it('sanitizes bracket and quote characters out of the wrapper header filename', async () => {
+    const crafted = {
+      id: 'a',
+      fileName: 'weird[1]"name.txt',
+      mimeType: 'text/plain',
+      vectorized: false,
+    } as IFabFileDocument;
+    const { userMessages } = await processFabFilesServer(
+      embeddingFactory,
+      [crafted],
+      'prompt',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    const content = userMessages[0].content as string;
+    expect(content).not.toContain('weird[1]"name.txt');
+    expect(content).toContain('weird 1  name.txt');
+  });
+
+  it('falls back to a placeholder when sanitizing empties the filename', async () => {
+    const crafted = { id: 'a', fileName: '["]', mimeType: 'text/plain', vectorized: false } as IFabFileDocument;
+    const { userMessages } = await processFabFilesServer(
+      embeddingFactory,
+      [crafted],
+      'prompt',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    const content = userMessages[0].content as string;
+    expect(content).toContain('Here is the content from the attached file "unnamed attachment" for context:');
+  });
+
+  it('states the digit-in-filename caveat once, not per file, when multiple files are attached', async () => {
+    const { userMessages } = await processFabFilesServer(
+      embeddingFactory,
+      [textFile('30000'), textFile('40000')],
+      'prompt',
+      4000,
+      modelInfo,
+      async () => {},
+      deps()
+    );
+
+    const content = userMessages[0].content as string;
+    const occurrences = content.split('Digits in the file name are part of the name').length - 1;
+    expect(occurrences).toBe(1);
+    expect(content).toContain('--- File 1: 30000.txt ---');
+    expect(content).toContain('--- File 2: 40000.txt ---');
   });
 });

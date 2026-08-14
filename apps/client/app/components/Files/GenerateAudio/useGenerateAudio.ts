@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
+import { VOICE_VENDOR_LABELS, type VoiceGenerationVendor } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
 import { useAudioGenSettings } from '@client/app/stores/useAudioGenSettings';
@@ -24,6 +25,9 @@ interface TtsBase64Response {
   fabFileId?: string;
   fileUrl?: string;
   saveSkippedReason?: 'storage_limit' | 'file_too_large' | 'error';
+  /** Present only when the selected provider was unusable and another stood in. */
+  provider?: VoiceGenerationVendor;
+  fallbackFrom?: VoiceGenerationVendor;
 }
 
 const SAVE_SKIPPED_MESSAGES: Record<NonNullable<TtsBase64Response['saveSkippedReason']>, string> = {
@@ -153,6 +157,16 @@ export function useGenerateAudio() {
             contentType: data.contentType,
           });
 
+          // The server substituted a provider, so the voice will not be the one
+          // selected. Say so before the outcome toast rather than letting an
+          // unexplained voice change look like a bug.
+          if (data.fallbackFrom && data.provider) {
+            toast.info(
+              `${VOICE_VENDOR_LABELS[data.fallbackFrom]} was unavailable, so this audio was generated with ` +
+                `${VOICE_VENDOR_LABELS[data.provider]}.`
+            );
+          }
+
           if (data.saved === true) {
             refreshFiles();
             toast.success('Audio generated and saved to your Files.');
@@ -212,6 +226,11 @@ export function useGenerateAudio() {
 
         if (parsed.status === 413) {
           toast.error('The generated audio is too large to return. Try shorter text.');
+        } else if (parsed.errorCode === 'provider_rejected') {
+          // A key is configured but the provider refused it, and no other
+          // provider could cover for it: switching providers is the one thing
+          // the user can act on themselves.
+          toast.error(`${parsed.message}. Try a different provider in the audio settings.`);
         } else if (parsed.status === 401) {
           toast.error('No provider API key is configured. Ask your administrator to set one up.');
         } else if (parsed.status === 402 || parsed.errorCode === 'insufficient_credits') {

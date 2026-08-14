@@ -4,15 +4,15 @@ const h = vi.hoisted(() => ({
   findAccessibleById: vi.fn(),
   update: vi.fn(),
   findByDatalakeTag: vi.fn(),
-  // The membership write pair `reconcileLakeTags` now owns: `findById` backs the leave path's
-  // own membership check (removeFileFromLake) and update.ts's post-commit re-read; the mutable
-  // `store` keeps them consistent with each other and with what pullTagsByFabFileId removes.
+  // `findById` backs reconcileLakeTags' prefix-arm owner resolution; the mutable `store` in
+  // makeStatefulFabFile keeps it consistent with what update()/pullTagsByFabFileId do.
   findById: vi.fn(),
   pullTagsByFabFileId: vi.fn(),
   pushTagsByFabFileId: vi.fn(),
   computeDataLakeStats: vi.fn(),
   find: vi.fn(),
   setStats: vi.fn(),
+  activateIfDraft: vi.fn(),
 }));
 
 // Callable chain routed by req.method, same shape as the batch/generate-presigned-urls-batch
@@ -47,6 +47,18 @@ vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/database')>()),
   changeStorageSize: vi.fn(),
   dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag, find: h.find, setStats: h.setStats },
+  // Stubbed (not the real, Mongo-backed repository): the real assertCanWriteDataLakeTags gate
+  // reaches this for its grant-supersession check, and a real repository call here has no DB
+  // connection to answer against and hangs the suite on a buffering timeout.
+  dataLakeAccessGrantRepository: {
+    listByLake: vi.fn().mockResolvedValue([]),
+    listActiveByLakes: vi.fn().mockResolvedValue([]),
+    listByPrincipal: vi.fn().mockResolvedValue([]),
+    findGrant: vi.fn().mockResolvedValue(null),
+    upsertGrant: vi.fn().mockResolvedValue({}),
+    removeGrant: vi.fn().mockResolvedValue(true),
+    removeAllForLake: vi.fn().mockResolvedValue(0),
+  },
   fabFileChunkRepository: {},
   fabFileRepository: {
     shareable: { findAccessibleById: h.findAccessibleById },
@@ -84,20 +96,25 @@ const makeRes = () => {
   return { res, json };
 };
 
-const req = (body: unknown) =>
+// The route 404s a non-round-tripping id before anything else runs, so the fixture id has to be
+// a real 24-hex ObjectId string rather than a readable slug.
+const FILE_ID = '507f1f77bcf86cd799439011';
+
+const req = (body: unknown, id: string = FILE_ID) =>
   ({
     method: 'PUT',
     user: { id: 'u1', isAdmin: false },
     ability: {},
-    query: { id: 'file-1' },
+    query: { id },
     body,
     logger: { updateMetadata: vi.fn(), error: vi.fn(), warn: vi.fn() },
   }) as never;
 
-const run = (body: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(req(body), res);
+const run = (body: unknown, res: unknown, id?: string) =>
+  (handler as (req: unknown, res: unknown) => Promise<void>)(req(body, id), res);
 
 const fabFile = (overrides: Record<string, unknown> = {}) => ({
-  id: 'file-1',
+  id: FILE_ID,
   userId: 'u1',
   fileName: 'notes.txt',
   mimeType: 'text/plain',
@@ -138,13 +155,13 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
     vi.clearAllMocks();
     h.findByDatalakeTag.mockResolvedValue(LAKE);
     h.update.mockResolvedValue(undefined);
-    h.computeDataLakeStats.mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 });
+    h.computeDataLakeStats.mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 });
     h.find.mockResolvedValue([]);
   });
 
   it('stamps the lake prefix when the update keeps the meta-tag with no tag under that prefix', async () => {
     h.findAccessibleById.mockResolvedValue(fabFile({ tags: [{ name: META, strength: 1 }] }));
-    makeStatefulFabFile({ id: 'file-1', userId: 'u1', tags: [{ name: META, strength: 1 }] });
+    makeStatefulFabFile({ id: FILE_ID, userId: 'u1', tags: [{ name: META, strength: 1 }] });
     const { res, json } = makeRes();
 
     await run({ tags: [{ name: META, strength: 1 }] }, res);
@@ -158,7 +175,7 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
     ]);
   });
 
-  it('retracts the stamp when the update drops the meta-tag from a file that carried both', async () => {
+  it('preserves lake membership when a whole-array write drops the meta-tag', async () => {
     h.findAccessibleById.mockResolvedValue(
       fabFile({
         tags: [
@@ -168,7 +185,7 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
       })
     );
     makeStatefulFabFile({
-      id: 'file-1',
+      id: FILE_ID,
       userId: 'u1',
       tags: [
         { name: META, strength: 1 },
@@ -177,14 +194,16 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
     });
     const { res, json } = makeRes();
 
+    // Simulates a stale client resending a tags array fetched before this file joined the lake:
+    // an empty array must never read as "leave".
     await run({ tags: [] }, res);
 
-    // The first write keeps the meta-tag (and the fallback tagger re-backfills its content tag,
-    // since as far as tagsToPersist is concerned the lake is still current) so removeFileFromLake
-    // can still see the file as a member and pull BOTH atomically. The route's final response -
-    // what a client actually observes - is what matters here, not that intermediate array.
-    expect(h.pullTagsByFabFileId).toHaveBeenCalledWith('file-1', [META, 'acme:uncategorized']);
-    expect(json.mock.calls[0][0].tags).toEqual([]);
+    expect(h.pullTagsByFabFileId).not.toHaveBeenCalled();
+    expect(h.setStats).not.toHaveBeenCalled();
+    expect((json.mock.calls[0][0].tags as { name: string }[]).map(t => t.name).sort()).toEqual([
+      'acme:uncategorized',
+      META,
+    ]);
   });
 
   it('does not change tags and never looks a lake up when tags is omitted (a rename)', async () => {
@@ -216,5 +235,17 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
     expect(h.findByDatalakeTag).toHaveBeenCalled();
     const persisted = h.update.mock.calls[0][0] as { tags?: { name: string }[] };
     expect(persisted.tags).toBeUndefined();
+  });
+
+  it('404s a malformed id before the lake write gate or any persistence runs', async () => {
+    const { res } = makeRes();
+
+    // 'file-not-real' is 13 characters, so it fails isValid outright; the round trip in the guard
+    // is what additionally catches a 12-character string, which isValid accepts and then coerces.
+    await run({ tags: [{ name: META, strength: 1 }] }, res, 'file-not-real');
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(h.findByDatalakeTag).not.toHaveBeenCalled();
+    expect(h.update).not.toHaveBeenCalled();
   });
 });

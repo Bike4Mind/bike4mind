@@ -205,34 +205,55 @@ describe('🎭 DocumentDB $facet Compatibility - Comprehensive Testing', () => {
     });
   });
 
-  describe('⚡ Performance and Parallel Execution', () => {
-    it('should execute facet stages in parallel for DocumentDB mode', async () => {
+  describe('⚡ Parallel Execution', () => {
+    it('should start every facet stage before any of them completes in DocumentDB mode', async () => {
       process.env.USE_DOCUMENTDB_COMPATIBILITY = 'true';
 
       const mockModel = {
         aggregate: vi.fn(),
       } as any;
 
-      // Add delays to simulate real database calls
-      const startTime = Date.now();
-      mockModel.aggregate.mockImplementation(
-        () => new Promise(resolve => setTimeout(() => resolve([{ count: 10 }]), 50))
-      );
+      // Keyed by call index, not by facet name: all three stages below are the identical
+      // [{ $count: 'count' }], so the mock cannot tell them apart from its arguments.
+      const executionLog: string[] = [];
+      let callIndex = 0;
+      mockModel.aggregate.mockImplementation(() => {
+        const id = callIndex++;
+        executionLog.push(`start:${id}`);
+        // A real async gap, so serialized execution would be observable as interleaved
+        // start/end pairs. The delay carries no assertion weight.
+        return new Promise(resolve =>
+          setTimeout(() => {
+            executionLog.push(`end:${id}`);
+            resolve([{ count: 10 }]);
+          }, 10)
+        );
+      });
 
       const facetStages = {
         count1: [{ $count: 'count' }],
         count2: [{ $count: 'count' }],
         count3: [{ $count: 'count' }],
       };
+      const expectedStageCount = Object.keys(facetStages).length;
 
       await executeFacetCompatible(mockModel, [], facetStages);
-      const duration = Date.now() - startTime;
 
-      // Parallel execution should take ~50ms, not ~150ms (3 * 50ms)
-      expect(duration).toBeLessThan(100); // Allow some overhead
-      expect(mockModel.aggregate).toHaveBeenCalledTimes(3);
+      // Concurrency means every stage starts before any of them finishes; sequential
+      // execution interleaves start/end pairs instead. Asserted on executionLog order
+      // (as b4m-core/agents/src/ReActAgent.parallel.test.ts and
+      // b4m-core/agents/src/toolParallelizer.test.ts do) rather than elapsed time: a
+      // wall-clock threshold has to separate ~50ms from ~150ms, which CI contention
+      // routinely erases, and it cannot distinguish real concurrency from queries that
+      // merely ran fast.
+      const firstEndIndex = executionLog.findIndex(entry => entry.startsWith('end:'));
+      // Guard the -1 miss explicitly: slice(0, -1) would silently mean "all but the last
+      // entry" and the count below would then fail for the wrong reason.
+      expect(firstEndIndex).toBeGreaterThan(-1);
+      const startsBeforeFirstEnd = executionLog.slice(0, firstEndIndex).filter(e => e.startsWith('start:'));
+      expect(startsBeforeFirstEnd).toHaveLength(expectedStageCount);
 
-      console.log(`⚡ Parallel execution: ${duration}ms for 3 queries (target: <100ms)`);
+      expect(mockModel.aggregate).toHaveBeenCalledTimes(expectedStageCount);
     });
   });
 

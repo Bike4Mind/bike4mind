@@ -321,6 +321,14 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
 
   const { data: paginatedFabFiles } = useGetFabFiles();
   const fabFiles = useMemo(() => paginatedFabFiles?.pages?.map(page => page.data).flat(), [paginatedFabFiles?.pages]);
+  // Ref mirror so fetchFiles can read the latest fabFiles without re-creating
+  // itself on every paginated refetch. Without this, every fabFiles change
+  // re-triggers the hydration effect, which re-reads currentSession.knowledgeIds
+  // and can overwrite an in-flight optimistic removal.
+  const fabFilesRef = useRef(fabFiles);
+  useEffect(() => {
+    fabFilesRef.current = fabFiles;
+  }, [fabFiles]);
   const queryClient = useQueryClient();
 
   // Memoize the query object to prevent re-subscription churn: this is an
@@ -425,10 +433,12 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
     [settings.experimentalFeatures, isFeatureEnabled, availableAgents, currentSession, queryClient]
   );
 
-  // Utility function to fetch files, first trying local storage, then the server
+  // Utility function to fetch files, first trying local storage, then the server.
+  // Reads fabFilesRef (not fabFiles) so this callback is stable across paginated
+  // refetches and does not re-trigger the hydration effect.
   const fetchFiles = useCallback(
     async (knowledgeIds: string[]): Promise<IFabFileDocument[]> => {
-      const safeFabFiles = fabFiles ?? [];
+      const safeFabFiles = fabFilesRef.current ?? [];
 
       const localFiles = knowledgeIds
         .map(knowledgeId => safeFabFiles.find(file => file.id === knowledgeId))
@@ -451,7 +461,8 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
         .filter((file): file is IFabFileDocument => file !== undefined)
         .map(file => ({ ...file, enabled: true }));
     },
-    [fabFiles]
+
+    []
   );
 
   // Persist session knowledgeIds to the backend
@@ -570,14 +581,26 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
 
       // Session switch completed - files will be restored via useEffect
 
-      // Update the user's last notebook ID if it's a different session
+      // Fire-and-forget on purpose: lastNotebookId feeds API chat routing (getSessionId in
+      // pages/api/chat.ts), session resumption, and Slack notebook resolution (notebook-manager
+      // in b4m-core/slack, which only ever reads it - a lost write is repaired by the next
+      // web-app message, never by a Slack one). Awaiting would hold up the switch, and a toast
+      // would interrupt a path the user is actively navigating.
       if (sessionId && currentUser.lastNotebookId !== sessionId) {
-        updateUserToServer(currentUser.id, { lastNotebookId: sessionId });
+        updateUserToServer(currentUser.id, { lastNotebookId: sessionId }).catch(error => {
+          console.error('[SessionsContext] Failed to persist lastNotebookId to server', error);
+        });
         queryClient.invalidateQueries({ queryKey: ['sessions', sessionId] });
       }
     },
     [currentSessionId, currentUser?.id, queryClient, currentUser?.lastNotebookId, setWorkBenchFiles, initializeSession]
   );
+
+  // Whether the context's session copy can be BELIEVED about having no knowledge files: every
+  // full document carries the array (the schema defaults it to []), so a missing field marks a
+  // partial copy that must not drive a workbench reset. A boolean, so the hydration effect's
+  // cadence stays keyed to knowledgeIds identity rather than to every session-object touch.
+  const knowledgeFieldTrustworthy = !currentSession || Array.isArray(currentSession.knowledgeIds);
 
   // Usage in useEffect for initial fetch
   useEffect(() => {
@@ -595,10 +618,14 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
           setWorkBenchFiles(sessionId, fetched);
         })
         .catch(console.error);
-    } else if (currentSessionId) {
+    } else if (currentSessionId && knowledgeFieldTrustworthy) {
+      // Zero the workbench only when the emptiness is trustworthy (see the flag above): a doc
+      // with the field missing is a partial copy - e.g. the session.created fanout payload,
+      // which can adopt the session before the create response does - and zeroing on it wipes
+      // files the store legitimately holds (the Data Lake mint writes the opened file there).
       setWorkBenchFiles(currentSessionId, []);
     }
-  }, [currentSession?.knowledgeIds, fabFiles, fetchFiles, currentSessionId, setWorkBenchFiles]);
+  }, [currentSession?.knowledgeIds, fetchFiles, currentSessionId, setWorkBenchFiles, knowledgeFieldTrustworthy]);
 
   // AUTO-DISABLE EXPENSIVE TOOLS: Disable Deep Research and QuestMaster when SWITCHING notebooks (A->B)
   // This prevents accidental expensive operations when users change context

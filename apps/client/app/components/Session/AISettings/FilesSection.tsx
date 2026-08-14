@@ -4,7 +4,13 @@ import { Badge, Box, Chip, CircularProgress, Divider, IconButton, Tooltip, Typog
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
-import { IFabFileDocument, MimeType, isImageAttachment, isImageServeable } from '@bike4mind/common';
+import {
+  DEFAULT_PASSAGE_TOKEN_TARGET,
+  IFabFileDocument,
+  MimeType,
+  isImageAttachment,
+  isImageServeable,
+} from '@bike4mind/common';
 import { setKnowledgeViewer } from '@client/app/components/Knowledge/KnowledgeViewer';
 import {
   useSessions,
@@ -155,7 +161,8 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
   const { currentUser } = useUser();
   const modelInfo = useModelInfo()?.data?.find(m => m.id === model);
   const currentEmbeddingModel = useGetSettingsValue('defaultEmbeddingModel');
-  const defaultChunkSize = useGetSettingsValue('DefaultChunkSize') || 2000;
+  // Fall back to the canonical chunker default, not a third hand-copied number.
+  const defaultChunkSize = useGetSettingsValue('DefaultChunkSize') || DEFAULT_PASSAGE_TOKEN_TARGET;
   const chunkFile = useChunkFile();
   const queryClient = useQueryClient();
 

@@ -1,0 +1,37 @@
+name: Auto Changeset Guard
+
+# Runs the self-tests for the Auto Changeset workflow.
+#
+# The workflow itself only ever runs against real PRs, where a mistake is expensive:
+# it commits to the PR branch, and a wrong package set ships a version bump and a
+# changelog entry for a package that was never changed. The tests exercise the real
+# step body extracted from the workflow YAML, so they catch regressions in the shell
+# before it runs with a write token.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/auto-changeset.yml'
+      - '.github/workflows/auto-changeset-guard.yml'
+      - '.github/scripts/resolve-changeset-packages.sh'
+      - '.github/scripts/resolve-changeset-packages.test.sh'
+      - '.github/scripts/auto-changeset.test.sh'
+  # Also run on the merge queue so the check reports there if it later becomes a
+  # required branch-protection check (see semantic-pr-title.yml for why a required
+  # check must run on merge_group).
+  merge_group:
+    branches: [main]
+
+jobs:
+  check:
+    if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Resolver unit tests
+        run: bash .github/scripts/resolve-changeset-packages.test.sh
+
+      - name: Generate-changeset step integration tests
+        run: bash .github/scripts/auto-changeset.test.sh

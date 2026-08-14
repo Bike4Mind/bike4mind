@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs';
-import { IUserDocument, IUserRepository } from '@bike4mind/common';
+import { IUserDocument, IUserPreferences, IUserRepository } from '@bike4mind/common';
 import { BadRequestError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 
@@ -103,7 +103,28 @@ export function applyBaseUserUpdates(user: IUserDocument, params: UpdateUserPara
   return {
     ...user,
     ...params,
+    ...(params.preferences && { preferences: mergePreferences(user.preferences, params.preferences) }),
     updatedAt: new Date(),
+  };
+}
+
+/**
+ * `preferences` is merged onto the stored object, not replaced, so a partial write cannot
+ * silently drop keys the caller omitted. An explicit `null` still clears the whole object -
+ * that is the only way to remove individual keys. `experimentalFeatures` is merged one level
+ * deeper (mirrors the client in UserSettingsContext); nothing else in the schema nests.
+ */
+function mergePreferences(
+  stored: IUserPreferences | null | undefined,
+  incoming: NonNullable<UpdateUserParameters['preferences']>
+): IUserPreferences {
+  const base = stored ?? {};
+  return {
+    ...base,
+    ...incoming,
+    ...(incoming.experimentalFeatures !== undefined && {
+      experimentalFeatures: { ...base.experimentalFeatures, ...incoming.experimentalFeatures },
+    }),
   };
 }
 

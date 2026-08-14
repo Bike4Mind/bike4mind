@@ -86,6 +86,7 @@ export class ChatCompletionInvoke {
       enableArtifacts,
       enableAgents,
       enableLattice,
+      promptMode,
       tools,
       projectId,
       organizationId,
@@ -96,6 +97,7 @@ export class ChatCompletionInvoke {
       embeddingModel,
       deepResearchConfig,
       imageConfig,
+      audioConfig,
       mcpServers,
       extraContextMessages,
       allowedAgents,
@@ -124,6 +126,17 @@ export class ChatCompletionInvoke {
         `Session for sessionId: ${sessionId} not found. The session may have been deleted before the quest was started.`
       );
       return;
+    }
+
+    // sessionId is caller-supplied (the public POST /api/chat contract accepts any string), and
+    // nothing upstream of this class checks it against the caller - so without this, any
+    // authenticated caller could target another user's notebook by id: post into its history,
+    // have that notebook's full prior context sent to the model, and (with wait: true) read the
+    // reply straight back in the response, bypassing the promptMeta redaction on GET
+    // /api/quests/{id} entirely. Same owner-or-sharee rule as that route (quests/[id]/index.ts).
+    const isOwnerOrSharee = session.userId === userId || session.users?.some(u => u.userId === userId);
+    if (!isOwnerOrSharee) {
+      throw new ForbiddenError('You do not have access to this session');
     }
 
     // Get model info (depends on apiKeyTable, so must be sequential)
@@ -342,6 +355,7 @@ export class ChatCompletionInvoke {
         enableArtifacts,
         enableAgents,
         enableLattice,
+        promptMode,
         promptMeta: PromptMetaZodSchema.parse(quest.promptMeta),
         sessionId: session.id,
         tools,
@@ -356,6 +370,7 @@ export class ChatCompletionInvoke {
         embeddingModel: currentEmbeddingModel,
         queryComplexity,
         imageConfig,
+        audioConfig,
         deepResearchConfig,
         extraContextMessages,
         allowedAgents,

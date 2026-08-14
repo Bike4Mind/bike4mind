@@ -1,4 +1,5 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
+import { CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS } from '@bike4mind/common';
 import { OllamaBackend } from './ollamaBackend';
 import type { ICompletionOptionTools } from './backend';
 
@@ -318,6 +319,12 @@ describe('OllamaBackend.complete tool loop', () => {
 // capabilities rather than a hardcoded list, so a thinking-capable model
 // (e.g. qwen3.5) must surface can_think and drive the Thinking toggle.
 describe('OllamaBackend.getModelInfo capability mapping', () => {
+  // The window cases below stub OLLAMA_MAX_NUM_CTX; leaking it would move the sibling
+  // expectations that assert an unconfigured window.
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   function backendWithCapabilities(capabilities: string[]) {
     const backend = new OllamaBackend('http://localhost:11434', silentLogger);
     (backend as any)._api = {
@@ -332,10 +339,29 @@ describe('OllamaBackend.getModelInfo capability mapping', () => {
     expect(info.can_think).toBe(true);
     expect(info.supportsVision).toBe(true);
     expect(info.supportsTools).toBe(true);
-    // Advertised as the window we will actually allocate (see effectiveContextWindow),
-    // not the 262144 the model reports, so callers size history to what fits.
+    // The window is what we will actually allocate (see effectiveContextWindow), not the
+    // 262144 the model reports, so callers size history to what fits. Output is half of
+    // that, which is what leaves room for the prompt.
     expect(info.contextWindow).toBe(32768);
-    expect(info.max_tokens).toBe(32768);
+    expect(info.max_tokens).toBe(16384);
+  });
+
+  // collectStaticCatalogModels excludes Ollama, so the catalog-wide input-budget test
+  // cannot reach these rows - the same invariant is asserted here instead. A text model
+  // advertising its whole window as output makes safeInputWindow negative, and the chat
+  // path then refuses to build a prompt at all.
+  it('leaves a positive input budget after the advertised output reserve', async () => {
+    const [info] = await backendWithCapabilities(['completion', 'tools']).getModelInfo();
+    expect(info.contextWindow - (info.max_tokens ?? 0) - CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS).toBeGreaterThan(0);
+  });
+
+  // OLLAMA_MAX_NUM_CTX takes any positive value, so an operator can put every local model at the
+  // bottom of the range at once. Halving alone leaves exactly zero budget at 2000.
+  it.each([2000, 1500, 32768])('keeps the budget positive at an allocated window of %i', async window => {
+    vi.stubEnv('OLLAMA_MAX_NUM_CTX', String(window));
+    const [info] = await backendWithCapabilities(['completion', 'tools']).getModelInfo();
+    expect(info.contextWindow).toBe(window);
+    expect(info.contextWindow - (info.max_tokens ?? 0) - CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS).toBeGreaterThan(0);
   });
 
   it('advertises a small model window verbatim', async () => {
@@ -647,5 +673,57 @@ describe('OllamaBackend abort logging', () => {
       'This operation was aborted'
     );
     expect(logger.error).toHaveBeenCalled();
+  });
+});
+
+// This backend is the odd one out among the strip sites: it withholds tools IN PLACE for the round
+// rather than recursing with `tools: undefined`, so the strip has to track its own `offerTools` flag.
+// That different shape is why it gets its own test rather than leaning on the Anthropic one.
+describe('OllamaBackend drops tool-dependent prompts once it stops offering tools', () => {
+  const IMAGE_PROMPT = 'When the user requests an image, you MUST use the image_generation tool to create it.';
+
+  it('sends the prompt while tools are offered and withholds it on the tool-less round', async () => {
+    const { backend, chat } = makeBackend([
+      {
+        message: {
+          content: '',
+          tool_calls: [{ function: { name: 'math_evaluate', arguments: { expression: '2+2' } } }],
+        },
+        prompt_eval_count: 5,
+        eval_count: 1,
+      },
+      { message: { content: 'Done.', tool_calls: [] }, prompt_eval_count: 6, eval_count: 2 },
+    ]);
+
+    await backend.complete(
+      'qwen2.5-coder:3b',
+      [
+        { role: 'system', content: IMAGE_PROMPT, requiresTool: 'image_generation' },
+        { role: 'system', content: 'Format replies as markdown.' },
+        { role: 'user', content: 'go' },
+      ] as any,
+      {
+        stream: false,
+        executeTools: true,
+        tools: [mathTool(async () => '4')],
+        // Round 0 is under the cap and offers tools; the post-tool round is at it and must not.
+        _internal: { maxToolCalls: 1 },
+      } as any,
+      async () => undefined
+    );
+
+    expect(chat).toHaveBeenCalledTimes(2);
+    const req = (n: number) => chat.mock.calls[n][0] as { messages: unknown; tools?: unknown[] };
+    const round = (n: number) => JSON.stringify(req(n).messages);
+    // Control: round 0 genuinely offers tools, so the instruction belongs there.
+    expect(req(0).tools?.length ?? 0).toBeGreaterThan(0);
+    expect(round(0)).toContain('MUST use the image_generation tool');
+    // The round under test carries no tools at all - that is the state the strip tracks.
+    expect(req(1).tools?.length ?? 0).toBe(0);
+
+    // Tools are gone on this round, so the instruction ordering one must be gone with them - while
+    // the system prompt that never depended on a tool survives.
+    expect(round(1)).not.toContain('MUST use the image_generation tool');
+    expect(round(1)).toContain('Format replies as markdown');
   });
 });

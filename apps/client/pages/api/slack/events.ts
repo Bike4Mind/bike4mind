@@ -47,7 +47,12 @@ import {
   FunctionExecutedEvent,
   TOKEN_EXPIRATION_MS,
   buildImageModelPicker,
+  isDataLakeCommand,
 } from '@bike4mind/slack';
+import { adminSettingsRepository } from '@bike4mind/database';
+import { normalizeId } from '@bike4mind/utils/normalizeId';
+import { runDataLakeSlackCommand } from '@server/slack/handleDataLakeCommand';
+import { buildSlackLakeIngestDeps } from '@server/slack/dataLakeIngestDeps';
 import { logEvent } from '@server/utils/analyticsLog';
 import { slackChannelConfigRepository } from '@bike4mind/database';
 import { decryptToken } from '@server/security/tokenEncryption';
@@ -702,6 +707,37 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
   // Determine thread_ts for bot reply
   const { replyThreadTs } = determineThreadStrategy({ thread_ts: slackEvent.threadTs, ts: slackEvent.ts });
+
+  // Deterministic @datalake command. Intercepted BEFORE notebook creation and the LLM path
+  // so it NEVER routes through selectAgent. The interception is unconditional (keeping
+  // @datalake off the LLM); the EnableDataLakeSlackAdd flag gates only the work - when off
+  // (PR 1 default) the command is silently consumed and no ingest occurs.
+  if (isDataLakeCommand(commandHandler.parsedCommand)) {
+    await runDataLakeSlackCommand({
+      command: commandHandler.parsedCommand.command,
+      // Identity comes from the resolved B4M user record, never from the Slack event body.
+      actor: {
+        id: user.id,
+        isAdmin: user.isAdmin,
+        tags: user.tags,
+        organizationId: normalizeId(user.organizationId),
+        email: user.email,
+        emailVerified: user.emailVerified,
+      },
+      files: slackEvent.files,
+      channel: slackEvent.channel,
+      messageTs: slackEvent.ts,
+      threadTs: replyThreadTs,
+      adminSettings: adminSettingsRepository,
+      ingest: buildSlackLakeIngestDeps({
+        downloadFile: (url, fileName) => slackClient.downloadFile(url, fileName),
+        logger,
+      }),
+      sendMessage: args => slackClient.sendMessage(args),
+      logger,
+    });
+    return res.status(200).json({ message: 'Data Lake command handled' });
+  }
 
   const notebookId = await getOrCreateNotebookForSlackUser(
     user!.id,

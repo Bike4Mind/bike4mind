@@ -127,4 +127,29 @@ describe('ReplyStatus', () => {
     // elapsed clamps to 0, and the badge only renders when elapsedSeconds > 0
     expect(screen.queryByTestId('reply-status-elapsed')).toBeNull();
   });
+
+  // jsdom does no layout, so the overlap itself cannot be measured. What it can prove is
+  // that the line box is taller than the glyphs: a line-height of '100%' (or any value
+  // equal to the font-size) leaves zero leading, which is what made wrapped status lines
+  // collide. jsdom reports a unitless line-height verbatim, so resolve each form to px.
+  const resolveLineBoxPx = (lineHeight: string, fontSizePx: number): number => {
+    if (lineHeight === 'normal') return Number.POSITIVE_INFINITY; // font metrics supply leading
+    if (lineHeight.endsWith('px')) return parseFloat(lineHeight);
+    if (lineHeight.endsWith('%')) return (parseFloat(lineHeight) / 100) * fontSizePx;
+    return parseFloat(lineHeight) * fontSizePx;
+  };
+
+  it('status text has leading, so a wrapped line cannot collide with the one above it', () => {
+    render(
+      <Wrapper>
+        <ReplyStatus status={'\u{1F310} Searching the web: "a query long enough to wrap onto a second line"'} />
+      </Wrapper>
+    );
+
+    const { lineHeight, fontSize } = window.getComputedStyle(screen.getByTestId('reply-status-text'));
+    const fontSizePx = parseFloat(fontSize);
+
+    expect(fontSizePx).toBeGreaterThan(0);
+    expect(resolveLineBoxPx(lineHeight, fontSizePx)).toBeGreaterThan(fontSizePx);
+  });
 });

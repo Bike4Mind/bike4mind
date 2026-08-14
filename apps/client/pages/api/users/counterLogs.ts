@@ -1,4 +1,4 @@
-import { Permission, dayjs, type CompletionSource } from '@bike4mind/common';
+import { ApiKeyScope, Permission, dayjs, type CompletionSource } from '@bike4mind/common';
 import {
   CounterLog,
   DailyReport,
@@ -26,6 +26,13 @@ import {
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
 } from '@server/analytics/userActivityQuery';
+import {
+  asWindow,
+  buildWindow,
+  sliceWindow,
+  windowCoversPage,
+  windowRowsFor,
+} from '@server/analytics/userActivityCache';
 
 dayjs.extend(isSameOrBefore);
 
@@ -35,9 +42,45 @@ dayjs.extend(isSameOrBefore);
 // its Lambda budget is 60s, so it is sized to this route rather than copied from elsewhere.
 const AGGREGATION_MAX_TIME_MS = 45000;
 
+/**
+ * Both dates are interpolated into `new Date(`${date}T00:00:00.000Z`)`. Unvalidated, anything
+ * unparseable produced an Invalid Date, which serializes to epoch 0 and silently widened the
+ * window to all time - a far heavier query than the caller asked for. The refine rejects a
+ * well-shaped but unreal date (2026-02-30), which ISO parsing rejects outright.
+ */
+const IsoDateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected a YYYY-MM-DD date')
+  .refine(value => {
+    const parsed = new Date(`${value}T00:00:00.000Z`);
+    return !Number.isNaN(parsed.getTime()) && parsed.toISOString().startsWith(value);
+  }, 'Not a calendar date');
+
+const isValidTimeZone = (tz: string): boolean => {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const CounterLogsQuerySchema = z.object({
-  startDate: z.string(),
-  endDate: z.string(),
+  startDate: IsoDateSchema,
+  endDate: IsoDateSchema,
+  /**
+   * IANA zone that startDate/endDate name a calendar day in, and that the day buckets are cut in.
+   * Defaults to UTC, which is how this route behaved before the parameter existed.
+   *
+   * Applies to the `{logs}` branch only. The report branches persist to DailyReport /
+   * WeeklyReport, whose rows are keyed by UTC date and shared across every admin, so honouring a
+   * per-request zone there would let one admin's locale overwrite another's cached report.
+   */
+  timezone: z
+    .string()
+    .optional()
+    .refine(val => val === undefined || isValidTimeZone(val), { message: 'Unknown IANA time zone' })
+    .transform(val => val ?? 'UTC'),
   events: z
     .string()
     .optional()
@@ -125,142 +168,173 @@ interface WeeklyReportData {
   usageBySource?: Array<{ source: CompletionSource; count: number }>;
 }
 
-const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async (req, res) => {
-  if (!req.ability?.can(Permission.read, CounterLog)) {
-    throw new ForbiddenError('Unauthorized');
-  }
+// requiredScopes: an API key reaching this route gets its CASL ability rebuilt from `user.isAdmin`
+// (server/middlewares/apiKeyAuth.ts), so the `Permission.read` check below passes for any
+// admin-owned key regardless of the scopes it was issued with. The scope gate is what makes a
+// narrow key stay narrow; it only runs for API-key callers, so browser/JWT admins are unaffected.
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get<Request<{}, {}, {}, Record<string, string>>>(
+  async (req, res) => {
+    if (!req.ability?.can(Permission.read, CounterLog)) {
+      throw new ForbiddenError('Unauthorized');
+    }
 
-  try {
-    const {
-      startDate,
-      endDate,
-      events,
-      orgs,
-      excludeOrgs,
-      report,
-      includeInsights,
-      weeklyReport,
-      counterName,
-      userEmail,
-      metadataFilters,
-      page,
-      limit,
-    } = CounterLogsQuerySchema.parse(qs.parse(req.query));
-
-    // For report requests, check cache first
-    if (report || weeklyReport) {
-      const cacheKey = `reports:${startDate}:${endDate}:${report}:${weeklyReport}:${includeInsights}`;
-
-      const cachedResult = await cacheRepository.findByKey(cacheKey);
-      if (cachedResult) {
-        return sendMaybeGzip(req, res, cachedResult.result);
-      }
-
-      // Get API key for insights
-      let apiKey: string | null = null;
-      if (includeInsights) {
-        try {
-          const operationsModel = await OperationsModelService.getOperationsModel();
-          apiKey = await getEffectiveApiKeyByBackend(req.user?.id || 'system', operationsModel.modelInfo.backend);
-        } catch (error) {
-          console.error('Failed to get operations model: %s', error);
-        }
-      }
-
-      const response = weeklyReport
-        ? await generateWeeklyReportResponse(startDate, endDate, apiKey, includeInsights)
-        : await generateDailyReportResponse(startDate, endDate, apiKey, includeInsights);
-
-      // Cache the result with 1 hour expiry for reports
-      try {
-        await cacheRepository.createOrUpdate({
-          key: cacheKey,
-          result: response,
-          expiresAt: new Date(Date.now() + 3600000), // 1 hour from now
-        });
-      } catch (error) {
-        console.error('Failed to cache reports: %s', error);
-      }
-
-      return sendMaybeGzip(req, res, response);
-    } else {
-      // Page-scoped key: the pre-pagination key omitted page/limit/search, so any change
-      // of page would have been served the first page's cached body.
-      //
-      // Each segment is percent-encoded before joining. counterName/userEmail are free text,
-      // so a raw ':' in one segment would otherwise shift the delimiter and let two different
-      // filter sets collide - e.g. counterName='a:b' + userEmail='c' vs counterName='a' +
-      // userEmail='b:c' - serving one admin the other's rows and total for the full hour.
-      const cacheKey = [
-        'logs:v2',
-        ...[
-          startDate,
-          endDate,
-          String(page),
-          String(limit),
-          events?.join(',') ?? '',
-          orgs?.join(',') ?? '',
-          excludeOrgs?.join(',') ?? '',
-          counterName ?? '',
-          userEmail ?? '',
-          JSON.stringify(metadataFilters ?? []),
-        ].map(encodeURIComponent),
-      ].join(':');
-
-      const cachedResult = await cacheRepository.findByKey(cacheKey);
-      if (cachedResult) {
-        const cached = cachedResult.result as { rows: unknown[]; total: number };
-        return sendMaybeGzip(req, res, { logs: cached.rows, total: cached.total, page, limit });
-      }
-
-      const { pipeline, facetStages } = buildUserActivityPipeline({
+    try {
+      const {
         startDate,
         endDate,
-        page,
-        limit,
+        timezone,
         events,
         orgs,
         excludeOrgs,
+        report,
+        includeInsights,
+        weeklyReport,
         counterName,
         userEmail,
         metadataFilters,
-        usersCollection: User.collection.name,
-      });
+        page,
+        limit,
+      } = CounterLogsQuerySchema.parse(qs.parse(req.query));
 
-      // No `hint`: measured with explain() on this collection's real index set, forcing
-      // { datetime: 1 } makes Mongo examine 4x the documents on the filtered shape the UI
-      // actually sends (orgs/excludeOrgs are always present), because it blocks the
-      // { datetime, counterName, userOrganization } compound index the planner would pick.
-      // A hint would also hard-fail the whole request if the index were ever absent.
-      const [facet] = await executeFacetCompatible(CounterLog, convertPipelineForDocumentDB(pipeline), facetStages, {
-        allowDiskUse: true,
-        maxTimeMS: AGGREGATION_MAX_TIME_MS,
-      });
-      const rows = facet?.rows ?? [];
-      const total = facet?.total?.[0]?.value ?? 0;
+      // For report requests, check cache first
+      if (report || weeklyReport) {
+        const cacheKey = `reports:${startDate}:${endDate}:${report}:${weeklyReport}:${includeInsights}`;
 
-      // Cache the result with 1 hour expiry
-      try {
-        await cacheRepository.createOrUpdate({
-          key: cacheKey,
-          result: { rows, total },
-          expiresAt: new Date(Date.now() + 3600000), // 1 hour from now
+        const cachedResult = await cacheRepository.findByKey(cacheKey);
+        if (cachedResult) {
+          return sendMaybeGzip(req, res, cachedResult.result);
+        }
+
+        // Get API key for insights
+        let apiKey: string | null = null;
+        if (includeInsights) {
+          try {
+            const operationsModel = await OperationsModelService.getOperationsModel();
+            apiKey = await getEffectiveApiKeyByBackend(req.user?.id || 'system', operationsModel.modelInfo.backend);
+          } catch (error) {
+            console.error('Failed to get operations model: %s', error);
+          }
+        }
+
+        const response = weeklyReport
+          ? await generateWeeklyReportResponse(startDate, endDate, apiKey, includeInsights)
+          : await generateDailyReportResponse(startDate, endDate, apiKey, includeInsights);
+
+        // Cache the result with 1 hour expiry for reports
+        try {
+          await cacheRepository.createOrUpdate({
+            key: cacheKey,
+            result: response,
+            expiresAt: new Date(Date.now() + 3600000), // 1 hour from now
+          });
+        } catch (error) {
+          console.error('Failed to cache reports: %s', error);
+        }
+
+        return sendMaybeGzip(req, res, response);
+      } else {
+        // Filter-scoped, NOT page-scoped: the entry holds a window of the sorted result set, so
+        // every page of one filter set shares it and costs one aggregation between them
+        // (userActivityCache.ts). `limit` stays out of the key for the same reason - the window is
+        // sliced to whatever page size asks for it.
+        //
+        // Each segment is percent-encoded before joining. counterName/userEmail are free text,
+        // so a raw ':' in one segment would otherwise shift the delimiter and let two different
+        // filter sets collide - e.g. counterName='a:b' + userEmail='c' vs counterName='a' +
+        // userEmail='b:c' - serving one admin the other's rows and total for the full hour.
+        const cacheKey = [
+          // v4: day buckets are now cut in the caller's timezone, so a v3 window holds rows bucketed
+          // differently for what is otherwise the same filter set.
+          'logs:v4',
+          ...[
+            startDate,
+            endDate,
+            timezone,
+            events?.join(',') ?? '',
+            orgs?.join(',') ?? '',
+            excludeOrgs?.join(',') ?? '',
+            counterName ?? '',
+            userEmail ?? '',
+            JSON.stringify(metadataFilters ?? []),
+          ].map(encodeURIComponent),
+        ].join(':');
+
+        const skip = (page - 1) * limit;
+
+        const cachedResult = await cacheRepository.findByKey(cacheKey);
+        const cachedWindow = asWindow(cachedResult?.result);
+        if (cachedWindow && windowCoversPage(cachedWindow, skip, limit)) {
+          return sendMaybeGzip(req, res, {
+            logs: sliceWindow(cachedWindow, skip, limit),
+            total: cachedWindow.total,
+            page,
+            limit,
+          });
+        }
+
+        // A window that the byte budget already cut short cannot be grown by re-fetching it, so a
+        // page beyond it is fetched alone rather than re-materializing the same truncated window.
+        const windowRows = cachedWindow?.truncated ? null : windowRowsFor(skip, limit, cachedWindow?.rows.length);
+
+        const { pipeline, facetStages } = buildUserActivityPipeline({
+          startDate,
+          endDate,
+          timezone,
+          // A cacheable window always starts at 0 so any earlier page can be sliced out of it.
+          skip: windowRows === null ? skip : 0,
+          limit: windowRows ?? limit,
+          events,
+          orgs,
+          excludeOrgs,
+          counterName,
+          userEmail,
+          metadataFilters,
+          usersCollection: User.collection.name,
         });
-      } catch (error) {
-        console.error('Failed to cache logs: %s', error);
-      }
 
-      return sendMaybeGzip(req, res, { logs: rows, total, page, limit });
+        // No `hint`: measured with explain() on this collection's real index set, forcing
+        // { datetime: 1 } makes Mongo examine 4x the documents on the filtered shape the UI
+        // actually sends (orgs/excludeOrgs are always present), because it blocks the
+        // { datetime, counterName, userOrganization } compound index the planner would pick.
+        // A hint would also hard-fail the whole request if the index were ever absent.
+        const [facet] = await executeFacetCompatible(CounterLog, convertPipelineForDocumentDB(pipeline), facetStages, {
+          allowDiskUse: true,
+          maxTimeMS: AGGREGATION_MAX_TIME_MS,
+        });
+        const fetched: unknown[] = facet?.rows ?? [];
+        const total = facet?.total?.[0]?.value ?? 0;
+
+        if (windowRows === null) {
+          return sendMaybeGzip(req, res, { logs: fetched, total, page, limit });
+        }
+
+        const cacheEntry = buildWindow(fetched, total);
+
+        // Cache the window with 1 hour expiry
+        try {
+          await cacheRepository.createOrUpdate({
+            key: cacheKey,
+            result: cacheEntry,
+            expiresAt: new Date(Date.now() + 3600000), // 1 hour from now
+          });
+        } catch (error) {
+          console.error('Failed to cache logs: %s', error);
+        }
+
+        // Sliced from what was fetched, not from the cache entry: the byte budget only bounds what is
+        // stored, and this page was materialized whether or not it survived the trim.
+        return sendMaybeGzip(req, res, { logs: fetched.slice(skip, skip + limit), total, page, limit });
+      }
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        // Keyed `issues`, not `error`: errorHandler spreads additionalInfo and then writes its own
+        // `error` message over it, so a detail under that name never reaches the client.
+        throw new BadRequestError('Invalid query parameters', { issues: error.issues });
+      }
+      throw error;
     }
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      // Keyed `issues`, not `error`: errorHandler spreads additionalInfo and then writes its own
-      // `error` message over it, so a detail under that name never reaches the client.
-      throw new BadRequestError('Invalid query parameters', { issues: error.issues });
-    }
-    throw error;
   }
-});
+);
 
 const generateWeeklyReportResponse = async (
   startDate: string,

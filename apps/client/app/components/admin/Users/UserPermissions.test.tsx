@@ -120,10 +120,10 @@ describe('UserPermissions - Role', () => {
 });
 
 describe('UserPermissions - Custom Tags', () => {
-  it('does not show a product-access comp tag (e.g. opti) in the Custom Tags list - it has its own control in Product Access', () => {
+  it('does not show a SURVIVING product-access comp tag (opti) in the Custom Tags list - it has its own control in Product Access', () => {
     render(
       <UserPermissions
-        user={baseUser({ tags: ['opti', 'opti-compute'] })}
+        user={baseUser({ tags: ['opti'] })}
         editedFields={{}}
         onFieldChange={noop}
         handleUserLevelButtonChange={noop}
@@ -131,7 +131,24 @@ describe('UserPermissions - Custom Tags', () => {
       { wrapper: TestWrapper }
     );
     expect(screen.queryByText('opti')).not.toBeInTheDocument();
-    expect(screen.queryByText('opti-compute')).not.toBeInTheDocument();
+  });
+
+  it('shows a RETIRED tier tag (opti-compute) as a removable custom-tag chip', () => {
+    // #1237 retired optihashi:compute, so `opti-compute` no longer maps to an entitlement and is no
+    // longer a managed tag. It renders as a removable chip like any freeform tag - the deliberate,
+    // documented consequence of the retirement: the tag is an inert leftover, and surfacing it is
+    // how an operator strips it. (See the note in lib/entitlements/registry.ts.)
+    render(
+      <UserPermissions
+        user={baseUser({ tags: ['opti-compute'] })}
+        editedFields={{}}
+        onFieldChange={noop}
+        handleUserLevelButtonChange={noop}
+      />,
+      { wrapper: TestWrapper }
+    );
+    expect(screen.getByText('opti-compute')).toBeInTheDocument();
+    expect(screen.getByTestId('remove-tag-opti-compute')).toBeInTheDocument();
   });
 
   it('does not show the Developer tag in the Custom Tags list - it is represented by the Role radio', () => {

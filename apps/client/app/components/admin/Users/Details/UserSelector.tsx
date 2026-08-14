@@ -1,5 +1,5 @@
 import { useGetUsers } from '@client/app/hooks/data/user';
-import { IUserDocument } from '@bike4mind/common';
+import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import {
   Autocomplete,
   AutocompleteOption,
@@ -32,7 +32,7 @@ const UserSelector: React.FC<UserSelectorProps> = ({
   excludeUserId,
 }) => {
   const { value: inputValue, debouncedValue: debouncedSearch, setValue: setInputValue } = useDebounceValue('');
-  const [selectedUserCache, setSelectedUserCache] = useState<IUserDocument | null>(null);
+  const [selectedUserCache, setSelectedUserCache] = useState<AdminUserListItem | null>(null);
 
   // Fetch users with debounced search
   const { data, isLoading } = useGetUsers({
@@ -67,7 +67,7 @@ const UserSelector: React.FC<UserSelectorProps> = ({
   }, [selectedUser, value]);
 
   const handleChange = useCallback(
-    (_event: React.SyntheticEvent, newValue: IUserDocument | null) => {
+    (_event: React.SyntheticEvent, newValue: AdminUserListItem | null) => {
       onChange(newValue?.id || null);
       if (newValue) {
         setSelectedUserCache(newValue);

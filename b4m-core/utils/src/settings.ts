@@ -1,10 +1,19 @@
-import { IAdminSettings, IAdminSettingsRepository, SettingKey, settingsMap } from '@bike4mind/common';
+import {
+  IAdminSettings,
+  IAdminSettingsRepository,
+  IScopedSettingsRepository,
+  ScopeRef,
+  SettingKey,
+  settingsMap,
+} from '@bike4mind/common';
 import { z } from 'zod';
 import { AdminSettingsCache } from './cache/AdminSettingsCache';
+import { ScopedSettingsCache } from './cache/ScopedSettingsCache';
 import { Logger } from '@bike4mind/observability';
 
 // Global cache instance - will be shared across all calls
 let globalSettingsCache: AdminSettingsCache | null = null;
+let globalScopedSettingsCache: ScopedSettingsCache | null = null;
 
 /**
  * Get or create the global settings cache instance
@@ -14,6 +23,45 @@ function getSettingsCache(logger?: Logger): AdminSettingsCache {
     globalSettingsCache = new AdminSettingsCache(logger || new Logger());
   }
   return globalSettingsCache;
+}
+
+function getScopedSettingsCache(logger?: Logger): ScopedSettingsCache {
+  if (!globalScopedSettingsCache) {
+    globalScopedSettingsCache = new ScopedSettingsCache(logger || new Logger());
+  }
+  return globalScopedSettingsCache;
+}
+
+/**
+ * Read org/owner/lake OVERRIDE values for a set of rungs and setting names, through the scoped cache.
+ * Returns a map keyed by `scopedOverrideKey(level,id,name)` -> value|null (see ScopedSettingsCache).
+ * Platform values are NOT here - the resolver layers these over the platform read. Passing no rungs
+ * (a platform-altitude resolve) returns an empty map and touches neither cache nor DB.
+ */
+export async function getScopedOverrides(
+  scopes: ScopeRef[],
+  settingNames: SettingKey[],
+  db: { scopedSettings: Pick<IScopedSettingsRepository, 'findOverrides'> },
+  options?: { logger?: Logger }
+): Promise<Map<string, string | null>> {
+  return getScopedSettingsCache(options?.logger).getOverrides(scopes, settingNames, db);
+}
+
+/**
+ * Invalidate cached overrides for one rung address, or all of them. Call from a scoped-override writer.
+ *
+ * In-process only: this clears the calling process's map. With negative caching and the 5-minute TTL,
+ * a newly-written override can stay invisible on other Lambda/container instances for up to one TTL.
+ * That is acceptable while no writer ships (this PR), but a future write path needs a cross-instance
+ * invalidation story (shared cache or short TTL) rather than relying on this alone.
+ */
+export function invalidateScopedSettingsCache(scope?: ScopeRef): void {
+  if (!globalScopedSettingsCache) return;
+  if (scope) {
+    globalScopedSettingsCache.invalidateScope(scope.scopeLevel, scope.scopeId);
+  } else {
+    globalScopedSettingsCache.invalidateAll();
+  }
 }
 
 // Function overload for when defaultValue is provided
@@ -51,7 +99,7 @@ export function getSettingsValue<K extends SettingKey>(
     // prompts from completions and contradicting each setting's "clearing reverts to the built-in
     // default" contract. Only when the caller PASSED a default (defaultValue !== undefined) do we
     // treat '' as "use the default"; callers that omit it keep '' as a legitimate value (e.g.
-    // FormatPromptTemplate, whose empty default is meaningful).
+    // FormatPromptTemplate, whose sole reader substitutes its own fallback for a blank).
     if (parsed.data === '' && defaultValue !== undefined) {
       return defaultValue;
     }
@@ -165,7 +213,11 @@ export async function getSettingsByNames(
 
   const result: Record<string, string | null> = {};
   settingNames.forEach(name => {
-    result[name] = allSettings[name] || null;
+    // `?? null`, NOT `|| null`: settingValue is typed string but stored values can be the
+    // number 0 or boolean false (the admin panel saves typed values), and `||` would erase
+    // exactly those into "absent" - e.g. an operator's 0 spend budget silently reverting to
+    // the coded default. Mirrors the same fix in getSettingByName / AdminSettingsCache.
+    result[name] = allSettings[name] ?? null;
   });
 
   return result;
@@ -204,6 +256,10 @@ export function shutdownSettingsCache(): void {
   if (globalSettingsCache) {
     globalSettingsCache.shutdown();
     globalSettingsCache = null;
+  }
+  if (globalScopedSettingsCache) {
+    globalScopedSettingsCache.shutdown();
+    globalScopedSettingsCache = null;
   }
 }
 

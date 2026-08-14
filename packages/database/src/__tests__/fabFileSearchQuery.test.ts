@@ -523,6 +523,34 @@ describe('buildFabFileSearchQuery', () => {
       expect(patterns[0].test('Research')).toBe(true);
       expect(patterns[1].test('Robotics')).toBe(true);
     });
+
+    // These are whole tag names picked from the tag list, not a search term. Unanchored, the list
+    // covered files the count aggregate - which groups on the exact stored name - does not.
+    it('matches the whole tag name, not a neighbour that merely contains it', () => {
+      const result = buildFabFileSearchQuery(makeParams({ filters: { tags: ['test'] } }));
+      const andConditions = result.filter.$and as Record<string, unknown>[];
+      const tagCondition = andConditions.find(
+        c => 'tags' in c && JSON.stringify(c).includes('$elemMatch') && JSON.stringify(c).includes('$in')
+      ) as { tags: { $elemMatch: { name: { $in: RegExp[] } } } };
+
+      const pattern = tagCondition.tags.$elemMatch.name.$in[0];
+      expect(pattern.test('test')).toBe(true);
+      expect(pattern.test('TEST')).toBe(true);
+      expect(pattern.test('testing')).toBe(false);
+      expect(pattern.test('unit-test')).toBe(false);
+    });
+
+    it('treats regex metacharacters in a tag name literally', () => {
+      const result = buildFabFileSearchQuery(makeParams({ filters: { tags: ['.*'] } }));
+      const andConditions = result.filter.$and as Record<string, unknown>[];
+      const tagCondition = andConditions.find(
+        c => 'tags' in c && JSON.stringify(c).includes('$elemMatch') && JSON.stringify(c).includes('$in')
+      ) as { tags: { $elemMatch: { name: { $in: RegExp[] } } } };
+
+      const pattern = tagCondition.tags.$elemMatch.name.$in[0];
+      expect(pattern.test('.*')).toBe(true);
+      expect(pattern.test('anything')).toBe(false);
+    });
   });
 
   // ── 14. fileIds exclusion ─────────────────────────────────────────

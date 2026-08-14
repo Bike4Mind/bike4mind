@@ -66,6 +66,7 @@ import {
 import { usdToCreditsStochastic } from '@bike4mind/utils';
 import {
   buildSharedTools,
+  resolveToolAvailability,
   ServerAgentStore,
   ServerSubagentOrchestrator,
   PARENT_DEADLINE_BUFFER_MS,
@@ -75,7 +76,7 @@ import {
   type ToolBuilderDeps,
   type ToolBuilderCallbacks,
 } from '@bike4mind/services';
-import { creditService, apiKeyService } from '@bike4mind/services';
+import { creditService, apiKeyService, estimateGeneratedMediaUsd } from '@bike4mind/services';
 // Lattice launch-gate. `resolveLatticeTools` owns the `enableLattice` flag
 // resolution and the Lattice tool contribution (names + `externalTools`
 // definitions); see that module's header for the Next-tracing split and the
@@ -105,6 +106,7 @@ import {
   billIteration,
   addToolUsage,
   takeToolUsage,
+  foldGeneratedMediaUsd,
   type BillingCounters,
   type PendingToolUsage,
 } from './agentExecutor.billing';
@@ -134,8 +136,9 @@ import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage
 import { emitMetric } from '@server/utils/cloudwatch';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
 import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
-import { publishMementoCompletion } from '@server/utils/publishMementoCompletion';
-import { getFirstIterationMementosPreamble } from '@server/utils/getFirstIterationMementosPreamble';
+import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
+import { resolveAndBuildMementosPreamble } from '@server/utils/getFirstIterationMementosPreamble';
+import { resolveExecutionMementoGates } from '@server/utils/resolveExecutionMementoGates';
 import { getFirstIterationSkillsPreamble } from '@server/utils/getFirstIterationSkillsPreamble';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 import { loadAgentMcpTools, type AgentMcpTools } from '@server/utils/loadAgentMcpTools';
@@ -730,7 +733,20 @@ async function processExecution(
       getSettingsByNames,
     });
 
-    const models = await getAvailableModels(apiKeyTable as ApiKeyTable);
+    // Availability overlaps the models fetch rather than the key fetch above, so the key table can
+    // be handed over instead of re-read inside the resolver. Never rejects (see its doc comment).
+    // Fail-closed here (unlike the Tools picker UI's fail-open default): an agent run has nobody in
+    // the loop to add a missing key, so a tool this lookup couldn't confirm works should not reach
+    // the model. Resolved per-user because that is the identity the tools themselves use for their
+    // keys at call time (toolDeps.userId below).
+    const [models, toolAvailability] = await Promise.all([
+      getAvailableModels(apiKeyTable as ApiKeyTable),
+      resolveToolAvailability(
+        execution.userId,
+        { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } },
+        { onLookupError: 'unavailable', logger, llmKeys: apiKeyTable }
+      ),
+    ]);
     // Upgrade a deprecated/retired model id to its modern equivalent before lookup. getAvailableModels
     // filters retired ids out, so an agent/session still pinned to a sunset snapshot would otherwise
     // miss the lookup and throw instead of running on the mapped replacement.
@@ -751,6 +767,50 @@ async function processExecution(
       });
       await sendWs('failed', { executionId, reason: 'insufficient_credits' });
       return;
+    }
+
+    // Org-billed per-member cap. An agent run has no single upfront estimate (it bills
+    // per-iteration at settlement), so this gates on "already at/over cap" with no charge
+    // to add. It sits below the resume branch and re-reads `organization` each invocation,
+    // so it re-runs on every continuation/subagent-resume/DAG-wake: a run that crosses the
+    // cap mid-execution IS stopped, at its next handoff (like the pool gate above). Started,
+    // in-flight iterations still settle - this bounds the overshoot, it does not refund it.
+    if (organization && creditService.isMemberAtOrOverCap(organization, execution.userId)) {
+      logger.warn('[Credits] Member credit cap reached; refusing to start execution', {
+        used: creditService.getMemberUsedCredits(organization, execution.userId),
+        cap: organization.maxCreditsPerMember,
+      });
+      await agentExecutionRepository.markFailed(executionId, {
+        message: 'Organization member credit limit reached',
+      });
+      await sendWs('failed', { executionId, reason: 'insufficient_credits' });
+      return;
+    }
+
+    // Resolve the memory gates ONCE and persist them (#1525). The read path (first-iteration
+    // preamble) and the write path (completion event) used to resolve independently a whole run
+    // apart, so a mid-run flip of `EnableMementos` or the user's V2 opt-in made them disagree.
+    // Persisting one verdict lets continuation Lambdas and the stop-at-gate WS handler read it back;
+    // the downstream helpers route through `resolveExecutionMementoGates`, which short-circuits to it.
+    // Only new executions resolve; an explicit opt-out (`enableMementos === false`) resolves read-free
+    // in the resolver, so we skip the write for it. Runs below the credit/backend guards so a doomed
+    // execution never pays for it. The persist is best-effort: the in-memory stamp below already gives
+    // THIS Lambda read/write consistency, so a write blip must degrade memoization, not fail the run.
+    if (isNewExecution && execution.enableMementos !== false && !execution.resolvedMementoGates) {
+      const resolvedGates = await resolveExecutionMementoGates(
+        execution,
+        { db: { adminSettings: adminSettingsRepository } },
+        logger
+      );
+      try {
+        await agentExecutionRepository.persistResolvedMementoGates(executionId, resolvedGates);
+      } catch (err) {
+        logger.warn('[Mementos] Failed to persist resolved gates; continuing with the in-memory value', {
+          executionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      execution.resolvedMementoGates = resolvedGates;
     }
 
     // Resolve the top-level orchestration profile. Two paths:
@@ -938,6 +998,11 @@ async function processExecution(
           // required" (no picker UI in a headless run). Omitted when the parent
           // had none, so the tool falls back to its built-in default.
           ...(execution.imageConfig && { imageConfig: execution.imageConfig }),
+          // Inherit the parent's audio config for the same reason as imageConfig:
+          // a subagent that calls audio_generation should reach for the provider/
+          // voice the parent resolved, not the tool's built-in OpenAI default.
+          // Omitted when the parent had none.
+          ...(execution.audioConfig && { audioConfig: execution.audioConfig }),
           // NOTE: `enableLattice` (and other parent-only launch-gate flags) is
           // intentionally omitted here - subagents / DAG children do NOT inherit
           // it. The parent's Lattice toolbelt is scoped to the parent run; a
@@ -1184,6 +1249,7 @@ async function processExecution(
         // moderation gate. The gate itself is unconditional (constructed
         // inline in the tool) - this only wires the incident record, not the block.
         imageModerationIncidents: imageModerationIncidentRepository,
+        organizations: organizationRepository,
       },
       sessionRepository: sessionRepository,
       storage: getFilesStorage(),
@@ -1232,11 +1298,47 @@ async function processExecution(
           await sendWs('progress', { executionId, status });
         }
       },
-      onToolStart: async () => {
-        // Agent Executor handles credit billing per-iteration, not per-tool-call
+      onToolStart: async (toolName, data) => {
+        // Agent mode bills LLM tokens per-iteration; a generative tool's provider media
+        // cost (image/music/audio USD) is NOT LLM spend, so classic chat's per-tool
+        // toolCreditsMap drain never runs here. Fold the media USD into the same
+        // per-iteration bucket (`pendingToolUsage.costUsd`) that `onToolLlmUsage` feeds, so
+        // `billIteration` charges it on the existing agent rail - otherwise agent-mode
+        // generation is free. Image cost is known up front (n/size/quality), so it is read
+        // at start (mirrors classic reserve-on-start); music/audio settle at finish (see
+        // onToolFinish). The phase->tool routing + `usd > 0` guard live in the billing
+        // module so they are covered by agentExecutor.billing.test.ts.
+        // Subagent-dispatch tool cost stays unbilled until its Phase-1 credit deduction
+        // lands (see processSubagentDispatch) - tracked as a follow-up.
+        foldGeneratedMediaUsd({
+          phase: 'start',
+          toolName,
+          data,
+          models,
+          pending: pendingToolUsage,
+          estimateUsd: estimateGeneratedMediaUsd,
+          onError: err =>
+            logger.warn(`[agentExecutor] failed to estimate ${toolName} media cost; not billed this iteration`, {
+              err,
+            }),
+        });
       },
-      onToolFinish: async () => {
-        // Tool finish side effects tracked via ReActAgent steps
+      onToolFinish: async (toolName, data) => {
+        // Settle music/audio media cost on delivery (see onToolStart for the rail rationale):
+        // the tools' failure paths return before onFinish, so an undelivered clip is never
+        // billed. Charged into the current iteration's pendingToolUsage.
+        foldGeneratedMediaUsd({
+          phase: 'finish',
+          toolName,
+          data,
+          models,
+          pending: pendingToolUsage,
+          estimateUsd: estimateGeneratedMediaUsd,
+          onError: err =>
+            logger.warn(`[agentExecutor] failed to estimate ${toolName} media cost; not billed this iteration`, {
+              err,
+            }),
+        });
       },
       onUiSideEffect: async sideEffect => {
         // Fires inside the wrapped toolFn (sharedToolBuilder extraction), i.e. between the
@@ -1288,6 +1390,7 @@ async function processExecution(
       model: execution.model,
       apiKeyTable: apiKeyTable as ApiKeyTable,
       imageConfig: execution.imageConfig,
+      audioConfig: execution.audioConfig,
     });
 
     // Lattice opt-in pool for delegated subagents. Built UNCONDITIONALLY (unlike
@@ -1297,7 +1400,12 @@ async function processExecution(
     // even when the parent run didn't enable it — and Lattice never leaks into the
     // parent's own toolbelt because this pool is kept out of `tools`. See
     // `buildSubagentLatticeToolPool` and `ServerOrchestratorDeps.optInTools`.
-    const subagentLatticeTools = buildSubagentLatticeToolPool(toolDeps, toolCallbacks, subagentToolConfig);
+    const subagentLatticeTools = buildSubagentLatticeToolPool(
+      toolDeps,
+      toolCallbacks,
+      subagentToolConfig,
+      toolAvailability
+    );
 
     // Durable opti plan ledger (#680): ONE state object, rehydrated from the persisted execution so
     // the opti-loop guards survive a continuation Lambda -- a repeat decompose or a re-solve of a
@@ -1347,6 +1455,10 @@ async function processExecution(
       config: subagentToolConfig,
       mcpToolsByServer,
       agentOnlyMcpServers,
+      // Additive to, not a replacement for, the profile's allowedTools gating: that already narrowed
+      // `enabledTools` upstream (pickEffectiveEnabledTools -> resolvedToolNames), and this drops
+      // whatever survived that has no working key. A tool must be both allowed AND offerable.
+      toolAvailability,
     });
     if (!tools) throw new Error('Failed to build tools');
 
@@ -1873,16 +1985,13 @@ async function processExecution(
         logger,
         fabFileRepository
       );
-      // Memento retrieval parity with chat_completion. Append the
+      // Memento retrieval parity with chat_completion. Appends the
       // `[KNOWN FACTS ABOUT THE USER ...]` preamble to the same iteration-0 user
-      // message the file preamble lands in, so the agent reads both from a
-      // single materialized string that gets persisted into the checkpoint.
-      // Continuation Lambdas, gate-resumes, and DAG-resumes inherit it via
-      // the checkpoint replay - same handoff contract as the file preamble.
-      // The helper itself guards on `enableMementos` + `parentExecutionId`,
-      // matching `publishMementoCompletion` on the write side.
+      // message the file preamble lands in, so both survive into the checkpoint and
+      // inherit through continuation/gate/DAG resumes. Gates come from the resolver,
+      // which returns the verdict resolved once at execution start (#1525).
       if (firstIterationQuery !== undefined) {
-        const { preamble: mementoPreamble, mementoIds } = await getFirstIterationMementosPreamble(
+        const { preamble: mementoPreamble, mementoIds } = await resolveAndBuildMementosPreamble(
           execution,
           {
             db: {
@@ -2293,13 +2402,10 @@ async function processExecution(
       allSideEffects
     );
 
-    // Memento parity with chat_completion. Fires only when the user
-    // (or admin default) opted into mementos for this run; skipped for
-    // subagent / DAG children via the `parentExecutionId` guard inside the
-    // helper. Reads `execution` (loaded at the top of this function) so
-    // continuation Lambdas see the persisted flag the WS handler stamped at
-    // dispatch.
-    await publishMementoCompletion(execution, logger);
+    // Memento parity with chat_completion, write side. Gates come from the resolver's verdict
+    // resolved once at execution start (#1525), so this write agrees with the read-path preamble
+    // even across a mid-run flip. The publisher's own guards skip subagent/DAG children.
+    await resolveAndPublishMementoCompletion(execution, { db: { adminSettings: adminSettingsRepository } }, logger);
 
     logger.info('[Complete] Agent execution finished', {
       iterations: finalCheckpoint.iteration,
@@ -2453,7 +2559,17 @@ async function processSubagentDispatch(
       db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
       getSettingsByNames,
     });
-    const models = await getAvailableModels(apiKeyTable as ApiKeyTable);
+    // Resolved for the CHILD's user, the identity its tools use for their own keys at call time
+    // (toolDeps.userId below), and handed the key table above so it is not read twice. Fail-closed
+    // for the same reason as the parent path: nobody is in the loop to add a missing key mid-run.
+    const [models, toolAvailability] = await Promise.all([
+      getAvailableModels(apiKeyTable as ApiKeyTable),
+      resolveToolAvailability(
+        child.userId,
+        { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } },
+        { onLookupError: 'unavailable', logger, llmKeys: apiKeyTable }
+      ),
+    ]);
     const modelInfo = models.find((m: { id: string }) => m.id === child.model);
     const llm = getLlmByModel(apiKeyTable as ApiKeyTable, { modelInfo, logger, endUserId: child.userId });
     if (!llm) throw new Error(`Failed to create LLM backend for model "${child.model}"`);
@@ -2529,6 +2645,7 @@ async function processSubagentDispatch(
         // moderation gate. The gate itself is unconditional (constructed
         // inline in the tool) - this only wires the incident record, not the block.
         imageModerationIncidents: imageModerationIncidentRepository,
+        organizations: organizationRepository,
       },
       sessionRepository,
       storage: getFilesStorage(),
@@ -2572,13 +2689,19 @@ async function processSubagentDispatch(
       model: child.model,
       apiKeyTable: apiKeyTable as ApiKeyTable,
       imageConfig: child.imageConfig,
+      audioConfig: child.audioConfig,
     });
 
     // Lattice opt-in pool for this subagent (and any grandchildren it delegates
     // to). Built unconditionally and granted only when the agent's `allowedTools`
     // names `lattice_*`; mirrors the top-level path so Lattice availability is
     // identical whether a subagent runs in-process or in its own Lambda.
-    const subagentLatticeTools = buildSubagentLatticeToolPool(toolDeps, toolCallbacks, subagentToolConfig);
+    const subagentLatticeTools = buildSubagentLatticeToolPool(
+      toolDeps,
+      toolCallbacks,
+      subagentToolConfig,
+      toolAvailability
+    );
 
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
       config: subagentToolConfig,
@@ -2590,6 +2713,11 @@ async function processSubagentDispatch(
       // them. Marking them agent-only here would hide them and reproduce the
       // 0-tools bug.
       agentOnlyMcpServers: [],
+      // Wired for parity with the parent path, but inert as long as this call passes no
+      // `enabledTools`: buildSharedTools applies the offerable filter only to that list, so today
+      // this site materializes MCP tools plus delegate/coordinate and nothing key-gated. Kept so a
+      // future change that gives this path native tools cannot silently bypass the filter.
+      toolAvailability,
     });
     if (!tools) throw new Error('Failed to build tools for dispatched subagent');
 

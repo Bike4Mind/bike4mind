@@ -43,7 +43,7 @@ The evidence tiers (`engineering-proxy -> human-reviewed`) are an L0..L3 confide
 
 The unification seam is **separating the principal (whose memory / which scope) from the actor
 (who authored an event).** Generalize the DeepAgent memory core to a principal-scoped shape where
-`principalKind in { user, agent, org, system }`. Then:
+`principalKind in { user, agent, org, system, lake }`. Then:
 
 - **Agent memory** = principal is an agent (DeepAgent, generalized; `agentId` becomes the agent
   principal id).

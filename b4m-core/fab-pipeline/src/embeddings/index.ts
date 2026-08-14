@@ -6,3 +6,4 @@ export * from './providers/VoyageAIEmbeddingService';
 export * from './providers/OllamaEmbeddingService';
 export * from './getProviderFromModel';
 export * from './resolveEmbeddingConfig';
+export * from './EmbeddingErrors';

@@ -38,4 +38,20 @@ describe('convertMessagesToOpenAIFormat - image content pass-through', () => {
     expect(result).toHaveLength(1);
     expect(result[0]).toBe(message);
   });
+
+  // `requiresTool` decides whether a prompt survives a tools-dropped turn; it is ours, and OpenAI,
+  // xAI and Kimi all send whatever this converter returns straight into the request body.
+  it('strips the requiresTool control field instead of sending it to the provider', () => {
+    const message = {
+      role: 'system',
+      content: 'you MUST use the image_generation tool',
+      requiresTool: 'image_generation',
+    } as IMessage;
+
+    const result = convertMessagesToOpenAIFormat([message]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).not.toHaveProperty('requiresTool');
+    expect(result[0]).toEqual({ role: 'system', content: 'you MUST use the image_generation tool' });
+  });
 });

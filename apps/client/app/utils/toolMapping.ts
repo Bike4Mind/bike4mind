@@ -2,6 +2,8 @@ import {
   Schedule as DateTimeIcon,
   Casino as DiceIcon,
   Image as ImageIcon,
+  MusicNote as MusicIcon,
+  GraphicEq as AudioIcon,
   Calculate as MathIcon,
   Schema as MermaidIcon,
   Search as SearchIcon,
@@ -40,7 +42,9 @@ export type PublicTools = Exclude<
   B4MLLMTools,
   // `skill` is auto-enabled server-side when the user has skills defined - invocation is
   // via `/skill-name` slash mentions, not a tool toggle, so it stays out of the UI picker.
-  'edit_image' | 'blog_publish' | 'blog_edit' | 'blog_draft' | 'skill' | SlackLlmTools
+  // `count_knowledge_base` is paired server-side with `search_knowledge_base` (a corpus you can
+  // search but not count is the bug it exists to fix), so it needs no toggle of its own.
+  'edit_image' | 'blog_publish' | 'blog_edit' | 'blog_draft' | 'skill' | 'count_knowledge_base' | SlackLlmTools
 >;
 
 export const TOOL_MAPPING: Record<PublicTools, ToolInfo> = {
@@ -99,6 +103,20 @@ export const TOOL_MAPPING: Record<PublicTools, ToolInfo> = {
     description: 'AI-generated images from text descriptions',
     icon: ImageIcon,
     color: '#f57c00',
+  },
+  music_generation: {
+    name: 'music_generation',
+    displayName: 'Music Generation',
+    description: 'AI-generated background music from text descriptions',
+    icon: MusicIcon,
+    color: '#ab47bc',
+  },
+  audio_generation: {
+    name: 'audio_generation',
+    displayName: 'Audio Generation',
+    description: 'AI-generated speech (TTS) or sound effects from text',
+    icon: AudioIcon,
+    color: '#26a69a',
   },
   mermaid_chart: {
     name: 'mermaid_chart',
@@ -358,6 +376,8 @@ export const TOOL_CATEGORIES: Record<string, string> = {
   web_fetch: 'Search',
   deep_research: 'Search',
   image_generation: 'Generation',
+  music_generation: 'Generation',
+  audio_generation: 'Generation',
   prompt_enhancement: 'Generation',
   edit_image: 'Generation',
   mermaid_chart: 'Visualization',

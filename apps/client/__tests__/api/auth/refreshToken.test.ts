@@ -55,6 +55,7 @@ vi.mock('@bike4mind/common', () => ({
     isAfter: () => false,
     subtract: () => ({}),
   }),
+  redactUserSecretsForSelf: (user: unknown) => user,
 }));
 
 vi.mock('@server/utils/errors', () => ({
@@ -143,5 +144,67 @@ describe('POST /api/auth/refreshToken — tokenVersion kill switch', () => {
       expect.objectContaining({ impersonatedBy: 'admin-9' }),
       expect.anything()
     );
+  });
+});
+
+describe('POST /api/auth/refreshToken — cookie vs body transport', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIssueSession.mockResolvedValue({ accessToken: 'new_access', refreshToken: 'new_refresh', sid: 'sid' });
+    mockVerifyRefreshToken.mockReturnValue({ userId: 'user-1', tokenVersion: 0 });
+    mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 0 });
+  });
+
+  const cookieHeader = (res: any) => String(res.getHeader('Set-Cookie') ?? '');
+
+  it('reads the token from the HttpOnly cookie when the body has none, and rotates it back there', async () => {
+    const { req, res } = createMocks({ method: 'POST', body: {}, headers: { cookie: 'b4m_rt=cookie-token' } });
+
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockVerifyRefreshToken).toHaveBeenCalledWith('cookie-token', undefined);
+    expect(cookieHeader(res)).toContain('b4m_rt=new_refresh');
+    // Never in the body: a page script must not be able to read it.
+    expect(res._getJSONData().refreshToken).toBeUndefined();
+  });
+
+  it('returns the rotated token in the BODY and sets no cookie for a CLI/OAuth caller', async () => {
+    const { req, res } = createMocks({ method: 'POST', body: { refresh_token: 'cli-token' } });
+
+    await handler(req as any, res as any);
+
+    expect(res._getJSONData().refreshToken).toBe('new_refresh');
+    expect(res.getHeader('Set-Cookie')).toBeUndefined();
+  });
+
+  it('migrates a pre-cookie browser session onto the cookie when it opts in with cookie: true', async () => {
+    // The one-shot upgrade path: the token still lives in localStorage, so it arrives in the body,
+    // but the response must move it to a cookie rather than logging the user out.
+    const { req, res } = createMocks({ method: 'POST', body: { token: 'legacy-localstorage-token', cookie: true } });
+
+    await handler(req as any, res as any);
+
+    expect(mockVerifyRefreshToken).toHaveBeenCalledWith('legacy-localstorage-token', undefined);
+    expect(cookieHeader(res)).toContain('b4m_rt=new_refresh');
+    expect(res._getJSONData().refreshToken).toBeUndefined();
+  });
+
+  it('prefers an explicit body token over the cookie (a CLI request carrying a stale browser cookie)', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: { refresh_token: 'body-token' },
+      headers: { cookie: 'b4m_rt=cookie-token' },
+    });
+
+    await handler(req as any, res as any);
+
+    expect(mockVerifyRefreshToken).toHaveBeenCalledWith('body-token', undefined);
+  });
+
+  it('rejects when neither transport carries a token', async () => {
+    const { req, res } = createMocks({ method: 'POST', body: {} });
+
+    await expect(handler(req as any, res as any)).rejects.toThrow('Refresh token is required');
   });
 });

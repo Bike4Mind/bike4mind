@@ -1,25 +1,36 @@
-import { DATALAKE_TAG_PREFIX, DATALAKE_TAG_STRENGTH, normalizeTagPrefix } from '@bike4mind/common';
-import type { IDataLakeDocument, IFabFileRepository } from '@bike4mind/common';
+import { DATALAKE_TAG_PREFIX, DATALAKE_TAG_STRENGTH, prefixArmTagNames } from '@bike4mind/common';
+import type { IDataLakeAccessGrantRepository, IDataLakeDocument, IFabFileRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from './assertLakeAccess';
-import { canManageLake } from './authorizeLakeWrite';
+import { type ManageActor } from './manageRule';
+import { resolveCanManageLake } from './authorizeLakeManage';
 
 /** The acting principal for a membership write - resolved from auth, never from the body. */
-export type MembershipActor = { userId: string; isAdmin: boolean };
+export type MembershipActor = ManageActor;
 
 /**
  * The lake fields a membership write needs. Taking the resolved document rather than an id lets
  * a caller that already holds the lake (or resolved it by meta-tag rather than by id) reuse it
- * instead of refetching.
+ * instead of refetching. `organizationId` feeds the org-manageable manage rung.
  */
-export type MembershipLake = Pick<IDataLakeDocument, 'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId'>;
+export type MembershipLake = Pick<
+  IDataLakeDocument,
+  'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId' | 'organizationId'
+>;
 
 interface RemoveMembershipAdapters {
-  db: { fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId'> };
+  db: {
+    fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId'>;
+    // Optional: absent -> manage falls back to createdByUserId + org rung (see loadActiveLakeGrants).
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+  };
 }
 
 interface AddMembershipAdapters {
-  db: { fabFiles: Pick<IFabFileRepository, 'pushTagsByFabFileId'> };
+  db: {
+    fabFiles: Pick<IFabFileRepository, 'pushTagsByFabFileId'>;
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+  };
 }
 
 /**
@@ -39,22 +50,35 @@ export const removeFileFromLake = async (
   fabFileId: string,
   { db }: RemoveMembershipAdapters
 ): Promise<void> => {
-  if (!canManageLake(lake, actor)) {
-    throw new BadRequestError('Only the creator can remove files from this data lake');
+  if (!(await resolveCanManageLake(lake, actor, { db }))) {
+    throw new BadRequestError('You do not have permission to remove files from this data lake');
   }
   // A fallback lake has no document to hold membership, so there is nothing to remove from.
   assertLakeWritable(lake);
 
   const file = await db.fabFiles.findById(fabFileId);
   const tagNames = (file?.tags ?? []).map(t => t.name).filter((name): name is string => typeof name === 'string');
-  // Normalized through the same predicate the read arms use, so a lake whose prefix no query
-  // matches (empty, or missing its trailing colon) also gets nothing cleared by prefix.
-  const prefix = normalizeTagPrefix(lake.fileTagPrefix);
-  // Positive ownership: both ids must be present AND equal, so a file with no owner does not
-  // fall through as a match.
-  const ownsFile = actor.isAdmin || (!!file?.userId && file.userId === actor.userId);
-  const prefixedTags = prefix ? tagNames.filter(name => name.startsWith(prefix)) : [];
-  const inLake = !!file && (tagNames.includes(lake.datalakeTag) || (ownsFile && prefixedTags.length > 0));
+  // Positive ownership, anchored to the LAKE'S CREATOR (not the acting admin) so this matches
+  // buildDataLakeMembershipFilter's own ownership conjunct on the single-lake browse: both ids
+  // must be present AND equal, so a file with no owner does not fall through as a match, and an
+  // admin cannot strip a prefixed tag off a file that predicate never actually admitted to this
+  // lake. Other lake readers (the aggregate browse, semantic search, chat KB tools) still match
+  // the prefix within the VIEWER's own access - that is ownership of the file, not membership in
+  // this lake, and unaffected by this write.
+  //
+  // This is also why #1040 (a prefix-only file reached through a share or a group looked listed
+  // but unremovable) cannot happen: the same anchor excludes such a file from the single-lake
+  // browse (buildDataLakeMembershipFilter) too, so it is never listed in the first place. See the
+  // #1040 tests in lakeMembership.test.ts and FabFileModel.dataLakeLifecycle.test.ts.
+  const ownsFile = !!file?.userId && file.userId === lake.createdByUserId;
+  // Gated on ownsFile, not just prefix: a file admitted to inLake via the META-TAG arm (e.g. an
+  // admin added a stranger's file with addFileToLake, which checks only the ACTOR's access, not
+  // the file's ownership) must not also have its unrelated tags stripped just because one
+  // happens to start with this lake's prefix - the read path's prefix arm never admitted this
+  // file, so the write must not touch prefix-matching tags on it either. `prefixArmTagNames`
+  // itself drops an empty/reserved-namespace prefix, matching what the read arm's query would.
+  const prefixedTags = ownsFile ? prefixArmTagNames(tagNames, lake.fileTagPrefix) : [];
+  const inLake = !!file && (tagNames.includes(lake.datalakeTag) || prefixedTags.length > 0);
   if (!file || !inLake) {
     throw new NotFoundError('File not found in this data lake');
   }
@@ -88,8 +112,8 @@ export const addFileToLake = async (
   fabFileId: string,
   { db }: AddMembershipAdapters
 ): Promise<void> => {
-  if (!canManageLake(lake, actor)) {
-    throw new BadRequestError('Only the creator can add files to this data lake');
+  if (!(await resolveCanManageLake(lake, actor, { db }))) {
+    throw new BadRequestError('You do not have permission to add files to this data lake');
   }
   assertLakeWritable(lake);
 

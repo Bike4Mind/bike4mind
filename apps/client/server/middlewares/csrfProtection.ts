@@ -1,5 +1,6 @@
 import { RequestHandler } from 'express';
 import { ForbiddenError } from '@server/utils/errors';
+import { extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
 
 /**
  * CSRF Protection Middleware
@@ -18,8 +19,11 @@ export const csrfProtection = (): RequestHandler => {
 
     // API key requests use a bearer token that a cross-site attacker cannot
     // read or forge, so they are not vulnerable to CSRF. Applying origin checks
-    // to API key requests breaks all server-to-server integrations.
-    if (req.headers['x-api-key']) {
+    // to API key requests breaks all server-to-server integrations. Uses the same
+    // extractor as apiKeyAuth so every accepted form (x-api-key, `Authorization:
+    // ApiKey`, and the canonical `Authorization: Bearer b4m_<key>`) is exempt -
+    // sniffing x-api-key alone would CSRF-block the form the spec advertises.
+    if (extractApiKeyFromHeaders(req.headers)) {
       return next();
     }
 

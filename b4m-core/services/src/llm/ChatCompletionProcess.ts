@@ -1,5 +1,6 @@
 import {
   IChatHistoryItemDocument,
+  IFabFileDocument,
   IMessage,
   IUserDocument,
   LLMEvents,
@@ -25,6 +26,7 @@ import {
   isExperimentalFeatureEnabled,
   isImageAttachment,
   isImageServeable,
+  isMediaModelType,
   isUnlimitedHistory,
   normalizeRequestedHistoryCount,
   resolveHistoryFetchLimit,
@@ -58,13 +60,19 @@ import {
   usdToCreditsStochastic,
   LOW_CREDIT_ALERT_THRESHOLD,
   ITokenizer,
-  getLastBuildDebugInfo,
   getSettingsByNames,
+  attachedContentExtractionBudget,
+  effectiveContextWindow,
+  safeInputWindow,
 } from '@bike4mind/utils';
 // Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
 // dependency (keeps it out of the CLI bundle). See issue #660.
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
-import { toRetrievalFilter, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
+import {
+  isRetrievalExcluded,
+  toRetrievalFilter,
+  type RetrievalExclusionOptions,
+} from '@bike4mind/utils/retrievalExclusion';
 import {
   resolveOutputMaxTokens,
   getAvailableModels,
@@ -77,7 +85,9 @@ import { Logger } from '@bike4mind/observability';
 import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
+import { settleToolCallCredits } from './settleToolCredits';
 import { LATTICE_TOOL_NAMES } from './tools';
+import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
 import {
   buildElisionStamp,
   truncateElisionText,
@@ -91,6 +101,7 @@ import { MongoAbility } from '@casl/ability';
 import { Mutex } from 'async-mutex';
 import { z } from 'zod';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
+import { resolveToolAvailability } from './toolAvailability';
 import { applyModerationHit, MODERATION_POLICY, moderationThrottleKey } from '../userService/moderationPolicy';
 import { ToolDefinition } from './tools/base/types';
 import { ServerAgentStore } from './agents/ServerAgentStore';
@@ -100,6 +111,7 @@ import {
   ChatCompletionFeature,
   ContextSummarizationFeature,
   MementoFeature,
+  LakeMemoryFeature,
   OrganizationPromptFeature,
   SessionPromptFeature,
   KnowledgeRetrievalFeature,
@@ -112,12 +124,29 @@ import {
   featureNames,
 } from './ChatCompletionFeatures';
 import { AgentDetectionFeature } from './features/AgentDetectionFeature';
-import { SkillsFeature } from './features/SkillsFeature';
+import { SkillsFeature, type QuestWithSkillCatalog } from './features/SkillsFeature';
 import { StatusManager } from './StatusManager';
 import { buildContextOverflowMessage } from './contextOverflowMessage';
-import { buildInsufficientCreditsMessage } from './insufficientCreditsMessage';
+import {
+  ALWAYS_ON_FLOOR_SOURCES,
+  buildTaggedContextMessages,
+  filterByPromptMode,
+  filterFeaturesByPromptMode,
+  PROMPT_SOURCE_METADATA,
+  resolveForcedRetrieval,
+  SYSTEM_PROMPT_PRIORITY,
+  toPromptDetails,
+  type PromptSourceId,
+} from './systemPromptSources';
+import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
+import { buildInsufficientCreditsMessage, buildMemberCreditCapMessage } from './insufficientCreditsMessage';
 import { ResearchModeService } from './ResearchModeService';
-import { deductCreditsWithOrgSupport, subtractCredits } from '../creditService';
+import {
+  deductCreditsWithOrgSupport,
+  subtractCredits,
+  getMemberUsedCredits,
+  isMemberCreditCapExceeded,
+} from '../creditService';
 import {
   TelemetryBuilder,
   mapBackendToProvider,
@@ -125,9 +154,11 @@ import {
   AnomalyAlertService,
   aggregateWebFetchContentTelemetry,
 } from '../telemetry';
-import type { ToolTelemetry, ToolErrorCategory, SystemPromptDetail } from '@bike4mind/common';
-import { buildAlwaysOnFloorDetails } from './systemPromptFloorTelemetry';
+import type { ToolTelemetry, ToolErrorCategory, SystemPromptDetail, DataLakeGroundingMode } from '@bike4mind/common';
+import { buildAlwaysOnFloorDetails, buildInjectedBlockDetails } from './systemPromptFloorTelemetry';
 import { resolveArtifactsEnabled } from './artifactGating';
+import { shouldOfferBlogTools, shouldOfferSkillTool } from './autoAddedToolGating';
+import { resolveMementoGates } from './mementoGating';
 import {
   ContextTelemetryAlertsSchema,
   detectAgentMentions,
@@ -135,7 +166,9 @@ import {
   mapMimeTypeToArtifactType,
   ARTIFACT_EMISSION_PROMPT,
   HELP_CENTER_PROMPT,
+  ABSTENTION_PROMPT,
   ELISION_WARNING,
+  CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
 } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 
@@ -195,56 +228,49 @@ function assertNeverElisionSignal(signal: never): never {
  * Output budget used when a caller supplies no max_tokens. Within supported output
  * limits for every configured non-reasoning model; models that reason inside the
  * output budget default to ADAPTIVE_THINKING_MAX_TOKENS_FLOOR instead, since their
- * reasoning would otherwise consume this whole budget. Distinct from the catalog's
- * DEFAULT_MAX_OUTPUT_TOKENS, which fills in a model's *capability* when its record
- * omits one.
+ * reasoning would otherwise consume this whole budget (see reasonsWithinOutputBudget
+ * for which those are). Distinct from the catalog's DEFAULT_MAX_OUTPUT_TOKENS, which
+ * fills in a model's *capability* when its record omits one.
  */
 const DEFAULT_OUTPUT_MAX_TOKENS = 4096;
 
 /**
- * Usable input window: the context window less the output this request will reserve, less a safety
- * buffer. Deliberately NOT clamped at zero - the empty-prompt guard depends on seeing a non-positive
- * budget for a genuinely misconfigured text model.
- *
- * Image and video models return media rather than tokens, and every image backend here sets
- * max_tokens equal to contextWindow because both are the prompt-length limit, so reserving it as
- * output left no room for the prompt itself. Two callers need this figure - the assembly budget and
- * the verbatim-history window - and they must not drift apart.
- */
-const safeInputWindow = (modelInfo: ModelInfo, requestedMaxTokens: number, safetyBuffer = 1000): number => {
-  const contextLimit = modelInfo.contextWindow ?? 200000;
-  const modelMaxOutput = modelInfo.max_tokens ?? 16384;
-  const returnsMedia = modelInfo.type === 'image' || modelInfo.type === 'video';
-  const reservedOutput = returnsMedia ? 0 : Math.min(requestedMaxTokens, modelMaxOutput);
-  return contextLimit - reservedOutput - safetyBuffer;
-};
-
-/**
  * Share of the context budget this file assumes history will take when sizing a history count. It
  * does NOT mirror how buildAndSortMessages splits the budget: that depends on historyCount, giving
- * files 70% when history is unlimited and guaranteeing them a 35% floor otherwise.
+ * files 70% when history is unlimited and guaranteeing them a 35% floor otherwise - a floor measured
+ * against the budget BEFORE system instructions are charged to it, so it does not shrink as the system
+ * stack grows.
  */
 const HISTORY_BUDGET_PERCENTAGE = 0.3;
+// Three stages decide how much attached content survives, and they are easily confused.
+// HISTORY_BUDGET_PERCENTAGE above sizes the history MESSAGE COUNT before anything is fetched. The other
+// two now live together in @bike4mind/utils contextBudget, because the relationship between them is
+// what matters: EXTRACTION reads content off disk, ASSEMBLY trims what was read, and when extraction
+// is the smaller of the two the assembly floor is what a file actually gets. On a small window that
+// held only after the reserve was bounded; above ~80k it does not hold at all, and contextBudget spells
+// out why that is tolerable there.
+
 /**
- * Share of the usable input window that attached-file content may be EXTRACTED into.
- * Kept a minority share so conversational history, which is what users notice losing
- * first, keeps the majority. See attachedFileTokenBudget at its only use site.
+ * Below this per-doc even-split inline depth (tokens), inlining a RETRIEVABLE data-lake corpus
+ * goes breadth-shallow: buildDataSources splits attachedFileTokenBudget evenly across every file
+ * (processFabFilesServer in utils.ts), so many docs each get a thin, poorly-ranked slice - which
+ * an internal eval scored WORSE than deferring the corpus to the offered search_knowledge_base
+ * tool. When the estimated depth falls below this floor AND the corpus is retrievable, defer it.
  *
- * Three different stages, easily confused. HISTORY_BUDGET_PERCENTAGE above sizes the
- * history MESSAGE COUNT before anything is fetched. Two constants in utils.ts govern
- * ASSEMBLY, trimming an already-extracted set to fit: KNOWLEDGE_FILE_TOKEN_ALLOCATION for
- * an unwindowed request, MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION as the floor for a windowed
- * one. This constant governs EXTRACTION - how much is read off disk at all - and is held
- * below the assembly share on purpose.
+ * 0 = OFF (preserve today's force-inline) and is the default until tuned; override per-deploy via
+ * the `CorpusRetrievalMinInlineTokensPerDoc` admin setting. Expressed in tokens-per-doc, not a raw
+ * doc count, so the threshold auto-scales with the model's window through attachedFileTokenBudget.
  */
-const ATTACHED_CONTENT_SHARE = 0.35;
+const CORPUS_RETRIEVAL_MIN_INLINE_TOKENS_PER_DOC = 0;
+
 /**
- * Floor for the attached-content budget, as a share of the raw input window. Applies
- * when subtracting SYSTEM_PROMPT_RESERVE would drive the budget to zero, which a small
- * local model does routinely. See attachedFileTokenBudget for why zero is the dangerous
- * value rather than the safe one.
+ * The tool deferral hands the corpus to. A literal because the name is declared inline in the
+ * tool's definition (llm/tools/implementation/knowledgeBaseSearch) with no exported constant.
+ * Deferring while this tool is denied strands the corpus with no reader, and a rename would
+ * un-guard that path silently - so exported, and pinned against the real name by a test rather
+ * than by this comment.
  */
-const MIN_ATTACHED_CONTENT_SHARE = 0.15;
+export const KNOWLEDGE_SEARCH_TOOL_NAME = 'search_knowledge_base';
 
 /**
  * Fraction of the space ACTUALLY AVAILABLE FOR HISTORY (safe input minus the
@@ -410,7 +436,6 @@ interface ProcessInitContext {
   sessionFabFileIds: string[];
   params: z.infer<typeof QuestStartBodySchema>['params'];
   enabledTools: (z.infer<typeof b4mLLMTools> | string)[];
-  hasContentTransform?: boolean;
   projectId?: string;
   organizationId?: string | null;
   questMaster?: z.infer<typeof QuestStartBodySchema>['questMaster'];
@@ -419,6 +444,7 @@ interface ProcessInitContext {
   embeddingModel?: string;
   queryComplexity: string;
   imageConfig?: z.infer<typeof QuestStartBodySchema>['imageConfig'];
+  audioConfig?: z.infer<typeof QuestStartBodySchema>['audioConfig'];
   deepResearchConfig?: z.infer<typeof QuestStartBodySchema>['deepResearchConfig'];
   userTimezone?: string;
 }
@@ -519,12 +545,169 @@ export function addPairedTool<T extends string>(tools: readonly T[], trigger: T,
   return [...tools];
 }
 
+export interface ResolveEnabledToolsInput {
+  /** Tools already assembled for this request: client selection + server auto-adds. */
+  requestTools: string[];
+  /** `session.enabledTools` - tools a surface forces on regardless of the client toggle. */
+  sessionEnabledTools?: string[];
+  /** `session.disabledTools` - tools a curated surface forbids. Wins over everything else. */
+  sessionDisabledTools?: string[];
+  /**
+   * True when the session has a document attached (`session.knowledgeIds`) whose chunk text is
+   * actually readable by the knowledge tools right now - not merely present. The caller computes
+   * this (see `process()` and `attachmentHasIndexedContent`) so a file still chunking, whose
+   * content is already inlined elsewhere in the prompt, does not trigger an offer that can only
+   * return a zero-content reply.
+   */
+  hasAttachedKnowledge: boolean;
+  /**
+   * True when the caller can retrieve from at least one data lake - their own, their org's, or a
+   * shared/entitlement-gated lake they hold the gate for - independent of what's attached to this
+   * session. See `userHasAccessibleKnowledgeLake`. Low-stakes offering signal only; the knowledge
+   * tool re-resolves the authoritative retrieval scope fresh at execution.
+   */
+  hasAccessibleDataLake?: boolean;
+  /**
+   * Skip OUR server-side auto-offers (step 2, the knowledge offer). Set for any `promptMode`,
+   * matching the auto-add gate at the request-parse site (`if (!parsedBody.promptMode)`): auto-adds
+   * are our additions, not the caller's, and attaching a tool also pulls the provider's tool-use
+   * preamble into the request - so a mode-driven eval, above all `raw` (the bare-model control
+   * arm), must not get surprise tools. Caller-selected and session-forced tools are unaffected;
+   * only step 2 is gated.
+   */
+  skipAutoOffers?: boolean;
+}
+
 /**
- * Tools this process auto-adds server-side regardless of user selection (see the
- * auto-add pushes in the request-parse method: blog_publish/blog_edit/blog_draft
- * for admins, navigate_view, skill). Small local (Ollama) models get confused by
- * tools they didn't ask for, so these are trimmed for that backend unless the user
- * explicitly enabled them. Keep this list in sync with those auto-add sites.
+ * Single owner for the final tool-offer list handed to `buildTools`. The step order is
+ * deliberate:
+ *   1. session-forced union     - a surface can guarantee a tool is offered.
+ *   2. knowledge offer         - offer the knowledge-base tool when the caller has retrievable
+ *      knowledge: documents attached to THIS session (hasAttachedKnowledge) OR a data lake they
+ *      can reach (hasAccessibleDataLake). Attaching files / having a lake is a far stronger
+ *      retrieval signal than any phrase match, and offering a tool is cheap (the model may
+ *      decline) whereas withholding it is unrecoverable. Skipped when `skipAutoOffers` is set
+ *      (prompt-mode requests), since the offer is our addition, not the caller's.
+ *   3. companion pairing        - a tool useless without its partner rides along
+ *      (search_knowledge_base -> retrieve_knowledge_content, image_generation ->
+ *      edit_image). Runs AFTER the union/offer so session-forced and auto-offered tools
+ *      get paired too; pairing used to run at request-parse time, before the union, so
+ *      anything added later was silently left unpaired.
+ *   4. session denylist wraps pairing - a curated surface ("approved sources only") wins.
+ *      We strip denied tools BEFORE pairing so a denied trigger can't drag its companion
+ *      in (deny search_knowledge_base => retrieve_knowledge_content must not ride along),
+ *      and AFTER pairing so a denied companion can't ride in on a surviving trigger (keep
+ *      image_generation but deny edit_image). The final filter is the authoritative last word.
+ *
+ * Containment note for curated surfaces: this is a UNION plus a denylist, never an allowlist.
+ * `sessionDisabledTools` is the only thing that subtracts, so a surface that wants the knowledge
+ * tool kept out must deny it explicitly - carrying no attached documents is no longer sufficient,
+ * since `hasAccessibleDataLake` offers it to any caller who can reach a lake.
+ */
+export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
+  const denied = new Set(input.sessionDisabledTools ?? []);
+  const tools = [...input.requestTools];
+
+  for (const tool of input.sessionEnabledTools ?? []) {
+    if (!tools.includes(tool)) tools.push(tool);
+  }
+
+  if (
+    !input.skipAutoOffers &&
+    (input.hasAttachedKnowledge || input.hasAccessibleDataLake) &&
+    !tools.includes('search_knowledge_base')
+  ) {
+    tools.push('search_knowledge_base');
+  }
+
+  const survivors = tools.filter(tool => !denied.has(tool));
+  let paired = addPairedTool(survivors, 'image_generation', 'edit_image');
+  paired = addPairedTool(paired, 'search_knowledge_base', 'retrieve_knowledge_content');
+  // Cardinality rides along with search: a corpus you can search but not count is what made the
+  // model treat a count question as proof it had no access at all.
+  paired = addPairedTool(paired, 'search_knowledge_base', 'count_knowledge_base');
+  return paired.filter(tool => !denied.has(tool));
+}
+
+/**
+ * Whether to stop force-inlining a retrievable data-lake corpus and let the offered
+ * search_knowledge_base tool fetch it on demand. Pure so it is unit-testable in isolation from the
+ * DB reads that produce `retrievableCount`.
+ *
+ * `groundingMode` is the per-lake choice resolved at session-create (session.corpusGroundingMode),
+ * and it OVERRIDES the size heuristic:
+ * - `inline`: never defer (keep the corpus inlined).
+ * - `retrieve`: always defer the retrievable subset - so an owner and an entitlement-only reader of
+ *   the same lake ground identically, instead of the behavior falling out of a per-file CASL read.
+ * - `auto-by-size` OR absent (a session NOT created for a lake, which keeps the pre-existing
+ *   behavior): the per-doc even-split depth rule below.
+ *
+ * `retrievableCount <= 0` short-circuits to "never defer" AHEAD of the mode, in every mode
+ * including `retrieve`: deferring content the tool cannot fetch would strand it silently, so the
+ * anti-content-loss invariant wins over an explicit retrieve.
+ *
+ * The size rule: attachedFileTokenBudget is divided evenly across the inlined files
+ * (processFabFilesServer), so a large corpus gives each doc a shallow slice. `retrievableCount`
+ * (not the full attached count) is the divisor on purpose - it is the set eligible to defer. The
+ * real per-file split divides the same budget across MORE files (the always-inlined
+ * message/session/system sources share it too), so with retrievableCount <= totalAttached this
+ * estimate is an UPPER bound on the real depth (budget / retrievableCount >= budget /
+ * totalAttached). That biases conservatively in the safe direction: an estimate below the floor
+ * guarantees the real split is below it too, so we never over-defer - at worst we under-defer a
+ * corpus whose real split is shallow but whose estimate is not. Small corpora keep a high per-doc
+ * share and stay inlined (strictly better).
+ */
+export function shouldDeferCorpusToRetrieval(input: {
+  retrievableCount: number;
+  attachedFileTokenBudget: number;
+  minInlineTokensPerDoc: number;
+  groundingMode?: DataLakeGroundingMode;
+}): boolean {
+  const { retrievableCount, attachedFileTokenBudget, minInlineTokensPerDoc, groundingMode } = input;
+  // Nothing retrievable -> never defer, whatever the mode: deferring would lose content the tool
+  // cannot reach. Precedes the mode branches so an explicit `retrieve` can never strand a corpus.
+  if (retrievableCount <= 0) return false;
+  if (groundingMode === 'inline') return false; // explicit inline: keep the corpus inlined
+  if (groundingMode === 'retrieve') return true; // explicit retrieve: defer the retrievable subset
+  // 'auto-by-size' or absent: the size heuristic. minInlineTokensPerDoc <= 0 is the feature
+  // off-switch -> today's force-inline behavior.
+  if (minInlineTokensPerDoc <= 0) return false;
+  return Math.floor(attachedFileTokenBudget / retrievableCount) < minInlineTokensPerDoc;
+}
+
+/**
+ * Whether an attached file's chunk TEXT is actually readable by the knowledge tools right now.
+ * `vectorized` is set true at CHUNKING completion, not embedding completion (see
+ * fabFileService/chunk.ts: `vectorized = chunks.length > 0`, written in the same update as
+ * `chunkCount`), and `retrieve_knowledge_content`'s zero-result path is a chunk-TEXT read
+ * (findTextsByFabFileId) with no embedding dependency. So this is deliberately looser than
+ * `resolveCorpusInlinePlan`'s fully-vectorized-and-same-embedding-space bar, which gates semantic
+ * RANKING quality, not whether the tool has any text to hand back at all. Do not tighten this to
+ * `vectorizedChunkCount >= chunkCount` - that would withhold the tool from files it can serve fine.
+ * The `!deletedAt && !archivedAt` liveness check mirrors `isLiveVisibleFile` in
+ * knowledgeBaseRetrieve (also re-derived at `resolveCorpusInlinePlan`'s `liveAndReachable`) rather
+ * than importing it - each site pairs the check with a different retrievability bar.
+ */
+export function attachmentHasIndexedContent(
+  file: Pick<IFabFileDocument, 'vectorized' | 'chunkCount' | 'deletedAt' | 'archivedAt'>
+): boolean {
+  return !file.deletedAt && !file.archivedAt && (Boolean(file.vectorized) || (file.chunkCount ?? 0) > 0);
+}
+
+/**
+ * Tools this process auto-adds server-side regardless of user selection. Three auto-add sites
+ * feed this: the request-parse method (navigate_view), the conditional blog/skill gate in
+ * `process()` (blog_publish/blog_edit/blog_draft, skill - each on its own intent/catalog signal,
+ * see `shouldOfferBlogTools`/`shouldOfferSkillTool`), and `resolveEnabledTools` (the
+ * attached-knowledge offer). Small local (Ollama) models get confused by tools they didn't ask
+ * for, so the names in this list are trimmed for that backend unless the user explicitly enabled
+ * them. Keep this list in sync with those auto-add sites.
+ *
+ * Deliberately NOT listed: search_knowledge_base / retrieve_knowledge_content. Attaching a
+ * document is itself an explicit user signal that the docs should be used, unlike the genuinely
+ * unrequested capabilities above - so the attached-knowledge offer must survive the Ollama trim,
+ * which is the whole point of the feature for local models. Listing them here would silently
+ * defeat it.
  */
 export const AUTO_ADDED_TOOL_NAMES = ['blog_draft', 'blog_publish', 'blog_edit', 'navigate_view', 'skill'];
 
@@ -554,6 +737,8 @@ export class ChatCompletionProcess {
   public db: IChatCompletionServiceOptions['db'];
   public invokeCreateMemento: IChatCompletionServiceOptions['invokeCreateMemento'];
   public recallMementosV2: IChatCompletionServiceOptions['recallMementosV2'];
+  public recallLakeMemory: IChatCompletionServiceOptions['recallLakeMemory'];
+  public loadSystemPromptById: IChatCompletionServiceOptions['loadSystemPromptById'];
   public logger: Logger;
   public user: IUserDocument;
   public logEvent: IChatCompletionServiceOptions['logEvent'];
@@ -573,6 +758,20 @@ export class ChatCompletionProcess {
   public entitlementKeys: string[] = [];
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private entitlementsResolved = false;
+  /**
+   * Per-turn memo for the caller's resolved data-lake access. Shared by the tool-offer check
+   * (userHasAccessibleKnowledgeLake) and the corpus inline-defer plan (resolveCorpusInlinePlan) so
+   * the two can never disagree - it is the SAME access the knowledge tool resolves with.
+   */
+  private accessibleDataLakeAccessMemo:
+    { dataLakeTags: string[]; dataLakeTagPrefixes: string[]; scopedTagPrefixes: string[] } | undefined;
+  /**
+   * Per-turn memo for the session's attached-knowledge file docs (`session.knowledgeIds`), shared
+   * by the tool-offer gate (`hasAttachedKnowledge`, see `process()`) and `resolveCorpusInlinePlan`
+   * so the turn pays for this DB read at most once. `null` means the lookup failed this turn (see
+   * `getAttachedKnowledgeFiles`), distinct from `[]` (looked up, none accessible).
+   */
+  private attachedKnowledgeFilesMemo: IFabFileDocument[] | null | undefined;
   private storage: IChatCompletionServiceOptions['storage'];
   private imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
   private imageProcessorLambdaName?: string;
@@ -591,7 +790,10 @@ export class ChatCompletionProcess {
   private onReplyStream?: IChatCompletionServiceOptions['onReplyStream'];
   private onToolPreamble?: IChatCompletionServiceOptions['onToolPreamble'];
   private verbose: boolean = false;
-  private toolCreditsMap: Map<string, number> = new Map();
+  // Per-name queue of each tool call's reserved credits, in call order (see
+  // ToolBuilder.reserveToolCredits). Settled per-call below so a tool invoked more
+  // than once in a turn bills the sum of every call.
+  private toolCreditsMap: Map<string, number[]> = new Map();
   private subagentTelemetryData: SubagentTelemetryData[] = [];
   // Credit reservation tracking (pre-reserve/reconcile pattern)
   private reservedCredits: number = 0;
@@ -607,6 +809,8 @@ export class ChatCompletionProcess {
     this.db = options.db;
     this.invokeCreateMemento = options.invokeCreateMemento;
     this.recallMementosV2 = options.recallMementosV2;
+    this.recallLakeMemory = options.recallLakeMemory;
+    this.loadSystemPromptById = options.loadSystemPromptById;
     this.storage = options.storage;
     this.imageGenerateStorage = options.imageGenerateStorage;
     this.imageProcessorLambdaName = options.imageProcessorLambdaName;
@@ -666,6 +870,260 @@ export class ChatCompletionProcess {
     return this.entitlementKeys;
   }
 
+  /**
+   * Coarse offering signal: can the caller retrieve from at least one data lake - their own,
+   * their org's, OR a shared/entitlement-gated lake they hold the gate for? Uses `dataLakeTags`
+   * from the shared access resolver, which is ALREADY access-filtered (tag / entitlement /
+   * ownership), so a shared lake only counts for a user who can actually reach it - offering the
+   * search tool to entitled users is the intent. Memoized per turn (the DB lookup runs at most once).
+   *
+   * Offering-only and low-stakes: the knowledge tool re-resolves the authoritative retrieval
+   * scope fresh at execution (never cached), so a FALSE POSITIVE here can only offer a tool that
+   * returns nothing. A true positive does change what the model can pull into context, but only
+   * from lakes the caller was already authorized to read - this signal never widens that set.
+   */
+  public async userHasAccessibleKnowledgeLake(): Promise<boolean> {
+    return (await this.getAccessibleDataLakeAccess()).dataLakeTags.length > 0;
+  }
+
+  /**
+   * The caller's resolved data-lake access (owned + org + shared/entitlement-gated lakes they can
+   * reach), memoized per turn. This is the SAME resolver the knowledge tool executes with, so the
+   * tool-offer and the inline-defer decisions can never disagree. Fail-safe: any error degrades to
+   * empty access (treated as "no lake"), never breaks the turn.
+   */
+  private async getAccessibleDataLakeAccess(): Promise<{
+    dataLakeTags: string[];
+    dataLakeTagPrefixes: string[];
+    scopedTagPrefixes: string[];
+  }> {
+    if (this.accessibleDataLakeAccessMemo === undefined) {
+      try {
+        const entitlementKeys = await this.resolveEntitlementKeys();
+        this.accessibleDataLakeAccessMemo = await getDynamicDataLakeAccess({
+          db: this.db,
+          user: this.user,
+          entitlementKeys,
+        });
+      } catch (err) {
+        this.logger.warn(
+          `[dataLakes] accessible-lake resolution failed; treating as no lake: ${(err as Error)?.message}`
+        );
+        this.accessibleDataLakeAccessMemo = { dataLakeTags: [], dataLakeTagPrefixes: [], scopedTagPrefixes: [] };
+      }
+    }
+    return this.accessibleDataLakeAccessMemo;
+  }
+
+  /**
+   * The session's attached-knowledge file docs (`session.knowledgeIds`), memoized per turn.
+   * Returns `null` on a lookup failure rather than throwing - callers decide their own fail
+   * direction (the tool-offer gate fails toward offering; `resolveCorpusInlinePlan` fails toward
+   * keeping content inline), so this method must not force one on them.
+   * The memo is NOT keyed on `ids` - every caller within a turn must pass `session.knowledgeIds`
+   * (both call sites do); a future caller passing a different subset would silently get the
+   * first call's cached result instead of its own.
+   */
+  private async getAttachedKnowledgeFiles(ids: string[]): Promise<IFabFileDocument[] | null> {
+    if (this.attachedKnowledgeFilesMemo === undefined) {
+      try {
+        const scope = this.getScopeFilter(this.user, Permission.read, 'FabFile');
+        this.attachedKnowledgeFilesMemo = await this.db.fabfiles.getAccessibleFiles(ids, scope);
+      } catch (err) {
+        this.logger.warn(
+          `[knowledge] attached-file lookup failed; treating attached knowledge as indexed (fail open): ${(err as Error)?.message}`
+        );
+        this.attachedKnowledgeFilesMemo = null;
+      }
+    }
+    return this.attachedKnowledgeFilesMemo;
+  }
+
+  /**
+   * Decide which attached-knowledge documents to STOP inlining and leave to the offered
+   * search_knowledge_base tool. Returns the deferred id subset plus telemetry. See
+   * `shouldDeferCorpusToRetrieval` for the size rule and `CORPUS_RETRIEVAL_MIN_INLINE_TOKENS_PER_DOC`
+   * for why this is off by default.
+   *
+   * Anti-regression is the whole design: a file is deferrable ONLY when the tool can actually reach
+   * it, which for the unscoped semantic arm means an EXACT match against the caller's accessible
+   * `dataLakeTags` (the ownership-independent membership branch). Prefix-only / non-lake attachments
+   * are never deferred - they stay inlined, because deferring content the tool cannot fetch would
+   * silently lose it. Only `sessionKnowledgeIds` are ever considered; message- and session-attached
+   * fab files and system files are always inlined by the caller.
+   */
+  private async resolveCorpusInlinePlan(input: {
+    sessionKnowledgeIds: string[];
+    attachedFileTokenBudget: number;
+    skipAutoOffers: boolean;
+    /** `session.disabledTools` includes the knowledge-search tool - see the guard below. */
+    knowledgeSearchDisabled: boolean;
+    defaultAdminSettings: Record<string, string>;
+    /** The SAME filter the knowledge tools are built with - see the retrievability comment below. */
+    retrievalFilter: RetrievalExclusionOptions;
+    /**
+     * The session's resolved per-lake grounding mode (`session.corpusGroundingMode`), set at
+     * create time for a lake session. Overrides the size heuristic: `inline` never defers,
+     * `retrieve` always defers the retrievable subset. Absent on a non-lake session -> the
+     * pre-existing size-only behavior (byte-identical to before this field existed). The
+     * `EnableDataLakeGroundingMode` admin kill switch (default on) neutralizes this to the
+     * size-only path globally when turned off - see the resolution below.
+     */
+    groundingMode?: DataLakeGroundingMode;
+  }): Promise<{
+    deferredKnowledgeIds: string[];
+    attachedCount: number;
+    retrievableCount: number;
+    deferredToRetrieval: boolean;
+    minInlineTokensPerDoc: number;
+  }> {
+    const {
+      sessionKnowledgeIds,
+      attachedFileTokenBudget,
+      skipAutoOffers,
+      knowledgeSearchDisabled,
+      defaultAdminSettings,
+      retrievalFilter,
+      groundingMode,
+    } = input;
+    const attachedCount = sessionKnowledgeIds.length;
+
+    // getSettingsValue coerces via the setting's Zod schema, so this is a number (0 by default).
+    const rawThreshold = getSettingsValue('CorpusRetrievalMinInlineTokensPerDoc', defaultAdminSettings);
+    const minInlineTokensPerDoc =
+      typeof rawThreshold === 'number' && Number.isFinite(rawThreshold) && rawThreshold >= 0
+        ? rawThreshold
+        : CORPUS_RETRIEVAL_MIN_INLINE_TOKENS_PER_DOC;
+
+    // Global rollback lever (default ON). Turning it OFF makes this path IGNORE the per-lake
+    // grounding mode and fall back to pure size-only behavior (as if no mode were set), for every
+    // lake at once - so an operator can revert the retrieve-by-default rollout without editing lakes
+    // one settings modal at a time. This is the escape hatch the per-lake mode otherwise lacks:
+    // CorpusRetrievalMinInlineTokensPerDoc at 0 ("always inline") stops being an off-switch once
+    // every lake session carries `retrieve`, so 0 alone can no longer revert the behavior.
+    const groundingModeEnabled = getSettingsValue('EnableDataLakeGroundingMode', defaultAdminSettings) === true;
+    const mode = groundingModeEnabled ? groundingMode : undefined;
+
+    const noDefer = {
+      deferredKnowledgeIds: [] as string[],
+      attachedCount,
+      retrievableCount: 0,
+      deferredToRetrieval: false,
+      minInlineTokensPerDoc,
+    };
+
+    // Nothing attached -> nothing to defer OR strand, in any mode. Gated FIRST so the anti-strand
+    // warning below never fires for a lake session that simply has no corpus - the common case, since
+    // the "start chat with this lake" entry point creates the session with empty knowledgeIds.
+    if (attachedCount === 0) return noDefer;
+
+    // These two gates are MODE-INDEPENDENT: they hold even for an explicit `retrieve`, because
+    // deferring to a tool that isn't there strands the corpus with no reader. When a lake WITH a
+    // corpus asked for `retrieve` but the tool path is unavailable, log the anti-strand inline
+    // fallback: a lake configured to retrieve silently inlining is otherwise invisible in a smoke test.
+    if ((skipAutoOffers || knowledgeSearchDisabled) && mode === 'retrieve') {
+      this.logger.warn(
+        `[dataLakes] grounding mode 'retrieve' requested but the knowledge tool is ${
+          skipAutoOffers ? 'not offered (promptMode)' : 'disabled for this session'
+        }; inlining the corpus (${attachedCount} doc(s)) to avoid stranding it.`
+      );
+    }
+    // promptMode is an eval/passthrough surface where the tool is NOT offered - deferring there
+    // would strand the corpus with no retrieval path. Symmetric with the tool-offer gate.
+    if (skipAutoOffers) return noDefer;
+    // Same reasoning one step further: `session.disabledTools` wins over every other tool gate
+    // (including the post-build denylist pass, which runs AFTER this plan), so deferring to a
+    // denied tool loses the corpus outright. Read from the session rather than the resolved tool
+    // list because the list is filtered again downstream of this call.
+    if (knowledgeSearchDisabled) return noDefer;
+    // `inline` never defers, so skip the DB reads entirely (gate the work, not just its use).
+    if (mode === 'inline') return noDefer;
+    // The size feature-flag off-switch short-circuits before the reads for auto-by-size and for a
+    // non-lake session (absent mode). `retrieve` deliberately does NOT short-circuit here - it
+    // defers by policy, not by size, so it proceeds even when the size threshold is 0.
+    if (mode !== 'retrieve' && minInlineTokensPerDoc <= 0) return noDefer;
+
+    try {
+      const access = await this.getAccessibleDataLakeAccess();
+      if (access.dataLakeTags.length === 0) return noDefer; // no accessible lake -> nothing retrievable
+
+      const accessibleTags = new Set(access.dataLakeTags);
+      const files = await this.getAttachedKnowledgeFiles(sessionKnowledgeIds);
+      if (files === null) return noDefer; // lookup failed -> never lose content over an optimization
+
+      // Retrievability = tag membership AND real vector-search reachability. A lake-tagged doc is
+      // deferrable only if search_knowledge_base's semantic arm can actually surface it: it must be
+      // FULLY VECTORIZED (vectorizedChunkCount >= chunkCount, chunkCount > 0) AND embedded under the
+      // SAME model as the query (embeddingModel agreement). A doc that is unvectorized, still
+      // vectorizing, or embedded in another model's space passes the tag check but the semantic arm
+      // skips it - deferring it would strand its content silently. When the query embedding model is
+      // unresolvable the semantic arm cannot run at all (the tool falls back to metadata-only keyword
+      // search), so nothing is deferrable. Closes the tag-only gap; #1411 hardened the retrieval-side
+      // reads this now relies on. `vectorizedChunkCount >= chunkCount` is the usable-data condition.
+      // MUST STAY IN SYNC with `isFabFileCitable` (apps/client/server/memory/lakeSourceReachability.ts),
+      // the #1440 lake-memory copy of this same "can the knowledge tool actually reach this doc"
+      // predicate (fully vectorized + same embedding model + live/not-excluded). The two live in
+      // different packages with no shared symbol; change one, change the other.
+      const queryEmbeddingModel = getSettingsValue('defaultEmbeddingModel', defaultAdminSettings);
+      const retrievableIds = files
+        .filter(file => {
+          const lakeTagged = (file.tags ?? []).some(tag => accessibleTags.has(tag.name));
+          const chunks = file.chunkCount ?? 0;
+          const fullyVectorized = chunks > 0 && (file.vectorizedChunkCount ?? 0) >= chunks;
+          // Exact-match on purpose, and deliberately STRICTER than embeddingMismatch's
+          // isForeignEmbeddingModel, which counts an absent/blank label as comparable. Here an
+          // unlabeled-but-vectorized doc stays inlined rather than risk a strand. Do NOT consolidate
+          // this onto isForeignEmbeddingModel - that loosens the gate to defer unlabeled docs the
+          // semantic arm may not actually reach, which is the content-losing direction.
+          const sameVectorSpace = Boolean(queryEmbeddingModel) && file.embeddingModel === queryEmbeddingModel;
+          // The tool is built with `retrievalFilter: toRetrievalFilter(session)` and enforces it on
+          // BOTH arms, so a doc the filter excludes is unreachable however well vectorized it is.
+          // Checking the same predicate here is what stops the two lists diverging - the gap this
+          // closes was a lake-tagged, fully-vectorized doc matching a session exclusion marker being
+          // deferred and then dropped by the tool, losing it silently. Mirrors `isLiveVisibleFile` in
+          // knowledgeBaseRetrieve, which is the canonical "can the tool reach this file" predicate.
+          const liveAndReachable = !file.deletedAt && !file.archivedAt && !isRetrievalExcluded(file, retrievalFilter);
+          return lakeTagged && fullyVectorized && sameVectorSpace && liveAndReachable;
+        })
+        .map(file => file.id);
+
+      // The most reachable retrieve->inline fallback: `retrieve` was asked for, but nothing in the
+      // corpus is retrievable yet (not fully vectorized, or embedded under a different model than the
+      // query), so shouldDeferCorpusToRetrieval declines to defer and the corpus is inlined rather
+      // than stranded. Log it with the attached count so an operator can tell "nothing vectorized
+      // yet" from "nothing attached" - this is the anti-strand case the tool-availability gates above
+      // do NOT cover, and the one most likely to be hit in practice.
+      if (mode === 'retrieve' && retrievableIds.length === 0) {
+        this.logger.warn(
+          `[dataLakes] grounding mode 'retrieve' requested but 0 of ${attachedCount} attached doc(s) are ` +
+            `retrievable (not fully vectorized, or embedded under a different model than the query); ` +
+            `inlining the corpus to avoid stranding it.`
+        );
+      }
+
+      const deferredToRetrieval = shouldDeferCorpusToRetrieval({
+        retrievableCount: retrievableIds.length,
+        attachedFileTokenBudget,
+        minInlineTokensPerDoc,
+        groundingMode: mode,
+      });
+
+      return {
+        deferredKnowledgeIds: deferredToRetrieval ? retrievableIds : [],
+        attachedCount,
+        retrievableCount: retrievableIds.length,
+        deferredToRetrieval,
+        minInlineTokensPerDoc,
+      };
+    } catch (err) {
+      // Never lose content over an optimization: any failure degrades to today's full inline.
+      this.logger.warn(
+        `[dataLakes] corpus inline-defer plan failed; inlining all attached knowledge: ${(err as Error)?.message}`
+      );
+      return noDefer;
+    }
+  }
+
   private async initializeProcessContext(
     body: z.infer<typeof QuestStartBodySchema>,
     logger: Logger,
@@ -717,44 +1175,32 @@ export class ChatCompletionProcess {
       embeddingModel,
       queryComplexity,
       imageConfig,
+      audioConfig,
       deepResearchConfig,
       timezone: userTimezone,
     } = parsedBody;
 
-    // Pair tools that are useless without their companion. The UI exposes single toggles
-    // ("Image Generation", "Knowledge Base Search") that imply the paired capability.
-    let finalEnabledTools: string[] = addPairedTool(enabledTools, 'image_generation', 'edit_image');
-    finalEnabledTools = addPairedTool(finalEnabledTools, 'search_knowledge_base', 'retrieve_knowledge_content');
-    let hasContentTransform = false;
+    // Companion pairing now runs once in `resolveEnabledTools` (see process()), after the
+    // per-session union and attached-knowledge offer, so session-forced and auto-offered
+    // tools get paired too. Here we only copy the request selection so the auto-adds below
+    // don't mutate `parsedBody.tools`.
+    const finalEnabledTools: string[] = [...enabledTools];
 
-    // Auto-add blog_publish tool if user has blog integration configured (admin-only for now)
-    if (this.user.isAdmin && this.user.blogIntegration && !enabledTools.includes('blog_publish')) {
-      finalEnabledTools.push('blog_publish');
-    }
-
-    // Auto-add blog_edit tool if user has blog integration configured (admin-only for now)
-    if (this.user.isAdmin && this.user.blogIntegration && !enabledTools.includes('blog_edit')) {
-      finalEnabledTools.push('blog_edit');
-    }
-
-    // Auto-add blog_draft tool for admin users (used by Content Publishing Studio)
-    if (this.user.isAdmin && !enabledTools.includes('blog_draft')) {
-      finalEnabledTools.push('blog_draft');
-      hasContentTransform = true;
-    }
-
-    if (!enabledTools.includes('navigate_view') && shouldAutoEnableNavigateView(parsedBody.extraContextMessages)) {
-      finalEnabledTools.push('navigate_view');
-    }
-
-    // Auto-add the `skill` LLM tool when the host has wired a skill repository.
-    // Skills are user-defined instruction templates and there's no separate
-    // toggle for them in the UI - gating purely on db.skills being present
-    // keeps callers without skill support unaffected. SkillsFeature still
-    // surfaces the catalog into the system prompt so the LLM knows what's
-    // invocable.
-    if (this.db.skills && !finalEnabledTools.includes('skill')) {
-      finalEnabledTools.push('skill');
+    // Auto-added capabilities are OUR additions, not the caller's, so a prompt mode skips this
+    // whole block - and not only for prompt hygiene: attaching any tool also pulls the provider's
+    // server-side tool-use preamble into the request (observed live: a completion whose only tools
+    // were auto-added knew the current date on a fresh raw-mode session). Tools the caller sent
+    // explicitly are caller intent and stay, mode or not.
+    //
+    // blog_publish/blog_edit/blog_draft and `skill` are NOT auto-added here even though they are
+    // OUR additions too: both need signals not yet available at this point in the request (an
+    // intent-or-continuation check needs the fetched history; `skill` needs the invocable-skill
+    // catalog SkillsFeature populates later) - see the conditional auto-add in process(), after
+    // previous messages are fetched and the feature loop has run.
+    if (!parsedBody.promptMode) {
+      if (!enabledTools.includes('navigate_view') && shouldAutoEnableNavigateView(parsedBody.extraContextMessages)) {
+        finalEnabledTools.push('navigate_view');
+      }
     }
 
     // Auto-add Lattice tools when Lattice feature is enabled
@@ -791,7 +1237,6 @@ export class ChatCompletionProcess {
       sessionFabFileIds,
       params,
       enabledTools: finalEnabledTools,
-      hasContentTransform,
       projectId,
       organizationId,
       questMaster,
@@ -800,6 +1245,7 @@ export class ChatCompletionProcess {
       embeddingModel,
       queryComplexity,
       imageConfig,
+      audioConfig,
       deepResearchConfig,
       userTimezone,
     };
@@ -807,6 +1253,13 @@ export class ChatCompletionProcess {
 
   /** Pipeline phase durations from the most recent process() call. Available after process() resolves. */
   public pipelinePhases: Record<string, number> | null = null;
+
+  /**
+   * The disclosed system prompt text, when the request asked for it. Deliberately exposed here
+   * rather than on the quest: unlike the promptDetails breakdown, this is the prompt itself, and
+   * persisting it would hand it to every reader of the session.
+   */
+  public systemPromptText: SystemPromptTextDisclosure | undefined;
 
   public async process({
     body,
@@ -846,7 +1299,6 @@ export class ChatCompletionProcess {
       sessionFabFileIds,
       params,
       enabledTools,
-      hasContentTransform,
       projectId,
       organizationId,
       questMaster,
@@ -855,6 +1307,7 @@ export class ChatCompletionProcess {
       embeddingModel,
       queryComplexity,
       imageConfig,
+      audioConfig,
       deepResearchConfig,
       userTimezone,
     } = initContext;
@@ -862,7 +1315,7 @@ export class ChatCompletionProcess {
     let enableQuestMaster = initialEnableQuestMaster;
     const enableMementos = initialEnableMementos;
     let enableAgents = initialEnableAgents;
-    const { questId, sessionId } = parsedBody;
+    const { questId, sessionId, promptMode } = parsedBody;
 
     // Variables to store actual timing durations
     let actualArtifactProcessingDuration = 0;
@@ -1052,7 +1505,7 @@ export class ChatCompletionProcess {
         );
       };
 
-      const [session, organization, apiKeyTable] = await Promise.all([
+      const [session, organization, apiKeyTable, toolAvailability] = await Promise.all([
         timeCall('session', Promise.resolve(prefetchedSession ?? this.db.sessions.findById(sessionId))),
         timeCall(
           'organization',
@@ -1063,6 +1516,14 @@ export class ChatCompletionProcess {
               : Promise.resolve(null)
         ),
         timeCall('apiKeys', getEffectiveLLMApiKeys(this.user.id, { db: this.db, getSettingsByNames }, { logger })),
+        // Never rejects (see resolveToolAvailability's doc comment), so it's safe alongside the
+        // "essential" calls above that re-throw on failure. Fail-closed here (unlike the Tools
+        // picker UI's fail-open default): a tool this lookup couldn't confirm works should not
+        // reach the model rather than risk offering one that will throw or refuse.
+        timeCall(
+          'toolAvailability',
+          resolveToolAvailability(this.user.id, { db: this.db }, { onLookupError: 'unavailable', logger })
+        ),
       ]);
 
       if (!session) {
@@ -1074,28 +1535,17 @@ export class ChatCompletionProcess {
       }
       quest.status = 'running';
 
-      // Generic per-session tool defaults: a session may carry tools that must
-      // always be offered to the model, unioned with the per-request selection.
-      // Lets a product surface guarantee grounded retrieval (or other tools)
-      // regardless of the client's Smart/Fast toggle. No product-specific branch
-      // in core - mirrors the generic `session.systemPromptText` capability.
-      if (Array.isArray(session.enabledTools)) {
-        for (const tool of session.enabledTools) {
-          if (!enabledTools.includes(tool)) enabledTools.push(tool);
-        }
-      }
-
-      // Generic per-session tool denylist: strip tools the session forbids, even if
-      // the request or a global auto-add (e.g. navigate_view) included them. Lets a
-      // product surface enforce an approved toolset ("curated sources only" -> no web
-      // search). Applied last so it wins over every other tool source. Mutates in
-      // place since `enabledTools` is the array reference passed to buildTools.
-      if (Array.isArray(session.disabledTools) && session.disabledTools.length > 0) {
-        const denied = new Set(session.disabledTools);
-        for (let i = enabledTools.length - 1; i >= 0; i--) {
-          if (denied.has(enabledTools[i])) enabledTools.splice(i, 1);
-        }
-      }
+      const hasAnyAttachment = (session.knowledgeIds?.length ?? 0) > 0;
+      // Any promptMode is an eval/passthrough that must not receive our server-side offers.
+      const skipAutoOffers = Boolean(promptMode);
+      // Kicked off here (not awaited yet) so its DB read overlaps with the models/admin-settings
+      // fetch below instead of serializing in front of it - folded into that Promise.all. Skips
+      // the lookup entirely when there's nothing to check (no attachment) or the offer is skipped
+      // anyway (promptMode).
+      const attachedKnowledgeFilesPromise: Promise<IFabFileDocument[] | null> =
+        hasAnyAttachment && !skipAutoOffers
+          ? this.getAttachedKnowledgeFiles(session.knowledgeIds!)
+          : Promise.resolve(null);
 
       // Generic per-session integration isolation: a curated-surface session (e.g. /opti)
       // can suppress the user's personal integrations so it runs only its server-owned
@@ -1106,14 +1556,15 @@ export class ChatCompletionProcess {
         parsedBody.mcpServers = [];
       }
 
-      // Start model info, admin settings, and quest save in parallel
-      const [, models, defaultAdminSettings] = await Promise.all([
+      // Start model info, admin settings, quest save, and the attached-knowledge lookup in parallel
+      const [, models, defaultAdminSettings, attachedKnowledgeFiles] = await Promise.all([
         // Quest save can be async - don't block on it
         timeCall('saveQuest', Promise.resolve(saveQuest(quest))),
         // Get available models in parallel
         timeCall('models', getAvailableModels(apiKeyTable)),
         // Admin settings have NO dependency on models, load in parallel
         timeCall('adminSettings', this.loadAdminSettingsAsync(logger, processStartTime)),
+        timeCall('attachedKnowledgeFiles', attachedKnowledgeFilesPromise),
       ]);
 
       logger.info(
@@ -1121,6 +1572,40 @@ export class ChatCompletionProcess {
           Date.now() - essentialDataStartTime
         }ms`
       );
+
+      // Finalize the tool-offer list in one place: union the session's forced tools, offer the
+      // knowledge-base tool when the caller has retrievable knowledge (documents attached to this
+      // session OR one of their own data lakes), pair companion tools, and apply the session
+      // denylist last (so a curated "approved sources only" surface still wins). `enabledTools`
+      // is the array reference handed to buildTools, so splice the result back in place rather
+      // than reassigning the binding.
+      //
+      // "Attached knowledge" for the offer means the caller has an attachment the tool can
+      // actually read RIGHT NOW - not merely an attachment. A file still chunking has its raw
+      // content already inlined by processFabFilesServer, so offering the tool for it can only
+      // return a zero-content reply that a tool-eager model reads as "I cannot access this file",
+      // discarding the content already in front of it. `attachedKnowledgeFiles` is `null` both
+      // when the lookup was skipped above and when it failed - fail toward offering rather than
+      // stranding a genuinely indexed corpus with no retrieval path (see getAttachedKnowledgeFiles).
+      const hasAttachedKnowledge =
+        hasAnyAttachment &&
+        (attachedKnowledgeFiles === null || attachedKnowledgeFiles.some(attachmentHasIndexedContent));
+      // Only pay the accessible-lake lookup when it could change the offer: not skipped
+      // (prompt-mode), and attached knowledge hasn't already triggered the offer anyway.
+      const hasAccessibleDataLake =
+        skipAutoOffers || hasAttachedKnowledge ? false : await this.userHasAccessibleKnowledgeLake();
+      const resolvedTools = resolveEnabledTools({
+        requestTools: enabledTools,
+        sessionEnabledTools: Array.isArray(session.enabledTools) ? session.enabledTools : undefined,
+        sessionDisabledTools: Array.isArray(session.disabledTools) ? session.disabledTools : undefined,
+        hasAttachedKnowledge,
+        hasAccessibleDataLake,
+        skipAutoOffers,
+      });
+      enabledTools.splice(0, enabledTools.length, ...resolvedTools);
+
+      // The invisible-failure warning ("caller has knowledge but no knowledge tool offered")
+      // moved to after buildTools, where the authoritative post-build tool list is known.
 
       const throttledSend = DISABLE_SERVER_THROTTLING
         ? () => this.sendStatusUpdate(quest, null) // No throttling - direct send
@@ -1200,16 +1685,31 @@ export class ChatCompletionProcess {
       // Build optimized features based on query complexity
       timer.phase('features_build');
       const featureBuildStartTime = Date.now();
+      // A session's authored prompt is either raw server-owned text (`systemPromptText`) or a
+      // reference to a curated registry prompt (`systemPromptId`, e.g. the triage router). Resolve
+      // the id to its CURRENT content HERE - not in an entry-point route - so it injects on EVERY
+      // path (chat, llm, queue, slack) via SessionPromptFeature, and admin edits take effect with no
+      // deploy. Raw text wins if both are somehow set. The injector enforces the activatable allowlist.
+      const sessionSystemPrompt = session.systemPromptText?.trim()
+        ? session.systemPromptText
+        : session.systemPromptId && this.loadSystemPromptById
+          ? ((await this.loadSystemPromptById(session.systemPromptId)) ?? undefined)
+          : undefined;
       await this.buildOptimizedFeatures(
         defaultAdminSettings,
         enableQuestMaster || false,
-        enableMementos || false,
+        // Tri-state, deliberately NOT coerced: explicit false is the caller's memory
+        // opt-out and must stay distinguishable from absence (#1319, resolveMementoGates).
+        enableMementos,
         enableAgents || false,
         projectId,
-        optimizedFeatureList,
+        // Not built at all under a prompt mode, rather than built and filtered later: these
+        // features have side effects (memory writes, reply replacement) that outlive the prompt.
+        filterFeaturesByPromptMode(optimizedFeatureList, promptMode),
         organization,
-        session.systemPromptText,
-        session.forceKnowledgeRetrieval,
+        sessionSystemPrompt,
+        // A mode overrides the session flag in both directions; see resolveForcedRetrieval.
+        resolveForcedRetrieval(promptMode, session.forceKnowledgeRetrieval),
         session.retrievalTags,
         session.citationStyle,
         toRetrievalFilter(session)
@@ -1263,13 +1763,13 @@ export class ChatCompletionProcess {
 
       // Dynamic history adjustment: now that we have modelInfo, adjust history count
       // based on model's actual context window
-      const contextWindow = modelInfo.contextWindow ?? 200000;
+      const contextWindow = effectiveContextWindow(modelInfo);
 
-      // Image models generate from the current prompt alone: the image backend
+      // Image and video models generate from the current prompt alone: the media backend
       // ignores conversation history. Sending history only inflates the token count
-      // and trips a false context-overflow against the image model's small context
+      // and trips a false context-overflow against the media model's small context
       // window (e.g. FLUX Pro 1.1 at 10k).
-      if (modelInfo.type === 'image') {
+      if (isMediaModelType(modelInfo.type)) {
         historyCount = 0;
       }
 
@@ -1560,7 +2060,14 @@ export class ChatCompletionProcess {
       // where a lean one did not. The tokenizer isn't run here (that would be N async
       // calls over the whole history on every turn); char/4 estimates keep boundary
       // selection synchronous and are only a conservative floor. enabledTools here
-      // undercounts MCP-expanded tools, which the overflow-guard safety net catches.
+      // undercounts MCP-expanded tools, which the overflow-guard safety net catches - and, as of
+      // the conditional blog/skill auto-add below (which needs the history this budget sizes, so
+      // it cannot run any earlier), also undercounts by up to 4 tools on a turn that ends up
+      // getting one or more of them. Same backstop: the final tokenizer-accurate safety pass in
+      // buildAndSortMessages sheds history until the real payload fits regardless of how this
+      // estimate was sized, so the cost of the undercount is one extra shed round at most, never
+      // an overflow - the cost of under-reserving here is a slower approach to the right size
+      // (more shed rounds), never a payload that ships oversized.
       const estTokens = (text: string | undefined | null): number => (text ? Math.ceil(text.length / 4) : 0);
       const nonHistoryOverhead =
         SYSTEM_PROMPT_RESERVE_TOKENS +
@@ -1576,6 +2083,52 @@ export class ChatCompletionProcess {
       const [previousMessages, totalMessageCount, cacheInfo] = previousMessagesResult;
       const oldestIncludedQuestId = cacheInfo.oldestIncludedQuestId ?? null;
       const verbatimExcludedCount = cacheInfo.excludedOlderQuestCount ?? 0;
+      // Real tool-usage signal for this window - see fetchAndProcessPreviousMessages's own doc
+      // comment on this field for why `previousMessages` itself cannot answer "was this tool used
+      // earlier in the conversation" (neither of its tool_use-replay paths fires in production).
+      const priorToolNames = cacheInfo.priorToolNames ?? [];
+
+      // blog_publish/blog_edit/blog_draft and `skill` are auto-added HERE rather than at the
+      // request-parse site (initializeProcessContext) because each needs a signal that isn't
+      // available that early: the intent-or-continuation check needs this fetched history, and
+      // `skill` needs the invocable-skill catalog SkillsFeature populated in the feature loop
+      // above. No session.disabledTools check needed here - the final denylist pass on the built
+      // tool list (below, near buildTools) already strips any session-forbidden tool regardless
+      // of when it was added to enabledTools.
+      let hasContentTransform = false;
+      if (!promptMode) {
+        const blogGates = shouldOfferBlogTools({
+          isAdmin: this.user.isAdmin,
+          hasBlogIntegration: Boolean(this.user.blogIntegration),
+          message,
+          priorToolNames,
+        });
+        if (blogGates.publish && !enabledTools.includes('blog_publish')) {
+          enabledTools.push('blog_publish');
+        }
+        if (blogGates.edit && !enabledTools.includes('blog_edit')) {
+          enabledTools.push('blog_edit');
+        }
+        if (blogGates.draft && !enabledTools.includes('blog_draft')) {
+          enabledTools.push('blog_draft');
+        }
+        hasContentTransform = blogGates.draft;
+
+        // The only honest gate for `skill` is whether this user has a model-invocable skill - a
+        // user with zero skills used to pay ~161 tokens for a tool whose every call returns "you
+        // have no LLM-invocable skills defined", with no catalog in the prompt to name one.
+        if (
+          !enabledTools.includes('skill') &&
+          shouldOfferSkillTool({
+            hasSkillRepository: Boolean(this.db.skills),
+            invocableSkillCount: (quest as QuestWithSkillCatalog)._skillCatalog?.length ?? 0,
+            message,
+            priorToolNames,
+          })
+        ) {
+          enabledTools.push('skill');
+        }
+      }
 
       // Local (Ollama) models run on modest hardware with small context budgets and
       // are easily derailed by prose that isn't about the task. Give them a leaner
@@ -1636,7 +2189,7 @@ export class ChatCompletionProcess {
       this.sendStatusUpdate(quest, 'Gathering data sources...', { statusAt: new Date() });
       // Input-window limits, needed BEFORE building messages because the amount of
       // attached-file content we extract has to be derived from them.
-      const contextLimit = modelInfo.contextWindow ?? 200000;
+      const contextLimit = effectiveContextWindow(modelInfo);
       // safeMaxTokens is resolved once further up, where the verbatim-history window
       // needs it too. An explicit caller budget is honored as-is; only its absence is
       // sized for the model. See resolveOutputMaxTokens for why raising an explicit
@@ -1647,7 +2200,9 @@ export class ChatCompletionProcess {
       // attachedFileTokenBudget below), so the adaptive default must not balloon it.
       const urlContentBudget = maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS;
 
-      const safetyBuffer = 1000; // Emergency buffer
+      // The same figure the catalog tests hold rows to, so CI's rule cannot end up looser
+      // than what this call actually reserves. Reported as bufferTokens in the telemetry below.
+      const safetyBuffer = CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS;
       // safeMaxTokens, not the raw (possibly absent) requested maxTokens: this reserves against the
       // output budget actually in play, including the adaptive-reasoning floor above, or an adaptive
       // model could reserve less than it goes on to use and land back on the negative-window bug this
@@ -1661,32 +2216,45 @@ export class ChatCompletionProcess {
       // answers silently shrank your own retrieval. Deriving it from the input window
       // instead means a large-context model can actually use one.
       //
-      // Held below the assembly budget on purpose. Extraction estimates at
-      // CHARS_PER_TOKEN while assembly re-counts with the real tokenizer, so leaving
-      // headroom keeps anything extracted from being dropped again downstream.
+      // Meant to sit below the assembly budget, because extraction estimates at CHARS_PER_TOKEN while
+      // assembly re-counts with the real tokenizer, so headroom keeps anything extracted from being
+      // dropped again downstream. It does on the small windows that matter, but not universally: see
+      // contextBudget, where the flat-reserve-versus-percentage-buffer crossover is spelled out.
       //
-      // The floor is load-bearing, not defensive. On a small local model the reserve
-      // subtraction goes negative, and a budget of 0 does NOT mean "send nothing" to
-      // processFabFilesServer - it means "no budget given", which restores a flat
-      // per-file cap applied once per file. Three files would then be handed more
-      // content than the whole input window. Flooring at a share of the raw window
-      // keeps the per-file division in effect, and assembly trims from there.
-      // Outer clamp is not redundant: on a tiny context window maxSafeInputTokens is
-      // itself negative (contextLimit - output cap - buffer), so both inner terms are
-      // negative and a negative budget would reach processFabFilesServer.
-      const attachedFileTokenBudget = Math.max(
-        0,
-        Math.max(
-          Math.floor(maxSafeInputTokens * MIN_ATTACHED_CONTENT_SHARE),
-          Math.floor((maxSafeInputTokens - SYSTEM_PROMPT_RESERVE) * ATTACHED_CONTENT_SHARE)
-        )
-      );
+      // SYSTEM_PROMPT_RESERVE is bounded to a share of the window inside this helper. Flat, it was
+      // most of an 8k-class budget, which collapsed the formula onto its emergency floor and
+      // head-sliced a 4k character file to ~2.6k before assembly could apply its own floor - so the
+      // floor was unreachable and raising it changed nothing. Bounded at the use site rather than at
+      // the constant because the history sizing above also reads it, where a smaller reserve would
+      // fetch MORE history to compete with the file.
+      const attachedFileTokenBudget = attachedContentExtractionBudget(maxSafeInputTokens, SYSTEM_PROMPT_RESERVE);
+
+      // Once the knowledge tools are offered (above), stop ALSO force-inlining a large retrievable
+      // corpus - the even-split inline goes breadth-shallow and the tool can fetch the relevant
+      // docs on demand. Off by default; defers only the tool-retrievable subset. `skipAutoOffers`
+      // mirrors the tool-offer gate (the tool isn't offered under promptMode, so we don't defer).
+      const corpusInlinePlan = await this.resolveCorpusInlinePlan({
+        sessionKnowledgeIds: session.knowledgeIds ?? [],
+        attachedFileTokenBudget,
+        skipAutoOffers,
+        knowledgeSearchDisabled:
+          Array.isArray(session.disabledTools) && session.disabledTools.includes(KNOWLEDGE_SEARCH_TOOL_NAME),
+        defaultAdminSettings,
+        // The same mapping the tool build uses below, so the session -> filter translation cannot
+        // drift between them. Narrower than "the two agree": reachability also depends on the tool
+        // surviving the denylist, which is what knowledgeSearchDisabled above covers.
+        retrievalFilter: toRetrievalFilter(session),
+        // Per-lake grounding mode, resolved onto the session at create time. Absent on a non-lake
+        // session -> the plan keeps its pre-existing size-only behavior.
+        groundingMode: session.corpusGroundingMode,
+      });
 
       const dataSources = await this.buildDataSources({
         defaultAdminSettings,
         sessionFabFileIds,
         messageFileIds,
         sessionKnowledgeIds: session.knowledgeIds ?? [],
+        deferredKnowledgeIds: corpusInlinePlan.deferredKnowledgeIds,
         message,
         maxTokens: urlContentBudget,
         attachedFileTokenBudget,
@@ -1706,6 +2274,8 @@ export class ChatCompletionProcess {
         allFileIdsBeforeDedup,
         dedupedFileIds,
         featureContextMessages,
+        actuallyInlinedKnowledgeIds,
+        fullyInlinedAttachmentIds,
       } = dataSources;
 
       // Step 5b: Build MCP tools and tool prompts before message assembly
@@ -1726,6 +2296,8 @@ export class ChatCompletionProcess {
         // Generic retrieval exclusion (opt-in per session) - keeps excluded/unvectorized lake files
         // out of the knowledge tools' search + retrieve arms, matching the surface's listing predicate.
         retrievalFilter: toRetrievalFilter(session),
+        inlinedAttachmentIds: actuallyInlinedKnowledgeIds,
+        fullyInlinedAttachmentIds,
         logger: this.logger,
         storage: this.storage,
         imageGenerateStorage: this.imageGenerateStorage,
@@ -1827,6 +2399,7 @@ export class ChatCompletionProcess {
           },
           image_generation: imageConfig,
           edit_image: imageConfig,
+          audio_generation: audioConfig,
         },
         model,
         organization,
@@ -1840,6 +2413,7 @@ export class ChatCompletionProcess {
         thinking: thinking ? { enabled: thinking.enabled, budget_tokens: thinking.budget_tokens ?? 16000 } : undefined,
         agentStore,
         externalTools,
+        toolAvailability,
       });
 
       // Final denylist pass on the built tool list. The enabledTools filter above
@@ -1869,10 +2443,52 @@ export class ChatCompletionProcess {
         }
       }
 
+      const offeredToolNames = allTools?.map(t => t.toolSchema.name) ?? [];
       logger.info('🔧 [Tools] allTools:', {
-        count: allTools?.length ?? 0,
-        names: allTools?.map(t => t.toolSchema.name) ?? [],
+        count: offeredToolNames.length,
+        names: offeredToolNames,
       });
+      // Record the final offered tool list for telemetry/eval. The API response's
+      // effectiveTools is the API-layer (phrase-recommender) selection only; this is what
+      // the model was actually given, so it reflects server-side offers like the attached-
+      // knowledge auto-offer above.
+      if (quest.promptMeta) quest.promptMeta.offeredTools = offeredToolNames;
+
+      // Loud warning for the invisible failure mode: the caller has retrievable knowledge
+      // (attached documents OR an accessible lake) but no knowledge tool survived into the final
+      // offered set. Checked here against offeredToolNames (not at resolveEnabledTools) because
+      // this is the authoritative post-build list - it sees the post-build denylist pass, the
+      // Ollama auto-added trim, and tools injected inside buildTools, none of which the pre-build
+      // enabledTools filter can. Skipped under promptMode, where withholding the offer is
+      // deliberate (see skipAutoOffers), not a failure. Silent otherwise means the model answers
+      // from its weights while the user believes their knowledge was consulted.
+      // The lake signal is held to a stricter bar than attached documents. The warning speaks to a
+      // user belief that their knowledge was consulted, and attaching documents creates that belief
+      // where merely owning a lake does not. So for the lake-only case we warn on an UNEXPECTED
+      // disappearance and stay quiet when the tool is absent BY CONFIGURATION: a session that
+      // denies it, or a model offered no tools at all. Without this, every turn of every
+      // lake-holding caller on a non-tool model logs a warning and drowns the real case.
+      const knowledgeToolWithheldByConfig =
+        (Array.isArray(session.disabledTools) && session.disabledTools.includes('search_knowledge_base')) ||
+        offeredToolNames.length === 0;
+      if ((hasAttachedKnowledge || (hasAccessibleDataLake && !knowledgeToolWithheldByConfig)) && !promptMode) {
+        const source = hasAttachedKnowledge
+          ? `${session.knowledgeIds!.length} attached document(s)`
+          : 'an accessible data lake';
+        if (!offeredToolNames.includes('search_knowledge_base')) {
+          this.logger.warn(
+            `[knowledge] session ${session.id} has ${source} but search_knowledge_base is not offered - ` +
+              `the answer will come from model weights, not the knowledge.`
+          );
+        } else if (!offeredToolNames.includes('retrieve_knowledge_content')) {
+          // Search survived but its companion did not (e.g. a denylist stripped retrieve): the
+          // model can locate passages but cannot read their text. See addPairedTool.
+          this.logger.warn(
+            `[knowledge] session ${session.id} offers search_knowledge_base without ` +
+              `retrieve_knowledge_content - the model can locate passages but cannot read them.`
+          );
+        }
+      }
 
       // For tool prompt guidance, only include MCP tools given directly to the main LLM
       // (agent-only tools like Atlassian are excluded - they're accessed via delegate_to_agent)
@@ -1886,9 +2502,19 @@ export class ChatCompletionProcess {
       // have makes it emit the call as leaked JSON text in the reply.
       const blogDraftAvailable = allTools?.some(t => t.toolSchema.name === 'blog_draft') ?? false;
 
+      // Same gate, same reason, for the image prompt - except buildAndSortMessages appends that one
+      // out of sight of this assembly site, so availability has to be threaded into the builder.
+      const imageGenerationAvailable = allTools?.some(t => t.toolSchema.name === 'image_generation') ?? false;
+
+      // navigate_view is auto-added (AUTO_ADDED_TOOL_NAMES), so the local-model trim above drops it
+      // from the built list while it stays in the requested one - the view registry below would then
+      // describe a tool the model never received.
+      const navigateViewAvailable = allTools?.some(t => t.toolSchema.name === 'navigate_view') ?? false;
+      const editImageAvailable = allTools?.some(t => t.toolSchema.name === 'edit_image') ?? false;
+
       const toolPromptMessage = await toolBuilder.buildToolPrompt({
         toolPromptId,
-        hasContentTransform: (hasContentTransform ?? false) && blogDraftAvailable,
+        hasContentTransform: hasContentTransform && blogDraftAvailable,
         hasChessEngine: enabledTools.includes('chess_engine'),
         hasCurrentDateTime: enabledTools.includes('current_datetime'),
         userTimezone,
@@ -1969,23 +2595,38 @@ export class ChatCompletionProcess {
 
       // Extracted so the overflow-guard safety net below can rebuild with a trimmed
       // history without duplicating this (long, order-sensitive) system/context block.
-      const contextAndSystemMessages: IMessage[] = [
-        dateTimeContext, // Always provide current date/time awareness
-        ...extraContextMessages, // Add extra context messages from external sources at the top
+      const taggedContextMessages = buildTaggedContextMessages({
+        dateContext: [dateTimeContext], // Always provide current date/time awareness
+        extraContext: extraContextMessages, // Extra context messages from external sources, at the top
         // Artifact emission guidance. Without this, correct <artifact> usage
         // is left to the model's defaults and large HTML/code can leak into the chat
         // body as raw markup. Gated on the same effective flag as extraction, so a turn is
         // never told to emit artifacts that the post-processing below will not extract.
-        ...(artifactsEnabled ? [{ role: 'system' as const, content: artifactEmissionContent }] : []),
+        artifactEmission: artifactsEnabled ? [{ role: 'system' as const, content: artifactEmissionContent }] : [],
         // Help-center awareness. Makes the model aware of the in-app
         // Help Center so a user who types a how-to question ("how do I add to my data lake?")
         // gets pointed to it instead of an ungrounded guess. Skipped for local models (lean prompt).
-        ...(isLocalModel ? [] : [{ role: 'system' as const, content: helpCenterContent }]),
-        // Inject view registry summary when navigate_view tool is enabled
-        ...(enabledTools.includes('navigate_view')
+        helpCenter: isLocalModel ? [] : [{ role: 'system' as const, content: helpCenterContent }],
+        // Abstention licence. Counterweight to the completeness pressure the rest of the prompt
+        // applies - without it the model treats "answer fully" as unconditional and invents
+        // specifics about the user or their data rather than naming the gap. Ships on every
+        // in-app completion (not just the grounded surfaces) because that is where the pressure
+        // is; a promptMode strips it like any other prompt we author. Admin-editable via
+        // `AbstentionPrompt`; a blank value falls back to the built-in default so the licence can
+        // never be silently stripped.
+        abstention: [
+          {
+            role: 'system' as const,
+            content: getSettingsValue('AbstentionPrompt', defaultAdminSettings, ABSTENTION_PROMPT),
+          },
+        ],
+        // Inject view registry summary when the navigate_view tool reached the model
+        viewRegistry: navigateViewAvailable
           ? [
               {
                 role: 'system' as const,
+                // Dropped again if the turn later continues without tools; see stripToolDependentMessages.
+                requiresTool: 'navigate_view',
                 content: (() => {
                   // Extract current path from extraContextMessages for context-aware prompting
                   const viewCtx = extraContextMessages.find(
@@ -2003,53 +2644,84 @@ export class ChatCompletionProcess {
                 })(),
               },
             ]
-          : []),
-        ...(toolPromptMessage ? [toolPromptMessage] : []), // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
-        ...(featureContextMessages['agentDetection'] ?? []), // Add agent system prompts
-        ...(featureContextMessages['questMaster'] ?? []),
-        ...(featureContextMessages['organizationPrompt'] ?? []), // Add team-wide system prompt
-        ...(featureContextMessages['sessionPrompt'] ?? []), // Per-session system prompt (product surfaces)
-        ...(featureContextMessages['knowledgeRetrieval'] ?? []), // Forced data-lake retrieval (grounding + citations)
+          : [],
+        toolPrompt: toolPromptMessage ? [toolPromptMessage] : [], // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
+        agentDetection: featureContextMessages['agentDetection'], // Add agent system prompts
+        questMaster: featureContextMessages['questMaster'],
+        organizationPrompt: featureContextMessages['organizationPrompt'], // Add team-wide system prompt
+        sessionPrompt: featureContextMessages['sessionPrompt'], // Per-session system prompt (product surfaces)
+        // Skills catalog (model-invocable `skill` tool discovery) + expanded `/skill-name`
+        // invocations. Grouped with the instruction-shaping blocks above and ahead of the
+        // data-context blocks below so an explicit invocation is not diluted by retrieval noise.
+        skills: featureContextMessages['skills'],
+        knowledgeRetrieval: featureContextMessages['knowledgeRetrieval'], // Forced data-lake retrieval (grounding + citations)
+        lakeMemory: featureContextMessages['lakeMemory'], // Lake-memory hot card: durable beliefs extracted from the session's entitled lakes
         // Add LLM-optimized context summary if available (covers messages before verbatim window)
-        ...(session.contextSummary
+        contextSummary: session.contextSummary
           ? [
               {
                 role: 'system' as const,
                 content: `[Context from earlier in this conversation]\n${session.contextSummary}`,
               },
             ]
-          : []),
-        ...(featureContextMessages['mementos'] ?? []),
-        ...(featureContextMessages['project'] ?? []),
+          : [],
+        mementos: featureContextMessages['mementos'],
+        project: featureContextMessages['project'],
         // Recently generated images - gives the model a handle to edit a prior
         // generated image ("make it cartoonish"). Generated images persist as
         // bare storage keys in quest.images with no fabFile record, so without
         // this note the model can't reference them and either declines or (worse)
-        // claims success without calling a tool. Gated on edit_image being
-        // available (paired with image_generation).
-        ...(enabledTools.includes('edit_image') && (cacheInfo.recentGeneratedImages?.length ?? 0) > 0
-          ? [
-              {
-                role: 'system' as const,
-                content: [
-                  '# Recently generated images',
-                  '',
-                  'You generated these image(s) earlier in this conversation. To modify one (change style, angle, colors, etc.), call edit_image with `image` set to the EXACT id shown (for a previously generated image, that bare key is the handle to use):',
-                  '',
-                  ...cacheInfo.recentGeneratedImages!.map(
-                    img => `- ${img.key}${img.prompt ? ` - from: "${img.prompt}"` : ''}`
-                  ),
-                  '',
-                  'Never claim you created or edited an image unless image_generation or edit_image actually returned successfully in this turn.',
-                ].join('\n'),
-              },
-            ]
-          : []),
-        ...urlMessages,
-        ...fabMessages,
-      ];
+        // claims success without calling a tool. Gated on edit_image reaching the
+        // built tool list, like the two prompts above: the requested list agrees today
+        // only because edit_image is never auto-added, which is exactly the assumption
+        // that broke the view registry once navigate_view became auto-added.
+        recentImages:
+          editImageAvailable && (cacheInfo.recentGeneratedImages?.length ?? 0) > 0
+            ? [
+                {
+                  role: 'system' as const,
+                  content: [
+                    '# Recently generated images',
+                    '',
+                    'You generated these image(s) earlier in this conversation. To modify one (change style, angle, colors, etc.), call edit_image with `image` set to the EXACT id shown (for a previously generated image, that bare key is the handle to use):',
+                    '',
+                    ...cacheInfo.recentGeneratedImages!.map(
+                      img => `- ${img.key}${img.prompt ? ` - from: "${img.prompt}"` : ''}`
+                    ),
+                    '',
+                    'Never claim you created or edited an image unless image_generation or edit_image actually returned successfully in this turn.',
+                  ].join('\n'),
+                },
+              ]
+            : [],
+        urls: urlMessages,
+        attachedFiles: fabMessages,
+      });
+      const admittedContextMessages = filterByPromptMode(taggedContextMessages, promptMode);
+      const contextAndSystemMessages: IMessage[] = admittedContextMessages.map(t => t.message);
+      // Carries each message's source across into the builder, which sees only an IMessage[] and so
+      // could otherwise decide what to drop on array position alone. Keyed by reference, which survives
+      // the map above; if a source ever contributed the same object twice the last tag would win, and
+      // both entries would then hold the same priority anyway.
+      const systemPromptPriorities = new Map<IMessage, number>(
+        admittedContextMessages.map(t => [t.message, SYSTEM_PROMPT_PRIORITY[t.source]])
+      );
       const currentUserPromptMessages = [{ role: 'user' as const, content: effectiveUserPrompt }];
-      let messages = await buildAndSortMessages(
+      // An explicit mode also excludes the admin templates this helper appends downstream
+      // (FormatPromptTemplate, image prompt) - they are invisible from the assembly above, so the
+      // source filter alone would leave them in front of a "raw" completion.
+      //
+      // Shared with the overflow-recovery rebuild further down, so a prompt rebuilt after shedding
+      // history cannot carry different builder options than the first build.
+      const buildOptions = {
+        verbose: false,
+        skipAdminPromptTemplates: Boolean(promptMode),
+        imageGenerationAvailable,
+        systemMessagePriority: (message: IMessage) => systemPromptPriorities.get(message),
+      };
+      // messageTruncationInfo is captured ONLY from this first build - the overflow-recovery rebuild
+      // further down does not refresh it, so downstream telemetry always reflects the first attempt.
+      const firstBuild = await buildAndSortMessages(
         previousMessages,
         contextAndSystemMessages,
         currentUserPromptMessages,
@@ -2057,12 +2729,20 @@ export class ChatCompletionProcess {
         defaultAdminSettings,
         historyCount,
         logger,
-        this.tokenizer
+        this.tokenizer,
+        buildOptions
       );
-      // The length check is the part that matters: buildAndSortMessages returns an EMPTY ARRAY when
-      // the input budget is non-positive, and `!messages` is false for `[]`, so an empty prompt used
-      // to reach the model. It then answers confidently from nothing, which reads to the user as the
-      // assistant ignoring their file rather than as a misconfiguration.
+      let messages = firstBuild.messages;
+      const messageTruncationInfo = firstBuild.messageTruncation;
+      // Unlike messageTruncationInfo, this DOES get refreshed by the overflow-recovery rebuild below -
+      // that rebuild produces fresh message identities, so pinning to the first build would report
+      // both blocks as token_limit-excluded on every turn that overflows. `?? []` covers a test mock
+      // stubbing buildAndSortMessages without this field - the real function always returns it.
+      let injectedBlocks = firstBuild.injectedBlocks ?? [];
+      // The length check is the part that matters: buildAndSortMessages returns an EMPTY messages
+      // array when the input budget is non-positive, and `!messages` is false for `[]`, so an empty
+      // prompt used to reach the model. It then answers confidently from nothing, which reads to the
+      // user as the assistant ignoring their file rather than as a misconfiguration.
       if (!messages || messages.length === 0) {
         throw new Error(
           `Cannot build a prompt for ${modelInfo.name || model}: no input budget. The model's context window ` +
@@ -2071,8 +2751,6 @@ export class ChatCompletionProcess {
         );
       }
 
-      // Phase 2: Capture message truncation debug info
-      const messageTruncationInfo = getLastBuildDebugInfo();
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Message building completed (${messages.length} total messages) in ${
           Date.now() - messageBuildingStartTime
@@ -2119,6 +2797,9 @@ export class ChatCompletionProcess {
 
       const mementoMessages = featureContextMessages['mementos'] ?? [];
       let inputTokens = 0;
+      // Whether inputTokens came from the char estimator rather than the encoder. The overflow guard
+      // below reads this: an estimate is fine to bill and reserve against, but not to reject a turn on.
+      let inputTokensEstimated = false;
 
       try {
         const [totalTokens, mementoTokens, fabTokens, urlTokens, historyTokens, userPromptTokens] = await Promise.all([
@@ -2194,7 +2875,8 @@ export class ChatCompletionProcess {
             const trimmed = dropOldestHistoryTurn(recoveryHistory);
             if (!trimmed) break; // only the most-recent turn left: system/tools/prompt itself is oversized
             recoveryHistory = trimmed;
-            const rebuilt = await buildAndSortMessages(
+            // messageTruncationInfo is deliberately not refreshed here - it stays pinned to the first build.
+            const { messages: rebuilt, injectedBlocks: rebuiltBlocks } = await buildAndSortMessages(
               recoveryHistory,
               contextAndSystemMessages,
               currentUserPromptMessages,
@@ -2202,10 +2884,15 @@ export class ChatCompletionProcess {
               defaultAdminSettings,
               historyCount,
               logger,
-              this.tokenizer
+              this.tokenizer,
+              buildOptions
             );
             if (!rebuilt || rebuilt.length === 0) break; // keep the last good build; guard below decides
             messages = rebuilt;
+            // Unlike messageTruncationInfo, refreshed here: the rebuild produces fresh message
+            // identities, so the first build's injectedBlocks would misreport delivery against this
+            // payload.
+            injectedBlocks = rebuiltBlocks ?? [];
             shedTurns++;
             [effectiveTotalTokens, effectiveHistoryTokens] = await Promise.all([
               calculateTotalTokenLength(messages, tokenCalcOptions),
@@ -2243,109 +2930,125 @@ export class ChatCompletionProcess {
         logger.info(`📊 Token breakdown by source calculated`, tokensBySource);
       } catch (tokenBreakdownError) {
         logger.warn(`📊 Failed to calculate token breakdown:`, tokenBreakdownError);
+        if (inputTokens === 0) {
+          // Zero is not a neutral "unknown" downstream: it disables the context-overflow guard and
+          // the pre-reservation eligibility check, and on backends that report no provider usage
+          // (DeepSeek, Llama-on-Bedrock streaming) settlement falls back to this figure and
+          // under-bills the turn. The estimate is pure char math with no encoder involved
+          // (estimateTokenLength), so it cannot fail the way the real count just did.
+          try {
+            inputTokens = await calculateTotalTokenLength(messages, { ...tokenCalcOptions, estimateOnly: true });
+            inputTokensEstimated = true;
+            logger.warn(`📊 Input tokens fell back to the char-based estimate: ${inputTokens}`);
+          } catch (estimateFallbackError) {
+            logger.error(`📊 Estimate fallback failed; input tokens stay 0 for this turn`, estimateFallbackError);
+          }
+        }
+      }
+
+      // Per-source breakdown, derived from the same tagged list the prompt was assembled
+      // from (see systemPromptSources) rather than re-listed by hand here. The hand-written
+      // version this replaces covered a third of the sources and reported a `session_summary`
+      // row built from `session.summary`, a field the assembled prompt never carried - it
+      // carries `session.contextSummary`. The two always-on floor sources come from
+      // systemPromptFloorTelemetry's buildAlwaysOnFloorDetails, which owns those rows outright -
+      // including the wasIncluded:false inventory rows a derivation from the admitted stack
+      // cannot produce; inclusion is read off the admitted stack rather than the raw settings
+      // gates, so a promptMode that strips a block reports it excluded instead of billed.
+      // The two blocks buildAndSortMessages appends downstream of this stack (FormatPromptTemplate,
+      // image prompt) are itemized separately below via buildInjectedBlockDetails, reading
+      // injectedBlocks back off that call rather than re-deriving the same gates a second time here.
+      //
+      // Persisted on the quest for every completion - unlike contextTelemetry, which exists
+      // only when enhanced telemetry is on - so the API layer can report which prompts fed a
+      // completion instead of leaving callers to infer it from behavior. Guarded: a counting
+      // failure must degrade to a missing breakdown, never a failed completion.
+      // What actually reached the model, by reference, read off the final payload so it accounts for
+      // overflow recovery too. The budget can drop a system message deliberately now, so being in the
+      // admitted stack no longer means being in the prompt, and every inclusion claim below has to be
+      // read from here rather than from the assembly.
+      const deliveredMessages = new Set<IMessage>(messages);
+      const droppedSources = admittedContextMessages
+        .filter(t => t.message.role === 'system')
+        .reduce<Map<PromptSourceId, boolean>>(
+          (kept, t) => kept.set(t.source, (kept.get(t.source) ?? false) || deliveredMessages.has(t.message)),
+          new Map()
+        );
+      const shedSourceNames = [...droppedSources]
+        .filter(([, survived]) => !survived)
+        .map(([source]) => PROMPT_SOURCE_METADATA[source].name);
+      if (shedSourceNames.length > 0) {
+        // Deliberate, but not something to leave silent: the assistant's behaviour changes and only
+        // this line says which instructions it lost.
+        logger.warn(
+          `📊 System prompts dropped to fit the input budget (${shedSourceNames.length}): ${shedSourceNames.join(', ')}`
+        );
+      }
+
+      const countSystemBlockTokens = (content: string) =>
+        calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions);
+      let systemPromptDetails: SystemPromptDetail[] | undefined;
+      try {
+        systemPromptDetails = await toPromptDetails(
+          admittedContextMessages.filter(t => !ALWAYS_ON_FLOOR_SOURCES.includes(t.source)),
+          messages => calculateTotalTokenLength(messages, tokenCalcOptions),
+          deliveredMessages
+        );
+        // Two different questions, and the floor rows need both: whether the gates admitted a block at
+        // all, and whether it survived the budget. Collapsing them would report a block the window could
+        // not fit as though an admin had switched it off.
+        const admitted = (source: PromptSourceId) => admittedContextMessages.some(t => t.source === source);
+        const delivered = (source: PromptSourceId) =>
+          admittedContextMessages.some(t => t.source === source && deliveredMessages.has(t.message));
+        systemPromptDetails.push(
+          ...(await buildAlwaysOnFloorDetails(
+            {
+              artifactEmissionEnabled: admitted('artifactEmission'),
+              artifactEmissionContent,
+              // The helper models exactly one exclusion ("local model"); a mode that strips
+              // the help-center block must surface the same way: excluded, zero tokens.
+              isLocalModel: !admitted('helpCenter'),
+              helpCenterContent,
+              artifactEmissionDelivered: delivered('artifactEmission'),
+              helpCenterDelivered: delivered('helpCenter'),
+            },
+            countSystemBlockTokens
+          ))
+        );
+      } catch (detailsError) {
+        logger.warn(`📊 Failed to derive system prompt details:`, detailsError);
+      }
+
+      // Isolated from the try above: buildInjectedBlockDetails is new, so a throw here must not
+      // drop the floor rows toPromptDetails/buildAlwaysOnFloorDetails already computed.
+      if (systemPromptDetails) {
+        try {
+          systemPromptDetails.push(...(await buildInjectedBlockDetails(injectedBlocks, countSystemBlockTokens)));
+        } catch (injectedDetailsError) {
+          logger.warn(`📊 Failed to itemize injected format/image prompt blocks:`, injectedDetailsError);
+        }
+        quest.promptMeta!.context!.systemPromptDetails = systemPromptDetails;
+      }
+
+      // Opt-in only, and built from the same tagged stack the breakdown above is derived from, so
+      // the text and the metadata describing it can never disagree. Response-only: nothing here is
+      // written to the quest.
+      if (parsedBody.includeSystemPrompt) {
+        try {
+          this.systemPromptText = buildSystemPromptText(
+            admittedContextMessages,
+            deliveredMessages,
+            undefined,
+            injectedBlocks
+          );
+        } catch (promptTextError) {
+          logger.warn(`📊 Failed to itemize the effective system prompt:`, promptTextError);
+        }
       }
 
       // Feed breakdown into telemetry builder for detailed system prompt tracking
-      if (telemetryBuilder) {
+      if (telemetryBuilder && systemPromptDetails) {
         try {
-          // Build system prompt details for telemetry
-          const systemPromptDetails: SystemPromptDetail[] = [];
-
-          // Date/time context (hardcoded)
-          if (dateTimeContext) {
-            const dtTokens = await calculateTotalTokenLength([dateTimeContext], tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'hardcoded',
-              name: 'date_time_context',
-              tokenCount: dtTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Tool prompt (admin/hardcoded)
-          if (toolPromptMessage) {
-            const toolTokens = await calculateTotalTokenLength([toolPromptMessage], tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'admin',
-              name: 'tool_guidance',
-              tokenCount: toolTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Agent detection prompts
-          const agentMessages = featureContextMessages['agentDetection'] ?? [];
-          if (agentMessages.length > 0) {
-            const agentTokens = await calculateTotalTokenLength(agentMessages, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'hardcoded',
-              name: 'agent_detection',
-              tokenCount: agentTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Quest master prompts
-          const qmMessages = featureContextMessages['questMaster'] ?? [];
-          if (qmMessages.length > 0) {
-            const qmTokens = await calculateTotalTokenLength(qmMessages, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'session',
-              name: 'quest_master',
-              tokenCount: qmTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Organization prompts
-          const orgMessages = featureContextMessages['organizationPrompt'] ?? [];
-          if (orgMessages.length > 0) {
-            const orgTokens = await calculateTotalTokenLength(orgMessages, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'org',
-              name: 'organization_prompt',
-              tokenCount: orgTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Session summary
-          if (session.summary) {
-            const summaryMsg = [
-              { role: 'system' as const, content: `Previous conversation summary:\n${session.summary}` },
-            ];
-            const summaryTokens = await calculateTotalTokenLength(summaryMsg, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'session',
-              name: 'session_summary',
-              tokenCount: summaryTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Project prompts
-          const projectMessages = featureContextMessages['project'] ?? [];
-          if (projectMessages.length > 0) {
-            const projectTokens = await calculateTotalTokenLength(projectMessages, tokenCalcOptions);
-            systemPromptDetails.push({
-              source: 'project',
-              name: 'project_context',
-              tokenCount: projectTokens,
-              wasIncluded: true,
-            });
-          }
-
-          // Always-on floor blocks (artifact-emission, help-center) billed on every basic
-          // turn. Previously invisible inside the systemPrompts residual; itemized here so
-          // the fixed prompt cost is auditable in the Context Inspector (#810).
-          systemPromptDetails.push(
-            ...(await buildAlwaysOnFloorDetails(
-              { artifactEmissionEnabled: artifactsEnabled, artifactEmissionContent, isLocalModel, helpCenterContent },
-              content => calculateTotalTokenLength([{ role: 'system' as const, content }], tokenCalcOptions)
-            ))
-          );
-
-          // Calculate total system prompt tokens
           const systemPromptTokensTotal = systemPromptDetails.reduce((sum, p) => sum + p.tokenCount, 0);
 
           telemetryBuilder.setSystemPrompts({
@@ -2367,8 +3070,17 @@ export class ChatCompletionProcess {
         quest.promptMeta!.context!.tokensBySource = tokensBySource;
       }
 
-      // Detect and handle context overflow with detailed breakdown
-      if (inputTokens > maxSafeInputTokens) {
+      // Detect and handle context overflow with detailed breakdown.
+      // Measured counts only: the estimator assumes 3.5 chars/token against prose that really runs
+      // ~6, so it over-counts prose by up to ~1.7x. Rejecting a turn on that figure would fail
+      // perfectly valid requests, and the recovery loop above never ran on the estimate path either.
+      if (inputTokensEstimated && inputTokens > maxSafeInputTokens) {
+        logger.warn(
+          `⚠️ Skipping the context-overflow guard: input tokens are an estimate (${inputTokens} vs ` +
+            `${maxSafeInputTokens} limit), not an encoder count. Letting the provider be the judge.`
+        );
+      }
+      if (!inputTokensEstimated && inputTokens > maxSafeInputTokens) {
         logger.error(`🚨 CRITICAL: Context overflow detected!`, {
           inputTokens,
           maxTokens: safeMaxTokens,
@@ -2436,6 +3148,20 @@ export class ChatCompletionProcess {
           reservationOwnerId = organization.id;
           reservationOwnerType = CreditHolderType.Organization;
           reservationMethods = this.db.organizations;
+
+          // Enforce the per-member cap here, at pre-flight, before debiting the org pool.
+          // Blocking must happen now: by settlement the reply has streamed and the balance
+          // has moved, so a cap throw there can only sabotage usage tracking (#1536).
+          if (isMemberCreditCapExceeded(organization, this.user.id, requiredCredits)) {
+            throw new InsufficientCreditsError(
+              buildMemberCreditCapMessage({
+                used: getMemberUsedCredits(organization, this.user.id),
+                cap: organization.maxCreditsPerMember!,
+                organizationName: organization.name,
+              }),
+              'insufficient_credits'
+            );
+          }
         }
 
         // Preserve low-credits notification (checks current balance before reservation)
@@ -2540,6 +3266,13 @@ export class ChatCompletionProcess {
       // Add system prompt tracking to promptMeta
       quest.promptMeta!.context!.sessionFileIds = sessionFabFileIds;
       quest.promptMeta!.context!.messageFileIds = messageFileIds;
+      quest.promptMeta!.context!.knowledgeInlining = {
+        attachedCount: corpusInlinePlan.attachedCount,
+        retrievableCount: corpusInlinePlan.retrievableCount,
+        deferredCount: corpusInlinePlan.deferredKnowledgeIds.length,
+        deferredToRetrieval: corpusInlinePlan.deferredToRetrieval,
+        minInlineTokensPerDoc: corpusInlinePlan.minInlineTokensPerDoc,
+      };
       quest.promptMeta!.context!.globalSystemFileIds = globalSystemFileIds;
       quest.promptMeta!.context!.userSystemFileIds = enabledSystemFileIds;
       quest.promptMeta!.context!.dedupedSystemPrompts = dedupedFileIds;
@@ -2622,6 +3355,9 @@ export class ChatCompletionProcess {
               }
             : undefined,
         tools: allTools,
+        // raw promises an empty system parameter; the adapters append a model-identity
+        // line on their own, so the promise has to be threaded down to them.
+        ...(promptMode === 'raw' ? { omitIdentityReminder: true } : {}),
       };
 
       // Check if Research Mode is enabled and handle parallel processing
@@ -2780,6 +3516,14 @@ export class ChatCompletionProcess {
             actualTokenUsage.cacheReadInputTokens = undefined;
             actualTokenUsage.cacheCreationInputTokens = undefined;
             actualTokenUsage.stopReason = undefined;
+
+            // Same reasoning for tool-credit reservations: quest.promptMeta.functionCalls
+            // is reassigned (not appended) per attempt, but toolCreditsMap is instance
+            // state that persists across the loop. A discarded attempt's reservation left
+            // in the queue would be shifted onto the next attempt's call by
+            // settleToolCallCredits and billed as its cost. Clear it so only the surviving
+            // attempt's delivered tools settle.
+            this.toolCreditsMap.clear();
 
             logger.info(
               `⏱️ [${Date.now() - processStartTime}ms] === ${
@@ -3684,13 +4428,13 @@ export class ChatCompletionProcess {
             });
           }
         }
-        // Update functionCalls with creditsUsed
-        quest.promptMeta!.functionCalls = (quest.promptMeta!.functionCalls || []).map(fc => {
-          if (this.toolCreditsMap.has(fc.name || '')) {
-            return { ...fc, creditsUsed: this.toolCreditsMap.get(fc.name || '') };
-          }
-          return fc;
-        });
+        // Assign each tool call its own reserved credits from the per-name queue so a
+        // tool called more than once in a turn settles as the sum of every call, not
+        // the count times the last call's cost (see settleToolCallCredits).
+        quest.promptMeta!.functionCalls = settleToolCallCredits(
+          quest.promptMeta!.functionCalls || [],
+          this.toolCreditsMap
+        );
 
         // Update execution tracking
         quest.promptMeta!.executionTracking = {
@@ -4555,6 +5299,8 @@ export class ChatCompletionProcess {
     );
     const {
       userMessages: promptMessages,
+      deliveredFileIds,
+      fullyDeliveredFileIds,
       // errorMessages,
     } = await processFabFilesServer(
       embeddingFactory,
@@ -4596,7 +5342,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       });
     }
 
-    const result = { promptMessages, convertedFabFiles };
+    const result = { promptMessages, convertedFabFiles, deliveredFileIds, fullyDeliveredFileIds };
     return result;
   }
 
@@ -4740,7 +5486,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
   private async buildOptimizedFeatures(
     adminSettings: Record<string, string>,
     enableQuestMaster: boolean,
-    enableMementos: boolean,
+    enableMementos: boolean | undefined,
     enableAgents: boolean,
     projectId?: string,
     optimizedFeatureList: featureNames[] = [],
@@ -4754,6 +5500,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     const adminSettingsEnableMementos = getSettingsValue('EnableMementos', adminSettings);
     const adminSettingsEnableQuestMaster = getSettingsValue('EnableQuestMaster', adminSettings);
     const adminSettingsEnableAgents = getSettingsValue('EnableAgents', adminSettings);
+    const adminSettingsEnableLakeMemory = getSettingsValue('EnableLakeMemory', adminSettings);
     const adminSettingsAutoNameNotebook = getSettingsValue('AutoNameNotebook', adminSettings);
 
     // Only build features that are in the optimized list
@@ -4772,29 +5519,30 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       this.features.set('contextSummarization', new ContextSummarizationFeature(this));
     }
 
-    // Conditional features - only build if requested AND enabled. Mementos runs when V1 is on
-    // (admin + request flag) OR when the user has opted into V2, so V2 works independently of V1
-    // (the two are mutually exclusive at inject time - MementoFeature picks which).
+    // Conditional features - only build if requested AND enabled. Memento gating for BOTH
+    // pipelines lives in resolveMementoGates (#1319): V1 needs explicit request intent plus
+    // the admin setting; V2 rides the per-user opt-in but an explicit `enableMementos: false`
+    // from the caller now disables it too - on the read side (the feature is never registered,
+    // so nothing injects) and the write side (the flags below never fire). The two remain
+    // mutually exclusive at inject time - MementoFeature picks which.
     //
     // MUST go through isExperimentalFeatureEnabled: `preferences.experimentalFeatures` is a Mongoose
     // Map at runtime, so reading it with dot access silently yields undefined and the feature never
     // runs. That is exactly the bug this line used to have - V2 memory was never injected into a
     // prompt even for a user who had opted in.
     const enableMementosV2 = isExperimentalFeatureEnabled(this.user, 'enableMementosV2');
-    if (
-      optimizedFeatureList.includes('mementos') &&
-      ((enableMementos && adminSettingsEnableMementos) || enableMementosV2)
-    ) {
-      this.logger.log(`  - Enabling Mementos feature${enableMementosV2 ? ' (V2 opt-in)' : ''}`);
-      // Resolve the WRITE gates here, where both the admin setting and the per-user opt-in are in
-      // scope, and hand them to the feature. V1 writes only when it is fully on (request flag AND admin
-      // setting); V2 writes on the opt-in. Without this, the completion event carried no flags and the
-      // subscriber defaulted V1 on - so chat kept writing V1 mementos for a V2 user even with V1 off.
+    const mementoGates = resolveMementoGates(enableMementos, Boolean(adminSettingsEnableMementos), enableMementosV2);
+    if (optimizedFeatureList.includes('mementos') && (mementoGates.v1 || mementoGates.v2)) {
+      this.logger.log(`  - Enabling Mementos feature${mementoGates.v2 ? ' (V2 opt-in)' : ''}`);
+      // Resolve the WRITE gates here, where the request flag, admin setting, and per-user opt-in
+      // are all in scope, and hand them to the feature. Without explicit flags, the completion
+      // event carried none and the subscriber defaulted V1 on - so chat kept writing V1 mementos
+      // for a V2 user even with V1 off.
       this.features.set(
         'mementos',
         new MementoFeature(this, {
-          writeV1: Boolean(enableMementos && adminSettingsEnableMementos),
-          writeV2: enableMementosV2,
+          writeV1: mementoGates.v1,
+          writeV2: mementoGates.v2,
         })
       );
     }
@@ -4861,6 +5609,16 @@ When using tools that require file IDs (like edit_image), use the ID shown above
         'knowledgeRetrieval',
         new KnowledgeRetrievalFeature(this, retrievalTags, citationStyle, retrievalFilter)
       );
+
+      // Lake memory hot-card (#1440) rides the same Data-Lake toggle: a durable identity/context layer
+      // alongside the forced chunk retrieval. Gated on the SAME `EnableLakeMemory` flag as the producer,
+      // so the flag is a complete kill-switch for BOTH sides: turning it off stops new extraction AND
+      // stops injecting already-extracted beliefs (otherwise a lake extracted while it was on would keep
+      // being read forever). Also needs the host to have wired the app-layer ledger read.
+      if (adminSettingsEnableLakeMemory && this.recallLakeMemory) {
+        this.logger.log('  - Enabling LakeMemory (hot-card) feature');
+        this.features.set('lakeMemory', new LakeMemoryFeature(this, retrievalTags, retrievalFilter));
+      }
     }
 
     this.logger.log(`🛠️ Features enabled: ${Array.from(this.features.keys()).join(', ')}`);
@@ -4875,6 +5633,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     sessionFabFileIds,
     messageFileIds,
     sessionKnowledgeIds,
+    deferredKnowledgeIds = [],
     message,
     maxTokens,
     attachedFileTokenBudget,
@@ -4888,6 +5647,9 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     sessionFabFileIds: string[];
     messageFileIds: string[];
     sessionKnowledgeIds: string[];
+    /** Subset of `sessionKnowledgeIds` to leave OUT of the inline merge and defer to retrieval
+     *  (resolveCorpusInlinePlan). Full `sessionKnowledgeIds` is still reported in logs/telemetry. */
+    deferredKnowledgeIds?: string[];
     message: string;
     maxTokens: number;
     attachedFileTokenBudget: number;
@@ -4906,6 +5668,16 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     allFileIdsBeforeDedup: string[];
     dedupedFileIds: string[];
     featureContextMessages: { [name: string]: IMessage[] };
+    /** The `sessionKnowledgeIds` subset NOT deferred to retrieval AND actually delivered into a
+     *  prompt message this turn (excludes a file silently dropped by processFabFilesServer -
+     *  audio, an unserveable image, an unsupported/corrupted file) - the set the knowledge tools
+     *  can truthfully call "already in the conversation above". */
+    actuallyInlinedKnowledgeIds: string[];
+    /** Subset of `actuallyInlinedKnowledgeIds` whose ENTIRE content is in the prompt, not a cosine
+     *  excerpt or a truncated-to-budget head - the set the knowledge tools can truthfully call
+     *  "you already have everything, no need to search/retrieve further" for (#1163 review: the
+     *  wording was claiming this for a merely-inlined file, which can still be a partial delivery). */
+    fullyInlinedAttachmentIds: string[];
   }> {
     // Load feature contexts in parallel with data sources
     const featureContextPromise = Promise.all(
@@ -4956,13 +5728,19 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       this.systemFilesCache.set(systemFilesCacheKey, [globalSystemFileIds, enabledSystemFileIds]);
     }
 
+    // Defer the retrievable-corpus subset out of the inline set (resolveCorpusInlinePlan); the
+    // offered search_knowledge_base tool fetches those on demand. Only knowledge IDs are affected -
+    // message/session fab files and system files always inline.
+    const deferred = new Set(deferredKnowledgeIds);
+    const inlineKnowledgeIds = sessionKnowledgeIds.filter(id => !deferred.has(id));
+
     // Pre-compute file dedup (synchronous) before deciding whether to skip
     const allFileIdsBeforeDedup = [
       ...sessionFabFileIds,
       ...messageFileIds,
       ...enabledSystemFileIds,
       ...globalSystemFileIds,
-      ...sessionKnowledgeIds,
+      ...inlineKnowledgeIds,
     ];
     const dedupedFileIds = Array.from(new Set(allFileIdsBeforeDedup));
 
@@ -5037,6 +5815,16 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     }
     const featureContextMessages: { [name: string]: IMessage[] } = Object.fromEntries(featureContextResults);
 
+    // The intersection with `inlineKnowledgeIds` (not `fabResult.deliveredFileIds` alone) matters:
+    // `deliveredFileIds` covers every id `fabFilesToMessages` was given (session/message/system
+    // files too), and a knowledge id can be IN `inlineKnowledgeIds` but still end up undelivered
+    // (audio, an unserveable image, an unsupported/corrupted file - see processFabFilesServer).
+    // Only a knowledge id present in BOTH sets actually has its content in the prompt right now.
+    const deliveredKnowledgeIds = new Set(fabResult?.deliveredFileIds ?? []);
+    const actuallyInlinedKnowledgeIds = inlineKnowledgeIds.filter(id => deliveredKnowledgeIds.has(id));
+    const fullyDeliveredKnowledgeIds = new Set(fabResult?.fullyDeliveredFileIds ?? []);
+    const fullyInlinedAttachmentIds = actuallyInlinedKnowledgeIds.filter(id => fullyDeliveredKnowledgeIds.has(id));
+
     return {
       urlMessages: urlResult.userMessages,
       remainingUserPrompt: urlResult.remainingPrompt,
@@ -5047,6 +5835,8 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       allFileIdsBeforeDedup,
       dedupedFileIds,
       featureContextMessages,
+      actuallyInlinedKnowledgeIds,
+      fullyInlinedAttachmentIds,
     };
   }
 }

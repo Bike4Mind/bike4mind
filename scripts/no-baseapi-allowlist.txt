@@ -27,6 +27,8 @@ apps/client/pages/api/v1/openapi.json.ts                # Public OpenAPI spec; r
 apps/client/pages/api/v1/__tests__/openapi.json.test.ts # Test file for the handler above (script greps by path, not export)
 apps/client/pages/api/v1/docs.ts                        # Public Scalar API-reference page; static HTML, no user data, no DB (#39)
 apps/client/pages/api/v1/__tests__/docs.test.ts         # Test file for the handler above (script greps by path, not export)
+apps/client/pages/api/agent-quest/manifest.ts           # Public agent-quest manifest; raw handler (no baseApi/DB) so it can't 5xx on a Mongo outage; a constant document, no user data
+apps/client/pages/api/agent-quest/__tests__/manifest.test.ts # Test file for the handler above (script greps by path, not export)
 
 # Slack — authenticated via HMAC-SHA256 signature (Slack signing secret)
 apps/client/pages/api/slack/commands.ts                 # verifySlackRequest() HMAC check

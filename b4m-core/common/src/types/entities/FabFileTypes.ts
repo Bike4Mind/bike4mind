@@ -56,7 +56,21 @@ export interface IFabFileChunk {
   fabFileId: string;
   text: string;
   tokenCount: number;
+  /**
+   * Length of `text` in Unicode CODE POINTS (countCodePoints on the write path, $strLenCP in the
+   * backfill - the two must agree, which is why this is NOT UTF-16 `text.length`). Written at
+   * chunk time; absent on chunks that predate the field until
+   * packages/scripts/datalake/backfill-chunk-char-length.ts runs. Unit basis for the lake
+   * health predicates (#1666), which are stated in characters because the serve cap is.
+   */
+  charLength?: number;
   vector?: number[];
+  /**
+   * Embedding model this chunk's vector was generated with. Chunks can outlive their file's
+   * current `embeddingModel` (re-embedding, backfill), so this is the per-chunk source of truth
+   * an Atlas `$vectorSearch` index lookup keys on - not FabFile.embeddingModel.
+   */
+  embeddingModel?: string;
 }
 
 /**
@@ -76,6 +90,36 @@ export interface IFabFileVersion {
 
 export interface IFabFileChunkDocument extends IFabFileChunk, IMongoDocument {}
 
+/** One member lake whose required chunk policy a file's current chunks do not satisfy (#1662). */
+export interface FabFileChunkPolicyConflictLake {
+  /** DB lake id when known; absent for a static-registry lake (which carries no requirement). */
+  lakeId?: string;
+  /** The lake's meta-tag ("datalake:<slug>"), always present for attribution. */
+  datalakeTag: string;
+  name: string;
+  /** The raw target the lake requires (operator-set), for display. */
+  requiredTarget: number;
+  /** That required target after the model-window clamp - what the conflict is actually decided on. */
+  effectiveRequiredTarget: number;
+}
+
+/**
+ * Records that a file belongs to one or more data lakes whose REQUIRED chunk policy its current
+ * chunks do not satisfy (#1662). Chunk policy is resolved at file-OWNER altitude; a lake is a
+ * CONSTRAINT, not an override, so a mismatch is reported here (and logged/pushed) rather than
+ * silently re-chunking - which would rewrite chunks for non-members and oscillate for a file tagged
+ * into two lakes whose requirements disagree.
+ */
+export interface FabFileChunkPolicyConflict {
+  /** The file's effective chunk target (TOKENS, post model-window clamp) its chunks were built with. */
+  effectiveTarget: number;
+  /** The embedding model both effective targets were computed against. */
+  embeddingModel: string;
+  /** Member lakes whose required policy this file's chunks do not satisfy. */
+  lakes: FabFileChunkPolicyConflictLake[];
+  detectedAt: Date;
+}
+
 export interface IFabFile {
   userId: string;
   fileName: string;
@@ -83,6 +127,21 @@ export interface IFabFile {
   fileNameLower?: string;
 
   fileSize: number;
+  /**
+   * Characters of TEXT this file extracts to, as opposed to its byte size. Absent until something has
+   * actually extracted it.
+   *
+   * The two are only comparable for text/csv/md; a PDF or DOCX of a given byte size can extract to
+   * almost any length, which is why a caller wanting to know whether a file fits a model's context
+   * cannot infer it from `fileSize`. Written through by the context dry-run route the composer calls,
+   * so the second question about the same file is free.
+   *
+   * Explicitly nullable: an in-place content update sets it to null to invalidate the measurement, and
+   * null rather than undefined because the repository's `$set` strips undefined and would leave the
+   * stale number in place. Readers must treat null as "not measured", not as zero characters.
+   */
+  extractedCharCount?: number | null;
+
   /** This is the path to the file in the storage bucket. Eg: `fab-files/1234.json` */
   filePath?: string;
   mimeType: string;
@@ -108,11 +167,33 @@ export interface IFabFile {
   chunkCount?: number;
   /** Number of chunks that have been vectorized. */
   vectorizedChunkCount?: number;
+  /**
+   * Sum of this file's chunks' `charLength` (Unicode code points), stamped by chunkFabfile in
+   * the same update as `chunkCount`. The chunk-derived counterpart of `extractedCharCount`,
+   * which a DIFFERENT extractor writes lazily on the composer dry-run path - the two
+   * legitimately drift and must not be conflated. Nullable for the same reason as
+   * extractedCharCount: a content rewrite nulls it via FAB_FILE_CONTENT_REWRITE_PATCH (Mongoose
+   * strips undefined from $set) and the re-chunk that follows re-stamps it.
+   */
+  chunkedCharCount?: number | null;
 
   /** Whether this FabFile is currently being chunked. */
   isChunking?: boolean;
   /** Whether this FabFile has been chunked */
   chunked?: boolean;
+  /**
+   * The effective chunk passage target (TOKENS, post model-window clamp) this file's CURRENT chunks
+   * were produced with (#1662). Recorded by the chunk handler so a later lake-membership change can
+   * check a lake's required policy against the file WITHOUT re-chunking. Absent on files chunked
+   * before this landed.
+   */
+  chunkedPassageTokenTarget?: number;
+  /**
+   * Set when this file belongs to data lakes whose required chunk policy its current chunks do not
+   * satisfy (#1662); `null`/absent means no conflict. A report, not a failure: the file stays
+   * chunked at its owner-altitude policy. Cleared when a re-chunk or membership change resolves it.
+   */
+  chunkPolicyConflict?: FabFileChunkPolicyConflict | null;
 
   /** Whether this FabFile is currently being vectorized. */
   isVectorizing?: boolean;
@@ -120,6 +201,12 @@ export interface IFabFile {
   vectorized?: boolean;
   /** The embedding model used to generate the vectors. */
   embeddingModel?: string;
+  /**
+   * When this file's chunks were last fully re-stamped with their per-chunk `embeddingModel`
+   * (see IFabFileChunk.embeddingModel). Atlas $vectorSearch cutover treats a stamp younger than
+   * ~60s as not-yet-queryable (mongot indexing lag), so this is read-time readiness, not a cache.
+   */
+  chunkEmbeddingModelStampedAt?: Date | null;
 
   system?: boolean;
 
@@ -178,6 +265,12 @@ export interface IFabFile {
   // Data Lake fields
   /** The source where this file originated from */
   sourceType?: FabFileSourceType;
+  /**
+   * Origin details for the `sourceType`, shaped by that source (for SLACK: the channel id and
+   * the message ts the file was posted in). Server-supplied only - never accepted from a request
+   * body, or a caller could forge the audit trail this exists to provide.
+   */
+  sourceMetadata?: Record<string, unknown>;
   /** Whether this file was automatically processed (vs manual upload) */
   automaticallyProcessed?: boolean;
   /** Metadata for data lake files */
@@ -189,6 +282,18 @@ export interface IFabFile {
   batchId?: string;
   /** Original relative path from folder upload (preserves directory structure) */
   relativePath?: string;
+
+  // Google Drive ingest provenance (#1589). Populated when sourceType === GOOGLE_DRIVE.
+  /** Drive file id this FabFile was ingested from - the stable dedup key within a lake. */
+  driveFileId?: string;
+  /** Drive modifiedTime captured at ingest, for change detection on re-sync. */
+  driveModifiedTime?: Date;
+  /** Drive md5Checksum captured at ingest (native binaries only), for change detection. */
+  driveMd5Checksum?: string;
+  /** The data lake this file was ingested into (provenance). */
+  sourceLakeId?: string;
+  /** The OrgGoogleDriveConnection that ingested this file (provenance). */
+  driveConnectionId?: string;
 
   sessionId?: string; // For session summaries
 
@@ -206,6 +311,26 @@ export interface IFabFile {
 }
 
 export interface IFabFileDocument extends IFabFile, IShareableDocument {}
+
+/**
+ * Spread into the `$set` of EVERY update that rewrites a FabFile's bytes in place.
+ *
+ * A cached `extractedCharCount` describes the previous content, and a stale one makes the pre-send
+ * attachment warning silent about a file that no longer fits - the failure that warning exists to
+ * prevent. An AI edit growing a 4k file to 44k is the live case: the doc would still say 4,000 and the
+ * dry-run would short-circuit to "fits".
+ *
+ * A shared fragment rather than a literal at each site, because the sites are the problem: the first
+ * version of this fix covered only fabFileService/update and missed three live edit routes. A guard
+ * test enumerates the rewrite sites and fails if one does not reference this.
+ *
+ * null, NOT undefined - Mongoose strips undefined from a `$set`, so the undefined form of this leaves
+ * the stale number in place and only looks correct.
+ *
+ * Also clears `chunkedCharCount`, the chunk-derived sum: a content rewrite invalidates the chunks
+ * it was summed from, and the re-chunk that follows re-stamps it.
+ */
+export const FAB_FILE_CONTENT_REWRITE_PATCH = { extractedCharCount: null, chunkedCharCount: null } as const;
 
 export interface IFabFileListItem {
   userId: string;
@@ -234,10 +359,33 @@ export interface FabFileChunkVector {
 
 export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDocument> {
   deleteManyByFabFileId(fabFileId: string): Promise<void>;
+  /**
+   * Every DISTINCT embeddingModel actually used by chunks of the given files - not
+   * FabFile.embeddingModel, which is only the file's current/latest model (see
+   * IFabFileChunk.embeddingModel: chunks can outlive a re-embed). A retrieval index keyed
+   * per-model (e.g. self-host OpenSearch) needs this to know every index a removal must reach.
+   */
+  distinctEmbeddingModelsByFabFileIds(fabFileIds: string[]): Promise<string[]>;
   bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]): Promise<IFabFileChunkDocument[]>;
   findByFabFileId(fabFileId: string): Promise<IFabFileChunkDocument[]>;
   /** Count chunks that are terminal (have a vector OR are oversized) - for idempotent vectorizedChunkCount recompute. */
   countTerminalChunks(fabFileId: string, contextWindow: number): Promise<number>;
+  /** Bulk-stamp every chunk of a file with the model its vectors were generated under. */
+  updateEmbeddingModel(fabFileId: string, embeddingModel: string): Promise<void>;
+  /** One page of vector-bearing chunks missing `embeddingModel`, ascending by `_id` - backfill's keyset cursor. */
+  findChunksMissingEmbeddingModel(options?: {
+    limit?: number;
+    afterChunkId?: string;
+  }): Promise<Array<{ id: string; fabFileId: string; vectorLength: number }>>;
+  /** Atlas `$vectorSearch` over a bounded, already-eligibility-checked file subset for one embedding model. */
+  vectorSearch(
+    fileIds: string[],
+    queryVector: number[],
+    model: string,
+    options?: { limit?: number }
+  ): Promise<Array<{ id: string; fabFileId: string; text: string; score: number }>>;
+  /** Whether `model`'s Atlas vector index exists and is queryable (cached; see atlasSearchIndex.ts). */
+  getAtlasIndexStatus(model: string): Promise<{ queryable: boolean; status: string } | null>;
   /**
    * One page of vector-bearing chunks (id, fabFileId, text, vector) for the given files,
    * ascending by `_id`. Skips chunks without a vector at the DB layer. Powers semantic search
@@ -252,6 +400,23 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
     fabFileIds: string[],
     options?: { limit?: number; afterChunkId?: string }
   ): Promise<FabFileChunkVector[]>;
+  /**
+   * One page of chunk TEXT for a single file, ascending by `_id`, same exact-cursor contract as
+   * `findVectorsByFabFileIds`. Returns vectorless chunks too - a text consumer that inherited the
+   * vector filter would silently drop content.
+   */
+  findTextsByFabFileId(
+    fabFileId: string,
+    options?: { limit?: number; afterChunkId?: string }
+  ): Promise<{ id: string; text: string }[]>;
+  /** Every chunk of a file, vectorless included - lets a paging caller tell a whole file from a slice. */
+  countByFabFileId(fabFileId: string): Promise<number>;
+  /** One page of chunk ids still missing `charLength`, ascending by `_id` - backfill's keyset cursor. */
+  findChunkIdsMissingCharLength(options?: { limit?: number; afterChunkId?: string }): Promise<string[]>;
+  /** Server-side $strLenCP stamp of `charLength` on the given chunks; chunk text never leaves the DB. */
+  backfillCharLengthByIds(chunkIds: string[]): Promise<number>;
+  /** Sum of a file's chunks' charLength, unstamped chunks counted as 0. */
+  sumChunkCharLengthByFabFileId(fabFileId: string): Promise<number>;
 }
 
 /**
@@ -281,11 +446,30 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   getAccessibleFiles: (fabFileIds: string[], scope: Record<string, unknown>) => Promise<IFabFileDocument[]>;
 
   /**
+   * Persist the chunk-policy outcome for a file (#1662): the effective target its current chunks
+   * were built with, plus the cross-lake conflict report (`null` clears a now-resolved conflict).
+   * One atomic $set so the recorded target and the conflict decided from it can never disagree.
+   */
+  setChunkPolicyConflict(
+    fabFileId: string,
+    chunkedPassageTokenTarget: number,
+    conflict: FabFileChunkPolicyConflict | null
+  ): Promise<void>;
+
+  /**
    * Find all files for a user.
    * @param userId - The ID of the user.
    * @returns A promise that resolves to an array of files.
    */
   findByUserId(userId: string): Promise<IFabFileDocument[]>;
+
+  /**
+   * Sum the `fileSize` of every non-deleted file a user owns, via an aggregate
+   * so no documents are hydrated. A missing or null `fileSize` counts as 0.
+   * @param userId - The ID of the user.
+   * @returns A promise that resolves to the total size in bytes.
+   */
+  sumFileSizeByUserId(userId: string): Promise<number>;
 
   /**
    * Find a file by its ID and the user's ID.
@@ -401,15 +585,17 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   ) => Promise<{ data: IFabFileDocument[]; hasMore: boolean; total: number }>;
 
   /**
-   * Count the number of files by user id and tag.
-   * @param userId - The ID of the user.
-   * @param tag - The tag to count.
-   * @returns A promise that resolves to the number of files.
+   * Count a user's live files carrying one tag. Matches the WHOLE name, case-insensitively - a
+   * `test` tag does not count files tagged `testing`. Excludes soft-deleted files, unlike the
+   * write paths that keep tag names in step.
    */
   countByUserIdAndTag(userId: string, tag: string): Promise<number>;
 
   /**
-   * Count the number of files by tag for a user.
+   * Count the number of files by tag for a user. Widens to shared/group/data-lake files when
+   * options are supplied. `excludePersonalShares` additionally drops a file merely shared 1:1
+   * with the user - see buildOwnershipConditions (packages/database) for the full why and which
+   * kind of caller should or should not opt in.
    * @param userId - The ID of the user.
    * @returns A promise that resolves to the number of files.
    */
@@ -420,6 +606,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
       scopedTagPrefixes?: string[];
+      excludePersonalShares?: boolean;
     }
   ): Promise<{ tag: string; count: number }[]>;
 
@@ -455,8 +642,10 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   ): Promise<{ total: number; byPrefix: Record<string, number> }>;
 
   /**
-   * Count unique files per root tag namespace for a user. Takes the same optional scope as
-   * countFilesByTagForUser, which it is served beside; omitting it counts owned files only.
+   * Count unique files per root tag namespace for a user. Takes the SAME optional scope
+   * (including `excludePersonalShares`) as countFilesByTagForUser, which it is served beside -
+   * the two must move in lockstep or a namespace's size disagrees with its tag count. Omitting
+   * the scope counts owned files only.
    */
   countUniqueFilesByNamespaceForUser(
     userId: string,
@@ -465,24 +654,52 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
       scopedTagPrefixes?: string[];
+      excludePersonalShares?: boolean;
     }
   ): Promise<{ namespace: string; fileCount: number }[]>;
 
   /**
-   * Remove a tag from a user's files.
-   * @param userId - The ID of the user.
-   * @param tag - The tag to remove.
-   * @returns A promise that resolves to the number of files.
+   * Strip one tag name off every file a user owns, so deleting a tag document cannot leave the
+   * name orphaned on the files that carried it. Matches the WHOLE name, case-insensitively, and
+   * removes every occurrence - including a name a file carries twice.
+   *
+   * Includes SOFT-DELETED files, unlike most reads here: a soft-deleted file that kept the name
+   * would resurrect a tag that no longer exists the moment it is undeleted. Also clears
+   * `primaryTag` where it named the removed tag.
+   *
+   * Scoped to files the user OWNS. A file shared to them but owned by someone else keeps the
+   * name, which is correct - one user's tag edit must not rewrite another user's file.
+   *
+   * @returns files modified by the tag removal (not tags removed, and not counting the
+   * `primaryTag` sweep).
    */
   removeTagByUserId(userId: string, tag: string): Promise<number>;
 
   /**
-   * Update the tags for a user's files.
-   * @param userId - The ID of the user.
-   * @param tag - The tag to update.
-   * @returns A promise that resolves to the number of files.
+   * Rename one tag on every file a user owns, so renaming a tag document cannot leave the old name
+   * orphaned on the files that carried it. Matches the WHOLE name, case-insensitively, and renames
+   * EVERY occurrence in a file's tags array rather than only the first. Includes soft-deleted files
+   * and carries `primaryTag` across, for the same reasons as `removeTagByUserId`.
+   *
+   * May leave a file carrying `newTag` twice - once from the rename and once because it already
+   * had that tag. The caller resolves it with `dedupeTagByUserId`; doing both in one write would
+   * mean rewriting the whole array and losing the element-level concurrency this buys.
+   *
+   * @returns files modified by the rename (not the `primaryTag` sweep).
    */
   updateTagsByUserId(userId: string, tag: string, newTag: string): Promise<number>;
+
+  /**
+   * Collapse a repeated tag name to a single entry on every file of a user's that carries it more
+   * than once, normalizing the survivor to `name`'s casing. Keeps the FIRST occurrence and its
+   * other fields (`strength`, and anything this schemaless array happens to hold).
+   *
+   * The companion to `updateTagsByUserId`: renaming in place is what creates the duplicate, when a
+   * file already carried the target name.
+   *
+   * @returns the number of files that actually had a duplicate to collapse.
+   */
+  dedupeTagByUserId(userId: string, name: string): Promise<number>;
 
   /**
    * Atomically remove every tag matching one of `tagNames` (exact names) from one file's
@@ -526,10 +743,24 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Bulk-writes each file's full tags array in a single round trip via bulkWrite, instead of
    * one findOneAndUpdate per file. Used by applyTaxonomySuggestions, where a batch can hold
    * thousands of files and one write per file risks exceeding the caller's request timeout.
-   * @param updates - Each file's id and its complete resolved tags array.
-   * @returns Number of documents modified.
+   *
+   * Optimistic concurrency: each op is additionally filtered on `expectedTags`, the exact
+   * array the caller read before computing `tags`. If another writer (a direct tag edit, a
+   * lake-membership tag pull, a concurrent apply) changed the file's tags since that read, the
+   * filter no longer matches and this op is a silent no-op instead of clobbering the
+   * concurrent change - the caller's merge logic ran against stale data, so writing it would
+   * be wrong regardless of what it computed.
+   * @param updates - Each file's id, its complete resolved tags array, and the tags snapshot
+   * the resolution was computed from.
+   * @returns Number of documents modified (may be less than `updates.length` - see above).
    */
-  bulkUpdateTags(updates: { id: string; tags: { name: string; strength: number }[] }[]): Promise<number>;
+  bulkUpdateTags(
+    updates: {
+      id: string;
+      tags: { name: string; strength: number }[];
+      expectedTags: { name: string; strength: number }[];
+    }[]
+  ): Promise<number>;
 
   /**
    * Find files by content hashes for a given user (deduplication).
@@ -541,11 +772,17 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   /**
    * Files in a lake matching any hash, by META-TAG ONLY - deliberately narrower than the
    * `DataLakeMembershipScope` the rest of the lifecycle family takes. Its callers act on the
-   * answer destructively (the unarchive dedup hard-deletes the losing copy) or by skipping a
-   * caller's upload, and every re-upload path that matters writes the meta-tag, so admitting a
-   * prefix match here would risk the wrong file for no gain.
+   * answer destructively (the unarchive dedup soft-deletes, recoverably, the losing copy) or by
+   * skipping a caller's upload, and every re-upload path that matters writes the meta-tag, so
+   * admitting a prefix match here would risk the wrong file for no gain.
    */
   findByContentHashesInDataLake(hashes: string[], datalakeTag: string): Promise<IFabFileDocument[]>;
+  /**
+   * Files in a lake ingested from any of the given Google Drive file ids (META-TAG ONLY,
+   * mirroring findByContentHashesInDataLake). driveFileId is the Drive re-sync dedup key:
+   * it is stable across edits where contentHash is not, so it decides create-vs-skip-vs-update.
+   */
+  findByDriveFileIdsInDataLake(driveFileIds: string[], datalakeTag: string): Promise<IFabFileDocument[]>;
   markFailedIfNotAlready(fabFileId: string, errorMessage: string): Promise<boolean>;
 
   // ── Data lake lifecycle. Scoped by DataLakeMembershipScope - the lake's meta-tag OR a
@@ -556,7 +793,16 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Authoritative lake stats recomputed from source records via an aggregate (NOT
    * find().length). Counts only live files (not archived, not deleted).
    */
-  computeDataLakeStats(scope: DataLakeMembershipScope): Promise<{ fileCount: number; totalSizeBytes: number }>;
+  computeDataLakeStats(
+    scope: DataLakeMembershipScope
+  ): Promise<{ fileCount: number; totalSizeBytes: number; totalChunkedChars: number }>;
+  /**
+   * One page of file ids that have chunks but no `chunkedCharCount` (missing or nulled by a
+   * content rewrite), ascending by `_id` - the char-length backfill's phase-2 cursor.
+   */
+  findFileIdsMissingChunkedCharCount(options?: { limit?: number; afterFileId?: string }): Promise<string[]>;
+  /** Stamp a file's recomputed `chunkedCharCount` - the char-length backfill's phase-2 write. */
+  setChunkedCharCount(id: string, chunkedCharCount: number): Promise<void>;
   /**
    * Distinct live file count per lake, keyed by `datalakeTag`. Same predicate as
    * computeDataLakeStats, so what a browse surface displays cannot disagree with a lake's
@@ -564,20 +810,84 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * carry only the membership tag and over-counts multi-tagged ones.
    */
   countDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<Record<string, number>>;
-  /** Soft-archive (reversible) all live member files. Returns affected count. */
-  archiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number>;
-  /** Reverse archive for all archived member files. */
-  unarchiveByDataLakeTag(scope: DataLakeMembershipScope): Promise<number>;
-  /** Archived member files - used by the unarchive dedup pass. */
-  findArchivedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]>;
-  /** Soft-deleted member files - used by the deleted->active restore dedup pass. */
-  findDeletedByDataLakeTag(scope: DataLakeMembershipScope): Promise<IFabFileDocument[]>;
-  /** Reverse soft-delete for member files, optionally excluding ids (discarded duplicates). Returns count. */
-  undeleteByDataLakeTag(scope: DataLakeMembershipScope, excludeIds?: string[]): Promise<number>;
-  /** Soft-delete (phase 1) all member files. Returns affected file ids. */
-  softDeleteByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
-  /** Hard-delete (phase 2) all member files, including soft-deleted. Returns purged ids. Idempotent. */
+  // The delete/restore pair is STAMP-KEYED. Phase-1 delete takes `at` and writes that one value
+  // to every row it flips; it records the stamp on the lake and restore passes it back as
+  // `stampedAt` to reverse exactly that batch. `stampedAt` matches by EQUALITY - deliberately not a
+  // lower bound, which would also match a file the creator deleted during the deleted window (the
+  // per-file delete routes stamp `deletedAt` too) and revive it on restore. Omitting `stampedAt`
+  // matches every stamped row: the pre-mark behavior, and the fallback for a lake torn down before
+  // the mark existed. The archive axis is stamped the same way (`at`, `filesArchivedAt`) so restore
+  // can also clear `archivedAt` for exactly the batch this lake's own archive wrote, without
+  // freeing a prefix-sharing sibling's independently-archived files. `unarchiveByDataLakeTag` and
+  // `findArchivedByDataLakeTag` use this same equality bound over the WHOLE membership filter, not
+  // just the prefix arm - a meta-tag match is not exempt, because `addFileToLake` lets one file
+  // carry more than one lake's meta-tag with no exclusivity check, so a meta-tagged row can belong
+  // to a co-owning lake's own archive just as a prefix-tagged row can belong to a sibling's.
+
+  /**
+   * Soft-archive (reversible) all live member files, stamped `at`. Returns affected count.
+   * Omitting `at` still writes a real per-row timestamp - it is orphaned (no lake names it), not
+   * absent. See archiveDataLake's `hasUnstampedArchive` guard for when that's intentional.
+   */
+  archiveByDataLakeTag(scope: DataLakeMembershipScope, at?: Date): Promise<number>;
+  /**
+   * Reverse archive for member files stamped `stampedAt`, by equality - a sibling or a co-owning
+   * lake's own differently-stamped member is never freed. `stampedAt` omitted unarchives
+   * unbounded, for a lake archived before `filesArchivedAt` existed.
+   */
+  unarchiveByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<number>;
+  /**
+   * Archived member files stamped `stampedAt` - used by the unarchive dedup pass. Omitting
+   * `stampedAt` matches every archived row, same as before this parameter existed.
+   */
+  findArchivedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]>;
+  /**
+   * Existence-only probe, unbounded by any stamp (unlike findArchivedByDataLakeTag) - a caller
+   * deciding whether to claim a fresh stamp needs to know if ANY member is already archived,
+   * stamped or not.
+   *
+   * EXCLUSIVE means the row carries no OTHER lake's membership meta-tag: a co-tagged row is
+   * whichever co-owning lake's stamp is on it, not this lake's un-restorable orphan, so counting
+   * it here would leave this lake permanently unstamped and its own later unarchive unbounded.
+   * Says nothing about a prefix-ARM collision, which carries no lake attribution at all (#1729).
+   */
+  hasArchivedMemberExclusiveToDataLakeTag(scope: DataLakeMembershipScope): Promise<boolean>;
+  /** Soft-deleted member files stamped `stampedAt` - used by the deleted->active restore dedup pass. */
+  findDeletedByDataLakeTag(scope: DataLakeMembershipScope, stampedAt?: Date): Promise<IFabFileDocument[]>;
+  /**
+   * Reverse soft-delete for member files stamped `stampedAt`, minus `excludeIds` (discarded
+   * duplicates). When `archiveStampToClear` is given, also clears `archivedAt` on the subset of
+   * the restored batch whose archivedAt equals it (the batch this lake's own archive wrote) -
+   * everything else keeps its archive marker untouched. Returns count restored.
+   */
+  undeleteByDataLakeTag(
+    scope: DataLakeMembershipScope,
+    excludeIds?: string[],
+    stampedAt?: Date,
+    archiveStampToClear?: Date
+  ): Promise<number>;
+  /** Soft-delete (phase 1) all member files, stamped `at`. Returns affected file ids. */
+  softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at?: Date): Promise<string[]>;
+  /**
+   * Hard-delete (phase 2) all member files, including soft-deleted. Returns purged ids. Idempotent.
+   *
+   * Resolves membership at call time, so it can destroy a file that became a member after the
+   * caller last looked. A caller that has already acted on a resolved id set - deleted its chunks,
+   * told a retrieval index - must purge that same set via `hardDeleteByIds` instead, or it
+   * destroys rows it never accounted for.
+   */
   hardDeleteByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
+  /**
+   * Hard-delete exactly these files, including soft-deleted ones. Idempotent.
+   *
+   * Echoes back the ids it was GIVEN, not the rows it actually removed - a second call with the
+   * same ids returns them again. Do not read the result as "what this call deleted"; if you need
+   * that, count before and after.
+   *
+   * Ids must come from a prior repository read. They go straight into an `_id` query, so a
+   * malformed one throws a CastError partway through the delete.
+   */
+  hardDeleteByIds(fabFileIds: string[]): Promise<string[]>;
   /** All member file ids (including soft-deleted), for chunk/index cleanup. */
   findIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
 }

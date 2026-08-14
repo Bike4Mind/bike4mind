@@ -12,12 +12,16 @@ const makeFile = (overrides: {
   fileName?: string;
   deleted?: boolean;
   archived?: boolean;
+  pending?: boolean;
 }) =>
   FabFile.create({
     userId: overrides.userId ?? CREATOR,
     fileName: overrides.fileName ?? 'doc',
     type: KnowledgeType.TEXT,
     tags: (overrides.tags ?? []).map(name => ({ name })),
+    // A real member file has always finished uploading by the time anything counts it; the
+    // schema default is 'pending', which is the not-yet-landed state these counts must exclude.
+    status: overrides.pending ? 'pending' : 'complete',
     ...(overrides.deleted ? { deletedAt: new Date() } : {}),
     ...(overrides.archived ? { archivedAt: new Date() } : {}),
   });
@@ -74,6 +78,16 @@ describe('FabFileRepository.countDataLakeFilesByMembership', () => {
     const counts = await fabFileRepository.countDataLakeFilesByMembership([scope('papers', 'papers:')]);
 
     expect(counts).toEqual({ 'datalake:papers': 1 });
+  });
+
+  it('excludes a presigned file whose bytes have not landed yet', async () => {
+    // A presign door stamps the lake's meta-tag before the browser sends a byte. Counting this
+    // row would let an abandoned upload permanently activate an otherwise-empty lake (#1342).
+    await makeFile({ tags: ['datalake:papers'], fileName: 'still-uploading', pending: true });
+
+    const counts = await fabFileRepository.countDataLakeFilesByMembership([scope('papers', 'papers:')]);
+
+    expect(counts).toEqual({ 'datalake:papers': 0 });
   });
 
   it('returns a count per requested lake, keyed by membership tag', async () => {

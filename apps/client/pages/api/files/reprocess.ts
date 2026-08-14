@@ -28,7 +28,9 @@ const handler = baseApi().post(
     if (!req.ability?.can?.(Permission.update, fabFile)) throw new BadRequestError('Unauthorized');
     if (fabFile.isChunking) throw new BadRequestError('FabFile is currently being chunked');
 
-    // Reset processing state and clear any prior "no text" flag.
+    // Reset processing state and clear any prior "no text" flag. chunkEmbeddingModelStampedAt
+    // must clear too - a stale stamp would make the Atlas cutover read path treat this file as
+    // ANN-ready before the re-chunked chunks are re-stamped (see vectorSearchEligibility.ts).
     await FabFile.updateOne(
       { _id: fabFileId },
       {
@@ -39,6 +41,7 @@ const handler = baseApi().post(
           vectorized: false,
           vectorizedChunkCount: 0,
           notes: '',
+          chunkEmbeddingModelStampedAt: null,
         },
       }
     );

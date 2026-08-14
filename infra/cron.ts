@@ -9,9 +9,11 @@ import {
   liveOpsTriageQueue,
   deepAgentWakeQueue,
   dataLakeTaxonomyQueue,
+  fabFileChunkQueue,
 } from './queues';
 import { lambdaVpc } from './vpc';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
+import { websocketApi } from './websocket';
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
   schedule: 'rate(5 minutes)',
@@ -641,9 +643,12 @@ const dataLakeBatchReconcileCron = new sst.aws.Cron('dataLakeBatchReconcile', {
     handler: 'apps/client/server/cron/dataLakeBatchReconcile.handler',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
-    // dataLakeTaxonomyQueue: the stuck-batch backstop calls enqueueTaxonomyAnalysisIfWanted,
-    // which needs Resource.dataLakeTaxonomyQueue.url.
-    link: [...allSecrets, dataLakeTaxonomyQueue],
+    // dataLakeTaxonomyQueue + websocketApi: the stuck-batch backstop calls
+    // enqueueTaxonomyAnalysisIfWanted, which needs Resource.dataLakeTaxonomyQueue.url to
+    // enqueue and, on a rate-limited batch, Resource.websocket.managementEndpoint to push the
+    // live status update. fabFileChunkQueue: the un-chunked rescue sweep (#1420) re-enqueues
+    // complete-but-never-chunked files for chunking.
+    link: [...allSecrets, dataLakeTaxonomyQueue, websocketApi, fabFileChunkQueue],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -694,6 +699,26 @@ const agentExecutionAbandonedSweepCron = new sst.aws.Cron('agentExecutionAbandon
   enabled: ['production', 'dev'].includes($app.stage),
 });
 
+// Spend Reconciliation -- fetches authoritative billing from Anthropic/OpenAI
+// admin APIs and compares against internal COGS estimates.
+const spendReconciliationCron = new sst.aws.Cron('spendReconciliation', {
+  schedule: 'cron(0 6 * * ? *)', // Daily at 6am UTC
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/client/server/cron/spendReconciliation.handler',
+    runtime: 'nodejs24.x',
+    timeout: '5 minutes',
+    link: [...allSecrets],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    logging: {
+      retention: '1 week',
+    },
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
 export {
   dailyUserActivityReport,
   weeklyUserActivityReport,
@@ -720,4 +745,5 @@ export {
   modelDiscoveryCron,
   agentExecutionAbandonedSweepCron,
   dataLakeBatchReconcileCron,
+  spendReconciliationCron,
 };

@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
 
-const { findOneMock, saveMock, getSettingsValueMock, sendToQueueMock } = vi.hoisted(() => ({
+const { findOneMock, saveMock, getSettingsValueMock, sendToQueueMock, recomputeUploadedMock } = vi.hoisted(() => ({
   findOneMock: vi.fn(),
   saveMock: vi.fn(),
   getSettingsValueMock: vi.fn(),
   sendToQueueMock: vi.fn(),
+  recomputeUploadedMock: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ post: (h: unknown) => h }) }));
@@ -18,6 +19,9 @@ vi.mock('@server/s3/utils', () => ({
   findWithRetry: <T>(fn: () => Promise<T>) => fn(),
 }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: sendToQueueMock }));
+vi.mock('@server/dataLakes/recomputeStatsForUploadedFile', () => ({
+  recomputeStatsForUploadedFile: recomputeUploadedMock,
+}));
 vi.mock('sst', () => ({ Resource: { fabFileChunkQueue: { url: 'http://sqs/fabFileChunkQueue' } } }));
 
 const handler = (await import('../object-created')).default as (req: Request, res: Response) => Promise<unknown>;
@@ -54,6 +58,24 @@ describe('POST /api/internal/s3/object-created', () => {
   afterEach(() => {
     delete process.env.B4M_SELF_HOST;
     delete process.env.INTERNAL_S3_WEBHOOK_SECRET;
+  });
+
+  it('recomputes the lakes the uploaded file joined, now that its bytes have landed (#1342)', async () => {
+    // Self-host has no S3 events, so without this the hosted and self-host paths would disagree
+    // about when a lake leaves 'draft'.
+    findOneMock.mockResolvedValue({
+      id: 'ff1',
+      _id: 'ff1',
+      userId: 'u1',
+      status: 'pending',
+      tags: [{ name: 'datalake:acme' }],
+      save: saveMock,
+    });
+    const res = makeRes();
+
+    await handler(makeReq('secret-token', 'uploads/a.pdf'), res);
+
+    expect(recomputeUploadedMock).toHaveBeenCalledWith(expect.objectContaining({ id: 'ff1' }), expect.anything());
   });
 
   it('returns 404 when not in self-host mode', async () => {
@@ -94,7 +116,6 @@ describe('POST /api/internal/s3/object-created', () => {
     expect(sendToQueueMock).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
       fabFileId: 'ff1',
       userId: 'u1',
-      chunkSize: '1000',
     });
     expect(res.status).toHaveBeenCalledWith(200);
   });

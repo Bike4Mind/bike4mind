@@ -105,7 +105,10 @@ const handler = baseApi()
     const ownerHasWhitelabel = new Map<string, boolean>();
     await Promise.all(
       [...uniqueOwners].map(async ([cacheKey, key]) => {
-        ownerHasWhitelabel.set(cacheKey, await embedKeyOwnerHasEntitlement(key, EMBED_WHITELABEL_ENTITLEMENT_KEY));
+        ownerHasWhitelabel.set(
+          cacheKey,
+          await embedKeyOwnerHasEntitlement(key, EMBED_WHITELABEL_ENTITLEMENT_KEY, key.id)
+        );
       })
     );
 

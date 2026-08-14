@@ -208,38 +208,35 @@ const AISettings: FC<AISettingsProps> = ({
         {/* Briefcase - one-click prompt catalog */}
         {isBriefcaseEnabled && <BriefcaseButton isMobile={isMobile} isTablet={isTablet} />}
 
-        {/* Number of Responses (Image Models only) */}
+        {/* Images per prompt. Image models only - `n` reaches only the image services; the text
+            path destructures it and never uses it. */}
         {!isTablet && isImageModel(model) && (
-          <Box
-            sx={{
-              display: 'flex',
-              flexDirection: 'row',
-              alignItems: 'center',
-              height: '32px',
-              borderRadius: '6px',
-            }}
+          <Tooltip
+            title="How many images to generate from your prompt. More images cost proportionally more credits."
+            placement="top"
           >
-            <TagIcon sx={{ color: 'text.primary', fontSize: '18px', mr: '4px' }} />
-            <Tooltip title="Number of Responses">
-              <Input
-                data-testid="image-response-count-input"
-                sx={{
-                  width: '3vw',
-                  minWidth: '48px',
-                  height: '32px',
-                  backgroundColor: 'background.surface',
-                  color: 'text.primary',
-                }}
-                size="sm"
-                id="nEdit"
-                variant="outlined"
-                type="number"
-                value={n ?? 1}
-                onChange={handleResponseCountChange}
-                slotProps={{ input: { sx: { textAlign: 'center' }, min: 1, max: 4 } }}
-              />
-            </Tooltip>
-          </Box>
+            <Input
+              data-testid="image-response-count-input"
+              // The icon rides inside the field as a decorator, matching every other control in
+              // this row. `--Icon-margin` is Joy's own -3px nudge for decorator icons, which pulls
+              // it off-centre; cancel the variable rather than compensating on the icon.
+              startDecorator={<TagIcon sx={{ color: 'text.primary', fontSize: '18px' }} />}
+              sx={{
+                '--Icon-margin': '0px',
+                width: '76px',
+                height: '32px',
+                backgroundColor: 'background.surface',
+                color: 'text.primary',
+              }}
+              size="sm"
+              id="nEdit"
+              variant="outlined"
+              type="number"
+              value={n ?? 1}
+              onChange={handleResponseCountChange}
+              slotProps={{ input: { sx: { textAlign: 'center' }, min: 1, max: 4 } }}
+            />
+          </Tooltip>
         )}
 
         {/* Image Templates (save/apply reusable image-mode settings) */}

@@ -1,6 +1,8 @@
-import type { IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
+import type { IDataLakeAccessGrantRepository, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
 import { UpdateDataLakeRequestInput, normalizeEntitlementKey } from '@bike4mind/common';
 import { secureParameters, BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { type ManageActor } from './manageRule';
+import { resolveCanManageLake } from './authorizeLakeManage';
 import type { z } from 'zod';
 
 type UpdateDataLakeParams = z.infer<typeof UpdateDataLakeRequestInput>;
@@ -8,6 +10,7 @@ type UpdateDataLakeParams = z.infer<typeof UpdateDataLakeRequestInput>;
 interface UpdateDataLakeAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'update'>;
+    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
   };
 }
 
@@ -20,7 +23,7 @@ interface UpdateDataLakeAdapters {
  * Private-by-default in canAccessLake.
  */
 export const updateDataLake = async (
-  actor: { userId: string; isAdmin: boolean },
+  actor: ManageActor,
   dataLakeId: string,
   parameters: UpdateDataLakeParams,
   { db }: UpdateDataLakeAdapters
@@ -32,8 +35,8 @@ export const updateDataLake = async (
     throw new NotFoundError(`Data lake not found`);
   }
 
-  if (!actor.isAdmin && existing.createdByUserId !== actor.userId) {
-    throw new BadRequestError('Only the creator can update this data lake');
+  if (!(await resolveCanManageLake(existing, actor, { db }))) {
+    throw new BadRequestError('You do not have permission to update this data lake');
   }
 
   // Mirror the setLakeVisibility guardrail from the other side so the "public => no gate"

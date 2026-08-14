@@ -1,6 +1,7 @@
 import { Logger } from '@bike4mind/observability';
 import OpenAI from 'openai';
 import { EmbeddingModelInfo, EmbeddingModelProvider, EmbeddingService } from '../EmbeddingService';
+import { EmbeddingAuthError } from '../EmbeddingErrors';
 import { OpenAIEmbeddingModel } from '@bike4mind/common';
 
 export const OPENAI_EMBEDDING_MODEL_MAP: Record<OpenAIEmbeddingModel, EmbeddingModelInfo<OpenAIEmbeddingModel>> = {
@@ -73,14 +74,18 @@ export class OpenAIEmbeddingService implements EmbeddingService {
    * up front by EmbeddingFactory; this is the runtime backstop for a key that is invalid or revoked
    * at call time, so a failed file reports what to fix instead of a bare AuthenticationError.
    * Preserves the original message, and is a no-op for any non-auth error so the token-limit /
-   * rate-limit / server-error handling below is left untouched.
+   * rate-limit / server-error handling below is left untouched. Returns a typed EmbeddingAuthError
+   * so a caller can tell an auth failure (fix a credential) apart from a transient one (retry) - see
+   * fabFileVectorize, which maps it to user-safe copy instead of leaking these operator instructions.
    */
   private toActionableAuthError(error: unknown): unknown {
     if (error instanceof OpenAI.AuthenticationError) {
-      return new Error(
+      return new EmbeddingAuthError(
+        'openai',
         `OpenAI rejected the embedding request (401 Unauthorized): the OPENAI_API_KEY is invalid or expired. ` +
           `Set a valid key, or for an airgapped self-host unset it and set OLLAMA_BASE_URL to use a local embedder. ` +
-          `(original: ${error.message})`
+          `(original: ${error.message})`,
+        { cause: error }
       );
     }
     return error;
@@ -191,7 +196,9 @@ export class OpenAIEmbeddingService implements EmbeddingService {
       const encoding = encoding_for_model('text-embedding-ada-002');
 
       const counts = texts.map(text => {
-        const tokens = encoding.encode(text);
+        // encode_ordinary: these texts are file content, and encode rejects a special-token literal
+        // in it - which would drop the whole batch to the chars/3 estimate below over one string.
+        const tokens = encoding.encode_ordinary(text);
         return tokens.length;
       });
 

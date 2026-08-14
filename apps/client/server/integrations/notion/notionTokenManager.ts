@@ -184,10 +184,12 @@ export class NotionTokenManager {
       console.log('Created new Notion MCP server');
     }
 
-    // Fetch and store available tools, retrying once on failure.
-    // Without toolSchemas the ToolBuilder silently skips the server,
-    // so the LLM never sees Notion tools despite a valid connection.
-    const MAX_TOOL_FETCH_ATTEMPTS = 2;
+    // Fetch and cache tool schemas so ToolBuilder / loadAgentMcpTools can
+    // build the tool list without a live fetch on every request. Three
+    // attempts with backoff (2s, 4s) covers Lambda cold starts. Without
+    // toolSchemas both paths silently skip the server.
+    const MAX_TOOL_FETCH_ATTEMPTS = 3;
+    const BASE_BACKOFF_MS = 2000;
     let toolsFetched = false;
 
     for (let attempt = 1; attempt <= MAX_TOOL_FETCH_ATTEMPTS; attempt++) {
@@ -216,7 +218,7 @@ export class NotionTokenManager {
       } catch (toolsError) {
         console.warn(`Failed to get Notion MCP tools (attempt ${attempt}/${MAX_TOOL_FETCH_ATTEMPTS}):`, toolsError);
         if (attempt < MAX_TOOL_FETCH_ATTEMPTS) {
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          await new Promise(resolve => setTimeout(resolve, BASE_BACKOFF_MS * attempt));
         }
       }
     }

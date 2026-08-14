@@ -124,7 +124,10 @@ describe('/api/otc/verify — enumeration resistance', () => {
     json: ReturnType<typeof vi.fn>;
     status: ReturnType<typeof vi.fn>;
     setHeader: ReturnType<typeof vi.fn>;
+    getHeader: ReturnType<typeof vi.fn>;
   };
+  // Minimal Set-Cookie accumulator so setRefreshCookie's get/append/set cycle works on the stub.
+  let sentCookies: string[];
 
   const makeReq = (body: Record<string, unknown>) => ({
     body,
@@ -139,7 +142,15 @@ describe('/api/otc/verify — enumeration resistance', () => {
     mockJwtSign.mockReturnValue('reissued-token');
     mockValidateAndRotateNonce.mockResolvedValue(true);
     mockUserHasMFA.mockReturnValue(false);
-    mockRes = { json: vi.fn().mockReturnThis(), status: vi.fn().mockReturnThis(), setHeader: vi.fn() };
+    sentCookies = [];
+    mockRes = {
+      json: vi.fn().mockReturnThis(),
+      status: vi.fn().mockReturnThis(),
+      setHeader: vi.fn((name: string, value: string | string[]) => {
+        if (name === 'Set-Cookie') sentCookies = Array.isArray(value) ? value.map(String) : [String(value)];
+      }),
+      getHeader: vi.fn((name: string) => (name === 'Set-Cookie' && sentCookies.length ? sentCookies : undefined)),
+    };
     const mod = await import('@pages/api/otc/verify');
     handler = mod.default;
   });
@@ -204,7 +215,10 @@ describe('/api/otc/verify — enumeration resistance', () => {
     expect(mockFindByEmail).toHaveBeenCalledWith('user@example.com');
     expect(mockRes.status).toHaveBeenCalledWith(200);
     const body = mockRes.json.mock.calls[0][0];
-    expect(body).toMatchObject({ id: 'u1', username: 'bob', accessToken: 'access', refreshToken: 'refresh' });
+    expect(body).toMatchObject({ id: 'u1', username: 'bob', accessToken: 'access' });
+    // The refresh token is delivered as an HttpOnly cookie, never in the JSON body.
+    expect(body.refreshToken).toBeUndefined();
+    expect(sentCookies.join(';')).toContain('b4m_rt=refresh');
     // Serialized via toJSON - no raw Mongoose internals / select:false fields.
     expect(body.password).toBeUndefined();
   });

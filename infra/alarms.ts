@@ -125,6 +125,10 @@ export const deprecatedModelRequestAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('DeprecatedModelRequestAlarm')
   : undefined;
 
+export const dataLakeStuckBatchesAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('DataLakeStuckBatchesAlarm')
+  : undefined;
+
 // --- MetricAlarm definitions (only created for monitored stages) ---
 
 if (isMonitoredStage) {
@@ -1028,6 +1032,37 @@ if (isMonitoredStage) {
     alarmActions: [deprecatedModelRequestAlarm!.arn],
     tags: {
       Application: 'ModelSunset',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
+   * Alarm: Data Lake stuck-batch count
+   *
+   * The reconciler (hosted cron + self-host worker) samples the stuck-batch gauge once per
+   * sweep; each forced-terminal batch is lost work for a user, but an occasional one is expected
+   * noise (e.g. a browser tab closed mid-upload). Threshold 10 in one sample is a systemic
+   * problem, not a one-off.
+   *
+   * Metric emitted by: server/utils/cloudwatch.ts -> recordStuckBatchGauge, wired from
+   * server/cron/dataLakeBatchReconcile.ts's runStuckBatchSweep.
+   * Namespace: Lumina5/DataLakeBatch / StuckBatches
+   */
+  new aws.cloudwatch.MetricAlarm('dataLakeStuckBatchesHigh', {
+    name: `${$app.name}-${$app.stage}-data-lake-stuck-batches-high`,
+    alarmDescription:
+      'Data lake stuck-batch count crossed threshold - the reconciler is forcing an unusual number of batches terminal',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'StuckBatches',
+    namespace: 'Lumina5/DataLakeBatch',
+    period: 86400, // 1 day - matches the once-per-sweep sample cadence
+    statistic: 'Maximum',
+    threshold: 10,
+    treatMissingData: 'notBreaching',
+    alarmActions: [dataLakeStuckBatchesAlarm!.arn],
+    tags: {
+      Application: 'DataLakeBatch',
       Severity: 'Medium',
     },
   });

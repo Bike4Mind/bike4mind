@@ -15,6 +15,7 @@ import { BadRequestError, ForbiddenError, getFileContent, getSettingsByNames } f
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { getFilesStorage } from '@server/utils/storage';
+import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { apiKeyService } from '@bike4mind/services';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -137,7 +138,8 @@ async function generateAgentFromContext(
   // 2. Any OpenAI model (more likely to have user keys)
   // 3. Any Anthropic model (non-Bedrock)
   // 4. Any available model
-  let modelInfo = preferredModelId ? models.find(m => m.id === preferredModelId) : null;
+  // Skip a pinned model the catalog now reports as disabled, matching the save-time guard.
+  let modelInfo = preferredModelId ? models.find(m => m.id === preferredModelId && !m.disabled) : null;
 
   if (!modelInfo) {
     // Try OpenAI models first (users more likely to have OpenAI keys)
@@ -411,21 +413,35 @@ const handler = baseApi().post<Request<{}, CreateFromContextResponse, CreateFrom
     // Generate the agent from context
     const agentData = await generateAgentFromContext(agentName, messages, fabFiles, authenticatedUserId, req.logger);
 
-    // Always create a dedicated project for this agent
-    const agentProject = await projectRepository.create({
-      name: `${agentName} Agent Project`,
-      description: `Project automatically created for the ${agentName} agent`,
-      userId: authenticatedUserId,
-      users: [
-        {
-          userId: authenticatedUserId,
-          permissions: ['read', 'create', 'update', 'delete', 'share'], // All permissions for owner
-        },
-      ],
-      groups: [],
-      isGlobalRead: false,
-      isGlobalWrite: false,
-    } as never); // any: projectRepository.create() expects full document type but we provide a partial
+    // Always create a dedicated project for this agent. Per-user project names are
+    // unique (userId_1_name_1), so generating a second agent with the same name would
+    // trip code 11000; disambiguate with a short suffix rather than 500 the whole
+    // agent creation.
+    const makeAgentProjectDoc = (name: string) =>
+      ({
+        name,
+        description: `Project automatically created for the ${agentName} agent`,
+        userId: authenticatedUserId,
+        users: [
+          {
+            userId: authenticatedUserId,
+            permissions: ['read', 'create', 'update', 'delete', 'share'], // All permissions for owner
+          },
+        ],
+        groups: [],
+        isGlobalRead: false,
+        isGlobalWrite: false,
+      }) as never; // projectRepository.create() expects full document type but we provide a partial
+
+    let agentProject;
+    try {
+      agentProject = await projectRepository.create(makeAgentProjectDoc(`${agentName} Agent Project`));
+    } catch (error) {
+      if (!isDuplicateKeyError(error)) throw error;
+      agentProject = await projectRepository.create(
+        makeAgentProjectDoc(`${agentName} Agent Project (${uuidv4().slice(0, 8)})`)
+      );
+    }
 
     if (!agentProject) {
       throw new Error('Failed to create project for agent');

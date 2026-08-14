@@ -1,13 +1,40 @@
 import { connectDB as baseConnectDB } from '@bike4mind/db-core';
 import { setModelCatalogProvider, setModelPriceRowsProvider } from '@bike4mind/llm-adapters';
+import { configureSecretsAtRest } from '@bike4mind/utils/security';
+import { Resource } from 'sst';
 import { modelPriceRepository } from './models/billing/ModelPriceModel';
 import { ModelCatalog, modelCatalogRepository } from './models/ai/ModelCatalogModel';
 import { ModelDiscoveryState } from './models/ai/ModelDiscoveryStateModel';
+import { DataLakeModel } from './models/ai/DataLakeModel';
 import { seedModelCatalog } from './seeds/seedModelCatalog';
 import { seedModelPrices } from './seeds/seedModelPrices';
 
 let catalogWired = false;
 let catalogSeedSettled: Promise<boolean> | null = null;
+let secretsAtRestConfigured = false;
+
+/** Guarded read: an unlinked/unprovisioned SST secret throws in the getter itself. */
+function readSecretFromResource(name: string): string | undefined {
+  try {
+    return (Resource as unknown as Record<string, { value?: string } | undefined>)[name]?.value;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Register the at-rest encryption key from SST resources. Wiring this into connectDB (rather
+ * than a single apps/client module) is what lets EVERY process that reaches Mongo decrypt
+ * sensitive settings and per-user keys - API routes, queue/cron handlers, AND the
+ * packages/scripts CLIs, which never import apps/client's Config. Idempotent and safe to call
+ * with no key configured (reads then degrade to plaintext passthrough). Exported for tests.
+ */
+export function configureSecretsAtRestFromResource(): void {
+  configureSecretsAtRest(
+    readSecretFromResource('SECRET_ENCRYPTION_KEY'),
+    readSecretFromResource('SECRET_ENCRYPTION_KEY_PREVIOUS')
+  );
+}
 
 /**
  * Resolves once the boot-time catalog seed has settled, to whether the CATALOG
@@ -31,6 +58,15 @@ export const whenCatalogSeeded = (): Promise<boolean> => catalogSeedSettled ?? P
  * ModelDiscoveryState are both new collections, so every deployment gets exactly
  * that cold start. ModelPrice is deliberately absent - its collection and index
  * predate this.
+ *
+ * DataLakeModel is here for a different reason: its new
+ * { createdByUserId, fileTagPrefix } unique index lands on an EXISTING,
+ * populated collection, so a stage with legacy same-creator-prefix duplicates
+ * fails this build on every boot, not just the first - awaiting it turns that
+ * into a warning any deployer watching boot logs sees, instead of a Node
+ * unhandled-rejection with no attribution. The pre-deploy check script
+ * (packages/scripts/migrate/check-datalake-prefix-dupes.ts) is what actually
+ * finds and resolves the duplicates; this only makes a failed build loud.
  *
  * A failed build must not skip the seeding it precedes: an already-duplicated
  * collection would then never receive its rows.
@@ -63,6 +99,7 @@ async function seedCatalogs(): Promise<boolean> {
   await Promise.all([
     ensureUniqueIndex('modelCatalog', ModelCatalog),
     ensureUniqueIndex('modelDiscoveryState', ModelDiscoveryState),
+    ensureUniqueIndex('dataLake', DataLakeModel),
   ]);
 
   let catalogSeeded = true;
@@ -106,6 +143,10 @@ async function seedCatalogs(): Promise<boolean> {
  */
 export const connectDB: typeof baseConnectDB = async (url, logger) => {
   const result = await baseConnectDB(url, logger);
+  if (!secretsAtRestConfigured) {
+    secretsAtRestConfigured = true;
+    configureSecretsAtRestFromResource();
+  }
   if (!catalogWired) {
     catalogWired = true;
     setModelCatalogProvider(() => modelCatalogRepository.rowsInForce());

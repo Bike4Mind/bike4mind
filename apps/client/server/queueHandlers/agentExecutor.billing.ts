@@ -75,6 +75,62 @@ export function addToolUsage(pending: PendingToolUsage, usage: ToolUsageTotals):
 }
 
 /**
+ * Which generative tools have their provider media cost folded into the iteration bill, keyed
+ * by the callback phase that folds them. Image cost is fully determined at call time by
+ * n/size/quality, so it is reserved on start (mirrors classic chat's reserve-on-start); music
+ * and audio cost depends on the delivered clip, so it settles on finish (the tools' failure
+ * paths return before onFinish, so an undelivered clip is never billed). Must stay in sync
+ * with the tool implementations in b4m-core/services.
+ */
+const MEDIA_COST_TOOLS_BY_PHASE = {
+  start: ['image_generation', 'edit_image'],
+  finish: ['music_generation', 'audio_generation'],
+} as const satisfies Record<'start' | 'finish', readonly string[]>;
+
+export type MediaCostPhase = keyof typeof MEDIA_COST_TOOLS_BY_PHASE;
+
+export type FoldGeneratedMediaUsdParams = {
+  phase: MediaCostPhase;
+  toolName: string;
+  data: unknown;
+  models: ModelInfo[];
+  /** Mutated in place when a positive media cost is folded in. */
+  pending: PendingToolUsage;
+  /** The pure USD estimator (b4m-core `estimateGeneratedMediaUsd`); injected to keep this module services-free and testable. */
+  estimateUsd: (toolName: string, data: unknown, models: ModelInfo[]) => number;
+  /** Called when the estimator throws so the caller can log; the iteration is still billed, just without this tool's media cost. */
+  onError?: (err: unknown) => void;
+};
+
+/**
+ * Fold a generative tool's provider media cost (USD) into the per-iteration accumulator, on the
+ * phase that owns that tool (see MEDIA_COST_TOOLS_BY_PHASE). Agent mode bills LLM tokens
+ * per-iteration; a tool's media cost is NOT LLM spend, so classic chat's per-tool toolCreditsMap
+ * drain never runs here - without this fold, agent-mode generation would be free. No-op for a
+ * tool not owned by this phase, or when the estimate is <= 0. Never throws: an estimator error
+ * is routed to `onError` and this iteration is billed without the media cost.
+ */
+export function foldGeneratedMediaUsd(params: FoldGeneratedMediaUsdParams): void {
+  const { phase, toolName, data, models, pending, estimateUsd, onError } = params;
+  // Cast widens the readonly literal tuple so `includes` accepts an arbitrary tool name.
+  if (!(MEDIA_COST_TOOLS_BY_PHASE[phase] as readonly string[]).includes(toolName)) return;
+  try {
+    const usd = estimateUsd(toolName, data, models);
+    if (usd > 0) {
+      addToolUsage(pending, {
+        costUsd: usd,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      });
+    }
+  } catch (err) {
+    onError?.(err);
+  }
+}
+
+/**
  * Snapshot the accumulated tool spend and reset the accumulator to zero in one step, so a
  * repeat call can't double-count the same spend (a second take returns all-zeros). Mutates
  * `pending`. Call once per iteration, just before `billIteration` consumes the snapshot.

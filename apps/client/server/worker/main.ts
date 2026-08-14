@@ -12,9 +12,15 @@ import { dispatch as fabFileVectorizeDispatch } from '@server/queueHandlers/fabF
 import { dispatch as dataLakeTaxonomyAnalysisDispatch } from '@server/queueHandlers/dataLakeTaxonomyAnalysis';
 import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
 import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
+import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
 import { buildFabFileChunkScanFilter, CHUNK_SCAN_BATCH, CHUNK_SCAN_MIN_AGE_MS } from './chunkScan';
+import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
+import {
+  FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
+  FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
+} from '@server/queueHandlers/sqsDelivery';
 
 /**
  * Self-host background worker entrypoint.
@@ -38,6 +44,8 @@ const FAB_FILE_VISIBILITY_TIMEOUT_SEC = 300;
 const SCHEDULER_INTERVAL_MS = 5 * 60_000;
 /** Safety-net scan cadence: catches uploads whose MinIO webhook never arrived. */
 const CHUNK_SCAN_INTERVAL_MS = 60_000;
+/** Matches hosted's daily dataLakeBatchReconcile cron cadence (infra/cron.ts). */
+const DATA_LAKE_BATCH_RECONCILE_INTERVAL_MS = 24 * 60 * 60_000;
 /** Grace period on SIGTERM/SIGINT for in-flight message handling to finish before exit. */
 const DRAIN_GRACE_MS = 20_000;
 
@@ -63,9 +71,14 @@ async function main() {
   // fabFileChunk fans out to fabFileVectorizeQueue. Same dispatch handlers as hosted.
   worker.registerQueueHandler('fabFileChunkQueue', Resource.fabFileChunkQueue.url, fabFileChunkDispatch, {
     visibilityTimeoutSec: FAB_FILE_VISIBILITY_TIMEOUT_SEC,
+    // Explicit rather than relying on registerQueueHandler's own default: this is the same
+    // number fabFileChunk.ts's isFinalDeliveryAttempt gate uses, so a future change to one
+    // can't silently drift from the other (previously synced only by a comment).
+    maxReceiveCount: FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   });
   worker.registerQueueHandler('fabFileVectorizeQueue', Resource.fabFileVectorizeQueue.url, fabFileVectorizeDispatch, {
     visibilityTimeoutSec: FAB_FILE_VISIBILITY_TIMEOUT_SEC,
+    maxReceiveCount: FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
   });
 
   // Background AI-tag suggestion, opted into per-batch on the create wizard. Optional
@@ -75,6 +88,10 @@ async function main() {
   if (taxonomyQueueUrl) {
     worker.registerQueueHandler('dataLakeTaxonomyQueue', taxonomyQueueUrl, dataLakeTaxonomyAnalysisDispatch, {
       visibilityTimeoutSec: FAB_FILE_VISIBILITY_TIMEOUT_SEC,
+      // Explicit rather than registerQueueHandler's default of 3: infra/queues.ts's hosted
+      // dataLakeTaxonomyQueue is dlq.retry: 2 (LLM calls cost money), so leaving this on the
+      // default would run one extra taxonomy LLM pass on self-host for every poison message.
+      maxReceiveCount: 2,
     });
   } else {
     bootLogger.warn('dataLakeTaxonomyQueue not configured; background AI tag suggestion will not run');
@@ -123,7 +140,7 @@ async function main() {
 
     const cutoff = new Date(Date.now() - CHUNK_SCAN_MIN_AGE_MS);
     const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff))
-      .select('_id userId')
+      .select('_id userId batchId')
       .limit(CHUNK_SCAN_BATCH)
       .lean();
 
@@ -131,12 +148,22 @@ async function main() {
       await sendToQueue(Resource.fabFileChunkQueue.url, {
         fabFileId: String(file._id),
         userId: file.userId,
-        chunkSize: '1000',
+        // Self-host counterpart of the hosted rescue sweep: only a data-lake file (has a batch) is
+        // convergence work the kill switch may halt (#1676); a plain lost-webhook upload is user
+        // work and always runs. Global sweep => no lakeId => platform switch only.
+        ...(file.batchId ? { origin: CONVERGENCE_ORIGIN } : {}),
       });
     }
     if (candidates.length > 0) {
       bootLogger.info(`[fabFileChunkScan] enqueued ${candidates.length} un-chunked file(s)`);
     }
+  });
+
+  // Self-host counterpart of the hosted daily dataLakeBatchReconcile cron (infra/cron.ts):
+  // without this, a self-host batch that nobody's list-view revisits stays stuck indefinitely
+  // now that the timeout is 3 hours instead of 30 minutes. Same shared sweep, same timeout.
+  worker.registerScheduledTask('dataLakeBatchReconcile', DATA_LAKE_BATCH_RECONCILE_INTERVAL_MS, async () => {
+    await runStuckBatchSweep(bootLogger);
   });
 
   // Remote-provider catalog freshness (sec 6.2). The enableModelDiscovery gate,
@@ -161,6 +188,15 @@ async function main() {
   // Held (not fire-and-forget) so shutdown can wait for it: a run abandoned
   // mid-flight strands its Mongo lease until the TTL expires.
   const startupLeg = startDiscoveryOnStartup({ logger: bootLogger, host: 'selfhost' });
+
+  // Same "don't wait a full interval" reasoning as the discovery startup leg above, but not
+  // held for shutdown: each batch transition is an atomic guarded single-document update
+  // (markTerminalIfActive), so an abandoned run leaves no lease behind to strand.
+  runStuckBatchSweep(bootLogger).catch(err => {
+    bootLogger.error('[dataLakeBatchReconcile] startup sweep failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
 
   const shutdown = async (signal: string) => {
     bootLogger.info(`${signal} received - draining selfHostWorker (up to ${DRAIN_GRACE_MS}ms)`);

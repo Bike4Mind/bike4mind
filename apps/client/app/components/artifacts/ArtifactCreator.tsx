@@ -35,6 +35,7 @@ import {
 import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
 import { type BaseArtifact } from '@bike4mind/common';
+import { type ArtifactMutationResponse } from './types';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
@@ -321,10 +322,11 @@ export const ArtifactCreator: React.FC<ArtifactCreatorProps> = ({
 
     try {
       setSaving(true);
-      const response = await api.post<BaseArtifact>('/api/artifacts', formData);
+      const response = await api.post<ArtifactMutationResponse>('/api/artifacts', formData);
+      const created = response.data.artifact;
 
-      toast.success('Artifact created successfully!');
-      onSave?.(response.data);
+      toast.success(`Artifact "${created.title}" created successfully!`);
+      onSave?.(created);
       onClose?.();
     } catch (error: any) {
       toast.error(error.message || 'Failed to create artifact');
@@ -378,6 +380,7 @@ export const ArtifactCreator: React.FC<ArtifactCreatorProps> = ({
 
           <Button
             className="artifact-creator-save-button"
+            data-testid="artifact-creator-save-btn"
             startDecorator={<SaveIcon />}
             onClick={handleSave}
             loading={saving}
@@ -429,6 +432,7 @@ export const ArtifactCreator: React.FC<ArtifactCreatorProps> = ({
                   <FormLabel className="artifact-creator-title-label">Title</FormLabel>
                   <Input
                     className="artifact-creator-title-input"
+                    slotProps={{ input: { 'data-testid': 'artifact-creator-title-input' } }}
                     placeholder="Enter artifact title..."
                     value={formData.title}
                     onChange={e => handleFieldChange('title', e.target.value)}

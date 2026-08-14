@@ -12,14 +12,25 @@ describe('toGeneratedFiles', () => {
   it('builds fully-qualified CDN URLs under /generated', () => {
     process.env.NEXT_PUBLIC_CDN_URL = 'https://cdn.example.com';
     expect(toGeneratedFiles(['a1b2c3.png'])).toEqual([
-      { name: 'a1b2c3.png', url: 'https://cdn.example.com/generated/a1b2c3.png', isImage: true },
+      { name: 'a1b2c3.png', url: 'https://cdn.example.com/generated/a1b2c3.png', isImage: true, isAudio: false },
     ]);
   });
 
   it('flags non-image files (e.g. .xlsx) with isImage: false', () => {
     process.env.NEXT_PUBLIC_CDN_URL = 'https://cdn.example.com';
     const [file] = toGeneratedFiles(['report.xlsx']);
-    expect(file).toMatchObject({ name: 'report.xlsx', isImage: false });
+    expect(file).toMatchObject({ name: 'report.xlsx', isImage: false, isAudio: false });
+  });
+
+  it('flags generated audio (music_generation .mp3) with isAudio: true, isImage: false', () => {
+    process.env.NEXT_PUBLIC_CDN_URL = 'https://cdn.example.com';
+    const files = toGeneratedFiles(['track.mp3', 'clip.WAV', 'art.png', 'report.xlsx']);
+    expect(files.map(f => ({ isImage: f.isImage, isAudio: f.isAudio }))).toEqual([
+      { isImage: false, isAudio: true },
+      { isImage: false, isAudio: true },
+      { isImage: true, isAudio: false },
+      { isImage: false, isAudio: false },
+    ]);
   });
 
   it('normalizes a trailing slash on the CDN URL so paths never double-slash', () => {

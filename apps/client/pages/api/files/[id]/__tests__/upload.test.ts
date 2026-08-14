@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
 
-const { findByIdMock, uploadMock, getSettingsValueMock } = vi.hoisted(() => ({
+const { findByIdMock, uploadMock, getSettingsValueMock, recomputeUploadedMock } = vi.hoisted(() => ({
   findByIdMock: vi.fn(),
   uploadMock: vi.fn(),
   getSettingsValueMock: vi.fn(),
+  recomputeUploadedMock: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ put: (h: unknown) => h }) }));
@@ -14,6 +15,9 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsValue: getSettingsValueMock,
 }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ upload: uploadMock }) }));
+vi.mock('@server/dataLakes/recomputeStatsForUploadedFile', () => ({
+  recomputeStatsForUploadedFile: recomputeUploadedMock,
+}));
 
 const handler = (await import('../upload')).default as (req: Request, res: Response) => Promise<unknown>;
 
@@ -36,6 +40,7 @@ const makeReq = (opts: { id?: string; userId?: string; body?: Buffer[] }) => {
     query: { id: opts.id ?? 'ff1' },
     user: { id: opts.userId ?? 'u1' },
     headers: { 'content-type': 'text/plain' },
+    logger: { error: vi.fn() },
     destroy: vi.fn(),
     async *[Symbol.asyncIterator]() {
       for (const c of chunks) yield c;
@@ -130,6 +135,29 @@ describe('PUT /api/files/[id]/upload (self-host proxy)', () => {
     expect(fabFile.status).toBe('complete');
     expect(fabFile.save).toHaveBeenCalledTimes(1);
     expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('recomputes the lakes the file joined once the PUT succeeds (#1342)', async () => {
+    // The lake meta-tag was stamped when the row was created, before any bytes existed. This is
+    // the first moment counting it is honest - and counting is what activates a draft lake.
+    const fabFile = makePendingFile();
+    findByIdMock.mockResolvedValue(fabFile);
+    const res = makeRes();
+
+    await handler(makeReq({}), res);
+
+    expect(recomputeUploadedMock).toHaveBeenCalledWith(fabFile, expect.anything());
+  });
+
+  it('does not recompute when the write fails', async () => {
+    const fabFile = makePendingFile();
+    findByIdMock.mockResolvedValue(fabFile);
+    uploadMock.mockRejectedValue(new Error('storage down'));
+    const res = makeRes();
+
+    await expect(handler(makeReq({}), res)).rejects.toThrow('storage down');
+
+    expect(recomputeUploadedMock).not.toHaveBeenCalled();
   });
 
   it('does not mark complete when the write fails', async () => {

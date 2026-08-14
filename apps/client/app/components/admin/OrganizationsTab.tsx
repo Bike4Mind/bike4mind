@@ -27,6 +27,7 @@ import {
 } from '@mui/joy';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { IOrganizationDocument, Permission, WithId } from '@bike4mind/common';
+import { ORGANIZATION_SUBSCRIPTION_MAX_SEATS } from '@client/lib/subscriptions/constants';
 import { toast } from 'sonner';
 import OrganizationProfileUpdated from './OrganizationProfileUpdated';
 import OrganizationMembers from '@client/app/components/organizations/Member';
@@ -42,6 +43,7 @@ import {
   useAdminOrgGrants,
   useConvertOrgToPaid,
   useGrantOrganization,
+  useReconcileOrgSeats,
   useRevokeOrganization,
   useTopUpOrganization,
 } from '@client/app/hooks/data/adminOrganizations';
@@ -112,6 +114,10 @@ const AdjustSeatsModal: React.FC<AdjustSeatsModalProps> = ({
   const pendingCount = pendingUsers?.length ?? 0;
   const acceptedTeamSize = (org.users?.length ?? 0) + 1; // +1 for owner
   const teamSize = acceptedTeamSize + pendingCount;
+  // Clamp the floor at the ceiling so an over-cap org can be set back down to the max (#1424) -
+  // mirrors the server validateSeatChange clamp. Without it, min > max here and the input forces
+  // an unsubmittable value (>= teamSize) that the server then rejects as over the 100-seat cap.
+  const minAllowed = Math.min(teamSize, ORGANIZATION_SUBSCRIPTION_MAX_SEATS);
   const pendingHint = pendingCount > 0 ? ` (${pendingCount} pending invite${pendingCount === 1 ? '' : 's'})` : '';
 
   return (
@@ -122,15 +128,15 @@ const AdjustSeatsModal: React.FC<AdjustSeatsModalProps> = ({
         <Divider sx={{ my: 2 }} />
         <Typography level="body-sm" sx={{ mb: 1 }}>
           Current seats: {org.seats}. Members: {acceptedTeamSize}
-          {pendingHint}. Minimum allowed: {teamSize} (remove members or revoke pending invites to go lower).
+          {pendingHint}. Minimum allowed: {minAllowed} (remove members or revoke pending invites to go lower).
         </Typography>
         <FormControl>
           <FormLabel>New seat count</FormLabel>
           <Input
             type="number"
-            slotProps={{ input: { min: teamSize, max: 100 } }}
+            slotProps={{ input: { min: minAllowed, max: ORGANIZATION_SUBSCRIPTION_MAX_SEATS } }}
             value={seatsValue}
-            onChange={e => setSeatsValue(Math.max(teamSize, Number(e.target.value || teamSize)))}
+            onChange={e => setSeatsValue(Math.max(minAllowed, Number(e.target.value || minAllowed)))}
             data-testid="seats-input"
           />
         </FormControl>
@@ -198,6 +204,7 @@ const OrganizationsTab: React.FC = () => {
   const grantOrgMutation = useGrantOrganization();
   const topUpMutation = useTopUpOrganization();
   const seatsMutation = useAdjustOrgSeats();
+  const reconcileMutation = useReconcileOrgSeats();
   const convertMutation = useConvertOrgToPaid();
   const revokeMutation = useRevokeOrganization();
 
@@ -269,6 +276,15 @@ const OrganizationsTab: React.FC = () => {
     try {
       await seatsMutation.mutateAsync({ organizationId: seatsOrg.id, seats: seatsValue });
       setSeatsOrg(null);
+      refetch();
+    } catch {
+      // toast handled
+    }
+  };
+
+  const handleReconcileSeats = async (org: WithId<IOrganizationDocument>) => {
+    try {
+      await reconcileMutation.mutateAsync({ organizationId: org.id });
       refetch();
     } catch {
       // toast handled
@@ -497,6 +513,14 @@ const OrganizationsTab: React.FC = () => {
                               Adjust seats
                             </MenuItem>
                           )}
+                          {!isGranted && !org.personal && (
+                            <MenuItem
+                              data-testid={`reconcile-seats-${org.id}`}
+                              onClick={() => handleReconcileSeats(org)}
+                            >
+                              Reconcile seats from Stripe
+                            </MenuItem>
+                          )}
                           {isGranted && (
                             <MenuItem
                               data-testid={`convert-to-paid-${org.id}`}
@@ -617,6 +641,14 @@ const OrganizationsTab: React.FC = () => {
                                   Adjust seats
                                 </MenuItem>
                               )}
+                              {!isGranted && !org.personal && (
+                                <MenuItem
+                                  data-testid={`reconcile-seats-${org.id}`}
+                                  onClick={() => handleReconcileSeats(org)}
+                                >
+                                  Reconcile seats from Stripe
+                                </MenuItem>
+                              )}
                               {isGranted && (
                                 <MenuItem
                                   data-testid={`convert-to-paid-${org.id}`}
@@ -672,7 +704,7 @@ const OrganizationsTab: React.FC = () => {
       {/* Organization Profile Modal */}
       {selectedOrg && (
         <Modal open={!!selectedOrg} onClose={() => setSelectedOrg(null)}>
-          <ModalDialog size="lg">
+          <ModalDialog size="lg" sx={{ maxHeight: '80vh', overflow: 'auto' }}>
             <ModalClose />
             <OrganizationProfileUpdated
               org={selectedOrg}

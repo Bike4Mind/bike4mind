@@ -58,22 +58,55 @@ const MementoSchema = new Schema<IMementoDocument, IMementoModel>(
 MementoSchema.index({ userId: 1, tier: 1, weight: -1 });
 MementoSchema.index({ userId: 1, sessionId: 1 });
 MementoSchema.index({ userId: 1, tags: 1 });
+// Equality on `userId` plus a range/sort on `_id` is what makes the keyset walk in
+// `getRelevantMementos` non-blocking. None of the indexes above ends in `_id`, so none can hold the
+// `userId` bound AND deliver `_id` order; the planner's alternative is `_id_`, which gives the order
+// but scans the collection tail across every user. Either way the paged read ends up costing more
+// than the unbounded read it replaced - a blocking sort per page, or a scan of everyone's rows.
+// `tier` stays a residual filter rather than earning a place in the key: it is absent from the query
+// when tier is 'all'.
+MementoSchema.index({ userId: 1, _id: 1 });
 
 export const Memento =
   (mongoose.models.Memento as IMementoModel) ?? model<IMementoDocument, IMementoModel>('Memento', MementoSchema);
 export default Memento;
 
 class MementoRepository extends BaseRepository<IMementoDocument> implements IMementoRepository {
-  async findByUserId(userId: string, options: { tier?: MementoTier; select?: string }): Promise<IMementoDocument[]> {
-    const { tier, select } = options;
+  /**
+   * `limit`/`afterId` turn this into a keyset-paged read so a caller can walk a user's mementos
+   * without holding all of them at once. Both are opt-in, and `.sort({ _id: 1 })` is applied ONLY
+   * when one is supplied: the cursor is meaningless without the sort, and adding the sort
+   * unconditionally would change the plan for every existing unpaged caller.
+   */
+  async findByUserId(
+    userId: string,
+    options: { tier?: MementoTier; select?: string; limit?: number; afterId?: string }
+  ): Promise<IMementoDocument[]> {
+    const { tier, select, limit, afterId } = options;
+    // Mongo treats `.limit(0)` as NO LIMIT, so a caller asking for zero rows would get the sort applied
+    // and then an unbounded read - precisely the failure this reader exists to prevent. Refuse rather
+    // than silently serve the whole collection. Unreachable from today's callers (both pass module
+    // constants), but this is now the shared paging primitive.
+    if (limit !== undefined && limit <= 0) {
+      throw new Error(`findByUserId: limit must be positive, got ${limit}; Mongo reads limit(0) as unbounded`);
+    }
     const filter: FilterQuery<IMementoDocument> = { userId };
     if (tier) {
       filter.tier = tier;
+    }
+    if (afterId) {
+      filter._id = { $gt: afterId };
     }
 
     const query = this.model.find(filter);
     if (select) {
       query.select(select);
+    }
+    if (limit !== undefined || afterId) {
+      query.sort({ _id: 1 });
+    }
+    if (limit !== undefined) {
+      query.limit(limit);
     }
     return query.exec();
   }

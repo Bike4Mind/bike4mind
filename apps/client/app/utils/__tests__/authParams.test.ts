@@ -4,36 +4,33 @@ import { parseHashParams, parseQueryParams, parseAuthParams } from '../authParam
 describe('authParams', () => {
   describe('parseHashParams', () => {
     it('should parse complete hash params with leading #', () => {
-      const hash = '#token=abc123&refreshToken=refresh456&userId=user789';
+      const hash = '#token=abc123&userId=user789';
       const result = parseHashParams(hash);
 
       expect(result).toEqual({
         token: 'abc123',
-        refreshToken: 'refresh456',
         userId: 'user789',
         error: undefined,
       });
     });
 
     it('should parse complete hash params without leading #', () => {
-      const hash = 'token=abc123&refreshToken=refresh456&userId=user789';
+      const hash = 'token=abc123&userId=user789';
       const result = parseHashParams(hash);
 
       expect(result).toEqual({
         token: 'abc123',
-        refreshToken: 'refresh456',
         userId: 'user789',
         error: undefined,
       });
     });
 
     it('should include error when present with complete params', () => {
-      const hash = '#token=abc&refreshToken=ref&userId=user&error=some_error';
+      const hash = '#token=abc&userId=user&error=some_error';
       const result = parseHashParams(hash);
 
       expect(result).toEqual({
         token: 'abc',
-        refreshToken: 'ref',
         userId: 'user',
         error: 'some_error',
       });
@@ -53,20 +50,19 @@ describe('authParams', () => {
 
     it('should return null for incomplete token data', () => {
       // Missing userId
-      expect(parseHashParams('#token=abc&refreshToken=ref')).toBeNull();
-      // Missing refreshToken
-      expect(parseHashParams('#token=abc&userId=user')).toBeNull();
+      expect(parseHashParams('#token=abc')).toBeNull();
       // Missing token
+      expect(parseHashParams('#userId=user')).toBeNull();
+      // A stale fragment carrying only the (now cookie-borne) refresh token is not a session
       expect(parseHashParams('#refreshToken=ref&userId=user')).toBeNull();
     });
 
     it('should handle URL-encoded values', () => {
-      const hash = '#token=abc%20123&refreshToken=ref%2B456&userId=user%40test';
+      const hash = '#token=abc%20123&userId=user%40test';
       const result = parseHashParams(hash);
 
       expect(result).toEqual({
         token: 'abc 123',
-        refreshToken: 'ref+456',
         userId: 'user@test',
         error: undefined,
       });
@@ -75,7 +71,7 @@ describe('authParams', () => {
     it('should handle JWT-like tokens', () => {
       // nosemgrep: generic.secrets.security.detected-jwt-token.detected-jwt-token
       const jwtToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N';
-      const hash = `#token=${jwtToken}&refreshToken=refresh&userId=123`;
+      const hash = `#token=${jwtToken}&userId=123`;
       const result = parseHashParams(hash);
 
       expect(result?.token).toBe(jwtToken);
@@ -86,14 +82,12 @@ describe('authParams', () => {
     it('should parse complete query params', () => {
       const search = {
         token: 'abc123',
-        refreshToken: 'refresh456',
         userId: 'user789',
       };
       const result = parseQueryParams(search);
 
       expect(result).toEqual({
         token: 'abc123',
-        refreshToken: 'refresh456',
         userId: 'user789',
         error: undefined,
       });
@@ -102,7 +96,6 @@ describe('authParams', () => {
     it('should include error when present', () => {
       const search = {
         token: 'abc',
-        refreshToken: 'ref',
         userId: 'user',
         error: 'some_error',
       };
@@ -110,7 +103,6 @@ describe('authParams', () => {
 
       expect(result).toEqual({
         token: 'abc',
-        refreshToken: 'ref',
         userId: 'user',
         error: 'some_error',
       });
@@ -121,7 +113,6 @@ describe('authParams', () => {
 
       expect(result).toEqual({
         token: undefined,
-        refreshToken: undefined,
         userId: undefined,
         error: undefined,
       });
@@ -130,7 +121,6 @@ describe('authParams', () => {
     it('should ignore non-string values', () => {
       const search = {
         token: 123,
-        refreshToken: ['array'],
         userId: null,
         error: undefined,
       };
@@ -138,7 +128,6 @@ describe('authParams', () => {
 
       expect(result).toEqual({
         token: undefined,
-        refreshToken: undefined,
         userId: undefined,
         error: undefined,
       });
@@ -150,7 +139,6 @@ describe('authParams', () => {
 
       expect(result).toEqual({
         token: 'abc',
-        refreshToken: undefined,
         userId: undefined,
         error: undefined,
       });
@@ -165,7 +153,7 @@ describe('authParams', () => {
     it('should prefer hash params when window has hash', () => {
       const mockWindow = {
         location: {
-          hash: '#token=hashToken&refreshToken=hashRefresh&userId=hashUser',
+          hash: '#token=hashToken&userId=hashUser',
           pathname: '/auth/success',
           search: '',
         },
@@ -176,7 +164,6 @@ describe('authParams', () => {
 
       const search = {
         token: 'queryToken',
-        refreshToken: 'queryRefresh',
         userId: 'queryUser',
       };
 
@@ -184,7 +171,6 @@ describe('authParams', () => {
 
       expect(result).toEqual({
         token: 'hashToken',
-        refreshToken: 'hashRefresh',
         userId: 'hashUser',
         error: undefined,
       });
@@ -194,7 +180,7 @@ describe('authParams', () => {
       const replaceStateMock = vi.fn();
       const mockWindow = {
         location: {
-          hash: '#token=abc&refreshToken=ref&userId=user',
+          hash: '#token=abc&userId=user',
           pathname: '/auth/success',
           search: '',
         },
@@ -222,7 +208,6 @@ describe('authParams', () => {
 
       const search = {
         token: 'queryToken',
-        refreshToken: 'queryRefresh',
         userId: 'queryUser',
       };
 
@@ -230,7 +215,6 @@ describe('authParams', () => {
 
       expect(result).toEqual({
         token: 'queryToken',
-        refreshToken: 'queryRefresh',
         userId: 'queryUser',
         error: undefined,
       });
@@ -250,7 +234,6 @@ describe('authParams', () => {
 
       const search = {
         token: 'queryToken',
-        refreshToken: 'queryRefresh',
         userId: 'queryUser',
       };
 
@@ -258,7 +241,6 @@ describe('authParams', () => {
 
       expect(result).toEqual({
         token: 'queryToken',
-        refreshToken: 'queryRefresh',
         userId: 'queryUser',
         error: undefined,
       });
@@ -285,7 +267,7 @@ describe('authParams', () => {
       const replaceStateMock = vi.fn();
       const mockWindow = {
         location: {
-          hash: '#token=abc&refreshToken=ref&userId=user',
+          hash: '#token=abc&userId=user',
           pathname: '/auth/success',
           search: '?redirectTo=%2Fnew',
         },
@@ -300,7 +282,6 @@ describe('authParams', () => {
     it('should handle undefined window (SSR)', () => {
       const search = {
         token: 'queryToken',
-        refreshToken: 'queryRefresh',
         userId: 'queryUser',
       };
 
@@ -309,7 +290,6 @@ describe('authParams', () => {
 
       expect(result).toEqual({
         token: 'queryToken',
-        refreshToken: 'queryRefresh',
         userId: 'queryUser',
         error: undefined,
       });
@@ -318,7 +298,7 @@ describe('authParams', () => {
     it('should handle window without history (edge case)', () => {
       const mockWindow = {
         location: {
-          hash: '#token=abc&refreshToken=ref&userId=user',
+          hash: '#token=abc&userId=user',
           pathname: '/auth/success',
           search: '',
         },
@@ -330,7 +310,6 @@ describe('authParams', () => {
 
       expect(result).toEqual({
         token: 'abc',
-        refreshToken: 'ref',
         userId: 'user',
         error: undefined,
       });

@@ -1,9 +1,10 @@
 import type { CounterLogRow } from '@client/app/utils/userAPICalls';
 
 /**
- * Per-request page size, at the endpoint's own MAX_PAGE_SIZE. Every page re-runs the full
- * aggregation before $skip/$limit trims it, so the request count is what an export costs the
- * database: 5000 turns a 50k export into 10 round trips instead of 25.
+ * Per-request page size, at the endpoint's own MAX_PAGE_SIZE: 5000 turns a 50k export into 10
+ * round trips instead of 25. The server caches a window of the sorted result set that spans the
+ * whole export, so those trips share one aggregation - keep this at or below the server's
+ * MAX_CACHED_ROWS (server/analytics/userActivityCache.ts) or the tail pages fall out of it.
  */
 export const EXPORT_PAGE_SIZE = 5000;
 /** Hard ceiling on an export, so a broad filter can't page indefinitely. */

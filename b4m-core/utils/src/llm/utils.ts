@@ -1,6 +1,8 @@
+import { assemblyTokenBuffer, MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION } from './contextBudget';
 import {
   dayjs,
   extractSnippetMeta,
+  FORMAT_PROMPT_TEMPLATE,
   ICacheRepository,
   IChatHistoryItemRepository,
   IExtendedMessage,
@@ -57,10 +59,22 @@ const CHARS_PER_TOKEN = 3.5;
  * 10 is borrowed from rankChunksForFiles' topK default, but note the two caps differ in shape: that
  * one is global across every file in the search, this one is PER FILE, so a multi-file attachment can
  * yield more chunks here. What bounds the payload is the per-file character budget applied to these
- * results (maxChars in processFabFilesServer), not this count - though that budget is derived from
- * the model's OUTPUT token limit, which is its own separate defect.
+ * results (maxChars in processFabFilesServer), not this count - and that budget now derives from the
+ * model's input window rather than its output limit; see attachedContentExtractionBudget.
  */
 const COSINE_SEARCH_TOP_K = 10;
+
+/**
+ * How much of one attached file the cosine scan will read, and in what size pages.
+ *
+ * Module constants rather than admin settings: unlike a data lake, an attachment is one file the
+ * user picked this turn, so there is nothing for an operator to tune per environment. Keep the bound
+ * well above COSINE_SEARCH_TOP_K: at or below it, a cut scan of a large file delivers as many chunks
+ * as it read, so the caller's count comparison alone stops telling that apart from a whole small file
+ * and the scan-truncation flag becomes the only thing carrying the distinction.
+ */
+const COSINE_SEARCH_MAX_CHUNKS_SCANNED = 2000;
+const COSINE_SEARCH_CHUNK_PAGE_SIZE = 200;
 
 // Emergency token limits for embedding generation
 const EMBEDDING_TOKEN_LIMITS = {
@@ -69,41 +83,59 @@ const EMBEDDING_TOKEN_LIMITS = {
 };
 
 // Context Management Constants
-/**
- * Floor for the context-overflow buffer, used when 5% of the context window is under 1000 tokens.
- * Covers token-estimation error (10-20% between estimate and tokenizer), special-token and
- * formatting overhead (role tags, separators), and output headroom.
- */
-const MIN_TOKEN_BUFFER = 1000;
-
-/**
- * Fraction of the context window reserved as buffer (5%).
- * Covers token-count drift between estimate and encoder and special tokens (BOS, EOS, role
- * markers), and keeps input+output from exactly hitting the context limit.
- */
-const TOKEN_BUFFER_PERCENTAGE = 0.05;
+// The buffer and the attached-content floor live in ./contextBudget so the extraction stage can be
+// checked against the same figures rather than a second copy of them.
 
 /**
  * Share of the token budget given to knowledge/fab files when history + files overflow: 70% files,
  * 30% history. Users attach files expecting them used; history can be pruned more aggressively.
- * Applies only when history is unlimited; a windowed historyCount uses the floor below.
+ * Applies only when history is unlimited; a windowed historyCount uses the floor from contextBudget.
  */
 const KNOWLEDGE_FILE_TOKEN_ALLOCATION = 0.7;
 
 /**
- * Smallest share of the token budget an explicitly attached file is guaranteed when a finite
- * historyCount is set. History used to have absolute priority here, so a long conversation silently
- * pushed the file the user just attached out of context entirely and the model answered as though no
- * file existed.
+ * Retention priority for the two system messages this module injects itself, for
+ * `options.systemMessagePriority`. Lower is kept first, so these sit behind everything a caller
+ * assembles: both injectors PREPEND, which used to make them the only blocks guaranteed to survive a
+ * budget squeeze while the caller's org and per-session prompts were dropped off the tail.
  *
- * 0.35 is the largest share that still leaves history the clear majority, which the user did not ask
- * to give up, while sitting at or above the per-file budget attachments effectively got already on
- * every model class of 8k context and up - so it raises the floor without cutting what a file
- * receives today. A fraction rather than a token count, so the reserve can never exceed the budget on
- * a small context window. The exact figure is not load-bearing: unused reserve flows back to history,
- * so over-reserving costs nothing and this only binds when content genuinely wants more.
+ * 50 and 60 are deliberately clear of the caller's range. The caller-side table that has to stay
+ * below them is SYSTEM_PROMPT_PRIORITY in @bike4mind/services (systemPromptSources.ts), which cannot
+ * live here because utils must not import services; a test there pins the two ranges apart.
+ *
+ * The image prompt outranks the format prompt only because losing the format prompt costs styling,
+ * whereas the image nudge is recoverable from the tool's own schema - see
+ * includeImagePromptSystemMessage.
  */
-const MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION = 0.35;
+export const IMAGE_PROMPT_PRIORITY = 50;
+export const FORMAT_PROMPT_PRIORITY = 60;
+
+/**
+ * The two always-on blocks this function injects itself, downstream of the caller's own
+ * systemPromptDetails assembly - so a caller reporting per-source token telemetry (see
+ * ChatCompletionProcess) cannot see them without reading this list back off the return value.
+ */
+export const BUILDER_INJECTED_BLOCK_IDS = ['formatPrompt', 'imagePrompt'] as const;
+export type BuilderInjectedBlockId = (typeof BUILDER_INJECTED_BLOCK_IDS)[number];
+
+export interface BuilderInjectedBlock {
+  id: BuilderInjectedBlockId;
+  /** The exact string prepended, read back off the injected message - never re-derived. */
+  content?: string;
+  /** The gate let the injector run and it prepended a message. */
+  injected: boolean;
+  /** That message survived the system-token cap into the returned payload. */
+  delivered: boolean;
+  /** Why the injector did not run or declined, when `injected` is false. */
+  reason?: 'mode_skipped' | 'setting_disabled' | 'not_triggered';
+}
+
+/**
+ * Rounds the final safety pass may spend shrinking the payload. It has to re-measure between rounds
+ * (see the pass for why one shot overshoots), and each round costs two real tokenizer calls, so this
+ * bounds the work. Converges in one or two rounds in practice.
+ */
+const MAX_SAFETY_SHRINK_ROUNDS = 5;
 
 /**
  * Appended to attached-file content that had to be cut to fit. Without it a CSV sliced mid-row reads
@@ -113,7 +145,19 @@ const MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION = 0.35;
  * model only - what later steps read to know a message was cut is processMessages' truncatedMessages.
  */
 const CONTENT_TRUNCATION_NOTICE =
-  '\n\n[Content truncated to fit the context window. This is NOT the end of the file - later content was not sent.]';
+  '\n\n[Content truncated to fit the context window. This is NOT the end of the file - later content was ' +
+  'not sent. Do not infer a total row, record, or section count, or a final row, from what is above.]';
+
+/**
+ * Prefixed onto a delivered attachment's own content in `assemble`, never added as a separate system
+ * message: the system-message loop further down picks messages first-fit-with-break by budget, so a new
+ * one there risks silently starving the `file.system` branch's own content on a marginal turn. Riding on
+ * the content message itself means it lives or dies with what it is asserting, so it can never claim
+ * content is present when `declareUndeliveredAttachments` has already dropped or replaced it.
+ */
+export const ATTACHMENT_DELIVERED_NOTICE =
+  '[The content below is included in this request and you can read it. Do not tell the user you are ' +
+  'unable to access or open it.]\n\n';
 
 /**
  * Below this many tokens of a file, a slice is not worth sending. A few dozen characters of a CSV does
@@ -155,8 +199,17 @@ const sanitizeNoticeFileName = (fileName: string): string =>
     .trim()
     .slice(0, MAX_NOTICE_FILENAME_CHARS);
 
+// A name that is only brackets/quotes/newlines sanitizes to '', which would otherwise show the model an
+// empty quoted name or break the line-anchored ATTACHMENT_NAME_HEADERS match.
+const noticeFileName = (fileName: string): string => sanitizeNoticeFileName(fileName) || 'unnamed attachment';
+
+// Placed next to a filename, never inside CONTENT_TRUNCATION_NOTICE: that notice is also used for
+// URL-derived content with no filename at all, where this sentence would be nonsensical.
+const FILENAME_DIGIT_NOTICE =
+  '(Digits in the file name are part of the name, not a count of its rows, records, or sections.)';
+
 const excerptNotice = (fileName: string): string =>
-  `${EXCERPT_NOTICE_PREFIX}"${sanitizeNoticeFileName(fileName)}"${EXCERPT_NOTICE_TAIL}`;
+  `${EXCERPT_NOTICE_PREFIX}"${noticeFileName(fileName)}"${EXCERPT_NOTICE_TAIL}`;
 
 const URL_TRUNCATION_NOTICE =
   '\n\n[Fetched page content truncated to fit the context window. This is NOT the end of the page - later ' +
@@ -211,6 +264,13 @@ const urlDerivedMessages = new WeakSet<IMessage>();
  */
 const IMAGE_TOKEN_ESTIMATE = 1600;
 
+/**
+ * Block types a caller-supplied user-role message can deliver on its own. An allowlist rather than
+ * a denylist, so a block type added to MessageContentTypes later is dropped loudly by the
+ * classifier below instead of forwarded to a provider that rejects it.
+ */
+const DELIVERABLE_USER_BLOCK_TYPES = new Set<string>(['text']);
+
 /** Bounded so building a log label never walks a multi-MB attachment. */
 const ATTACHMENT_LABEL_SCAN_CHARS = 400;
 
@@ -231,7 +291,11 @@ const estimateTokenLength = (text: string): number => {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
 };
 
-const isImageBlock = (obj: { type?: string }): boolean => obj.type === 'image' || obj.type === 'image_url';
+// Array content is caller-controlled (extraContextMessages accepts z.array(z.any())), so a block can
+// be null/undefined/not-an-object at runtime despite the static type; every caller here iterates raw
+// message.content, so the null-safety has to live in this one shared helper rather than at each call site.
+const isImageBlock = (obj: { type?: string } | null | undefined): boolean =>
+  obj?.type === 'image' || obj?.type === 'image_url';
 
 /**
  * Flattens a message's content to its text, skipping image blocks - their base64 payload is not text
@@ -253,8 +317,8 @@ const messageContentText = (message: IMessage): string =>
 /**
  * Must charge images the same flat rate as calculateTotalTokenLength, so the two measures stay
  * comparable: stringifying base64 as text here would make an image-carrying turn read as millions of
- * tokens against a real count that charges a flat rate. Nothing at present divides one by the other -
- * the rework in #1164 reintroduces that conversion, and depends on this rate matching.
+ * tokens against a real count that charges a flat rate. The final safety pass divides one measure by the
+ * other to convert its overage between them, so an image-carrying turn depends on these rates matching.
  */
 const estimateMessageTokens = (message: IMessage): number => {
   const imageCount = Array.isArray(message.content) ? message.content.filter(isImageBlock).length : 0;
@@ -452,6 +516,16 @@ export async function fetchAndProcessPreviousMessages(
       excludedOlderQuestCount?: number;
       /** Recently generated images (bare storage keys + originating prompt), newest first. */
       recentGeneratedImages?: { key: string; prompt: string }[];
+      /**
+       * Names of tools actually invoked across the returned window, read straight off each
+       * turn's `promptMeta.functionCalls` rather than the reconstructed IMessage history: neither
+       * of `convertedMessages`' two tool_use-replay paths fires in production today (Priority 1
+       * needs `structuredReplies`, which nothing writes; Priority 2 needs a recorded
+       * `returnValue`, which nothing writes either - see replayableToolCalls), so a caller that
+       * scanned `convertedMessages` for a prior tool call would never find one. This reads the
+       * raw field instead, at no extra DB cost since chatHistoryItems is already in hand.
+       */
+      priorToolNames?: string[];
     },
   ]
 > {
@@ -616,6 +690,12 @@ export async function fetchAndProcessPreviousMessages(
     }
   }
 
+  // Real tool-usage signal for this window - see the field's own doc comment above for why the
+  // reconstructed message history cannot answer "was this tool used earlier in the conversation".
+  const priorToolNames = chatHistoryItems
+    .flatMap(item => (item.promptMeta?.functionCalls ?? []).map(fc => fc.name))
+    .filter((name): name is string => Boolean(name));
+
   return [
     convertedMessages,
     chatHistoryItems.length,
@@ -626,6 +706,7 @@ export async function fetchAndProcessPreviousMessages(
       oldestIncludedQuestId,
       excludedOlderQuestCount,
       recentGeneratedImages,
+      priorToolNames,
     },
   ];
 }
@@ -948,6 +1029,28 @@ export function computeCosineSimilarity(vector1: number[], vector2: number[]): n
   return dotProduct / (magnitude1 * magnitude2);
 }
 
+/**
+ * Total order for the top-K: `chunkId` breaks score ties so the result cannot depend on page arrival.
+ *
+ * Byte comparison, NOT localeCompare: the cursor check and Mongo's `_id` ascending sort both order these
+ * ids bytewise, and running a collation-aware comparator over the same key is how the determinism this
+ * tiebreaker exists to provide would quietly erode. They agree for lowercase hex today; one comparison
+ * means there is nothing to keep in agreement.
+ */
+const compareRankedChunks = (a: { score: number; chunkId: string }, b: { score: number; chunkId: string }) =>
+  b.score - a.score || (a.chunkId < b.chunkId ? -1 : a.chunkId > b.chunkId ? 1 : 0);
+
+/**
+ * Similarity-select up to COSINE_SEARCH_TOP_K chunks of one attached file.
+ *
+ * Reads through the projected keyset reader in bounded pages, so peak memory is one page plus the
+ * top-K rather than the whole file - this runs once per attached file at FILE_PROCESSING_CONCURRENCY,
+ * on every completion that has attachments.
+ *
+ * `totalChunks` is the file's true chunk count, NOT what this scan read. The caller uses it to decide
+ * whether to tell the model it is holding a subset, and both the scan bound and the reader's
+ * DB-layer vectorless filter make "chunks read" smaller than "chunks in the file".
+ */
 async function cosineSearch(
   file: IFabFileDocument,
   userPromptVector: number[],
@@ -956,31 +1059,125 @@ async function cosineSearch(
     logger,
   }: {
     db: {
-      fabfilechunks: Pick<IFabFileChunkRepository, 'findByFabFileId'>;
+      fabfilechunks: Pick<IFabFileChunkRepository, 'findVectorsByFabFileIds' | 'countByFabFileId'>;
     };
     logger: Logger;
   }
-): Promise<{ results: Array<{ chunkId: string; content: string; score: number }>; totalChunks: number }> {
-  const chunks = await db.fabfilechunks.findByFabFileId(file.id);
+): Promise<{
+  results: Array<{ chunkId: string; content: string; score: number }>;
+  unranked: Array<{ chunkId: string; content: string; score: number }>;
+  totalChunks: number;
+  scanned: number;
+  scanTruncated: boolean;
+  skipped: { dimensionMismatch: number; nonFinite: number };
+}> {
+  const queryDim = userPromptVector.length;
+  const totalChunks = await db.fabfilechunks.countByFabFileId(file.id);
 
-  const searchResults = chunks
-    .map((chunk: any, position: number) => {
-      const score = computeCosineSimilarity(userPromptVector, chunk.vector!);
-      return { chunkId: chunk.id, content: chunk.text, score, position };
-    })
-    .filter((result: any) => result !== null);
-
-  // Similarity decides WHICH chunks; document order decides how they are PRESENTED. Returning them in
-  // score order handed the model a scrambled file - even when every chunk was delivered - which is one
-  // of the ways it ends up naming a mid-file row as the last. `position` is the repository's order,
-  // which is ascending _id, i.e. the order the chunks were written.
+  const ranked: Array<{ chunkId: string; content: string; score: number; position: number }> = [];
+  // The head of the file's VECTOR-BEARING chunks - not of the file. These come from
+  // findVectorsByFabFileIds, which filters `vector: { $exists: true, $ne: [] }`, so on a
+  // partially-vectorized file this starts at the first vectorized chunk rather than the first chunk.
+  // That is survivable precisely because `totalChunks` counts the vectorless ones too, so the caller
+  // still declares an excerpt rather than claiming the whole file.
   //
-  // totalChunks lets the caller tell the model when it is holding a subset. Without it the top-K slice
-  // is indistinguishable from "this is the whole file".
-  const selected = [...searchResults].sort((a: any, b: any) => b.score - a.score).slice(0, COSINE_SEARCH_TOP_K);
+  // Kept regardless of whether a chunk could be SCORED. When scoring rejects everything - a file whose
+  // chunks all sit in another embedding space - this is real content the caller can still hand over, at
+  // the same order of memory as the top-K. The alternative is leaning on the raw-content read, which
+  // cannot decode every format that CAN be chunked (a vectorized .pptx has chunks but getFileContent
+  // throws on it), so the attachment would reach the model as nothing at all.
+  const head: Array<{ chunkId: string; content: string; score: number }> = [];
+  let scanned = 0;
+  let scanTruncated = false;
+  let dimensionMismatch = 0;
+  let nonFinite = 0;
+  let cursor: string | undefined;
+
+  // Every page consumes at least one row, so this bounds the loop even if a page somehow failed to
+  // advance the cursor. Paired with the strict-increase check below, which throws rather than spins.
+  const maxPages = Math.ceil(COSINE_SEARCH_MAX_CHUNKS_SCANNED / COSINE_SEARCH_CHUNK_PAGE_SIZE) + 1;
+
+  for (let page = 0; page < maxPages; page++) {
+    const remaining = COSINE_SEARCH_MAX_CHUNKS_SCANNED - scanned;
+    if (remaining <= 0) {
+      scanTruncated = true;
+      break;
+    }
+    // Consume at most `want`, but ask for one extra row to learn whether more exist. Without the
+    // probe, a file that exactly fills the bound is indistinguishable from one that overflows it and
+    // we would report a truncation that never happened.
+    const want = Math.min(COSINE_SEARCH_CHUNK_PAGE_SIZE, remaining);
+    const rows = await db.fabfilechunks.findVectorsByFabFileIds([file.id], {
+      limit: want + 1,
+      afterChunkId: cursor,
+    });
+    if (rows.length === 0) break;
+
+    const moreExist = rows.length > want;
+    // The probe row is past the bound: scoring it would let the page boundary decide the top-K.
+    const usable = moreExist ? rows.slice(0, want) : rows;
+
+    // Checked before the page is scored, not after: a stuck cursor would otherwise score and count
+    // the same rows again on its way to throwing.
+    const nextCursor = usable[usable.length - 1].id;
+    if (cursor !== undefined && !(nextCursor > cursor)) {
+      throw new Error(
+        `[cosineSearch] chunk cursor failed to advance past ${cursor} for file ${file.id}; refusing to re-read the same page`
+      );
+    }
+    cursor = nextCursor;
+
+    for (const chunk of usable) {
+      // Read order is ascending `_id`, i.e. the order the chunks were written.
+      const position = scanned;
+      scanned++;
+      if (head.length < COSINE_SEARCH_TOP_K) {
+        head.push({ chunkId: chunk.id, content: chunk.text, score: 0 });
+      }
+      // Chunks embedded under a different model score against a different space. computeCosineSimilarity
+      // returns 0 on a width mismatch, and a 0 is not a rejection: on a sparse file it still occupies a
+      // top-K slot and displaces nothing useful with nothing useful.
+      if (chunk.vector.length !== queryDim) {
+        dimensionMismatch++;
+        continue;
+      }
+      const score = computeCosineSimilarity(userPromptVector, chunk.vector);
+      // A zero-magnitude vector makes cosine NaN, and NaN fails every comparison - it would sort ahead
+      // of every real hit instead of being rejected.
+      if (!Number.isFinite(score)) {
+        nonFinite++;
+        continue;
+      }
+      ranked.push({ chunkId: chunk.id, content: chunk.text, score, position });
+    }
+
+    // Trim every page so chunk TEXT is never held for more than one page plus the top-K.
+    if (ranked.length > COSINE_SEARCH_TOP_K) {
+      ranked.sort(compareRankedChunks);
+      ranked.length = COSINE_SEARCH_TOP_K;
+    }
+
+    if (!moreExist) break;
+  }
+
+  if (scanTruncated) {
+    logger.warn(
+      `[cosineSearch] Scanned ${scanned}/${totalChunks} chunk(s) of "${file.fileName}" before hitting the ` +
+        `${COSINE_SEARCH_MAX_CHUNKS_SCANNED}-chunk bound; selection is over the scanned prefix only.`
+    );
+  }
+
+  // `ranked` is already the top-K (the per-page trim above keeps it there), so all that is left is
+  // presentation. Similarity decides WHICH chunks; document order decides how they are PRESENTED -
+  // returning them in score order handed the model a scrambled file even when every chunk was
+  // delivered, which is one of the ways it ends up naming a mid-file row as the last.
   return {
-    results: selected.sort((a, b) => a.position - b.position).map(({ position, ...rest }) => rest),
-    totalChunks: searchResults.length,
+    results: ranked.sort((a, b) => a.position - b.position).map(({ position, ...rest }) => rest),
+    unranked: head,
+    totalChunks,
+    scanned,
+    scanTruncated,
+    skipped: { dimensionMismatch, nonFinite },
   };
 }
 
@@ -1018,22 +1215,40 @@ export async function processFabFilesServer(
     logger: Logger;
     storage: BaseStorage;
     db: {
-      fabfilechunks: Pick<IFabFileChunkRepository, 'findByFabFileId'>;
+      fabfilechunks: Pick<IFabFileChunkRepository, 'findVectorsByFabFileIds' | 'countByFabFileId'>;
       fabfiles: Pick<IFabFileRepository, 'update'>;
       caches: ICacheRepository;
     };
     resizeImageForModel?: ResizeImageForModel;
   },
   progressCallback?: (progress: number, total: number) => Promise<void>
-): Promise<{ userMessages: IMessage[]; errorMessages: IExtendedMessage[] }> {
+): Promise<{
+  userMessages: IMessage[];
+  errorMessages: IExtendedMessage[];
+  deliveredFileIds: string[];
+  fullyDeliveredFileIds: string[];
+}> {
   if (!fabFiles || fabFiles.length === 0) {
-    return { userMessages: [], errorMessages: [] };
+    return { userMessages: [], errorMessages: [], deliveredFileIds: [], fullyDeliveredFileIds: [] };
   }
 
   const fileProcessingStartTime = Date.now();
   let systemContent = '';
   const userMessages: IMessage[] = [];
   const errorMessages: IExtendedMessage[] = [];
+  // Ids that actually contributed content below - NOT every id in `fabFiles`. A file can be
+  // silently skipped (audio, an unserveable/oversized/unsupported-backend image, an unsupported
+  // file type, a corrupted/404 read) with no content ever reaching a message. Callers that need
+  // to tell a caller-facing consumer "this file's content is already in the prompt" must use this
+  // set, not the input list (see #1163 - a caller claiming inclusion for a silently-skipped file
+  // asserts something false).
+  const deliveredFileIds = new Set<string>();
+  // Subset of deliveredFileIds whose ENTIRE content reached the prompt - excludes a cosine
+  // excerpt, a scan that never reached every chunk, or a raw-content read truncated to fit the
+  // token budget. A caller claiming "you have everything, no need to search further" for a file
+  // that is only in `deliveredFileIds` (delivered, but not fully) asserts something false (#1163
+  // review: partial delivery was being described with wording that implied completeness).
+  const fullyDeliveredFileIds = new Set<string>();
 
   // Collect non-system file contents to combine into a single context message
   const contextFiles: { fileName: string; content: string }[] = [];
@@ -1076,10 +1291,14 @@ export async function processFabFilesServer(
       logger
     );
   } catch (error) {
+    // Pass a string, not the Error object: the structured logger serializes a raw Error to `{}`,
+    // which drops exactly the reason (401 vs rate limit vs network) an operator needs in this
+    // degraded-mode line. Keep the class name too - for an EmbeddingAuthError it is the cheapest
+    // signal that this is a credential problem rather than a timeout.
     logger.warn(
       `[processFabFilesServer] Query embedding failed (${selectedEmbeddingModel}); ` +
         'falling back to raw file content for this turn.',
-      error
+      error instanceof Error ? `${error.name}: ${error.message}` : String(error)
     );
   }
 
@@ -1099,6 +1318,13 @@ export async function processFabFilesServer(
   const fileContentCache = new Map<string, string>();
 
   const processFileInParallel = async (file: IFabFileDocument): Promise<void> => {
+    // Set true only at an actual content-adding site below; read once at the end of the try
+    // block. Local per-invocation state, so concurrent files in the same batch never interfere.
+    let delivered = false;
+    // Set alongside `delivered` only when the WHOLE file (not an excerpt/truncated head) reached
+    // the prompt. Defaults to true at each image site (always delivered whole) and is narrowed to
+    // false explicitly on the two text paths that can partially deliver.
+    let fullyDelivered = false;
     try {
       // Audio (generated TTS / sound effects) is never LLM input: no model
       // accepts audio, and the non-image branch below would otherwise try to
@@ -1153,6 +1379,8 @@ export async function processFabFilesServer(
               type: 'text',
               text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}" — do not rename based on image content.`,
             });
+            delivered = true;
+            fullyDelivered = true; // images are always delivered whole
             break;
           }
 
@@ -1206,6 +1434,8 @@ export async function processFabFilesServer(
                 type: 'text',
                 text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}" — do not rename based on image content.`,
               });
+              delivered = true;
+              fullyDelivered = true; // images are always delivered whole
             } else if (modelInfo.id.startsWith('moonshot')) {
               // Bedrock-served Kimi speaks OpenAI on the Invoke path, so it takes
               // the base64 `image_url` block rather than the Anthropic `source`
@@ -1242,6 +1472,8 @@ export async function processFabFilesServer(
                 type: 'text',
                 text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}" — do not rename based on image content.`,
               });
+              delivered = true;
+              fullyDelivered = true; // images are always delivered whole
             } else {
               logger.warn(
                 `Vision support for the model ${modelInfo.id} is not implemented. Skipping image processing.`
@@ -1285,6 +1517,8 @@ export async function processFabFilesServer(
               type: 'text',
               text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}". Do not rename based on image content.`,
             });
+            delivered = true;
+            fullyDelivered = true; // images are always delivered whole
             break;
           }
 
@@ -1307,6 +1541,12 @@ export async function processFabFilesServer(
         // dropped - fall through to the raw-content path so the attachment still reaches the model.
         const canCosineSearch = file.vectorized && !!userVector && userVector.length > 0;
 
+        // Whether the cosine path actually put content in front of the model. It can select nothing
+        // even on a vectorized file - every chunk embedded under another model, say - and an attachment
+        // that silently contributes NOTHING is worse than one delivered as raw text, so anything
+        // leaving this false falls through to the raw-content read below.
+        let deliveredViaCosine = false;
+
         if (canCosineSearch) {
           // Perform cosine search for vectorized content
           sendStatusUpdate('Now doing retrieval augmented search');
@@ -1316,7 +1556,28 @@ export async function processFabFilesServer(
             await db.fabfiles.update({ id: file.id, error: null });
           }
 
-          const { results: searchResults, totalChunks } = await cosineSearch(file, userVector, { db, logger });
+          const {
+            results: rankedResults,
+            unranked,
+            totalChunks,
+            scanned,
+            scanTruncated,
+            skipped,
+          } = await cosineSearch(file, userVector, { db, logger });
+
+          // Scoring can reject every chunk (all of them embedded in another space) while the file
+          // still has perfectly good text. Handing over its head beats handing over nothing, and
+          // beats depending on the raw-content reader, which throws on formats that ARE chunkable.
+          const usedUnranked = rankedResults.length === 0 && unranked.length > 0;
+          const searchResults = usedUnranked ? unranked : rankedResults;
+          if (usedUnranked) {
+            logger.warn(
+              `[processFabFilesServer] No chunk of "${file.fileName}" could be scored ` +
+                `(scanned=${scanned}, skippedDimensionMismatch=${skipped.dimensionMismatch}, ` +
+                `skippedNonFinite=${skipped.nonFinite}, embeddingModel=${embeddingModel}); ` +
+                `delivering the first ${unranked.length} chunk(s) in file order instead of ranking.`
+            );
+          }
 
           // Truncate search results to fit within the token budget
           const maxChars = maxTokens > 0 ? maxTokens * CHARS_PER_TOKEN : MAX_FILE_SIZE;
@@ -1344,6 +1605,8 @@ export async function processFabFilesServer(
           }
 
           if (truncatedResults.length > 0) {
+            deliveredViaCosine = true;
+            delivered = true;
             // Results arrive in file order, so every chunk with none cut is the whole file and needs
             // no notice. Every chunk WITH a cut is still contiguous, and the excerpt wording ("parts
             // between them were not sent") would misdescribe it - that is a head slice reached by
@@ -1351,12 +1614,21 @@ export async function processFabFilesServer(
             // the first one alone exceeds the budget (any later overflow breaks instead), so today
             // that means a single-chunk file; the condition is written on the invariant rather than
             // on the chunk count so it stays correct if the loop learns to cut a tail.
-            const deliveredEveryChunk = totalChunks === truncatedResults.length;
+            //
+            // `totalChunks` is the file's chunk count, so this stays a claim about the FILE and not
+            // about the scan. `scanTruncated` is a separate arm because a bounded scan can hand over
+            // every chunk it read while chunks it never reached still exist.
+            // `usedUnranked` cannot claim the whole file on its own: the head is capped at the same
+            // top-K, so it is only the whole file when the count agrees, which the comparison covers.
+            const deliveredEveryChunk = !scanTruncated && totalChunks === truncatedResults.length;
+            // Every chunk AND none cut is the only case with no notice below - that is the actual
+            // "nothing missing" claim fullyDeliveredFileIds needs to make.
+            fullyDelivered = deliveredEveryChunk && !anyChunkCut;
             let notice = '';
             if (!deliveredEveryChunk) notice = excerptNotice(file.fileName);
             else if (anyChunkCut) notice = CONTENT_TRUNCATION_NOTICE;
 
-            const body = `Data for ${file.fileName}:\n${truncatedResults.map(r => `For context: ${r.content}`).join('\n')}`;
+            const body = `Data for ${noticeFileName(file.fileName)}:\n${FILENAME_DIGIT_NOTICE}\n${truncatedResults.map(r => `For context: ${r.content}`).join('\n')}`;
             userMessages.push({ role: 'user', content: body + notice });
 
             if (notice) {
@@ -1367,8 +1639,18 @@ export async function processFabFilesServer(
                     : ' as similarity-ranked excerpts; the model is told not to read them as the whole file.')
               );
             }
+          } else {
+            // Nothing to hand over at all, so the file is vectorized on paper but carries no chunk
+            // this reader can see. Raw content is the only remaining route.
+            logger.warn(
+              `[processFabFilesServer] "${file.fileName}" is marked vectorized but yielded no readable chunk ` +
+                `(chunks=${totalChunks}, scanned=${scanned}, embeddingModel=${embeddingModel}). ` +
+                `Falling back to raw content so the attachment still reaches the model.`
+            );
           }
-        } else {
+        }
+
+        if (!deliveredViaCosine) {
           try {
             logger.info(
               `[processFabFilesServer] Using raw content path for "${file.fileName}" ` +
@@ -1391,6 +1673,8 @@ export async function processFabFilesServer(
             logger.log(`[processFabFilesServer] Final max file size: ${finalMaxFileSize}`);
 
             sendStatusUpdate('Adding file content to prompt...');
+            // Captured before the truncation branch below mutates fabContent to the sliced head.
+            fullyDelivered = fabContent.length <= finalMaxFileSize;
             if (fabContent.length > finalMaxFileSize) {
               await sendStatusUpdate('File is too large, truncating...');
               const originalFileSize = fabContent.length;
@@ -1398,7 +1682,15 @@ export async function processFabFilesServer(
               // so without this the model presents the slice as the complete file and names a mid-file
               // row as the last.
               fabContent = fabContent.substring(0, finalMaxFileSize ?? PREVIEW_CHUNK) + CONTENT_TRUNCATION_NOTICE;
-              errorMsg = `Knowledge in the workbench with the fileName ${file.fileName} is ${originalFileSize} long which exceeds ${finalMaxFileSize}. Vectorize your large file or select a model with higher context window.`;
+              // "Vectorize your large file" is false advice for a file that IS vectorized and only
+              // reached this path because nothing in it was searchable this turn. The shared prefix is
+              // deliberate: it is what the cosine branch above clears, so whichever message we set here
+              // goes away by itself once cosine selection works again.
+              errorMsg =
+                `Knowledge in the workbench with the fileName ${file.fileName} is ${originalFileSize} long which exceeds ${finalMaxFileSize}. ` +
+                (canCosineSearch
+                  ? "None of its vectorized chunks could be searched with this turn's embedding model, so it was sent as raw text and truncated. Re-vectorize it under the current embedding model, or select a model with a higher context window."
+                  : 'Vectorize your large file or select a model with higher context window.');
               errorMessages.push({
                 role: 'error',
                 content: errorMsg,
@@ -1408,6 +1700,7 @@ export async function processFabFilesServer(
               errorMsg = null;
             }
 
+            delivered = true;
             if (file.system) {
               systemContent += fabContent;
             } else {
@@ -1443,6 +1736,8 @@ export async function processFabFilesServer(
           }
         }
       }
+      if (delivered) deliveredFileIds.add(file.id);
+      if (fullyDelivered) fullyDeliveredFileIds.add(file.id);
     } catch (error) {
       logger.updateMetadata({ fileId: file.id });
       logger.error(`🕐 [processFabFilesServer] Error processing file ${file.fileName}: ${error}`);
@@ -1478,12 +1773,12 @@ export async function processFabFilesServer(
 
     if (contextFiles.length === 1) {
       // Single file: simple format
-      combinedContent = `Here is the content from the attached file "${contextFiles[0].fileName}" for context:\n\n${contextFiles[0].content}`;
+      combinedContent = `Here is the content from the attached file "${noticeFileName(contextFiles[0].fileName)}" for context:\n${FILENAME_DIGIT_NOTICE}\n\n${contextFiles[0].content}`;
     } else {
       // Multiple files: structured format with clear separation
-      combinedContent = `Here are the contents from ${contextFiles.length} attached files for context:\n\n`;
+      combinedContent = `Here are the contents from ${contextFiles.length} attached files for context. ${FILENAME_DIGIT_NOTICE}\n\n`;
       contextFiles.forEach((file, index) => {
-        combinedContent += `--- File ${index + 1}: ${file.fileName} ---\n${file.content}\n\n`;
+        combinedContent += `--- File ${index + 1}: ${noticeFileName(file.fileName)} ---\n${file.content}\n\n`;
       });
       combinedContent += `--- End of attached files ---`;
     }
@@ -1502,57 +1797,84 @@ export async function processFabFilesServer(
   }
   const fileProcessingTime = Date.now() - fileProcessingStartTime;
   logger.info(`📁 File processing completed in ${fileProcessingTime}ms for ${fabFiles.length} files`);
-  return { userMessages, errorMessages };
+  return {
+    userMessages,
+    errorMessages,
+    deliveredFileIds: Array.from(deliveredFileIds),
+    fullyDeliveredFileIds: Array.from(fullyDeliveredFileIds),
+  };
 }
 
+/**
+ * Prepends the formatting system message. `formatPrompt` is the admin-editable
+ * `FormatPromptTemplate` value; blank falls back to FORMAT_PROMPT_TEMPLATE, the shared default this
+ * used to duplicate inline. That older inline wording ("Adhere to specific formatting requests...")
+ * read as general compliance and bled into whether the model answered at all - see the const's
+ * comment in @bike4mind/common schemas/settings.
+ */
 export function includeHardcodedSystemMessage(messages: IMessage[], formatPrompt: string): IMessage[] {
-  // Scoped to formatting ONLY. The previous wording ("Adhere to specific formatting
-  // requests...") read as a general compliance instruction and measurably degraded
-  // refusal behavior on underspecified asks (#1320: 81.1 -> 40.3 as the sole system
-  // content). Same failure shape as the artifact prompt's pre-SCOPE wording (#1296):
-  // any instruction that sounds like "comply with requests" bleeds into WHETHER to
-  // answer, not just how to format. Keep any future edit inside that boundary.
-  let format = `Formatting only - nothing here decides whether or how fully to answer. Format replies to maintain the integrity of the requested style; default to markdown for text. Preserve proper structure for poems, songs, or haikus. When the user specifies an output format (e.g. TypeScript), use that format for the parts you do answer.`;
-  if (formatPrompt) {
-    format = formatPrompt;
-  }
-
   const hardcodedSystemMessage: IMessage = {
     role: 'system',
-    content: format,
+    content: formatPrompt || FORMAT_PROMPT_TEMPLATE,
   };
 
   return [hardcodedSystemMessage, ...messages];
 }
 
-export function includeImagePromptSystemMessage(messages: IMessage[], userPrompt: string): IMessage[] {
-  const imageRelatedVerbs = [
-    'image',
-    'illustration',
-    'photo',
-    'watercolor',
-    'painting',
-    'comic book',
-    'picture',
-    'diagram',
-    'snapshot',
-    'visual',
-    'graphic',
-  ];
-  const hasImageRequest = imageRelatedVerbs.some(verb => userPrompt.toLowerCase().includes(verb));
+/**
+ * Nouns that name a picture the user wants made. Matched on word boundaries because the previous
+ * substring scan fired on any prompt merely containing one: `visual` matched "visualize", `graphic`
+ * matched "graphical". Compiled once - this runs on every turn. No `g` flag, which would carry
+ * `lastIndex` between calls and make the match depend on the previous prompt.
+ *
+ * `visual`, `graphic`, `diagram` and `snapshot` are deliberately gone rather than boundary-matched:
+ * each reads naturally about something other than a picture ("visualize this data", "a snapshot of the
+ * metrics"), and a request for a diagram or a chart is served by mermaid and artifacts, not by image
+ * generation. Plurals and `photograph` are spelled out because the substring scan matched those for
+ * free and a bare word-boundary list would silently stop firing on them.
+ *
+ * Errs toward missing a request rather than inventing one. A missed prompt costs a hint the model can
+ * still get from the tool's own schema; a wrongly matched one plants a MUST-generate-an-image order on
+ * a turn the user never asked about images.
+ */
+const IMAGE_REQUEST_PATTERN =
+  /\b(?:images?|illustrations?|photos?|photographs?|pictures?|watercolou?rs?|paintings?|comic\s+books?)\b/i;
 
-  const content = `When the user requests an image, you MUST use the image_generation tool to create it. Craft a vivid and imaginative prompt parameter for the tool based on the user's request and available context.`;
-
-  if (hasImageRequest) {
-    const imageSystemMessage: IMessage = {
-      role: 'system',
-      content: content,
-    };
-
-    return [imageSystemMessage, ...messages];
-  } else {
+/**
+ * Prepends the image-generation nudge, but only when `image_generation` actually reached the model's
+ * tool schema this turn. Pointing a model at a tool it does not have makes it emit the call as leaked
+ * JSON text in the reply, which is why the blog-workflow prompt gates the same way - see
+ * ChatCompletionProcess, where `imageGenerationAvailable` is resolved from the built tool list.
+ *
+ * That list is the truthful source for presence but says nothing about usability: a tool whose
+ * provider key is missing is still listed, and still refuses at dispatch rather than degrading, so
+ * this gate cannot cover that case (#1103).
+ *
+ * It also only decides the turn it runs on. A turn that starts with the tool and later gives it up -
+ * every backend drops tools once the tool-call budget is spent - is handled by the `requiresTool`
+ * marker set below, which `stripToolDependentMessages` acts on at those sites.
+ */
+export function includeImagePromptSystemMessage(
+  messages: IMessage[],
+  userPrompt: string,
+  imageGenerationAvailable: boolean
+): IMessage[] {
+  if (!imageGenerationAvailable) {
     return messages;
   }
+
+  if (!IMAGE_REQUEST_PATTERN.test(userPrompt)) {
+    return messages;
+  }
+
+  const imageSystemMessage: IMessage = {
+    role: 'system',
+    content: `When the user requests an image, you MUST use the image_generation tool to create it. Craft a vivid and imaginative prompt parameter for the tool based on the user's request and available context.`,
+    // Dropped again if the turn later continues without tools; see stripToolDependentMessages.
+    requiresTool: 'image_generation',
+  };
+
+  return [imageSystemMessage, ...messages];
 }
 
 // Priority order for message retention (lower number = higher priority)
@@ -1737,6 +2059,23 @@ const processMessages = (
 };
 
 /**
+ * Truncation telemetry for one buildAndSortMessages call. Non-nullable here because
+ * ContextDebugInfo always carries a real value once assembled; buildAndSortMessages itself
+ * returns this or null on its non-positive-budget early exit.
+ */
+export interface MessageTruncationInfo {
+  wasTruncated: boolean;
+  originalMessageCount: number;
+  truncatedMessageCount: number;
+  truncationMethod?: 'priority' | 'token-budget' | 'history-limit';
+  removedMessages?: Array<{
+    role: string;
+    tokens: number;
+    priority: number;
+  }>;
+}
+
+/**
  * Context debug info return type.
  */
 export interface ContextDebugInfo {
@@ -1750,17 +2089,7 @@ export interface ContextDebugInfo {
     overflowDetected?: boolean;
     overflowAmount?: number;
   };
-  messageTruncation: {
-    wasTruncated: boolean;
-    originalMessageCount: number;
-    truncatedMessageCount: number;
-    truncationMethod?: 'priority' | 'token-budget' | 'history-limit';
-    removedMessages?: Array<{
-      role: string;
-      tokens: number;
-      priority: number;
-    }>;
-  };
+  messageTruncation: MessageTruncationInfo;
 }
 
 export async function buildAndSortMessages(
@@ -1772,13 +2101,48 @@ export async function buildAndSortMessages(
   historyCount: number = 0,
   logger: Logger,
   tokenizer: ITokenizer,
-  options: { verbose: boolean } = { verbose: false }
-): Promise<IMessage[]> {
+  options: {
+    verbose: boolean;
+    /**
+     * Skip the admin-configured templates this function appends (FormatPromptTemplate, image
+     * prompt). They are invisible from the caller's own system-message assembly, so a caller
+     * asking for an unadorned completion cannot exclude them any other way.
+     */
+    skipAdminPromptTemplates?: boolean;
+    /**
+     * Whether `image_generation` survived into the tool list handed to the model this turn. Absent
+     * means "unknown", which suppresses the image prompt: staying quiet costs a hint the model can
+     * get from the tool schema anyway, whereas ordering a tool it lacks has no recovery.
+     *
+     * Independent of `skipAdminPromptTemplates`: that decides whether the admin templates are
+     * offered at all, this decides whether the image one is honest on a turn that does get them.
+     */
+    imageGenerationAvailable?: boolean;
+    /**
+     * Retention priority for a system message when they do not all fit; lower is kept first. Absent,
+     * `undefined` or non-finite sorts last, and ties keep assembly order, so a caller that supplies
+     * nothing gets today's array-order behaviour.
+     *
+     * Selection ONLY - never payload order. The assembled order is prompt-visible, because the
+     * Anthropic adapter marks the last system block and everything ahead of it forms the cached
+     * prefix, so survivors are re-emitted in the order they arrived.
+     *
+     * A resolver rather than a field on IMessage: `cache` and `requiresTool` are control-only fields,
+     * and the backends that forward IMessage objects largely intact have to strip those explicitly, so
+     * a third one would buy that audit again for no gain.
+     */
+    systemMessagePriority?: (message: IMessage) => number | undefined;
+  } = { verbose: false }
+): Promise<{
+  messages: IMessage[];
+  messageTruncation: MessageTruncationInfo | null;
+  injectedBlocks: BuilderInjectedBlock[];
+}> {
   // Negated like processMessages' budget guard so a NaN lands here rather than sailing past every
   // comparison below.
   if (!(maxInputTokens > 0)) {
     logger.error(`Invalid maxInputTokens: ${maxInputTokens}. Must be greater than 0.`);
-    return [];
+    return { messages: [], messageTruncation: null, injectedBlocks: [] };
   }
 
   const VERBOSE_CHAT_CONTEXT = process.env.VERBOSE_CHAT_CONTEXT !== 'false';
@@ -1812,8 +2176,8 @@ export async function buildAndSortMessages(
   }
 
   let tokenBudget: number = maxInputTokens;
-  // Token buffer; see MIN_TOKEN_BUFFER and TOKEN_BUFFER_PERCENTAGE for rationale.
-  const bufferTokenBudget: number = Math.max(MIN_TOKEN_BUFFER, Math.floor(maxInputTokens * TOKEN_BUFFER_PERCENTAGE));
+  // Token buffer; see MIN_TOKEN_BUFFER and TOKEN_BUFFER_PERCENTAGE in ./contextBudget for rationale.
+  const bufferTokenBudget: number = assemblyTokenBuffer(maxInputTokens);
   tokenBudget = tokenBudget - bufferTokenBudget;
 
   let userPromptContent: string = '';
@@ -1826,16 +2190,60 @@ export async function buildAndSortMessages(
     userPromptTokens = await tokenizer.encodeTokens(userPromptContent);
     tokenBudget = tokenBudget - userPromptTokens.length;
   }
+  // Everything below divides this figure. Captured before system instructions are charged against it,
+  // so the attached-content floor is a share of the whole input budget rather than of whatever the
+  // system stack happens to leave behind - which on an 8k window was a minority of it.
+  const preSystemBudget = tokenBudget;
+
   const systemMessages: IMessage[] = [];
   let systemTokenCount: number = 0;
 
-  if (getSettingsValue('UseFormatPrompt', settings)) {
-    const formatPromptTemplate = settings.FormatPromptTemplate;
-    fabMessages = includeHardcodedSystemMessage(fabMessages, formatPromptTemplate);
-  }
+  // Priorities for the messages the two injectors below add. Keyed by reference because that is the
+  // only handle on a message this function created itself; identified by length because each injector
+  // either prepends exactly one message or returns its input untouched.
+  const builderInjectedPriorities = new Map<IMessage, number>();
+  // Gate/injection outcome per block, resolved into BuilderInjectedBlock[] once admittedSystemMessages
+  // is known below (delivery cannot be decided until then). `message` set means the injector prepended
+  // it; absent means declined, with `reason` saying why.
+  const injectedBlockGateResults = new Map<
+    BuilderInjectedBlockId,
+    { message?: IMessage; reason?: BuilderInjectedBlock['reason'] }
+  >();
 
-  if (getSettingsValue('UseImagePrompt', settings)) {
-    fabMessages = includeImagePromptSystemMessage(fabMessages, userPromptContent);
+  if (options.skipAdminPromptTemplates) {
+    injectedBlockGateResults.set('formatPrompt', { reason: 'mode_skipped' });
+    injectedBlockGateResults.set('imagePrompt', { reason: 'mode_skipped' });
+  } else {
+    if (getSettingsValue('UseFormatPrompt', settings)) {
+      const formatPromptTemplate = settings.FormatPromptTemplate;
+      const withFormatPrompt = includeHardcodedSystemMessage(fabMessages, formatPromptTemplate);
+      if (withFormatPrompt.length > fabMessages.length) {
+        builderInjectedPriorities.set(withFormatPrompt[0], FORMAT_PROMPT_PRIORITY);
+        injectedBlockGateResults.set('formatPrompt', { message: withFormatPrompt[0] });
+      } else {
+        injectedBlockGateResults.set('formatPrompt', { reason: 'not_triggered' });
+      }
+      fabMessages = withFormatPrompt;
+    } else {
+      injectedBlockGateResults.set('formatPrompt', { reason: 'setting_disabled' });
+    }
+
+    if (getSettingsValue('UseImagePrompt', settings)) {
+      const withImagePrompt = includeImagePromptSystemMessage(
+        fabMessages,
+        userPromptContent,
+        options.imageGenerationAvailable ?? false
+      );
+      if (withImagePrompt.length > fabMessages.length) {
+        builderInjectedPriorities.set(withImagePrompt[0], IMAGE_PROMPT_PRIORITY);
+        injectedBlockGateResults.set('imagePrompt', { message: withImagePrompt[0] });
+      } else {
+        injectedBlockGateResults.set('imagePrompt', { reason: 'not_triggered' });
+      }
+      fabMessages = withImagePrompt;
+    } else {
+      injectedBlockGateResults.set('imagePrompt', { reason: 'setting_disabled' });
+    }
   }
 
   // Artifact guidance comes from the admin-editable `ArtifactEmissionPrompt` system message that the
@@ -1844,22 +2252,151 @@ export async function buildAndSortMessages(
   // CSS classes only", and said nothing about publishing - so the model followed it and produced
   // non-publishable artifacts. It has been removed so ArtifactEmissionPrompt is the single source of truth.
 
-  for (const message of fabMessages.filter(message => message.role === 'system')) {
-    const content = (message.content as string) || '';
-    const estimatedTokens = estimateTokenLength(content);
-    if (systemTokenCount + estimatedTokens <= tokenBudget) {
-      systemTokenCount += estimatedTokens;
-      systemMessages.push(message);
-    } else {
-      break;
+  // Classifies every non-system fabMessage into exactly one bucket (system messages are handled by
+  // systemCandidates below), rather than two positive filters that could both miss a message: a
+  // role:user array-content message with no image block (only text, or a tool_use/tool_result/
+  // thinking block) used to match neither the old nonImageMessages nor imageMessages filter and
+  // vanish with no trace. This is reachable today - extraContextMessages accepts z.array(z.any())
+  // content, so a caller can post exactly that shape.
+  const imageMessages: IMessage[] = [];
+  const nonImageMessages: IMessage[] = [];
+  const undeliverableBlockMessages: Array<{ index: number; message: IMessage }> = [];
+  const unassignableMessages: Array<{ index: number; message: IMessage }> = [];
+
+  fabMessages.forEach((message, index) => {
+    if (message.role === 'system') return; // handled by systemCandidates below
+    if (message.role !== 'user') {
+      unassignableMessages.push({ index, message });
+      return;
     }
+    const blocks = message.content;
+    if (!Array.isArray(blocks)) {
+      nonImageMessages.push(message);
+      return;
+    }
+    if (blocks.length === 0) {
+      unassignableMessages.push({ index, message });
+      return;
+    }
+    // Image priority checked first so a block mixing an image with e.g. a tool_result still delivers
+    // as an image message rather than being caught by the undeliverable-block bucket below.
+    if (blocks.some(isImageBlock)) {
+      imageMessages.push(message);
+      return;
+    }
+    if (blocks.every(block => DELIVERABLE_USER_BLOCK_TYPES.has((block as { type?: string })?.type ?? ''))) {
+      nonImageMessages.push(message);
+      return;
+    }
+    undeliverableBlockMessages.push({ index, message });
+  });
+
+  // Content-free labels (block types, position, est. tokens only - never payload text), matching the
+  // no-content-in-logs convention attachmentLabel already follows below.
+  const blockTypesLabel = ({ index, message }: { index: number; message: IMessage }): string => {
+    const types = Array.isArray(message.content)
+      ? Array.from(new Set(message.content.map(block => (block as { type?: string })?.type ?? 'untyped')))
+      : [];
+    return `message ${index + 1} [${types.join(', ')}] (~${estimateMessageTokens(message)} est. tokens)`;
+  };
+
+  if (undeliverableBlockMessages.length > 0) {
+    logger.warn(
+      `Dropped ${undeliverableBlockMessages.length} user context message(s) carrying block types that cannot ` +
+        `be delivered in a user turn: ${undeliverableBlockMessages.map(blockTypesLabel).join(' | ')}. A ` +
+        `tool_result supplied here has no tool_use to pair with - replayed history already pairs every ` +
+        `tool_use it emits - so it would be stripped as an orphan after assembly; a thinking block is ` +
+        `assistant-only and the provider rejects it on a user turn.`
+    );
+  }
+  if (unassignableMessages.length > 0) {
+    logger.warn(
+      `Ignored ${unassignableMessages.length} context message(s) assembly has no slot for: ` +
+        `${unassignableMessages
+          .map(
+            ({ index, message }) =>
+              `message ${index + 1} (role ${message.role}${
+                Array.isArray(message.content) && message.content.length === 0 ? ', empty content array' : ''
+              })`
+          )
+          .join(' | ')}. Only system and user messages are assembled from this argument.`
+    );
+  }
+
+  // Attached content is reserved out of the budget BEFORE system instructions are charged against it,
+  // and only on a turn that actually carries a file: with no attachment the reserve is 0 and the cap
+  // below is arithmetically the budget the system loop always had, so no second code path is needed to
+  // leave an ordinary turn's budget alone. (Which messages fill it still changes - see the skip below.)
+  // Same `!(x > 0)` negation as the guards above, so a NaN lands in the zero branch here too.
+  const contentReserve =
+    !(preSystemBudget > 0) || nonImageMessages.length === 0
+      ? 0
+      : Math.floor(preSystemBudget * MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION);
+  // The cap never falls below the complement of the content floor, so an attachment can squeeze the
+  // system budget but not shrink it without limit. It says nothing about any individual message: one
+  // larger than the cap is still dropped whole, which the warning below reports.
+  const systemTokenCap = Math.max(0, preSystemBudget - contentReserve);
+
+  const systemCandidates = fabMessages.filter(message => message.role === 'system');
+  // messageContentText rather than a cast: array content is legal on a system message
+  // (extraContextMessages accepts it from the request), and `content as string` leaves an array intact,
+  // so estimateTokenLength divided its ELEMENT COUNT by CHARS_PER_TOKEN. A single oversized block
+  // measured ~1 token, sailed past the cap for free, and its real weight only surfaced at the
+  // tokenizer-accurate safety pass, which shrinks content and history but never system messages - so
+  // the attachment paid for it.
+  const systemMessageTokens = (message: IMessage): number => estimateTokenLength(messageContentText(message));
+  const priorityOf = (message: IMessage): number => {
+    const priority = builderInjectedPriorities.get(message) ?? options.systemMessagePriority?.(message);
+    return typeof priority === 'number' && Number.isFinite(priority) ? priority : Number.MAX_SAFE_INTEGER;
+  };
+
+  // Selection order only; the payload is rebuilt in assembly order below. Sorting a mapped copy keeps
+  // the original index available as the tie-break, so equal priorities retain assembly order.
+  const admittedSystemMessages = new Set<IMessage>();
+  const byRetentionPriority = systemCandidates
+    .map((message, index) => ({ message, index }))
+    .sort((a, b) => priorityOf(a.message) - priorityOf(b.message) || a.index - b.index);
+
+  for (const { message } of byRetentionPriority) {
+    const estimatedTokens = systemMessageTokens(message);
+    // Skipped rather than `break`: one oversized prompt used to shut out every message behind it, and
+    // since the array arrives in assembly order that meant the tail - the org and per-session prompts.
+    if (systemTokenCount + estimatedTokens > systemTokenCap) continue;
+    systemTokenCount += estimatedTokens;
+    admittedSystemMessages.add(message);
+  }
+
+  // Re-filtering the original array is what restores assembly order, so the cached-prefix ordering
+  // cannot drift away from the selection logic above.
+  systemMessages.push(...systemCandidates.filter(message => admittedSystemMessages.has(message)));
+
+  // Resolved now that delivery is known. Iterates the fixed id list, not injectedBlockGateResults, so
+  // a caller-facing consumer always gets a complete two-row inventory even if a gate above never ran.
+  const injectedBlocks: BuilderInjectedBlock[] = BUILDER_INJECTED_BLOCK_IDS.map(id => {
+    const gateResult = injectedBlockGateResults.get(id);
+    if (!gateResult?.message) {
+      return { id, injected: false, delivered: false, ...(gateResult?.reason ? { reason: gateResult.reason } : {}) };
+    }
+    return {
+      id,
+      injected: true,
+      delivered: admittedSystemMessages.has(gateResult.message),
+      ...(typeof gateResult.message.content === 'string' ? { content: gateResult.message.content } : {}),
+    };
+  });
+
+  if (systemCandidates.length > 0 && systemMessages.length === 0) {
+    // The one new failure mode this cap introduces, and silence would make it look like a turn that
+    // simply had no system instructions.
+    logger.warn(
+      `No system instructions fit the budget: ${systemCandidates.length} message(s) dropped, cap ` +
+        `${systemTokenCap} of ${preSystemBudget} est. tokens (${Math.round((1 - MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION) * 100)}% ` +
+        `after the attached-content reserve of ${contentReserve}). Smallest was ` +
+        `${Math.min(...systemCandidates.map(systemMessageTokens))} est. tokens.`
+    );
   }
 
   tokenBudget -= systemTokenCount;
-
-  const nonImageMessages: IMessage[] = fabMessages.filter(
-    message => message.role === 'user' && !Array.isArray(message.content)
-  );
 
   // TODO: also weight previousMessages by cosine score (not just fabMessages) - blocked on not
   // having vectors for previousMessages yet.
@@ -1908,6 +2445,12 @@ export async function buildAndSortMessages(
   // not. URL-derived content opens with the fetched page body and has no header at all, so it is
   // labelled positionally rather than by echoing what it contains.
   const attachmentLabel = (message: IMessage, index: number): string => {
+    // Array content (e.g. caller-supplied text blocks routed here by the classifier above) has no
+    // filename header to find; naming it "attachment N" would misreport a context block as a file.
+    if (Array.isArray(message.content)) {
+      const types = Array.from(new Set(message.content.map(block => (block as { type?: string })?.type ?? 'untyped')));
+      return `context blocks [${types.join(', ')}] (~${estimateMessageTokens(message)} est. tokens)`;
+    }
     const head = messageContentText(message).slice(0, ATTACHMENT_LABEL_SCAN_CHARS);
     const named: string[] = [];
     for (const pattern of ATTACHMENT_NAME_HEADERS) {
@@ -1930,9 +2473,13 @@ export async function buildAndSortMessages(
     // Negated like the guards at the two layers above, so NaN lands in the zero branch here too. A
     // NaN cannot currently reach this line, but the two idioms sitting side by side invited someone
     // to loosen the ones that are load-bearing.
-    const contentBudget = !(tokenBudget > 0)
-      ? 0
-      : Math.max(Math.floor(tokenBudget * MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION), tokenBudget - totalPreviousTokens);
+    // The floor is `contentReserve`, a share of the PRE-system budget, which is the whole point: taking
+    // it out of the post-system remainder made the file's share depend on how much the system stack
+    // spent, and on an 8k window that left it a third of what the model could actually have carried.
+    //
+    // Needs no clamp to `tokenBudget`: the cap holds systemTokenCount at or below
+    // preSystemBudget - contentReserve, so what survives here is never less than the reserve.
+    const contentBudget = !(tokenBudget > 0) ? 0 : Math.max(contentReserve, tokenBudget - totalPreviousTokens);
 
     // Content first: history's budget depends on what content actually used.
     processedContentMessages = recordContentResult(
@@ -1949,8 +2496,9 @@ export async function buildAndSortMessages(
       // says it cannot see the file and the user has no way to tell why.
       logger.warn(
         `Attached content squeezed to fit the token budget: kept ${processedContentMessages.length}/${nonImageMessages.length} message(s), ` +
-          `${contentTokensUsed}/${attachedContentTokens} est. tokens (reserved ${contentBudget} of ${tokenBudget}, floor ` +
-          `${Math.round(MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION * 100)}%). Affected: ` +
+          `${contentTokensUsed}/${attachedContentTokens} est. tokens (reserved ${contentBudget} of ${tokenBudget} left ` +
+          `after system instructions, floor ${contentReserve} = ` +
+          `${Math.round(MIN_ATTACHED_CONTENT_TOKEN_ALLOCATION * 100)}% of the ${preSystemBudget} pre-system budget). Affected: ` +
           nonImageMessages.map(attachmentLabel).join(' | ')
       );
     }
@@ -1967,7 +2515,16 @@ export async function buildAndSortMessages(
       processedPreviousMessages = recordHistoryResult(processMessages(historyMessages, tokenBudget));
     } else {
       // Both exceed the budget: trim proportionally. See KNOWLEDGE_FILE_TOKEN_ALLOCATION for the split.
-      const nonImageTokenBudget = Math.min(tokenBudget * KNOWLEDGE_FILE_TOKEN_ALLOCATION, totalContentTokens);
+      //
+      // The floor applies here too, and the two are not comparable by their fractions alone: 70% is a
+      // share of what survived the system stack, the floor is a share of the budget before it. Once
+      // system instructions approach their cap the floor is the larger of the two, and without it a
+      // heavy stack still cut the file on this path. Capped at what content actually wants, so a small
+      // attachment does not hold budget away from history.
+      const nonImageTokenBudget = Math.min(
+        totalContentTokens,
+        Math.max(contentReserve, tokenBudget * KNOWLEDGE_FILE_TOKEN_ALLOCATION)
+      );
       const previousMessageTokenBudget = tokenBudget - nonImageTokenBudget;
 
       processedContentMessages = recordContentResult(
@@ -2002,43 +2559,66 @@ export async function buildAndSortMessages(
   // counting it would report a truncation on a completely healthy turn. URL-derived content is
   // excluded on the same grounds: it rides in this block but is not an attachment, and counting it
   // made the note claim a file was lost on turns where the file arrived whole, or where the prompt
-  // carried only a link and no file existed at all.
-  const isAttachment = (message: IMessage): boolean => !urlDerivedMessages.has(message) && fileTokens(message) > 0;
+  // carried only a link and no file existed at all. The array-content builders that exist today
+  // (processUrlsFromPrompt's image URLs, processFabFilesServer's image blocks) emit image-only
+  // arrays, which imageMessages claims before nonImageMessages ever sees them - so nonImageMessages
+  // only ever held string content until the classifier above started routing caller-supplied
+  // array-content context blocks here too. The string guard excludes those: without it, one could
+  // join attachmentsWithContent, get told to the model as an undelivered FILE it never was, and be
+  // deleted outright by the sliver rule below.
+  const isAttachment = (message: IMessage): boolean =>
+    typeof message.content === 'string' && !urlDerivedMessages.has(message) && fileTokens(message) > 0;
   const attachmentsWithContent = nonImageMessages.filter(isAttachment);
   let undeliveredNote: IMessage | null = null;
 
+  // Only a change in what is undelivered is news: the safety pass calls the declaration once per shrink
+  // round, so one turn would otherwise log up to five warnings disagreeing about the counts.
+  let lastDeclaredCounts = '';
+
   /**
    * Replaces attachments that arrived too small to be recognised as file content, and declares any
-   * dropped whole, with one message saying so. Runs after the allocation below, the only stage that
-   * currently shrinks content. The final safety pass can also drop an attachment the allocation had
-   * delivered, and does not re-run this - so on that path the file reaches the model undeclared. That
-   * gap is tracked in #1164 along with the rest of the safety pass rework.
+   * dropped whole, with one message saying so. Called by both stages that shrink content: the
+   * allocation below, and the final safety pass after it, which can drop an attachment the allocation
+   * had delivered.
    *
-   * Idempotent by design, so a second call is safe to add there: its own note is excluded by identity,
-   * so it re-judges only real attachments and replaces the note rather than stacking another. It keeps
-   * the note in the payload it measures, so the ~100 tokens it costs are counted, not hidden.
+   * Idempotent, which is what makes the per-round call safe: the note it produced last time is
+   * excluded by identity, so it re-judges only real attachments and replaces that note rather than
+   * stacking another. It keeps the note in the payload it measures, so the ~100 tokens it costs are
+   * counted, not hidden.
    */
   const declareUndeliveredAttachments = (contentMessages: IMessage[]): IMessage[] => {
     if (attachmentsWithContent.length === 0) return contentMessages;
 
-    // Counted on the same footing as attachmentsWithContent - same isAttachment predicate on both
-    // sides. An attachment carrying no extractable text, or a URL-derived message, is absent from
-    // both: counting either as delivered let it stand in for a sibling that was dropped, and the drop
-    // then went undeclared.
-    const delivered = contentMessages.filter(message => message !== undeliveredNote && isAttachment(message));
-    const isUnusableSliver = (message: IMessage): boolean =>
-      cutContentMessages.has(message) && fileTokens(message) < MIN_USEFUL_ATTACHED_CONTENT_TOKENS;
-    const usable = delivered.filter(message => !isUnusableSliver(message));
+    // Read before the reassignment below, because identity is what retires the previous round's note.
+    // Comparing against the new object leaves the old one in place, and a stale note passes isAttachment
+    // and so counts as a delivered file - each round then declares one fewer loss than the last, while
+    // the payload grows by another ~100-token duplicate of the same sentence.
+    const previousNote = undeliveredNote;
+    // Counted on the same footing as attachmentsWithContent - same isAttachment predicate on both sides.
+    // An attachment carrying no extractable text, or a URL-derived message, is absent from both:
+    // counting either as delivered let it stand in for a sibling that was dropped, and the drop then
+    // went undeclared.
+    const delivered = contentMessages.filter(message => message !== previousNote && isAttachment(message));
+    // Computed once: fileTokens re-derives the message text, and the safety pass calls this per round.
+    const replaced = new Set(
+      delivered.filter(
+        message => cutContentMessages.has(message) && fileTokens(message) < MIN_USEFUL_ATTACHED_CONTENT_TOKENS
+      )
+    );
     const droppedCount = Math.max(0, attachmentsWithContent.length - delivered.length);
-    const sliverCount = delivered.length - usable.length;
+    const sliverCount = replaced.size;
     if (droppedCount === 0 && sliverCount === 0) return contentMessages;
 
-    logger.warn(
-      `Attached content could not be delivered usefully: ${droppedCount} file(s) dropped whole and ` +
-        `${sliverCount} reduced below the ${MIN_USEFUL_ATTACHED_CONTENT_TOKENS}-token minimum worth sending. ` +
-        `Context window is too small after system instructions and history. Affected: ` +
-        attachmentsWithContent.map(attachmentLabel).join(' | ')
-    );
+    const counts = `${droppedCount}/${sliverCount}`;
+    if (counts !== lastDeclaredCounts) {
+      lastDeclaredCounts = counts;
+      logger.warn(
+        `Attached content could not be delivered usefully: ${droppedCount} file(s) dropped whole and ` +
+          `${sliverCount} reduced below the ${MIN_USEFUL_ATTACHED_CONTENT_TOKENS}-token minimum worth sending. ` +
+          `Context window is too small after system instructions and history. Affected: ` +
+          attachmentsWithContent.map(attachmentLabel).join(' | ')
+      );
+    }
     contentSqueezed = true;
     // Deliberately names no files. Which attachment was lost is not knowable here once processMessages
     // has replaced the objects, and listing all of them let the model disclaim one it did receive.
@@ -2051,27 +2631,14 @@ export async function buildAndSortMessages(
         `could not be read within this model's context window, and suggest a model with a larger context window, ` +
         `a smaller file, or a shorter conversation.`,
     };
-    return [...usable, undeliveredNote];
+    // Everything except the replaced slivers and the note being superseded. Filtering down to the
+    // attachments instead also dropped what the note is not about - URL-derived context, attachments with
+    // no extractable text - which was masked while the allocation was the only caller, since a turn it
+    // dropped nothing on returned early above.
+    return [...contentMessages.filter(message => message !== previousNote && !replaced.has(message)), undeliveredNote];
   };
 
   processedContentMessages = declareUndeliveredAttachments(processedContentMessages);
-
-  // Separate image and non-image messages
-  const imageMessages: IMessage[] = fabMessages.filter(
-    message =>
-      message.role === 'user' &&
-      Array.isArray(message.content) &&
-      message.content.some(obj => obj.type.startsWith('image'))
-  );
-
-  // Combine all messages and sort with system messages at the top
-
-  // Check if the last message in history is a tool_use
-  const lastHistoryMessage = processedPreviousMessages[processedPreviousMessages.length - 1];
-  const historyEndsWithToolUse =
-    lastHistoryMessage?.role === 'assistant' &&
-    Array.isArray(lastHistoryMessage.content) &&
-    lastHistoryMessage.content.some((block: any) => block.type === 'tool_use');
 
   // Check if the user prompt contains a tool_result
   const promptHasToolResult = userPrompt.some(
@@ -2081,47 +2648,60 @@ export async function buildAndSortMessages(
       msg.content.some((block: any) => block.type === 'tool_result')
   );
 
-  let messages: IMessage[];
+  /**
+   * Combines everything into the message array, system first. Sole owner of the ordering: the safety
+   * pass below re-assembles the payload several times to measure it, and a second copy of these two
+   * orderings would be free to drift from this one. Both the pairing check and the content/history it
+   * applies to are read from the arguments, since the pass rewrites both.
+   *
+   * tool_use blocks must be immediately followed by tool_result blocks, so when history ends with a
+   * tool_use and the prompt carries the matching tool_result, other context moves after the prompt to
+   * keep the pair adjacent.
+   */
+  // Gated on the exact survivor predicate declareUndeliveredAttachments already applies, so a message
+  // this array still holds is one that really did survive: excludes undeliveredNote by identity (it
+  // exists to say content did NOT arrive) and mirrors the cutContentMessages/fileTokens sliver check,
+  // even though a sliver never reaches this array today - a future caller of assemble should not have to
+  // re-derive that invariant to stay correct.
+  const withDeliveredNotice = (message: IMessage): IMessage =>
+    typeof message.content === 'string' &&
+    message !== undeliveredNote &&
+    isAttachment(message) &&
+    !(cutContentMessages.has(message) && fileTokens(message) < MIN_USEFUL_ATTACHED_CONTENT_TOKENS)
+      ? { ...message, content: ATTACHMENT_DELIVERED_NOTICE + message.content }
+      : message;
 
-  // tool_use blocks must be immediately followed by tool_result blocks. If history ends with a
-  // tool_use and the userPrompt carries the tool_result, keep them adjacent by moving other
-  // context (files/images) after the userPrompt.
-  if (historyEndsWithToolUse && promptHasToolResult) {
-    messages = [
-      ...systemMessages, // System messages go first for instruction
-      ...processedPreviousMessages, // previous message context
-      ...userPrompt, // Tool result must follow tool use immediately
-      ...imageMessages, // Include all image messages
-      ...processedContentMessages, // fab file content (non-image messages)
-    ];
-  } else {
-    messages = [
-      ...systemMessages, // System messages go first for instruction
-      ...processedPreviousMessages, // previous message context
-      ...imageMessages, // Include all image messages
-      ...processedContentMessages, // fab file content (non-image messages)
-      ...userPrompt, // Spread the userPrompt array into the messages array
-    ];
-  }
+  const assemble = (content: IMessage[], history: IMessage[]): IMessage[] => {
+    const deliveredContent = content.map(withDeliveredNotice);
+    const lastHistoryMessage = history[history.length - 1];
+    const historyEndsWithToolUse =
+      lastHistoryMessage?.role === 'assistant' &&
+      Array.isArray(lastHistoryMessage.content) &&
+      lastHistoryMessage.content.some((block: any) => block.type === 'tool_use');
+
+    return historyEndsWithToolUse && promptHasToolResult
+      ? [...systemMessages, ...history, ...userPrompt, ...imageMessages, ...deliveredContent]
+      : [...systemMessages, ...history, ...imageMessages, ...deliveredContent, ...userPrompt];
+  };
+
+  const messages: IMessage[] = assemble(processedContentMessages, processedPreviousMessages);
 
   // Budget loss outranks history windowing: reporting 'history-limit' whenever historyCount was
   // finite - which is nearly always - made a file the budget had silently zeroed look identical in
   // telemetry to history being windowed exactly as configured, which is why that bug went unnoticed
   // for so long. `contentSqueezed` is needed alongside allRemovedMessages because content cut
   // mid-message is a budget loss that drops no message and so leaves allRemovedMessages empty.
-  // Called on BOTH return paths: the overflow path below returns early, so assigning this only at
-  // the end left the worst-loss turn reporting the previous call's numbers from a warm container.
-  const recordDebugInfo = (finalContentMessages: IMessage[]) => {
+  // Called on BOTH return paths: the overflow path below returns early, so building this only at
+  // the end would report the wrong finalContentMessages for that path.
+  const buildDebugInfo = (finalContentMessages: IMessage[]): MessageTruncationInfo => {
     const historyWindowed = previousMessages.length > historyMessages.length;
     const budgetTruncated = allRemovedMessages.length > 0 || contentSqueezed || historyCutMidMessage;
-    (buildAndSortMessages as any).lastDebugInfo = {
-      messageTruncation: {
-        wasTruncated: budgetTruncated,
-        originalMessageCount: originalTotalMessageCount,
-        truncatedMessageCount: processedPreviousMessages.length + finalContentMessages.length,
-        truncationMethod: budgetTruncated ? 'token-budget' : historyWindowed ? 'history-limit' : undefined,
-        removedMessages: allRemovedMessages.length > 0 ? allRemovedMessages : undefined,
-      },
+    return {
+      wasTruncated: budgetTruncated,
+      originalMessageCount: originalTotalMessageCount,
+      truncatedMessageCount: processedPreviousMessages.length + finalContentMessages.length,
+      truncationMethod: budgetTruncated ? 'token-budget' : historyWindowed ? 'history-limit' : undefined,
+      removedMessages: allRemovedMessages.length > 0 ? allRemovedMessages : undefined,
     };
   };
 
@@ -2132,49 +2712,107 @@ export async function buildAndSortMessages(
     logger.warn(
       `⚠️ Final message token count (${finalTokenCount}) exceeds maxInputTokens (${maxInputTokens}). Truncating messages.`
     );
-    // If we still exceed limits, remove some processed content messages as last resort.
-    //
-    // The notice is threaded and the result recorded for the same reason: this pass can now actually
-    // cut. Before the reservation cap above, protected messages were reserved unconditionally, so the
-    // selection was never empty, the truncation fallback never fired from here, and an overflow went
-    // to the caller's hard throw instead. With the cap it shrinks - and without these two arguments it
-    // would head-slice a file with nothing appended (the fallback's hold-out for an existing upstream
-    // notice is gated on truncationNotice), then drop the cut from telemetry, so the turn that lost
-    // the most content would report wasTruncated: false. A silent truncated file presented as complete
-    // is the failure this module exists to prevent.
-    const excessTokens = finalTokenCount - maxInputTokens;
-    const reducedContentMessages = recordContentResult(
-      processMessages(
-        processedContentMessages,
-        Math.max(
-          0,
-          (await calculateTotalTokenLength(processedContentMessages, { estimateOnly: false, tokenizer })) - excessTokens
-        ),
-        { truncationNotice: CONTENT_TRUNCATION_NOTICE }
-      )
-    );
+    // Shrink content first, then history, re-measuring the real count each round until it fits. One
+    // subtraction cannot: the overflow usually lives in history, and an overage measured by the real
+    // tokenizer buys less than it looks like when spent against processMessages, which budgets in the
+    // character estimate. The notice and the recorder are threaded because this pass really does cut -
+    // without them it head-slices a file with nothing appended and reports wasTruncated: false.
+    let reducedContentMessages = processedContentMessages;
+    let currentTokenCount = finalTokenCount;
+    // Null until a round measures one, so the give-up log cannot print a ratio nothing measured.
+    let lastRatio: number | null = null;
 
-    let truncatedMessages: IMessage[];
-    if (historyEndsWithToolUse && promptHasToolResult) {
-      truncatedMessages = [
-        ...systemMessages,
-        ...processedPreviousMessages,
-        ...userPrompt,
-        ...imageMessages,
-        ...reducedContentMessages,
-      ];
-    } else {
-      truncatedMessages = [
-        ...systemMessages,
-        ...processedPreviousMessages,
-        ...imageMessages,
-        ...reducedContentMessages,
-        ...userPrompt,
-      ];
+    // Content is asked to give first, but a round that frees nothing hands over to history rather than
+    // retrying forever: processMessages judges against the character estimate, so content that is
+    // oversized in real tokens can still look like it fits and come back untouched.
+    let contentExhausted = reducedContentMessages.filter(message => message !== undeliveredNote).length === 0;
+    for (let round = 0; round < MAX_SAFETY_SHRINK_ROUNDS && currentTokenCount > maxInputTokens; round++) {
+      const shrinkingContent = !contentExhausted;
+      // Only system messages, images and the user prompt are left, and none is droppable here.
+      if (!shrinkingContent && processedPreviousMessages.length === 0) break;
+
+      // The undelivered note is held out of the content slice by identity so the shrink judges only real
+      // content; it stays in the assembled payload, so its cost is still measured.
+      const before = shrinkingContent
+        ? reducedContentMessages.filter(message => message !== undeliveredNote)
+        : processedPreviousMessages;
+      // Measured on the slice being cut rather than the whole payload: a prose-heavy conversation's
+      // overall ratio understates CSV density and under-trims the very slice the round is spending
+      // against. Realistic CSV runs about 2.2 chars/token against the estimator's 3.5, prose about 5.6.
+      const beforeEstimate = estimateMessagesTokens(before);
+      const beforeReal = await calculateTotalTokenLength(before, { estimateOnly: false, tokenizer });
+      lastRatio = beforeEstimate > 0 && beforeReal > 0 ? Math.min(8, Math.max(0.25, beforeReal / beforeEstimate)) : 1;
+      // No overshoot allowance on top of the conversion: a round that frees too little is corrected by
+      // the next one, while asking for more than the overage drops content a smaller cut would have kept.
+      const excessInEstimateTokens = Math.ceil((currentTokenCount - maxInputTokens) / lastRatio);
+      const budget = Math.max(0, beforeEstimate - excessInEstimateTokens);
+
+      if (shrinkingContent) {
+        const reduced = recordContentResult(
+          processMessages(before, budget, { truncationNotice: CONTENT_TRUNCATION_NOTICE })
+        );
+        if (reduced.length < before.length) {
+          logger.warn(
+            `Final safety pass dropped ${before.length - reduced.length} of ${before.length} ` +
+              `attached content message(s) to fit the context window.`
+          );
+        }
+        reducedContentMessages = undeliveredNote ? [...reduced, undeliveredNote] : reduced;
+      } else {
+        const reduced = processMessages(before, budget);
+        // Compared in tokens, not message count: the truncation fallback shrinks messages in place, so a
+        // count test reads "same count" as "cannot shrink", discards a real reduction, and sends the
+        // still-oversized payload to the throw.
+        if (estimateMessagesTokens(reduced.messages) >= beforeEstimate) break;
+        logger.warn(
+          `Final safety pass also reduced ${before.length} history message(s) to ${reduced.messages.length}: ` +
+            `the attached content alone could not absorb the overflow.`
+        );
+        processedPreviousMessages = recordHistoryResult(reduced);
+      }
+
+      // Re-declared every round rather than once at the end, so an attachment this pass drops is named
+      // to the model - otherwise it arrives with nothing said and the model denies the file exists, the
+      // exact failure this backstop re-entered through last time - and so the note's own ~100 tokens sit
+      // inside the count the next round works from.
+      reducedContentMessages = declareUndeliveredAttachments(reducedContentMessages);
+
+      const afterTokenCount = await calculateTotalTokenLength(
+        assemble(reducedContentMessages, processedPreviousMessages),
+        { estimateOnly: false, tokenizer }
+      );
+      const stalled = afterTokenCount >= currentTokenCount;
+      currentTokenCount = afterTokenCount;
+      if (stalled) {
+        // Content that cannot give any more hands over to history; history that cannot is the end of
+        // what this pass can do.
+        if (shrinkingContent) contentExhausted = true;
+        else break;
+      }
     }
-    recordDebugInfo(reducedContentMessages);
+
+    if (currentTokenCount > maxInputTokens) {
+      // Deliberately names no single cause: this is reached from four exits (the round cap, content and
+      // history both spent, nothing droppable left, history unable to shrink) and only one of them is
+      // about system + prompt size. Images are the usual answer when nothing moved at all - they are
+      // assembled in at a flat rate and neither branch can touch them - so log the composition instead
+      // and let the reader identify which exit it was.
+      logger.warn(
+        `Final safety pass could not bring the payload under maxInputTokens (${currentTokenCount} > ${maxInputTokens}). ` +
+          `Remaining: ${systemMessages.length} system, ${processedPreviousMessages.length} history, ` +
+          `${reducedContentMessages.length} content, ${imageMessages.length} image message(s) plus the user prompt` +
+          (lastRatio === null
+            ? ', with nothing shrinkable to measure.'
+            : `, at ${lastRatio.toFixed(2)} real tokens per estimated token.`)
+      );
+    }
+
     // Ensure tool_use/tool_result pairing integrity after truncation
-    return ensureToolPairingIntegrity(truncatedMessages, logger);
+    return {
+      messages: ensureToolPairingIntegrity(assemble(reducedContentMessages, processedPreviousMessages), logger),
+      messageTruncation: buildDebugInfo(reducedContentMessages),
+      injectedBlocks,
+    };
   }
 
   const VERBOSE_MESSAGE_BUILDING = process.env.VERBOSE_MESSAGE_BUILDING === 'true';
@@ -2197,15 +2835,10 @@ export async function buildAndSortMessages(
     logger.log('=== End of Verbose Message Building Log ===');
   }
 
-  recordDebugInfo(processedContentMessages);
-
   // Ensure tool_use/tool_result pairing integrity after any truncation
-  return ensureToolPairingIntegrity(messages, logger);
-}
-
-/**
- * Returns the debug info populated by the most recent buildAndSortMessages call.
- */
-export function getLastBuildDebugInfo(): ContextDebugInfo['messageTruncation'] | null {
-  return (buildAndSortMessages as any).lastDebugInfo?.messageTruncation || null;
+  return {
+    messages: ensureToolPairingIntegrity(messages, logger),
+    messageTruncation: buildDebugInfo(processedContentMessages),
+    injectedBlocks,
+  };
 }

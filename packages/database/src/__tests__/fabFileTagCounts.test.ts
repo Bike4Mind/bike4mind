@@ -18,6 +18,8 @@ describe('FabFileRepository.countFilesByTagForUser', () => {
   const userId = 'tag-counts-user';
   const otherUserId = 'someone-else';
   const OPTIONS = { userGroups: [], dataLakeTags: [] };
+  // GET /api/files/tags/counts's actual scope - the only caller that opts into the exclusion.
+  const OPTIONS_EXCLUDE_PERSONAL = { ...OPTIONS, excludePersonalShares: true };
 
   const seed = async (tags: string[], overrides: Record<string, unknown> = {}): Promise<string> => {
     const doc = await FabFile.create({
@@ -99,6 +101,89 @@ describe('FabFileRepository.countFilesByTagForUser', () => {
     await seed(['invoices'], { userId: otherUserId });
 
     expect(await countOf('invoices', OPTIONS)).toBe(0);
+  });
+
+  // The orphan-bucket regression: a tag the caller can never rewrite (they don't own the file)
+  // must not keep counting once the caller's own tag by that name is gone, or WORKSPACES shows
+  // a bucket that renaming/deleting their tag can never clear. Only a caller that opts into
+  // excludePersonalShares gets this - see the next test for the default (opted-out) behavior.
+  it('does not count a tag surviving only on a file merely shared with the caller, when excluded', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: 'invoices', strength: 1 }],
+      users: [{ userId, permissions: ['read'] }],
+    });
+
+    expect(await countOf('invoices', OPTIONS_EXCLUDE_PERSONAL)).toBe(0);
+  });
+
+  // listFileTags (GET /api/files/tags, backing the TagSidebar and "Shared with me" view) calls
+  // this WITHOUT excludePersonalShares, so its fileCount must keep agreeing with the file list -
+  // including a file reachable only via a personal share. This is the regression a human review
+  // caught: the exclusion was originally hardcoded, silently changing listFileTags's count too.
+  it('still counts a tag on a personally-shared file when excludePersonalShares is not set', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: 'invoices', strength: 1 }],
+      users: [{ userId, permissions: ['read'] }],
+    });
+
+    expect(await countOf('invoices', OPTIONS)).toBe(1);
+  });
+
+  // Regression guard: the exclusion must be scoped to personal shares only - a group-shared
+  // file's tag still has to count, since a group workspace is the caller's own, not orphanable.
+  it('still counts a tag on a file shared via group access', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'group-shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: 'reports', strength: 1 }],
+      groups: [{ groupId: 'group-1', permissions: ['read'] }],
+    });
+
+    expect(await countOf('reports', { userGroups: ['group-1'], dataLakeTags: [], excludePersonalShares: true })).toBe(
+      1
+    );
+  });
+
+  // A file can be BOTH shared 1:1 AND reachable another way - the exclusion must not swallow
+  // that other, legitimate arm just because a personal share is also present.
+  it('still counts a file that is shared 1:1 AND group-shared, via the group arm', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'both-shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: 'contracts', strength: 1 }],
+      users: [{ userId, permissions: ['read'] }],
+      groups: [{ groupId: 'group-1', permissions: ['read'] }],
+    });
+
+    expect(await countOf('contracts', { userGroups: ['group-1'], dataLakeTags: [], excludePersonalShares: true })).toBe(
+      1
+    );
+  });
+
+  it('still counts a file that is shared 1:1 AND carries a data-lake meta-tag, via the data-lake arm', async () => {
+    const lakeTag = 'datalake:acme:handbook';
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'both-shared-lake.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: lakeTag, strength: 1 }],
+      users: [{ userId, permissions: ['read'] }],
+    });
+
+    expect(await countOf(lakeTag, { userGroups: [], dataLakeTags: [lakeTag], excludePersonalShares: true })).toBe(1);
   });
 
   it('omits a tag no live file carries rather than reporting it as zero', async () => {
@@ -245,5 +330,144 @@ describe('FabFileRepository.countUniqueFilesByNamespaceForUser', () => {
     await seed(['clients:acme'], { userId: otherUserId });
 
     expect(await countOf('clients')).toBe(0);
+  });
+
+  // Mirrors the countFilesByTagForUser orphan-bucket regression: the two must move in lockstep
+  // (see this function's own doc comment) or a namespace disappears from one count but not the
+  // other, rendering a workspace row with the wrong size. Only a caller opting into
+  // excludePersonalShares gets this - the next test pins the default (opted-out) behavior.
+  it('does not count a namespace surviving only on a file merely shared with the caller, when excluded', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: 'clients:acme', strength: 1 }],
+      users: [{ userId, permissions: ['read'] }],
+    });
+
+    expect(await countOf('clients', { userGroups: [], dataLakeTags: [], excludePersonalShares: true })).toBe(0);
+  });
+
+  // GET /api/files/tags does not opt in, so a personally-shared file's namespace must still count.
+  it('still counts a namespace on a personally-shared file when excludePersonalShares is not set', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: 'clients:acme', strength: 1 }],
+      users: [{ userId, permissions: ['read'] }],
+    });
+
+    expect(await countOf('clients', { userGroups: [], dataLakeTags: [] })).toBe(1);
+  });
+
+  it('still counts a namespace on a file shared via group access', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'group-shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: 'clients:acme', strength: 1 }],
+      groups: [{ groupId: 'group-1', permissions: ['read'] }],
+    });
+
+    expect(await countOf('clients', { userGroups: ['group-1'], dataLakeTags: [], excludePersonalShares: true })).toBe(
+      1
+    );
+  });
+
+  it('still counts a namespace on a file that is shared 1:1 AND group-shared, via the group arm', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'both-shared.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: 'clients:acme', strength: 1 }],
+      users: [{ userId, permissions: ['read'] }],
+      groups: [{ groupId: 'group-1', permissions: ['read'] }],
+    });
+
+    expect(await countOf('clients', { userGroups: ['group-1'], dataLakeTags: [], excludePersonalShares: true })).toBe(
+      1
+    );
+  });
+
+  // Test asymmetry a human review flagged: the tag-count sibling has a 1:1-share + data-lake
+  // combination test; this function's doc comment says the two move in lockstep, so it needs one.
+  it('still counts a namespace on a file that is shared 1:1 AND carries a data-lake meta-tag, via the data-lake arm', async () => {
+    await FabFile.create({
+      userId: otherUserId,
+      fileName: 'both-shared-lake.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: [{ name: LAKE_TAG, strength: 1 }],
+      users: [{ userId, permissions: ['read'] }],
+    });
+
+    expect(await countOf('datalake', { userGroups: [], dataLakeTags: [LAKE_TAG], excludePersonalShares: true })).toBe(
+      1
+    );
+  });
+});
+
+/**
+ * The single-tag counterpart. It queries the same `tags.name` data as the tag-lifecycle writes and
+ * carried the same unescaped, unanchored regex they did, so it is pinned here rather than left to
+ * re-seed the bug for its first caller - it has none yet.
+ */
+describe('FabFileRepository.countByUserIdAndTag', () => {
+  const userId = 'single-tag-count-user';
+
+  const seedFor = async (owner: string, tags: string[], overrides: Record<string, unknown> = {}) => {
+    await FabFile.create({
+      userId: owner,
+      fileName: 'seed.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+      tags: tags.map(name => ({ name, strength: 1 })),
+      ...overrides,
+    });
+  };
+
+  beforeEach(async () => {
+    await FabFile.deleteMany({});
+  });
+
+  it('counts only files carrying the whole name, not a neighbour containing it', async () => {
+    await seedFor(userId, ['test']);
+    await seedFor(userId, ['testing']);
+    await seedFor(userId, ['unit-test']);
+
+    expect(await fabFileRepository.countByUserIdAndTag(userId, 'test')).toBe(1);
+  });
+
+  it('counts casing variants as the same tag', async () => {
+    await seedFor(userId, ['Invoices']);
+    await seedFor(userId, ['invoices']);
+
+    expect(await fabFileRepository.countByUserIdAndTag(userId, 'INVOICES')).toBe(2);
+  });
+
+  it('treats regex metacharacters literally', async () => {
+    await seedFor(userId, ['.*']);
+    await seedFor(userId, ['anything']);
+
+    expect(await fabFileRepository.countByUserIdAndTag(userId, '.*')).toBe(1);
+  });
+
+  it('excludes soft-deleted files and other users', async () => {
+    await seedFor(userId, ['invoices']);
+    await seedFor(userId, ['invoices'], { deletedAt: new Date() });
+    await seedFor('someone-else', ['invoices']);
+
+    expect(await fabFileRepository.countByUserIdAndTag(userId, 'invoices')).toBe(1);
+  });
+
+  it('reports zero for an empty name rather than counting everything', async () => {
+    await seedFor(userId, ['invoices']);
+
+    expect(await fabFileRepository.countByUserIdAndTag(userId, '')).toBe(0);
   });
 });

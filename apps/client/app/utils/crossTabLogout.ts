@@ -26,7 +26,7 @@ export interface CrossTabLocation {
  * Decide where a background tab should navigate when the access-token storage entry
  * changes in another tab (the 'storage' event only fires cross-tab). Returns the URL
  * for window.location.replace, or null when no redirect is warranted (the entry still
- * holds a valid accessToken - e.g. a cross-tab token refresh). Pure so the cross-tab
+ * reports an active session - e.g. the other tab just signed in). Pure so the cross-tab
  * logout branch can be unit-tested without rendering the provider tree.
  */
 export function resolveCrossTabRedirect(newValue: string | null, location: CrossTabLocation): string | null {
@@ -44,7 +44,7 @@ export function resolveCrossTabRedirect(newValue: string | null, location: Cross
     return '/login';
   }
 
-  let parsed: { state?: { accessToken?: string | null; expired?: boolean; expiredReason?: string | null } };
+  let parsed: { state?: { hasSession?: boolean; expired?: boolean; expiredReason?: string | null } };
   try {
     parsed = JSON.parse(newValue);
   } catch {
@@ -52,13 +52,15 @@ export function resolveCrossTabRedirect(newValue: string | null, location: Cross
     return '/login';
   }
 
-  // A truthy accessToken means the other tab is still authenticated (e.g. it just
-  // refreshed the token) - nothing to do in this tab.
-  if (parsed?.state?.accessToken) {
+  // hasSession means the other tab is still authenticated (e.g. it just signed in) - nothing to
+  // do in this tab. It replaces the persisted accessToken this used to read: no credential is
+  // written to localStorage any more, so a plain token refresh now produces no storage event at
+  // all and only genuine session-state changes reach this function.
+  if (parsed?.state?.hasSession) {
     return null;
   }
 
-  // Tokens are cleared (and we're on a protected page - public paths returned above).
+  // The session is over (and we're on a protected page - public paths returned above).
   // Only an expired: true payload with a known reason gets the tailored ?error= UX; a
   // voluntary logout (expired: false / unknown reason) gets a plain /login with no toast.
   const reason = parsed?.state?.expired === true ? parsed?.state?.expiredReason : null;

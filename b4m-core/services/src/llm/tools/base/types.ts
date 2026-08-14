@@ -78,10 +78,16 @@ export interface ToolContext {
     };
     // Extended db adapters for tools that need them
     fabfiles?: IFabFileRepository;
-    fabfilechunks?: Pick<IFabFileChunkRepository, 'findByFabFileId' | 'findVectorsByFabFileIds'>;
+    fabfilechunks?: Pick<
+      IFabFileChunkRepository,
+      'findByFabFileId' | 'findVectorsByFabFileIds' | 'findTextsByFabFileId' | 'countByFabFileId'
+    >;
     users?: Pick<IUserRepository, 'findById'>;
     projects?: IProjectRepository;
-    dataLakes?: Pick<IDataLakeRepository, 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements'>;
+    dataLakes?: Pick<
+      IDataLakeRepository,
+      'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag'
+    >;
     /** Optional skill repository - present when the host wires `/api/skills`. Used by the `skill` LLM tool. */
     skills?: Pick<ISkillRepository, 'findAccessibleByNameForUser' | 'listAccessibleInvocableForUser'>;
     /**
@@ -97,8 +103,12 @@ export interface ToolContext {
      * where recording degrades to a no-op.
      */
     usageEvents?: Pick<IUsageEventRepository, 'record'>;
-    /** Owner lookup for usage attribution; findById is all the recorder needs. */
-    organizations?: Pick<IOrganizationRepository, 'findById'>;
+    /**
+     * Owner lookup for usage attribution (`findById`) plus the org-membership resolution the
+     * data-lake retrieval resolver needs internally (`findMembershipOrgIds`, #1674). Required -
+     * an absent resolver would silently drop every org lake from retrieval.
+     */
+    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds'>;
   };
   /**
    * Caller's RESOLVED entitlement keys (subscription- + tag-derived), resolved app-side
@@ -122,13 +132,32 @@ export interface ToolContext {
    * consult owner-wide access (getDynamicDataLakeAccess). Absent on all non-agent paths.
    *
    * INVARIANT: any NEW tool that reads db.fabfiles / db.fabfilechunks must honor kbScope
-   * (reject / restrict to scope.fileIds) - today only search_knowledge_base and
-   * retrieve_knowledge_content do, and the embed surface stays safe only because its tool
-   * resolver excludes every other fabfiles-reading tool. Enforcement is per-tool, not
+   * (reject / restrict to scope.fileIds) - today only search_knowledge_base,
+   * retrieve_knowledge_content and count_knowledge_base do, and the embed surface stays safe only
+   * because its tool resolver excludes every other fabfiles-reading tool. Enforcement is per-tool, not
    * per-repository, so a new fabfiles tool added to a scoped surface without this handling
    * would silently read unscoped.
    */
   kbScope?: KbScope;
+  /**
+   * FabFile ids attached to THIS session whose text was actually delivered into this turn's
+   * prompt (the `sessionKnowledgeIds` subset that is both NOT deferred to retrieval and NOT
+   * silently dropped by `processFabFilesServer` - see `buildDataSources`'s
+   * `actuallyInlinedKnowledgeIds`). The knowledge tools use this to tell a caller "that file's
+   * content is already above" without lying about a deferred OR undeliverable (audio,
+   * unserveable image, unsupported/corrupted file) attachment. Absent/empty on non-chat surfaces
+   * (agent executor, embed) where nothing is inlined this way.
+   */
+  inlinedAttachmentIds?: string[];
+  /**
+   * Subset of `inlinedAttachmentIds` whose ENTIRE content is in the prompt - excludes a cosine
+   * excerpt or a raw-content read truncated to fit the token budget (see `buildDataSources`'s
+   * `fullyInlinedAttachmentIds`). A file can be in `inlinedAttachmentIds` but NOT here, meaning
+   * only part of it reached the prompt; only THIS set is safe to tell a caller "you already have
+   * everything, no need to search/retrieve further" (#1163 review: that claim was being made for
+   * a merely-inlined, possibly-partial file).
+   */
+  fullyInlinedAttachmentIds?: string[];
   storage: Pick<BaseStorage, 'upload' | 'getSignedUrl' | 'getPublicUrl'>;
   imageGenerateStorage: Pick<BaseStorage, 'upload' | 'getSignedUrl' | 'getPublicUrl'>;
   statusUpdate: (q: Partial<IChatHistoryItemDocument>, status?: string) => Promise<void>;

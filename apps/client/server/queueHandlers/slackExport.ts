@@ -1,7 +1,8 @@
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { z } from 'zod';
 import { slackDevWorkspaceRepository, slackExportJobRepository } from '@bike4mind/database';
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
+import { createS3Client } from '@bike4mind/fab-pipeline';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { Resource } from 'sst';
@@ -549,7 +550,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     const filename = `slack-${safeChannelName}-${dateSuffix}.${fileExtension}`;
     const s3Key = `exports/${userId}/${jobId}/${filename}`;
 
-    const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-2' });
+    const s3Client = createS3Client({ region: process.env.AWS_REGION || 'us-east-2' });
     const s3Bucket = Resource.slackExportBucket.name;
 
     await s3Client.send(

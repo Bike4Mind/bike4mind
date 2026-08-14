@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { PromptMeta } from '@bike4mind/common';
@@ -83,5 +83,70 @@ describe('PromptMetaInspector warnings', () => {
     render(<PromptMetaInspector />, { wrapper: TestWrapper });
 
     expect(screen.getByTestId('prompt-meta-error-item').textContent).toBe(err);
+  });
+});
+
+describe('PromptMetaInspector tools reporting: absent is not empty', () => {
+  // `tools` is not part of PromptMetaZodSchema, so it is routinely absent. The report used to read
+  // `tools?.length > 0`, which is falsy for undefined, and printed a confident "NONE (empty array)"
+  // with count 0 - accusing the tool pipeline when the real signal was "nothing was captured".
+  const withTools = (tools?: unknown) => show({ ...(tools === undefined ? {} : { tools }) } as Partial<PromptMeta>);
+
+  const copiedMarkdown = () => {
+    const writeText = vi.fn();
+    Object.assign(navigator, { clipboard: { writeText } });
+    render(<PromptMetaInspector />, { wrapper: TestWrapper });
+    fireEvent.click(screen.getByTestId('prompt-meta-copy-md-btn'));
+    return writeText.mock.calls[0][0] as string;
+  };
+
+  beforeEach(() => {
+    usePromptMetaInspector.getState().setPromptMeta(null);
+  });
+
+  it('reports an absent tools field as not captured, never as an empty array', () => {
+    withTools(undefined);
+    const md = copiedMarkdown();
+
+    expect(md).toContain('**Tools Sent to Model**: not captured (promptMeta.tools absent)');
+    expect(md).toContain('**Tools Count**: not captured');
+    expect(md).not.toContain('NONE (empty array)');
+    // The Issues section must point at the real cause instead of staying silent, which is what made
+    // an uncaptured report indistinguishable from a healthy tool-free one.
+    expect(md).toContain('NOT CAPTURED');
+  });
+
+  it('does not call a genuinely empty tools array CRITICAL - forced retrieval runs tool-free', () => {
+    withTools([]);
+    const md = copiedMarkdown();
+
+    expect(md).toContain('**Tools Sent to Model**: NONE (empty array)');
+    expect(md).toContain('**Tools Count**: 0');
+    expect(md).not.toContain('CRITICAL');
+    expect(md).toContain('forced knowledge retrieval');
+  });
+
+  it('still lists tool names when tools were captured', () => {
+    withTools([{ toolSchema: { name: 'search_knowledge_base' } }, { name: 'web_search' }]);
+    const md = copiedMarkdown();
+
+    expect(md).toContain('**Tools Sent to Model**: search_knowledge_base, web_search');
+    expect(md).toContain('**Tools Count**: 2');
+    expect(md).not.toContain('not captured');
+  });
+
+  it('distinguishes absent from empty in the panel, and flags neither as danger', () => {
+    withTools(undefined);
+    const { unmount } = render(<PromptMetaInspector />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('prompt-meta-tools-count-chip').textContent).toBe('not captured');
+    expect(screen.getByTestId('prompt-meta-tools-absent-chip')).toBeTruthy();
+    expect(screen.queryByTestId('prompt-meta-tools-empty-chip')).toBeNull();
+    unmount();
+
+    withTools([]);
+    render(<PromptMetaInspector />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('prompt-meta-tools-count-chip').textContent).toBe('0 tools');
+    expect(screen.getByTestId('prompt-meta-tools-empty-chip')).toBeTruthy();
+    expect(screen.queryByTestId('prompt-meta-tools-absent-chip')).toBeNull();
   });
 });

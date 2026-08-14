@@ -1,4 +1,4 @@
-import { NO_TEMPERATURE_MODELS, REASONING_SUPPORTED_MODELS, type ModelInfo } from '@bike4mind/common';
+import { ChatModels, NO_TEMPERATURE_MODELS, REASONING_SUPPORTED_MODELS, type ModelInfo } from '@bike4mind/common';
 
 /**
  * Thinking parameter shapes for the Anthropic Messages API.
@@ -30,6 +30,20 @@ export const ADAPTIVE_THINKING_MAX_TOKENS_FLOOR = 64_000;
 export const THINKING_ANSWER_HEADROOM_TOKENS = 1000;
 
 /**
+ * Reasoning-inside-the-budget ids that none of the shape checks below can infer.
+ * Bedrock's Kimi always reasons, but it is not Anthropic-adaptive, does not take
+ * `reasoning_effort`, and sends plain `max_tokens` - so it looks like an ordinary
+ * model at every seam we can inspect. Bedrock copies the monologue inline into
+ * `content` (see bedrockBackend/moonshot.ts) and caps output at 16K, so the floor
+ * resolves to that entire cap, which is the only value leaving room for an answer
+ * after a long trace.
+ */
+const REASONS_WITHIN_OUTPUT_BUDGET_IDS: ReadonlySet<string> = new Set<string>([
+  ChatModels.KIMI_K2_THINKING_BEDROCK,
+  ChatModels.KIMI_K2_5_BEDROCK,
+]);
+
+/**
  * Whether the model spends reasoning tokens inside its output budget on every turn,
  * which is what makes a small budget produce an empty visible reply rather than a
  * short one. Provider-agnostic on purpose: the trap is identical whether the tokens
@@ -47,6 +61,7 @@ export const THINKING_ANSWER_HEADROOM_TOKENS = 1000;
 export function reasonsWithinOutputBudget(modelInfo: ModelInfo): boolean {
   if (modelInfo.thinkingStyle === 'adaptive') return true;
   if (REASONING_SUPPORTED_MODELS.has(modelInfo.id)) return true;
+  if (REASONS_WITHIN_OUTPUT_BUDGET_IDS.has(modelInfo.id)) return true;
   return modelInfo.dispatchProfile?.maxTokensParam === 'max_completion_tokens' && modelInfo.can_think === true;
 }
 
@@ -62,8 +77,8 @@ export function reasonsWithinOutputBudget(modelInfo: ModelInfo): boolean {
  * to the model's own cap, since over-requesting 400s the whole turn.
  *
  * Models that reason inside the output budget default to
- * ADAPTIVE_THINKING_MAX_TOKENS_FLOOR: a small default can be consumed entirely by
- * reasoning, leaving an empty visible reply.
+ * ADAPTIVE_THINKING_MAX_TOKENS_FLOOR, clamped to their own cap: a small default can
+ * be consumed entirely by reasoning, leaving an empty visible reply.
  */
 export function resolveOutputMaxTokens({
   requested,

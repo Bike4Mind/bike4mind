@@ -3,7 +3,7 @@
  * This bypasses the subscription flow for local development testing
  */
 
-import { organizationRepository } from '@bike4mind/database';
+import { organizationRepository, userRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { isDevelopment } from '@server/utils/config';
@@ -37,7 +37,9 @@ const handler = baseApi().post<Request<{}, {}, z.infer<typeof CreateDevOrgSchema
     {
       db: {
         organizations: organizationRepository,
+        users: userRepository,
       },
+      logger: req.logger,
     }
   );
 

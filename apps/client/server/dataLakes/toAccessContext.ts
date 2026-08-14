@@ -1,4 +1,5 @@
 import type { AccessContext } from '@bike4mind/common';
+import { organizationRepository } from '@bike4mind/database';
 import { getRequestEntitlements, type EntitlementRequest } from '@server/entitlements';
 
 /**
@@ -19,8 +20,12 @@ import { getRequestEntitlements, type EntitlementRequest } from '@server/entitle
  * from multiple handlers within one request costs a single subscription query.
  *
  * Admins skip the resolution entirely: the gates (`canAccessLake`/`findAccessible`) grant an
- * admin immediately and never consult `entitlementKeys`, so the subscription read would be
- * pure overhead on every admin data-lake request.
+ * admin immediately and never consult `entitlementKeys` or `administeredOrgIds`, so the extra reads
+ * would be pure overhead on every admin data-lake request.
+ *
+ * `administeredOrgIds` is the caller's org-admin set (billing owner / manager / appointed admin),
+ * the input to the org-manageable rung in `canManageLake`: an org admin may manage any lake scoped
+ * to one of these orgs. Resolved once here (non-admins only) so every management gate agrees.
  */
 export async function toAccessContext(req: EntitlementRequest): Promise<AccessContext> {
   const user = req.user!;
@@ -29,7 +34,12 @@ export async function toAccessContext(req: EntitlementRequest): Promise<AccessCo
     userId: user.id,
     isAdmin,
     userTags: user.tags ?? [],
-    organizationId: user.organizationId ?? undefined,
+    // Authoritative membership set (owner + users[] ACL), resolved per request - NOT
+    // user.organizationId, the selected-org display preference (#1674). Resolved for admins
+    // too: the fallback-lake org prerequisite and findBySlug's own-org preference apply to
+    // admins as well, unlike the entitlement gates below.
+    organizationIds: await organizationRepository.findMembershipOrgIds(user.id),
     entitlementKeys: isAdmin ? [] : await getRequestEntitlements(req),
+    administeredOrgIds: isAdmin ? [] : await organizationRepository.findIdsWithAdminRights(user.id),
   };
 }

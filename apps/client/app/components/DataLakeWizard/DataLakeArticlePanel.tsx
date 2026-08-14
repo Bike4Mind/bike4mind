@@ -17,7 +17,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import StorageIcon from '@mui/icons-material/Storage';
 import { useGetFabFileContent } from '@client/app/hooks/data/fabFiles';
-import { useReprocessFabFile, useRemoveFileFromDataLake } from '@client/app/hooks/data/dataLakeWizard';
+import { useReprocessFabFile, useRemoveFileFromDataLake } from '@client/app/hooks/data/dataLakes';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
 import type { IFabFileDocument } from '@bike4mind/common';
 

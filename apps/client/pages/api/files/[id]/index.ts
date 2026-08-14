@@ -2,6 +2,7 @@ import { FileEvents, IFabFile, KnowledgeType } from '@bike4mind/common';
 import {
   changeStorageSize,
   dataLakeRepository,
+  dataLakeAccessGrantRepository,
   fabFileChunkRepository,
   fabFileRepository,
   fileTagRepository,
@@ -13,9 +14,12 @@ import {
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { NotFoundError } from '@bike4mind/utils';
+import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
+import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { findLakeAccessibleFabFile } from '@server/dataLakes';
+import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
 import { getFilesStorage } from '@server/utils/storage';
 import { Request } from 'express';
 import { Types } from 'mongoose';
@@ -67,15 +71,27 @@ const handler = baseApi()
 
     req.logger.updateMetadata({ userId, fileId: fabFileId });
 
+    // Same guard the DELETE branch below carries. The round trip matters on top of isValid():
+    // isValid() also accepts any 12-character string, which then coerces to an unrelated id.
+    if (!Types.ObjectId.isValid(fabFileId) || new Types.ObjectId(fabFileId).toString() !== fabFileId) {
+      return res.status(404).json({ msg: 'File not found' });
+    }
+
     // Data-lake membership is conferred by the lake's `datalake:*` meta-tag. Applying one is a
     // WRITE into that lake, so gate it with the same creator/admin check the remove path uses -
     // otherwise a read-only member could inject files via Send-to-Data-Lake.
+    //
+    // A `fileTagPrefix` content tag is membership too, but this route-level gate is NOT extended
+    // to cover it: it has no resolved file, so it cannot know the owner a prefix-arm join is
+    // anchored to. `reconcileLakeTags` (inside `updateFabFile` below) gates that join - a whole-
+    // array write can only ever join or preserve membership through either mechanism, never
+    // leave one; see that function's docstring.
     const candidateTagNames = [
       ...(req.body.tags?.map(t => t.name) ?? []),
       ...(req.body.primaryTag ? [req.body.primaryTag] : []),
     ];
     await dataLakeService.assertCanWriteDataLakeTags({ userId, isAdmin: !!req.user.isAdmin }, candidateTagNames, {
-      db: { dataLakes: dataLakeRepository },
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
     const updatedFabFile = await withTransaction(async () => {
@@ -99,7 +115,11 @@ const handler = baseApi()
             error: req.body.error,
           },
           {
-            db: { fabFiles: fabFileRepository, dataLakes: dataLakeRepository },
+            db: {
+              fabFiles: fabFileRepository,
+              dataLakes: dataLakeRepository,
+              dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            },
             logger: req.logger,
             storage: {
               upload: (filepath, content, option) => {
@@ -140,26 +160,24 @@ const handler = baseApi()
       return res.status(404).json({ msg: 'File not found' });
     }
 
-    // Only decrement tag counts for owned files (shared file "delete" = unshare, not removal)
+    // Only touch tag activity for owned files (shared file "delete" = unshare, not removal)
     const fabFile = await fabFileRepository.findById(fabFileId);
     const isOwned = fabFile?.userId === userId;
     if (isOwned && fabFile?.tags?.length) {
       for (const tag of fabFile.tags) {
         try {
           if (tag?.name) {
-            await fileTagRepository.incrementFileCountBy({ name: tag.name, userId }, -1);
+            await fileTagRepository.touchLastActivityBy({ name: tag.name, userId });
           }
         } catch (tagError) {
-          req.logger.error('Error updating tag count during single file delete:', { tagError, tag });
+          req.logger.error('Error touching tag activity during single file delete:', { tagError, tag });
         }
       }
     }
 
     let sizeToDeduct = 0;
 
-    let deleteAction: string = 'not_found';
-
-    await withTransaction(async session => {
+    const deleteAction = await withTransaction(async session => {
       const result = await fabFilesService.deleteFabFile(
         userId,
         { id: fabFileId },
@@ -174,10 +192,9 @@ const handler = baseApi()
           onDeleteComplete: async (_fabFile, size) => {
             sizeToDeduct = size;
           },
+          searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
         }
       );
-
-      deleteAction = result.action;
 
       if (result.action === 'deleted') {
         await logEvent(
@@ -194,6 +211,8 @@ const handler = baseApi()
           { ability: req.ability, session }
         );
       }
+
+      return result.action;
     });
 
     // Deduct storage size after successful deletion
@@ -214,7 +233,19 @@ const handler = baseApi()
       }
     }
 
-    return res.json({ msg: 'Fab file deleted', action: deleteAction });
+    // After the transaction, so the aggregation sees the committed `deletedAt`. The shared helper
+    // also backs bulk-delete; see it for why only the 'deleted' outcome moves lake membership.
+    if (deleteAction === 'deleted') {
+      await recomputeStatsForLakeTags(
+        (fabFile?.tags ?? []).map(tag => tag?.name),
+        { logger: req.logger }
+      );
+    }
+
+    return res.json({
+      msg: 'Fab file deleted',
+      action: fabFilesService.toPublicDeleteAction(deleteAction),
+    });
   });
 
 export const config = {

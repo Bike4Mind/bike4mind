@@ -4,6 +4,7 @@ import { CircularProgress, Container, Typography, Box } from '@mui/joy';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { resetRefreshPromise } from '@client/app/contexts/ApiContext';
+import { resetSessionBootstrap } from '@client/app/utils/sessionBootstrap';
 import { parseAuthParams } from '@client/app/utils/authParams';
 import { applyRedirect } from '@client/app/utils/authRedirect';
 import { trackSignupConversion } from '@client/app/utils/signupConversion';
@@ -13,7 +14,7 @@ const AuthSuccessPage = () => {
   const router = useRouter();
   const search = useSearch({ strict: false });
   const { setCurrentUser } = useUser();
-  const { setAccessToken, setRefreshToken } = useAccessToken();
+  const { setVerifiedSession } = useAccessToken();
   const hasProcessed = useRef(false);
 
   useEffect(() => {
@@ -23,9 +24,7 @@ const AuthSuccessPage = () => {
     hasProcessed.current = true;
 
     const handleAuthSuccess = async () => {
-      const { token, refreshToken, error, userId, isNewUser, signupMethod } = parseAuthParams(
-        search as Record<string, unknown>
-      );
+      const { token, error, userId, isNewUser, signupMethod } = parseAuthParams(search as Record<string, unknown>);
 
       if (error) {
         console.error('Authentication error:', error);
@@ -33,12 +32,14 @@ const AuthSuccessPage = () => {
         return;
       }
 
-      if (token && refreshToken && userId) {
+      if (token && userId) {
         try {
-          // Set the tokens - reset any stale refresh promise first
+          // Set the access token - reset any stale refresh promise first. The matching refresh
+          // token never reaches the client: the SSO callback set it as an HttpOnly cookie, which
+          // is also why it is no longer in this page's URL fragment.
           resetRefreshPromise();
-          setAccessToken(token as string);
-          setRefreshToken(refreshToken as string);
+          resetSessionBootstrap();
+          setVerifiedSession(token as string);
 
           const response = await fetch(`/api/users/${userId}`, {
             headers: {
@@ -82,7 +83,7 @@ const AuthSuccessPage = () => {
         // component instance after the hash has already been cleared by the first
         // mount. If the access token is already in the store, auth completed
         // successfully - redirect to the destination instead of showing an error.
-        // A user with a persisted (localStorage) token who reaches this page
+        // A user who already holds an in-memory access token and reaches this page
         // with no hash/error is also redirected rather than shown missing_tokens:
         // they hold a valid session, so forwarding them is the correct outcome.
         const { accessToken } = useAccessToken.getState();
@@ -96,7 +97,7 @@ const AuthSuccessPage = () => {
 
     handleAuthSuccess();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navigate, setCurrentUser, setAccessToken, setRefreshToken]);
+  }, [navigate, setCurrentUser, setVerifiedSession]);
 
   return (
     <Container

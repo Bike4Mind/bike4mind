@@ -45,7 +45,7 @@ describe('addFileToLake', () => {
     const adapters = makeAdapters();
 
     await expect(addFileToLake({ userId: 'stranger', isAdmin: false }, lake(), 'f1', adapters)).rejects.toThrow(
-      /only the creator can add files/i
+      /do not have permission to add files/i
     );
     expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
   });
@@ -98,7 +98,7 @@ describe('removeFileFromLake', () => {
     const adapters = makeAdapters();
 
     await expect(removeFileFromLake({ userId: 'stranger', isAdmin: false }, lake(), 'f1', adapters)).rejects.toThrow(
-      /only the creator can remove files/i
+      /do not have permission to remove files/i
     );
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
   });
@@ -108,6 +108,95 @@ describe('removeFileFromLake', () => {
 
     await expect(removeFileFromLake({ userId: 'root', isAdmin: true }, fallbackLake, 'f1', adapters)).rejects.toThrow(
       /built into the platform and is read-only/i
+    );
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('refuses even an admin clearing a prefixed tag on a file the lake creator does not own', async () => {
+    // Prefix-only (no meta-tag), owned by someone other than lake()'s creator ('owner'), so the
+    // outcome is decided entirely by the ownership conjunct, not the meta-tag arm.
+    const adapters = {
+      db: {
+        fabFiles: {
+          findById: vi
+            .fn()
+            .mockResolvedValue({ id: 'f1', userId: 'victim', tags: [{ name: 'lk:invoices', strength: 1 }] }),
+          pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
+        },
+      },
+    };
+
+    await expect(removeFileFromLake({ userId: 'root', isAdmin: true }, lake(), 'f1', adapters)).rejects.toThrow(
+      /not found in this data lake/i
+    );
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('refuses the lake creator removing a prefix-only file merely shared with them (#1040)', async () => {
+    // Same code path as the admin test above - ownsFile never reads file.users/file.groups - but
+    // spelled out for #1040's literal scenario: the ACTOR here is the lake's own creator (passes
+    // canManageLake trivially), and the file's owner shared it with them read/write. A share is
+    // not ownership, so the outcome is identical to the admin case.
+    const adapters = {
+      db: {
+        fabFiles: {
+          findById: vi.fn().mockResolvedValue({
+            id: 'f1',
+            userId: 'victim',
+            users: [{ userId: 'owner', permissions: ['read', 'write'] }],
+            tags: [{ name: 'lk:invoices', strength: 1 }],
+          }),
+          pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
+        },
+      },
+    };
+
+    await expect(removeFileFromLake(owner, lake(), 'f1', adapters)).rejects.toThrow(/not found in this data lake/i);
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('strips only the meta-tag, not a bystander prefix-matching tag, on a file the creator does not own', async () => {
+    // Admitted to inLake via the meta-tag arm only (e.g. an admin's addFileToLake added a
+    // stranger's file) - the read path's prefix arm never admitted this file since it is not
+    // owned by the lake's creator, so removal must not strip its coincidentally-matching tag.
+    const adapters = {
+      db: {
+        fabFiles: {
+          findById: vi.fn().mockResolvedValue({
+            id: 'f1',
+            userId: 'victim',
+            tags: [
+              { name: 'datalake:lake', strength: 1 },
+              { name: 'lk:invoices', strength: 1 },
+            ],
+          }),
+          pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
+        },
+      },
+    };
+
+    await removeFileFromLake({ userId: 'root', isAdmin: true }, lake(), 'f1', adapters);
+
+    expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake']);
+  });
+
+  it('ignores a legacy reserved-namespace fileTagPrefix rather than matching every other lake', async () => {
+    // A prefix inside datalake: (predates the create-time guard that now rejects it) must not
+    // treat an unrelated lake's meta-tag as this lake's own prefix-tagged content.
+    const reservedPrefixLake = lake({ fileTagPrefix: 'datalake:evil:' });
+    const adapters = {
+      db: {
+        fabFiles: {
+          findById: vi
+            .fn()
+            .mockResolvedValue({ id: 'f1', userId: 'owner', tags: [{ name: 'datalake:other', strength: 1 }] }),
+          pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
+        },
+      },
+    };
+
+    await expect(removeFileFromLake(owner, reservedPrefixLake, 'f1', adapters)).rejects.toThrow(
+      /not found in this data lake/i
     );
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
   });

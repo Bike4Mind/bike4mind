@@ -7,7 +7,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 // Track the real temp input files createTempFile produces so the cleanup
 // assertions can verify they are removed after the response.
 const tempFiles: string[] = [];
-const ZIP_BYTES = Buffer.from('PKZIPDATA');
+const ZIP_BYTES = Buffer.from('PK\x03\x04ZIPDATA');
 
 // baseApi wraps the handler; mock it as a thin pass-through so the test
 // focuses on the response body + cleanup behaviour.

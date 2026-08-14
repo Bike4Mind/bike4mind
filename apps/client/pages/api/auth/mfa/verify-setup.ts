@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService, userService } from '@bike4mind/services';
 import { userRepository, authSessionRepository } from '@bike4mind/database';
-import { issueSessionForRequest } from '@server/auth/issueSession';
+import { issueBrowserSession } from '@server/auth/issueSession';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
 import * as z from 'zod';
@@ -54,11 +54,11 @@ const handler = baseApi()
           db: { users: userRepository, authSessions: authSessionRepository },
           logger: req.logger,
         });
-        const { accessToken, refreshToken } = await issueSessionForRequest(req, result.user.id, {
+        const { accessToken } = await issueBrowserSession(req, res, result.user.id, {
           createdVia: 'mfa-setup',
           tokenVersion: newTokenVersion,
         });
-        const tokens = { accessToken, refreshToken };
+        const tokens = { accessToken };
 
         await logAuthAudit(req, { userId: result.user.id, event: 'mfa_enrolled' });
 

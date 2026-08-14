@@ -1,10 +1,19 @@
 import { CreateFabFileRequestInputType, FileEvents, Permission } from '@bike4mind/common';
-import { adminSettingsRepository, dataLakeRepository, FabFile, User, withTransaction } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  dataLakeBatchRepository,
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+  FabFile,
+  User,
+  withTransaction,
+} from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError } from '@server/utils/errors';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { getFilesStorage } from '@server/utils/storage';
 import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
 
@@ -23,13 +32,24 @@ const handler = baseApi()
 
       const params = createFabFileSchema.parse(req.body);
 
-      // Applying a lake's `datalake:*` meta-tag at creation is a WRITE into that lake - gate it
-      // with the creator/admin check so this path can't be used to bypass the Send-to-Data-Lake
-      // authorization and inject files into a lake the caller only reads.
+      // Same feature gate as the presign siblings: when this create is bound to a data lake
+      // batch, the feature must actually be on.
+      if (params.batchId) {
+        const enabled = await adminSettingsRepository.getSettingsValue('EnableDataLakes');
+        if (!enabled) throw new ForbiddenError('Feature not available', { code: 'FEATURE_DISABLED' });
+      }
+
+      // Applying a lake's `datalake:*` meta-tag at creation is a WRITE into that lake - gate it so
+      // this path can't be used to bypass the Send-to-Data-Lake authorization and inject files into
+      // a lake the caller only reads. Full actor (ctx) + the grant repo so a transferred owner /
+      // curator / org admin can create-into their lake too, matching the presign doors.
+      const ctx = await toAccessContext(req);
       await dataLakeService.assertCanWriteDataLakeTags(
-        { userId: user.id, isAdmin: !!user.isAdmin },
+        ctx,
         (params.tags ?? []).map(t => t.name),
-        { db: { dataLakes: dataLakeRepository } }
+        {
+          db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+        }
       );
 
       // A file joining a lake must also land under that lake's content prefix, or it is
@@ -38,6 +58,14 @@ const handler = baseApi()
         db: { dataLakes: dataLakeRepository },
         logger: req.logger,
       });
+
+      // Verify batch ownership before stamping - batchId comes from the body (IDOR otherwise).
+      // Shared with the presign routes (see assertBatchOwnership).
+      if (params.batchId) {
+        await dataLakeService.assertBatchOwnership(user.id, params.batchId, {
+          db: { batches: dataLakeBatchRepository },
+        });
+      }
 
       const result = await withTransaction(async () => {
         return fabFilesService.createFabFile(
@@ -48,6 +76,7 @@ const handler = baseApi()
               adminSettings: adminSettingsRepository,
               fabFiles: FabFile,
               users: User,
+              dataLakes: dataLakeRepository,
             },
             storage: {
               upload: async (filepath, content, option) => {
