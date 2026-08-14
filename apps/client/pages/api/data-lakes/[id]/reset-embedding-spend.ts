@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
-import { dataLakeRepository } from '@bike4mind/database';
+import { dataLakeRepository, dataLakeSpendNotificationRepository } from '@bike4mind/database';
 import { ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { Request } from 'express';
 
@@ -27,6 +27,13 @@ const handler = baseApi()
     const { id } = req.query as { id: string };
     const reset = await dataLakeRepository.resetEmbeddingSpend(id);
     if (!reset) throw new NotFoundError('Data lake not found');
+
+    // Re-arm the lake-scope spend notice: it's keyed on the configured budget value (see
+    // spendNotificationKeys.ts), which a reset doesn't change, so without this a zeroed lake
+    // would never warn again.
+    await dataLakeSpendNotificationRepository
+      .deleteForLake(id)
+      .catch(err => req.logger?.warn?.(`[spendGate] failed to re-arm spend notice for lake ${id}: ${err}`));
 
     req.logger?.log?.(`[spendGate] admin ${req.user.id} reset embeddingSpendMicroUsd for lake ${id}`);
     res.status(200).json({ ok: true });
