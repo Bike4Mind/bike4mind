@@ -2796,9 +2796,13 @@ describe('ChatCompletionProcess', () => {
 
     const TOOL_SCHEMA_TOKENS = 3000;
 
-    const runRecoveryScenario = async (opts: { recoveryTokenCounts: number[] }): Promise<any> => {
+    const runRecoveryScenario = async (opts: {
+      recoveryTokenCounts: number[];
+      toolSchemaTokens?: number;
+    }): Promise<any> => {
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(manyMcpTools as any);
       const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
+      const toolSchemaTokens = opts.toolSchemaTokens ?? TOOL_SCHEMA_TOKENS;
 
       mockedCalculateTotalTokenLength.mockReset();
       // Initial totals: a huge messages total forces the recovery loop to trigger regardless of the
@@ -2809,7 +2813,7 @@ describe('ChatCompletionProcess', () => {
 
       mockTokenizer.countTokens
         .mockReset()
-        .mockImplementation(async (text: any) => (typeof text === 'string' ? TOOL_SCHEMA_TOKENS : 7));
+        .mockImplementation(async (text: any) => (typeof text === 'string' ? toolSchemaTokens : 7));
       mockedUsdToCredits.mockImplementation(realUsdToCredits);
       mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
 
@@ -2859,6 +2863,23 @@ describe('ChatCompletionProcess', () => {
         recoveryTokenCounts: [50_000, 40_000, 50_000, 40_000],
       });
 
+      expect(updateCall?.type).toBe('error');
+      expect(updateCall?.reply).toMatch(/too large for/);
+    });
+
+    it('never attempts a rebuild once tool schemas alone already exceed the safe budget', async () => {
+      // When toolSchemaTokens >= maxSafeInputTokens, the reserved budget (maxSafeInputTokens -
+      // toolSchemaTokens) is <= 0, so a rebuild attempt would call buildAndSortMessages with an
+      // invalid budget and log at error severity for an outcome that is already known unrecoverable.
+      // The loop skips the attempt entirely instead: buildCalls stays at 1 (the initial firstBuild),
+      // and no recovery iteration (no dropOldestHistoryTurn, no rebuild) ever runs.
+      const HUGE_TOOL_SCHEMA_TOKENS = 100_000;
+      const { updateCall, buildCalls } = await runRecoveryScenario({
+        recoveryTokenCounts: [],
+        toolSchemaTokens: HUGE_TOOL_SCHEMA_TOKENS,
+      });
+
+      expect(buildCalls.length).toBe(1);
       expect(updateCall?.type).toBe('error');
       expect(updateCall?.reply).toMatch(/too large for/);
     });

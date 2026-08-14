@@ -2868,7 +2868,16 @@ export class ChatCompletionProcess {
         // the estimate-layer boundary keeps advancing normally on subsequent turns.
         let effectiveTotalTokens = totalTokens;
         let effectiveHistoryTokens = historyTokens;
-        if (inputTokens > maxSafeInputTokens && previousMessages.length > 0) {
+        if (
+          inputTokens > maxSafeInputTokens &&
+          previousMessages.length > 0 &&
+          // If tool schemas alone already consume the whole budget, maxSafeInputTokens -
+          // toolSchemaTokens is <= 0 and no amount of history shedding can recover: skip straight to
+          // the hard-overflow check below instead of calling buildAndSortMessages with an invalid
+          // budget, which would log at error severity for an outcome this branch already knows is
+          // unrecoverable.
+          toolSchemaTokens < maxSafeInputTokens
+        ) {
           let recoveryHistory: IMessage[] = previousMessages;
           let shedTurns = 0;
           while (inputTokens > maxSafeInputTokens) {
