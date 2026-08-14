@@ -104,6 +104,27 @@ describe('transferLakeOwnership', () => {
     );
   });
 
+  it('still reports the failed stamp when no logger is wired, rather than going silent', async () => {
+    // `logger` is optional on the adapters, so a caller that omits it must not turn a swallowed
+    // failure into no output at all - the only other symptom is a stamp naming an older, smaller edit.
+    const { adapters, update } = makeAdapters();
+    update.mockRejectedValueOnce(new Error('mongo down'));
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      await expect(transferLakeOwnership(owner, 'lake1', 'newOwner', adapters)).resolves.toEqual({
+        newOwnerUserId: 'newOwner',
+        demotedUserIds: ['creator'],
+      });
+      expect(spy).toHaveBeenCalledWith(
+        expect.stringContaining('actor stamp did not persist'),
+        expect.objectContaining({ dataLakeId: 'lake1' })
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('does not write the lake at all when the actor has no id to attribute', async () => {
     // The stamp write exists only to record WHO; with nobody to record it must not cost a round
     // trip, and it must not clear a prior stamp that WAS attributable.
