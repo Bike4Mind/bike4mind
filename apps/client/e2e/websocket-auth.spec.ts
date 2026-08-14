@@ -136,9 +136,11 @@ async function subscribeRoundTrip(
               subscriptionId,
               collectionName: 'users',
               query: { _id: id },
-              // No `fields`: the server adds exclusion-based fieldLimits for `users` (password etc),
-              // and an inclusion projection here would mix inclusions+exclusions and be rejected.
-              // The real client (UserContext.tsx) subscribes to `users` without a projection too.
+              // `fields` is required by the schema, and for `users` the server merges in
+              // exclusion-based fieldLimits (password etc); an inclusion projection here would mix
+              // inclusions+exclusions and be rejected, so send {} - exactly what the real client
+              // (useSubscribeCollection) sends - and only the server exclusions apply.
+              fields: {},
               fetchInitialData: true,
             })
           );
