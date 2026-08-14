@@ -141,7 +141,13 @@ export const transferLakeOwnership = async (
     try {
       await db.dataLakes.update({ id: lake.id, ...stamp });
     } catch (err) {
-      logger?.warn('[dataLakes] ownership transferred but the actor stamp did not persist', {
+      // Falls back to console when no logger is wired, so this can never go silent: `logger` is
+      // optional on the adapters, and a swallowed failure with no output would leave the stamp
+      // quietly naming an older, smaller edit with nothing anywhere to say why. Called through a
+      // closure rather than passing `logger.warn` by reference, so a logger whose method needs
+      // `this` still works.
+      const warn = (msg: string, meta: unknown) => (logger ? logger.warn(msg, meta) : console.warn(msg, meta));
+      warn('[dataLakes] ownership transferred but the actor stamp did not persist', {
         dataLakeId: lake.id,
         err,
       });
