@@ -138,15 +138,25 @@ export const transferLakeOwnership = async (
   // names an older, smaller edit.
   const stamp = lakeConfigWriteStamp(actor);
   if (stamp.lastUpdatedByUserId) {
+    // Falls back to console when no logger is wired, so neither failure shape below can go silent:
+    // `logger` is optional on the adapters, and a swallowed failure with no output would leave the
+    // stamp quietly naming an older, smaller edit with nothing anywhere to say why. Called through a
+    // closure rather than passing `logger.warn` by reference, so a logger whose method needs `this`
+    // still works.
+    const warn = (msg: string, meta: unknown) => (logger ? logger.warn(msg, meta) : console.warn(msg, meta));
     try {
-      await db.dataLakes.update({ id: lake.id, ...stamp });
+      // The return value matters as much as the throw: `BaseModel.update` is a `findOneAndUpdate`
+      // that RESOLVES `null` when no document matches, so a lake deleted between this function's
+      // opening `findById` and this final write (several awaits apart - grant upserts, user and org
+      // lookups) would no-op with no exception for the catch to see. Checking the result is what
+      // makes "never fails silently" true for BOTH shapes, not just the throwing one.
+      const stamped = await db.dataLakes.update({ id: lake.id, ...stamp });
+      if (!stamped) {
+        warn('[dataLakes] ownership transferred but the lake was not found for the actor stamp', {
+          dataLakeId: lake.id,
+        });
+      }
     } catch (err) {
-      // Falls back to console when no logger is wired, so this can never go silent: `logger` is
-      // optional on the adapters, and a swallowed failure with no output would leave the stamp
-      // quietly naming an older, smaller edit with nothing anywhere to say why. Called through a
-      // closure rather than passing `logger.warn` by reference, so a logger whose method needs
-      // `this` still works.
-      const warn = (msg: string, meta: unknown) => (logger ? logger.warn(msg, meta) : console.warn(msg, meta));
       warn('[dataLakes] ownership transferred but the actor stamp did not persist', {
         dataLakeId: lake.id,
         err,
