@@ -320,7 +320,7 @@ describe('fabFileVectorize handler - spend gate', () => {
     expect(h.enforceEmbeddingSpendGate).not.toHaveBeenCalled();
   });
 
-  it('wires the spend notifier into the gate call (#1677)', async () => {
+  it('wires the spend notifier into the gate call', async () => {
     h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
     h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
 
@@ -382,7 +382,7 @@ describe('fabFileVectorize handler - spend gate', () => {
   });
 });
 
-describe('fabFileVectorize handler - usage ledger (#1677)', () => {
+describe('fabFileVectorize handler - usage ledger', () => {
   const unvectorizedFile = (batchId?: string) => ({
     id: 'ff1',
     batchId,

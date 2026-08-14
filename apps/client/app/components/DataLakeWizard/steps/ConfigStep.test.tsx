@@ -199,7 +199,7 @@ describe('ConfigStep - identity summary', () => {
   });
 });
 
-describe('ConfigStep - embedding cost estimate banner (#1677)', () => {
+describe('ConfigStep - embedding cost estimate banner', () => {
   it('shows the estimate line for a plausible, in-budget upload', () => {
     seedConfig({ allFiles: [mockWizardFile('a.txt', 50_000)] });
 

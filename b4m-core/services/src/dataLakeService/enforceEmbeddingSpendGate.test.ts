@@ -327,4 +327,48 @@ describe('enforceEmbeddingSpendGate - spend notifications (#1677)', () => {
 
     expect(notify).not.toHaveBeenCalled();
   });
+
+  it('does not fire approaching_cap/lake again on a later message that stays over the threshold', async () => {
+    // The lake was already at 85% before this message reserved another 1_000 - the crossing
+    // already happened on a prior message, so this one must not re-fire.
+    const db = grantAll();
+    db.dataLakes.tryAddEmbeddingSpendMetered.mockResolvedValue({ granted: true, spendMicroUsd: 85_001_000 });
+    const notify = vi.fn().mockResolvedValue(undefined);
+
+    await gate(db, 1_000, notify);
+
+    expect(notify).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'approaching_cap' }));
+  });
+
+  it('does not fire approaching_cap/period again on a later message that stays over the threshold', async () => {
+    const db = grantAll();
+    const expiresAt = new Date(Date.now() + 3_600_000);
+    db.cache.tryAddWithinLimitFixedWindow.mockImplementation(async (key: string) => ({
+      success: true,
+      count: key === EMBEDDING_SPEND_PERIOD_KEY ? 45_001_000 : 1,
+      expiresAt,
+    }));
+    const notify = vi.fn().mockResolvedValue(undefined);
+
+    await gate(db, 1_000, notify);
+
+    expect(notify).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'approaching_cap' }));
+  });
+
+  it("bounds a hung notify() so it never blocks the gate's own resolution", async () => {
+    const db = grantAll();
+    const hungNotify = vi.fn().mockReturnValue(new Promise<never>(() => {})); // never resolves/rejects
+
+    await expect(
+      enforceEmbeddingSpendGate({
+        estimatedMicroUsd: 1_000,
+        batchId: 'batch1',
+        dataLakeId: 'lake1',
+        db,
+        sleep: vi.fn().mockResolvedValue(undefined),
+        notify: hungNotify,
+        notifyTimeoutMs: 10,
+      })
+    ).resolves.toBeUndefined();
+  });
 });

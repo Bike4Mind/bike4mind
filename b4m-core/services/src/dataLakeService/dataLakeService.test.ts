@@ -577,7 +577,7 @@ describe('listDataLakes - groundingMode is returned to a lake EDITOR only', () =
 
 // embeddingSpendMicroUsd is EDITOR-ONLY too, but unlike the fields above it is ALWAYS present
 // (defaulted to 0) when manageable, since its presence vs. absence is itself the client's
-// spend-tab visibility signal (#1677) - a zero-spend manageable lake must not look identical to
+// spend-tab visibility signal - a zero-spend manageable lake must not look identical to
 // a non-manageable one.
 describe('listDataLakes - embeddingSpendMicroUsd is returned to a lake EDITOR only, always defaulted', () => {
   it("returns the real meter for the caller's own lake with nonzero spend", async () => {

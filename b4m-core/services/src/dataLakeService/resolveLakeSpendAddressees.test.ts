@@ -129,6 +129,33 @@ describe('resolveLakeSpendAddressees', () => {
     expect(result).toEqual([{ userId: 'org2-owner', email: 'org2@example.com' }]);
   });
 
+  it('unions org admins with a distinct individual owner-grant holder on the same org-owned lake (N5)', async () => {
+    const db = makeDb({
+      dataLakes: { findById: vi.fn().mockResolvedValue(lake({ organizationId: 'org-1' })) },
+      dataLakeAccessGrants: {
+        listByLake: vi
+          .fn()
+          .mockResolvedValue([{ principalType: 'user', principalId: 'individual-owner', role: 'owner' }]),
+      },
+      organizations: {
+        findById: vi.fn().mockResolvedValue({ userId: 'billing-owner', managerId: null, adminUserIds: ['admin-1'] }),
+      },
+      users: {
+        findActiveEmailsByIds: emailRows([
+          { id: 'billing-owner', email: 'billing@example.com' },
+          { id: 'admin-1', email: 'admin@example.com' },
+          { id: 'individual-owner', email: 'individual@example.com' },
+        ]),
+      },
+    });
+
+    const result = await resolveLakeSpendAddressees('lake-1', db, logger);
+
+    // Both canManageLake rungs (org-admin and individual owner) fire independently for this
+    // lake, so both must be notified - the individual owner is never excluded by the org set.
+    expect(result.map(a => a.userId).sort()).toEqual(['admin-1', 'billing-owner', 'individual-owner']);
+  });
+
   it('falls through to the individual-owner path when the org has no resolvable admin set', async () => {
     const db = makeDb({
       dataLakes: { findById: vi.fn().mockResolvedValue(lake({ organizationId: 'org-1' })) },

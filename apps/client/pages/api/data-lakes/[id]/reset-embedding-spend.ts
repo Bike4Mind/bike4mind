@@ -32,7 +32,7 @@ const handler = baseApi()
     // spendNotificationKeys.ts), which a reset doesn't change, so without this a zeroed lake
     // would never warn again.
     await dataLakeSpendNotificationRepository
-      .deleteForLake(id)
+      .deleteForLake(id, 'lake')
       .catch(err => req.logger?.warn?.(`[spendGate] failed to re-arm spend notice for lake ${id}: ${err}`));
 
     req.logger?.log?.(`[spendGate] admin ${req.user.id} reset embeddingSpendMicroUsd for lake ${id}`);

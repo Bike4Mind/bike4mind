@@ -644,7 +644,7 @@ export function useGetDataLakeArticles(params?: DataLakeArticlesParams | null, s
 }
 
 /**
- * One lake's spend view (#1677): lifetime meter, live budget levers, and the byModel/byFeature/
+ * One lake's spend view: lifetime meter, live budget levers, and the byModel/byFeature/
  * overTime ledger breakdown. `enabled` is passed by the caller so the modal can fetch lazily -
  * only once the Spend tab is actually opened, not on every settings-modal mount.
  *
@@ -669,6 +669,9 @@ export function useDataLakeSpend(dataLakeId: string | null, days: number, opts?:
     staleTime: 1000 * 60,
     placeholderData: keepPreviousData,
   });
-  const isForbidden = isAxiosError(query.error) && (query.error.response?.status ?? 0) >= 400;
+  const isForbidden =
+    isAxiosError(query.error) &&
+    (query.error.response?.status ?? 0) >= 400 &&
+    (query.error.response?.status ?? 0) < 500;
   return { ...query, isForbidden };
 }

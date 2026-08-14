@@ -19,26 +19,24 @@ export interface LakeSpendAddresseeDb {
 export const MAX_LAKE_SPEND_ADDRESSEES = 20;
 
 /**
- * Resolve who to notify about a data lake's spend (#1677). Never throws - a notification
+ * Resolve who to notify about a data lake's spend. Never throws - a notification
  * failure must never break the ingestion path it would otherwise report on; any failure
  * resolves to `[]` and is logged.
  *
  * Org-owned lake: the org's billing owner (`userId`) + `managerId` + `adminUserIds` - the
- * SAME field set `administeredOrgIds` is built from (see OrganizationModel.findIdsWithAdminRights),
- * so the notified set agrees by construction with `canManageLake`'s org-admin rung - an
- * addressee is never mailed a link to a spend view they'd then be 403'd from. Also folds in
- * any org-principal owner/curator GRANT on this specific lake (canManageLake's org-grant
- * rung) - each such grant's `principalId` is itself an ORG id, so it is resolved through the
- * same org-admin-fields lookup, never pushed directly into the user-id lookup (an org id can
- * never match a user, which would otherwise silently drop that source with no addressee and
- * no error). This also covers an org-LESS lake carrying an org-principal grant - the grant's
- * own org is resolved regardless of `lake.organizationId`. If the combined set is empty (every
- * resolvable org missing/soft-deleted, or none of those fields populated), falls through to
- * the individual-owner path below rather than returning nothing - a fallback recipient beats
- * silence.
+ * SAME field set `administeredOrgIds` is built from (see OrganizationModel.findIdsWithAdminRights)
+ * - covers `canManageLake`'s org-admin rung. Also folds in any org-principal owner/curator GRANT
+ * on this specific lake (canManageLake's org-grant rung) - each such grant's `principalId` is
+ * itself an ORG id, resolved through the same org-admin-fields lookup, never pushed directly
+ * into the user-id lookup (an org id can never match a user, which would otherwise silently
+ * drop that source with no addressee and no error). This also covers an org-LESS lake carrying
+ * an org-principal grant - the grant's own org is resolved regardless of `lake.organizationId`.
  *
- * Individual/fallback path reuses the EXISTING `resolveEffectiveOwnerIds` (owner-role grant,
- * else the immutable creator) - not re-derived - with grants filtered to non-expired.
+ * The individual effective owner (`resolveEffectiveOwnerIds`: owner-role grant, else the
+ * immutable creator) is always UNIONED in, not gated on the org set being empty - `canManageLake`'s
+ * owner and org-admin rungs grant independently, so the notified set is a superset of the
+ * org-admin rung (no false negatives), never a subset (a notified id unable to view the lake
+ * was never possible either way).
  */
 export async function resolveLakeSpendAddressees(
   dataLakeId: string,
@@ -65,21 +63,19 @@ export async function resolveLakeSpendAddressees(
       }
     }
 
-    let candidateIds: string[] = [];
+    let orgAdminIds: string[] = [];
     if (orgIdsToResolve.size > 0) {
       const orgs = await Promise.all(Array.from(orgIdsToResolve).map(id => db.organizations.findById(id)));
-      candidateIds = orgs.flatMap(org =>
+      orgAdminIds = orgs.flatMap(org =>
         [org?.userId, org?.managerId, ...(org?.adminUserIds ?? [])].filter(
           (id): id is string => !!id && id.trim().length > 0
         )
       );
     }
 
-    if (candidateIds.length === 0) {
-      // Either an individual lake, or an org lake whose admin set is empty/unresolvable -
-      // fall back to the effective owner (owner-role user grant, else the creator).
-      candidateIds = resolveEffectiveOwnerIds(lake, activeGrants);
-    }
+    // Always unioned, not gated on the org set being empty: canManageLake's owner rung and
+    // org-admin rung grant independently, so an org lake's own owner must be notified too.
+    const candidateIds = [...orgAdminIds, ...resolveEffectiveOwnerIds(lake, activeGrants)];
 
     const dedupedIds = Array.from(new Set(candidateIds)).sort();
     const boundedIds = dedupedIds.slice(0, MAX_LAKE_SPEND_ADDRESSEES);

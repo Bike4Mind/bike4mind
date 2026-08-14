@@ -47,6 +47,10 @@ export interface RecordOperationalUsageParams {
    * enforceCredits admin settings. For spend already governed by its own dedicated
    * budget/gate (e.g. data-lake embedding spend levers) - debiting credits on top of
    * that gate would be a second, unreviewed billing mechanism for the same spend.
+   * Redundant with passing a narrowed `db` (see RecordOperationalUsageAdapters) that omits
+   * creditTransactions/users/organizations, which already forces recorded-only - use this
+   * flag when the caller still has the full db but wants the bypass explicit and intentional
+   * rather than an incidental side effect of which repos it happened to wire up.
    */
   bypassCreditBilling?: boolean;
 }

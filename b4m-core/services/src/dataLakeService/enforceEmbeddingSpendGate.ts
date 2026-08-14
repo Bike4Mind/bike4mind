@@ -31,6 +31,14 @@ const MINUTE_MS = 60_000;
 const RATE_WAIT_TOTAL_MS = 30_000;
 
 /**
+ * Bounds how long a single notify() call (SMTP send + its awaited Slack mirror) can block
+ * the ingestion critical path. Without this, a hung mail server can consume the whole
+ * Lambda timeout for the one message that wins the notification claim - the file fails to
+ * index and burns an SQS delivery attempt over a mail-server problem, not a real error.
+ */
+const DEFAULT_NOTIFY_TIMEOUT_MS = 3_000;
+
+/**
  * Thrown when the spend gate denies a provider embedding call. The message is user-safe:
  * the vectorize handler stores it on the failed file, where a lake owner reads it.
  */
@@ -111,14 +119,22 @@ export async function enforceEmbeddingSpendGate(params: {
    * caught and logged; it never changes the gate's own grant/deny decision.
    */
   notify?: (event: DataLakeSpendNotificationEvent) => Promise<unknown>;
+  /** Injectable for tests; defaults to DEFAULT_NOTIFY_TIMEOUT_MS. */
+  notifyTimeoutMs?: number;
 }): Promise<void> {
   const { estimatedMicroUsd, batchId, dataLakeId, db, logger, notify } = params;
   const sleep = params.sleep ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
+  const notifyTimeoutMs = params.notifyTimeoutMs ?? DEFAULT_NOTIFY_TIMEOUT_MS;
 
   const fire = async (event: Omit<DataLakeSpendNotificationEvent, 'dataLakeId'>): Promise<void> => {
     if (!notify || !dataLakeId) return;
     try {
-      await notify({ dataLakeId, ...event });
+      await Promise.race([
+        notify({ dataLakeId, ...event }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`notify exceeded ${notifyTimeoutMs}ms`)), notifyTimeoutMs)
+        ),
+      ]);
     } catch (err) {
       logger?.warn?.(`[spendGate] spend notification failed: ${err}`);
     }
@@ -241,9 +257,15 @@ export async function enforceEmbeddingSpendGate(params: {
   // "approaching" notice. No check-then-write race here for either meter: the ONLY
   // race-safety is the atomic claim inside `notify`'s send service - N concurrent workers may
   // all attempt to fire, and exactly one's claim wins.
+  //
+  // Fire only on the message that CROSSES the threshold, not every message after it: both
+  // sides of the crossing are already in hand (this call's own reservation amount), so a
+  // before/after comparison avoids paying a findById + claim upsert on every remaining
+  // message in the window once a lake or the platform period is past 80%.
   if (dataLakeId && lakeSpendMicroUsd !== null && levers.perLakeBudgetMicroUsd > 0) {
-    const lakePct = lakeSpendMicroUsd / levers.perLakeBudgetMicroUsd;
-    if (lakePct >= EMBEDDING_SPEND_NOTIFY_THRESHOLD_PCT) {
+    const thresholdMicroUsd = levers.perLakeBudgetMicroUsd * EMBEDDING_SPEND_NOTIFY_THRESHOLD_PCT;
+    const spendBeforeMicroUsd = lakeSpendMicroUsd - estimatedMicroUsd;
+    if (spendBeforeMicroUsd < thresholdMicroUsd && lakeSpendMicroUsd >= thresholdMicroUsd) {
       await fire({
         kind: 'approaching_cap',
         scope: 'lake',
@@ -254,8 +276,9 @@ export async function enforceEmbeddingSpendGate(params: {
     }
   }
   if (levers.perPeriodBudgetMicroUsd > 0) {
-    const periodPct = period.count / levers.perPeriodBudgetMicroUsd;
-    if (periodPct >= EMBEDDING_SPEND_NOTIFY_THRESHOLD_PCT) {
+    const thresholdMicroUsd = levers.perPeriodBudgetMicroUsd * EMBEDDING_SPEND_NOTIFY_THRESHOLD_PCT;
+    const spendBeforeMicroUsd = period.count - estimatedMicroUsd;
+    if (spendBeforeMicroUsd < thresholdMicroUsd && period.count >= thresholdMicroUsd) {
       await fire({
         kind: 'approaching_cap',
         scope: 'period',

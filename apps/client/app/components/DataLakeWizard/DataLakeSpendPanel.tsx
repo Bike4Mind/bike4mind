@@ -38,7 +38,7 @@ export interface DataLakeSpendPanelProps {
 }
 
 /**
- * Owner-facing spend view for one data lake (#1677). Pure/presentational - all data comes via
+ * Owner-facing spend view for one data lake. Pure/presentational - all data comes via
  * props, no fetching here - so it needs no QueryClientProvider in tests.
  */
 export function DataLakeSpendPanel({

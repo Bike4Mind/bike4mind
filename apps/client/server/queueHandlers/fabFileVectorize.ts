@@ -317,16 +317,19 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         throw providerErr;
       }
 
-      // Ledger the ingestion spend (cost attribution, #1677). Only for lake-scoped work
+      // Ledger the ingestion spend (cost attribution). Only for lake-scoped work
       // (grantedReservation implies dataLakeId came from a real batch) - a cache-hit-only
       // run never reaches this block, so cache hits already never produce a row.
       // bypassCreditBilling: true because this spend is already governed by the dedicated
       // spend-lever/gate above; debiting credits on top of it would double-charge.
       if (grantedReservation) {
         const organization = user.organizationId ? await organizationRepository.findById(user.organizationId) : null;
+        // SQS redelivery can double-write this row if the embedding-cache write above has not
+        // landed before the container freezes - the same double-count the lake meter already
+        // accepts above, so the ledger and meter at least drift together.
         await recordOperationalUsage(
           {
-            requestId: existingFabFile.batchId ?? fabFileId,
+            requestId: grantedReservation.batchId,
             user,
             organization,
             dataLakeId: grantedReservation.dataLakeId,

@@ -3,7 +3,7 @@ import { IMongoDocument } from './common';
 
 // -- Data Lake Spend Notification ------------------------------------------------------------
 //
-// The notification model this codebase never had (#1677): one row per notice sent about a data
+// The notification model this codebase never had: one row per notice sent about a data
 // lake's embedding spend, existing SOLELY to make the send atomic and idempotent (a unique
 // compound index is the dedup mechanism, not app-level logic). Types live here rather than
 // inline in the model because the caller (enforceEmbeddingSpendGate) lives in
@@ -54,7 +54,7 @@ export interface IDataLakeSpendNotification {
   organizationId?: string | null;
   kind: DataLakeSpendNotificationKind;
   scope: DataLakeSpendNotificationScope;
-  /** The dedup key's third component - see resolveSpendNotificationKeys.ts for how each scope derives it. */
+  /** The dedup key's third component - see spendNotificationKeys.ts for how each scope derives it. */
   periodKey: string;
   /** Set only for `approaching_cap`. */
   thresholdPct?: number;
@@ -93,8 +93,12 @@ export interface IDataLakeSpendNotificationRepository extends IBaseRepository<ID
     id: string,
     result: { recipientUserIds: string[]; deliveredCount: number; deliveryFailed: boolean }
   ): Promise<void>;
-  /** Delete every claim for a lake, so a subsequent admin-reset re-arms the lake-scope notice. */
-  deleteForLake(dataLakeId: string): Promise<number>;
+  /**
+   * Delete the lake-scope claim for a lake, so a subsequent admin reset re-arms just that
+   * notice. Scoped deliberately: period/run/switch/rate claims for the same lake are untouched,
+   * since those windows aren't affected by a lifetime-meter reset.
+   */
+  deleteForLake(dataLakeId: string, scope: DataLakeSpendNotificationScope): Promise<number>;
   /** Most recent notifications for a lake, newest first - for a future owner-facing history view. */
   listRecentForLake(dataLakeId: string, limit?: number): Promise<IDataLakeSpendNotificationDocument[]>;
 }

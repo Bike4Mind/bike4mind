@@ -56,7 +56,7 @@ afterEach(async () => {
 
 const PER_LAKE_BUDGET_USD = 0.0001; // 100 microUSD - tiny, so one small embed crosses 80%.
 
-describe('cross-milestone seam: ingest -> ledger -> notification claim -> mailer (#1677)', () => {
+describe('cross-milestone seam: ingest -> ledger -> notification claim -> mailer', () => {
   it('crossing 80% of the per-lake budget writes a UsageEvent row, claims one notification, and emails the owner', async () => {
     const owner = await User.create({ username: 'lake-owner', name: 'Lake Owner', email: 'owner@example.com' });
     const lake = await dataLakeRepository.create({

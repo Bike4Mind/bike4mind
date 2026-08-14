@@ -1620,7 +1620,7 @@ describe('tryAddEmbeddingSpend (lake and batch spend meters)', () => {
   });
 });
 
-describe('tryAddEmbeddingSpendMetered (returns the post-reservation total, #1677)', () => {
+describe('tryAddEmbeddingSpendMetered (returns the post-reservation total)', () => {
   setupMongoTest();
 
   it('grants and returns the post-increment total', async () => {

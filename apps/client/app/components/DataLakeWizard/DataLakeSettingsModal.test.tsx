@@ -575,7 +575,7 @@ describe('DataLakeSettingsModal \u2014 grounding mode', () => {
   });
 });
 
-describe('DataLakeSettingsModal - Spend tab visibility (#1677)', () => {
+describe('DataLakeSettingsModal - Spend tab visibility', () => {
   const manageableLake = { ...openLake, id: 'lake-spend-1', embeddingSpendMicroUsd: 0 };
   const readerLake = { ...openLake, id: 'lake-spend-2', canManage: false, embeddingSpendMicroUsd: undefined };
 
@@ -672,5 +672,30 @@ describe('DataLakeSettingsModal - Spend tab visibility (#1677)', () => {
 
     expect(screen.getByTestId('datalake-spend-panel')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-spend-lifetime')).toHaveTextContent('$5.00');
+  });
+
+  it('hides the Settings form Save/Cancel actions while the Spend tab is open (nothing to save there)', async () => {
+    useDataLakeSpendMock.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isFetching: false,
+      isForbidden: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('datalake-settings-tab-spend'));
+    expect(screen.queryByTestId('datalake-settings-save-btn')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('datalake-settings-tab-settings'));
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeInTheDocument();
   });
 });

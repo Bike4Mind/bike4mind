@@ -71,7 +71,7 @@ describe('UsageEventRepository', () => {
       expect(doc!.apiKeyId).toBeUndefined();
     });
 
-    it('persists dataLakeId when provided (ingestion spend attribution, #1677)', async () => {
+    it('persists dataLakeId when provided (ingestion spend attribution)', async () => {
       const doc = await record({ feature: 'embedding', dataLakeId: 'lake-1' });
       expect(doc!.dataLakeId).toBe('lake-1');
     });

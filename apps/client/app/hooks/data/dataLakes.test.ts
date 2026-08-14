@@ -39,6 +39,7 @@ import {
   __resetPurgingLakesForTests,
   useBrowsePublicDataLakes,
   useCleanupDataLake,
+  useDataLakeSpend,
   useDuplicatePrefixLake,
   useGetDeletedDataLakes,
   useRemoveFileFromDataLake,
@@ -393,6 +394,45 @@ describe('useCleanupDataLake queued purge', () => {
       await queryClient.invalidateQueries({ queryKey: ['data-lakes', 'deleted'] });
     });
     await waitFor(() => expect(result.current.deleted.data).toHaveLength(2));
+  });
+});
+
+describe('useDataLakeSpend isForbidden', () => {
+  const mountSpend = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useDataLakeSpend('lake1', 30), { wrapper });
+  };
+
+  const axiosError = (status: number) => {
+    const err = new Error(`request failed with status ${status}`) as Error & {
+      isAxiosError: boolean;
+      response: { status: number };
+    };
+    err.isAxiosError = true;
+    err.response = { status };
+    return err;
+  };
+
+  beforeEach(() => {
+    apiGet.mockReset();
+  });
+
+  it('treats a 403 as forbidden', async () => {
+    apiGet.mockRejectedValue(axiosError(403));
+    const { result } = mountSpend();
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.isForbidden).toBe(true);
+  });
+
+  // A transient 500 must not be treated as forbidden: retry:false means the Spend tab would
+  // otherwise stay hidden until the query is invalidated, even though nothing is actually denied.
+  it('does not treat a 500 as forbidden', async () => {
+    apiGet.mockRejectedValue(axiosError(500));
+    const { result } = mountSpend();
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.isForbidden).toBe(false);
   });
 });
 

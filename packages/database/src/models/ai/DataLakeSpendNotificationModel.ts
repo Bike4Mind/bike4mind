@@ -84,9 +84,10 @@ class DataLakeSpendNotificationRepository
     const now = new Date();
     const expiresAt = new Date(now.getTime() + DATA_LAKE_SPEND_NOTIFICATION_RETENTION_DAYS * 24 * 60 * 60 * 1000);
     try {
-      // new: false returns the PRE-image - null means nothing existed yet, so THIS call
-      // performed the insert (setOnInsert only fires on insert, never on a matched update).
-      const prior = await this.notificationModel.findOneAndUpdate(
+      // includeResultMetadata surfaces lastErrorObject.upserted, which mongo sets ONLY when this
+      // call performed the insert - a matched (already-claimed) update leaves it undefined. That
+      // one round trip replaces the old findOneAndUpdate-then-findOne pair.
+      const result = await this.notificationModel.findOneAndUpdate(
         { dataLakeId, kind, scope, periodKey },
         {
           $setOnInsert: {
@@ -105,11 +106,11 @@ class DataLakeSpendNotificationRepository
             expiresAt,
           },
         },
-        { upsert: true, new: false }
+        { upsert: true, includeResultMetadata: true }
       );
-      if (prior) return { claimed: false };
-      const doc = await this.notificationModel.findOne({ dataLakeId, kind, scope, periodKey }).select('_id');
-      return { claimed: true, id: doc ? String(doc._id) : undefined };
+      const upsertedId = result.lastErrorObject?.upserted;
+      if (!upsertedId) return { claimed: false };
+      return { claimed: true, id: String(upsertedId) };
     } catch (err) {
       // E11000: lost the insert race to a concurrent claimer between our filter match and insert.
       if ((err as { code?: number }).code === 11000) return { claimed: false };
@@ -134,8 +135,8 @@ class DataLakeSpendNotificationRepository
     );
   }
 
-  async deleteForLake(dataLakeId: string): Promise<number> {
-    const result = await this.notificationModel.deleteMany({ dataLakeId });
+  async deleteForLake(dataLakeId: string, scope: DataLakeSpendNotificationScope): Promise<number> {
+    const result = await this.notificationModel.deleteMany({ dataLakeId, scope });
     return result.deletedCount ?? 0;
   }
 

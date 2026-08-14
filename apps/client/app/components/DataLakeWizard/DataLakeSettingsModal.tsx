@@ -436,21 +436,25 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
               settingsFields
             )}
           </DialogContent>
-          <DialogActions>
-            <Button
-              variant="solid"
-              color="primary"
-              loading={updateLake.isPending}
-              disabled={!name.trim()}
-              onClick={handleSave}
-              data-testid="datalake-settings-save-btn"
-            >
-              Save
-            </Button>
-            <Button variant="plain" color="neutral" onClick={onClose}>
-              Cancel
-            </Button>
-          </DialogActions>
+          {/* Save/Cancel apply to the Settings form only - the Spend tab has nothing to
+              save, so these belong to that tab, not the modal as a whole. */}
+          {activeTab !== 'spend' && (
+            <DialogActions>
+              <Button
+                variant="solid"
+                color="primary"
+                loading={updateLake.isPending}
+                disabled={!name.trim()}
+                onClick={handleSave}
+                data-testid="datalake-settings-save-btn"
+              >
+                Save
+              </Button>
+              <Button variant="plain" color="neutral" onClick={onClose}>
+                Cancel
+              </Button>
+            </DialogActions>
+          )}
         </ModalDialog>
       </Modal>
       <Modal open={confirmPublicOpen} onClose={() => setConfirmPublicOpen(false)}>

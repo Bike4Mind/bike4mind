@@ -111,7 +111,7 @@ describe('GET /api/data-lakes/[id]/spend', () => {
     expect(json).toHaveBeenCalledWith(expect.objectContaining({ embeddingSpendMicroUsd: null, ledger: emptyLedger }));
   });
 
-  it('honors a custom days window, clamped by the query schema', async () => {
+  it('honors a custom days window within the schema-allowed range', async () => {
     const { res } = makeRes();
 
     await call(req({ id: 'lake1', days: '7' }), res);

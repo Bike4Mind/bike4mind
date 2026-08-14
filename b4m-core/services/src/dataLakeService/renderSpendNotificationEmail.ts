@@ -78,7 +78,7 @@ export function renderSpendNotificationEmail(input: SpendNotificationEmailInput)
       html: wrap(
         lake,
         `<p>A platform admin set the embedding rate limit to 0, which stops all indexing. ` +
-          (reason ? `<p>${reason}</p>` : '') +
+          (reason ? `${reason} ` : '') +
           `No action is available to you.</p>`
       ),
     };
@@ -107,12 +107,15 @@ export function renderSpendNotificationEmail(input: SpendNotificationEmailInput)
   }
 
   if (kind === 'budget_exhausted' && scope === 'period') {
+    // Period scope is platform-wide, shared across every tenant lake - recipients here are
+    // lake owners/org admins, not platform admins, so the dollar figure is never shown (it
+    // would disclose the platform's aggregate spend/budget to every affected lake's owner).
     return {
       subject: `Platform embedding budget exhausted - "${input.lakeName}" indexing paused`,
       html: wrap(
         lake,
-        `<p>The platform-wide embedding budget (${budget ?? ''}${detail.periodHours ? ` per ${detail.periodHours}h` : ''}) ` +
-          `is exhausted. This resumes automatically${windowEndsAt ? ` at ${windowEndsAt}` : ''} - re-index then.</p>`
+        `<p>Indexing is paused platform-wide because the shared embedding budget is exhausted. ` +
+          `This resumes automatically${windowEndsAt ? ` at ${windowEndsAt}` : ''} - re-index then.</p>`
       ),
     };
   }
@@ -139,13 +142,16 @@ export function renderSpendNotificationEmail(input: SpendNotificationEmailInput)
     };
   }
 
-  // approaching_cap / period
+  // approaching_cap / period - same disclosure concern as budget_exhausted/period above:
+  // no dollar or percentage figures, since this is the platform-wide aggregate, not this
+  // lake's own spend.
   return {
-    subject: `Platform embedding budget is ${pct ?? 80}% used`,
+    subject: `Indexing is approaching the platform embedding budget`,
     html: wrap(
       lake,
-      `<p>${spent ?? ''} of ${budget ?? ''} for the current${detail.periodHours ? ` ${detail.periodHours}h` : ''} ` +
-        `window has been spent${windowEndsAt ? `, ending ${windowEndsAt}` : ''}.</p>`
+      `<p>Indexing is approaching the platform-wide embedding budget for the current` +
+        `${detail.periodHours ? ` ${detail.periodHours}h` : ''} window` +
+        `${windowEndsAt ? `, ending ${windowEndsAt}` : ''}. It may pause automatically if the budget is reached.</p>`
     ),
   };
 }

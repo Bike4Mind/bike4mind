@@ -66,12 +66,13 @@ describe('POST /api/data-lakes/[id]/reset-embedding-spend', () => {
     expect(h.deleteForLake).not.toHaveBeenCalled();
   });
 
-  it('re-arms the lake-scope spend notice after a successful reset (#1677)', async () => {
+  it('re-arms the lake-scope spend notice after a successful reset', async () => {
     h.resetEmbeddingSpend.mockResolvedValue(true);
     const res = makeRes();
     await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(true), res);
 
-    expect(h.deleteForLake).toHaveBeenCalledWith('lake-1');
+    // Scoped to 'lake' only - a period/run/switch notice for the same lake must survive a reset.
+    expect(h.deleteForLake).toHaveBeenCalledWith('lake-1', 'lake');
   });
 
   it('a re-arm failure is logged, never fails the reset request', async () => {

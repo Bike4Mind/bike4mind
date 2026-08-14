@@ -49,6 +49,36 @@ describe('renderSpendNotificationEmail', () => {
 
     expect(result.html).not.toMatch(/chunk|query|passage/i);
   });
+
+  it.each([
+    { kind: 'budget_exhausted' as const, scope: 'period' as const },
+    { kind: 'approaching_cap' as const, scope: 'period' as const },
+  ])(
+    'never discloses the platform-wide dollar figure or percentage for $kind/$scope (recipients are tenant lake owners, not platform admins)',
+    ({ kind, scope }) => {
+      const result = renderSpendNotificationEmail({
+        kind,
+        scope,
+        lakeName: 'My Lake',
+        detail: { spentMicroUsd: 40_000_000, budgetMicroUsd: 50_000_000, periodHours: 24 },
+      });
+
+      expect(result.subject).not.toMatch(/\$|%/);
+      expect(result.html).not.toMatch(/\$|%/);
+    }
+  );
+
+  it('does not nest a <p> inside a <p> when a reason string is present (stopped/rate)', () => {
+    const result = renderSpendNotificationEmail({
+      kind: 'stopped',
+      scope: 'rate',
+      lakeName: 'My Lake',
+      detail: { reason: 'the embedding rate limit is 0 (stopped)' },
+    });
+
+    expect(result.html).not.toMatch(/<p>[^<]*<p>/);
+    expect(result.html).toContain('the embedding rate limit is 0 (stopped)');
+  });
 });
 
 describe('formatMicroUsd', () => {

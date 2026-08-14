@@ -13,18 +13,16 @@ function toBool(value: unknown, fallback: boolean): boolean {
 
 export interface EmbeddingBudgetEstimateProps {
   files: { name: string; size: number }[];
-  /** Compact rendering for the preview step's summary box. */
-  compact?: boolean;
 }
 
 /**
- * Advisory-only upload-time cost warning (#1677). Pure client-side heuristic on file SIZE, not
+ * Advisory-only upload-time cost warning. Pure client-side heuristic on file SIZE, not
  * text extraction: this repo's ingest pipeline (mammoth/JSZip/tiktoken/unpdf) does not belong in
  * a browser bundle, and a server round-trip is not possible either - `useBatchUpload` uploads via
  * presigned S3 URLs, so the server has no bytes to extract from until after the commit this
  * estimate is meant to precede. Never blocks the upload - advisory only.
  */
-export function EmbeddingBudgetEstimate({ files, compact }: EmbeddingBudgetEstimateProps) {
+export function EmbeddingBudgetEstimate({ files }: EmbeddingBudgetEstimateProps) {
   const spendEnabledRaw = useGetSettingsValue('dataLakeEmbeddingSpendEnabled');
   const perRunBudgetRaw = useGetSettingsValue('dataLakeEmbeddingBudgetPerRunUsd');
   const model = useGetSettingsValue('defaultEmbeddingModel');
@@ -58,17 +56,12 @@ export function EmbeddingBudgetEstimate({ files, compact }: EmbeddingBudgetEstim
   }
 
   return (
-    <Alert
-      size={compact ? 'sm' : 'md'}
-      color="warning"
-      variant="soft"
-      data-testid="datalake-estimate-over-budget-alert"
-    >
+    <Alert size="md" color="warning" variant="soft" data-testid="datalake-estimate-over-budget-alert">
       {/* Alert lays its own children out as flex row items - a bare mix of text nodes and
           <span>s becomes several independent flex items that wrap into overlapping columns
           instead of flowing as one paragraph. Wrapping in a single Typography (matching the
           "Adding files to..." Alert elsewhere in this file's own directory) keeps it one item. */}
-      <Typography level={compact ? 'body-xs' : 'body-sm'}>
+      <Typography level="body-sm">
         This upload may exceed the per-run embedding budget. Rough estimate: ~$
         <span data-testid="datalake-estimate-total">{roundedCost}</span> for {files.length.toLocaleString()} file
         {files.length === 1 ? '' : 's'}, against ~$

@@ -14,13 +14,13 @@ import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 
 const QuerySchema = z.object({
-  // Clamped so a stray value can't turn this into a full-collection ledger scan.
+  // Rejected (422), not clamped, so a stray value can't turn this into a full-collection ledger scan.
   days: z.coerce.number().int().min(1).max(365).optional(),
 });
 
 /**
  * GET /api/data-lakes/:id/spend?days=30
- * Cost attribution + owner-facing spend view for one data lake (#1677). Access-gated first
+ * Cost attribution + owner-facing spend view for one data lake. Access-gated first
  * (not-found-style denial via assertLakeAccess), then the stricter manage check - owner/
  * curator/org-admin, via canManageLake - so a mere reader gets a 403, not the financial
  * telemetry. Same authority `redactLakeForActor` already uses to decide whether

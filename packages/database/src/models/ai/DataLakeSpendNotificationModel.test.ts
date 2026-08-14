@@ -31,6 +31,8 @@ describe('DataLakeSpendNotificationRepository', () => {
     const docs = await DataLakeSpendNotificationModel.find({});
     expect(docs).toHaveLength(1);
     expect(docs[0].expiresAt).toBeInstanceOf(Date);
+    // Confirms the id came from lastErrorObject.upserted, not a placeholder.
+    expect(result.id).toBe(String(docs[0]._id));
   });
 
   it('a second claim on the same (dataLakeId, kind, scope, periodKey) key is deduped', async () => {
@@ -83,7 +85,7 @@ describe('DataLakeSpendNotificationRepository', () => {
 
   it('deleteForLake re-arms - a subsequent claim on the same key succeeds again', async () => {
     await repo.claimNotification(claimInput());
-    const deletedCount = await repo.deleteForLake('lake-1');
+    const deletedCount = await repo.deleteForLake('lake-1', 'lake');
     expect(deletedCount).toBe(1);
 
     const reclaim = await repo.claimNotification(claimInput());
@@ -94,11 +96,23 @@ describe('DataLakeSpendNotificationRepository', () => {
     await repo.claimNotification(claimInput({ dataLakeId: 'lake-1' }));
     await repo.claimNotification(claimInput({ dataLakeId: 'lake-2' }));
 
-    await repo.deleteForLake('lake-1');
+    await repo.deleteForLake('lake-1', 'lake');
 
     const remaining = await DataLakeSpendNotificationModel.find({});
     expect(remaining).toHaveLength(1);
     expect(remaining[0].dataLakeId).toBe('lake-2');
+  });
+
+  it('deleteForLake only clears the given scope, leaving other scopes on the same lake', async () => {
+    await repo.claimNotification(claimInput({ dataLakeId: 'lake-1', scope: 'lake', periodKey: 'lake:1' }));
+    await repo.claimNotification(claimInput({ dataLakeId: 'lake-1', scope: 'period', periodKey: 'period:1' }));
+
+    const deletedCount = await repo.deleteForLake('lake-1', 'lake');
+    expect(deletedCount).toBe(1);
+
+    const remaining = await DataLakeSpendNotificationModel.find({});
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].scope).toBe('period');
   });
 
   it('listRecentForLake returns newest first, scoped to the lake', async () => {
