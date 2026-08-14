@@ -129,6 +129,16 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
   findIdsAdministeredBy(userId: string): Promise<string[]>;
 
   /**
+   * IDs of every organization the user is a MEMBER of: the org's owner (`userId`) or a
+   * `users[]` ACL row with read/write permission - the same membership arms
+   * `shareable.findAllAccessible` grants on (groups deliberately excluded: org membership
+   * is direct). Normalized strings, suitable for an `$in` filter. This is the authoritative
+   * set lake authorization consumes (see AccessContext.organizationIds, #1674) - NOT
+   * `user.organizationId`, which is a display preference.
+   */
+  findMembershipOrgIds(userId: string): Promise<string[]>;
+
+  /**
    * IDs of every organization where the user holds admin RIGHTS: billing owner (`userId`), team
    * manager (`managerId`), OR an appointed org admin (`adminUserIds`). Broader than
    * `findIdsAdministeredBy` (which omits appointed admins) - deliberately a separate method so its

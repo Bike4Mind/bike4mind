@@ -164,6 +164,9 @@ OrganizationSchema.plugin(softDeletePlugin);
 // on every non-admin data-lake request would plan a full `organizations` collscan.
 OrganizationSchema.index({ userId: 1 });
 OrganizationSchema.index({ managerId: 1 });
+// Backs findMembershipOrgIds' reverse lookup (users[] ACL by member) - previously every
+// membership question collscanned. The owner arm rides the existing { userId: 1 } index.
+OrganizationSchema.index({ 'users.userId': 1 });
 OrganizationSchema.index({ adminUserIds: 1 });
 
 export const Organization =
@@ -395,6 +398,18 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
       .select('_id')
       .lean();
     return orgs.map(org => org._id.toString());
+  }
+
+  async findMembershipOrgIds(userId: string): Promise<string[]> {
+    const docs = await this.organizationModel
+      .find(
+        {
+          $or: [{ userId }, { users: { $elemMatch: { userId, permissions: { $in: ['read', 'write'] } } } }],
+        },
+        { _id: 1 }
+      )
+      .lean();
+    return docs.map(d => String(d._id));
   }
 
   async findIdsWithAdminRights(userId: string): Promise<string[]> {

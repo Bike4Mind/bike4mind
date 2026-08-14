@@ -317,6 +317,7 @@ describe('retrieve_knowledge_content scoped lake-prompt injection (#1108)', () =
           findActiveByUserTags: vi.fn(),
           findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([lake]),
         },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
       } as never,
       ...overrides,
     });

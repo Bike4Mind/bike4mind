@@ -585,6 +585,7 @@ describe('search_knowledge_base scoped lake-prompt injection (#1108)', () => {
           findActiveByUserTags: vi.fn(),
           findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue(lakes),
         },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
       } as never,
       ...overrides,
     });
@@ -980,6 +981,7 @@ describe('search_knowledge_base untrusted-content delimiter (#1659)', () => {
           findActiveByUserTags: vi.fn(),
           findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue(lakes),
         },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
       } as never,
       ...overrides,
     });

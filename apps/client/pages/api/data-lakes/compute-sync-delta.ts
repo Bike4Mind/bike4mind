@@ -11,6 +11,7 @@ import { ComputeSyncDeltaRequestInput } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { normalizeId } from '@bike4mind/utils/normalizeId';
 
 const HASH_QUERY_CHUNK = 500;
 
@@ -86,7 +87,7 @@ const handler = baseApi()
         {
           principalKind: 'user',
           principalId: req.user.id,
-          organizationId: accessContext.organizationId,
+          organizationId: normalizeId(req.user.organizationId),
           resolvedLakeIds: [dataLake.id],
           fileIds: [...existingHashMap.values()].map(f => f.fileId),
           surface: 'data-lake-sync-delta',

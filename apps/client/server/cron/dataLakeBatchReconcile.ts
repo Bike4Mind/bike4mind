@@ -30,6 +30,7 @@ import { Config } from '@server/utils/config';
 import { recordReconcilerForcedTerminal, recordStuckBatchGauge, recordReconcileRun } from '@server/utils/cloudwatch';
 import { enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
 import { buildFabFileChunkScanFilter, CHUNK_SCAN_MIN_AGE_MS } from '@server/worker/chunkScan';
+import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
 
@@ -51,7 +52,7 @@ async function rescueUnchunkedFiles(): Promise<number> {
 
   const cutoff = new Date(Date.now() - CHUNK_SCAN_MIN_AGE_MS);
   const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff))
-    .select('_id userId')
+    .select('_id userId batchId')
     .limit(CHUNK_RESCUE_MAX_PER_RUN)
     .lean();
 
@@ -59,6 +60,10 @@ async function rescueUnchunkedFiles(): Promise<number> {
     await sendToQueue(Resource.fabFileChunkQueue.url, {
       fabFileId: String(file._id),
       userId: file.userId,
+      // Only a data-lake file (has a batch) is convergence work the kill switch may halt (#1676).
+      // A plain upload rescued after a lost S3 event is user work - it must always run (#1420), so
+      // it carries no origin. No lakeId either: this global sweep is gated by the platform switch.
+      ...(file.batchId ? { origin: CONVERGENCE_ORIGIN } : {}),
     });
   }
   return candidates.length;

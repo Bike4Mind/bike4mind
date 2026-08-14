@@ -1250,6 +1250,7 @@ async function processExecution(
         // moderation gate. The gate itself is unconditional (constructed
         // inline in the tool) - this only wires the incident record, not the block.
         imageModerationIncidents: imageModerationIncidentRepository,
+        organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
       },
       sessionRepository: sessionRepository,
@@ -2646,6 +2647,7 @@ async function processSubagentDispatch(
         // moderation gate. The gate itself is unconditional (constructed
         // inline in the tool) - this only wires the incident record, not the block.
         imageModerationIncidents: imageModerationIncidentRepository,
+        organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
       },
       sessionRepository,

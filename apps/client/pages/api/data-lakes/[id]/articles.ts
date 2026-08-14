@@ -14,6 +14,7 @@ import { dataLakeService } from '@bike4mind/services';
 import { getFilesStorage } from '@server/utils/storage';
 import { fabFilesService } from '@bike4mind/services';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { normalizeId } from '@bike4mind/utils/normalizeId';
 
 interface ArticlesQuery {
   id: string;
@@ -128,7 +129,7 @@ const handler = baseApi()
         {
           principalKind: 'user',
           principalId: userId,
-          organizationId: accessContext.organizationId,
+          organizationId: normalizeId(req.user.organizationId),
           resolvedLakeIds: [dataLake.id],
           fileIds: (result.data as Array<{ id: string }>).map(f => f.id),
           surface: 'data-lake-articles',

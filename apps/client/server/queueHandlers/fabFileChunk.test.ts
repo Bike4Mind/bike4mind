@@ -26,6 +26,7 @@ const h = vi.hoisted(() => ({
   selfHostOpenSearchEnabled: vi.fn(() => false),
   recomputeFileChunkPolicyConflict: vi.fn(async () => null),
   resolveScopedSetting: vi.fn(async () => ({ value: 512, source: 'platform' })),
+  sendToQueue: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -41,8 +42,11 @@ vi.mock('@bike4mind/database', () => ({
     shareable: { findAccessibleById: h.findAccessibleById },
     markFailedIfNotAlready: h.markFailedIfNotAlready,
   },
-  dataLakeRepository: {},
-  scopedSettingsRepository: {},
+  // Deps for the convergence kill switch (#1676), built eagerly on every message. Never exercised
+  // by these user-origin payloads (origin absent -> user work short-circuits before any read), but
+  // the named exports must exist so the deps object can be constructed.
+  dataLakeRepository: { findById: vi.fn() },
+  scopedSettingsRepository: { findOverrides: vi.fn() },
   FabFile: { updateOne: h.fabFileUpdateOne },
   User: { findById: vi.fn(async () => ({ id: 'u1' })) },
   // Run the callback so chunkFabfile actually executes (and rejects) under test.
@@ -52,10 +56,12 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', () => ({
   fabFilesService: { chunkFabfile: h.chunkFabfile },
   // Owner-altitude chunk-policy resolution (#1662). The resolver never throws; default it to the
-  // platform value so the handler proceeds exactly as before these seams existed.
+  // platform value so the handler proceeds exactly as before these seams existed. scopeForLake
+  // (#1676) is only reached for background lake work; stubbed so the deps object can be constructed.
   scopedSettingsService: {
     scopeForFileOwner: vi.fn(() => ({ owner: { id: 'u1', type: 'user' } })),
     resolveScopedSetting: h.resolveScopedSetting,
+    scopeForLake: vi.fn(),
   },
   dataLakeService: {
     resolveSpendLevers: vi.fn(async () => ({ vectorizeChunkBatchSize: 50 })),
@@ -63,7 +69,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })) }));
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: vi.fn() }));
+vi.mock('@server/utils/sqs', () => ({ sendToQueue: (...a: unknown[]) => h.sendToQueue(...a) }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: (...a: unknown[]) => h.sendToClient(...a) }));
 vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: (...a: unknown[]) => h.finalizeBatchIfComplete(...a),
@@ -367,6 +373,49 @@ describe('fabFileChunk handler - self-host OpenSearch searchIndex adapter', () =
       expect.anything(),
       expect.anything(),
       expect.objectContaining({ searchIndex: undefined })
+    );
+  });
+});
+
+describe('fabFileChunk handler - convergence kill switch (#1676)', () => {
+  const convergencePayload = { ...payload, origin: 'convergence' as const };
+  const switchOn = async (key: string) => (key === 'PauseLakeConvergence' ? true : 'text-embedding-3-small');
+  const switchOff = async (key: string) => (key === 'PauseLakeConvergence' ? false : 'text-embedding-3-small');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getSettingsValue.mockImplementation(switchOff);
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', chunked: false });
+    h.chunkFabfile.mockResolvedValue([{ id: 'c1' }]);
+    h.claimFileStatus.mockResolvedValue(false);
+  });
+
+  it('halts a convergence message when the switch is on, before any file work', async () => {
+    h.getSettingsValue.mockImplementation(switchOn);
+
+    await dispatch(makeEvent(convergencePayload), {} as never, mockLogger);
+
+    // Gated before the fabFile load, the chunk, and the isChunking claim; nothing fans out.
+    expect(h.findAccessibleById).not.toHaveBeenCalled();
+    expect(h.chunkFabfile).not.toHaveBeenCalled();
+    expect(h.fabFileUpdateOne).not.toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { isChunking: true } });
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('never halts user work (origin absent) even when the switch is on', async () => {
+    h.getSettingsValue.mockImplementation(switchOn);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger); // no origin -> user
+
+    expect(h.chunkFabfile).toHaveBeenCalled();
+  });
+
+  it('forwards origin + lakeId into the vectorize fan-out so the switch still bites downstream', async () => {
+    await dispatch(makeEvent({ ...convergencePayload, lakeId: 'lake-9' }), {} as never, mockLogger);
+
+    expect(h.sendToQueue).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ fabFileId: 'ff1', origin: 'convergence', lakeId: 'lake-9' })
     );
   });
 });
