@@ -51,6 +51,11 @@ describe('buildFabFileChunkScanFilter', () => {
     expect(matches(doc, filter)).toBe(false);
   });
 
+  it('skips a file with chunked: true even when chunkCount is 0', () => {
+    const doc = { status: 'complete', chunkCount: 0, chunked: true, isChunking: false, createdAt: old, deletedAt: null };
+    expect(matches(doc, filter)).toBe(false);
+  });
+
   it('skips a just-uploaded file still within the age window', () => {
     const recent = new Date('2026-01-01T00:01:00Z'); // after cutoff
     const doc = { status: 'complete', chunkCount: 0, isChunking: false, createdAt: recent, deletedAt: null };

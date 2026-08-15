@@ -47,6 +47,7 @@ export const NO_EXTRACTABLE_TEXT_NOTE_PREFIX = 'No extractable text';
 
 export const buildFabFileChunkScanFilter = (cutoff: Date) => ({
   status: 'complete' as const,
+  chunked: { $ne: true },
   chunkCount: 0,
   isChunking: { $ne: true },
   createdAt: { $lt: cutoff },

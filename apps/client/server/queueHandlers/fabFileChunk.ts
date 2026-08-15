@@ -273,6 +273,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         { _id: fabFileId },
         {
           $set: {
+            chunked: true,
+            chunkCount: 0,
             notes: `${NO_EXTRACTABLE_TEXT_NOTE_PREFIX} - re-process or re-upload (e.g. image-only or unsupported content).`,
           },
         }
