@@ -814,30 +814,16 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   findChunkedFilesByScope(scope: DataLakeMembershipScope): Promise<{ id: string; userId: string }[]>;
   /**
-   * Per-file compare-and-set CLAIM for re-chunking (isChunking:true, precondition isChunking:{$ne:
-   * true}) plus a reset of the chunk/vector flags (incl. `error`) so a re-enqueued job re-chunks
-   * instead of hitting the "already chunked" guard or stranding a stale vectorize error. Returns
-   * ONLY the ids actually claimed - a file a concurrent wave already claimed is skipped - each with
-   * its claim stamp (chunkClaimedAt as epoch ms). The stamp is the claim TOKEN the caller must put
-   * on the queue message: the worker only proceeds if the file still carries that exact stamp, so a
-   * duplicate or superseded delivery can't double-process one file. A claim whose enqueue fails MUST
-   * be released (releaseChunkClaimByIds).
+   * Reset the chunk/vector flags on a set of files so a re-enqueued chunk job actually re-chunks
+   * instead of hitting the "already chunked" guard. Clears `error` too - a file that chunked then
+   * failed vectorization would otherwise be stranded (chunked:false + stale error is invisible to
+   * both re-detection and the rescue sweep). Shared by the bulk rebuild wave and the per-file
+   * reprocess route so the two cannot drift. Returns the number modified.
+   *
+   * Deliberately NOT a claim: mutual exclusion is the chunk worker's compare-and-set on isChunking,
+   * which resolves two deliveries for one file regardless of which producer sent them.
    */
-  claimFilesForRechunkByIds(ids: string[]): Promise<{ id: string; claimedAt: number }[]>;
-  /**
-   * Compare-and-set CLAIM for the rescue sweep, over ids it already selected via
-   * buildFabFileChunkScanFilter. Takes the claim (isChunking:true, chunkClaimedAt=now) only if the
-   * file is not being chunked or its claim is stale - mirroring that filter's stale arm - so a
-   * merely-slow (not crashed) file already in flight isn't re-enqueued and chunked twice. Returns
-   * ONLY the ids won, each with its claim stamp (the token the worker matches); the caller enqueues
-   * exactly that subset.
-   */
-  claimForChunkScanByIds(ids: string[], staleClaimBefore: Date): Promise<{ id: string; claimedAt: number }[]>;
-  /**
-   * Undo a claim whose chunk message never reached the queue: restore chunked:true and clear
-   * isChunking so the file is re-detectable and not stranded. Returns the number modified.
-   */
-  releaseChunkClaimByIds(ids: string[]): Promise<number>;
+  resetChunkStateByIds(ids: string[]): Promise<number>;
   /**
    * Count the lake's files whose re-chunk failed (error set, no chunks) - invisible to both the
    * under-chunked detection and the rescue sweep, so surfaced separately so a manager can tell

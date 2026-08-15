@@ -11,7 +11,6 @@ const h = vi.hoisted(() => ({
   enqueueTaxonomyAnalysisIfWanted: vi.fn(),
   getSettingsValue: vi.fn(),
   fabFileFind: vi.fn(),
-  claimForChunkScan: vi.fn(),
   sendToQueue: vi.fn(),
   // Spied (not a bare stub) so a test can assert the cron passes BOTH the age cutoff and the
   // stale-claim cutoff: a one-arg call silently turns the stale-claim rescue arm back off.
@@ -22,7 +21,7 @@ vi.mock('@bike4mind/database', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
   dataLakeBatchRepository: { findStuck: h.findStuck, findStuckTaxonomy: h.findStuckTaxonomy },
   dataLakeRepository: {},
-  fabFileRepository: { claimForChunkScanByIds: h.claimForChunkScan },
+  fabFileRepository: {},
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   FabFile: { find: h.fabFileFind },
 }));
@@ -80,7 +79,6 @@ describe('dataLakeBatchReconcile cron handler', () => {
     h.fabFileFind.mockReturnValue({
       select: () => ({ limit: () => ({ lean: async () => [] }) }),
     });
-    h.claimForChunkScan.mockResolvedValue([]);
   });
 
   it('scans with a cutoff ~ now-timeout and a bounded limit, reconciles, and heartbeats', async () => {
@@ -176,10 +174,6 @@ describe('dataLakeBatchReconcile cron handler', () => {
         }),
       });
       // The CAS claim wins both files, each with its stamp; the sweep enqueues only won ids.
-      h.claimForChunkScan.mockResolvedValue([
-        { id: 'ff1', claimedAt: 111 },
-        { id: 'ff2', claimedAt: 222 },
-      ]);
 
       const res = await handler();
 
@@ -194,26 +188,23 @@ describe('dataLakeBatchReconcile cron handler', () => {
 
       // Only won ids are enqueued (never the raw pre-read set), and each carries its claim token so
       // the worker can reject a duplicate/superseded delivery.
-      expect(h.claimForChunkScan).toHaveBeenCalledWith(['ff1', 'ff2'], expect.any(Date));
       expect(h.sendToQueue).toHaveBeenCalledTimes(2);
       // A plain lost-webhook upload (no batch) is user work - it must always run, so no origin (#1676).
       expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
         fabFileId: 'ff1',
         userId: 'u1',
-        claimedAt: 111,
       });
       // A data-lake file (has a batch) is convergence work, haltable by the kill switch; a global
       // sweep carries no lakeId (platform switch only).
       expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
         fabFileId: 'ff2',
         userId: 'u2',
-        claimedAt: 222,
         origin: 'convergence',
       });
       expect(JSON.parse(res.body).rescuedChunkFiles).toBe(2);
     });
 
-    it('enqueues only the ids the claim won when a concurrent worker took the rest', async () => {
+    it('enqueues every id the filter selected - duplicates are the worker CAS to resolve', async () => {
       h.getSettingsValue.mockResolvedValue(true);
       h.fabFileFind.mockReturnValue({
         select: () => ({
@@ -225,25 +216,23 @@ describe('dataLakeBatchReconcile cron handler', () => {
           }),
         }),
       });
-      // ff2 was already claimed elsewhere -> the CAS returns only ff1.
-      h.claimForChunkScan.mockResolvedValue([{ id: 'ff1', claimedAt: 111 }]);
 
       const res = await handler();
 
-      expect(h.sendToQueue).toHaveBeenCalledTimes(1);
+      // No producer-side claim: the sweep sends what its filter selected, and a file already in
+      // flight loses the chunk worker's compare-and-set and returns without re-chunking.
+      expect(h.sendToQueue).toHaveBeenCalledTimes(2);
       expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/fabFileChunkQueue', {
         fabFileId: 'ff1',
         userId: 'u1',
-        claimedAt: 111,
       });
-      expect(JSON.parse(res.body).rescuedChunkFiles).toBe(1);
+      expect(JSON.parse(res.body).rescuedChunkFiles).toBe(2);
     });
 
     it('does nothing when auto-chunk is disabled', async () => {
       h.getSettingsValue.mockResolvedValue(false);
       await handler();
       expect(h.fabFileFind).not.toHaveBeenCalled();
-      expect(h.claimForChunkScan).not.toHaveBeenCalled();
       expect(h.sendToQueue).not.toHaveBeenCalled();
     });
 

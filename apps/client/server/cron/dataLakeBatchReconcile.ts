@@ -62,24 +62,20 @@ async function rescueUnchunkedFiles(): Promise<number> {
     .limit(CHUNK_RESCUE_MAX_PER_RUN)
     .lean();
 
-  // CLAIM before enqueue, then send only the ids won: re-sending a stale-looking claim without
-  // taking it (the old behavior) let a merely-slow, still-in-flight file be chunked twice. The
-  // claim stamp is the token the worker matches so a duplicate delivery can't double-process.
+  // Enqueue the selected ids directly. No producer-side claim: the chunk worker's compare-and-set
+  // (fabFileChunk.ts) is the single point of mutual exclusion, so a file already in flight loses
+  // there and returns. The selection filter above already excludes in-flight files, so a merely-slow
+  // file is not re-sent every pass.
   const userById = new Map(candidates.map(f => [String(f._id), String(f.userId)]));
   const batchById = new Map(candidates.map(f => [String(f._id), f.batchId]));
-  const claimed = await fabFileRepository.claimForChunkScanByIds([...userById.keys()], staleClaimBefore);
-  for (const { id, claimedAt } of claimed) {
+  for (const id of userById.keys()) {
     await sendToQueue(Resource.fabFileChunkQueue.url, {
       fabFileId: id,
       userId: userById.get(id)!,
-      claimedAt,
-      // Only a data-lake file (has a batch) is convergence work the kill switch may halt (#1676).
-      // A plain upload rescued after a lost S3 event is user work - it must always run (#1420), so
-      // it carries no origin. No lakeId either: this global sweep is gated by the platform switch.
       ...(batchById.get(id) ? { origin: CONVERGENCE_ORIGIN } : {}),
     });
   }
-  return claimed.length;
+  return userById.size;
 }
 
 /**

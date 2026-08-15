@@ -44,19 +44,11 @@ const ChunkFabFilePayload = z.object({
   // Provenance for the convergence kill switch (#1676): distinguishes background lake work
   // (haltable) from real-time user uploads (never halted). Absent => user work.
   ...provenancePayloadShape,
-  // Optional claim TOKEN (chunkClaimedAt as epoch ms) set by a producer that pre-claimed the file
-  // (the "Rebuild passages" wave or the rescue sweep). When present, the worker proceeds only if
-  // the file still carries this exact stamp - see the acquire step below. Untokened producers
-  // (upload / S3 webhook / per-file reprocess) omit it and the worker claims the file itself.
-  // `.catch(undefined)` fails soft to the untokened path on a malformed value.
-  claimedAt: z.coerce.number().int().positive().optional().catch(undefined),
 });
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = event.Records[0].body;
-  const { fabFileId, userId, chunkSize, origin, lakeId, claimedAt } = ChunkFabFilePayload.parse(
-    JSON.parse(body)
-  );
+  const { fabFileId, userId, chunkSize, origin, lakeId } = ChunkFabFilePayload.parse(JSON.parse(body));
 
   logger.updateMetadata({ fabFileId, userId });
 
@@ -83,43 +75,41 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     return;
   }
 
-  // Single-run lease. chunkFabfile unconditionally deletes then recreates a file's chunks, so at
-  // most one worker may run it per file at a time. The lease is acquired FIRST, before any pre-flight
-  // check, so that (a) any throw/return below still runs the `finally` that releases OUR claim, and
-  // (b) a superseded or duplicate delivery bails here without disturbing the winner's claim.
+  // Single-run lease, and the ONLY mutual exclusion in the chunk path. chunkFabfile unconditionally
+  // deletes then recreates a file's chunks, so at most one worker may run it per file at a time.
   //
-  // A TOKENED delivery (a "Rebuild passages" wave or the rescue sweep) carries the exact chunkClaimedAt
-  // stamp it was pre-claimed with, and proceeds only while the file still carries it. Pickup must NOT
-  // move that stamp: an SQS retry redelivers the SAME token, so overwriting it here would make every
-  // attempt after the first match nothing - silently collapsing the retry ladder (DLQ routing, batch
-  // failure accounting, `error` marking all die) into a single attempt. Leaving it put keeps the token
-  // stable across retries; a genuinely superseding claim (a new wave/sweep re-claim) is what moves it,
-  // which correctly invalidates the older message. Staleness stays safe because a run is bounded by the
-  // Lambda timeout (~13m) and CHUNK_CLAIM_STALE_MS (30m) exceeds it, so the sweep can't re-claim a still-
-  // running worker even though the stamp is now the pre-claim time rather than pickup time.
-  // An UNTOKENED delivery (upload / S3 webhook / per-file reprocess) claims a file that is not being
-  // chunked, or whose claim is stale (a worker hard-killed before its finally) - the same arms
-  // buildFabFileChunkScanFilter selects on - and DOES take a fresh lease stamp.
+  // This compare-and-set is deliberately the whole mechanism: producers (a "Rebuild passages" wave,
+  // the rescue sweep, an upload, a per-file reprocess) just reset and enqueue, and two deliveries for
+  // one file are resolved HERE regardless of who sent them. Splitting exclusion across a producer
+  // pre-claim and a consumer token is what broke this path repeatedly - the producer marks a file
+  // busy, and the consumer then cannot tell its own reservation from someone else's in-flight run.
+  //
+  // The three arms are: free (not being chunked), or a claim stale past CHUNK_CLAIM_STALE_MS (a
+  // worker hard-killed before its finally), or the null-stamp backfill arm for files stuck
+  // isChunking:true from before chunkClaimedAt existed. They mirror buildFabFileChunkScanFilter, so
+  // the sweep and the worker agree on what "in flight" means. Acquired FIRST, before any pre-flight
+  // check, so every throw/return below still runs the `finally` that releases it.
+  //
+  // Concurrent duplicate: loser matches no arm (isChunking true, stamp fresh) and returns.
+  // SQS retry: attempt 1's `finally` cleared isChunking, so arm 1 matches and the ladder survives.
+  // Redundant enqueue after a successful run: the `chunked` guard below skips it.
   let acquired = false;
   try {
     const now = new Date();
     const staleClaimBefore = new Date(now.getTime() - CHUNK_CLAIM_STALE_MS);
-    const claimQuery =
-      claimedAt !== undefined
-        ? { _id: fabFileId, chunkClaimedAt: new Date(claimedAt) }
-        : {
-            _id: fabFileId,
-            $or: [
-              { isChunking: { $ne: true } },
-              { isChunking: true, chunkClaimedAt: { $lt: staleClaimBefore } },
-              { isChunking: true, chunkClaimedAt: null },
-            ],
-          };
-    const claimUpdate =
-      claimedAt !== undefined ? { $set: { isChunking: true } } : { $set: { isChunking: true, chunkClaimedAt: now } };
-    const claimDoc = await FabFile.findOneAndUpdate(claimQuery, claimUpdate);
+    const claimDoc = await FabFile.findOneAndUpdate(
+      {
+        _id: fabFileId,
+        $or: [
+          { isChunking: { $ne: true } },
+          { isChunking: true, chunkClaimedAt: { $lt: staleClaimBefore } },
+          { isChunking: true, chunkClaimedAt: null },
+        ],
+      },
+      { $set: { isChunking: true, chunkClaimedAt: now } }
+    );
     if (!claimDoc) {
-      logger.log(`FabFile ${fabFileId}: chunk claim superseded or duplicate delivery, skipping`);
+      logger.log(`FabFile ${fabFileId}: already being chunked by another delivery, skipping`);
       return;
     }
     acquired = true;

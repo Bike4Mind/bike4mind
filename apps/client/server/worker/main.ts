@@ -1,6 +1,6 @@
 import type { SQSEvent } from 'aws-lambda';
 import { taskSchedulerService } from '@bike4mind/services';
-import { taskScheduleRepository, connectDB, FabFile, fabFileRepository, adminSettingsRepository } from '@bike4mind/database';
+import { taskScheduleRepository, connectDB, FabFile, adminSettingsRepository } from '@bike4mind/database';
 import { TaskScheduleHandler } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
@@ -151,25 +151,21 @@ async function main() {
       .limit(CHUNK_SCAN_BATCH)
       .lean();
 
-    // CLAIM before enqueue, then send only the ids won: re-sending a stale-looking claim without
-    // taking it (the old behavior) let a merely-slow, still-in-flight file be chunked twice. The
-    // claim stamp is the token the worker matches so a duplicate delivery can't double-process.
+    // Enqueue the selected ids directly. No producer-side claim: the chunk worker's compare-and-set
+    // (fabFileChunk.ts) is the single point of mutual exclusion, so a file already in flight loses
+    // there and returns. The selection filter above already excludes in-flight files, so a merely-slow
+    // file is not re-sent every pass.
     const userById = new Map(candidates.map(f => [String(f._id), String(f.userId)]));
     const batchById = new Map(candidates.map(f => [String(f._id), f.batchId]));
-    const claimed = await fabFileRepository.claimForChunkScanByIds([...userById.keys()], staleClaimBefore);
-    for (const { id, claimedAt } of claimed) {
+    for (const id of userById.keys()) {
       await sendToQueue(Resource.fabFileChunkQueue.url, {
         fabFileId: id,
         userId: userById.get(id)!,
-        claimedAt,
-        // Self-host counterpart of the hosted rescue sweep: only a data-lake file (has a batch) is
-        // convergence work the kill switch may halt (#1676); a plain lost-webhook upload is user
-        // work and always runs. Global sweep => no lakeId => platform switch only.
         ...(batchById.get(id) ? { origin: CONVERGENCE_ORIGIN } : {}),
       });
     }
-    if (claimed.length > 0) {
-      bootLogger.info(`[fabFileChunkScan] enqueued ${claimed.length} un-chunked file(s)`);
+    if (userById.size > 0) {
+      bootLogger.info(`[fabFileChunkScan] enqueued ${userById.size} un-chunked file(s)`);
     }
   });
 

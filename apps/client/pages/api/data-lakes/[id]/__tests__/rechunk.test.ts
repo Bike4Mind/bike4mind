@@ -5,8 +5,7 @@ const h = vi.hoisted(() => ({
   assertLakeWriteAccess: vi.fn(),
   detectUnderChunkedFiles: vi.fn(),
   countFailedLakeFiles: vi.fn(),
-  claimFilesForRechunkByIds: vi.fn(),
-  releaseChunkClaimByIds: vi.fn(),
+  resetChunkStateByIds: vi.fn(),
   sendToQueue: vi.fn(),
   getSourceQueueUrl: vi.fn(() => 'https://sqs.example.com/fab-file-chunk'),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false })),
@@ -38,8 +37,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
   fabFileRepository: {
-    claimFilesForRechunkByIds: h.claimFilesForRechunkByIds,
-    releaseChunkClaimByIds: h.releaseChunkClaimByIds,
+    resetChunkStateByIds: h.resetChunkStateByIds,
   },
   fabFileChunkRepository: {},
 }));
@@ -64,7 +62,6 @@ const invoke = async (method: 'GET' | 'POST', body: unknown = {}) => {
 };
 
 const lake = { id: 'lake1', datalakeTag: 'datalake:acme', createdByUserId: 'u1' };
-const CLAIMED_AT = 1_700_000_000_000;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -73,10 +70,7 @@ beforeEach(() => {
   h.countFailedLakeFiles.mockResolvedValue(0);
   // By default the claim wins every id it's asked for, each with a claim stamp (the token the
   // message carries so the worker can reject a superseded/duplicate delivery).
-  h.claimFilesForRechunkByIds.mockImplementation(async (ids: string[]) =>
-    ids.map(id => ({ id, claimedAt: CLAIMED_AT }))
-  );
-  h.releaseChunkClaimByIds.mockResolvedValue(0);
+  h.resetChunkStateByIds.mockImplementation(async (ids: string[]) => ids.length);
   h.sendToQueue.mockResolvedValue(undefined);
 });
 
@@ -91,31 +85,28 @@ describe('GET /api/data-lakes/[id]/rechunk', () => {
     expect(json).toHaveBeenCalledWith({ underChunkedCount: 2, failedCount: 1 });
     expect(h.assertLakeAccess).toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
-    expect(h.claimFilesForRechunkByIds).not.toHaveBeenCalled();
+    expect(h.resetChunkStateByIds).not.toHaveBeenCalled();
   });
 });
 
 describe('POST /api/data-lakes/[id]/rechunk', () => {
-  it('claims and enqueues the whole detected set when under the wave cap', async () => {
+  it('resets and enqueues the whole detected set when under the wave cap', async () => {
     h.detectUnderChunkedFiles.mockResolvedValue([
       { fabFileId: 'f1', userId: 'u1' },
       { fabFileId: 'f2', userId: 'u2' },
     ]);
     const { json } = await invoke('POST', {});
     expect(h.assertLakeWriteAccess).toHaveBeenCalled();
-    expect(h.claimFilesForRechunkByIds).toHaveBeenCalledWith(['f1', 'f2']);
+    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['f1', 'f2']);
     expect(h.sendToQueue).toHaveBeenCalledTimes(2);
     expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
       fabFileId: 'f1',
       userId: 'u1',
-      claimedAt: CLAIMED_AT,
     });
     expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
       fabFileId: 'f2',
       userId: 'u2',
-      claimedAt: CLAIMED_AT,
     });
-    expect(h.releaseChunkClaimByIds).not.toHaveBeenCalled();
     expect(json).toHaveBeenCalledWith({ detected: 2, enqueued: 2, remaining: 0 });
   });
 
@@ -126,12 +117,12 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
       { fabFileId: 'c', userId: 'u' },
     ]);
     const { json } = await invoke('POST', { limit: 2 });
-    expect(h.claimFilesForRechunkByIds).toHaveBeenCalledWith(['a', 'b']);
+    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['a', 'b']);
     expect(h.sendToQueue).toHaveBeenCalledTimes(2);
     expect(json).toHaveBeenCalledWith({ detected: 3, enqueued: 2, remaining: 1 });
   });
 
-  it('releases the claim on a file whose send failed, and excludes it from `enqueued`', async () => {
+  it('leaves a file whose send failed in the reset state, and excludes it from `enqueued`', async () => {
     h.detectUnderChunkedFiles.mockResolvedValue([
       { fabFileId: 'ok', userId: 'u1' },
       { fabFileId: 'bad', userId: 'u2' },
@@ -139,53 +130,33 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
     // first send lands, second rejects (SQS hiccup)
     h.sendToQueue.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('sqs unavailable'));
     const { json } = await invoke('POST', {});
-    expect(h.claimFilesForRechunkByIds).toHaveBeenCalledWith(['ok', 'bad']);
-    expect(h.releaseChunkClaimByIds).toHaveBeenCalledWith(['bad']); // un-strand the failed one
+    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['ok', 'bad']);
     expect(json).toHaveBeenCalledWith({ detected: 2, enqueued: 1, remaining: 1 });
   });
 
-  it('enqueues only the ids the claim actually won (a concurrent wave took the rest)', async () => {
+  it('resets the whole wave in ONE call, then enqueues each id', async () => {
     h.detectUnderChunkedFiles.mockResolvedValue([
       { fabFileId: 'a', userId: 'u' },
       { fabFileId: 'b', userId: 'u' },
-      { fabFileId: 'c', userId: 'u' },
-    ]);
-    // 'b' was already claimed by a concurrent wave, so the claim returns only a and c.
-    h.claimFilesForRechunkByIds.mockResolvedValue([
-      { id: 'a', claimedAt: CLAIMED_AT },
-      { id: 'c', claimedAt: CLAIMED_AT },
     ]);
     const { json } = await invoke('POST', {});
+    // One bulk reset for the wave - no per-file claim, because mutual exclusion is the chunk
+    // worker's compare-and-set, not a producer-side reservation.
+    expect(h.resetChunkStateByIds).toHaveBeenCalledTimes(1);
+    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['a', 'b']);
     expect(h.sendToQueue).toHaveBeenCalledTimes(2);
-    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
-      fabFileId: 'a',
-      userId: 'u',
-      claimedAt: CLAIMED_AT,
-    });
-    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
-      fabFileId: 'c',
-      userId: 'u',
-      claimedAt: CLAIMED_AT,
-    });
-    expect(h.sendToQueue).not.toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
-      fabFileId: 'b',
-      userId: 'u',
-      claimedAt: CLAIMED_AT,
-    });
-    expect(h.releaseChunkClaimByIds).not.toHaveBeenCalled();
-    // enqueued counts what THIS call put on the queue; the lost id stays in `remaining`.
-    expect(json).toHaveBeenCalledWith({ detected: 3, enqueued: 2, remaining: 1 });
+    expect(json).toHaveBeenCalledWith({ detected: 2, enqueued: 2, remaining: 0 });
   });
 
   it('is a no-op enqueue when nothing is under-chunked', async () => {
     h.detectUnderChunkedFiles.mockResolvedValue([]);
     const { json } = await invoke('POST', {});
-    expect(h.claimFilesForRechunkByIds).not.toHaveBeenCalled();
+    expect(h.resetChunkStateByIds).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
     expect(json).toHaveBeenCalledWith({ detected: 0, enqueued: 0, remaining: 0 });
   });
 
-  it('gates on write access - a rejected assert never claims or enqueues', async () => {
+  it('gates on write access - a rejected assert never resets or enqueues', async () => {
     h.assertLakeWriteAccess.mockRejectedValue(new Error('Only the creator can add files to this data lake'));
     await expect(invoke('POST', {})).rejects.toThrow(/creator/);
     expect(h.detectUnderChunkedFiles).not.toHaveBeenCalled();

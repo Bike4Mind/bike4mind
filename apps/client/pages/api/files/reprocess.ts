@@ -1,5 +1,5 @@
 import { Permission } from '@bike4mind/common';
-import { FabFile } from '@bike4mind/database';
+import { fabFileRepository } from '@bike4mind/database';
 import { getFabFileById } from '@server/managers/fabFileManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -28,23 +28,11 @@ const handler = baseApi().post(
     if (!req.ability?.can?.(Permission.update, fabFile)) throw new BadRequestError('Unauthorized');
     if (fabFile.isChunking) throw new BadRequestError('FabFile is currently being chunked');
 
-    // Reset processing state and clear any prior "no text" flag. chunkEmbeddingModelStampedAt
-    // must clear too - a stale stamp would make the Atlas cutover read path treat this file as
-    // ANN-ready before the re-chunked chunks are re-stamped (see vectorSearchEligibility.ts).
-    await FabFile.updateOne(
-      { _id: fabFileId },
-      {
-        $set: {
-          isChunking: false,
-          chunked: false,
-          chunkCount: 0,
-          vectorized: false,
-          vectorizedChunkCount: 0,
-          notes: '',
-          chunkEmbeddingModelStampedAt: null,
-        },
-      }
-    );
+    // Shared with the bulk "Rebuild passages" wave so the two reset paths cannot drift on which
+    // fields they clear - notably `error`, which this route previously left set: a file that chunked
+    // then failed vectorization stayed invisible to both the lake's under-chunked detection and the
+    // rescue sweep after a reprocess.
+    await fabFileRepository.resetChunkStateByIds([fabFileId]);
 
     await sendToClient(req.user.id, Resource.websocket.managementEndpoint, {
       action: 'update_file_chunk_vector_status',

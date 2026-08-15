@@ -72,30 +72,26 @@ const handler = baseApi()
     if (wave.length > 0) {
       const queueUrl = getSourceQueueUrl('fabFileChunkQueue');
       if (!queueUrl) throw new Error('Chunk queue URL not found');
-      // Atomically CLAIM the wave and enqueue ONLY the files this call actually won: a file a
-      // concurrent wave already claimed isn't returned, so the two waves can't both enqueue it and
-      // double-process it. The claim flips `chunked` off (so the re-enqueued job clears
-      // fabFileChunk.ts's idempotency guard) and hides the file from the rescue sweep.
-      const claimedById = new Map(wave.map(f => [f.fabFileId, f.userId] as const));
-      const claimed = await fabFileRepository.claimFilesForRechunkByIds([...claimedById.keys()]);
-      // allSettled, not all: one failed send must not fail the batch and strand the OTHER claimed
-      // files with nothing on the queue. Release the claim on any file whose send didn't land so it
-      // self-heals (re-detected / re-swept) instead of sitting claimed-and-invisible. `claimedAt` is
-      // the claim token: the worker only re-chunks a file that still carries this exact stamp, so a
-      // duplicate delivery or a stale rescue re-enqueue can't double-process it.
+      // Reset the wave, then enqueue it. No producer-side claim: mutual exclusion is the chunk
+      // worker's compare-and-set (fabFileChunk.ts), which resolves a duplicate whether it came from
+      // a second wave, the rescue sweep, or an SQS redelivery. The reset flips `chunked` off so the
+      // re-enqueued job clears the worker's idempotency guard.
+      const userById = new Map(wave.map(f => [f.fabFileId, f.userId] as const));
+      const ids = [...userById.keys()];
+      await fabFileRepository.resetChunkStateByIds(ids);
+      // allSettled, not all: one failed send must not fail the whole wave. A file whose send didn't
+      // land is left in the reset state (chunked:false, chunkCount:0), which is exactly what the
+      // rescue sweep selects on, so it self-heals on the next pass rather than needing an undo.
       const results = await Promise.allSettled(
-        claimed.map(({ id, claimedAt }) =>
-          sendToQueue(queueUrl, { fabFileId: id, userId: claimedById.get(id)!, claimedAt })
-        )
+        ids.map(id => sendToQueue(queueUrl, { fabFileId: id, userId: userById.get(id)! }))
       );
-      const failedIds = claimed.filter((_, i) => results[i].status === 'rejected').map(c => c.id);
-      if (failedIds.length > 0) {
+      const failed = results.filter(r => r.status === 'rejected').length;
+      if (failed > 0) {
         req.logger?.error?.(
-          `rechunk: ${failedIds.length}/${claimed.length} sends failed for lake ${lake.id}, released`
+          `rechunk: ${failed}/${ids.length} sends failed for lake ${lake.id}; left reset for the rescue sweep`
         );
-        await fabFileRepository.releaseChunkClaimByIds(failedIds);
       }
-      enqueued = claimed.length - failedIds.length;
+      enqueued = ids.length - failed;
     }
 
     return res.json({

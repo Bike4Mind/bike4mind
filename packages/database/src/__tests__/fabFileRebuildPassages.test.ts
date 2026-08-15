@@ -99,13 +99,13 @@ describe('FabFileRepository.findChunkedFilesByScope', () => {
   });
 });
 
-describe('FabFileRepository.claimFilesForRechunkByIds', () => {
+describe('FabFileRepository.resetChunkStateByIds', () => {
   setupMongoTest();
   beforeEach(async () => {
     await FabFile.deleteMany({});
   });
 
-  it('claims a free file (isChunking:true + reset flags, incl. error) and returns its id + claim stamp', async () => {
+  it('resets the chunk/vector flags INCLUDING error, so a re-enqueued job re-chunks', async () => {
     const [f] = await FabFile.create([
       makeFile({
         chunked: true,
@@ -113,110 +113,95 @@ describe('FabFileRepository.claimFilesForRechunkByIds', () => {
         isChunking: false,
         vectorized: true,
         vectorizedChunkCount: 1,
-        // A file that chunked then FAILED vectorization: chunked:true + a stale error. The claim
-        // must clear that error, else a released claim strands it invisibly.
+        // A file that chunked then FAILED vectorization: chunked:true + a stale error. If the reset
+        // leaves `error` set, the file is stranded - invisible to re-detection (needs chunked:true)
+        // AND to the rescue sweep (needs empty error). This assertion is the guard on that.
         error: 'vectorize timeout',
         chunkEmbeddingModelStampedAt: new Date(),
       }),
     ]);
 
-    expect(await fabFileRepository.claimFilesForRechunkByIds([f._id.toString()])).toEqual([
-      { id: f._id.toString(), claimedAt: expect.any(Number) },
-    ]);
+    expect(await fabFileRepository.resetChunkStateByIds([f._id.toString()])).toBe(1);
 
     const after = await FabFile.findById(f._id).lean();
-    expect(after?.isChunking).toBe(true); // claimed, so the rescue sweep can't grab it mid-flight
-    expect(after?.chunkClaimedAt).toBeInstanceOf(Date); // stamped so a lost claim is later reclaimable
+    expect(after?.isChunking).toBe(false); // NOT a claim - the worker's CAS owns exclusion
     expect(after?.chunked).toBe(false);
     expect(after?.chunkCount).toBe(0);
     expect(after?.vectorized).toBe(false);
     expect(after?.vectorizedChunkCount).toBe(0);
-    expect(after?.error).toBeNull(); // stale vectorize error cleared with the rest of the reset
+    expect(after?.error).toBeNull();
     expect(after?.chunkEmbeddingModelStampedAt).toBeNull();
   });
 
-  it('does NOT claim a file already in-flight (compare-and-set), so concurrent waves cannot double-claim', async () => {
-    const [f] = await FabFile.create([makeFile({ chunked: false, isChunking: true })]);
-    // Second wave sees isChunking already set -> not returned -> caller never enqueues it again.
-    expect(await fabFileRepository.claimFilesForRechunkByIds([f._id.toString()])).toEqual([]);
-  });
-
-  it('returns only the subset it won when some ids are already claimed', async () => {
-    const [free, taken] = await FabFile.create([makeFile({ isChunking: false }), makeFile({ isChunking: true })]);
-    expect(await fabFileRepository.claimFilesForRechunkByIds([free._id.toString(), taken._id.toString()])).toEqual([
-      { id: free._id.toString(), claimedAt: expect.any(Number) },
-    ]);
-  });
-
   it('an empty id list is a no-op', async () => {
-    expect(await fabFileRepository.claimFilesForRechunkByIds([])).toEqual([]);
+    expect(await fabFileRepository.resetChunkStateByIds([])).toBe(0);
   });
 });
 
-describe('FabFileRepository.claimForChunkScanByIds', () => {
+// The handoff the mocked worker tests cannot see: a producer resets a file, and the worker's claim
+// must then actually acquire it. A previous round added an `isChunking:{$ne:true}` precondition to a
+// path whose producer SET isChunking:true, so every message was rejected and nothing was ever
+// re-chunked - green CI throughout, because the worker suite mocks findOneAndUpdate. These run the
+// real query against a real document.
+describe('reset -> worker claim handoff (real DB)', () => {
   setupMongoTest();
   beforeEach(async () => {
     await FabFile.deleteMany({});
   });
 
-  const staleBefore = () => new Date(Date.now() - 30 * 60_000);
+  const STALE_MS = 30 * 60_000;
+  // Byte-for-byte the claim in apps/client/server/queueHandlers/fabFileChunk.ts. If that query
+  // changes, this must change with it - which is the point.
+  const workerClaim = async (id: string) => {
+    const now = new Date();
+    const staleClaimBefore = new Date(now.getTime() - STALE_MS);
+    return FabFile.findOneAndUpdate(
+      {
+        _id: id,
+        $or: [
+          { isChunking: { $ne: true } },
+          { isChunking: true, chunkClaimedAt: { $lt: staleClaimBefore } },
+          { isChunking: true, chunkClaimedAt: null },
+        ],
+      },
+      { $set: { isChunking: true, chunkClaimedAt: now } }
+    );
+  };
 
-  it('claims a free (not-in-flight) file, stamping isChunking + chunkClaimedAt', async () => {
-    const [f] = await FabFile.create([makeFile({ chunked: false, chunkCount: 0, isChunking: false })]);
-    expect(await fabFileRepository.claimForChunkScanByIds([f._id.toString()], staleBefore())).toEqual([
-      { id: f._id.toString(), claimedAt: expect.any(Number) },
-    ]);
-    const after = await FabFile.findById(f._id).lean();
-    expect(after?.isChunking).toBe(true);
-    expect(after?.chunkClaimedAt).toBeInstanceOf(Date);
+  it('the worker ACQUIRES a file the producer just reset', async () => {
+    const [f] = await FabFile.create([makeFile({ chunked: true, chunkCount: 1 })]);
+    const id = f._id.toString();
+    await fabFileRepository.resetChunkStateByIds([id]);
+
+    expect(await workerClaim(id)).not.toBeNull();
+    expect((await FabFile.findById(id).lean())?.isChunking).toBe(true);
   });
 
-  it('reclaims a STALE claim (isChunking:true, chunkClaimedAt older than the cutoff)', async () => {
+  it('a CONCURRENT duplicate delivery loses the claim and must not run', async () => {
+    const [f] = await FabFile.create([makeFile({ chunked: true, chunkCount: 1 })]);
+    const id = f._id.toString();
+    await fabFileRepository.resetChunkStateByIds([id]);
+
+    expect(await workerClaim(id)).not.toBeNull(); // delivery 1 wins
+    expect(await workerClaim(id)).toBeNull(); // delivery 2 finds it in flight
+  });
+
+  it('an SQS retry re-acquires once the first attempt released the claim', async () => {
+    const [f] = await FabFile.create([makeFile({ chunked: true, chunkCount: 1 })]);
+    const id = f._id.toString();
+    await fabFileRepository.resetChunkStateByIds([id]);
+
+    expect(await workerClaim(id)).not.toBeNull();
+    // What the handler's `finally` does on every exit.
+    await FabFile.updateOne({ _id: id }, { $set: { isChunking: false } });
+    expect(await workerClaim(id)).not.toBeNull(); // retry ladder survives
+  });
+
+  it('a claim stranded by a hard crash is reclaimable once stale', async () => {
     const [f] = await FabFile.create([
       makeFile({ chunked: false, chunkCount: 0, isChunking: true, chunkClaimedAt: new Date(Date.now() - 60 * 60_000) }),
     ]);
-    expect(await fabFileRepository.claimForChunkScanByIds([f._id.toString()], staleBefore())).toEqual([
-      { id: f._id.toString(), claimedAt: expect.any(Number) },
-    ]);
-  });
-
-  it('does NOT reclaim a FRESH in-flight claim (chunkClaimedAt within the cutoff)', async () => {
-    const [f] = await FabFile.create([
-      makeFile({ chunked: false, chunkCount: 0, isChunking: true, chunkClaimedAt: new Date() }),
-    ]);
-    expect(await fabFileRepository.claimForChunkScanByIds([f._id.toString()], staleBefore())).toEqual([]);
-  });
-
-  it('reclaims a null-stamp stuck claim (isChunking:true with no chunkClaimedAt) - the backfill arm', async () => {
-    const [f] = await FabFile.create([makeFile({ chunked: false, chunkCount: 0, isChunking: true })]);
-    const after0 = await FabFile.findById(f._id).lean();
-    expect(after0?.chunkClaimedAt ?? null).toBeNull(); // stuck before chunkClaimedAt existed
-    expect(await fabFileRepository.claimForChunkScanByIds([f._id.toString()], staleBefore())).toEqual([
-      { id: f._id.toString(), claimedAt: expect.any(Number) },
-    ]);
-  });
-
-  it('an empty id list is a no-op', async () => {
-    expect(await fabFileRepository.claimForChunkScanByIds([], staleBefore())).toEqual([]);
-  });
-});
-
-describe('FabFileRepository.releaseChunkClaimByIds', () => {
-  setupMongoTest();
-  beforeEach(async () => {
-    await FabFile.deleteMany({});
-  });
-
-  it('clears only isChunking, leaving the file reset so the sweep re-chunks it rather than churns', async () => {
-    const [f] = await FabFile.create([makeFile({ chunked: false, isChunking: true, chunkCount: 0 })]);
-
-    expect(await fabFileRepository.releaseChunkClaimByIds([f._id.toString()])).toBe(1);
-
-    const after = await FabFile.findById(f._id).lean();
-    expect(after?.isChunking).toBe(false);
-    // chunked stays false (NOT restored to true): the released file is genuinely under-chunked, so
-    // the rescue sweep picks it up and the worker actually re-chunks it instead of no-op churning.
-    expect(after?.chunked).toBe(false);
+    expect(await workerClaim(f._id.toString())).not.toBeNull();
   });
 });
 
