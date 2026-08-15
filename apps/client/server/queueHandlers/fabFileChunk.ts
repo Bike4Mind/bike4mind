@@ -26,7 +26,7 @@ import {
 import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
 import { isSupportedEmbeddingModel } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
-import { NO_EXTRACTABLE_TEXT_NOTE_PREFIX } from '@server/worker/chunkScan';
+import { NO_EXTRACTABLE_TEXT_NOTE_PREFIX, CHUNK_CLAIM_STALE_MS } from '@server/worker/chunkScan';
 import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
 import { provenancePayloadShape } from '@server/queueHandlers/convergenceProvenance';
 import { Resource } from 'sst';
@@ -75,71 +75,113 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     return;
   }
 
-  const user = await User.findById(userId);
-  if (!user) throw new Error(`User not found for userId: ${userId}`);
-
-  logger.log('====================================');
-  logger.log(`Started chunk queue handler for fabFileId: ${fabFileId}`);
-  logger.log('====================================');
-
-  const defaultEmbeddingModel = await adminSettingsRepository.getSettingsValue('defaultEmbeddingModel');
-  if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) {
-    throw new BadRequestError('Default embedding model not found');
-  }
-
-  const fabFile = await fabFileRepository.shareable.findAccessibleById(user, fabFileId);
-  if (!fabFile) {
-    logger.log(`FabFile not found: ${fabFileId}, skipping chunking`);
-    return;
-  }
-
-  // Idempotency: skip a duplicate delivery once the file is already chunked. Without this,
-  // chunkFabfile's own deleteManyByFabFileId (called unconditionally on every run) would wipe out
-  // and replace chunks a prior successful delivery already created - possibly ones already
-  // vectorized - the exact destructive case the rescue sweep can trigger (a deferred, non-final
-  // attempt clears isChunking/leaves error unset for the whole retry window, matching the sweep's
-  // filter; see chunkScan.ts). Mirrors fabFileVectorize.ts's own early-return.
-  if (fabFile.chunked || fabFile.notes?.startsWith(NO_EXTRACTABLE_TEXT_NOTE_PREFIX)) {
-    logger.log(`FabFile ${fabFileId} already chunked, skipping duplicate message`);
-    return;
-  }
-
-  // Chunk policy at file-owner altitude (#1662). Resolve the owner's DefaultChunkSize (falling
-  // through to the platform default) UNLESS this delivery carried an explicit chunkSize override -
-  // only the UI reprocess door (/api/files/chunk) sends one; every automatic door omits it and now
-  // inherits the owner-altitude policy. The resolver never throws (degrades to the platform value).
-  // The chunker re-derives the same effective limit internally; we compute it here via the shared
-  // helper for the cross-lake conflict check below and to log when a lever exceeds the model window.
-  const ownerScope = scopedSettingsService.scopeForFileOwner({ userId: fabFile.userId });
-  const resolvedChunkPolicy = await scopedSettingsService.resolveScopedSetting(
-    'DefaultChunkSize',
-    ownerScope,
-    { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository },
-    { logger }
-  );
-  const requestedPassageTokenTarget = chunkSize ?? resolvedChunkPolicy.value;
-  const effectivePassageTokenTarget = effectiveChunkTokenLimit({
-    model: defaultEmbeddingModel,
-    passageTokenTarget: requestedPassageTokenTarget,
-  });
-  logger.log(
-    `Chunk policy for ${fabFileId}: requested=${requestedPassageTokenTarget} ` +
-      `(source=${chunkSize !== undefined ? 'payload' : resolvedChunkPolicy.source}) ` +
-      `effective=${effectivePassageTokenTarget} model=${defaultEmbeddingModel}`
-  );
-  if (effectivePassageTokenTarget !== requestedPassageTokenTarget) {
-    logger.warn(
-      `Chunk policy ${requestedPassageTokenTarget} for ${fabFileId} exceeds the ${defaultEmbeddingModel} ` +
-        `embedding window; reduced to ${effectivePassageTokenTarget}.`
-    );
-  }
-
-  // Mark the file as actively chunking so the self-host safety-net scan (worker) doesn't
-  // re-enqueue it mid-run - a duplicate would re-chunk and re-embed the whole file. Cleared
-  // in `finally` on success AND failure so it can still be retried/reprocessed. Default: false.
-  await FabFile.updateOne({ _id: fabFileId }, { $set: { isChunking: true } });
-
+  // Single-run lease: the only PRODUCER-side-independent exclusion in the chunk path. chunkFabfile
+  // unconditionally deletes then recreates a file's chunks, so at most one worker may run it per file.
+  //
+  // This compare-and-set is deliberately the whole producer-facing mechanism: producers (a "Rebuild
+  // passages" wave, the rescue sweep, an upload, a per-file reprocess) just reset and enqueue, and two
+  // deliveries for one file are resolved HERE regardless of who sent them. Splitting exclusion across
+  // a producer pre-claim and a consumer token is what broke this path repeatedly - the producer marks
+  // a file busy, and the consumer then cannot tell its own reservation from someone else's run.
+  //
+  // It is NOT the only guard for the whole run, and the distinction matters if you change either
+  // half: chunkFabfile writes isChunking:false alongside chunked:true partway through
+  // (fabFileService/chunk.ts) - BEFORE its destructive delete - so from that write onward a duplicate
+  // is turned away by the `chunked` guard below rather than by this CAS. Pre-existing, and the
+  // handoff holds because whichever of the two is live rejects the duplicate.
+  //
+  // The three arms are: free (not being chunked), or a claim stale past CHUNK_CLAIM_STALE_MS (a
+  // worker hard-killed before its finally), or the null-stamp backfill arm for files stuck
+  // isChunking:true from before chunkClaimedAt existed. They mirror buildFabFileChunkScanFilter, so
+  // the sweep and the worker agree on what "in flight" means. Acquired FIRST, before any pre-flight
+  // check, so every throw/return below still runs the `finally` that releases it.
+  //
+  // Concurrent duplicate: loser matches no arm (isChunking true, stamp fresh) and returns.
+  // SQS retry: attempt 1's `finally` cleared isChunking, so arm 1 matches and the ladder survives.
+  // Redundant enqueue after a successful run: the `chunked` guard below skips it.
+  let acquired = false;
+  // Hoisted so the release below can compare-and-set on the stamp this run actually claimed with.
+  let claimedAt: Date | undefined;
   try {
+    const now = new Date();
+    const staleClaimBefore = new Date(now.getTime() - CHUNK_CLAIM_STALE_MS);
+    const claimDoc = await FabFile.findOneAndUpdate(
+      {
+        _id: fabFileId,
+        $or: [
+          { isChunking: { $ne: true } },
+          { isChunking: true, chunkClaimedAt: { $lt: staleClaimBefore } },
+          { isChunking: true, chunkClaimedAt: null },
+        ],
+      },
+      { $set: { isChunking: true, chunkClaimedAt: now } }
+    );
+    if (!claimDoc) {
+      logger.log(`FabFile ${fabFileId}: already being chunked by another delivery, skipping`);
+      return;
+    }
+    acquired = true;
+    claimedAt = now;
+
+    const user = await User.findById(userId);
+    if (!user) throw new Error(`User not found for userId: ${userId}`);
+
+    logger.log('====================================');
+    logger.log(`Started chunk queue handler for fabFileId: ${fabFileId}`);
+    logger.log('====================================');
+
+    const defaultEmbeddingModel = await adminSettingsRepository.getSettingsValue('defaultEmbeddingModel');
+    if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) {
+      throw new BadRequestError('Default embedding model not found');
+    }
+
+    const fabFile = await fabFileRepository.shareable.findAccessibleById(user, fabFileId);
+    if (!fabFile) {
+      logger.log(`FabFile not found: ${fabFileId}, skipping chunking`);
+      return;
+    }
+
+    // Idempotency: skip a duplicate delivery once the file is already chunked. Without this,
+    // chunkFabfile's own deleteManyByFabFileId (called unconditionally on every run) would wipe out
+    // and replace chunks a prior successful delivery already created - possibly ones already
+    // vectorized - the exact destructive case the rescue sweep can trigger (a deferred, non-final
+    // attempt clears isChunking/leaves error unset for the whole retry window, matching the sweep's
+    // filter; see chunkScan.ts). Mirrors fabFileVectorize.ts's own early-return.
+    if (fabFile.chunked || fabFile.notes?.startsWith(NO_EXTRACTABLE_TEXT_NOTE_PREFIX)) {
+      logger.log(`FabFile ${fabFileId} already chunked, skipping duplicate message`);
+      return;
+    }
+
+    // Chunk policy at file-owner altitude (#1662). Resolve the owner's DefaultChunkSize (falling
+    // through to the platform default) UNLESS this delivery carried an explicit chunkSize override -
+    // only the UI reprocess door (/api/files/chunk) sends one; every automatic door omits it and now
+    // inherits the owner-altitude policy. The resolver never throws (degrades to the platform value).
+    // The chunker re-derives the same effective limit internally; we compute it here via the shared
+    // helper for the cross-lake conflict check below and to log when a lever exceeds the model window.
+    const ownerScope = scopedSettingsService.scopeForFileOwner({ userId: fabFile.userId });
+    const resolvedChunkPolicy = await scopedSettingsService.resolveScopedSetting(
+      'DefaultChunkSize',
+      ownerScope,
+      { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository },
+      { logger }
+    );
+    const requestedPassageTokenTarget = chunkSize ?? resolvedChunkPolicy.value;
+    const effectivePassageTokenTarget = effectiveChunkTokenLimit({
+      model: defaultEmbeddingModel,
+      passageTokenTarget: requestedPassageTokenTarget,
+    });
+    logger.log(
+      `Chunk policy for ${fabFileId}: requested=${requestedPassageTokenTarget} ` +
+        `(source=${chunkSize !== undefined ? 'payload' : resolvedChunkPolicy.source}) ` +
+        `effective=${effectivePassageTokenTarget} model=${defaultEmbeddingModel}`
+    );
+    if (effectivePassageTokenTarget !== requestedPassageTokenTarget) {
+      logger.warn(
+        `Chunk policy ${requestedPassageTokenTarget} for ${fabFileId} exceeds the ${defaultEmbeddingModel} ` +
+          `embedding window; reduced to ${effectivePassageTokenTarget}.`
+      );
+    }
+
     // Tag data-lake chunk logs with the batch id for incident triage (the lake is derivable
     // from the batch). dataLakeId isn't on the FabFile and isn't worth an extra read here.
     if (fabFile.batchId) logger.updateMetadata({ batchId: fabFile.batchId });
@@ -373,8 +415,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     logger.log('Completed chunk queue handler');
     logger.log('====================================');
   } finally {
-    await FabFile.updateOne({ _id: fabFileId }, { $set: { isChunking: false } }).catch(err =>
-      logger.error(`Failed to clear isChunking for ${fabFileId}: ${err}`)
-    );
+    // Release ONLY the claim this run actually holds, matched on the stamp it claimed with. A
+    // superseded/duplicate delivery (acquired=false) must not clear isChunking at all, and a run
+    // whose claim was since SUPERSEDED - by the stale arm, or by a re-claim - must not clear its
+    // successor's flag either: an unconditional clear turns one takeover into a cascade, re-opening
+    // arm 1 for a third worker while the second is still running.
+    if (acquired && claimedAt) {
+      await FabFile.updateOne({ _id: fabFileId, chunkClaimedAt: claimedAt }, { $set: { isChunking: false } }).catch(
+        err => logger.error(`Failed to clear isChunking for ${fabFileId}: ${err}`)
+      );
+    }
   }
 });

@@ -179,6 +179,9 @@ export interface IFabFile {
 
   /** Whether this FabFile is currently being chunked. */
   isChunking?: boolean;
+  /** When `isChunking` was last set true - the rescue sweep uses this to reclaim a claim stranded
+   *  by a hard worker crash that never cleared it (see buildFabFileChunkScanFilter). */
+  chunkClaimedAt?: Date | null;
   /** Whether this FabFile has been chunked */
   chunked?: boolean;
   /**
@@ -417,6 +420,13 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
   backfillCharLengthByIds(chunkIds: string[]): Promise<number>;
   /** Sum of a file's chunks' charLength, unstamped chunks counted as 0. */
   sumChunkCharLengthByFabFileId(fabFileId: string): Promise<number>;
+  /**
+   * Of the given files, those with at least one chunk larger than `tokenThreshold` - i.e. files
+   * whose passages predate the passage-target fix (a whole-document blob, not a ~512-token
+   * passage). Returned worst-first (largest oversized chunk first) so a bounded rebuild wave
+   * repairs the least-retrievable files first. Powers the lake "Rebuild passages" detection.
+   */
+  findUnderChunkedFabFileIds(fabFileIds: string[], tokenThreshold: number): Promise<string[]>;
 }
 
 /**
@@ -803,6 +813,31 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   findFileIdsMissingChunkedCharCount(options?: { limit?: number; afterFileId?: string }): Promise<string[]>;
   /** Stamp a file's recomputed `chunkedCharCount` - the char-length backfill's phase-2 write. */
   setChunkedCharCount(id: string, chunkedCharCount: number): Promise<void>;
+  /**
+   * Live, already-chunked files in the lake, as {id, userId} - the input set for under-chunked
+   * detection. userId is the file OWNER, needed to re-enqueue the chunk job under the same
+   * identity the original ingest used. Excludes deleted/archived/still-pending files, and files
+   * already claimed and in-flight (isChunking) so a concurrent wave can't re-select them.
+   */
+  findChunkedFilesByScope(scope: DataLakeMembershipScope): Promise<{ id: string; userId: string }[]>;
+  /**
+   * Reset the chunk/vector flags on a set of files so a re-enqueued chunk job actually re-chunks
+   * instead of hitting the "already chunked" guard. Clears `error` too - a file that chunked then
+   * failed vectorization would otherwise be stranded (chunked:false + stale error is invisible to
+   * both re-detection and the rescue sweep). Shared by the bulk rebuild wave and the per-file
+   * reprocess route so the two cannot drift. Returns the number modified.
+   *
+   * Preconditioned on `isChunking: {$ne: true}`: the reset WRITES isChunking:false, so without it a
+   * reset would release a live worker's lease and let a second worker into chunkFabfile's
+   * delete-then-insert. Returns the ids actually reset, so the caller enqueues exactly what changed.
+   */
+  resetChunkStateByIds(ids: string[]): Promise<string[]>;
+  /**
+   * Count the lake's files whose re-chunk failed (error set, no chunks) - invisible to both the
+   * under-chunked detection and the rescue sweep, so surfaced separately so a manager can tell
+   * "rebuild done" from "some files gave up".
+   */
+  countFailedFilesByScope(scope: DataLakeMembershipScope): Promise<number>;
   /**
    * Distinct live file count per lake, keyed by `datalakeTag`. Same predicate as
    * computeDataLakeStats, so what a browse surface displays cannot disagree with a lake's

@@ -72,6 +72,9 @@ const PDF_MIME = 'application/pdf';
 const DEFAULT_MAX_FILE_MB = 20;
 /** Only rescue files older than this - keep in sync with server/worker/chunkScan.ts. */
 const STRAGGLER_MIN_AGE_MS = 2 * 60_000;
+/** A claim held longer than this is treated as stranded (a worker hard-killed before its finally).
+ * Keep in sync with CHUNK_CLAIM_STALE_MS in server/worker/chunkScan.ts. */
+const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
 
 interface Options {
   dir?: string;
@@ -115,15 +118,28 @@ const membership = (lake: LakeTarget) =>
 /** Live lake files: members, not soft-deleted, not archived (parity with computeDataLakeStats). */
 const liveFilter = (lake: LakeTarget) => ({ ...membership(lake), deletedAt: null, archivedAt: null });
 
-/** Complete-but-unchunked lake files (lost S3 event / failed extraction).
- * Keep in sync with buildFabFileChunkScanFilter in apps/client/server/worker/chunkScan.ts. */
+/** Complete-but-unchunked lake files (lost S3 event / failed extraction), including files stranded
+ * mid-claim by a hard-killed worker. Keep in sync with buildFabFileChunkScanFilter in
+ * apps/client/server/worker/chunkScan.ts - including its stale-claim arm (a claim older than
+ * CHUNK_CLAIM_STALE_MS, or an isChunking:true file predating chunkClaimedAt, is rescuable). */
 const stragglerFilter = (lake: LakeTarget) => ({
-  ...membership(lake),
   status: 'complete',
   chunkCount: 0,
-  isChunking: { $ne: true },
   createdAt: { $lt: new Date(Date.now() - STRAGGLER_MIN_AGE_MS) },
   deletedAt: null,
+  // membership() itself returns a top-level `$or` for a prefix-bearing lake (meta-tag OR prefix
+  // arm), so the stale-claim `$or` below CANNOT be a sibling key - the later one would clobber the
+  // membership one and un-scope the query across every tenant. Nest both under `$and` so both hold.
+  $and: [
+    membership(lake),
+    {
+      $or: [
+        { isChunking: { $ne: true } },
+        { isChunking: true, chunkClaimedAt: { $lt: new Date(Date.now() - CHUNK_CLAIM_STALE_MS) } },
+        { isChunking: true, chunkClaimedAt: null },
+      ],
+    },
+  ],
 });
 
 async function statusReport(lake: LakeTarget): Promise<number> {
