@@ -1287,11 +1287,11 @@ function LakeInfoPanel({
               </Chip>
             </Tooltip>
           )}
-          {/* A rebuild badge reaching zero doesn't mean success if some files failed to re-chunk -
+          {/* A rebuild badge reaching zero doesn't mean success if some files failed to process -
               those won't retry on their own, so surface them distinctly. */}
           {lake.canManage && failedCount > 0 && (
             <Tooltip
-              title="These files failed to re-chunk (e.g. a corrupt or unparseable file) and won't retry automatically. Open the file and Re-process, or re-upload it."
+              title="These files failed to process (e.g. a corrupt or unparseable file) and won't retry automatically. Includes files that failed at upload, not only rebuild attempts - Rebuild passages cannot clear them. Open the file and Re-process, or re-upload it."
               size="sm"
             >
               <Chip

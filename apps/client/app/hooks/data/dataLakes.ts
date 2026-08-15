@@ -558,7 +558,11 @@ export function useUnderChunkedCount(dataLakeId: string | null, enabled = true) 
     // Tick down as waves complete; coarser cadence while the backlog is large (each poll is a full
     // lake rescan), quiet once nothing is left to rebuild.
     refetchInterval: query => {
-      const n = query.state.data?.underChunkedCount ?? 0;
+      // Both counts, not just underChunkedCount: that one drops the instant a wave is RESET, which is
+      // before the chunk jobs have run, so gating on it alone stops polling while the work is still in
+      // flight - and a job that then fails only shows up in failedCount, which nothing would refetch.
+      const d = query.state.data;
+      const n = (d?.underChunkedCount ?? 0) + (d?.failedCount ?? 0);
       if (n <= 0) return false;
       return n > 200 ? 30_000 : n > 50 ? 15_000 : 5_000;
     },

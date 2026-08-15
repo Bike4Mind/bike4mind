@@ -100,6 +100,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   // SQS retry: attempt 1's `finally` cleared isChunking, so arm 1 matches and the ladder survives.
   // Redundant enqueue after a successful run: the `chunked` guard below skips it.
   let acquired = false;
+  // Hoisted so the release below can compare-and-set on the stamp this run actually claimed with.
+  let claimedAt: Date | undefined;
   try {
     const now = new Date();
     const staleClaimBefore = new Date(now.getTime() - CHUNK_CLAIM_STALE_MS);
@@ -119,6 +121,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       return;
     }
     acquired = true;
+    claimedAt = now;
 
     const user = await User.findById(userId);
     if (!user) throw new Error(`User not found for userId: ${userId}`);
@@ -412,11 +415,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     logger.log('Completed chunk queue handler');
     logger.log('====================================');
   } finally {
-    // Release ONLY a claim this run actually won. A superseded/duplicate delivery (acquired=false)
-    // must not clear isChunking - that flag belongs to the worker that won the lease.
-    if (acquired) {
-      await FabFile.updateOne({ _id: fabFileId }, { $set: { isChunking: false } }).catch(err =>
-        logger.error(`Failed to clear isChunking for ${fabFileId}: ${err}`)
+    // Release ONLY the claim this run actually holds, matched on the stamp it claimed with. A
+    // superseded/duplicate delivery (acquired=false) must not clear isChunking at all, and a run
+    // whose claim was since SUPERSEDED - by the stale arm, or by a re-claim - must not clear its
+    // successor's flag either: an unconditional clear turns one takeover into a cascade, re-opening
+    // arm 1 for a third worker while the second is still running.
+    if (acquired && claimedAt) {
+      await FabFile.updateOne({ _id: fabFileId, chunkClaimedAt: claimedAt }, { $set: { isChunking: false } }).catch(
+        err => logger.error(`Failed to clear isChunking for ${fabFileId}: ${err}`)
       );
     }
   }

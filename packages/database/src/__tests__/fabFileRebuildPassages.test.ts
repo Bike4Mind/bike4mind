@@ -121,7 +121,7 @@ describe('FabFileRepository.resetChunkStateByIds', () => {
       }),
     ]);
 
-    expect(await fabFileRepository.resetChunkStateByIds([f._id.toString()])).toBe(1);
+    expect(await fabFileRepository.resetChunkStateByIds([f._id.toString()])).toEqual([f._id.toString()]);
 
     const after = await FabFile.findById(f._id).lean();
     expect(after?.isChunking).toBe(false); // NOT a claim - the worker's CAS owns exclusion
@@ -133,8 +133,23 @@ describe('FabFileRepository.resetChunkStateByIds', () => {
     expect(after?.chunkEmbeddingModelStampedAt).toBeNull();
   });
 
+  it('SKIPS a file a worker is mid-run on, so the reset cannot release a live lease', async () => {
+    // The round-8 P1. The reset WRITES isChunking:false, so without the precondition it releases a
+    // worker's claim and lets a second worker into chunkFabfile's delete-then-insert. The id must
+    // also be absent from the return value, or the caller enqueues a file it did not reset.
+    const [busy] = await FabFile.create([makeFile({ chunked: true, chunkCount: 1, isChunking: true })]);
+    const [free] = await FabFile.create([makeFile({ chunked: true, chunkCount: 1, isChunking: false })]);
+
+    const reset = await fabFileRepository.resetChunkStateByIds([busy._id.toString(), free._id.toString()]);
+
+    expect(reset).toEqual([free._id.toString()]);
+    const after = await FabFile.findById(busy._id).lean();
+    expect(after?.isChunking).toBe(true); // lease survived
+    expect(after?.chunked).toBe(true); // and its chunks were not un-flagged
+  });
+
   it('an empty id list is a no-op', async () => {
-    expect(await fabFileRepository.resetChunkStateByIds([])).toBe(0);
+    expect(await fabFileRepository.resetChunkStateByIds([])).toEqual([]);
   });
 });
 
@@ -195,6 +210,25 @@ describe('reset -> worker claim handoff (real DB)', () => {
     // What the handler's `finally` does on every exit.
     await FabFile.updateOne({ _id: id }, { $set: { isChunking: false } });
     expect(await workerClaim(id)).not.toBeNull(); // retry ladder survives
+  });
+
+  it('a SUPERSEDED run releasing does not clear its successor claim', async () => {
+    // The release is a CAS on the stamp the run claimed with. Without that, run A's `finally` clears
+    // the flag of whoever re-claimed after it (the stale arm, or a later wave), re-opening arm 1 for
+    // a third worker while the second is still inside chunkFabfile - one takeover becomes a cascade.
+    const [f] = await FabFile.create([makeFile({ chunked: false, chunkCount: 0 })]);
+    const id = f._id.toString();
+
+    const aStamp = new Date(Date.now() - 60 * 60_000);
+    await FabFile.updateOne({ _id: id }, { $set: { isChunking: true, chunkClaimedAt: aStamp } });
+
+    // B supersedes A via the stale arm, taking a fresh stamp.
+    expect(await workerClaim(id)).not.toBeNull();
+
+    // A now finishes and runs its release, matched on ITS stamp.
+    await FabFile.updateOne({ _id: id, chunkClaimedAt: aStamp }, { $set: { isChunking: false } });
+
+    expect((await FabFile.findById(id).lean())?.isChunking).toBe(true); // B still holds it
   });
 
   it('a claim stranded by a hard crash is reclaimable once stale', async () => {

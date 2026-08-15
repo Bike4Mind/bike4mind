@@ -70,7 +70,8 @@ beforeEach(() => {
   h.countFailedLakeFiles.mockResolvedValue(0);
   // By default the claim wins every id it's asked for, each with a claim stamp (the token the
   // message carries so the worker can reject a superseded/duplicate delivery).
-  h.resetChunkStateByIds.mockImplementation(async (ids: string[]) => ids.length);
+  // Returns the ids actually reset - a file a worker is mid-run on is skipped (round-8 P1).
+  h.resetChunkStateByIds.mockImplementation(async (ids: string[]) => ids);
   h.sendToQueue.mockResolvedValue(undefined);
 });
 

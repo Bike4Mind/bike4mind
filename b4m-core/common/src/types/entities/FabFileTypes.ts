@@ -820,10 +820,11 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * both re-detection and the rescue sweep). Shared by the bulk rebuild wave and the per-file
    * reprocess route so the two cannot drift. Returns the number modified.
    *
-   * Deliberately NOT a claim: mutual exclusion is the chunk worker's compare-and-set on isChunking,
-   * which resolves two deliveries for one file regardless of which producer sent them.
+   * Preconditioned on `isChunking: {$ne: true}`: the reset WRITES isChunking:false, so without it a
+   * reset would release a live worker's lease and let a second worker into chunkFabfile's
+   * delete-then-insert. Returns the ids actually reset, so the caller enqueues exactly what changed.
    */
-  resetChunkStateByIds(ids: string[]): Promise<number>;
+  resetChunkStateByIds(ids: string[]): Promise<string[]>;
   /**
    * Count the lake's files whose re-chunk failed (error set, no chunks) - invisible to both the
    * under-chunked detection and the rescue sweep, so surfaced separately so a manager can tell

@@ -161,7 +161,10 @@ describe('fabFileChunk handler - chunk-failure surfacing', () => {
     expect(h.fabFileFindOneAndUpdate).toHaveBeenCalledWith(expect.objectContaining({ _id: 'ff1' }), {
       $set: { isChunking: true, chunkClaimedAt: expect.any(Date) },
     });
-    expect(h.fabFileUpdateOne).toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { isChunking: false } });
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith(
+      { _id: 'ff1', chunkClaimedAt: expect.any(Date) },
+      { $set: { isChunking: false } }
+    );
   });
 });
 
@@ -205,7 +208,10 @@ describe('fabFileChunk handler - retry gating (#1412)', () => {
   it('still clears isChunking when deferred', async () => {
     h.deferFailureIfRetryable.mockResolvedValue(true);
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(CHUNK_ERR);
-    expect(h.fabFileUpdateOne).toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { isChunking: false } });
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith(
+      { _id: 'ff1', chunkClaimedAt: expect.any(Date) },
+      { $set: { isChunking: false } }
+    );
   });
 
   it('when not deferred (final attempt), accounts the failure into both counters atomically', async () => {
@@ -249,7 +255,10 @@ describe('fabFileChunk handler - idempotency guard against re-chunking (human re
     await dispatch(makeEvent(payload), {} as never, mockLogger);
     expect(h.chunkFabfile).not.toHaveBeenCalled();
     // The lease is briefly held then released by the finally, but the destructive re-chunk is skipped.
-    expect(h.fabFileUpdateOne).toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { isChunking: false } });
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith(
+      { _id: 'ff1', chunkClaimedAt: expect.any(Date) },
+      { $set: { isChunking: false } }
+    );
   });
 
   it('skips re-chunking a file already flagged as producing no extractable text', async () => {

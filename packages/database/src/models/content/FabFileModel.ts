@@ -1052,8 +1052,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async findChunkedFilesByScope(scope: DataLakeMembershipScope): Promise<{ id: string; userId: string }[]> {
     const docs = await this.fabFileModel
       .find(
-        // `isChunking: {$ne: true}` excludes a file another wave (or a per-file reprocess) already
-        // claimed and is mid-flight on, so a concurrent rebuild can't re-select and double-enqueue it.
+        // `isChunking: {$ne: true}` excludes a file a chunk WORKER is mid-run on (the worker CAS in
+        // fabFileChunk.ts is the only writer of isChunking:true - no producer pre-claims), so a
+        // rebuild can't select a file that is already being chunked.
         {
           ...buildDataLakeMembershipFilter(scope),
           deletedAt: null,
@@ -1067,40 +1068,54 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
   }
 
-  async resetChunkStateByIds(ids: string[]): Promise<number> {
-    if (ids.length === 0) return 0;
+  async resetChunkStateByIds(ids: string[]): Promise<string[]> {
+    if (ids.length === 0) return [];
     // The ONE reset shape for re-chunking, shared by the bulk "Rebuild passages" wave and the
     // per-file reprocess route, so the two cannot drift on which fields they clear.
     //
-    // Deliberately NOT a claim. Mutual exclusion lives in exactly one place - the chunk worker's
-    // compare-and-set on isChunking (see fabFileChunk.ts) - and a producer-side pre-claim cannot add
-    // to it: two deliveries for one file are already resolved there, whichever producer sent them.
-    // A pre-claim would only spare the rescue sweep a redundant enqueue during the reset->pickup
-    // window, and that message is harmless: the loser of the CAS returns immediately, and one
-    // arriving after a successful run is skipped by the worker's `chunked` guard.
+    // `isChunking: {$ne: true}` is a REQUIRED precondition, not a claim. The reset writes
+    // isChunking:false, so without it a reset lands on a file a worker is actively chunking and
+    // RELEASES that worker's lease - which is strictly worse than not claiming, because the freed
+    // file can then be acquired by a second worker while the first is still inside chunkFabfile's
+    // unconditional delete-then-insert. Per-document atomicity makes this race-free: a file that
+    // raced to isChunking:true after selection is simply not reset, and its stray enqueue then
+    // correctly LOSES the worker CAS instead of racing it.
+    //
+    // Returns the ids actually reset - never the input set - so the caller enqueues exactly what it
+    // changed and its reported count cannot overstate the work.
+    //
+    // KNOWN RESIDUAL (#1802): this does not close every double-run window. chunkFabfile persists
+    // isChunking:false + chunked:true partway through its own run, BEFORE its destructive delete, so
+    // during that window a file looks idle and repaired: the precondition passes, the reset clears
+    // `chunked`, and a second worker's guard is disarmed. That window is chunkFabfile's to close.
     //
     // `error` MUST be cleared with the rest. A file that chunked then FAILED vectorization carries a
     // non-empty error with chunked:true, and detection doesn't check error, so it can land in a wave.
     // Leaving it set would strand the file: chunked:false + a stale error is invisible to both
     // re-detection (needs chunked:true) and the rescue sweep (needs empty error).
-    const result = await this.fabFileModel.updateMany(
-      { _id: { $in: ids } },
-      {
-        $set: {
-          isChunking: false,
-          chunked: false,
-          chunkCount: 0,
-          vectorized: false,
-          vectorizedChunkCount: 0,
-          notes: '',
-          error: null,
-          // A stale readiness stamp would make the Atlas cutover read path treat the file as
-          // ANN-ready before its new chunks are re-stamped (see vectorSearchEligibility.ts).
-          chunkEmbeddingModelStampedAt: null,
-        },
-      }
+    const results = await Promise.all(
+      ids.map(async id => {
+        const doc = await this.fabFileModel.findOneAndUpdate(
+          { _id: id, isChunking: { $ne: true } },
+          {
+            $set: {
+              isChunking: false,
+              chunked: false,
+              chunkCount: 0,
+              vectorized: false,
+              vectorizedChunkCount: 0,
+              notes: '',
+              error: null,
+              // A stale readiness stamp would make the Atlas cutover read path treat the file as
+              // ANN-ready before its new chunks are re-stamped (see vectorSearchEligibility.ts).
+              chunkEmbeddingModelStampedAt: null,
+            },
+          }
+        );
+        return doc ? id : null;
+      })
     );
-    return result.modifiedCount;
+    return results.filter((id): id is string => id !== null);
   }
 
   async countFailedFilesByScope(scope: DataLakeMembershipScope): Promise<number> {
@@ -1463,7 +1478,7 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     chunkedCharCount: { type: Number, required: false },
 
     isChunking: { type: Boolean, default: false },
-    // When isChunking was last set true (worker pickup or a Rebuild-passages pre-claim). Lets the
+    // When isChunking was last set true - always worker pickup, the only writer. Lets the
     // rescue sweep recover a claim stranded by a hard worker crash (OOM/timeout/deploy) that never
     // ran the finally - see buildFabFileChunkScanFilter's stale-claim arm.
     chunkClaimedAt: { type: Date, default: null },

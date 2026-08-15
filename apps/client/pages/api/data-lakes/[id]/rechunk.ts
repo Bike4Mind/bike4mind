@@ -14,7 +14,7 @@ import { sendToQueue } from '@server/utils/sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 
 /**
- * GET  /api/data-lakes/:id/rechunk           -> { underChunkedCount }
+ * GET  /api/data-lakes/:id/rechunk           -> { underChunkedCount, failedCount }
  * POST /api/data-lakes/:id/rechunk  { limit } -> { detected, enqueued, remaining }
  *
  * "Rebuild passages": re-chunks the lake's files whose passages predate the passage-target fix
@@ -72,26 +72,27 @@ const handler = baseApi()
     if (wave.length > 0) {
       const queueUrl = getSourceQueueUrl('fabFileChunkQueue');
       if (!queueUrl) throw new Error('Chunk queue URL not found');
-      // Reset the wave, then enqueue it. No producer-side claim: mutual exclusion is the chunk
-      // worker's compare-and-set (fabFileChunk.ts), which resolves a duplicate whether it came from
-      // a second wave, the rescue sweep, or an SQS redelivery. The reset flips `chunked` off so the
-      // re-enqueued job clears the worker's idempotency guard.
+      // Reset the wave, then enqueue exactly what the reset changed. The reset is preconditioned on
+      // isChunking:{$ne:true} (see resetChunkStateByIds) - a file a worker is mid-run on is skipped
+      // rather than having its lease released - so `resetIds` is a subset of the wave and is what we
+      // enqueue. Mutual exclusion itself remains the chunk worker's compare-and-set.
       const userById = new Map(wave.map(f => [f.fabFileId, f.userId] as const));
-      const ids = [...userById.keys()];
-      await fabFileRepository.resetChunkStateByIds(ids);
+      const resetIds = await fabFileRepository.resetChunkStateByIds([...userById.keys()]);
       // allSettled, not all: one failed send must not fail the whole wave. A file whose send didn't
       // land is left in the reset state (chunked:false, chunkCount:0), which is exactly what the
       // rescue sweep selects on, so it self-heals on the next pass rather than needing an undo.
       const results = await Promise.allSettled(
-        ids.map(id => sendToQueue(queueUrl, { fabFileId: id, userId: userById.get(id)! }))
+        resetIds.map(id => sendToQueue(queueUrl, { fabFileId: id, userId: userById.get(id)! }))
       );
       const failed = results.filter(r => r.status === 'rejected').length;
-      if (failed > 0) {
+      const skipped = userById.size - resetIds.length;
+      if (failed > 0 || skipped > 0) {
         req.logger?.error?.(
-          `rechunk: ${failed}/${ids.length} sends failed for lake ${lake.id}; left reset for the rescue sweep`
+          `rechunk: lake ${lake.id} - ${failed}/${resetIds.length} sends failed; ` +
+            `${skipped} file(s) skipped as already being chunked`
         );
       }
-      enqueued = ids.length - failed;
+      enqueued = resetIds.length - failed;
     }
 
     return res.json({
