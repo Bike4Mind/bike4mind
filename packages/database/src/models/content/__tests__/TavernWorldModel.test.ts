@@ -213,29 +213,44 @@ describe('TavernWorldModel', () => {
   // ---------------------------------------------------------------------------
 
   describe('applyEdits — history cap', () => {
+    /**
+     * Seed `count` history entries directly, with the version/undoPointer a run of that many user
+     * edits would have left behind.
+     *
+     * Driving this through 500 sequential applyEdits calls is what these two tests used to do, and it
+     * made them the slowest in the repo (~140s for the file) and reliably timeout-prone on a loaded
+     * CI runner even at an 8x-default 120s budget - see #1803. The cap and eviction are pure array
+     * arithmetic (MAX_HISTORY_ENTRIES, splice, undoPointer adjust), so the boundary is what needs
+     * exercising, not the 500 round-trips it takes to reach it. Seeding keeps both assertions exactly
+     * as they were and lets the final applyEdits do the real work.
+     */
+    async function seedHistory(count: number, worldId = 'user-1') {
+      const entries = Array.from({ length: count }, (_, i) => ({
+        batchId: `seed-${i}`,
+        timestamp: new Date(),
+        source: 'user' as const,
+        forward: [{ key: `ground:${i % 96},0`, gid: i + 1 }],
+        reverse: [{ key: `ground:${i % 96},0`, gid: null }],
+      }));
+      await TavernWorld.updateOne(
+        { worldId, floorId: 'surface' },
+        { $set: { editHistory: entries, undoPointer: count, version: count } }
+      );
+    }
+
     it('should cap editHistory at 500 entries', async () => {
       await createWorld();
-
-      // Apply edits in bulk batches to stay under timeout
-      // Each applyEdits call is one history entry, so we need 500+ calls
-      // Use a smaller batch to verify the cap mechanism works
-      for (let i = 0; i < 500; i++) {
-        await applyEdits('user-1', i, [{ key: `ground:${i % 96},0`, gid: i + 1 }]);
-      }
+      await seedHistory(500);
 
       // Apply one more - should evict oldest
       const result = await applyEdits('user-1', 500, [{ key: 'ground:0,1', gid: 999 }]);
       expect(result!.editHistory).toHaveLength(500);
       expect(result!.version).toBe(501);
-    }, 120000);
+    });
 
     it('should adjust undoPointer when entries are evicted', async () => {
       await createWorld();
-
-      // Fill history to 500
-      for (let i = 0; i < 500; i++) {
-        await applyEdits('user-1', i, [{ key: `ground:${i % 96},0`, gid: i + 1 }]);
-      }
+      await seedHistory(500);
 
       // Pointer should be at 500
       const before = await tavernWorldRepository.getOrCreateWorld('user-1', 'user-1');
@@ -246,7 +261,17 @@ describe('TavernWorldModel', () => {
       expect(result!.editHistory).toHaveLength(500);
       // Pointer should still be at end (500), not 501
       expect(result!.undoPointer).toBe(500);
-    }, 120000);
+    });
+
+    it('evicts exactly the OLDEST entry, not an arbitrary one', async () => {
+      await createWorld();
+      await seedHistory(500);
+
+      const result = await applyEdits('user-1', 500, [{ key: 'ground:0,1', gid: 999 }]);
+      // seed-0 is gone, seed-1 is now the front, and the new edit is the last entry.
+      expect(result!.editHistory[0].batchId).toBe('seed-1');
+      expect(result!.editHistory[499].forward[0]).toMatchObject({ key: 'ground:0,1', gid: 999 });
+    });
   });
 
   // ---------------------------------------------------------------------------
