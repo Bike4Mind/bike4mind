@@ -2,8 +2,8 @@ import { z } from 'zod';
 import { CREDITS_PER_USD_COST } from '../pricing';
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
-  MAX_PASSAGE_TOKEN_TARGET,
   MIN_PASSAGE_TOKEN_TARGET,
+  OVERSIZED_PASSAGE_TOKEN_THRESHOLD,
 } from '../constants/chunking';
 import {
   LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS,
@@ -2155,11 +2155,19 @@ export const settingsMap = {
     // Floor matches the chunker's own clamp, so the UI cannot report a value the chunker will
     // silently raise (chunk.ts clamps to MIN_PASSAGE_TOKEN_TARGET).
     min: MIN_PASSAGE_TOKEN_TARGET,
+    // Ceiling is the under-chunked DETECTION threshold, not the chunker's capability bound (#1804).
+    // Above it, "Rebuild passages" stops converging: files re-chunk to a target that is correct per
+    // policy but still trips detection (tokenCount > OVERSIZED_PASSAGE_TOKEN_THRESHOLD), so the badge
+    // never reaches zero and every click destructively re-chunks and re-embeds the same files at real
+    // cost. Detection is `$gt`, so a target of exactly the threshold is safe.
+    max: OVERSIZED_PASSAGE_TOKEN_THRESHOLD,
     description:
       'Passage target in TOKENS for splitting large documents. The DEFAULT matches the chunker; a ' +
       'value stored here overrides it, and a stored value larger than the chunker default makes the ' +
       'UI reprocess path produce coarser chunks than /api/files/reprocess. Coarser chunks measurably ' +
-      'worsen retrieval. Resolves at file-OWNER altitude: an org/individual owner may pin their own ' +
+      'worsen retrieval, and values above the under-chunked detection threshold also stop "Rebuild ' +
+      'passages" converging, so the accepted range is capped there. Resolves at file-OWNER altitude: ' +
+      'an org/individual owner may pin their own ' +
       'default above the platform value; a data lake does NOT override it (epic decision 7) - a lake ' +
       'declares the policy it REQUIRES and a file that cannot satisfy every lake it belongs to is ' +
       'reported as a conflict rather than silently re-chunked.',
@@ -2176,8 +2184,12 @@ export const settingsMap = {
     // chunker (effectiveChunkTokenLimit), which reduces an over-large value further if needed.
     scope: {
       settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner],
+      // Ceiling matches the setting's own `max` rather than MAX_PASSAGE_TOKEN_TARGET, and that is
+      // what makes the #1804 bound RETROACTIVE: `max` only rejects new writes, so a value stored
+      // above the threshold before this shipped would still resolve at its stored size and keep the
+      // rebuild badge non-convergent. Clamping here bounds resolution itself.
       clamp: (value: number) =>
-        Math.min(Math.max(Math.floor(value), MIN_PASSAGE_TOKEN_TARGET), MAX_PASSAGE_TOKEN_TARGET),
+        Math.min(Math.max(Math.floor(value), MIN_PASSAGE_TOKEN_TARGET), OVERSIZED_PASSAGE_TOKEN_THRESHOLD),
     },
   }),
   ModerationEnabled: makeBooleanSetting({
