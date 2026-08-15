@@ -480,7 +480,15 @@ describe('fabFileChunk handler - single-run claim (human review)', () => {
 
     const calls = h.fabFileFindOneAndUpdate.mock.calls as [Record<string, unknown>][];
     expect(calls).toHaveLength(2);
-    expect(calls[0][0]).toEqual(calls[1][0]);
+    // Assert the SHAPE, not deep equality: the stale arm embeds `new Date()` per dispatch, so two
+    // attempts are only byte-identical when they land in the same millisecond. Deep-equality here
+    // passed locally and on two CI runs before failing on a slower one - a clock-dependent test,
+    // which is the thing it was supposed to be proving does NOT matter.
+    for (const [query] of calls) {
+      expect(query._id).toBe('ff1');
+      expect(query.$or).toHaveLength(3); // free / stale / null-stamp - same arms every delivery
+      expect(query).not.toHaveProperty('chunkLeaseId'); // no producer token is carried
+    }
     // The retry genuinely re-runs: exclusion is the live isChunking state, not a token the first
     // attempt consumed, so nothing about attempt 1 can silently disqualify attempt 2.
     expect(h.chunkFabfile).toHaveBeenCalledTimes(2);
