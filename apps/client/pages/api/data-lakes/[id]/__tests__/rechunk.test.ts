@@ -91,6 +91,27 @@ describe('GET /api/data-lakes/[id]/rechunk', () => {
 });
 
 describe('POST /api/data-lakes/[id]/rechunk', () => {
+  it('enqueues only the files the reset actually won, and folds the skipped ones back into remaining', async () => {
+    // A file a worker is mid-run on is skipped by the reset's precondition, so resetIds is a proper
+    // subset of the wave. Every other test here mocks the reset as identity, which makes skipped
+    // always 0 and leaves this accounting - the reason the reset returns ids at all - unexercised.
+    h.detectUnderChunkedFiles.mockResolvedValue([
+      { fabFileId: 'f1', userId: 'u1' },
+      { fabFileId: 'busy', userId: 'u2' },
+    ]);
+    h.resetChunkStateByIds.mockResolvedValue(['f1']);
+
+    const { json } = await invoke('POST', {});
+
+    expect(h.sendToQueue).toHaveBeenCalledTimes(1);
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
+      fabFileId: 'f1',
+      userId: 'u1',
+    });
+    // The skipped file is not enqueued and is still outstanding, so it must remain countable.
+    expect(json).toHaveBeenCalledWith({ detected: 2, enqueued: 1, remaining: 1 });
+  });
+
   it('resets and enqueues the whole detected set when under the wave cap', async () => {
     h.detectUnderChunkedFiles.mockResolvedValue([
       { fabFileId: 'f1', userId: 'u1' },

@@ -360,6 +360,10 @@ const METADATA_ONLY_PROJECTION = { content: 0, chunks: 0, vector: 0, presignedUr
 /** Row cap for unbounded metadata listings. */
 const METADATA_PAGE_CAP = 500;
 
+/** In-flight per-document resets in resetChunkStateByIds. Kept near the connection pool size
+ *  (maxPoolSize defaults to 2) so a wave cannot monopolize every connection in the process. */
+const RESET_CONCURRENCY = 10;
+
 export class FabFileRepository extends BaseRepository<IFabFileDocument> implements IFabFileRepository {
   shareable: IFabFileRepository['shareable'];
   constructor(
@@ -1101,28 +1105,38 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // non-empty error with chunked:true, and detection doesn't check error, so it can land in a wave.
     // Leaving it set would strand the file: chunked:false + a stale error is invisible to both
     // re-detection (needs chunked:true) and the rescue sweep (needs empty error).
-    const results = await Promise.all(
-      ids.map(async id => {
-        const doc = await this.fabFileModel.findOneAndUpdate(
-          { _id: id, isChunking: { $ne: true } },
-          {
-            $set: {
-              isChunking: false,
-              chunked: false,
-              chunkCount: 0,
-              vectorized: false,
-              vectorizedChunkCount: 0,
-              notes: '',
-              error: null,
-              // A stale readiness stamp would make the Atlas cutover read path treat the file as
-              // ANN-ready before its new chunks are re-stamped (see vectorSearchEligibility.ts).
-              chunkEmbeddingModelStampedAt: null,
-            },
-          }
-        );
-        return doc ? id : null;
-      })
-    );
+    //
+    // Batched rather than one Promise.all over the whole wave: maxPoolSize defaults to 2
+    // (b4m-core/db-core/src/utils/mongo.ts), so fanning 200 findOneAndUpdates out at once just
+    // queues 198 of them, and on self-host - one long-lived process sharing that pool with every
+    // other request - it stalls unrelated queries for the length of the wave. Purely a scheduling
+    // bound: the per-document precondition and the exact returned-id set are unchanged.
+    const results: (string | null)[] = [];
+    for (let i = 0; i < ids.length; i += RESET_CONCURRENCY) {
+      const batch = await Promise.all(
+        ids.slice(i, i + RESET_CONCURRENCY).map(async id => {
+          const doc = await this.fabFileModel.findOneAndUpdate(
+            { _id: id, isChunking: { $ne: true } },
+            {
+              $set: {
+                isChunking: false,
+                chunked: false,
+                chunkCount: 0,
+                vectorized: false,
+                vectorizedChunkCount: 0,
+                notes: '',
+                error: null,
+                // A stale readiness stamp would make the Atlas cutover read path treat the file as
+                // ANN-ready before its new chunks are re-stamped (see vectorSearchEligibility.ts).
+                chunkEmbeddingModelStampedAt: null,
+              },
+            }
+          );
+          return doc ? id : null;
+        })
+      );
+      results.push(...batch);
+    }
     return results.filter((id): id is string => id !== null);
   }
 

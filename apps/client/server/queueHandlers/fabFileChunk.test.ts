@@ -165,6 +165,13 @@ describe('fabFileChunk handler - chunk-failure surfacing', () => {
       { _id: 'ff1', chunkClaimedAt: expect.any(Date) },
       { $set: { isChunking: false } }
     );
+    // IDENTITY, not shape. expect.any(Date) above passes for a fresh `new Date()` in the release,
+    // which would silently match nothing in production and cascade one takeover into a third worker
+    // (the round-8 P2 (4)). toBe, not toEqual: two Dates in the same millisecond compare equal, and
+    // that is exactly the clock-flakiness removed elsewhere in this branch.
+    const [, claimUpdate] = h.fabFileFindOneAndUpdate.mock.calls[0];
+    const [releaseQuery] = h.fabFileUpdateOne.mock.calls[0];
+    expect(releaseQuery.chunkClaimedAt).toBe(claimUpdate.$set.chunkClaimedAt);
   });
 });
 
@@ -487,7 +494,10 @@ describe('fabFileChunk handler - single-run claim (human review)', () => {
     for (const [query] of calls) {
       expect(query._id).toBe('ff1');
       expect(query.$or).toHaveLength(3); // free / stale / null-stamp - same arms every delivery
-      expect(query).not.toHaveProperty('chunkLeaseId'); // no producer token is carried
+      // Closes the class, not just the one name: toHaveLength counts arms inside the $or and says
+      // nothing about extra conjuncts beside it, so a token reintroduced as leaseId or
+      // chunkClaimToken would pass a not.toHaveProperty('chunkLeaseId') check.
+      expect(Object.keys(query).sort()).toEqual(['$or', '_id']);
     }
     // The retry genuinely re-runs: exclusion is the live isChunking state, not a token the first
     // attempt consumed, so nothing about attempt 1 can silently disqualify attempt 2.

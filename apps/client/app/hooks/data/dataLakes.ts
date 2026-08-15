@@ -11,6 +11,7 @@ import { DATA_LAKES, normalizeTagPrefix, tagPrefixesOverlap } from '@bike4mind/c
 import type { CreateDataLakeRequestInputType, UpdateDataLakeRequestInputType } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useRef } from 'react';
 import { toast } from 'sonner';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
@@ -541,6 +542,38 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
 
 export type LakeRebuildStatus = { underChunkedCount: number; failedCount: number };
 
+/** Extra polls after the backlog clears, at SETTLE_MS each - about three minutes of cover. */
+const REBUILD_SETTLE_POLLS = 18;
+const REBUILD_SETTLE_MS = 10_000;
+
+export type RebuildPollState = { sawBacklog: boolean; settlePolls: number };
+export const INITIAL_REBUILD_POLL_STATE: RebuildPollState = { sawBacklog: false, settlePolls: 0 };
+
+/**
+ * Poll cadence for the rebuild badge, as a pure function so it can be tested without mounting the
+ * hook (the two defects this logic has carried both shipped because nothing executed it).
+ *
+ * `underChunkedCount` is the loop condition and `failedCount` deliberately is NOT: a failed file
+ * never retries on its own (see countFailedFilesByScope - it is invisible to both the detection
+ * query and the rescue sweep), so summing the two gives a term that can never reach zero and the
+ * badge polls forever on any lake holding one. But the count alone stops too early: it drops the
+ * instant a wave is RESET, minutes before those chunk jobs finish, and a job that then fails
+ * surfaces only in failedCount. So once the backlog clears we keep polling a bounded number of
+ * extra times to catch that, then stop for good.
+ */
+export function nextRebuildPoll(
+  underChunkedCount: number,
+  prev: RebuildPollState
+): { interval: number | false; next: RebuildPollState } {
+  if (underChunkedCount > 0) {
+    const interval = underChunkedCount > 200 ? 30_000 : underChunkedCount > 50 ? 15_000 : 5_000;
+    return { interval, next: { sawBacklog: true, settlePolls: 0 } };
+  }
+  // Never had anything to rebuild in this session - nothing to settle for.
+  if (!prev.sawBacklog || prev.settlePolls >= REBUILD_SETTLE_POLLS) return { interval: false, next: prev };
+  return { interval: REBUILD_SETTLE_MS, next: { ...prev, settlePolls: prev.settlePolls + 1 } };
+}
+
 /**
  * Hook: the lake's rebuild status - how many files are still oversized passages (predating the
  * passage-target fix) plus how many gave up (failed re-chunk). Polls itself down while a rebuild
@@ -548,6 +581,7 @@ export type LakeRebuildStatus = { underChunkedCount: number; failedCount: number
  * every 5s for the whole drain. Owner/admin only surface, so only enable when the viewer can manage.
  */
 export function useUnderChunkedCount(dataLakeId: string | null, enabled = true) {
+  const pollState = useRef<RebuildPollState>({ ...INITIAL_REBUILD_POLL_STATE });
   return useQuery({
     queryKey: dataLakeKeys.rebuildStatus(dataLakeId ?? 'none'),
     queryFn: async (): Promise<LakeRebuildStatus> => {
@@ -556,15 +590,11 @@ export function useUnderChunkedCount(dataLakeId: string | null, enabled = true) 
     },
     enabled: enabled && !!dataLakeId,
     // Tick down as waves complete; coarser cadence while the backlog is large (each poll is a full
-    // lake rescan), quiet once nothing is left to rebuild.
+    // lake rescan), then a bounded settle window before going quiet. See nextRebuildPoll.
     refetchInterval: query => {
-      // Both counts, not just underChunkedCount: that one drops the instant a wave is RESET, which is
-      // before the chunk jobs have run, so gating on it alone stops polling while the work is still in
-      // flight - and a job that then fails only shows up in failedCount, which nothing would refetch.
-      const d = query.state.data;
-      const n = (d?.underChunkedCount ?? 0) + (d?.failedCount ?? 0);
-      if (n <= 0) return false;
-      return n > 200 ? 30_000 : n > 50 ? 15_000 : 5_000;
+      const { interval, next } = nextRebuildPoll(query.state.data?.underChunkedCount ?? 0, pollState.current);
+      pollState.current = next;
+      return interval;
     },
   });
 }
