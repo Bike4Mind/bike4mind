@@ -149,4 +149,29 @@ describe('chunkFabfile', () => {
     const updatedFile = mockAdapter.db.fabFiles.update.mock.calls[0][0] as { chunkedCharCount: number };
     expect(updatedFile.chunkedCharCount).toBe(14);
   });
+
+  // #1802: chunkFabfile released its OWN claim mid-run (isChunking: false) before the destructive
+  // delete, opening a window for a concurrent delivery to pass the worker's CAS. The claim is now
+  // owned solely by the worker (fabFileChunk.ts) - chunkFabfile must never write either field.
+  it('never writes isChunking - the claim survives the run (#1802 T1)', async () => {
+    await chunkFabfile(
+      mockUser,
+      { fabFileId: 'file-1', embeddingModel: 'text-embedding-ada-002' },
+      mockAdapter as never
+    );
+
+    const updatePayload = mockAdapter.db.fabFiles.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(updatePayload).not.toHaveProperty('isChunking');
+  });
+
+  it('never writes chunkClaimedAt - a stale predecessor cannot stamp over a successor (#1802 T2/T3)', async () => {
+    await chunkFabfile(
+      mockUser,
+      { fabFileId: 'file-1', embeddingModel: 'text-embedding-ada-002' },
+      mockAdapter as never
+    );
+
+    const updatePayload = mockAdapter.db.fabFiles.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(updatePayload).not.toHaveProperty('chunkClaimedAt');
+  });
 });
