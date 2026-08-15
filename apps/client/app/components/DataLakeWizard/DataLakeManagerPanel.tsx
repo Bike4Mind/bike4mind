@@ -1271,7 +1271,7 @@ function LakeInfoPanel({
           )}
           {/* Derived retrievability health (#1666): reachable-content share + affected-file drill-down.
               Advisory only. Fetched lazily for the lake in view; renders nothing for an empty lake. */}
-          <LakeHealthBadge lakeId={lake.id} />
+          <LakeHealthBadge lakeId={lake.id} failedFileCount={failedCount} />
           {/* Retrievability health: files still stored as oversized (pre-passage-target) chunks.
               Manager-only, and the count self-polls down as the Rebuild passages wave drains. */}
           {lake.canManage && underChunkedCount > 0 && (

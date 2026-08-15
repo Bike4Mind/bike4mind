@@ -16,7 +16,7 @@
  * a substitute: the chars-per-token ratio swings by corpus, so a customer-facing percentage derived
  * from it is systematically wrong per lake - the exact "vibe" these predicates exist to remove.
  */
-import { CHARS_PER_TOKEN_SERVE_BOUND, deriveServeCharBudget } from './chunking';
+import { CHARS_PER_TOKEN_SERVE_BOUND, CONVERGENCE_PAUSED_NOTE, deriveServeCharBudget } from './chunking';
 
 /** The four predicate keys, ordered as stated in #1666. Members name the ones they fail. */
 export const LAKE_HEALTH_PREDICATES = [
@@ -106,6 +106,15 @@ export type LakeHealthMemberInput = {
    * clears it before vectorization even starts (chunk.ts).
    */
   error?: string | null;
+  /**
+   * `FabFile.notes`. Read ONLY to detect CONVERGENCE_PAUSED_NOTE, the second class of permanently-
+   * stalled file: the convergence kill switch abandons a vectorize by writing this note and clearing
+   * `isVectorizing`, and it never sets `error`, so without this the file satisfies none of the
+   * settled arms and hides from BOTH sides of the reachable ratio forever - the same green-counters-
+   * but-broken mode `error` exists to catch, reached by a different route. The handler's own log
+   * states these do not auto-resume, so this is durable, not a window.
+   */
+  notes?: string | null;
   /** Sum of the file's chunks' `charLength`; `null` until measured. */
   chunkedCharCount?: number | null;
   /** Largest single chunk's `charLength`; `null` until measured. */
@@ -157,6 +166,9 @@ export function evaluateMemberHealth(member: LakeHealthMemberInput, policy: Lake
   const embeddedChunkCount = nonNegOrNull(member.embeddedChunkCount);
   const vectorizedChunkCount = nonNegOrNull(member.vectorizedChunkCount);
   const hasError = typeof member.error === 'string' && member.error.length > 0;
+  // The kill switch marks an abandoned vectorize with `notes` and never with `error`, so this is the
+  // second terminal-stall signal, not a redundant one. See LakeHealthMemberInput.notes.
+  const abandonedByKillSwitch = member.notes === CONVERGENCE_PAUSED_NOTE;
 
   // Is the file's vectorization settled, or is it still being indexed? chunk-complete stamps the char
   // rollups (making the file "measured") and zeroes the vector rollups in the SAME write, so between
@@ -167,7 +179,8 @@ export function evaluateMemberHealth(member: LakeHealthMemberInput, policy: Lake
   // should. A permanently-FAILED file (`error` set) is also settled - it will never reach the terminal
   // count, but it is broken, not in flight, so it must grade (fail P3, count its real reachable chars)
   // rather than hide. A null count predates the field, so treat it as settled to keep legacy files grading.
-  const vectorizationSettled = hasError || vectorizedChunkCount === null || vectorizedChunkCount >= member.chunkCount;
+  const vectorizationSettled =
+    hasError || abandonedByKillSwitch || vectorizedChunkCount === null || vectorizedChunkCount >= member.chunkCount;
 
   // P1: the largest chunk must not exceed the policy size. Graded as soon as the chunk rollups exist
   // (even mid-vectorize): an oversized chunk is a structural fact, not a timing artifact.

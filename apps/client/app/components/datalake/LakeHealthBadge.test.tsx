@@ -197,3 +197,31 @@ describe('LakeHealthBadge render', () => {
     expect(badge).not.toHaveTextContent('Reachable');
   });
 });
+
+describe('deriveLakeHealthBadge - chunkless failures the predicates cannot see', () => {
+  // Health grades `chunkCount > 0`; countFailedFilesByScope counts `chunkCount <= 0`. The two
+  // partition the lake on the same field in OPPOSITE directions, so a file that failed before
+  // producing any chunk is invisible to every predicate. Both chips render in one row, so without
+  // this a lake with 12 upload failures shows a green "Reachable 100%" beside a red "12 failed".
+  it('degrades a fully-reachable lake when files failed before chunking', () => {
+    expect(deriveLakeHealthBadge({ reachableShare: 1, predicates: predicates() }, 0)).toBe('healthy');
+    expect(deriveLakeHealthBadge({ reachableShare: 1, predicates: predicates() }, 12)).toBe('degraded');
+  });
+
+  it('degrades an unmeasured lake rather than reading "not measured" beside a failure count', () => {
+    expect(deriveLakeHealthBadge({ reachableShare: null, predicates: predicates() }, 0)).toBe('unknown');
+    expect(deriveLakeHealthBadge({ reachableShare: null, predicates: predicates() }, 3)).toBe('degraded');
+  });
+
+  it('never makes the badge healthier, and never overrides a worse level', () => {
+    // A structural P4 defect stays unhealthy; a low share stays unhealthy.
+    expect(
+      deriveLakeHealthBadge({ reachableShare: 1, predicates: predicates({ serveCapMeetsPolicy: 'fail' }) }, 5)
+    ).toBe('unhealthy');
+    expect(deriveLakeHealthBadge({ reachableShare: 0.2, predicates: predicates() }, 5)).toBe('unhealthy');
+  });
+
+  it('defaults to 0 so existing callers are unaffected', () => {
+    expect(deriveLakeHealthBadge({ reachableShare: 1, predicates: predicates() })).toBe('healthy');
+  });
+});

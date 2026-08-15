@@ -1105,6 +1105,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       chunkCount: number;
       vectorizedChunkCount: number | null;
       error: string | null;
+      notes: string | null;
       chunkedCharCount: number | null;
       maxChunkCharLength: number | null;
       embeddedChunkCount: number | null;
@@ -1137,6 +1138,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           // Terminal-failure marker: an errored file is graded as settled (fails P3) rather than
           // hidden as still-indexing. Preserve null so "no error" stays distinct.
           error: { $ifNull: ['$error', null] },
+          // The SECOND terminal-stall marker. The convergence kill switch abandons a vectorize by
+          // writing CONVERGENCE_PAUSED_NOTE to `notes` and never sets `error`, so omitting this here
+          // would leave the evaluator's arm reading undefined and silently never firing - the same
+          // shape as the contract gap that disabled the vectorizedChunkCount gate.
+          notes: { $ifNull: ['$notes', null] },
           chunkedCharCount: { $ifNull: ['$chunkedCharCount', null] },
           maxChunkCharLength: { $ifNull: ['$maxChunkCharLength', null] },
           embeddedChunkCount: { $ifNull: ['$embeddedChunkCount', null] },
@@ -1277,6 +1283,15 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
                 vectorizedChunkCount: 0,
                 notes: '',
                 error: null,
+                // The four lake-health rollups go with the rest. They describe chunks this reset is
+                // about to invalidate, and the PR that added them states the rule for exactly this
+                // case (FAB_FILE_CONTENT_REWRITE_PATCH, and chunk.ts's rewrite path). Harmless today
+                // only because chunkCount:0 drops the row at the health aggregate's $match - which is
+                // an accident of another filter, not something this method should rely on.
+                chunkedCharCount: null,
+                maxChunkCharLength: null,
+                embeddedChunkCount: null,
+                embeddedCharCount: null,
                 // A stale readiness stamp would make the Atlas cutover read path treat the file as
                 // ANN-ready before its new chunks are re-stamped (see vectorSearchEligibility.ts).
                 chunkEmbeddingModelStampedAt: null,

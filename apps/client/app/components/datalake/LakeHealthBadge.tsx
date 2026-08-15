@@ -32,7 +32,18 @@ const PREDICATE_LABEL: Record<LakeHealthPredicate, string> = {
  * serve-cap-below-policy (P4) defect is structural and lake-wide, so it is never "healthy".
  */
 export function deriveLakeHealthBadge(
-  health: Pick<LakeHealthApiResponse, 'reachableShare' | 'predicates'>
+  health: Pick<LakeHealthApiResponse, 'reachableShare' | 'predicates'>,
+  /**
+   * Files that failed before producing any chunk (`countFailedFilesByScope`). Health and this count
+   * partition the lake on the SAME field in opposite directions - health takes `chunkCount > 0`, the
+   * failed count takes `chunkCount <= 0` - so every file here is invisible to every predicate above.
+   * Without this the two render side by side in one chip row and can contradict each other: a lake
+   * with 12 files that failed at upload shows a green "Reachable 100%" next to a red "12 failed",
+   * because the 100% is computed over the 88 that survived. Both numbers are individually true, which
+   * is exactly what makes the pair misleading - and a green headline over unusable content is the
+   * failure this feature exists to prevent. The count never makes the badge healthier.
+   */
+  failedFileCount = 0
 ): BadgeLevel {
   const { reachableShare, predicates } = health;
   const anyMemberPredicateFails =
@@ -47,9 +58,9 @@ export function deriveLakeHealthBadge(
   //  - A failing per-file predicate (an oversized chunk on a still-indexing file, say) is a known fact
   //    too; with nothing measurable yet the share is unknown, but "degraded" beats "not measured".
   if (predicates.serveCapMeetsPolicy === 'fail') return 'unhealthy';
-  if (reachableShare === null) return anyMemberPredicateFails ? 'degraded' : 'unknown';
+  if (reachableShare === null) return anyMemberPredicateFails || failedFileCount > 0 ? 'degraded' : 'unknown';
   if (reachableShare < 0.5) return 'unhealthy';
-  if (reachableShare < 0.95 || anyMemberPredicateFails) return 'degraded';
+  if (reachableShare < 0.95 || anyMemberPredicateFails || failedFileCount > 0) return 'degraded';
   return 'healthy';
 }
 
@@ -83,7 +94,7 @@ function badgeLabel(level: BadgeLevel, health: LakeHealthApiResponse): string {
 
 const DRILLDOWN_ROWS = 8;
 
-function HealthTooltip({ health }: { health: LakeHealthApiResponse }) {
+function HealthTooltip({ health, failedFileCount = 0 }: { health: LakeHealthApiResponse; failedFileCount?: number }) {
   const { predicates, coverage, affectedMembers, affectedMemberCount } = health;
   const measuredGap = coverage.membersWithChunks - coverage.measuredMembers;
   const anyMemberFails =
@@ -104,6 +115,11 @@ function HealthTooltip({ health }: { health: LakeHealthApiResponse }) {
       {measuredGap > 0 && (
         <Typography level="body-xs" sx={{ mt: 0.25, color: 'text.tertiary' }}>
           Measured over {coverage.measuredMembers} of {coverage.membersWithChunks} files.
+        </Typography>
+      )}
+      {failedFileCount > 0 && (
+        <Typography level="body-xs" sx={{ mt: 0.25, color: 'danger.400' }}>
+          {failedFileCount} file(s) failed before producing any chunk and are not counted in the share above.
         </Typography>
       )}
       {health.scanTruncated && (
@@ -141,7 +157,7 @@ function HealthTooltip({ health }: { health: LakeHealthApiResponse }) {
   );
 }
 
-export default function LakeHealthBadge({ lakeId }: { lakeId: string }) {
+export default function LakeHealthBadge({ lakeId, failedFileCount = 0 }: { lakeId: string; failedFileCount?: number }) {
   // The badge only mounts inside the lake detail view, so the query is already scoped to "open"; no
   // `enabled` gate is needed here.
   const { data: health, isLoading } = useGetDataLakeHealth(lakeId);
@@ -149,9 +165,9 @@ export default function LakeHealthBadge({ lakeId }: { lakeId: string }) {
   // misleading "unknown" chip. isLoading is silent for the same reason - the badge is advisory.
   if (isLoading || !health || health.coverage.membersWithChunks === 0) return null;
 
-  const level = deriveLakeHealthBadge(health);
+  const level = deriveLakeHealthBadge(health, failedFileCount);
   return (
-    <Tooltip title={<HealthTooltip health={health} />} size="sm" variant="outlined" arrow>
+    <Tooltip title={<HealthTooltip health={health} failedFileCount={failedFileCount} />} size="sm" variant="outlined" arrow>
       <Chip
         size="sm"
         variant="soft"

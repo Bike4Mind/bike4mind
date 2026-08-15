@@ -611,7 +611,9 @@ export function nextRebuildPoll(
 export function useUnderChunkedCount(dataLakeId: string | null, enabled = true) {
   const pollState = useRef<RebuildPollState>({ ...INITIAL_REBUILD_POLL_STATE });
   return useQuery({
-    queryKey: dataLakeKeys.rebuildStatus(dataLakeId ?? 'none'),
+    // Same null sentinel as the sibling lake queries. Never fetched either way (the query is disabled
+    // when the id is null), but two spellings side by side in one file invite a real divergence later.
+    queryKey: dataLakeKeys.rebuildStatus(dataLakeId ?? ''),
     queryFn: async (): Promise<LakeRebuildStatus> => {
       const res = await api.get<LakeRebuildStatus>(`/api/data-lakes/${dataLakeId}/rechunk`);
       return { underChunkedCount: res.data.underChunkedCount, failedCount: res.data.failedCount ?? 0 };
@@ -650,6 +652,12 @@ export function useRechunkDataLake(dataLakeId: string | null) {
       if (dataLakeId) {
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+        // A rebuild mass-mutates the exact rollups health is computed from, and the health query has
+        // no refetchInterval and does not refetch on focus - its observer stays mounted while the
+        // panel re-renders, so staleTime alone never refreshes it. Without this the badge sits frozen
+        // for the whole rebuild while the "to rebuild" chip ticks to zero beside it, which reads as
+        // "the rebuild accomplished nothing". The other two lake mutations already invalidate both.
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
       }
     },
     onError: (error: Error) => {

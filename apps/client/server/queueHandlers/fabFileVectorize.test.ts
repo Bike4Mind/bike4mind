@@ -90,9 +90,16 @@ vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => unde
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@server/utils/errors', () => ({ NotFoundError: class NotFoundError extends Error {} }));
 // Module-load zod schemas used by VectorizePayload.
-vi.mock('@bike4mind/common', () => ({
+vi.mock('@bike4mind/common', async () => ({
   SupportedEmbeddingModelSchema: z.string(),
   getEmbeddingModelCost: vi.fn(() => 0.0001),
+  // Pulled from the real module rather than retyped. This handler WRITES the note and the lake-health
+  // evaluator READS it to tell a permanently-stalled file from one still indexing; production cannot
+  // drift (both import the same constant), but a literal here would let THIS suite keep passing
+  // against a string the constant no longer has.
+  CONVERGENCE_PAUSED_NOTE: (
+    await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common')
+  ).CONVERGENCE_PAUSED_NOTE,
 }));
 vi.mock('@bike4mind/fab-pipeline', () => ({
   ChunkSchema: z.object({}).passthrough(),

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { DEFAULT_PASSAGE_TOKEN_TARGET, CHARS_PER_TOKEN_SERVE_BOUND, SERVE_CHUNK_CHARS_CEILING } from './chunking';
+import {
+  DEFAULT_PASSAGE_TOKEN_TARGET,
+  CHARS_PER_TOKEN_SERVE_BOUND,
+  SERVE_CHUNK_CHARS_CEILING,
+  CONVERGENCE_PAUSED_NOTE,
+} from './chunking';
 import {
   resolveLakeHealthPolicy,
   evaluateMemberHealth,
@@ -425,5 +430,62 @@ describe('summarizeLakeHealth', () => {
       DEFAULT_POLICY
     );
     expect(report.affectedMembers).toHaveLength(0);
+  });
+});
+
+describe('evaluateMemberHealth - convergence-paused files must GRADE, not hide', () => {
+  // The kill switch (#1676) abandons a vectorize by writing CONVERGENCE_PAUSED_NOTE to `notes` and
+  // clearing isVectorizing. It never sets `error`, so before the notes arm such a file satisfied no
+  // settled condition and hid from BOTH sides of the reachable ratio - forever, since the handler
+  // states these do not auto-resume. A lake where most files were paused mid-sweep would then report
+  // a healthy share over the few that finished. Same failure mode `error` exists to catch.
+  const paused = (over: Partial<LakeHealthMemberInput> = {}) =>
+    member({
+      chunkCount: 4,
+      chunkedCharCount: 8000,
+      maxChunkCharLength: 2000,
+      vectorizedChunkCount: 1, // stalled below chunkCount
+      embeddedChunkCount: 1,
+      embeddedCharCount: 2000,
+      notes: CONVERGENCE_PAUSED_NOTE,
+      ...over,
+    });
+
+  it('grades a paused file as SETTLED, so it fails P3 and contributes its real reachable chars', () => {
+    const r = evaluateMemberHealth(paused(), DEFAULT_POLICY);
+    expect(r.status.fullyVectorized).toBe('fail'); // not 'unknown'
+    expect(r.failed).toContain('fullyVectorized');
+    expect(r.measured).toBe(true);
+    expect(r.reachableChars).toBe(2000); // its real partial figure, not null
+  });
+
+  it('still treats an ordinary mid-vectorize file as pending', () => {
+    // The discriminator must be the note, not merely "vectorizedChunkCount < chunkCount".
+    const r = evaluateMemberHealth(paused({ notes: null }), DEFAULT_POLICY);
+    expect(r.status.fullyVectorized).toBe('unknown');
+    expect(r.reachableChars).toBeNull();
+    expect(r.measured).toBe(false);
+  });
+
+  it('does not treat an unrelated note as a terminal stall', () => {
+    const r = evaluateMemberHealth(paused({ notes: 'No extractable text found in this file' }), DEFAULT_POLICY);
+    expect(r.measured).toBe(false); // still pending, not graded
+  });
+
+  it('keeps a paused file in the lake denominator instead of shrinking it', () => {
+    // The headline bug: a paused file used to vanish from numerator AND denominator, so a lake that
+    // was mostly paused reported the healthy share of its survivors.
+    const finished = member({
+      fabFileId: 'ok',
+      chunkCount: 2,
+      chunkedCharCount: 2000,
+      maxChunkCharLength: 1000,
+      vectorizedChunkCount: 2,
+      embeddedChunkCount: 2,
+      embeddedCharCount: 2000,
+    });
+    const summary = summarizeLakeHealth([finished, paused({ fabFileId: 'stalled' })], DEFAULT_POLICY);
+    expect(summary.measuredChunkedChars).toBe(10000); // 2000 finished + 8000 paused, not 2000 alone
+    expect(summary.reachableShare).toBeCloseTo(0.4, 5); // (2000 + 2000) / 10000, not 1.0
   });
 });

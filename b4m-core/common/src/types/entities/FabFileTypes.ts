@@ -880,6 +880,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       // settled), re-arming the mid-ingest "0% reachable" bug at the type level. Keep in sync.
       vectorizedChunkCount: number | null;
       error: string | null;
+      // Third terminal-stall input, same keep-in-sync rule as the two above: the convergence kill
+      // switch stalls a file via `notes` (CONVERGENCE_PAUSED_NOTE) without ever setting `error`.
+      notes: string | null;
       chunkedCharCount: number | null;
       maxChunkCharLength: number | null;
       embeddedChunkCount: number | null;

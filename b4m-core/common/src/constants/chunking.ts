@@ -113,3 +113,16 @@ export function deriveServeCharBudget(chunkTokenTarget?: number | null): ServeCh
     ceilingBound: derived > SERVE_CHUNK_CHARS_CEILING,
   };
 }
+
+/**
+ * `FabFile.notes` marker written when the data-lake convergence kill switch abandons a vectorize
+ * (#1676). The file keeps its chunks but has no vectors, so it is unsearchable until re-indexed, and
+ * it does NOT auto-resume.
+ *
+ * Lives here rather than beside its writer (apps/client fabFileVectorize) because it is a
+ * cross-layer contract: the queue handler writes it and the lake-health evaluator
+ * (constants/lakeHealth.ts) reads it to tell a permanently-stalled file from one still in flight.
+ * b4m-core cannot import from apps/client, so a copy there would have to drift silently.
+ */
+export const CONVERGENCE_PAUSED_NOTE =
+  'Indexing paused by the data-lake convergence kill switch - reprocess to complete.';
