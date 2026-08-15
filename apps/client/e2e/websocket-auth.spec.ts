@@ -8,15 +8,17 @@ import { apiCreateTestUser } from './helpers/api';
  * The WebSocket verifiers ($connect, subscribe_query, unsubscribe_query) enforce the same
  * token gates as the REST strategy: `typ` and the tokenVersion kill switch. These tests pin
  * the observable end of that from a real deploy - a current token still gets a working
- * realtime subscription, and a token revoked by logout no longer completes the handshake.
+ * realtime subscription, and a token revoked server-side no longer completes the handshake.
  *
- * Each test mints its own throwaway account: revoking bumps tokenVersion for ALL of a user's
- * tokens, so a shared spec user would have its session killed for every parallel spec. The
+ * Revocation here means the tokenVersion kill switch (admin "sign out everywhere"), NOT per-device
+ * /api/logout - that path deliberately never bumps tokenVersion (issue #1194), so it would not
+ * revoke the socket. Each test mints its own throwaway account: the bump invalidates ALL of a
+ * user's tokens, so a shared spec user would have its session killed for every parallel spec. The
  * retry index is baked into the identity because createUser rejects a duplicate email, so a
  * retry would otherwise die during setup. The email mirrors the setup convention
  * (`...-<id>-e2e@test.com`) so global-teardown's cleanup sweep matches it.
  */
-async function createWsUser(request: APIRequestContext, label: string) {
+async function createWsUser(request: APIRequestContext, label: string, options: { isAdmin?: boolean } = {}) {
   const e2eId = getE2ETestId();
   const idSuffix = e2eId ? `${e2eId}-${getTestRunId()}` : getTestRunId();
   const slug = `wsauth-${label}${test.info().retry}`;
@@ -26,7 +28,7 @@ async function createWsUser(request: APIRequestContext, label: string) {
     email,
     name: `WsAuth ${label} ${idSuffix}`,
     password: `E2eWsAuth${label}Pass123!`,
-    isAdmin: false,
+    isAdmin: options.isAdmin ?? false,
   });
   return {
     email,
@@ -48,12 +50,18 @@ async function getWebsocketUrl(request: APIRequestContext, token: string): Promi
   return websocketUrl;
 }
 
-/** Logout revokes every token the user holds by bumping tokenVersion server-side. */
-async function apiLogout(request: APIRequestContext, token: string): Promise<void> {
-  const response = await request.get(`${baseURL()}/api/logout`, {
-    headers: { Authorization: `Bearer ${token}` },
+/**
+ * Admin "sign out everywhere" force-logout: bumps the target's tokenVersion, the kill switch every
+ * verifier (REST, CLI, WS $connect) enforces. This is the only lever that revokes an already-issued
+ * access token - per-device /api/logout revokes just the session `sid` and never bumps tokenVersion
+ * (issue #1194), so $connect (which checks tokenVersion, not the session store) would still accept
+ * the token. The caller revokes itself, so it must be an admin (createWsUser(..., { isAdmin: true })).
+ */
+async function apiForceLogout(request: APIRequestContext, adminToken: string, userId: string): Promise<void> {
+  const response = await request.post(`${baseURL()}/api/users/${userId}/revoke-sessions`, {
+    headers: { Authorization: `Bearer ${adminToken}` },
   });
-  if (!response.ok()) throw new Error(`Logout failed: ${response.status()}`);
+  if (!response.ok()) throw new Error(`Force-logout failed: ${response.status()}`);
 }
 
 /**
@@ -128,7 +136,11 @@ async function subscribeRoundTrip(
               subscriptionId,
               collectionName: 'users',
               query: { _id: id },
-              fields: { email: true },
+              // `fields` is required by the schema, and for `users` the server merges in
+              // exclusion-based fieldLimits (password etc); an inclusion projection here would mix
+              // inclusions+exclusions and be rejected, so send {} - exactly what the real client
+              // (useSubscribeCollection) sends - and only the server exclusions apply.
+              fields: {},
               fetchInitialData: true,
             })
           );
@@ -163,8 +175,9 @@ test.describe('WebSocket token enforcement', () => {
     expect(openAfterUnsubscribe).toBe(true);
   });
 
-  test('a token revoked by logout is refused at connect', async ({ page, request }) => {
-    const user = await createWsUser(request, 'revoked');
+  test('a token revoked server-side (force-logout) is refused at connect', async ({ page, request }) => {
+    // Admin so the user can pull the tokenVersion kill switch on itself; see apiForceLogout.
+    const user = await createWsUser(request, 'revoked', { isAdmin: true });
     const wsUrl = await getWebsocketUrl(request, user.accessToken);
     await page.goto('/login');
 
@@ -172,7 +185,7 @@ test.describe('WebSocket token enforcement', () => {
     // is the kill switch firing and not a broken deploy or a bad URL.
     expect(await tryWsConnect(page, wsUrl, user.accessToken)).toBe(true);
 
-    await apiLogout(request, user.accessToken);
+    await apiForceLogout(request, user.accessToken, user.userId);
 
     expect(await tryWsConnect(page, wsUrl, user.accessToken)).toBe(false);
   });

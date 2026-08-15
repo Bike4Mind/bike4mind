@@ -249,12 +249,15 @@ export interface ChatMemberNameResult {
 }
 
 /**
- * Where the digest is posted. lumina5 uses a bot token + channel rather than an
- * incoming webhook, deliberately: a post-only webhook has no read scope, so
- * `FetchChatMemberNames` could never resolve display names and the proofreading
- * preview would permanently show raw member ids.
+ * Where the digest is posted: a Slack Incoming Webhook URL. The URL encodes the
+ * channel and workspace and is the only credential the send needs - bearer-equivalent,
+ * so it is stored encrypted and never returned to the browser.
+ *
+ * A webhook has no read scope, so `FetchChatMemberNames` (the proofreading preview)
+ * cannot use it; the preview relies on a SEPARATE, optional workspace bot token and
+ * degrades to raw member ids when none is configured.
  */
-export type ChatPostTarget = { token: string; channel: string };
+export type ChatPostTarget = { webhookUrl: string };
 
 /**
  * How a FAILED post ended, from the poster's point of view. This is the single

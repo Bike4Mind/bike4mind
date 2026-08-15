@@ -1,5 +1,12 @@
 # @bike4mind/cli
 
+## 0.20.1
+
+### Patch Changes
+
+- Updated dependencies [[`c7b5854`](https://github.com/Bike4Mind/bike4mind/commit/c7b5854b3a02afdcd4d8c480d93f1005d5ee47c6)]:
+  - @bike4mind/hearth@0.3.0
+
 ## 0.20.0
 
 ### Minor Changes

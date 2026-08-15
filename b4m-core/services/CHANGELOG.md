@@ -1,5 +1,59 @@
 # @bike4mind/services
 
+## 6.0.0
+
+### Major Changes
+
+- [#1762](https://github.com/Bike4Mind/bike4mind/pull/1762) [`e805cbe`](https://github.com/Bike4Mind/bike4mind/commit/e805cbe54ebd5c7d1113769d9e28875b79a71fe9) Thanks [@biletskiy6](https://github.com/biletskiy6)! - authorize lakes by org membership set, not the selected-org pointer
+
+### Minor Changes
+
+- [#1520](https://github.com/Bike4Mind/bike4mind/pull/1520) [`3a3aef0`](https://github.com/Bike4Mind/bike4mind/commit/3a3aef0b59afe349f2f5e78ff3c693ea98f616e7) Thanks [@baboosh](https://github.com/baboosh)! - provider spend reconciliation banner
+
+- [#1722](https://github.com/Bike4Mind/bike4mind/pull/1722) [`c9f2085`](https://github.com/Bike4Mind/bike4mind/commit/c9f208569698a2a1ec8210923493d1c460cefbca) Thanks [@onoya](https://github.com/onoya)! - chunk policy at file-owner altitude with the lake as a constraint
+
+- [#1733](https://github.com/Bike4Mind/bike4mind/pull/1733) [`9fad658`](https://github.com/Bike4Mind/bike4mind/commit/9fad658b6504fa00b85045b028aa23c8d27d7bb2) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - add lake access audit event model and retention floor
+
+- [#1734](https://github.com/Bike4Mind/bike4mind/pull/1734) [`472f90d`](https://github.com/Bike4Mind/bike4mind/commit/472f90d7f9387a879757ffa81746845ad93a93b2) Thanks [@Illia025](https://github.com/Illia025)! - cost governance - spend levers in the admin panel, enforced at the vectorize gate
+
+- [#1753](https://github.com/Bike4Mind/bike4mind/pull/1753) [`50b52a5`](https://github.com/Bike4Mind/bike4mind/commit/50b52a5fb5f3344b56bd4644b3a2154ca51fe31e) Thanks [@cgtorniado](https://github.com/cgtorniado)! - apply pr-report-generator blueprint (base)
+
+- [#1760](https://github.com/Bike4Mind/bike4mind/pull/1760) [`7c8240c`](https://github.com/Bike4Mind/bike4mind/commit/7c8240ce7aa7ab839ad3ac7cc42aa51bc4fa9055) Thanks [@onoya](https://github.com/onoya)! - org-manageable lakes and ownership succession
+
+### Patch Changes
+
+- [#1528](https://github.com/Bike4Mind/bike4mind/pull/1528) [`da0f7ab`](https://github.com/Bike4Mind/bike4mind/commit/da0f7abd8decb98b13cb3c006a2a4f21e294a974) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - don't race a fresh upload against the knowledge tool
+
+- [#1620](https://github.com/Bike4Mind/bike4mind/pull/1620) [`1a01f97`](https://github.com/Bike4Mind/bike4mind/commit/1a01f977b4b3cfff9a325ac2867553f4ee8b79e7) Thanks [@jarlacut](https://github.com/jarlacut)! - type the notebook-import adapters so a wrong implementation is a compile error
+
+- [#1625](https://github.com/Bike4Mind/bike4mind/pull/1625) [`cae26c4`](https://github.com/Bike4Mind/bike4mind/commit/cae26c4026e606cf412aa9996fdb7a9b444a0e8f) Thanks [@onoya](https://github.com/onoya)! - enforce per-member credit cap at reservation
+
+- [#1701](https://github.com/Bike4Mind/bike4mind/pull/1701) [`16a8920`](https://github.com/Bike4Mind/bike4mind/commit/16a8920bd5a64e14d5fdd73fe0eb14da309d7866) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - guard prompt assembly against dropped feature content
+
+- [#1731](https://github.com/Bike4Mind/bike4mind/pull/1731) [`0b4e580`](https://github.com/Bike4Mind/bike4mind/commit/0b4e58050f10e92ec4f6fad32017d28c54a9d0ae) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - derive the retrieval serve cap from the chunk policy
+
+- [#1737](https://github.com/Bike4Mind/bike4mind/pull/1737) [`9fc991e`](https://github.com/Bike4Mind/bike4mind/commit/9fc991e214af4fd2b1442759dc37528e74b33f11) Thanks [@wescarda](https://github.com/wescarda)! - sum FabFile sizes in the DB for recalculateUserStorage
+
+- [#1738](https://github.com/Bike4Mind/bike4mind/pull/1738) [`5139e4e`](https://github.com/Bike4Mind/bike4mind/commit/5139e4e712089049eb47519455232c5e219c0fbd) Thanks [@wescarda](https://github.com/wescarda)! - carry forward the in-force maxOutputTokens when refusing a starved claim
+
+- [#1742](https://github.com/Bike4Mind/bike4mind/pull/1742) [`de702ea`](https://github.com/Bike4Mind/bike4mind/commit/de702ea4ada1f91ad26167f2d7899a336cf647da) Thanks [@wescarda](https://github.com/wescarda)! - align member-add seat accounting to owner-inclusive team size ([#1423](https://github.com/Bike4Mind/bike4mind/issues/1423))
+
+- [#1754](https://github.com/Bike4Mind/bike4mind/pull/1754) [`cb58a53`](https://github.com/Bike4Mind/bike4mind/commit/cb58a5394c377c8250ff7dafa0a251652be2a87a) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - shrink the always-on chat prompt footprint
+
+- [#1758](https://github.com/Bike4Mind/bike4mind/pull/1758) [`82cd12c`](https://github.com/Bike4Mind/bike4mind/commit/82cd12c90c7772735e2c00c79b0a028fc0c890bd) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - wire the key-availability filter into the agent and deep-agent toolbelts
+
+- [#1761](https://github.com/Bike4Mind/bike4mind/pull/1761) [`c46c8a4`](https://github.com/Bike4Mind/bike4mind/commit/c46c8a46e33df208d4547be6cd07b79add171ef2) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - stop a co-tag from unstamping a lake's archive
+
+- Updated dependencies [[`3a3aef0`](https://github.com/Bike4Mind/bike4mind/commit/3a3aef0b59afe349f2f5e78ff3c693ea98f616e7), [`da0f7ab`](https://github.com/Bike4Mind/bike4mind/commit/da0f7abd8decb98b13cb3c006a2a4f21e294a974), [`8e03a0e`](https://github.com/Bike4Mind/bike4mind/commit/8e03a0ed6430e40280db316e2301a0f20a8ddc57), [`c9f2085`](https://github.com/Bike4Mind/bike4mind/commit/c9f208569698a2a1ec8210923493d1c460cefbca), [`0b4e580`](https://github.com/Bike4Mind/bike4mind/commit/0b4e58050f10e92ec4f6fad32017d28c54a9d0ae), [`9fad658`](https://github.com/Bike4Mind/bike4mind/commit/9fad658b6504fa00b85045b028aa23c8d27d7bb2), [`472f90d`](https://github.com/Bike4Mind/bike4mind/commit/472f90d7f9387a879757ffa81746845ad93a93b2), [`9fc991e`](https://github.com/Bike4Mind/bike4mind/commit/9fc991e214af4fd2b1442759dc37528e74b33f11), [`de702ea`](https://github.com/Bike4Mind/bike4mind/commit/de702ea4ada1f91ad26167f2d7899a336cf647da), [`50b52a5`](https://github.com/Bike4Mind/bike4mind/commit/50b52a5fb5f3344b56bd4644b3a2154ca51fe31e), [`cb58a53`](https://github.com/Bike4Mind/bike4mind/commit/cb58a5394c377c8250ff7dafa0a251652be2a87a), [`7c8240c`](https://github.com/Bike4Mind/bike4mind/commit/7c8240ce7aa7ab839ad3ac7cc42aa51bc4fa9055), [`c46c8a4`](https://github.com/Bike4Mind/bike4mind/commit/c46c8a46e33df208d4547be6cd07b79add171ef2), [`e805cbe`](https://github.com/Bike4Mind/bike4mind/commit/e805cbe54ebd5c7d1113769d9e28875b79a71fe9), [`1507c14`](https://github.com/Bike4Mind/bike4mind/commit/1507c143605a375cce15735d4a953c3ee470bc7d)]:
+  - @bike4mind/common@5.0.0
+  - @bike4mind/utils@4.1.0
+  - @bike4mind/fab-pipeline@1.1.0
+  - @bike4mind/db-core@0.4.0
+  - @bike4mind/agents@0.20.2
+  - @bike4mind/auth@0.7.2
+  - @bike4mind/llm-adapters@0.11.2
+  - @bike4mind/mcp@1.41.3
+
 ## 5.0.0
 
 ### Major Changes

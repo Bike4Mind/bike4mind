@@ -19,7 +19,6 @@ const actor = {
   id: 'user-1',
   isAdmin: false,
   tags: ['beta'],
-  organizationId: 'org-1',
   email: 'a@example.com',
   emailVerified: true,
 };
@@ -67,6 +66,9 @@ beforeEach(() => {
 
   deps = {
     dataLakes: {} as never,
+    // See the same adapter in dataLakeLinkIngest.test.ts: required by the write gate so a curator or
+    // transferred owner can ingest, and unguarded by typecheck because test files are excluded.
+    dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue([]) } as never,
     fabFiles: { findByContentHashesInDataLake },
     createLakeFile,
     resolveEntitlementKeys,

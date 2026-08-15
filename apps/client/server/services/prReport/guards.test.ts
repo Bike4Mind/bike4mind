@@ -48,10 +48,11 @@ describe('assertRepoFormat - SSRF guard', () => {
 });
 
 describe('createAssertChatTargetFormat - egress guard', () => {
-  const TARGET = { token: 'xoxb-super-secret-token', channel: 'C0DIGEST1' };
+  const TARGET = { webhookUrl: 'https://hooks.slack.com/services/T00000000/B00000000/example-webhook-token' };
+  const EXFIL_TARGET = { webhookUrl: 'https://exfil.example.com/services/T0/B0/stolen' };
 
-  it('accepts a target whose API host is on the allowlist', () => {
-    const guard = createAssertChatTargetFormat({ allowedHosts: ['slack.com'] });
+  it('accepts a target whose webhook host is on the allowlist', () => {
+    const guard = createAssertChatTargetFormat({ allowedHosts: ['hooks.slack.com'] });
     expect(() => guard(TARGET)).not.toThrow();
   });
 
@@ -64,58 +65,47 @@ describe('createAssertChatTargetFormat - egress guard', () => {
     );
   });
 
-  it('rejects a host that is not on the allowlist', () => {
-    const guard = createAssertChatTargetFormat({
-      allowedHosts: ['slack.com'],
-      apiBaseUrl: 'https://exfil.example.com/api/',
-    });
-
-    expect(() => guard(TARGET)).toThrow(/not on the egress allowlist/);
+  it('rejects a webhook host that is not on the allowlist', () => {
+    const guard = createAssertChatTargetFormat({ allowedHosts: ['hooks.slack.com'] });
+    expect(() => guard(EXFIL_TARGET)).toThrow(/not on the egress allowlist/);
   });
 
   it('rejects a non-HTTPS destination', () => {
-    const guard = createAssertChatTargetFormat({
-      allowedHosts: ['chat.internal.test'],
-      apiBaseUrl: 'http://chat.internal.test/api/',
-    });
-
-    expect(() => guard(TARGET)).toThrow(/not HTTPS/);
+    const guard = createAssertChatTargetFormat({ allowedHosts: ['chat.internal.test'] });
+    expect(() => guard({ webhookUrl: 'http://chat.internal.test/services/T0/B0/x' })).toThrow(/not HTTPS/);
   });
 
   it('supports a self-hosted host the operator names', () => {
-    const guard = createAssertChatTargetFormat({
-      allowedHosts: ['chat.internal.test'],
-      apiBaseUrl: 'https://chat.internal.test/api/',
-    });
-
-    expect(() => guard(TARGET)).not.toThrow();
+    const guard = createAssertChatTargetFormat({ allowedHosts: ['chat.internal.test'] });
+    expect(() => guard({ webhookUrl: 'https://chat.internal.test/services/T0/B0/x' })).not.toThrow();
   });
 
-  it('rejects a missing or incomplete destination', () => {
-    const guard = createAssertChatTargetFormat({ allowedHosts: ['slack.com'] });
+  it('rejects a malformed webhook URL', () => {
+    const guard = createAssertChatTargetFormat({ allowedHosts: ['hooks.slack.com'] });
+    expect(() => guard({ webhookUrl: 'not a url' })).toThrow(/not a valid URL/);
+  });
+
+  it('rejects a missing or empty destination', () => {
+    const guard = createAssertChatTargetFormat({ allowedHosts: ['hooks.slack.com'] });
 
     expect(() => guard(null)).toThrow(/no destination configured/);
     expect(() => guard(undefined)).toThrow(/no destination configured/);
-    expect(() => guard({ token: '', channel: 'C1' })).toThrow(/no destination configured/);
-    expect(() => guard({ token: 'xoxb-x', channel: '' })).toThrow(/no destination configured/);
+    expect(() => guard({ webhookUrl: '' })).toThrow(/no destination configured/);
   });
 
   it('never echoes the rejected value in its message', () => {
     // The guard is handed the whole credential, so an error built from its input would
     // return that credential to the browser.
-    const guard = createAssertChatTargetFormat({
-      allowedHosts: ['slack.com'],
-      apiBaseUrl: 'https://exfil.example.com/api/',
-    });
+    const guard = createAssertChatTargetFormat({ allowedHosts: ['hooks.slack.com'] });
 
     try {
-      guard(TARGET);
+      guard(EXFIL_TARGET);
       throw new Error('expected the guard to throw');
     } catch (error) {
       const message = (error as Error).message;
-      expect(message).not.toContain(TARGET.token);
-      expect(message).not.toContain(TARGET.channel);
+      expect(message).not.toContain(EXFIL_TARGET.webhookUrl);
       expect(message).not.toContain('exfil.example.com');
+      expect(message).not.toContain('stolen');
     }
   });
 });

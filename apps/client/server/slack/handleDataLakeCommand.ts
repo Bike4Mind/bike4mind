@@ -1,13 +1,9 @@
 import { parseDataLakeCommand, type ParsedDataLakeCommand, type SlackAttachment } from '@bike4mind/slack';
 import { dataLakeService } from '@bike4mind/services';
 import type { IDataLakeRepository } from '@bike4mind/common';
-import {
-  buildSlackAccessContext,
-  ingestSlackFilesIntoLake,
-  type SlackIngestActor,
-  type SlackLakeIngestDeps,
-  type SlackLakeIngestOutcome,
-} from './dataLakeFileIngest';
+import { buildSlackAccessContext, type SlackIngestActor } from './dataLakeIngestAuthz';
+import { ingestSlackFilesIntoLake, type SlackLakeIngestDeps, type SlackLakeIngestOutcome } from './dataLakeFileIngest';
+import { ingestSlackLinkIntoLake, type SlackLinkIngestDeps, type SlackLinkIngestOutcome } from './dataLakeLinkIngest';
 
 /**
  * Deterministic handler for the Slack `@datalake` command.
@@ -35,7 +31,7 @@ export interface HandleDataLakeCommandParams {
   files: SlackAttachment[];
   channel: string;
   messageTs: string;
-  deps: SlackLakeIngestDeps & { dataLakes: DataLakeCommandRepo };
+  deps: SlackLakeIngestDeps & SlackLinkIngestDeps & { dataLakes: DataLakeCommandRepo };
   /**
    * Whether the `enableAutoChunk` admin setting is on. Only affects the wording of the success
    * reply: with it off, `objectCreated.ts` never enqueues the chunk job, so promising the file
@@ -47,6 +43,7 @@ export interface HandleDataLakeCommandParams {
 const HELP_TEXT = [
   '*Data Lake commands*',
   '- `@datalake add to <lake>` with a file attached - add that file to a lake',
+  '- `@datalake add to <lake> <link>` - fetch a link and add it to a lake',
   '- `@datalake list` - list the lakes you can add to',
   '- `@datalake help` - show this help',
 ].join('\n');
@@ -101,35 +98,87 @@ async function handleAdd(
     return 'Please name a target lake, e.g. `@datalake add to <lake>` with a file attached.';
   }
 
-  // LINK ingest is M3. Refuse explicitly: accepting the command and silently ingesting nothing
-  // would read as success to the person who shared the URL.
-  if (params.files.length === 0 && parsed.link) {
-    return 'Adding a link is not supported yet. Attach the file to your message instead.';
+  // Attachments and a link are both ingested now (M3), so a message carrying both gets both done
+  // and both reported. This replaces M2's "Ignored the link" note, which existed only because LINK
+  // ingest did not exist yet - keeping it would now under-report what actually happened.
+  //
+  // NOTE, deliberate: on a mixed message each ingest runs its OWN authorize-first prologue, so the
+  // lake is resolved and gated twice. That duplication is the price of neither path owning the
+  // other's security gate - the whole reason `dataLakeIngestAuthz` exists - and it is bounded (one
+  // extra lake lookup, only when a single message carries both a file and a link). The user-visible
+  // half of the cost, a refusal printed twice, is handled where the replies are joined below.
+  //
+  // `ok` is carried alongside the text because only REFUSALS are de-duplicated - see the join.
+  const replies: Array<{ text: string; ok: boolean }> = [];
+
+  if (params.files.length > 0) {
+    const outcome = await ingestSlackFilesIntoLake(
+      {
+        actor: params.actor,
+        lakeSlug: parsed.lakeSlug,
+        files: params.files,
+        channel: params.channel,
+        messageTs: params.messageTs,
+      },
+      params.deps
+    );
+    replies.push({
+      text: formatIngestOutcome(outcome, { autoChunkEnabled: params.autoChunkEnabled }),
+      ok: outcome.ok,
+    });
   }
 
-  const outcome = await ingestSlackFilesIntoLake(
-    {
-      actor: params.actor,
-      lakeSlug: parsed.lakeSlug,
-      files: params.files,
-      channel: params.channel,
-      messageTs: params.messageTs,
-    },
-    params.deps
+  if (parsed.link) {
+    const outcome = await ingestSlackLinkIntoLake(
+      {
+        actor: params.actor,
+        lakeSlug: parsed.lakeSlug,
+        link: parsed.link,
+        channel: params.channel,
+        messageTs: params.messageTs,
+      },
+      params.deps
+    );
+    replies.push({ text: formatLinkOutcome(outcome, { autoChunkEnabled: params.autoChunkEnabled }), ok: outcome.ok });
+  }
+
+  if (replies.length === 0) {
+    return 'Attach a file or include a link to add something to a data lake.';
+  }
+
+  // Both halves authorize independently (see the note on the paired calls above), so an actor who is
+  // refused gets the SAME refusal sentence from each - which reads as a stutter rather than as two
+  // half-outcomes. Collapse those, preserving order.
+  //
+  // REFUSALS ONLY, deliberately. Two successes could in principle format identically - same lake, and
+  // a file whose name happens to match the link's page title - and collapsing one of those would
+  // under-report a write that really happened. A duplicated refusal is cosmetic; a swallowed success
+  // is a lie about what is in the lake.
+  const seenRefusals = new Set<string>();
+  return replies
+    .filter(reply => {
+      if (reply.ok) return true;
+      if (seenRefusals.has(reply.text)) return false;
+      seenRefusals.add(reply.text);
+      return true;
+    })
+    .map(reply => reply.text)
+    .join('\n');
+}
+
+/**
+ * Reply for a link add. Deliberately routed through `formatIngestOutcome` on the success path
+ * rather than duplicating its wording: a link-sourced file goes through the same S3 ObjectCreated ->
+ * chunk -> vectorize pipeline, so the searchability caveat about `enableAutoChunk` applies to it
+ * identically and must not be allowed to drift between the two paths.
+ */
+export function formatLinkOutcome(outcome: SlackLinkIngestOutcome, opts: { autoChunkEnabled?: boolean } = {}): string {
+  if (!outcome.ok) return outcome.message;
+
+  return formatIngestOutcome(
+    { ok: true, lakeName: outcome.lakeName, added: [outcome.fileName], duplicates: [], rejected: [] },
+    opts
   );
-
-  const reply = formatIngestOutcome(outcome, { autoChunkEnabled: params.autoChunkEnabled });
-
-  // A message carrying BOTH files and a link falls past the refusal above, so say what happened
-  // to the link too - ingesting the files and staying silent about the URL reads as if both
-  // were taken. Only on success: appending it to a refusal would tell someone denied by the write
-  // gate that their link was "ignored", implying the rest went through.
-  if (parsed.link && outcome.ok) {
-    // Warning sign escaped so this source file stays ASCII (same as formatIngestOutcome).
-    return `${reply}\n\u26a0\ufe0f Ignored the link - links are not supported yet. Attach it as a file instead.`;
-  }
-
-  return reply;
 }
 
 /**
@@ -190,7 +239,7 @@ export interface RunDataLakeSlackCommandDeps {
       key: 'EnableDataLakes' | 'EnableDataLakeSlackAdd' | 'enableAutoChunk'
     ): Promise<boolean | undefined>;
   };
-  ingest: SlackLakeIngestDeps & { dataLakes: DataLakeCommandRepo };
+  ingest: SlackLakeIngestDeps & SlackLinkIngestDeps & { dataLakes: DataLakeCommandRepo };
   sendMessage: (args: { channel: string; text: string; threadTs?: string }) => Promise<unknown>;
   logger: { info: (message: string) => void; error: (message: string, meta?: unknown) => void };
 }

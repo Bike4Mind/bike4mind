@@ -123,7 +123,14 @@ export const createDataLake = async (
   // Before the slug work: a rejected prefix should fail fast rather than after resolving a slug.
   await assertPrefixAvailable(db, userId, params.fileTagPrefix, organizationId);
 
-  const slug = await disambiguateSlug(db, params.slug, organizationId);
+  // Lowercased at the mint point, so a lake can never be created with a mixed-case slug and
+  // therefore never with a mixed-case `datalakeTag`. That matters because the meta-tag write gates
+  // (`assertCanWriteDataLakeTags` and friends) lowercase their input before an exact-match lookup: a
+  // mixed-case stored tag would resolve to no lake and refuse a write its owner is entitled to make.
+  // Normalizing here rather than inside `buildDatalakeTag` deliberately leaves that function pure, so
+  // the well-formedness comparison in `getDynamicDataLakeTags` still reproduces existing rows exactly
+  // and no already-persisted lake is reclassified by this change.
+  const slug = await disambiguateSlug(db, params.slug.toLowerCase(), organizationId);
   const datalakeTag = buildDatalakeTag(slug, organizationId);
 
   // Lakes start in 'draft' and stay invisible to Discover and to retrieval until they have a

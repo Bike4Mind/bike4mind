@@ -8,6 +8,7 @@ import type {
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { type ManageActor } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
+import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 import { recomputeLakeStats } from './recomputeLakeStats';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
@@ -156,7 +157,10 @@ export const archiveDataLake = async (
   await bestEffortIndexRemove(retrievalIndex, scope, () => db.fabFiles.findIdsByDataLakeTag(scope), logger);
 
   // Step 4: settle to archived and reconcile stats from source (now 0 live files).
-  const updated = await db.dataLakes.update({ id: dataLakeId, status: 'archived' });
+  // Stamped on the TERMINAL transition only (not the 'archiving' hop above): one stamp per
+  // operator action, so a crashed run that never settles leaves no half-record of an archive
+  // that did not happen.
+  const updated = await db.dataLakes.update({ id: dataLakeId, status: 'archived', ...lakeConfigWriteStamp(actor) });
   if (!updated) {
     throw new NotFoundError('Data lake not found after archive');
   }

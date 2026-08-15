@@ -420,7 +420,7 @@ export const SettingKeySchema = z.enum([
   // PR REPORT GENERATOR
   'prReportRepo',
   'prReportIdentityMap',
-  'prReportSlackChannel',
+  'prReportWebhookUrl',
   'prReportEgressAllowlist',
 ]);
 export type SettingKey = z.infer<typeof SettingKeySchema>;
@@ -4034,21 +4034,22 @@ export const settingsMap = {
     category: 'Admin',
     order: 142,
   }),
-  prReportSlackChannel: makeStringSetting({
-    key: 'prReportSlackChannel',
-    name: 'PR Report Slack Channel',
+  prReportWebhookUrl: makeStringSetting({
+    key: 'prReportWebhookUrl',
+    name: 'PR Report Slack Webhook URL',
     defaultValue: '',
+    isSensitive: true,
     description:
-      'Slack channel ID the PR status digest posts to. The bot token itself is resolved from the credential store, never from admin settings.',
+      'Slack Incoming Webhook URL the PR status digest posts to (https://hooks.slack.com/services/...). It already encodes its channel and workspace, so no bot token or channel ID is needed to send. Bearer-equivalent: anyone holding it can post to the channel, so it is stored encrypted and never returned to the browser.',
     category: 'Slack',
     order: 143,
   }),
   prReportEgressAllowlist: makeObjectSetting({
     key: 'prReportEgressAllowlist',
     name: 'PR Report Egress Allowlist',
-    defaultValue: { hosts: ['slack.com', 'www.slack.com'] },
+    defaultValue: { hosts: ['hooks.slack.com'] },
     description:
-      'Hosts the PR digest may post to. FAILS CLOSED: an empty list rejects every send rather than degrading to allow-any, because the post body carries PR titles, author logins and the staffing implied by the role rosters. Validated against the Slack API origin, so the default lists slack.com; self-hosted (non-Slack) origins are not yet supported.',
+      'Hosts the PR digest may post to, checked against the webhook URL its own hostname. FAILS CLOSED: an empty list rejects every send rather than degrading to allow-any, because the post body carries PR titles, author logins and the staffing implied by the role rosters. Slack incoming webhooks live at hooks.slack.com, so that is the default.',
     category: 'Slack',
     order: 144,
     schema: z.object({

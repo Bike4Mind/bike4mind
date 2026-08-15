@@ -160,3 +160,27 @@ describe('processSlackFiles', () => {
     expect(data.sourceType).toBe('slack');
   });
 });
+
+/**
+ * NOT part of the characterization set above - this pins behavior deliberately ADDED after it (the
+ * `sourceMetadata` origin stamp), so it would fail against the pre-refactor implementation by
+ * design. Kept in a separate block so the 9 tests above keep meaning "unchanged pre/post refactor".
+ */
+describe('processSlackFiles origin stamp', () => {
+  it('stamps the Slack channel and message ts alongside sourceType', async () => {
+    await makeHandler().processSlackFiles([attachment()] as never);
+
+    expect(create.mock.calls[0][0].sourceMetadata).toEqual({ channel: 'C1', messageTs: '1700000000.0001' });
+  });
+
+  it('stamps an empty channel rather than omitting the field when the event carries none', async () => {
+    const slackEvent = new SlackEvent({ user: 'U1', text: 'hello', ts: '1700000000.0002' } as never);
+    const handler = new CommandHandler(slackEvent, { id: 'user-1' } as never, { downloadFile } as never, logger);
+
+    await handler.processSlackFiles([attachment()] as never);
+
+    // A DM carries no `channel` on the raw event; the shape stays consistent so anything reading
+    // sourceMetadata later does not have to handle a missing key as well as an empty one.
+    expect(create.mock.calls[0][0].sourceMetadata).toEqual({ channel: '', messageTs: '1700000000.0002' });
+  });
+});
