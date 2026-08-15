@@ -34,10 +34,17 @@ export const MIN_PASSAGE_TOKEN_TARGET = 64;
 /**
  * Model-INDEPENDENT sanity ceiling for a configured passage target, in tokens. A passage larger
  * than a full typical embedding context window (~8K) defeats retrieval granularity - one vector
- * would average a whole document (see DEFAULT_PASSAGE_TOKEN_TARGET). This bounds the scoped
- * `DefaultChunkSize` setting (#1662) where the specific embedding model is NOT known (the resolver
- * clamp is pure); the EXACT per-model embedding-window cap is enforced downstream by the chunker
- * (`effectiveChunkTokenLimit` in fab-pipeline), which knows the model and reduces further if needed.
+ * would average a whole document (see DEFAULT_PASSAGE_TOKEN_TARGET).
+ *
+ * CURRENTLY UNREFERENCED. It bounded the scoped `DefaultChunkSize` setting until #1804 lowered that
+ * ceiling to OVERSIZED_PASSAGE_TOKEN_THRESHOLD - a configured target above the detection threshold
+ * makes "Rebuild passages" non-convergent, which is a tighter constraint than this one. Deliberately
+ * kept rather than deleted: it states a real invariant (a passage should not approach a whole
+ * embedding window) that a future non-lake caller may need, and deleting an exported symbol from
+ * `common` is the shape that passes public CI and breaks an overlay at deploy time.
+ *
+ * NOT enforced downstream in this value: `effectiveChunkTokenLimit` (fab-pipeline) clamps to the
+ * EMBEDDING MODEL's window, which is a different and model-dependent bound. Nothing enforces 8192.
  */
 export const MAX_PASSAGE_TOKEN_TARGET = 8192;
 
