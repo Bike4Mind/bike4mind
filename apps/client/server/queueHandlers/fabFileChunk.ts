@@ -75,14 +75,20 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     return;
   }
 
-  // Single-run lease, and the ONLY mutual exclusion in the chunk path. chunkFabfile unconditionally
-  // deletes then recreates a file's chunks, so at most one worker may run it per file at a time.
+  // Single-run lease: the only PRODUCER-side-independent exclusion in the chunk path. chunkFabfile
+  // unconditionally deletes then recreates a file's chunks, so at most one worker may run it per file.
   //
-  // This compare-and-set is deliberately the whole mechanism: producers (a "Rebuild passages" wave,
-  // the rescue sweep, an upload, a per-file reprocess) just reset and enqueue, and two deliveries for
-  // one file are resolved HERE regardless of who sent them. Splitting exclusion across a producer
-  // pre-claim and a consumer token is what broke this path repeatedly - the producer marks a file
-  // busy, and the consumer then cannot tell its own reservation from someone else's in-flight run.
+  // This compare-and-set is deliberately the whole producer-facing mechanism: producers (a "Rebuild
+  // passages" wave, the rescue sweep, an upload, a per-file reprocess) just reset and enqueue, and two
+  // deliveries for one file are resolved HERE regardless of who sent them. Splitting exclusion across
+  // a producer pre-claim and a consumer token is what broke this path repeatedly - the producer marks
+  // a file busy, and the consumer then cannot tell its own reservation from someone else's run.
+  //
+  // It is NOT the only guard for the whole run, and the distinction matters if you change either
+  // half: chunkFabfile writes isChunking:false alongside chunked:true partway through
+  // (fabFileService/chunk.ts) - BEFORE its destructive delete - so from that write onward a duplicate
+  // is turned away by the `chunked` guard below rather than by this CAS. Pre-existing, and the
+  // handoff holds because whichever of the two is live rejects the duplicate.
   //
   // The three arms are: free (not being chunked), or a claim stale past CHUNK_CLAIM_STALE_MS (a
   // worker hard-killed before its finally), or the null-stamp backfill arm for files stuck
