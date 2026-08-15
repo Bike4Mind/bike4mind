@@ -18,6 +18,7 @@ export * from './authorizeBatchAccess';
 export * from './fallbackLakeTags';
 export * from './lakeMembershipScope';
 export * from './computeLakeHealth';
+export * from './rebuildLakePassages';
 export * from './tagPrefixCollision';
 export * from './createDataLake';
 export * from './updateDataLake';

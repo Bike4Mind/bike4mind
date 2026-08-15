@@ -29,10 +29,11 @@ const h = vi.hoisted(() => ({
   batchFindById: vi.fn(async () => ({ id: 'batch-1', dataLakeId: 'lake-1' })),
   batchReleaseSpend: vi.fn(async () => true),
   lakeReleaseSpend: vi.fn(async () => true),
+  getSettingsValue: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
-  adminSettingsRepository: { getSettingsValue: vi.fn() },
+  adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   apiKeyRepository: {},
   dataLakeBatchRepository: {
     updateFileStatus: h.updateFileStatus,
@@ -42,7 +43,10 @@ vi.mock('@bike4mind/database', () => ({
     findById: h.batchFindById,
     releaseEmbeddingSpend: h.batchReleaseSpend,
   },
-  dataLakeRepository: { releaseEmbeddingSpend: h.lakeReleaseSpend },
+  // dataLakeRepository/scopedSettingsRepository also feed the convergence kill switch (#1676),
+  // built eagerly on every message.
+  dataLakeRepository: { releaseEmbeddingSpend: h.lakeReleaseSpend, findById: vi.fn() },
+  scopedSettingsRepository: { findOverrides: vi.fn() },
   cacheRepository: {},
   embeddingCacheRepository: {},
   fabFileChunkRepository: {
@@ -75,6 +79,7 @@ vi.mock('@bike4mind/services', () => ({
       }
     },
   },
+  scopedSettingsService: { resolveScopedSetting: vi.fn(), scopeForLake: vi.fn() },
 }));
 vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   finalizeBatchIfComplete: vi.fn(),
@@ -111,7 +116,7 @@ const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(),
 import { fabFileChunkRepository } from '@bike4mind/database';
 import { sendToClient } from '@server/websocket/utils';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from './sqsDelivery';
-import { dispatch } from './fabFileVectorize';
+import { dispatch, CONVERGENCE_PAUSED_NOTE } from './fabFileVectorize';
 
 const makeEvent = (body: Record<string, unknown>) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
 // Fully-vectorized file -> idempotency early-return right after the batchId metadata attach.
@@ -137,6 +142,60 @@ describe('fabFileVectorize handler - batchId log metadata', () => {
     h.findAccessibleById.mockResolvedValue(vectorizedFile(undefined));
     await dispatch(makeEvent(payload), {} as never, mockLogger);
     expect(mockLogger.updateMetadata).not.toHaveBeenCalledWith({ batchId: 'batch-1' });
+  });
+});
+
+describe('fabFileVectorize handler - convergence kill switch (#1676)', () => {
+  // A partially-vectorized file passes the already-vectorized idempotency guard and reaches the
+  // halt check that sits just after it.
+  const unvectorizedFile = (batchId?: string) => ({
+    id: 'ff1',
+    batchId,
+    vectorized: false,
+    chunkCount: 1,
+    vectorizedChunkCount: 0,
+  });
+  const convergencePayload = { ...payload, origin: 'convergence' as const };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.fabFileUpdate.mockResolvedValue(undefined); // the flag-write is `.update(...).catch(...)`
+  });
+
+  it('flags the file and skips embedding when a convergence message hits the paused switch', async () => {
+    h.getSettingsValue.mockResolvedValue(true); // PauseLakeConvergence on (global read)
+
+    await dispatch(makeEvent(convergencePayload), {} as never, mockLogger);
+
+    expect(h.fabFileUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ff1', notes: CONVERGENCE_PAUSED_NOTE, isVectorizing: false })
+    );
+    // Embedding is gated: neither the chunk load nor the provider call runs.
+    expect(fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+    expect(h.getVector).not.toHaveBeenCalled();
+  });
+
+  it('never halts user work even when the switch is on, and does not flag the file', async () => {
+    h.getSettingsValue.mockResolvedValue(true);
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue(null); // no chunks -> early return
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger); // payload has no origin -> user
+
+    // User work short-circuits before any settings read; the file is never flagged paused.
+    expect(h.getSettingsValue).not.toHaveBeenCalled();
+    expect(h.fabFileUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ notes: CONVERGENCE_PAUSED_NOTE }));
+  });
+
+  it('lets convergence work proceed when the switch is off', async () => {
+    h.getSettingsValue.mockResolvedValue(false);
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue(null); // no valid chunks -> early return after the halt gate
+
+    await dispatch(makeEvent(convergencePayload), {} as never, mockLogger);
+
+    expect(h.fabFileUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ notes: CONVERGENCE_PAUSED_NOTE }));
+    // Passed the gate and reached chunk loading.
+    expect(fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).toHaveBeenCalled();
   });
 });
 

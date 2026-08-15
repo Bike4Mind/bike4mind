@@ -20,6 +20,11 @@ import type { Request } from 'express';
  *
  * This is the ONE place a route turns a client-supplied active org into a trusted scope, so the
  * callers (data-lake create/visibility, chat billing target) can't drift in how they validate it.
+ *
+ * NOTE: validation here uses the shareable ACL (findAccessibleById, which includes the groups
+ * arm) and is deliberately WIDER than the read-side membership set (findMembershipOrgIds, owner +
+ * users[] only, #1674) - a write-target validator and a read-membership resolver must not
+ * silently drift; see the design doc docs/superpowers/specs/2026-08-13-accesscontext-org-set-design.md.
  */
 export async function resolveActiveOrg(
   req: Request,

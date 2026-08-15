@@ -54,32 +54,20 @@ export function assertRepoFormat(repo: string): void {
 
 export interface ChatEgressPolicy {
   /**
-   * Hosts the digest may be posted to. OPERATOR-CONFIGURED, not compiled in. Today
-   * the check runs against the Slack API origin below, so the default deployment
-   * lists `slack.com`.
+   * Hosts the digest may be posted to. OPERATOR-CONFIGURED, not compiled in. The check
+   * runs against the webhook URL's own hostname, so a Slack deployment lists
+   * `hooks.slack.com`.
    */
   allowedHosts: string[];
-  /**
-   * The API origin the post is validated against. Defaults to Slack's.
-   *
-   * This is the seam for a future self-hosted (non-Slack) origin, but that path is
-   * NOT wired end-to-end yet: nothing in the settings schema populates this, and the
-   * Slack adapter (`createPostReport`) posts through `WebClient`'s default `slack.com`
-   * origin regardless. Redirecting egress to a self-hosted host needs BOTH this
-   * populated from settings AND the poster pointed at the same origin - deferred until
-   * there is a deployment to validate it against.
-   */
-  apiBaseUrl?: string;
 }
-
-const DEFAULT_SLACK_API_BASE_URL = 'https://slack.com/api/';
 
 /**
  * Build the egress guard - the outbound-side analogue of `assertRepoFormat`.
  *
  * The post body is the entire report: PR titles, author logins, repo URLs, and the
  * staffing implied by the role rosters. An unvalidated destination is a
- * data-exfiltration channel, not merely a broken post.
+ * data-exfiltration channel, not merely a broken post. The webhook URL is where the
+ * body actually goes, so its OWN hostname is what the allowlist checks.
  *
  * FAILS CLOSED. An unset or empty allowlist rejects every post and MUST NOT degrade
  * to allowing any host - a guard that quietly becomes a pass-through leaves open the
@@ -88,12 +76,12 @@ const DEFAULT_SLACK_API_BASE_URL = 'https://slack.com/api/';
  * (`targetRejected`) rather than surfacing as a generic 500 with no obvious cause.
  *
  * No message below names the value it rejected. The guard is handed the whole
- * `ChatPostTarget`, so an error built from its input would return a
- * bearer-equivalent credential to the browser.
+ * `ChatPostTarget`, whose webhook URL is bearer-equivalent, so an error built from its
+ * input would return a credential to the browser.
  */
 export function createAssertChatTargetFormat(policy: ChatEgressPolicy) {
   return function assertChatTargetFormat(destination: ChatPostTarget | null | undefined): void {
-    if (!destination || !destination.token || !destination.channel) {
+    if (!destination || !destination.webhookUrl) {
       throw new Error('no destination configured');
     }
 
@@ -101,15 +89,12 @@ export function createAssertChatTargetFormat(policy: ChatEgressPolicy) {
       throw new Error('no egress allowlist configured');
     }
 
-    // A bot-token target carries no URL of its own, so the egress that actually
-    // happens is the API origin the client posts to. Validating that keeps the
-    // allowlist load-bearing instead of decorative - the blueprint's "a URL-less
-    // target passes" would otherwise leave this deployment's only egress unchecked.
     let origin: URL;
     try {
-      origin = new URL(policy.apiBaseUrl ?? DEFAULT_SLACK_API_BASE_URL);
+      origin = new URL(destination.webhookUrl);
     } catch {
-      throw new Error('configured chat API base URL is not a valid URL');
+      // Deliberately does not echo the value - the webhook URL is bearer-equivalent.
+      throw new Error('configured webhook URL is not a valid URL');
     }
 
     if (origin.protocol !== 'https:') {

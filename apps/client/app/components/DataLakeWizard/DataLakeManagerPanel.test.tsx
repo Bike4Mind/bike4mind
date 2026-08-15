@@ -32,6 +32,9 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     useGetDataLakes: () => useGetDataLakes(),
     // LakeInfoPanel renders <LakeHealthBadge> unconditionally; the badge renders null on no data.
     useGetDataLakeHealth: () => ({ data: undefined, isLoading: false }),
+    // No rebuild backlog in these fixtures, so the "Rebuild passages" button/chips stay hidden.
+    useUnderChunkedCount: () => ({ data: undefined }),
+    useRechunkDataLake: mutation,
     // Per-lake files: only the selected lake queries (id != null).
     useDataLakeFiles: (id: string | null) => ({
       data: id ? { data: lakeFiles } : undefined,

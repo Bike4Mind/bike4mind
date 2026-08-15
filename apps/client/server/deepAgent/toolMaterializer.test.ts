@@ -19,6 +19,8 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   apiKeyRepository: {},
   dataLakeRepository: {},
+  // ToolContext.db.organizations is required since #1674 (org membership set).
+  organizationRepository: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
   fabFileChunkRepository: {},
   fabFileRepository: {},
   imageModerationIncidentRepository: {},

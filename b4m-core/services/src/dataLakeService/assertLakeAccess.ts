@@ -71,10 +71,12 @@ export function canAccessLake(
   if (!lakeOrgId && !lake.requiredUserTag && !lake.requiredEntitlement) return false;
 
   // Org is a hard prerequisite when the lake is org-scoped - evaluated BEFORE the
-  // tag/entitlement any-of so a holder in a different org can never pass. Normalize both
-  // sides: the ctx org id can reach here as an ObjectId or populated doc, and a raw strict
-  // compare then 404s a lake the casting Mongo collection query still returns.
-  if (lakeOrgId && lakeOrgId !== normalizeId(ctx.organizationId)) return false;
+  // tag/entitlement any-of so a non-member can never pass. Membership is the SET the
+  // context resolved from the org ACLs (#1674); the lake side still normalizes because
+  // a hydrated lake doc can carry an ObjectId.
+  // `?? []`: a runtime belt against a malformed ctx, not a widening of the declared (required)
+  // type - a missing set must deny, not throw or vacuously allow.
+  if (lakeOrgId && !(ctx.organizationIds ?? []).includes(lakeOrgId)) return false;
 
   return lakeMatchesAccess(lake, normalizedTags, normalizedKeys);
 }
@@ -124,7 +126,8 @@ function resolveFallbackLake(lakeIdOrSlug: string, ctx: AccessContext): IDataLak
   const config = DATA_LAKES.find(dl => dl.id === lakeIdOrSlug || dl.slug === lakeIdOrSlug);
   if (!config) return null;
   const configOrgId = normalizeId(config.organizationId);
-  if (configOrgId && configOrgId !== normalizeId(ctx.organizationId)) return null;
+  // `?? []`: same runtime belt as canAccessLake above - a malformed ctx must deny, not throw.
+  if (configOrgId && !(ctx.organizationIds ?? []).includes(configOrgId)) return null;
   if (!ctx.isAdmin) {
     const normalizedTags = ctx.userTags.map(t => t.toLowerCase());
     const normalizedKeys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
@@ -157,7 +160,7 @@ export const assertLakeAccess = async (
 ): Promise<IDataLakeDocument> => {
   const lake =
     (await db.dataLakes.findById(lakeIdOrSlug).catch(() => null)) ??
-    (await db.dataLakes.findBySlug(lakeIdOrSlug, ctx.organizationId));
+    (await db.dataLakes.findBySlug(lakeIdOrSlug, ctx.organizationIds));
   if (lake) {
     // A persisted lake may carry grants; a fallback lake never does. Fetch only when the repo is
     // wired, so callers that have not threaded it keep the createdByUserId + org/tag/public behavior.

@@ -19,6 +19,18 @@ interface IOrganizationModel extends Model<IOrganizationDocument, {}> {
   findShareAccessById: (userId: string, id: string) => Promise<IOrganizationDocument | null>;
 }
 
+// The users[] ACL permission values that constitute org membership. 'write' implies membership
+// even when 'read' was never explicitly granted - the #1674 read-side set (findMembershipOrgIds)
+// already treats it so, and search() must agree or a write-only member can reach an org they
+// cannot find. Must stay the union used by BOTH call sites below.
+//
+// 'write' is deliberately NOT a Permission enum member: adding it broke apps/client typecheck
+// (SkillShareDialog's Record<Permission, string> must be exhaustive) and would widen
+// UserShareableSchema's validator plus the public share/invite contracts. This array exists
+// only to match legacy/out-of-band rows - every app write path persists ['read'], so a
+// write-only row can only come from a raw-driver insert or old data.
+const MEMBER_PERMISSIONS = ['read', 'write'] as const;
+
 const OrganizationSchema = new Schema<IOrganizationDocument>(
   {
     ...ShareableDocumentSchema,
@@ -164,6 +176,9 @@ OrganizationSchema.plugin(softDeletePlugin);
 // on every non-admin data-lake request would plan a full `organizations` collscan.
 OrganizationSchema.index({ userId: 1 });
 OrganizationSchema.index({ managerId: 1 });
+// Backs findMembershipOrgIds' reverse lookup (users[] ACL by member) - previously every
+// membership question collscanned. The owner arm rides the existing { userId: 1 } index.
+OrganizationSchema.index({ 'users.userId': 1 });
 OrganizationSchema.index({ adminUserIds: 1 });
 
 export const Organization =
@@ -335,7 +350,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
           {
             $or: [
               { userId: filters.userId },
-              { users: { $elemMatch: { userId: filters.userId, permissions: { $in: ['read'] } } } },
+              { users: { $elemMatch: { userId: filters.userId, permissions: { $in: MEMBER_PERMISSIONS } } } },
             ],
           },
         ];
@@ -395,6 +410,18 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
       .select('_id')
       .lean();
     return orgs.map(org => org._id.toString());
+  }
+
+  async findMembershipOrgIds(userId: string): Promise<string[]> {
+    const docs = await this.organizationModel
+      .find(
+        {
+          $or: [{ userId }, { users: { $elemMatch: { userId, permissions: { $in: MEMBER_PERMISSIONS } } } }],
+        },
+        { _id: 1 }
+      )
+      .lean();
+    return docs.map(d => String(d._id));
   }
 
   async findIdsWithAdminRights(userId: string): Promise<string[]> {

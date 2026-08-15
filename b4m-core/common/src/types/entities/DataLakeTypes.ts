@@ -26,7 +26,13 @@ export interface AccessContext {
   userId: string;
   isAdmin: boolean;
   userTags: string[];
-  organizationId?: string;
+  /**
+   * Authoritative org membership (normalized string ids), resolved at context construction
+   * from the organization documents' owner + users[] ACL (findMembershipOrgIds) - never from
+   * user.organizationId, which is the "currently selected org" display preference and must
+   * not be an authorization input (#1674). Empty array = member of no organization.
+   */
+  organizationIds: string[];
   /**
    * Orgs the caller holds admin RIGHTS in (billing owner / manager / appointed admin), resolved
    * app-side via `organizationRepository.findIdsWithAdminRights` and injected here (same pre-resolved
@@ -44,7 +50,7 @@ export interface AccessContext {
    * Optional - absent -> tag-only matching (back-compat for any caller not threading it).
    *
    * Intentionally distinct from `DataLakeAccessContext` (retrieval): this type also carries
-   * `userId`/`isAdmin`/`organizationId` for the owner/org bypass that retrieval doesn't need.
+   * `userId`/`isAdmin`/`organizationIds` for the owner/org bypass that retrieval doesn't need.
    */
   entitlementKeys?: string[];
 }
@@ -60,10 +66,15 @@ export interface IDataLake {
   description?: string;
   /**
    * Optional per-lake system prompt, so a lake can carry its own answering instructions.
-   * Not yet consumed: a later PR (#843) injects it as a labeled system message whenever this
-   * lake is active in a chat turn, refining behavior WITHIN the org prompt (which stays
-   * authoritative on conflict). Editable only by the lake creator or an admin (canManageLake);
-   * uncapped, matching the other system prompts in the codebase. Absent/empty = no per-lake prompt.
+   * Injected RETRIEVAL-SCOPED: it rides only on turns that actually retrieved content from
+   * this lake, on both channels - forced retrieval (KnowledgeRetrievalFeature) and the
+   * model-driven knowledge tools (prependRetrievedLakePrompts) - resolved by
+   * getAccessibleDataLakePrompts and rendered with the renderDataLakePromptSection defenses.
+   * Injected only for TRUSTED actors (the lake's creator, or a member of the lake's
+   * organization - see isTrustedForInjection); users reached via tag/entitlement grants read
+   * the lake WITHOUT this prompt. The org prompt stays authoritative on conflict. Editable
+   * only via canManageLake and withheld from non-managers by the server; uncapped, matching
+   * the other system prompts in the codebase. Absent/empty = no per-lake prompt.
    */
   systemPrompt?: string;
   /**
@@ -129,6 +140,34 @@ export interface IDataLake {
   requiredEntitlement?: string;
   /** User who created this data lake */
   createdByUserId: string;
+  /**
+   * The last principal to write this lake's CONFIGURATION - server-set from the authenticated
+   * actor at the service boundary, never client input (it is absent from
+   * UpdateDataLakeRequestInput, so secureParameters drops a supplied value). `createdByUserId`
+   * never moves on an update, so without this nothing records WHO: `timestamps` advances
+   * `updatedAt` and no field says by whom.
+   *
+   * Written by every CONFIG-write service - updateDataLake, setLakeVisibility,
+   * transferLakeOwnership, and the archive/unarchive + delete/restore lifecycle pairs - so the
+   * answer holds for the whole config surface, not just the metadata PUT. Lifecycle stamps only on
+   * the TERMINAL transition, one stamp per operator action rather than one per intermediate hop.
+   *
+   * Deliberately NOT stamped: createDataLake already records its actor as createdByUserId, and a
+   * lake nobody has reconfigured should read as exactly that rather than as self-updated; file
+   * membership (addFileToLake/removeFileFromDataLake) changes the lake's CONTENT rather than its
+   * configuration and is attributed per file; recomputeLakeStats is UNATTRIBUTED BY DESIGN rather
+   * than operator-free (a tag edit, a file toggle or a batch completion drives it, and it can flip
+   * status via activateIfDraft - it simply has no actor parameter to stamp with); the lake-memory
+   * lease is genuine headless bookkeeping; and resetEmbeddingSpend moves a cost meter, not an
+   * answering behavior. So this reads as "who last changed how this lake is configured", never
+   * "who last touched this lake in any way".
+   *
+   * A stamp, not a history: it is overwritten by the next write and answers only "who last
+   * touched this". Editor-only (see LAKE_FIELD_VISIBILITY). Absent on a lake nobody has
+   * reconfigured - which includes both a newly created lake and one untouched since this field
+   * existed; the two are indistinguishable here, and the config-change event is what separates them.
+   */
+  lastUpdatedByUserId?: string;
   /** Organization scope (optional - if set, only org members can manage) */
   organizationId?: string;
   /**
@@ -237,11 +276,12 @@ export interface IDataLakeDocument extends IDataLake, IMongoDocument {}
 
 export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> {
   /**
-   * Resolve a lake by slug. Slug is unique only per scope (organizationId), so pass
-   * the caller's org to disambiguate: the caller's own-org lake is preferred, falling
-   * back to an org-less lake with that slug. Without an org, only org-less lakes match.
+   * Resolve a lake by slug. Slug is unique only per scope (organizationId), so pass the
+   * caller's membership set to disambiguate: a lake in one of the caller's own orgs is
+   * preferred, falling back to an org-less lake with that slug. Without a set, only
+   * org-less lakes match.
    */
-  findBySlug(slug: string, organizationId?: string): Promise<IDataLakeDocument | null>;
+  findBySlug(slug: string, organizationIds?: string[]): Promise<IDataLakeDocument | null>;
   /** Resolve a lake by its globally-unique join meta-tag (`datalake:<slug>` / `datalake:<org>:<slug>`). */
   findByDatalakeTag(datalakeTag: string): Promise<IDataLakeDocument | null>;
   findActiveByUserTags(userTags: string[]): Promise<IDataLakeDocument[]>;
@@ -251,8 +291,10 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * resolved entitlement keys), or - for a gateless ORG lake - membership in its org. Plus
    * the caller's OWN lakes (owner bypass). Mirrors the HTTP path's `findAccessible`.
    *
-   * `organizationId` is the hard org prerequisite: org-less lakes stay reachable cross-org
-   * (curated opti/help); an org-scoped lake only resolves for a caller in that org.
+   * `organizationIds` is the hard org prerequisite: org-less lakes stay reachable cross-org
+   * (curated opti/help); an org-scoped lake only resolves for a caller who is a MEMBER of that
+   * org (owner + `users[]` ACL - see `IOrganizationRepository.findMembershipOrgIds`, #1674).
+   * Empty/absent never widens access - it collapses every org arm to its org-less-only form.
    *
    * `userId` is the owner bypass + the Private-by-default rule: a lake with NO org and NO
    * gate is owner-only (not world-readable). Supply it on every user-facing retrieval call;
@@ -261,7 +303,7 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   findActiveByUserTagsAndEntitlements(
     userTags: string[],
     entitlementKeys: string[],
-    organizationId?: string | null,
+    organizationIds?: string[] | null,
     userId?: string | null
   ): Promise<IDataLakeDocument[]>;
   findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]>;

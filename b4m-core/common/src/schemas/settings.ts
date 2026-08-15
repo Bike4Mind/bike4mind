@@ -188,6 +188,7 @@ export const SettingKeySchema = z.enum([
   'EnableDataLakeGroundingMode',
   'EnableLakeMemory',
   'EnableDataLakeVectorSearch',
+  'PauseLakeConvergence',
   'EnableBriefcase',
   'EnableBriefcaseDefault',
   'EnableImageTemplates',
@@ -419,7 +420,7 @@ export const SettingKeySchema = z.enum([
   // PR REPORT GENERATOR
   'prReportRepo',
   'prReportIdentityMap',
-  'prReportSlackChannel',
+  'prReportWebhookUrl',
   'prReportEgressAllowlist',
 ]);
 export type SettingKey = z.infer<typeof SettingKeySchema>;
@@ -1896,6 +1897,22 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 92,
     dependsOn: 'EnableDataLakes',
+  }),
+  PauseLakeConvergence: makeBooleanSetting({
+    key: 'PauseLakeConvergence',
+    name: 'Data Lakes: Pause background convergence work',
+    defaultValue: false,
+    description:
+      'Kill switch for background data-lake ingestion work (convergence sweeps, rescue re-chunking) - NOT real-time user uploads, which are always honored. Off by default. Turn ON to halt in-flight background chunk/vectorize messages the next time the handler picks them up (a re-check inside the shared handler, so it takes effect on work already queued, not just the next scheduling pass). The platform value pauses every lake at once; a per-lake (or per-org / per-owner) override pauses a subset while the rest keep running. A platform-level flip applies immediately to lake-wide work and within ~5 min to per-lake-scoped work (settings cache).',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 93,
+    dependsOn: 'EnableDataLakes',
+    // Per-lake override (#1676): the platform value is the global kill switch; a narrower override
+    // pauses just that scope. Org/Owner rungs ride along (the resolver derives them from the lake
+    // via scopeForLake, and the scheme requires Owner wherever Lake is settable) so an operator can
+    // also pause all of an org's/owner's lake convergence, not only one lake at a time.
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
   }),
   EnableBriefcase: makeBooleanSetting({
     key: 'EnableBriefcase',
@@ -4017,21 +4034,22 @@ export const settingsMap = {
     category: 'Admin',
     order: 142,
   }),
-  prReportSlackChannel: makeStringSetting({
-    key: 'prReportSlackChannel',
-    name: 'PR Report Slack Channel',
+  prReportWebhookUrl: makeStringSetting({
+    key: 'prReportWebhookUrl',
+    name: 'PR Report Slack Webhook URL',
     defaultValue: '',
+    isSensitive: true,
     description:
-      'Slack channel ID the PR status digest posts to. The bot token itself is resolved from the credential store, never from admin settings.',
+      'Slack Incoming Webhook URL the PR status digest posts to (https://hooks.slack.com/services/...). It already encodes its channel and workspace, so no bot token or channel ID is needed to send. Bearer-equivalent: anyone holding it can post to the channel, so it is stored encrypted and never returned to the browser.',
     category: 'Slack',
     order: 143,
   }),
   prReportEgressAllowlist: makeObjectSetting({
     key: 'prReportEgressAllowlist',
     name: 'PR Report Egress Allowlist',
-    defaultValue: { hosts: ['slack.com', 'www.slack.com'] },
+    defaultValue: { hosts: ['hooks.slack.com'] },
     description:
-      'Hosts the PR digest may post to. FAILS CLOSED: an empty list rejects every send rather than degrading to allow-any, because the post body carries PR titles, author logins and the staffing implied by the role rosters. Validated against the Slack API origin, so the default lists slack.com; self-hosted (non-Slack) origins are not yet supported.',
+      'Hosts the PR digest may post to, checked against the webhook URL its own hostname. FAILS CLOSED: an empty list rejects every send rather than degrading to allow-any, because the post body carries PR titles, author logins and the staffing implied by the role rosters. Slack incoming webhooks live at hooks.slack.com, so that is the default.',
     category: 'Slack',
     order: 144,
     schema: z.object({

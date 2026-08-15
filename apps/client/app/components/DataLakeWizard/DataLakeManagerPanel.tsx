@@ -37,6 +37,7 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
+import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import {
   buildTagTree,
   getNodeAtPath,
@@ -71,6 +72,8 @@ import {
   usePermanentDeleteDataLake,
   useRestoreDeletedDataLake,
   useUnarchiveDataLake,
+  useUnderChunkedCount,
+  useRechunkDataLake,
 } from '@client/app/hooks/data/dataLakes';
 import { toast } from 'sonner';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
@@ -1118,6 +1121,12 @@ function LakeInfoPanel({
   const startChatWithLake = useStartChatWithLake();
   const [startingChat, setStartingChat] = useState(false);
   const visibility = lake.isPublic ? 'Public' : lake.organizationId ? 'Organization' : 'Private';
+  // "Rebuild passages": manager-only, and only surfaced when the lake actually has legacy
+  // oversized-chunk files to repair (the count self-polls down as a rebuild wave drains).
+  const { data: rebuildStatus } = useUnderChunkedCount(lake.id, lake.canManage);
+  const underChunkedCount = rebuildStatus?.underChunkedCount ?? 0;
+  const failedCount = rebuildStatus?.failedCount ?? 0;
+  const rechunk = useRechunkDataLake(lake.id);
 
   return (
     <Box
@@ -1191,6 +1200,25 @@ function LakeInfoPanel({
               >
                 Settings
               </Button>
+              {underChunkedCount > 0 && (
+                <Tooltip
+                  title="Re-chunk files stored as oversized passages into retrieval-sized ones. Runs in bounded waves; safe to repeat until zero."
+                  size="sm"
+                >
+                  <Button
+                    size="sm"
+                    variant="outlined"
+                    color="primary"
+                    startDecorator={<AutoFixHighIcon sx={{ fontSize: 16 }} />}
+                    data-testid={`datalake-rebuild-passages-btn-${lake.id}`}
+                    loading={rechunk.isPending}
+                    onClick={() => rechunk.mutate(undefined)}
+                    sx={{ flexShrink: 0, fontSize: '13px' }}
+                  >
+                    Rebuild passages
+                  </Button>
+                </Tooltip>
+              )}
               <Tooltip title="Archive (restorable from the manager home)" size="sm">
                 <Button
                   size="sm"
@@ -1244,6 +1272,44 @@ function LakeInfoPanel({
           {/* Derived retrievability health (#1666): reachable-content share + affected-file drill-down.
               Advisory only. Fetched lazily for the lake in view; renders nothing for an empty lake. */}
           <LakeHealthBadge lakeId={lake.id} />
+          {/* Retrievability health: files still stored as oversized (pre-passage-target) chunks.
+              Manager-only, and the count self-polls down as the Rebuild passages wave drains. */}
+          {lake.canManage && underChunkedCount > 0 && (
+            <Tooltip
+              title="These files are stored as oversized passages; use Rebuild passages to re-chunk them."
+              size="sm"
+            >
+              <Chip
+                size="sm"
+                variant="soft"
+                color="warning"
+                startDecorator={<AutoFixHighIcon sx={{ fontSize: 12 }} />}
+                sx={{ fontSize: '11px' }}
+                data-testid={`datalake-manager-rebuild-chip-${lake.id}`}
+              >
+                {underChunkedCount} to rebuild
+              </Chip>
+            </Tooltip>
+          )}
+          {/* A rebuild badge reaching zero doesn't mean success if some files failed to process -
+              those won't retry on their own, so surface them distinctly. */}
+          {lake.canManage && failedCount > 0 && (
+            <Tooltip
+              title="These files failed to process (e.g. a corrupt or unparseable file) and won't retry automatically. Includes files that failed at upload, not only rebuild attempts - Rebuild passages cannot clear them. Open the file and Re-process, or re-upload it."
+              size="sm"
+            >
+              <Chip
+                size="sm"
+                variant="soft"
+                color="danger"
+                startDecorator={<ErrorOutlineIcon sx={{ fontSize: 12 }} />}
+                sx={{ fontSize: '11px' }}
+                data-testid={`datalake-manager-rebuild-failed-chip-${lake.id}`}
+              >
+                {failedCount} failed
+              </Chip>
+            </Tooltip>
+          )}
           {/* Background AI-tag suggestion progress - an independent clock from ingest, so this
               can appear well after the lake's files are already fully uploaded/searchable. */}
           {(taxonomyBatch?.taxonomyStatus === 'queued' || taxonomyBatch?.taxonomyStatus === 'analyzing') && (

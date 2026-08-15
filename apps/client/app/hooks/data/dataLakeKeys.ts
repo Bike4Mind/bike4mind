@@ -37,6 +37,9 @@ export const dataLakeKeys = {
   /** Invalidation prefix covering every lake's health - used when a batch finishes ingesting, which
    *  is the moment a pending "indexing" badge should become measured (the message carries no lake id). */
   healthRoot: ['dataLakeHealth'] as const,
+  /** One lake's count of under-chunked files (GET /api/data-lakes/:id/rechunk) - the "Rebuild
+   *  passages" badge, polled while a rebuild drains. */
+  rebuildStatus: (dataLakeId: string) => ['dataLakeRebuildStatus', dataLakeId] as const,
   tagCounts: (source: DataLakeBrowseSource) => ['dataLakeTagCounts', source] as const,
   tagCountsRoot: ['dataLakeTagCounts'] as const,
   articles: (source: DataLakeBrowseSource, params?: DataLakeArticlesParams) =>

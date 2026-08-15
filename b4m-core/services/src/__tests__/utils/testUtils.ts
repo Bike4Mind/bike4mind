@@ -89,6 +89,9 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   setChunkedCharCount: vi.fn(),
   findFileIdsMissingChunkRollups: vi.fn(),
   setChunkRollups: vi.fn(),
+  findChunkedFilesByScope: vi.fn(),
+  resetChunkStateByIds: vi.fn(),
+  countFailedFilesByScope: vi.fn(),
   countDataLakeFilesByMembership: vi.fn(),
   archiveByDataLakeTag: vi.fn(),
   unarchiveByDataLakeTag: vi.fn(),
@@ -198,6 +201,7 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     findByIdAndUserId: vi.fn(),
     ensureUserDetails: vi.fn(),
     updateUserDetails: vi.fn(),
+    findMembershipOrgIds: vi.fn(),
   });
 
 export const createMockCreditTransactionRepository = (): MockedObject<ICreditTransactionRepository> =>

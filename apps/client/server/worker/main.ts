@@ -15,7 +15,13 @@ import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscove
 import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
-import { buildFabFileChunkScanFilter, CHUNK_SCAN_BATCH, CHUNK_SCAN_MIN_AGE_MS } from './chunkScan';
+import {
+  buildFabFileChunkScanFilter,
+  CHUNK_SCAN_BATCH,
+  CHUNK_SCAN_MIN_AGE_MS,
+  CHUNK_CLAIM_STALE_MS,
+} from './chunkScan';
+import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
 import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
@@ -137,20 +143,29 @@ async function main() {
   worker.registerScheduledTask('fabFileChunkScan', CHUNK_SCAN_INTERVAL_MS, async () => {
     if (!(await adminSettingsRepository.getSettingsValue('enableAutoChunk'))) return;
 
-    const cutoff = new Date(Date.now() - CHUNK_SCAN_MIN_AGE_MS);
-    const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff))
-      .select('_id userId')
+    const now = Date.now();
+    const cutoff = new Date(now - CHUNK_SCAN_MIN_AGE_MS);
+    const staleClaimBefore = new Date(now - CHUNK_CLAIM_STALE_MS);
+    const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff, staleClaimBefore))
+      .select('_id userId batchId')
       .limit(CHUNK_SCAN_BATCH)
       .lean();
 
-    for (const file of candidates) {
+    // Enqueue the selected ids directly. No producer-side claim: the chunk worker's compare-and-set
+    // (fabFileChunk.ts) is the single point of mutual exclusion, so a file already in flight loses
+    // there and returns. The selection filter above already excludes in-flight files, so a merely-slow
+    // file is not re-sent every pass.
+    const userById = new Map(candidates.map(f => [String(f._id), String(f.userId)]));
+    const batchById = new Map(candidates.map(f => [String(f._id), f.batchId]));
+    for (const id of userById.keys()) {
       await sendToQueue(Resource.fabFileChunkQueue.url, {
-        fabFileId: String(file._id),
-        userId: file.userId,
+        fabFileId: id,
+        userId: userById.get(id)!,
+        ...(batchById.get(id) ? { origin: CONVERGENCE_ORIGIN } : {}),
       });
     }
-    if (candidates.length > 0) {
-      bootLogger.info(`[fabFileChunkScan] enqueued ${candidates.length} un-chunked file(s)`);
+    if (userById.size > 0) {
+      bootLogger.info(`[fabFileChunkScan] enqueued ${userById.size} un-chunked file(s)`);
     }
   });
 

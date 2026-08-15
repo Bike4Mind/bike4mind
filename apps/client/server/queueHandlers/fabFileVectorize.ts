@@ -9,6 +9,7 @@ import {
   embeddingCacheRepository,
   fabFileChunkRepository,
   fabFileRepository,
+  scopedSettingsRepository,
   User,
   withTransaction,
 } from '@bike4mind/database';
@@ -33,6 +34,8 @@ import {
 } from '@server/queueHandlers/dataLakeBatchProgress';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
+import { provenancePayloadShape } from '@server/queueHandlers/convergenceProvenance';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getProviderFromModel } from '@bike4mind/fab-pipeline';
 import { Resource } from 'sst';
@@ -45,7 +48,20 @@ const VectorizePayload = z.object({
   fabFileId: z.string(),
   embeddingModel: SupportedEmbeddingModelSchema,
   batchSize: z.number().optional(),
+  // Provenance for the convergence kill switch (#1676), forwarded from the chunk handler. Absent
+  // => user work, which is never halted.
+  ...provenancePayloadShape,
 });
+
+/**
+ * Marker set on a data-lake file whose vectorize work was dropped by the convergence kill switch
+ * (#1676). The file keeps its chunks but has no vectors, so it is unsearchable until re-indexed;
+ * this note makes the abandoned set enumerable (query the prefix) and signals a reprocess is needed.
+ * `POST /api/files/reprocess` clears it as part of its `notes` reset. Distinct from
+ * NO_EXTRACTABLE_TEXT_NOTE_PREFIX, which excludes a file from the chunk-rescue sweep; this does not.
+ */
+export const CONVERGENCE_PAUSED_NOTE =
+  'Indexing paused by the data-lake convergence kill switch - reprocess to complete.';
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = event.Records[0].body;
@@ -95,6 +111,35 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     existingFabFile.vectorizedChunkCount === existingFabFile.chunkCount
   ) {
     logger.log(`FabFile ${fabFileId} already vectorized, skipping duplicate message`);
+    return;
+  }
+
+  // Convergence kill switch (#1676): re-checked here so the switch bites vectorize messages already
+  // fanned out before it flipped. Placed AFTER the already-vectorized guard above so a completed
+  // file is never touched, and before the embedding work (user work short-circuits in
+  // isConvergenceHalted before any settings read). Unlike a chunk message, a dropped vectorize
+  // message does NOT auto-resume - fabFileChunk is its only producer and it early-returns on an
+  // already-chunked file - so flag the file so the abandoned, chunked-but-unvectorized state is
+  // enumerable and reprocessable (POST /api/files/reprocess re-drives it and clears the note).
+  if (
+    await isConvergenceHalted(
+      { origin: payload.origin, lakeId: payload.lakeId },
+      {
+        adminSettings: adminSettingsRepository,
+        scopedSettings: scopedSettingsRepository,
+        dataLakes: dataLakeRepository,
+      },
+      logger
+    )
+  ) {
+    await fabFileRepository
+      .update({ id: fabFileId, notes: CONVERGENCE_PAUSED_NOTE, isVectorizing: false })
+      .catch(err => logger.error(`Failed to flag convergence-paused fabFile ${fabFileId}: ${err}`));
+    logger.log(
+      `[convergenceKillSwitch] Paused background vectorize work for fabFileId ${fabFileId}` +
+        (payload.lakeId ? ` (lake ${payload.lakeId})` : '') +
+        ' - kill switch on; message dropped, file flagged for reprocessing (no automatic resume)'
+    );
     return;
   }
 

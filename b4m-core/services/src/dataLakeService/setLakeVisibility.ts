@@ -1,13 +1,9 @@
-import type {
-  AccessContext,
-  IDataLakeAccessGrantRepository,
-  IDataLakeDocument,
-  IDataLakeRepository,
-} from '@bike4mind/common';
+import type { IDataLakeAccessGrantRepository, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { canManageLake, isEffectiveOwner, type ManageActor } from './manageRule';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
 import { findCollidingPrefixLakes } from './tagPrefixCollision';
+import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 
 /**
  * Private = owner-only (no org, not public); organization = scoped to the actor's own org;
@@ -39,7 +35,11 @@ interface SetLakeVisibilityAdapters {
  * Only those two fields change.
  */
 export const setLakeVisibility = async (
-  actor: ManageActor & Pick<AccessContext, 'organizationId'>,
+  // `organizationId` here is the WRITE TARGET - the per-request-validated active org
+  // (resolveActiveOrg) an org promotion moves the lake into. It is deliberately a single id
+  // and deliberately NOT from AccessContext, which carries only the membership SET and no
+  // singular org since #1674 (the pointer is a display preference, never an authorization read).
+  actor: ManageActor & { organizationId?: string },
   dataLakeId: string,
   visibility: LakeVisibility,
   { db }: SetLakeVisibilityAdapters
@@ -122,6 +122,7 @@ export const setLakeVisibility = async (
       id: dataLakeId,
       organizationId: targetOrg ?? null,
       isPublic: targetIsPublic,
+      ...lakeConfigWriteStamp(actor),
     } as Partial<IDataLakeDocument>);
   } catch (err) {
     // A concurrent create/rename can win the (organizationId, slug) unique index between the

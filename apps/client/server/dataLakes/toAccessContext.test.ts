@@ -1,60 +1,65 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { EntitlementRequest } from '@server/entitlements';
 
-// Hoisted so the vi.mock factory (hoisted above imports) can reference it.
-const { mockGetRequestEntitlements, mockFindIdsWithAdminRights } = vi.hoisted(() => ({
+// Hoisted so the vi.mock factories (hoisted above imports) can reference them.
+const { mockGetRequestEntitlements, mockFindMembershipOrgIds, mockFindIdsWithAdminRights } = vi.hoisted(() => ({
   mockGetRequestEntitlements: vi.fn(),
+  mockFindMembershipOrgIds: vi.fn(),
   mockFindIdsWithAdminRights: vi.fn(),
 }));
 vi.mock('@server/entitlements', () => ({ getRequestEntitlements: mockGetRequestEntitlements }));
-// toAccessContext now resolves the caller's org-admin set (#1668), which reaches Mongoose - mock it
-// so these pure org-id-normalization tests don't hit a real DB.
+// toAccessContext resolves the membership set (#1674) and the org-admin set (#1668), both of
+// which reach Mongoose - mock them so these tests don't hit a real DB.
 vi.mock('@bike4mind/database', () => ({
-  organizationRepository: { findIdsWithAdminRights: mockFindIdsWithAdminRights },
+  organizationRepository: {
+    findMembershipOrgIds: mockFindMembershipOrgIds,
+    findIdsWithAdminRights: mockFindIdsWithAdminRights,
+  },
 }));
 
 import { toAccessContext } from './toAccessContext';
 
 const req = (user: Record<string, unknown>) => ({ user }) as unknown as EntitlementRequest;
-const HEX = '507f1f77bcf86cd799439011';
 
-describe('toAccessContext - organizationId normalization (#1109 production fix site)', () => {
+describe('toAccessContext - organization membership (#1674)', () => {
   beforeEach(() => {
     mockGetRequestEntitlements.mockReset();
     mockGetRequestEntitlements.mockResolvedValue([]);
+    mockFindMembershipOrgIds.mockReset();
+    mockFindMembershipOrgIds.mockResolvedValue([]);
     mockFindIdsWithAdminRights.mockReset();
     mockFindIdsWithAdminRights.mockResolvedValue([]);
   });
 
-  it('coerces an ObjectId organizationId to its hex string (the real, reachable bug shape)', async () => {
-    const ctx = await toAccessContext(req({ id: 'u1', tags: [], organizationId: { toHexString: () => HEX } }));
-    expect(ctx.organizationId).toBe(HEX);
+  it('builds organizationIds from findMembershipOrgIds(user.id), NOT from user.organizationId', async () => {
+    // user.organizationId is the "currently selected org" display preference, and must never
+    // drive an authorization decision - the real source is the owner + users[] ACL lookup.
+    mockFindMembershipOrgIds.mockResolvedValue(['org-a']);
+    const ctx = await toAccessContext(req({ id: 'u1', tags: [], organizationId: 'org-b' }));
+
+    expect(mockFindMembershipOrgIds).toHaveBeenCalledWith('u1');
+    expect(ctx.organizationIds).toEqual(['org-a']);
   });
 
-  it('coerces a populated Organization document to its id', async () => {
-    const ctx = await toAccessContext(
-      req({ id: 'u1', tags: [], organizationId: { _id: { toHexString: () => HEX }, name: 'Acme' } })
-    );
-    expect(ctx.organizationId).toBe(HEX);
-  });
-
-  it('passes a plain string organizationId through unchanged', async () => {
-    const ctx = await toAccessContext(req({ id: 'u1', tags: [], organizationId: HEX }));
-    expect(ctx.organizationId).toBe(HEX);
-  });
-
-  it('leaves organizationId undefined when the user has none', async () => {
+  it('yields an empty membership set for a member of no organization', async () => {
+    mockFindMembershipOrgIds.mockResolvedValue([]);
     const ctx = await toAccessContext(req({ id: 'u1', tags: [] }));
-    expect(ctx.organizationId).toBeUndefined();
+    expect(ctx.organizationIds).toEqual([]);
   });
 
-  it('skips entitlement resolution for an admin (org id still normalized)', async () => {
-    const ctx = await toAccessContext(
-      req({ id: 'admin', isAdmin: true, tags: [], organizationId: { toHexString: () => HEX } })
-    );
+  it('reflects membership in multiple organizations', async () => {
+    mockFindMembershipOrgIds.mockResolvedValue(['org-a', 'org-b']);
+    const ctx = await toAccessContext(req({ id: 'u1', tags: [] }));
+    expect(ctx.organizationIds).toEqual(['org-a', 'org-b']);
+  });
+
+  it('resolves membership for an admin too (org gates still apply to admins on some paths)', async () => {
+    mockFindMembershipOrgIds.mockResolvedValue(['org-a']);
+    const ctx = await toAccessContext(req({ id: 'admin', isAdmin: true, tags: [] }));
+
     expect(ctx.isAdmin).toBe(true);
     expect(ctx.entitlementKeys).toEqual([]);
-    expect(ctx.organizationId).toBe(HEX);
+    expect(ctx.organizationIds).toEqual(['org-a']);
     expect(mockGetRequestEntitlements).not.toHaveBeenCalled();
   });
 });
