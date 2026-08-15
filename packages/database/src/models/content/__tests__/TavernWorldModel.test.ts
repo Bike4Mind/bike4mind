@@ -224,6 +224,10 @@ describe('TavernWorldModel', () => {
      * exercising, not the 500 round-trips it takes to reach it. Seeding keeps both assertions exactly
      * as they were and lets the final applyEdits do the real work.
      */
+    // Seeds editHistory only, leaving `edits` empty - so every `reverse` here is gid:null, which
+    // applyEdits would only produce on a first write. That is fine for the cap tests (pure array
+    // arithmetic, indifferent to entry contents); reverse-against-existing-tiles is covered by
+    // 'should record previous gid in reverse entries'.
     async function seedHistory(count: number, worldId = 'user-1') {
       const entries = Array.from({ length: count }, (_, i) => ({
         batchId: `seed-${i}`,
