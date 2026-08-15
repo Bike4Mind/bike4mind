@@ -44,6 +44,7 @@ import {
   useDuplicatePrefixLake,
   useGetDeletedDataLakes,
   useRemoveFileFromDataLake,
+  useRechunkDataLake,
 } from './dataLakes';
 
 const PAGE_SIZE = 24;
@@ -468,5 +469,30 @@ describe('nextRebuildPoll', () => {
     let state = nextRebuildPoll(3, start).next;
     state = nextRebuildPoll(0, state).next; // one settle poll consumed
     expect(nextRebuildPoll(5, state).next.settlePolls).toBe(0);
+  });
+});
+
+describe('useRechunkDataLake cache invalidation', () => {
+  it('refreshes lake HEALTH too, not just the rebuild badge', async () => {
+    // A rebuild mass-mutates the exact per-file rollups health is computed from. The health query has
+    // no refetchInterval and refetchOnWindowFocus:false, and its observer stays mounted while the
+    // panel re-renders, so staleTime alone never refreshes it. Without this invalidation the badge
+    // sits frozen for the whole rebuild while the "to rebuild" chip ticks to zero beside it - which
+    // reads as "the rebuild accomplished nothing". The other two lake mutations already do both.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiPost.mockResolvedValueOnce({ data: { detected: 2, enqueued: 2, remaining: 0 } });
+
+    const { result } = renderHook(() => useRechunkDataLake('lake1'), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync(undefined);
+    });
+
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['dataLakeHealth', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeRebuildStatus', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeFiles', 'lake1']));
   });
 });

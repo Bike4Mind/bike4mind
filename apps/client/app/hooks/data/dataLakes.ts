@@ -4,6 +4,7 @@ import type {
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
   IFabFileDocument,
+  LakeHealthApiResponse,
   ManageableDataLakeConfig,
   TaxonomyTag,
 } from '@bike4mind/common';
@@ -59,6 +60,28 @@ export function useGetDataLakes(
     },
     refetchOnWindowFocus: opts?.refetchOnWindowFocus ?? false,
     staleTime: opts?.staleTime ?? 1000 * 60 * 2,
+  });
+}
+
+/**
+ * One lake's derived health report (#1666): the four retrievability predicates and the
+ * reachable-content headline, computed on demand from per-file rollups. Advisory only.
+ *
+ * Fetched only where the badge mounts (the lake detail view) and cached for a few minutes - health
+ * shifts only as content is re-ingested, so it does not need to be live. `enabled` stays available
+ * for callers that mount it earlier. Like the other lake reads it does not retry the feature-gate 403.
+ */
+export function useGetDataLakeHealth(dataLakeId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: dataLakeKeys.health(dataLakeId ?? ''),
+    enabled: enabled && !!dataLakeId,
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 1000 * 60 * 2,
+    queryFn: async () => {
+      const response = await api.get<LakeHealthApiResponse>(`/api/data-lakes/${dataLakeId}/health`);
+      return response.data;
+    },
   });
 }
 
@@ -488,6 +511,9 @@ export function useReprocessFabFile(dataLakeId: string | null) {
       toast.success('Re-processing started - chunking and vectorization will re-run.');
       if (dataLakeId) {
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+        // Reprocessing changes the chunk/vector rollups health is computed from. The final figures
+        // land only once vectorization finishes (async); the badge refreshes then via its staleTime.
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
         // Re-chunking a file that was an oversized blob drops it from the under-chunked set, so the
         // "Rebuild passages" badge must refresh too (it otherwise only self-heals on its next poll).
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
@@ -517,6 +543,8 @@ export function useRemoveFileFromDataLake(dataLakeId: string | null) {
       toast.success('File removed from data lake.');
       if (dataLakeId) {
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+        // Removing a member changes the lake's reachable-content denominator and predicate tallies.
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
         // Removing a file can drop the lake's under-chunked count, so refresh the rebuild badge.
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
       }
@@ -583,7 +611,9 @@ export function nextRebuildPoll(
 export function useUnderChunkedCount(dataLakeId: string | null, enabled = true) {
   const pollState = useRef<RebuildPollState>({ ...INITIAL_REBUILD_POLL_STATE });
   return useQuery({
-    queryKey: dataLakeKeys.rebuildStatus(dataLakeId ?? 'none'),
+    // Same null sentinel as the sibling lake queries. Never fetched either way (the query is disabled
+    // when the id is null), but two spellings side by side in one file invite a real divergence later.
+    queryKey: dataLakeKeys.rebuildStatus(dataLakeId ?? ''),
     queryFn: async (): Promise<LakeRebuildStatus> => {
       const res = await api.get<LakeRebuildStatus>(`/api/data-lakes/${dataLakeId}/rechunk`);
       return { underChunkedCount: res.data.underChunkedCount, failedCount: res.data.failedCount ?? 0 };
@@ -622,6 +652,12 @@ export function useRechunkDataLake(dataLakeId: string | null) {
       if (dataLakeId) {
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(dataLakeId) });
+        // A rebuild mass-mutates the exact rollups health is computed from, and the health query has
+        // no refetchInterval and does not refetch on focus - its observer stays mounted while the
+        // panel re-renders, so staleTime alone never refreshes it. Without this the badge sits frozen
+        // for the whole rebuild while the "to rebuild" chip ticks to zero beside it, which reads as
+        // "the rebuild accomplished nothing". The other two lake mutations already invalidate both.
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
       }
     },
     onError: (error: Error) => {

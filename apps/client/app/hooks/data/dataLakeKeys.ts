@@ -32,6 +32,11 @@ export const dataLakeKeys = {
   filesOf: (dataLakeId: string) => ['dataLakeFiles', dataLakeId] as const,
   /** Invalidation prefix covering all lakes' file lists. */
   filesRoot: ['dataLakeFiles'] as const,
+  /** One lake's derived health report (GET /api/data-lakes/:id/health), #1666. */
+  health: (dataLakeId: string) => ['dataLakeHealth', dataLakeId] as const,
+  /** Invalidation prefix covering every lake's health - used when a batch finishes ingesting, which
+   *  is the moment a pending "indexing" badge should become measured (the message carries no lake id). */
+  healthRoot: ['dataLakeHealth'] as const,
   /** One lake's count of under-chunked files (GET /api/data-lakes/:id/rechunk) - the "Rebuild
    *  passages" badge, polled while a rebuild drains. */
   rebuildStatus: (dataLakeId: string) => ['dataLakeRebuildStatus', dataLakeId] as const,
