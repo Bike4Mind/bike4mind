@@ -105,10 +105,13 @@ HOW TO CARRY THIS
  * the fix - anyone re-adding an ambiguity instruction should word it differently AND measure it,
  * rather than restoring this text.
  *
- * NOT established, and the case to check first if you are re-adding: no-lake activation. The
- * PRECONDITION above treats it as reachable, and there `search_knowledge_base` is never offered, so
- * this was the one retrieval-decision step that could still have functioned. It has never been
- * measured. Nothing above is evidence about that configuration.
+ * NOT established, and the case to check first if you are re-adding: the "neither" configuration the
+ * PRECONDITION above names - no attached knowledge AND no reachable lake. That is strictly NARROWER
+ * than "a session with no lake attached": `hasAccessibleDataLake` offers `search_knowledge_base` to
+ * any caller who can reach a lake at all, so an ordinary user with any lake access still gets the
+ * tool on an otherwise bare session (see the containment note above `resolveEnabledTools`). Only in
+ * the genuinely toolless case is this the one retrieval-decision step that could still have
+ * functioned, and that case has never been measured. Nothing above is evidence about it.
  *
  * Two standing reasons not to restore it blind. ABSTENTION_PROMPT ships always-on and admin-sourced
  * and covers naming what is missing rather than guessing, so the vague-request case is not unhandled.
