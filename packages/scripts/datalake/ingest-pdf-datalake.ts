@@ -76,7 +76,7 @@ const STRAGGLER_MIN_AGE_MS = 2 * 60_000;
  * Keep in sync with CHUNK_CLAIM_STALE_MS in server/worker/chunkScan.ts. */
 const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
 
-interface Options {
+export interface Options {
   dir?: string;
   slug: string;
   userId: string;
@@ -211,7 +211,7 @@ async function statusReport(lake: LakeTarget): Promise<number> {
   return 0;
 }
 
-async function requeueStragglers(lake: LakeTarget, opts: Options): Promise<number> {
+export async function requeueStragglers(lake: LakeTarget, opts: Options): Promise<number> {
   // Exclude files the pipeline already marked failed (markFailedIfNotAlready sets `error`):
   // SQS retried them 3x before DLQ, so blind re-enqueueing only churns slots. `$in` also
   // matches a missing field. Failed files stay visible in --status for manual triage.
@@ -231,18 +231,25 @@ async function requeueStragglers(lake: LakeTarget, opts: Options): Promise<numbe
   const queueUrl = Resource.fabFileChunkQueue.url;
   const sqs = new SQSClient({});
   for (const f of files) {
-    // Reset processing flags first (parity with POST /api/files/reprocess) so a
-    // partially-failed extraction starts clean.
+    // Reset processing flags EXCEPT the worker-owned claim fields (#1802 follow-up):
+    // isChunking/chunkClaimedAt are deliberately excluded here - the chunk worker's own
+    // compare-and-set (fabFileChunk.ts) is the single point of mutual exclusion for those, and an
+    // unconditional write to them here could clear a claim out from under a worker that is still
+    // genuinely running (a stale-looking claim on self-host, which has no handler timeout, may
+    // still be live). Everything else below is this script's own reprocess mechanism (parity with
+    // POST /api/files/reprocess) and must stay - `notes` in particular is what clears the
+    // "no extractable text" guard (fabFileChunk.ts) that would otherwise make a re-enqueued
+    // straggler silently no-op at the worker.
     await FabFile.updateOne(
       { _id: f._id },
       {
         $set: {
-          isChunking: false,
           chunked: false,
           chunkCount: 0,
           vectorized: false,
           vectorizedChunkCount: 0,
           notes: '',
+          error: null,
         },
       }
     );
@@ -508,41 +515,47 @@ async function main(opts: Options): Promise<number> {
   return ingest(lake, opts);
 }
 
-const argv = yargs(hideBin(process.argv))
-  .option('dir', { type: 'string', describe: 'Directory tree of PDFs to ingest' })
-  .option('slug', { type: 'string', demandOption: true, describe: 'Target data lake slug' })
-  .option('userId', { type: 'string', demandOption: true, describe: 'FabFile owner (lake creator or admin)' })
-  .option('organizationId', { type: 'string', describe: 'Charge storage to this org instead of the user' })
-  .option('concurrency', {
-    type: 'number',
-    default: 4,
-    describe: 'Parallel uploads, clamped to 1-8 (drives objectCreated lambda concurrency)',
-  })
-  .option('limit', { type: 'number', describe: 'Upload at most N files (smoke tests)' })
-  .option('execute', { type: 'boolean', default: false, describe: 'Actually write (default: dry-run)' })
-  .option('status', { type: 'boolean', default: false, describe: 'Read-only pipeline progress report' })
-  .option('requeue-stragglers', {
-    type: 'boolean',
-    default: false,
-    describe: 'Re-enqueue complete-but-unchunked lake files',
-  })
-  .option('requeue-limit', { type: 'number', default: 50, describe: 'Max stragglers to re-enqueue per run' })
-  .parseSync();
+// Guard the CLI entrypoint (#1802 follow-up): without this, importing the module - as a test
+// must, to reach requeueStragglers - parses process.argv through yargs' demandOption'd
+// --slug/--userId and calls process.exit(), killing the test runner. Same pattern already used
+// in this package's cleanupOldQuerySubscriptions.ts.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const argv = yargs(hideBin(process.argv))
+    .option('dir', { type: 'string', describe: 'Directory tree of PDFs to ingest' })
+    .option('slug', { type: 'string', demandOption: true, describe: 'Target data lake slug' })
+    .option('userId', { type: 'string', demandOption: true, describe: 'FabFile owner (lake creator or admin)' })
+    .option('organizationId', { type: 'string', describe: 'Charge storage to this org instead of the user' })
+    .option('concurrency', {
+      type: 'number',
+      default: 4,
+      describe: 'Parallel uploads, clamped to 1-8 (drives objectCreated lambda concurrency)',
+    })
+    .option('limit', { type: 'number', describe: 'Upload at most N files (smoke tests)' })
+    .option('execute', { type: 'boolean', default: false, describe: 'Actually write (default: dry-run)' })
+    .option('status', { type: 'boolean', default: false, describe: 'Read-only pipeline progress report' })
+    .option('requeue-stragglers', {
+      type: 'boolean',
+      default: false,
+      describe: 'Re-enqueue complete-but-unchunked lake files',
+    })
+    .option('requeue-limit', { type: 'number', default: 50, describe: 'Max stragglers to re-enqueue per run' })
+    .parseSync();
 
-main({
-  dir: argv.dir,
-  slug: argv.slug,
-  userId: argv.userId,
-  organizationId: argv.organizationId,
-  concurrency: argv.concurrency,
-  limit: argv.limit,
-  execute: argv.execute,
-  status: argv.status,
-  requeueStragglers: argv['requeue-stragglers'],
-  requeueLimit: argv['requeue-limit'],
-})
-  .then(code => process.exit(code))
-  .catch(err => {
-    console.error(err);
-    process.exit(1);
-  });
+  main({
+    dir: argv.dir,
+    slug: argv.slug,
+    userId: argv.userId,
+    organizationId: argv.organizationId,
+    concurrency: argv.concurrency,
+    limit: argv.limit,
+    execute: argv.execute,
+    status: argv.status,
+    requeueStragglers: argv['requeue-stragglers'],
+    requeueLimit: argv['requeue-limit'],
+  })
+    .then(code => process.exit(code))
+    .catch(err => {
+      console.error(err);
+      process.exit(1);
+    });
+}
