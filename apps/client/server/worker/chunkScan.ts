@@ -23,7 +23,13 @@ export const CHUNK_SCAN_BATCH = 50;
  * ownership check (#1802 Phase 2, chunk.ts) re-confirms this stamp before any write and aborts as a
  * benign no-op if a successor already took over. This value only trades off how soon a genuinely
  * stranded claim gets rescued against how long a reclaimed-but-still-running self-host worker keeps
- * doing now-discarded work before hitting that check. */
+ * doing now-discarded work before hitting that check.
+ *
+ * Considered lowering this now that a claim is held for the WHOLE run (a hard-killed worker is
+ * stuck claimed for up to this long, not just from wherever it died to its own premature release,
+ * which no longer exists). Left at 30 minutes: since a too-early reclaim is now safe rather than
+ * corrupting, the only cost of leaving this long is rescue latency for a genuinely stranded claim,
+ * not correctness - and there's no production crash-rate data yet to justify tuning it against. */
 export const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
 
 /**

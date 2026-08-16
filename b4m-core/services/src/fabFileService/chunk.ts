@@ -109,9 +109,14 @@ export const chunkFabfile = async (
   // without reaching the destructive section. A WRITE, not a read: a read's correctness would
   // depend on isolation semantics `withTransaction` never configures (no read concern is set -
   // db-core/src/utils/mongo.ts), while the competing CAS that could have taken this claim over
-  // commits OUTSIDE any transaction. A matched write engages MongoDB's write-conflict detection
-  // instead, which is well-defined on both MongoDB and DocumentDB. Skipped entirely when no stamp
-  // was supplied (see chunkFileSchema) - never the case for the real production caller.
+  // commits OUTSIDE any transaction. A matched write engages write-conflict detection instead -
+  // verified sound on both engines, though by different mechanisms: MongoDB's WiredTiger raises a
+  // transient WriteConflict (code 112) if the takeover landed inside this run's own snapshot window,
+  // which `withTransaction` retries and the guard then correctly fails on; DocumentDB instead uses
+  // real document-level write LOCKS (1-minute max hold, non-configurable), so a competing writer
+  // blocks rather than racing and this write only ever sees fully-committed state. Either way, this
+  // filter never matches against stale data. Skipped entirely when no stamp was supplied (see
+  // chunkFileSchema) - never the case for the real production caller.
   if (chunkClaimedAt !== undefined && !(await db.fabFiles.confirmChunkClaim(fabFileId, chunkClaimedAt))) {
     throw new ChunkClaimLostError(fabFileId);
   }
