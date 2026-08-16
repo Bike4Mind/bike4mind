@@ -31,12 +31,11 @@ export interface IAuthSessionDevice {
  * revocation: per-session, individually revocable, and rotated on every refresh. Only a hash of
  * the refresh secret is stored, never the raw token.
  *
- * Rotation grace: on rotation the prior hash moves to `previousRefreshTokenHash` and stays valid
- * until `graceExpiresAt`, so a concurrent client that presents the just-rotated token inside the
- * window is served a fresh token instead of being flagged as reuse. A token matching neither the
- * current nor the (in-window) previous hash is treated as theft and revokes the session. Full
- * multi-tab convergence is completed by the cross-tab token propagation in the cookie-storage work
- * (see epic #1187); this window handles the common near-simultaneous case on its own.
+ * Replay window: on rotation the prior hash moves to `previousRefreshTokenHash` and stays
+ * REPLAYABLE until `graceExpiresAt`. Presenting it there yields an access token ONLY - it does not
+ * rotate and issues no refresh token, so the chain cannot fork and a replayer gains nothing
+ * durable. A token matching neither the current nor the (in-window) previous hash is treated as
+ * theft and revokes the session. See rotateSession in @bike4mind/services for the full rule set.
  */
 export interface IAuthSession {
   /** Stable session id, embedded as `sid` in the access + refresh tokens. */
@@ -44,10 +43,14 @@ export interface IAuthSession {
   userId: string;
   /** sha256 of the current refresh secret. Rotated on every refresh. */
   refreshTokenHash: string;
-  /** Prior refresh hash, honored until `graceExpiresAt`; null once the window passes. */
+  /** Prior refresh hash, replayable until `graceExpiresAt`; null once the window passes. */
   previousRefreshTokenHash?: string | null;
-  /** Absolute time the grace window for `previousRefreshTokenHash` closes. */
+  /** Absolute time the replay window for `previousRefreshTokenHash` closes. */
   graceExpiresAt?: Date | null;
+  /** Replays of `previousRefreshTokenHash` served in the current generation. Capped so the window
+   *  bounds the NUMBER of access tokens a superseded secret can mint, not just their timespan.
+   *  Reset to 0 on every rotation. Absent on rows written before this field existed. */
+  replayUses?: number;
   device?: IAuthSessionDevice;
   createdVia: AuthSessionCreatedVia;
   /** Set when this session belongs to an admin impersonating the user (loginAs). */
@@ -106,10 +109,16 @@ export interface IAuthSessionRepository extends IBaseRepository<IAuthSessionDocu
     sid: string,
     params: { expectedCurrentHash: string; nextHash: string; replayExpiresAt: Date }
   ) => Promise<IAuthSessionDocument | null>;
-  /** Bump lastUsedAt without touching the refresh chain. Used when a refresh is served WITHOUT a
-   *  rotation (a concurrent sibling already advanced the chain) - still real session activity, so
-   *  the active-sessions UI must not show it as idle. */
-  touchLastUsed: (sid: string) => Promise<void>;
+  /**
+   * Atomically claim one unit of the superseded secret's replay allowance, bumping lastUsedAt with
+   * it (a refresh served without a rotation is still real session activity, so the active-sessions
+   * UI must not show it as idle).
+   *
+   * Returns the updated doc, or null when the allowance is spent OR the session is no longer live -
+   * both mean "do not serve this", so callers need not distinguish them. Scoped to a live row, like
+   * rotateHash.
+   */
+  registerReplayUse: (sid: string, maxUses: number) => Promise<IAuthSessionDocument | null>;
   /** Revoke a single session (this-device logout / reuse detection). Returns the doc, or null. */
   revokeBySid: (sid: string) => Promise<IAuthSessionDocument | null>;
   /** Revoke every active session for a user ("log out all devices"); `exceptSid` keeps one alive.

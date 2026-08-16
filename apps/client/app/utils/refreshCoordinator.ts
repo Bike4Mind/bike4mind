@@ -49,7 +49,21 @@ export function resetRefreshCoordinator(): void {
 
 /* ------------------------------------------------------------------ cross-tab token propagation */
 
-type RefreshBroadcast = { type: 'refreshed'; accessToken: string; impersonating: boolean };
+type RefreshBroadcast = { type: 'refreshed'; sid: string; accessToken: string; impersonating: boolean };
+
+/** Read the `sid` claim without verifying the signature (client-side only) - same pattern as
+ *  sessionBootstrap's decodeTokenExpiryMs. Null when absent or malformed. */
+function decodeSid(token: string | null): string | null {
+  try {
+    if (!token) return null;
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'))) as { sid?: unknown };
+    return typeof payload.sid === 'string' ? payload.sid : null;
+  } catch {
+    return null;
+  }
+}
 
 let channel: BroadcastChannel | null | undefined;
 
@@ -64,15 +78,25 @@ function getChannel(): BroadcastChannel | null {
 }
 
 /**
- * Take a sibling tab's freshly minted access token. Guarded rather than unconditional: a tab that
- * is mid-MFA or already torn down has deliberately shed its session, and quietly re-arming it here
- * would resurrect a session the user (or a security path) just ended.
+ * Take a sibling tab's freshly minted access token.
+ *
+ * Guarded rather than unconditional, on three counts. A tab that is mid-MFA or already torn down
+ * has deliberately shed its session, and quietly re-arming it here would resurrect a session the
+ * user (or a security path) just ended. And the message must name the SAME session this tab already
+ * holds: a BroadcastChannel is same-origin but not same-author, so anything running on the page can
+ * post to it. That grants nothing an XSS does not already have, but binding to the known sid keeps
+ * this from becoming a cheap way to swap a tab onto an attacker-chosen session, and costs one
+ * unverified claim read.
  */
 function adoptBroadcast(message: unknown): void {
   const data = message as Partial<RefreshBroadcast> | null;
   if (!data || data.type !== 'refreshed' || typeof data.accessToken !== 'string') return;
-  const { mfaPending, expired } = useAccessToken.getState();
+  const { accessToken, mfaPending, expired } = useAccessToken.getState();
   if (mfaPending || expired) return;
+  // Only adopt within the session we are already in. A tab holding no token yet has nothing to
+  // compare against and takes the normal exchange path instead.
+  const heldSid = decodeSid(accessToken);
+  if (!heldSid || decodeSid(data.accessToken) !== heldSid) return;
   applySession({ accessToken: data.accessToken, impersonating: data.impersonating });
 }
 
@@ -128,11 +152,17 @@ async function exchange(): Promise<RefreshedSession> {
     );
 
     applySession(data);
-    getChannel()?.postMessage({
-      type: 'refreshed',
-      accessToken: data.accessToken,
-      impersonating: !!data.impersonating,
-    } satisfies RefreshBroadcast);
+    const sid = decodeSid(data.accessToken);
+    // No sid claim means siblings cannot verify this belongs to their session, so don't broadcast
+    // it - they fall back to their own exchange, which is correct, just an extra round trip.
+    if (sid) {
+      getChannel()?.postMessage({
+        type: 'refreshed',
+        sid,
+        accessToken: data.accessToken,
+        impersonating: !!data.impersonating,
+      } satisfies RefreshBroadcast);
+    }
     return data;
   });
 }

@@ -1,4 +1,4 @@
-import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { ACCESS_TOKEN_TTL_SECONDS, authTokenGenerator } from '@server/auth/tokenGenerator';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { isTokenVersionCurrent, authSessionService } from '@bike4mind/services';
 import { User, userRepository, authSessionRepository } from '@bike4mind/database';
@@ -41,7 +41,7 @@ const handler = baseApi({ auth: false })
           // the one you have", and the client MUST NOT discard its existing token.
           ...(rotated.status === 'rotated' ? { refresh_token: rotated.refreshToken } : {}),
           token_type: 'Bearer',
-          expires_in: 604800, // 7 days
+          expires_in: ACCESS_TOKEN_TTL_SECONDS,
         });
       }
 
@@ -75,7 +75,7 @@ const handler = baseApi({ auth: false })
         access_token: migrated.accessToken,
         refresh_token: migrated.refreshToken,
         token_type: 'Bearer',
-        expires_in: 604800, // 7 days
+        expires_in: ACCESS_TOKEN_TTL_SECONDS,
       });
     } catch (error) {
       console.error('Token refresh error:', error);

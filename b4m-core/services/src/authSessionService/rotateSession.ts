@@ -1,19 +1,26 @@
 import { Logger } from '@bike4mind/observability';
 import { IAuthSessionDocument, IAuthSessionRepository, IUserDocument, IUserRepository } from '@bike4mind/common';
-import { UnauthorizedError } from '@bike4mind/utils';
-import { REFRESH_REPLAY_WINDOW_MS } from './constants';
+import { TooManyRequestsError, UnauthorizedError } from '@bike4mind/utils';
+import { MAX_REFRESH_REPLAY_USES, REFRESH_REPLAY_WINDOW_MS } from './constants';
 import { buildRefreshToken, generateRefreshSecret, hashRefreshSecret, parseRefreshToken } from './refreshTokenFormat';
 
 export interface RotateSessionAdapters {
   db: {
-    authSessions: Pick<IAuthSessionRepository, 'findBySid' | 'rotateHash' | 'touchLastUsed' | 'revokeBySid'>;
+    authSessions: Pick<IAuthSessionRepository, 'findBySid' | 'rotateHash' | 'registerReplayUse' | 'revokeBySid'>;
     users: Pick<IUserRepository, 'findById'>;
   };
   signAccessToken: (id: string, tokenVersion: number, additionalPayload?: Record<string, unknown>) => string;
   /** Replay tolerance for the just-superseded secret; defaults to REFRESH_REPLAY_WINDOW_MS. */
   replayWindowMs?: number;
+  /** How many replays of the superseded secret are served per generation; defaults to
+   *  MAX_REFRESH_REPLAY_USES. */
+  maxReplayUses?: number;
   logger?: Logger;
 }
+
+/** Sentinel for "the allowance write could not be reached", which must not be conflated with the
+ *  repository's `null` ("allowance spent / row not live"). The two demand opposite handling. */
+const UNAVAILABLE = Symbol('replay-allowance-unavailable');
 
 interface RotateSessionResultBase {
   userId: string;
@@ -78,7 +85,13 @@ const isReplayable = (session: IAuthSessionDocument, hash: string, now: Date): b
  */
 export const rotateSession = async (
   opaqueToken: string,
-  { db, signAccessToken, replayWindowMs = REFRESH_REPLAY_WINDOW_MS, logger }: RotateSessionAdapters
+  {
+    db,
+    signAccessToken,
+    replayWindowMs = REFRESH_REPLAY_WINDOW_MS,
+    maxReplayUses = MAX_REFRESH_REPLAY_USES,
+    logger,
+  }: RotateSessionAdapters
 ): Promise<RotateSessionResult> => {
   const parsed = parseRefreshToken(opaqueToken);
   if (!parsed) throw invalid();
@@ -115,9 +128,27 @@ export const rotateSession = async (
     };
 
     if (rotatedSecret === null) {
-      // No rotation happened, so nothing bumped lastUsedAt - but this is still real session
-      // activity and the active-sessions UI reads that field as "last active".
-      await db.authSessions.touchLastUsed(sid);
+      // Claim one unit of the replay allowance. This both bounds how many access tokens a single
+      // superseded secret can mint (the window is otherwise purely a duration) and bumps
+      // lastUsedAt, which the rotated path gets for free inside its CAS write.
+      //
+      // A transport failure here must NOT fail the refresh: nothing about this exchange went
+      // wrong, and N-1 of N concurrent siblings take this path during exactly the burst this
+      // whole change exists to survive. So an ERROR is swallowed and we serve, while a definitive
+      // `null` - allowance spent, or the row is no longer live - is honoured and rejected.
+      const claimed = await db.authSessions.registerReplayUse(sid, maxReplayUses).catch(() => UNAVAILABLE);
+      if (claimed === null) {
+        // Deliberately NOT revokeAsTheft, and deliberately NOT UnauthorizedError. Overrunning the
+        // cap is what an unusually large legitimate burst looks like too, so this must degrade to
+        // "try again", not "your session is gone":
+        //  - revoking would reintroduce the very "kill a healthy session" failure this change
+        //    removes;
+        //  - a 401 would too, one step later, because the client's 401 interceptor reads 400/401
+        //    from the refresh endpoint as a revocation and tears the session down. 429 is in the
+        //    transient bucket it already retries instead.
+        logger?.log('Refresh replay allowance exhausted for session', sid);
+        throw new TooManyRequestsError('Too many refresh attempts');
+      }
       return { ...base, status: 'coalesced' };
     }
     return { ...base, status: 'rotated', refreshToken: buildRefreshToken(sid, rotatedSecret) };

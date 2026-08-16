@@ -16,6 +16,13 @@ const make401 = (config: InternalAxiosRequestConfig): AxiosError =>
     config,
   } as AxiosResponse);
 
+/** An unsigned JWT carrying a `sid` claim. Adoption binds to that claim, so the coordinator's
+ *  fixtures have to be token-shaped rather than opaque strings. */
+const token = (sid: string, label: string) =>
+  `${btoa(JSON.stringify({ alg: 'none' }))}.${btoa(JSON.stringify({ sid, label }))}.sig`;
+
+const SID = 'session-1';
+
 /** Minimal Web Locks stand-in: jsdom ships none, and the queueing behaviour is the whole point. */
 const installLockManager = () => {
   const queues = new Map<string, Promise<unknown>>();
@@ -41,7 +48,12 @@ describe('refreshCoordinator', () => {
 
   beforeEach(() => {
     resetRefreshCoordinator();
-    useAccessToken.setState({ accessToken: 'stale', expired: false, mfaPending: false, hasSession: true });
+    useAccessToken.setState({
+      accessToken: token(SID, 'stale'),
+      expired: false,
+      mfaPending: false,
+      hasSession: true,
+    });
     realAdapter = api.defaults.adapter as AxiosAdapter | undefined;
   });
 
@@ -55,14 +67,14 @@ describe('refreshCoordinator', () => {
     let calls = 0;
     api.defaults.adapter = (async (config: InternalAxiosRequestConfig) => {
       calls += 1;
-      return ok(config, { accessToken: 'fresh' });
+      return ok(config, { accessToken: token(SID, 'fresh') });
     }) as AxiosAdapter;
 
     const results = await Promise.all([refreshSession(), refreshSession(), refreshSession()]);
 
     expect(calls).toBe(1);
-    expect(results.every(r => r.accessToken === 'fresh')).toBe(true);
-    expect(useAccessToken.getState().accessToken).toBe('fresh');
+    expect(results.every(r => r.accessToken === token(SID, 'fresh'))).toBe(true);
+    expect(useAccessToken.getState().accessToken).toBe(token(SID, 'fresh'));
   });
 
   /**
@@ -87,7 +99,7 @@ describe('refreshCoordinator', () => {
       if (inFlight > 1) overlapped = true;
       await Promise.resolve();
       inFlight -= 1;
-      return ok(config, { accessToken: 'fresh' });
+      return ok(config, { accessToken: token(SID, 'fresh') });
     }) as AxiosAdapter;
 
     await twoTabs();
@@ -101,7 +113,7 @@ describe('refreshCoordinator', () => {
     let calls = 0;
     api.defaults.adapter = (async (config: InternalAxiosRequestConfig) => {
       calls += 1;
-      return ok(config, { accessToken: `fresh-${calls}` });
+      return ok(config, { accessToken: token(SID, `fresh-${calls}`) });
     }) as AxiosAdapter;
 
     const { second } = await twoTabs();
@@ -109,7 +121,7 @@ describe('refreshCoordinator', () => {
     // The queued tab found the token already replaced and took it, rather than spending a second
     // rotation of the one shared cookie.
     expect(calls).toBe(1);
-    expect(second.accessToken).toBe('fresh-1');
+    expect(second.accessToken).toBe(token(SID, 'fresh-1'));
   });
 
   it('rejects with the axios error so callers can tell a rejected credential from an outage', async () => {
@@ -121,8 +133,8 @@ describe('refreshCoordinator', () => {
     // A failed exchange must not leave the guard latched, or every later refresh returns the
     // same rejection forever.
     api.defaults.adapter = (async (config: InternalAxiosRequestConfig) =>
-      ok(config, { accessToken: 'fresh' })) as AxiosAdapter;
-    await expect(refreshSession()).resolves.toMatchObject({ accessToken: 'fresh' });
+      ok(config, { accessToken: token(SID, 'fresh') })) as AxiosAdapter;
+    await expect(refreshSession()).resolves.toMatchObject({ accessToken: token(SID, 'fresh') });
   });
 
   describe('sibling-tab adoption', () => {
@@ -134,15 +146,17 @@ describe('refreshCoordinator', () => {
       sibling.close();
     };
 
+    const fromSibling = token(SID, 'from-sibling');
+
     it("takes a sibling's freshly minted token without a round trip of its own", async () => {
       const stop = listenForSiblingRefresh();
       api.defaults.adapter = (() => {
         throw new Error('must not exchange - the token was handed to us');
       }) as unknown as AxiosAdapter;
 
-      await broadcastFromSibling({ type: 'refreshed', accessToken: 'from-sibling', impersonating: false });
+      await broadcastFromSibling({ type: 'refreshed', sid: SID, accessToken: fromSibling, impersonating: false });
 
-      expect(useAccessToken.getState().accessToken).toBe('from-sibling');
+      expect(useAccessToken.getState().accessToken).toBe(fromSibling);
       stop();
     });
 
@@ -153,9 +167,27 @@ describe('refreshCoordinator', () => {
       const stop = listenForSiblingRefresh();
       useAccessToken.setState({ accessToken: null, ...state });
 
-      await broadcastFromSibling({ type: 'refreshed', accessToken: 'from-sibling', impersonating: false });
+      await broadcastFromSibling({ type: 'refreshed', sid: SID, accessToken: fromSibling, impersonating: false });
 
       expect(useAccessToken.getState().accessToken).toBeNull();
+      stop();
+    });
+
+    it('ignores a broadcast naming a DIFFERENT session', async () => {
+      // A BroadcastChannel is same-origin but not same-author, so anything on the page can post to
+      // it. Binding adoption to the sid this tab already holds stops that being a cheap way to swap
+      // a tab onto an attacker-chosen session.
+      const stop = listenForSiblingRefresh();
+      const held = useAccessToken.getState().accessToken;
+
+      await broadcastFromSibling({
+        type: 'refreshed',
+        sid: 'someone-elses-session',
+        accessToken: token('someone-elses-session', 'evil'),
+        impersonating: false,
+      });
+
+      expect(useAccessToken.getState().accessToken).toBe(held);
       stop();
     });
   });
@@ -171,7 +203,7 @@ describe('refreshCoordinator', () => {
     const bodies: unknown[] = [];
     api.defaults.adapter = (async (config: InternalAxiosRequestConfig) => {
       bodies.push(JSON.parse(String(config.data ?? '{}')));
-      return ok(config, { accessToken: 'fresh' });
+      return ok(config, { accessToken: token(SID, 'fresh') });
     }) as AxiosAdapter;
 
     await refreshSession();

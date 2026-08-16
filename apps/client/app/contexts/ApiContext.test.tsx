@@ -504,4 +504,34 @@ describe('ApiProvider 401 interceptor -> login redirect', () => {
     expect(replace).not.toHaveBeenCalled();
     expect(useAccessToken.getState().expired).toBe(false);
   });
+
+  it('tries a token that arrived mid-retry instead of tearing down a session it never attempted', async () => {
+    // The teardown's premise is "we refreshed and the token we minted was STILL rejected". A
+    // sibling tab's broadcast can replace the store between the retry being sent and its 401
+    // arriving, which falsifies that premise: there is a newer token nobody has tried. Evaluating
+    // the teardown first signed the user out while holding a working credential - the exact
+    // failure class this whole change exists to remove.
+    let refreshCalls = 0;
+    api.defaults.adapter = (async (config: InternalAxiosRequestConfig) => {
+      if (config.url === '/api/auth/refreshToken') {
+        refreshCalls += 1;
+        return ok(config, { accessToken: 'B' });
+      }
+      const presented = String(config.headers?.Authorization ?? '');
+      if (presented === 'Bearer C') return ok(config, { ok: true });
+      // The retry carrying B lands just after a sibling broadcast swapped the store to C.
+      if (presented === 'Bearer B') {
+        useAccessToken.getState().setVerifiedSession('C');
+        throw make401(config);
+      }
+      throw make401(config);
+    }) as AxiosAdapter;
+
+    const result = await api.get('/api/notebooks');
+
+    expect(result.data).toEqual({ ok: true });
+    expect(refreshCalls).toBe(1);
+    expect(replace).not.toHaveBeenCalled();
+    expect(useAccessToken.getState().expired).toBe(false);
+  });
 });

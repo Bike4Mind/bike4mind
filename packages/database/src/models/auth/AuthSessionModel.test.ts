@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { authSessionRepository } from './AuthSessionModel';
+import { AuthSessionModel, authSessionRepository } from './AuthSessionModel';
 import { setupMongoTest } from '../../__test__/utils';
 
 setupMongoTest();
@@ -74,16 +74,62 @@ describe('AuthSessionModel repository', () => {
     expect(row?.previousRefreshTokenHash).toBe('h0');
   });
 
-  it('touchLastUsed bumps activity without disturbing the refresh chain', async () => {
+  it('registerReplayUse bumps activity without disturbing the refresh chain', async () => {
     const lastUsedAt = new Date(Date.now() - 60_000);
     await authSessionRepository.create(
       base({ sid: 'touch', refreshTokenHash: 'h0', previousRefreshTokenHash: 'hp', lastUsedAt })
     );
-    await authSessionRepository.touchLastUsed('touch');
-    const row = await authSessionRepository.findBySid('touch');
+    const row = await authSessionRepository.registerReplayUse('touch', 10);
     expect(row!.lastUsedAt.getTime()).toBeGreaterThan(lastUsedAt.getTime());
     expect(row?.refreshTokenHash).toBe('h0');
     expect(row?.previousRefreshTokenHash).toBe('hp');
+    expect(row?.replayUses).toBe(1);
+  });
+
+  it('registerReplayUse stops handing out replays once the allowance is spent', async () => {
+    await authSessionRepository.create(base({ sid: 'cap' }));
+    for (let i = 0; i < 3; i++) {
+      expect(await authSessionRepository.registerReplayUse('cap', 3)).not.toBeNull();
+    }
+    // Without this bound the window caps only how LONG a superseded secret can be replayed, not
+    // how many access tokens it can mint in that time.
+    expect(await authSessionRepository.registerReplayUse('cap', 3)).toBeNull();
+  });
+
+  it('registerReplayUse admits rows written before replayUses existed', async () => {
+    // Mongoose defaults apply on create, not to documents already in the collection, so a `$lt`
+    // filter would silently skip every in-flight session on deploy and reject its refreshes.
+    await authSessionRepository.create(base({ sid: 'legacy' }));
+    await AuthSessionModel.updateOne({ sid: 'legacy' }, { $unset: { replayUses: '' } }).exec();
+    // Assert on the RAW document: Mongoose applies the schema default when hydrating, so a read
+    // through the model would report 0 and hide whether the field is really absent - which is the
+    // only thing the query filter actually sees.
+    const raw = await AuthSessionModel.collection.findOne({ sid: 'legacy' });
+    expect(raw && 'replayUses' in raw).toBe(false);
+
+    expect(await authSessionRepository.registerReplayUse('legacy', 10)).not.toBeNull();
+    expect((await authSessionRepository.findBySid('legacy'))?.replayUses).toBe(1);
+  });
+
+  it('registerReplayUse refuses a revoked or expired session', async () => {
+    await authSessionRepository.create(base({ sid: 'rp-revoked', revokedAt: new Date() }));
+    await authSessionRepository.create(base({ sid: 'rp-expired', expiresAt: new Date(Date.now() - 1000) }));
+    expect(await authSessionRepository.registerReplayUse('rp-revoked', 10)).toBeNull();
+    expect(await authSessionRepository.registerReplayUse('rp-expired', 10)).toBeNull();
+  });
+
+  it('rotateHash resets the replay allowance for the new generation', async () => {
+    await authSessionRepository.create(base({ sid: 'reset', refreshTokenHash: 'h0' }));
+    await authSessionRepository.registerReplayUse('reset', 10);
+    await authSessionRepository.registerReplayUse('reset', 10);
+    expect((await authSessionRepository.findBySid('reset'))?.replayUses).toBe(2);
+
+    await authSessionRepository.rotateHash('reset', {
+      expectedCurrentHash: 'h0',
+      nextHash: 'h1',
+      replayExpiresAt: new Date(Date.now() + 5000),
+    });
+    expect((await authSessionRepository.findBySid('reset'))?.replayUses).toBe(0);
   });
 
   it('revokeBySid sets revokedAt exactly once', async () => {

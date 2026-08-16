@@ -47,20 +47,32 @@ const handler = baseApi({ auth: false })
     requireNonSystemUser(restored.user);
 
     if (impersonatedSid) {
-      await authSessionRepository
-        .revokeBySid(impersonatedSid)
-        .catch(err => req.logger.error('Failed to revoke impersonation session on return to admin', err));
+      // Only revoke a session this admin actually created by impersonating. The sid is read
+      // straight out of a caller-supplied cookie, so without this check a holder of any valid
+      // parked return cookie could revoke an arbitrary session by naming its sid.
+      const impersonated = await authSessionRepository.findBySid(impersonatedSid).catch(() => null);
+      if (impersonated && impersonated.impersonatedBy === restored.userId) {
+        await authSessionRepository
+          .revokeBySid(impersonatedSid)
+          .catch(err => req.logger.error('Failed to revoke impersonation session on return to admin', err));
+      }
     }
 
-    // Only ever write a cookie we just minted. `coalesced` means a concurrent return (a
-    // double-clicked "Return to safety") already rotated this session and set the primary cookie to
-    // the winning token - writing the token we presented would put the jar one generation behind
-    // and strand the admin at the next refresh. Leaving it alone lets the winner's value stand
-    // whichever response lands last.
+    // Only ever write cookies when we actually minted a new token. `coalesced` means a concurrent
+    // rotation of the parked admin session already advanced the chain - most often a double-clicked
+    // "Return to safety", whose winner sets the primary cookie and clears the return slot itself.
+    //
+    // Both cookie writes are gated together, deliberately. Clearing the return slot on a coalesced
+    // response would drop the admin's only durable credential while the primary slot still holds
+    // the (now revoked) impersonated token: a 30-minute access token, then a forced re-login. Worse,
+    // the revoke above is best-effort - if it failed, the primary slot holds a LIVE impersonated
+    // refresh token while this response says `impersonating: false`, so the next refresh would
+    // silently reinstate the impersonated identity under a UI that claims otherwise. Leaving both
+    // cookies untouched keeps the parked admin token available to retry.
     if (restored.status === 'rotated') {
       setRefreshCookie(res, restored.refreshToken);
+      clearAdminReturnCookie(res);
     }
-    clearAdminReturnCookie(res);
 
     return res.status(200).json({
       user: redactUserSecretsForSelf(restored.user),

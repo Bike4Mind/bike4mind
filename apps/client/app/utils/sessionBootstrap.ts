@@ -42,13 +42,28 @@ async function exchangeRefreshCookie(): Promise<void> {
     // user, but not when the coordinator served an already-current token (another tab exchanged
     // the cookie, and its response was never visible here). Resolve identity directly in that case
     // rather than assuming the payload shape.
-    const user = session.user ?? (await api.get<IdentifyResponse>('/api/identify', { timeout: 10000 })).data.user;
-    useUser.getState().setCurrentUser(user);
+    if (session.user) {
+      useUser.getState().setCurrentUser(session.user);
+      return;
+    }
+
+    // This second round trip only happens on the adopt path, and it is UNRETRIED - a blip, a cold
+    // Lambda or the 10s timeout is enough to lose it. Rethrow rather than swallowing so the caller
+    // does not cache a resolved "no identity": we hold a valid cookie and a valid token here, and
+    // caching that result would redirect to /login for the page's whole lifetime with no toast and
+    // nothing to retry.
+    const { data } = await api.get<IdentifyResponse>('/api/identify', { timeout: 10000 });
+    useUser.getState().setCurrentUser(data.user);
   } catch {
     // No recoverable session. Leave the stores alone rather than marking the session expired:
     // the route guard turns a null currentUser into a /login redirect with the deep link
     // preserved, and stamping expiredReason here would show a spurious "session expired" toast
     // to someone who was simply never signed in.
+    //
+    // Uncache so the next protected navigation retries. The cached-forever behaviour is right for
+    // "there is no session" (the answer cannot change without a login, which resets this anyway)
+    // but wrong for a transient identity fetch, and the two are indistinguishable from here.
+    bootstrapPromise = null;
   }
 }
 

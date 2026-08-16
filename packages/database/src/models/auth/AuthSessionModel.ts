@@ -20,6 +20,7 @@ const AuthSessionSchema = new Schema<IAuthSessionDocument>(
     refreshTokenHash: { type: String, required: true },
     previousRefreshTokenHash: { type: String, default: null },
     graceExpiresAt: { type: Date, default: null },
+    replayUses: { type: Number, default: 0 },
     device: { type: AuthSessionDeviceSchema, default: undefined },
     createdVia: { type: String, required: true },
     impersonatedBy: { type: String, default: null },
@@ -79,14 +80,35 @@ class AuthSessionRepository extends BaseRepository<IAuthSessionDocument> impleme
           previousRefreshTokenHash: params.expectedCurrentHash,
           graceExpiresAt: params.replayExpiresAt,
           lastUsedAt: now,
+          // A fresh generation gets a fresh allowance; see registerReplayUse.
+          replayUses: 0,
         },
       },
       { new: true }
     ).exec();
   }
 
-  async touchLastUsed(sid: string): Promise<void> {
-    await AuthSessionModel.updateOne({ sid, revokedAt: null }, { $set: { lastUsedAt: new Date() } }).exec();
+  async registerReplayUse(sid: string, maxUses: number): Promise<IAuthSessionDocument | null> {
+    const now = new Date();
+    // Atomic claim on one unit of the superseded secret's replay allowance. Without a cap the
+    // window is purely time-based, so a single stale secret could be presented over and over for
+    // its full duration, minting a fresh access token every time - bounded only by the endpoint's
+    // per-IP rate limit. The counter makes the real blast radius "N access tokens", not "as many
+    // as fit in the window".
+    //
+    // `$not: { $gte }` rather than `$lt` so rows written before this field existed (where it is
+    // absent, not 0) still match - a `$lt` filter silently skips missing fields and would reject
+    // every in-flight session on deploy.
+    return AuthSessionModel.findOneAndUpdate(
+      {
+        sid,
+        revokedAt: null,
+        expiresAt: { $gt: now },
+        replayUses: { $not: { $gte: maxUses } },
+      },
+      { $inc: { replayUses: 1 }, $set: { lastUsedAt: now } },
+      { new: true }
+    ).exec();
   }
 
   async revokeBySid(sid: string): Promise<IAuthSessionDocument | null> {

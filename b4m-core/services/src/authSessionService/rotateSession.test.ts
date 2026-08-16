@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { UnauthorizedError } from '@bike4mind/utils';
+import { TooManyRequestsError, UnauthorizedError } from '@bike4mind/utils';
 import { rotateSession, type RotateSessionResult } from './rotateSession';
 import { buildRefreshToken, generateRefreshSecret, hashRefreshSecret, parseRefreshToken } from './refreshTokenFormat';
 import { createMockAuthSessionRepository, createMockUserRepository } from '../__tests__/utils/testUtils';
@@ -31,6 +31,7 @@ const setup = () => {
   const users = createMockUserRepository();
   users.findById.mockResolvedValue({ id: 'user-1', tokenVersion: 7 } as never);
   authSessions.rotateHash.mockImplementation(async () => makeSession());
+  authSessions.registerReplayUse.mockImplementation(async () => makeSession());
   authSessions.revokeBySid.mockResolvedValue(makeSession({ revokedAt: new Date() }));
   const signAccessToken = vi.fn().mockReturnValue('ACCESS');
   return { authSessions, users, signAccessToken, db: { authSessions, users } };
@@ -85,7 +86,51 @@ describe('rotateSession', () => {
     // Not rotating is the point: `previous` stays pinned so every sibling in the burst resolves,
     // and a replayed secret can never be traded for a durable credential.
     expect(authSessions.rotateHash).not.toHaveBeenCalled();
-    expect(authSessions.touchLastUsed).toHaveBeenCalledWith(SID);
+    expect(authSessions.registerReplayUse).toHaveBeenCalledWith(SID, expect.any(Number));
+  });
+
+  it('rejects without revoking once the replay allowance for this generation is spent', async () => {
+    const { authSessions, db, signAccessToken } = setup();
+    const oldSecret = generateRefreshSecret();
+    authSessions.findBySid.mockResolvedValue(
+      makeSession({
+        refreshTokenHash: hashRefreshSecret(generateRefreshSecret()),
+        previousRefreshTokenHash: hashRefreshSecret(oldSecret),
+        graceExpiresAt: future(),
+      })
+    );
+    authSessions.registerReplayUse.mockResolvedValue(null); // allowance exhausted
+
+    // 429, NOT 401: the client's interceptor reads 400/401 from the refresh endpoint as a
+    // revocation and tears the session down, so answering an overrun burst with Unauthorized would
+    // log the user out - the exact failure this change exists to remove, one step removed.
+    await expect(rotateSession(buildRefreshToken(SID, oldSecret), { db, signAccessToken })).rejects.toBeInstanceOf(
+      TooManyRequestsError
+    );
+    // And not revoked either: a large legitimate burst and abuse are indistinguishable here.
+    expect(authSessions.revokeBySid).not.toHaveBeenCalled();
+  });
+
+  it('still serves a coalesced refresh when the allowance write is unreachable', async () => {
+    // N-1 of N concurrent siblings take this path during exactly the burst this change exists to
+    // survive. A transient Mongo error on a bookkeeping write must not fail an otherwise-good
+    // refresh - only a definitive "allowance spent" answer may.
+    const { authSessions, db, signAccessToken } = setup();
+    const oldSecret = generateRefreshSecret();
+    authSessions.findBySid.mockResolvedValue(
+      makeSession({
+        refreshTokenHash: hashRefreshSecret(generateRefreshSecret()),
+        previousRefreshTokenHash: hashRefreshSecret(oldSecret),
+        graceExpiresAt: future(),
+      })
+    );
+    authSessions.registerReplayUse.mockRejectedValue(new Error('connection reset'));
+
+    const result = await rotateSession(buildRefreshToken(SID, oldSecret), { db, signAccessToken });
+
+    expect(result.status).toBe('coalesced');
+    expect(result.accessToken).toBe('ACCESS');
+    expect(authSessions.revokeBySid).not.toHaveBeenCalled();
   });
 
   it('rejects + revokes when the previous hash is presented AFTER the replay window (reuse)', async () => {
@@ -182,6 +227,7 @@ describe('rotateSession', () => {
         revokedAt: Date | null;
         expiresAt: Date;
         lastUsedAt: Date;
+        replayUses?: number;
       };
       const authSessions = createMockAuthSessionRepository();
       const users = createMockUserRepository();
@@ -197,10 +243,16 @@ describe('rotateSession', () => {
         state.previousRefreshTokenHash = params.expectedCurrentHash;
         state.graceExpiresAt = params.replayExpiresAt;
         state.lastUsedAt = new Date();
+        state.replayUses = 0; // a fresh generation gets a fresh allowance
         return { ...state } as never;
       });
-      authSessions.touchLastUsed.mockImplementation(async () => {
+      authSessions.registerReplayUse.mockImplementation(async (_sid, maxUses) => {
+        // Mirrors AuthSessionModel.registerReplayUse: the cap is part of the FILTER.
+        if (state.revokedAt || state.expiresAt <= new Date()) return null;
+        if ((state.replayUses ?? 0) >= maxUses) return null;
+        state.replayUses = (state.replayUses ?? 0) + 1;
         state.lastUsedAt = new Date();
+        return { ...state } as never;
       });
       authSessions.revokeBySid.mockImplementation(async () => {
         state.revokedAt = new Date();

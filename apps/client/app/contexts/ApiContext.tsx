@@ -136,9 +136,36 @@ api.interceptors.response.use(
         return Promise.reject(error);
       }
 
-      // A refresh already succeeded (_retryCount is only bumped after refreshPromise
-      // RESOLVES) and we retried once, yet this request STILL 401s. When it is a bare
-      // auth-layer rejection, the freshly minted token is being rejected, so the session is
+      const retryCount = error.config?._retryCount || 0;
+
+      // A 401 about a token we have ALREADY replaced is stale news, not a reason to refresh again -
+      // and not evidence that the session is dead. A request that was in flight when someone else's
+      // refresh landed (or when a sibling tab broadcast its token) comes back rejecting the
+      // credential it was SENT with, which is no longer the credential we hold. Exchanging the
+      // cookie again would spend a rotation the first one already consumed, and its 400 would read
+      // as a revocation and log the user out of a perfectly healthy session.
+      //
+      // This is checked BEFORE the teardown below, deliberately. The teardown's premise is "we
+      // refreshed and the token we minted was still rejected" - but if the store has moved on since
+      // this request was sent, that premise is false: there is a newer token nobody has tried yet.
+      // Tearing down there would sign out a tab holding a working credential, which is the exact
+      // failure class this change exists to remove. Ordering it first cannot weaken the teardown,
+      // which is independently bounded by its own flag.
+      //
+      // Bounded by its OWN flag, not _retryCount: the token we swap in may itself be expired
+      // (sibling tabs' tokens expire together), and a 401 on it must still be allowed to drive a
+      // real refresh below. Charging it to _retryCount would instead trip the teardown on the next
+      // pass, logging the user out without ever having refreshed.
+      const presentedToken = String(error.config?.headers?.Authorization ?? '').replace(/^Bearer /, '');
+      const heldToken = getState().accessToken;
+      if (!error.config?._staleTokenRetried && heldToken && presentedToken && heldToken !== presentedToken) {
+        error.config._staleTokenRetried = true;
+        return api.request(error.config);
+      }
+
+      // A refresh already succeeded (_retryCount is only bumped after the refresh RESOLVES) and we
+      // retried once, yet this request STILL 401s with the token we currently hold. When it is a
+      // bare auth-layer rejection, the freshly minted token is being rejected, so the session is
       // unrecoverable - e.g. a server-side token/session mismatch where /api/auth/refreshToken
       // keeps returning 200 but the access verifier keeps rejecting the token it mints. Left
       // un-torn-down, the session stays alive (expired: false) and every repeating trigger -
@@ -152,31 +179,11 @@ api.interceptors.response.use(
       // user out of the app on a scoped, expected error. So only tear down on a code-less
       // rejection; a coded 401 falls through to the plain reject (the pre-PR behavior, letting
       // the caller surface its own error).
-      const retryCount = error.config?._retryCount || 0;
       if (retryCount >= 1) {
         if (!error.response?.data?.code) {
           await forceSessionExpiredRedirect();
         }
         return Promise.reject(error);
-      }
-
-      // A 401 about a token we have ALREADY replaced is stale news, not a reason to refresh again.
-      // A request that was in flight when someone else's refresh landed (or when a sibling tab
-      // broadcast its token) comes back rejecting the credential it was sent with, which is no
-      // longer the credential we hold. Exchanging the cookie again here would spend a rotation the
-      // first one already consumed, and its 400 would read as a revocation and log the user out -
-      // a session that is in fact perfectly healthy. Retrying with the token we now hold is both
-      // cheaper and correct.
-      //
-      // Bounded by its OWN flag, not _retryCount: the token we swap in may itself be expired
-      // (sibling tabs' tokens expire together), and a 401 on it must still be allowed to drive a
-      // real refresh below. Charging it to _retryCount would instead trip the teardown above on
-      // the next pass, logging the user out without ever having refreshed.
-      const presentedToken = String(error.config?.headers?.Authorization ?? '').replace(/^Bearer /, '');
-      const heldToken = getState().accessToken;
-      if (!error.config._staleTokenRetried && heldToken && presentedToken && heldToken !== presentedToken) {
-        error.config._staleTokenRetried = true;
-        return api.request(error.config);
       }
 
       // The refresh cookie rides along on `withCredentials`; the rotated one comes back the same
