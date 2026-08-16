@@ -35,8 +35,10 @@ import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { Resource } from 'sst';
 import { createHash } from 'crypto';
+import { realpathSync } from 'fs';
 import { readFile, stat } from 'fs/promises';
 import * as path from 'path';
+import { pathToFileURL } from 'url';
 import { glob } from 'glob';
 import pLimit from 'p-limit';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
@@ -230,6 +232,7 @@ export async function requeueStragglers(lake: LakeTarget, opts: Options): Promis
 
   const queueUrl = Resource.fabFileChunkQueue.url;
   const sqs = new SQSClient({});
+  let enqueued = 0;
   for (const f of files) {
     // Reset processing flags EXCEPT the worker-owned claim fields (#1802 follow-up):
     // isChunking/chunkClaimedAt are deliberately excluded here - the chunk worker's own
@@ -240,8 +243,17 @@ export async function requeueStragglers(lake: LakeTarget, opts: Options): Promis
     // POST /api/files/reprocess) and must stay - `notes` in particular is what clears the
     // "no extractable text" guard (fabFileChunk.ts) that would otherwise make a re-enqueued
     // straggler silently no-op at the worker.
-    await FabFile.updateOne(
-      { _id: f._id },
+    //
+    // Precondition mirrors resetChunkStateByIds's per-document mechanism (FabFileModel.ts):
+    // selection (above) and this write are separated by up to requeueLimit round-trips in a
+    // serial loop, so a file can genuinely still be claimed by the time its turn comes. Without
+    // the isChunking:{$ne:true} guard, the reset would still land on that live worker for every
+    // field it touches - including re-admitting a just-failed file to the pool via error:null,
+    // the one field here that's genuinely new versus the pre-#1802-follow-up reset. Skipping the
+    // enqueue when the write doesn't match (rather than sending it unconditionally) keeps the
+    // reported count from overstating the work, same as resetChunkStateByIds's own contract.
+    const result = await FabFile.updateOne(
+      { _id: f._id, isChunking: { $ne: true } },
       {
         $set: {
           chunked: false,
@@ -253,14 +265,16 @@ export async function requeueStragglers(lake: LakeTarget, opts: Options): Promis
         },
       }
     );
+    if (result.matchedCount === 0) continue;
     await sqs.send(
       new SendMessageCommand({
         QueueUrl: queueUrl,
         MessageBody: JSON.stringify({ fabFileId: String(f._id), userId: String(f.userId) }),
       })
     );
+    enqueued++;
   }
-  console.log(`Re-enqueued ${files.length} file(s) to fabFileChunkQueue.`);
+  console.log(`Re-enqueued ${enqueued} of ${files.length} file(s) to fabFileChunkQueue.`);
   return 0;
 }
 
@@ -517,9 +531,24 @@ async function main(opts: Options): Promise<number> {
 
 // Guard the CLI entrypoint (#1802 follow-up): without this, importing the module - as a test
 // must, to reach requeueStragglers - parses process.argv through yargs' demandOption'd
-// --slug/--userId and calls process.exit(), killing the test runner. Same pattern already used
-// in this package's cleanupOldQuerySubscriptions.ts.
-if (import.meta.url === `file://${process.argv[1]}`) {
+// --slug/--userId and calls process.exit(), killing the test runner.
+//
+// realpath-resolved, NOT the naive `import.meta.url === file://${process.argv[1]}` form: Node's
+// ESM loader canonicalizes import.meta.url (symlinks followed), but process.argv[1] is the raw
+// argv string, so on an invocation path that traverses a symlink (e.g. macOS's /tmp ->
+// /private/tmp) the naive comparison silently evaluates false - the guard skips, nothing prints,
+// and the process exits 0 having done nothing. Verified: pathToFileURL(argv[1]).href alone does
+// NOT fix this (it only closes percent-encoding gaps, not symlink resolution) - realpathSync is
+// the part that actually matters here (PR review finding, reproduced empirically).
+const isMainModule = (() => {
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+})();
+
+if (isMainModule) {
   const argv = yargs(hideBin(process.argv))
     .option('dir', { type: 'string', describe: 'Directory tree of PDFs to ingest' })
     .option('slug', { type: 'string', demandOption: true, describe: 'Target data lake slug' })

@@ -78,11 +78,11 @@ const findReturning = (docs: FabFileDoc[]) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockUpdateOne.mockResolvedValue({});
+  mockUpdateOne.mockResolvedValue({ matchedCount: 1 });
   mockSend.mockResolvedValue({});
 });
 
-describe('requeueStragglers (#1802 follow-up: narrowed reset)', () => {
+describe('requeueStragglers (#1802 follow-up: narrowed, guarded reset)', () => {
   it('never writes the worker-owned claim fields (isChunking/chunkClaimedAt)', async () => {
     mockFind.mockReturnValue(findReturning([{ _id: 'f1', fileName: 'a.pdf', userId: 'u1' }]));
 
@@ -110,6 +110,40 @@ describe('requeueStragglers (#1802 follow-up: narrowed reset)', () => {
     });
   });
 
+  // Regression guard for the round-2-adjudicated fix: selection and the write are separated by
+  // up to requeueLimit round-trips in a serial loop, so a file can genuinely be re-claimed by a
+  // live worker before its turn comes. The precondition must guard the write itself, not just
+  // exclude the claim fields from the payload - without it, this same reset would still land on
+  // that live worker for every field it touches (error:null in particular re-admits a file the
+  // worker may have just marked failed).
+  it('guards the reset write on isChunking:{$ne:true}, mirroring resetChunkStateByIds', async () => {
+    mockFind.mockReturnValue(findReturning([{ _id: 'f1', fileName: 'a.pdf', userId: 'u1' }]));
+
+    await requeueStragglers(lake, baseOpts);
+
+    const [filter] = mockUpdateOne.mock.calls[0];
+    expect(filter).toEqual({ _id: 'f1', isChunking: { $ne: true } });
+  });
+
+  it('skips the enqueue for a file re-claimed between selection and the reset write', async () => {
+    mockFind.mockReturnValue(
+      findReturning([
+        { _id: 'f1', fileName: 'a.pdf', userId: 'u1' },
+        { _id: 'f2', fileName: 'b.pdf', userId: 'u2' },
+      ])
+    );
+    mockUpdateOne
+      .mockResolvedValueOnce({ matchedCount: 0 }) // f1: re-claimed by a live worker, guard fails
+      .mockResolvedValueOnce({ matchedCount: 1 }); // f2: free, reset succeeds
+
+    await requeueStragglers(lake, baseOpts);
+
+    expect(mockUpdateOne).toHaveBeenCalledTimes(2);
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(mockSend.mock.calls[0][0].input.MessageBody);
+    expect(body).toEqual({ fabFileId: 'f2', userId: 'u2' });
+  });
+
   it('resets and enqueues every selected straggler exactly once, in order', async () => {
     mockFind.mockReturnValue(
       findReturning([
@@ -132,9 +166,8 @@ describe('requeueStragglers (#1802 follow-up: narrowed reset)', () => {
   it('dry-run (execute: false) performs zero writes and zero sends', async () => {
     mockFind.mockReturnValue(findReturning([{ _id: 'f1', fileName: 'a.pdf', userId: 'u1' }]));
 
-    const result = await requeueStragglers(lake, { ...baseOpts, execute: false });
+    await requeueStragglers(lake, { ...baseOpts, execute: false });
 
-    expect(result).toBe(0);
     expect(mockUpdateOne).not.toHaveBeenCalled();
     expect(mockSend).not.toHaveBeenCalled();
   });
@@ -142,9 +175,8 @@ describe('requeueStragglers (#1802 follow-up: narrowed reset)', () => {
   it('no stragglers found performs zero writes and zero sends', async () => {
     mockFind.mockReturnValue(findReturning([]));
 
-    const result = await requeueStragglers(lake, baseOpts);
+    await requeueStragglers(lake, baseOpts);
 
-    expect(result).toBe(0);
     expect(mockUpdateOne).not.toHaveBeenCalled();
     expect(mockSend).not.toHaveBeenCalled();
   });

@@ -57,6 +57,11 @@ describe('vectorizeFabFileChunk', () => {
   it('never writes isChunking/chunkClaimedAt (#1802-class clobber, same as chunk.ts)', async () => {
     await vectorizeFabFileChunk(mockUser, { fabFileId: 'file-1', chunkId: 'chunk-1' }, mockAdapter as never);
 
+    // Exactly one call, not "at least the first call is clean": a re-added trailing whole-object
+    // `update(fabFile)` would reintroduce the clobber as a SECOND call, invisible to an assertion
+    // that only ever reads mock.calls[0] (PR review finding, verified via mutation: adding such a
+    // call back left every other assertion in this file green).
+    expect(mockAdapter.db.fabFiles.update).toHaveBeenCalledTimes(1);
     const payload = mockAdapter.db.fabFiles.update.mock.calls[0][0] as Record<string, unknown>;
     expect(payload).not.toHaveProperty('isChunking');
     expect(payload).not.toHaveProperty('chunkClaimedAt');
@@ -104,6 +109,7 @@ describe('vectorizeFabFileChunk', () => {
   it('writes an explicit chunk payload of exactly {id, vector} - no other chunk field', async () => {
     await vectorizeFabFileChunk(mockUser, { fabFileId: 'file-1', chunkId: 'chunk-1' }, mockAdapter as never);
 
+    expect(mockAdapter.db.fabFileChunks.update).toHaveBeenCalledTimes(1);
     const chunkPayload = mockAdapter.db.fabFileChunks.update.mock.calls[0][0] as Record<string, unknown>;
     expect(chunkPayload).toEqual({ id: 'chunk-1', vector: [0.1, 0.2, 0.3] });
   });
