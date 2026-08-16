@@ -30,6 +30,28 @@ afterAll(async () => {
   await server.stop();
 });
 
+/**
+ * Fail a handshake wait with a message naming WHICH side hung, instead of letting the whole test
+ * die on vitest's timeout with no indication of where.
+ *
+ * Deliberately generous: this must never fire on a merely slow runner (the waits it guards are one
+ * transaction-start-plus-read and one non-transactional write), only on a genuine deadlock. It
+ * exists because a previous CI failure was an unexplained 30s timeout whose cause - slow vs stuck -
+ * could not be told apart from the log.
+ */
+const HANDSHAKE_DEADLINE_MS = 20_000;
+function withDeadline<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label} did not settle within ${HANDSHAKE_DEADLINE_MS}ms - handshake deadlock`)),
+      HANDSHAKE_DEADLINE_MS
+    );
+  });
+  // clearTimeout on settle, or the pending timer keeps the worker's event loop alive after the test.
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer)) as Promise<T>;
+}
+
 describe('FabFileRepository.confirmChunkClaim - genuine concurrent takeover', () => {
   it("detects a stale-claim takeover that commits WHILE the guard's own transaction is still open", async () => {
     const file = await FabFile.create({
@@ -61,11 +83,11 @@ describe('FabFileRepository.confirmChunkClaim - genuine concurrent takeover', ()
     const guardPromise = withTransaction(async () => {
       await FabFile.findById(fabFileId);
       releaseTakeover();
-      await takeoverCommitted;
+      await withDeadline(takeoverCommitted, 'takeoverCommitted');
       return fabFileRepository.confirmChunkClaim(fabFileId, originalStamp);
     });
 
-    await takeoverReady;
+    await withDeadline(takeoverReady, 'takeoverReady');
     try {
       // The real mechanism this simulates: fabFileChunk.ts's stale-arm CAS, a plain
       // findOneAndUpdate with no session, via a wholly separate client - genuinely concurrent,
@@ -90,5 +112,13 @@ describe('FabFileRepository.confirmChunkClaim - genuine concurrent takeover', ()
 
     const finalFile = await FabFile.findById(fabFileId).lean();
     expect(finalFile?.chunkClaimedAt?.toISOString()).toBe(successorStamp.toISOString());
-  }, 30000);
+    // 30s was too tight and timed out on CI twice, blocking a production promotion. This test is
+    // heavier than its ~2s local runtime suggests: a single-node replica set (so every transaction
+    // commit needs majority acknowledgement) plus a guarded write that can raise a WriteConflict and
+    // send withTransaction through up to two more full attempts with backoff. Under the shard's
+    // parallelism the database package logs ~2470s of test-time in ~221s of wall clock locally, and
+    // a 2-core CI runner is slower again - so the ceiling has to be sized for a contended runner,
+    // not for an idle laptop. Nothing here should take a minute; if it does, the deadlines above
+    // fire first and name the side that hung.
+  }, 90_000);
 });
