@@ -47,13 +47,28 @@ describe('FabFileRepository.confirmChunkClaim - genuine concurrent takeover', ()
 
     let releaseTakeover: () => void;
     const takeoverReady = new Promise<void>(resolve => (releaseTakeover = resolve));
+    // Signals the ACTUAL commit of the external takeover, not a fixed timer (see below for why
+    // a timer was flaky). The guard's own delay awaits this instead of sleeping a hardcoded
+    // duration, so the guard's write is deterministically ordered after the takeover, whatever
+    // the takeover's real latency happens to be in a given environment.
+    let signalTakeoverCommitted: () => void;
+    const takeoverCommitted = new Promise<void>(resolve => (signalTakeoverCommitted = resolve));
 
     // Mirrors chunkFabfile's real shape: an early read establishes the transaction's snapshot,
     // then simulated chunking work (S3 download, tokenize) elapses, THEN the guard runs.
+    //
+    // Previously this delay was a fixed `setTimeout(..., 300)`, racing the external takeover below
+    // on a hoped-for timing margin - the test's own `await`s only order ITS control flow, they do
+    // not causally order the guard's independently-running transaction against the takeover. Under
+    // CI's more variable latency (replica-set convergence, runner load), the takeover could still
+    // be in flight when the guard's 300ms elapsed, so the guard's write would land first, see no
+    // conflict, and this test's central assertion would flip - reproduced as a real, non-flaky-once
+    // failure on main (not this branch) at the exact commit this file was merged in. Awaiting an
+    // explicit signal instead makes the ordering a guarantee, not a race.
     const guardPromise = withTransaction(async () => {
       await FabFile.findById(fabFileId);
       releaseTakeover();
-      await new Promise(resolve => setTimeout(resolve, 300));
+      await takeoverCommitted;
       return fabFileRepository.confirmChunkClaim(fabFileId, originalStamp);
     });
 
@@ -68,6 +83,7 @@ describe('FabFileRepository.confirmChunkClaim - genuine concurrent takeover', ()
         { $set: { isChunking: true, chunkClaimedAt: successorStamp } }
       );
     expect(takeoverResult).not.toBeNull();
+    signalTakeoverCommitted();
 
     const guardResult = await guardPromise;
     expect(guardResult).toBe(false);
