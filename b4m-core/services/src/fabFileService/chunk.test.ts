@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, Mock } from 'vitest';
 import { chunkFabfile } from './chunk';
+import { ChunkClaimLostError } from '@bike4mind/common';
 import type { IUserDocument } from '@bike4mind/common';
 
 vi.mock('@bike4mind/utils', async importOriginal => {
@@ -19,7 +20,7 @@ describe('chunkFabfile', () => {
 
   let mockAdapter: {
     db: {
-      fabFiles: { shareable: { findAccessibleById: Mock }; update: Mock };
+      fabFiles: { shareable: { findAccessibleById: Mock }; update: Mock; confirmChunkClaim: Mock };
       fabFileChunks: {
         deleteManyByFabFileId: Mock;
         bulkInsert: Mock;
@@ -47,6 +48,7 @@ describe('chunkFabfile', () => {
         fabFiles: {
           shareable: { findAccessibleById: vi.fn().mockResolvedValue({ ...mockFabFile }) },
           update: vi.fn(),
+          confirmChunkClaim: vi.fn().mockResolvedValue(true),
         },
         fabFileChunks: {
           deleteManyByFabFileId: vi.fn(),
@@ -173,5 +175,49 @@ describe('chunkFabfile', () => {
 
     const updatePayload = mockAdapter.db.fabFiles.update.mock.calls[0][0] as Record<string, unknown>;
     expect(updatePayload).not.toHaveProperty('chunkClaimedAt');
+  });
+
+  // #1802 Phase 2: the guarded-write ownership check. A superseded run must abort BEFORE any write
+  // of its own - including the rollup update below, not just the destructive delete/insert further
+  // down - so a stale run can never leave the FabFile document describing chunks it never actually
+  // wrote.
+  describe('guarded-write ownership check (#1802 Phase 2)', () => {
+    it('confirms the claim it was called with before writing anything (T4)', async () => {
+      const claimedAt = new Date('2026-01-01T00:00:00.000Z');
+      await chunkFabfile(
+        mockUser,
+        { fabFileId: 'file-1', embeddingModel: 'text-embedding-ada-002', chunkClaimedAt: claimedAt },
+        mockAdapter as never
+      );
+
+      expect(mockAdapter.db.fabFiles.confirmChunkClaim).toHaveBeenCalledWith('file-1', claimedAt);
+    });
+
+    it('throws ChunkClaimLostError and performs no write at all when the claim was lost (T4)', async () => {
+      mockAdapter.db.fabFiles.confirmChunkClaim.mockResolvedValue(false);
+
+      await expect(
+        chunkFabfile(
+          mockUser,
+          { fabFileId: 'file-1', embeddingModel: 'text-embedding-ada-002', chunkClaimedAt: new Date() },
+          mockAdapter as never
+        )
+      ).rejects.toThrow(ChunkClaimLostError);
+
+      expect(mockAdapter.db.fabFiles.update).not.toHaveBeenCalled();
+      expect(mockAdapter.db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
+      expect(mockAdapter.db.fabFileChunks.bulkInsert).not.toHaveBeenCalled();
+    });
+
+    it('skips the check entirely when no claim stamp is supplied (backward-compatible no-op)', async () => {
+      await chunkFabfile(
+        mockUser,
+        { fabFileId: 'file-1', embeddingModel: 'text-embedding-ada-002' },
+        mockAdapter as never
+      );
+
+      expect(mockAdapter.db.fabFiles.confirmChunkClaim).not.toHaveBeenCalled();
+      expect(mockAdapter.db.fabFiles.update).toHaveBeenCalled();
+    });
   });
 });

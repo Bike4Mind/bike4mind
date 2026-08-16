@@ -1,4 +1,5 @@
 import {
+  ChunkClaimLostError,
   countCodePoints,
   IFabFileChunkDocument,
   IFabFileRepository,
@@ -23,6 +24,13 @@ const chunkFileSchema = z.object({
   // Soft chunk-size cap in tokens (see DEFAULT_PASSAGE_TOKEN_TARGET). Optional: the
   // chunker's passage-granularity default applies when omitted.
   passageTokenTarget: z.number().int().positive().optional(),
+  // The worker's claim stamp (#1802 Phase 2): the exact `chunkClaimedAt` its CAS acquired with.
+  // Optional - so a caller written before this existed (or any hypothetical caller with no claim
+  // to hold) is unaffected; the guarded ownership check below only runs when a stamp is actually
+  // supplied. The sole production caller (fabFileChunk.ts) always has one by the time it calls
+  // this, so the check is live on every real run - omitting it is a compatibility no-op, never a
+  // way to bypass the check on a path that genuinely holds a claim.
+  chunkClaimedAt: z.date().optional(),
 });
 
 /**
@@ -68,7 +76,10 @@ export const chunkFabfile = async (
   parameters: ChunkFileParameters,
   { db, storage, logger, searchIndex }: ChunkFileAdapters
 ) => {
-  const { fabFileId, embeddingModel, passageTokenTarget } = secureParameters(parameters, chunkFileSchema);
+  const { fabFileId, embeddingModel, passageTokenTarget, chunkClaimedAt } = secureParameters(
+    parameters,
+    chunkFileSchema
+  );
 
   const fabFile = await db.fabFiles.shareable.findAccessibleById(user, fabFileId);
   if (!fabFile) throw new NotFoundError('FabFile not found');
@@ -90,6 +101,20 @@ export const chunkFabfile = async (
   const previousChunkEmbeddingModels = searchIndex
     ? await db.fabFileChunks.distinctEmbeddingModelsByFabFileIds([fabFileId])
     : [];
+
+  // Guarded-write ownership check (#1802 Phase 2), BEFORE any write this run makes - not just
+  // before the destructive delete below. A superseded run that skipped this and still wrote its
+  // rollup fields (chunked, chunkCount, embeddingModel, ...) would leave the FabFile document
+  // describing chunks that were never actually deleted/replaced, an inconsistent state even
+  // without reaching the destructive section. A WRITE, not a read: a read's correctness would
+  // depend on isolation semantics `withTransaction` never configures (no read concern is set -
+  // db-core/src/utils/mongo.ts), while the competing CAS that could have taken this claim over
+  // commits OUTSIDE any transaction. A matched write engages MongoDB's write-conflict detection
+  // instead, which is well-defined on both MongoDB and DocumentDB. Skipped entirely when no stamp
+  // was supplied (see chunkFileSchema) - never the case for the real production caller.
+  if (chunkClaimedAt !== undefined && !(await db.fabFiles.confirmChunkClaim(fabFileId, chunkClaimedAt))) {
+    throw new ChunkClaimLostError(fabFileId);
+  }
 
   const chunked = chunks.length > 0;
 

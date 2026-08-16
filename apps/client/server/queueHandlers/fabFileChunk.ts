@@ -24,7 +24,7 @@ import {
   deferFailureIfRetryable,
 } from '@server/queueHandlers/dataLakeBatchProgress';
 import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
-import { isSupportedEmbeddingModel } from '@bike4mind/common';
+import { ChunkClaimLostError, isSupportedEmbeddingModel } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { NO_EXTRACTABLE_TEXT_NOTE_PREFIX, CHUNK_CLAIM_STALE_MS } from '@server/worker/chunkScan';
 import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
@@ -193,6 +193,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           fabFileId,
           embeddingModel: defaultEmbeddingModel,
           passageTokenTarget: requestedPassageTokenTarget,
+          chunkClaimedAt: claimedAt,
         },
         {
           db: {
@@ -210,6 +211,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         }
       )
     ).catch(async (err: unknown) => {
+      // A stale-claim takeover already reassigned this file to a successor mid-run (#1802 Phase
+      // 2) - not a failure, so this delivery must NOT count toward batch failure accounting or
+      // reach the DLQ. Returning null (rather than throwing) lets SQS delete the message as
+      // successfully processed; the successor is the one actually finishing this file.
+      if (err instanceof ChunkClaimLostError) {
+        logger.log(`FabFile ${fabFileId}: chunk claim lost to a successor mid-run - this delivery is a no-op`);
+        return null;
+      }
+
       const errorMessage = err instanceof Error ? err.message : String(err);
 
       // Only account a failure into the batch/file state on the LAST SQS delivery attempt -
@@ -261,6 +271,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       }
       throw err;
     });
+
+    // The claim was lost to a successor mid-run (see the catch above) - that successor owns
+    // finishing this file (notifications, batch progress, vectorize dispatch), so this delivery
+    // stops here rather than acting on a stale/absent chunk result.
+    if (fabFileChunks === null) {
+      return;
+    }
 
     logger.updateMetadata({
       fabFileChunksCount: fabFileChunks.length,

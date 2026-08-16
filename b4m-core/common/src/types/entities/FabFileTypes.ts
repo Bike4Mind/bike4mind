@@ -522,6 +522,17 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   ): Promise<void>;
 
   /**
+   * Guarded-write ownership check for `chunkFabfile` (#1802 Phase 2): matches on BOTH `_id` and
+   * `chunkClaimedAt` so a stale-claim takeover mid-run is caught via MongoDB's write-conflict
+   * detection rather than a transaction-isolation READ (`withTransaction` configures no read
+   * concern, and the competing CAS commits outside any transaction). A deliberate no-op $set - the
+   * write itself, succeeding or not, is the signal. Returns `false` when `chunkClaimedAt` no longer
+   * matches: a successor already reassigned this file's claim, and the caller must abort before any
+   * further write.
+   */
+  confirmChunkClaim(fabFileId: string, chunkClaimedAt: Date): Promise<boolean>;
+
+  /**
    * Find all files for a user.
    * @param userId - The ID of the user.
    * @returns A promise that resolves to an array of files.

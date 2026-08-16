@@ -58,6 +58,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   ...createMockRepository<IFabFileDocument>(),
   shareable: createMockShareableRepository<IFabFileDocument>(),
   getAccessibleFiles: vi.fn(),
+  confirmChunkClaim: vi.fn(),
   findByIdAndUserId: vi.fn(),
   findAllInIds: vi.fn(),
   findMetadataByIds: vi.fn(),

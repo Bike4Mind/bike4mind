@@ -972,6 +972,18 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result !== null;
   }
 
+  async confirmChunkClaim(fabFileId: string, chunkClaimedAt: Date): Promise<boolean> {
+    // No-op $set on a match - the WRITE succeeding or not is the signal (#1802 Phase 2), not any
+    // field it changes. Matching on chunkClaimedAt (not just _id) is what engages MongoDB's
+    // write-conflict detection when a stale-claim takeover has already re-stamped this field.
+    const result = await this.fabFileModel.findOneAndUpdate(
+      { _id: fabFileId, chunkClaimedAt },
+      { $set: { chunkClaimedAt } },
+      { new: false }
+    );
+    return result !== null;
+  }
+
   async setChunkPolicyConflict(
     fabFileId: string,
     chunkedPassageTokenTarget: number,

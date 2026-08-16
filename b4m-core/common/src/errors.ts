@@ -108,6 +108,21 @@ export class CorruptedFileError extends HTTPError {
   }
 }
 
+/**
+ * Thrown by `chunkFabfile`'s guarded-write ownership check (#1802): the run's claim stamp no longer
+ * matches `FabFile.chunkClaimedAt`, meaning a stale-claim takeover already reassigned this file to a
+ * successor mid-run. Not a failure - the successor is doing the work. Deliberately NOT an HTTPError:
+ * this is an internal worker control-flow signal, not an API response shape. Callers must treat it as
+ * a benign no-op (no retry, no failure/DLQ accounting) - see `isTransientTransactionError`, which this
+ * does not match, and the queue handler's catch in `fabFileChunk.ts`.
+ */
+export class ChunkClaimLostError extends Error {
+  constructor(public fabFileId: string) {
+    super(`Chunk claim for FabFile ${fabFileId} was lost to a successor mid-run`);
+    this.name = 'ChunkClaimLostError';
+  }
+}
+
 export function isZodError(err: unknown): err is ZodError {
   return Boolean(err && (err instanceof ZodError || (err as ZodError).name === 'ZodError'));
 }
