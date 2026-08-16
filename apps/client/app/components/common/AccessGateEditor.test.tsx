@@ -101,3 +101,86 @@ describe('AccessGateEditor', () => {
     await waitFor(() => expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/pub-1', { accessGate: null }));
   });
 });
+
+/**
+ * Show-once. The passphrase is bcrypt-hashed server-side and returned by no route, so the
+ * moment just after Apply is the only one in which the plaintext exists anywhere the owner can
+ * see it. These cover that it is actually shown then - and, just as importantly, that it does
+ * not linger or get mistaken for a readable stored value.
+ */
+describe('AccessGateEditor - passphrase show-once', () => {
+  const input = () => screen.getByTestId('manage-gate-passphrase-input') as HTMLInputElement;
+
+  it('generates a passphrase and unmasks it, since one you cannot read is useless', () => {
+    renderEditor('public');
+    pickGate('passphrase');
+    expect(input().type).toBe('password');
+
+    fireEvent.click(screen.getByTestId('manage-gate-passphrase-generate'));
+
+    expect(input().value).toMatch(/^[a-z]+-[a-z]+-\d{2}-[a-z]+-[a-z]+$/);
+    expect(input().type).toBe('text');
+  });
+
+  it('toggles masking of what is being typed', () => {
+    renderEditor('public');
+    pickGate('passphrase');
+    fireEvent.change(input(), { target: { value: 'longenough1' } });
+    expect(input().type).toBe('password');
+
+    fireEvent.click(screen.getByTestId('manage-gate-passphrase-reveal'));
+    expect(input().type).toBe('text');
+
+    fireEvent.click(screen.getByTestId('manage-gate-passphrase-reveal'));
+    expect(input().type).toBe('password');
+  });
+
+  it('displays the applied passphrase once, and clears it from the input', async () => {
+    renderEditor('public');
+    pickGate('passphrase');
+    fireEvent.change(input(), { target: { value: 'ravine-cobalt-79-mist-opal' } });
+    fireEvent.click(screen.getByTestId('manage-gate-apply'));
+
+    await waitFor(() => expect(screen.getByTestId('manage-gate-passphrase-justset')).not.toBeNull());
+    expect(screen.getByTestId('manage-gate-passphrase-justset-value').textContent).toBe('ravine-cobalt-79-mist-opal');
+    // The input is emptied and re-masked, so the value survives only in the show-once panel.
+    expect(input().value).toBe('');
+    expect(input().type).toBe('password');
+  });
+
+  it('does not show the panel for a domain gate', async () => {
+    renderEditor('public');
+    pickGate('domain');
+    fireEvent.change(screen.getByTestId('manage-gate-domains-input'), { target: { value: 'acme.com' } });
+    fireEvent.click(screen.getByTestId('manage-gate-apply'));
+
+    await waitFor(() => expect(apiPatch).toHaveBeenCalled());
+    expect(screen.queryByTestId('manage-gate-passphrase-justset')).toBeNull();
+  });
+
+  it('drops the shown passphrase as soon as a new one is typed', async () => {
+    renderEditor('public');
+    pickGate('passphrase');
+    fireEvent.change(input(), { target: { value: 'longenough1' } });
+    fireEvent.click(screen.getByTestId('manage-gate-apply'));
+    await waitFor(() => expect(screen.getByTestId('manage-gate-passphrase-justset')).not.toBeNull());
+
+    fireEvent.change(input(), { target: { value: 'a' } });
+
+    expect(screen.queryByTestId('manage-gate-passphrase-justset')).toBeNull();
+  });
+
+  it('copies the shown passphrase to the clipboard', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    renderEditor('public');
+    pickGate('passphrase');
+    fireEvent.change(input(), { target: { value: 'longenough1' } });
+    fireEvent.click(screen.getByTestId('manage-gate-apply'));
+    await waitFor(() => expect(screen.getByTestId('manage-gate-passphrase-justset')).not.toBeNull());
+
+    fireEvent.click(screen.getByTestId('manage-gate-passphrase-copy'));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('longenough1'));
+  });
+});

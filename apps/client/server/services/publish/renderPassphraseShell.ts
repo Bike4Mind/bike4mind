@@ -18,13 +18,31 @@
  * navigated to a gated path after its proof cookie was dropped/expired), the
  * form cannot function - the sandbox suppresses form submission and strips
  * credentials - so the script swaps it for open-in-own-tab guidance instead.
+ *
+ * OWNER BYPASS. checkAccessGate already lets the owner and an admin through their own gate
+ * before it ever looks at the proof cookie - but that is guarded on `user?.id`, and a top-level
+ * navigation carries no credential, so it could never fire and the owner was asked for the
+ * passphrase they themselves set. This shell therefore exchanges the refresh cookie for an
+ * access token and asks /api/publish/gate/owner to mint the proof cookie on identity alone; on
+ * success it RELOADS, and the artifact comes back through the ordinary serve path. Minting and
+ * reloading rather than rendering here is deliberate: this page's CSP is deliberately tight
+ * because it holds a credential input, and a sandboxed srcdoc frame inherits its parent's
+ * policy - so rendering in place would mean either loosening the policy that protects the
+ * passphrase field or shipping a second copy of the viewer pipeline.
+ *
+ * The form is held back only for that one round trip (bounded by FORM_REVEAL_MS), so the common
+ * case - someone who followed a link they were given - is never left waiting on a check that
+ * cannot help them.
  */
+import { SESSION_EXCHANGE_JS } from './sessionExchangeJs';
+
 export function renderPassphraseShell(): string {
   const bootstrap = `(function () {
   var form = document.getElementById('b4m-pp-form');
   var input = document.getElementById('b4m-pp-input');
   var btn = document.getElementById('b4m-pp-btn');
   var msg = document.getElementById('b4m-pp-msg');
+  var hint = document.getElementById('b4m-pp-hint');
   function note(text) { msg.textContent = text; }
   if (window.top !== window.self) {
     // Framed render (e.g. a sandboxed bundle iframe navigated here after its
@@ -41,6 +59,50 @@ export function renderPassphraseShell(): string {
     msg.parentNode.insertBefore(url, msg);
     return;
   }
+  // ---- owner/admin bypass: try the session before asking for a passphrase ----
+  // The form starts hidden and is revealed either when the check comes back unhelpful or when
+  // FORM_REVEAL_MS elapses, whichever is first - a slow or failed exchange must never strand a
+  // viewer in front of a spinner when a passphrase would have let them straight in.
+  var FORM_REVEAL_MS = 1500;
+  var settled = false;
+  function revealForm() {
+    if (settled) return;
+    settled = true;
+    form.style.visibility = 'visible';
+    input.focus();
+  }
+  var revealTimer = setTimeout(revealForm, FORM_REVEAL_MS);
+
+  b4mExchangeSession(function (token) {
+    if (!token) { revealForm(); return; }
+    // Ask the server to mint the proof cookie on identity alone. It says yes only to the owner
+    // and to an admin - exactly who checkAccessGate already admits ahead of any proof check.
+    // On success we RELOAD rather than rendering here: the reload passes the gate server-side
+    // and the artifact comes back through the ordinary serve path, with the ordinary wrapper
+    // and CSP. Rendering in place would mean rebuilding the sandboxed-iframe pipeline inside a
+    // page whose CSP is deliberately tight because it holds a credential input.
+    fetch('/api/publish/gate/owner', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      credentials: 'include',
+      body: JSON.stringify({ path: location.pathname })
+    })
+      .then(function (res) {
+        if (res.status === 204) {
+          if (settled) return;
+          settled = true;
+          clearTimeout(revealTimer);
+          if (hint) hint.textContent = 'Opening your artifact...';
+          location.reload();
+          return;
+        }
+        // 401/403/404 all mean "this viewer must supply the passphrase", which is every
+        // viewer who is not the owner - the overwhelmingly common case for a shared link.
+        revealForm();
+      })
+      .catch(function () { revealForm(); });
+  });
+
   form.addEventListener('submit', function (ev) {
     ev.preventDefault();
     var passphrase = input.value;
@@ -71,7 +133,6 @@ export function renderPassphraseShell(): string {
       })
       .catch(function () { btn.disabled = false; note('Network error - try again.'); });
   });
-  input.focus();
 })();`;
 
   return `<!doctype html>
@@ -106,12 +167,13 @@ export function renderPassphraseShell(): string {
     <div class="lock" aria-hidden="true">&#128274;</div>
     <h1>This shared item is passphrase-protected</h1>
     <p id="b4m-pp-hint">Enter the passphrase you were given to view it.</p>
-    <form id="b4m-pp-form">
+    <form id="b4m-pp-form" style="visibility:hidden">
       <input id="b4m-pp-input" type="password" autocomplete="off" aria-label="Passphrase">
       <button id="b4m-pp-btn" type="submit">Unlock</button>
     </form>
     <div id="b4m-pp-msg" role="status"></div>
   </div>
+  <script>${SESSION_EXCHANGE_JS}</script>
   <script>${bootstrap}</script>
 </body>
 </html>`;

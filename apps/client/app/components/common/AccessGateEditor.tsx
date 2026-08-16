@@ -1,9 +1,15 @@
 import React, { useState } from 'react';
-import { Box, Button, FormLabel, Input, Radio, Sheet, Textarea, Typography } from '@mui/joy';
+import { Box, Button, FormLabel, IconButton, Input, Radio, Sheet, Textarea, Typography } from '@mui/joy';
 import LockOpenIcon from '@mui/icons-material/LockOpen';
 import KeyIcon from '@mui/icons-material/Key';
 import DomainIcon from '@mui/icons-material/Domain';
 import PublicIcon from '@mui/icons-material/Public';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
+import AutorenewIcon from '@mui/icons-material/Autorenew';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import CheckIcon from '@mui/icons-material/Check';
+import { generatePassphrase } from '@client/app/utils/generatePassphrase';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import {
@@ -58,8 +64,27 @@ export function AccessGateEditor({
     initialGate?.kind === 'domain' ? initialGate.allowedDomains.join(', ') : ''
   );
   const [busy, setBusy] = useState(false);
+  /** Unmask what is being typed. Never reveals a STORED passphrase - there is none to reveal. */
+  const [reveal, setReveal] = useState(false);
+  /** The passphrase just applied, held for this render only so the owner can copy it. Cleared
+   *  on any further edit; never re-derivable once gone, since the server keeps only a hash. */
+  const [justSet, setJustSet] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const isPublic = visibility === 'public';
+
+  const copyJustSet = async () => {
+    if (!justSet) return;
+    try {
+      await navigator.clipboard.writeText(justSet);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard blocked (insecure context, or permission denied). The value is on screen and
+      // selectable, so say so rather than failing silently.
+      toast.error('Could not copy - select the passphrase and copy it manually');
+    }
+  };
 
   const buildInput = (): PublishAccessGateInput | 'invalid' => {
     if (kind === 'none') return null;
@@ -105,7 +130,11 @@ export function AccessGateEditor({
     setBusy(true);
     try {
       await updatePublishedAccessGate(publicId, gate);
+      // Move the plaintext out of the input and into the show-once panel. This is the last
+      // moment it exists anywhere: the server stores only a bcrypt hash and no route returns it.
+      setJustSet(gate !== null && gate.kind === 'passphrase' ? gate.passphrase : null);
       setPassphrase('');
+      setReveal(false);
       const applied: PublishAccessGateRead =
         gate === null
           ? null
@@ -188,16 +217,93 @@ export function AccessGateEditor({
           </Box>
 
           {kind === 'passphrase' && (
-            <Input
-              type="password"
-              value={passphrase}
-              placeholder={
-                initialGate?.kind === 'passphrase' ? 'Enter a NEW passphrase to change it' : 'At least 8 characters'
-              }
-              onChange={e => setPassphrase(e.target.value)}
-              slotProps={{ input: { 'data-testid': `${testIdPrefix}-passphrase-input`, autoComplete: 'new-password' } }}
-              sx={{ mb: 1 }}
-            />
+            <Box sx={{ mb: 1 }}>
+              <Box sx={{ display: 'flex', gap: 0.75, alignItems: 'flex-start' }}>
+                <Input
+                  type={reveal ? 'text' : 'password'}
+                  value={passphrase}
+                  placeholder={
+                    initialGate?.kind === 'passphrase' ? 'Enter a NEW passphrase to change it' : 'At least 8 characters'
+                  }
+                  onChange={e => {
+                    setPassphrase(e.target.value);
+                    setJustSet(null); // a new draft supersedes the one we are still displaying
+                  }}
+                  slotProps={{
+                    input: { 'data-testid': `${testIdPrefix}-passphrase-input`, autoComplete: 'new-password' },
+                  }}
+                  endDecorator={
+                    <IconButton
+                      size="sm"
+                      variant="plain"
+                      color="neutral"
+                      // Only ever reveals what the user is typing right now. There is no stored
+                      // passphrase to unmask: it is bcrypt-hashed on the way in and no route
+                      // returns it, which is why this editor can offer show-once and not "show".
+                      onClick={() => setReveal(v => !v)}
+                      aria-label={reveal ? 'Hide passphrase' : 'Show passphrase'}
+                      data-testid={`${testIdPrefix}-passphrase-reveal`}
+                    >
+                      {reveal ? <VisibilityOffIcon sx={{ fontSize: 16 }} /> : <VisibilityIcon sx={{ fontSize: 16 }} />}
+                    </IconButton>
+                  }
+                  sx={{ flex: 1 }}
+                />
+                <Button
+                  size="sm"
+                  variant="soft"
+                  color="neutral"
+                  startDecorator={<AutorenewIcon sx={{ fontSize: 16 }} />}
+                  onClick={() => {
+                    setPassphrase(generatePassphrase());
+                    setReveal(true); // a generated passphrase you cannot read is useless
+                  }}
+                  data-testid={`${testIdPrefix}-passphrase-generate`}
+                >
+                  Generate
+                </Button>
+              </Box>
+              <Typography level="body-xs" sx={{ opacity: 0.75, mt: 0.5 }}>
+                Stored hashed - it cannot be shown again after you apply it, so copy it now if you need to share it.
+              </Typography>
+            </Box>
+          )}
+
+          {/* Show-once: the only moment the plaintext exists anywhere. After this render it is
+              gone from the client too, and the server holds nothing but a bcrypt hash. */}
+          {justSet && (
+            <Sheet
+              variant="soft"
+              color="success"
+              sx={{ borderRadius: 'md', p: 1, mb: 1 }}
+              data-testid={`${testIdPrefix}-passphrase-justset`}
+            >
+              <Typography level="body-xs" sx={{ fontWeight: 600, mb: 0.5 }}>
+                Passphrase set - copy it now
+              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                <Typography
+                  level="body-sm"
+                  sx={{ fontFamily: 'monospace', wordBreak: 'break-all', flex: 1, userSelect: 'all' }}
+                  data-testid={`${testIdPrefix}-passphrase-justset-value`}
+                >
+                  {justSet}
+                </Typography>
+                <IconButton
+                  size="sm"
+                  variant="plain"
+                  color="neutral"
+                  onClick={() => void copyJustSet()}
+                  aria-label="Copy passphrase"
+                  data-testid={`${testIdPrefix}-passphrase-copy`}
+                >
+                  {copied ? <CheckIcon sx={{ fontSize: 16 }} /> : <ContentCopyIcon sx={{ fontSize: 16 }} />}
+                </IconButton>
+              </Box>
+              <Typography level="body-xs" sx={{ opacity: 0.75, mt: 0.5 }}>
+                This will not be shown again. To get a new one, set another passphrase.
+              </Typography>
+            </Sheet>
           )}
           {kind === 'domain' && (
             <Textarea
