@@ -115,8 +115,13 @@ export const chunkFabfile = async (
   // which `withTransaction` retries and the guard then correctly fails on; DocumentDB instead uses
   // real document-level write LOCKS (1-minute max hold, non-configurable), so a competing writer
   // blocks rather than racing and this write only ever sees fully-committed state. Either way, this
-  // filter never matches against stale data. Skipped entirely when no stamp was supplied (see
-  // chunkFileSchema) - never the case for the real production caller.
+  // filter never matches against stale data - PROVIDED the write is genuinely a write. A bare
+  // self-valued $set (writing chunkClaimedAt back to itself) was verified, against a real replica
+  // set, to be silently elidable: MongoDB can treat it as a no-op and let the match succeed against
+  // a stale snapshot with no conflict ever raised. confirmChunkClaim's write also stamps
+  // chunkClaimConfirmedAt for exactly this reason - see its doc comment - so this guarantee does not
+  // quietly depend on FabFile's schema happening to have `timestamps: true`. Skipped entirely when
+  // no stamp was supplied (see chunkFileSchema) - never the case for the real production caller.
   if (chunkClaimedAt !== undefined && !(await db.fabFiles.confirmChunkClaim(fabFileId, chunkClaimedAt))) {
     throw new ChunkClaimLostError(fabFileId);
   }

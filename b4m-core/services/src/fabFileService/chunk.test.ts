@@ -16,6 +16,11 @@ describe('chunkFabfile', () => {
     id: 'file-1',
     embeddingModel: 'text-embedding-ada-002',
     mimeType: 'text/plain',
+    // The worker's live claim on the loaded document (#1802 T2/T3) - without these two fields, the
+    // "never writes X" tests below pass even against the pre-fix bug (a spread of this fixture has
+    // nothing to leak, since the fixture never carried them).
+    isChunking: true,
+    chunkClaimedAt: new Date('2026-01-01T00:00:00.000Z'),
   };
 
   let mockAdapter: {

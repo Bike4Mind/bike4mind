@@ -123,6 +123,16 @@ export class ChunkClaimLostError extends Error {
   }
 }
 
+/**
+ * `ChunkClaimLostError` is thrown in `@bike4mind/services` and caught in `apps/client` - a bare
+ * `instanceof` across that package boundary breaks if `@bike4mind/common` is ever resolved as two
+ * distinct module realms (mirrors `isZodError` below, same reason). A miss here would silently
+ * misroute every lost-claim case into the failure/DLQ path.
+ */
+export function isChunkClaimLostError(err: unknown): err is ChunkClaimLostError {
+  return Boolean(err && (err instanceof ChunkClaimLostError || (err as Error).name === 'ChunkClaimLostError'));
+}
+
 export function isZodError(err: unknown): err is ZodError {
   return Boolean(err && (err instanceof ZodError || (err as ZodError).name === 'ZodError'));
 }

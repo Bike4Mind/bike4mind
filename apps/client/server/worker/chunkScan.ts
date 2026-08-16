@@ -25,11 +25,21 @@ export const CHUNK_SCAN_BATCH = 50;
  * stranded claim gets rescued against how long a reclaimed-but-still-running self-host worker keeps
  * doing now-discarded work before hitting that check.
  *
+ * Two hosted consumers of this cutoff, not one: the daily `dataLakeBatchReconcile` sweep, AND
+ * fabFileChunk.ts's own CAS re-evaluating it on every redelivery - so the practical hosted rescue
+ * path is usually SQS's 60-minute visibility timeout re-delivering the message, which then sees the
+ * claim as stale and proceeds, well before the daily sweep would ever see it. That also makes this
+ * value load-bearing in the other direction: it must stay BELOW the queue's 60-minute visibility
+ * timeout, or a redelivery would still see an in-flight-looking claim and decline, burning the
+ * retry budget toward the DLQ instead of rescuing.
+ *
  * Considered lowering this now that a claim is held for the WHOLE run (a hard-killed worker is
  * stuck claimed for up to this long, not just from wherever it died to its own premature release,
  * which no longer exists). Left at 30 minutes: since a too-early reclaim is now safe rather than
  * corrupting, the only cost of leaving this long is rescue latency for a genuinely stranded claim,
- * not correctness - and there's no production crash-rate data yet to justify tuning it against. */
+ * not correctness - and there's no production crash-rate data yet to justify tuning it against.
+ * Lowering it further wouldn't meaningfully speed up hosted rescue anyway (SQS redelivery already
+ * dominates), so the tradeoff is really self-host-only. */
 export const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
 
 /**

@@ -206,6 +206,9 @@ export interface IFabFile {
   /** When `isChunking` was last set true - the rescue sweep uses this to reclaim a claim stranded
    *  by a hard worker crash that never cleared it (see buildFabFileChunkScanFilter). */
   chunkClaimedAt?: Date | null;
+  /** Written by confirmChunkClaim on every matched call - purely so that write is never a
+   *  byte-for-byte no-op MongoDB could elide. Not read anywhere; see confirmChunkClaim's doc. */
+  chunkClaimConfirmedAt?: Date | null;
   /** Whether this FabFile has been chunked */
   chunked?: boolean;
   /**
@@ -525,10 +528,14 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Guarded-write ownership check for `chunkFabfile` (#1802 Phase 2): matches on BOTH `_id` and
    * `chunkClaimedAt` so a stale-claim takeover mid-run is caught via MongoDB's write-conflict
    * detection rather than a transaction-isolation READ (`withTransaction` configures no read
-   * concern, and the competing CAS commits outside any transaction). A deliberate no-op $set - the
-   * write itself, succeeding or not, is the signal. Returns `false` when `chunkClaimedAt` no longer
-   * matches: a successor already reassigned this file's claim, and the caller must abort before any
-   * further write.
+   * concern, and the competing CAS commits outside any transaction). `chunkClaimedAt` itself is
+   * written back unchanged - the release CAS later matches on this run's exact original stamp - but
+   * the write ALSO stamps `chunkClaimConfirmedAt` so it is never a byte-for-byte no-op: verified
+   * against a real replica set that an update matching-and-writing only the SAME value can be
+   * silently elided (no conflict raised, stale match succeeds), so a genuinely-changing field is
+   * required for the write-conflict detection this depends on to actually fire. Returns `false`
+   * when `chunkClaimedAt` no longer matches: a successor already reassigned this file's claim, and
+   * the caller must abort before any further write.
    */
   confirmChunkClaim(fabFileId: string, chunkClaimedAt: Date): Promise<boolean>;
 

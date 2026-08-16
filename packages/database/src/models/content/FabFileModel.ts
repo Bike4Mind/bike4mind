@@ -973,12 +973,19 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   async confirmChunkClaim(fabFileId: string, chunkClaimedAt: Date): Promise<boolean> {
-    // No-op $set on a match - the WRITE succeeding or not is the signal (#1802 Phase 2), not any
-    // field it changes. Matching on chunkClaimedAt (not just _id) is what engages MongoDB's
-    // write-conflict detection when a stale-claim takeover has already re-stamped this field.
+    // The WRITE succeeding or not is the signal (#1802 Phase 2), not any field it changes - but the
+    // write must ACTUALLY be a write, not a no-op MongoDB is free to elide. A bare
+    // `$set: {chunkClaimedAt}` writes back the value it just matched on, and verified against a
+    // real replica set: when nothing else in the update changes, a concurrent non-transactional
+    // takeover landing inside this transaction's snapshot window can be silently invisible to it -
+    // the match succeeds against the stale snapshot and no conflict is ever raised. `chunkClaimedAt`
+    // stays untouched deliberately (fabFileChunk.ts's release CAS matches on this run's exact
+    // original stamp), so chunkClaimConfirmedAt exists for the sole purpose of making this write
+    // always genuinely different, so MongoDB can never treat it as a no-op regardless of whether
+    // this schema's `timestamps` option happens to be doing the same job by accident.
     const result = await this.fabFileModel.findOneAndUpdate(
       { _id: fabFileId, chunkClaimedAt },
-      { $set: { chunkClaimedAt } },
+      { $set: { chunkClaimedAt, chunkClaimConfirmedAt: new Date() } },
       { new: false }
     );
     return result !== null;
@@ -1682,6 +1689,10 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // rescue sweep recover a claim stranded by a hard worker crash (OOM/timeout/deploy) that never
     // ran the finally - see buildFabFileChunkScanFilter's stale-claim arm.
     chunkClaimedAt: { type: Date, default: null },
+    // Written by confirmChunkClaim on every matched call - see IFabFileRepository.confirmChunkClaim
+    // for why this field exists at all: it exists ONLY so that write is never a byte-for-byte
+    // no-op. Purely diagnostic otherwise; nothing reads it.
+    chunkClaimConfirmedAt: { type: Date, default: null },
     chunked: { type: Boolean, default: false },
     // Chunk policy at file-owner altitude (#1662). chunkedPassageTokenTarget: the effective target
     // (post model-window clamp) the current chunks were built with, so a later lake-membership

@@ -24,7 +24,7 @@ import {
   deferFailureIfRetryable,
 } from '@server/queueHandlers/dataLakeBatchProgress';
 import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
-import { ChunkClaimLostError, isSupportedEmbeddingModel } from '@bike4mind/common';
+import { isChunkClaimLostError, isSupportedEmbeddingModel } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { NO_EXTRACTABLE_TEXT_NOTE_PREFIX, CHUNK_CLAIM_STALE_MS } from '@server/worker/chunkScan';
 import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
@@ -216,8 +216,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // 2) - not a failure, so this delivery must NOT count toward batch failure accounting or
       // reach the DLQ. Returning null (rather than throwing) lets SQS delete the message as
       // successfully processed; the successor is the one actually finishing this file.
-      if (err instanceof ChunkClaimLostError) {
-        logger.log(`FabFile ${fabFileId}: chunk claim lost to a successor mid-run - this delivery is a no-op`);
+      if (isChunkClaimLostError(err)) {
+        // WARN, not log/info: this is a RETURN/swallow path (see queueHandlers/utils.ts's own
+        // documented contract), and a benign no-op is still the event an operator triaging a stuck
+        // file wants visible above INFO noise.
+        logger.warn(`FabFile ${fabFileId}: chunk claim lost to a successor mid-run - this delivery is a no-op`);
         return null;
       }
 
