@@ -97,8 +97,10 @@ HOW TO CARRY THIS
  *     model reasons and "do not search yet" has nothing left to withhold.
  *   - Retrieval NOT forced - reachable today, not hypothetical: a user can turn it off on a live
  *     session without unbinding the router, since `useSetDataLakeMode` sends only
- *     `forceKnowledgeRetrieval`. That removes the block entirely (systemPrompts 4,957 -> 719) and the
- *     model still called `search_knowledge_base` of its own accord, which the step forbids.
+ *     `forceKnowledgeRetrieval`. That removes the retrieval block entirely, and the model still
+ *     called `search_knowledge_base` of its own accord, which the step forbids. (systemPrompts 4,957
+ *     vs 719 - two sessions on the same lake, not one measured before and after; the delta also
+ *     includes `lake_memory` at 394, so it is not all retrieval.)
  *
  * One reading is NOT ruled out at n=1: the model may have judged the question specific enough to
  * search, which would be a WORDING problem rather than a reachability one. That distinction decides

@@ -33,16 +33,22 @@ describe('getDefaultSystemPrompts - triage_router', () => {
   // in defaults.ts for the measurements. Re-adding it silently would restore an instruction measured
   // not to fire, which reads as a capability in the admin editor while changing nothing at runtime.
   //
-  // Deliberately matches the step's SEMANTICS, not its number. An earlier version asserted `/STEP 2/`,
-  // which was wrong twice over: it pinned the step COUNT, so an unrelated future second step would
-  // fail a test that is about the underspecified step; and it caught only a literal revert, since
-  // renumbering to "STEP 3" or rewording to "hold off on retrieval" slipped through untouched.
-  it('carries no underspecified/withhold-retrieval step, however it is worded or numbered', () => {
+  // A TRIPWIRE AGAINST DRIFT, NOT A PROOF OF ABSENCE. These are keyword assertions, so a sufficiently
+  // reworded re-add still passes - "if the request could mean several materially different things,
+  // hold off until the user narrows it" trips none of them. It is strictly better than the `/STEP 2/`
+  // assertion it replaced, which pinned the step COUNT (failing an unrelated future second step) and
+  // caught only a literal revert, but do not read a green run here as proof the step is gone.
+  //
+  // The patterns are deliberately broad, so legitimate future prompt text can trip them - any sentence
+  // using "vague", or "underspecified", which is ABSTENTION_PROMPT's own word for the case this router
+  // now leaves to it. If that happens, narrow the offending pattern; do not delete the assertion.
+  it('carries no underspecified/withhold-retrieval step under any of its known spellings', () => {
     const content = triage()!.content;
     expect(content).not.toMatch(/UNDERSPECIFIED/i);
     expect(content).not.toMatch(/vague/i);
     expect(content).not.toMatch(/clarifying question/i);
     expect(content).not.toMatch(/withhold/i);
+    expect(content).not.toMatch(/hold off on retrieval/i);
     expect(content).not.toMatch(/do NOT search/i);
   });
 
