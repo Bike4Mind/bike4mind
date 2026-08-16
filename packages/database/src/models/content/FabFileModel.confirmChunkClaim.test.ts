@@ -57,13 +57,27 @@ describe('FabFileRepository.confirmChunkClaim', () => {
     expect(result).toBe(false);
   });
 
-  it('does not modify chunkClaimedAt when it matches (a true no-op write)', async () => {
+  it('leaves chunkClaimedAt intact but always re-stamps chunkClaimConfirmedAt (never a no-op write)', async () => {
     const stamp = new Date('2026-01-01T00:00:00.000Z');
     const file = await makeFile(stamp);
+    expect(file.chunkClaimConfirmedAt).toBeNull();
 
     await fabFileRepository.confirmChunkClaim(String(file._id), stamp);
+    const firstReload = await FabFile.findById(file._id);
 
-    const reloaded = await FabFile.findById(file._id);
-    expect(reloaded?.chunkClaimedAt?.toISOString()).toBe(stamp.toISOString());
+    // The release CAS in fabFileChunk.ts matches on this run's original stamp, so it must not move.
+    expect(firstReload?.chunkClaimedAt?.toISOString()).toBe(stamp.toISOString());
+    // ...but the update must still be a genuine write, or MongoDB may elide the self-valued $set on
+    // chunkClaimedAt and a concurrent takeover inside the snapshot window goes undetected - see
+    // confirmChunkClaim's doc comment. chunkClaimConfirmedAt exists solely to guarantee that.
+    expect(firstReload?.chunkClaimConfirmedAt).toBeInstanceOf(Date);
+
+    // A second call proves it is re-stamped every time, not just set once from null.
+    await new Promise(resolve => setTimeout(resolve, 5));
+    await fabFileRepository.confirmChunkClaim(String(file._id), stamp);
+    const secondReload = await FabFile.findById(file._id);
+    expect(secondReload!.chunkClaimConfirmedAt!.getTime()).toBeGreaterThan(
+      firstReload!.chunkClaimConfirmedAt!.getTime()
+    );
   });
 });

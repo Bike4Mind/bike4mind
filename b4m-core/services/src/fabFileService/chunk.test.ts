@@ -35,7 +35,7 @@ describe('chunkFabfile', () => {
       users: { findById: Mock };
     };
     storage: { getContentAsBuffer: Mock };
-    logger: { updateMetadata: Mock; log: Mock };
+    logger: { updateMetadata: Mock; log: Mock; warn: Mock };
     searchIndex?: { deleteByFabFileId: Mock };
   };
 
@@ -64,7 +64,7 @@ describe('chunkFabfile', () => {
         users: { findById: vi.fn() },
       },
       storage: { getContentAsBuffer: vi.fn() },
-      logger: { updateMetadata: vi.fn(), log: vi.fn() },
+      logger: { updateMetadata: vi.fn(), log: vi.fn(), warn: vi.fn() },
     };
   });
 
@@ -223,6 +223,9 @@ describe('chunkFabfile', () => {
 
       expect(mockAdapter.db.fabFiles.confirmChunkClaim).not.toHaveBeenCalled();
       expect(mockAdapter.db.fabFiles.update).toHaveBeenCalled();
+      // The sole production caller always supplies a stamp - this only fires for a future in-repo
+      // caller that doesn't, so it must be loud rather than silent.
+      expect(mockAdapter.logger.warn).toHaveBeenCalledWith(expect.stringContaining('no claim stamp'));
     });
   });
 });

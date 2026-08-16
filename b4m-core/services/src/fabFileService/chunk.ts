@@ -114,15 +114,23 @@ export const chunkFabfile = async (
   // transient WriteConflict (code 112) if the takeover landed inside this run's own snapshot window,
   // which `withTransaction` retries and the guard then correctly fails on; DocumentDB instead uses
   // real document-level write LOCKS (1-minute max hold, non-configurable), so a competing writer
-  // blocks rather than racing and this write only ever sees fully-committed state. Either way, this
-  // filter never matches against stale data - PROVIDED the write is genuinely a write. A bare
-  // self-valued $set (writing chunkClaimedAt back to itself) was verified, against a real replica
-  // set, to be silently elidable: MongoDB can treat it as a no-op and let the match succeed against
-  // a stale snapshot with no conflict ever raised. confirmChunkClaim's write also stamps
-  // chunkClaimConfirmedAt for exactly this reason - see its doc comment - so this guarantee does not
-  // quietly depend on FabFile's schema happening to have `timestamps: true`. Skipped entirely when
-  // no stamp was supplied (see chunkFileSchema) - never the case for the real production caller.
-  if (chunkClaimedAt !== undefined && !(await db.fabFiles.confirmChunkClaim(fabFileId, chunkClaimedAt))) {
+  // blocks rather than racing and this write only ever sees fully-committed state (moot in practice
+  // on DocumentDB for a nontrivial file: its 1-minute TRANSACTION cap, hard and non-configurable,
+  // would abort the whole run before the lock guarantee is ever the operative thing - see the
+  // DocumentDB follow-up in the PR body/plan doc). Either way, this filter never matches against
+  // stale data - PROVIDED the write is genuinely a write. A bare self-valued $set (writing
+  // chunkClaimedAt back to itself) was verified, against a real replica set, to be silently
+  // elidable: MongoDB can treat it as a no-op and let the match succeed against a stale snapshot
+  // with no conflict ever raised. confirmChunkClaim's write also stamps chunkClaimConfirmedAt for
+  // exactly this reason - see its doc comment - so this guarantee does not quietly depend on
+  // FabFile's schema happening to have `timestamps: true`. A retried WriteConflict here re-runs
+  // this ENTIRE function from the top - up to `maxRetries` (2) additional full passes, S3 download
+  // and tokenization included - bounded and correct, but worth knowing before treating a lost claim
+  // as cheap. Skipped entirely when no stamp was supplied (see chunkFileSchema) - never the case
+  // for the real production caller, logged below if it ever is.
+  if (chunkClaimedAt === undefined) {
+    logger.warn(`chunkFabfile called for ${fabFileId} with no claim stamp - guarded-write ownership check skipped`);
+  } else if (!(await db.fabFiles.confirmChunkClaim(fabFileId, chunkClaimedAt))) {
     throw new ChunkClaimLostError(fabFileId);
   }
 

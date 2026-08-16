@@ -30,6 +30,12 @@ describe('the zero-chunk window, against real repositories', () => {
       filePath: 'empty.txt',
       isChunking: true,
       chunkClaimedAt,
+      // Seeded as a prior successful chunking so the zero-chunk rollup below has something to
+      // overwrite. chunked/chunkCount default to false/0 on a fresh document - the SAME values the
+      // zero-chunk rollup writes - so an unseeded fixture would make those assertions pass whether
+      // or not the write actually happened.
+      chunked: true,
+      chunkCount: 5,
     });
 
   it('a zero-chunk run: guard passes, rollup writes chunked:false/chunkCount:0, delete+insert of nothing both succeed, claim fields untouched', async () => {
@@ -68,7 +74,7 @@ describe('the zero-chunk window, against real repositories', () => {
     expect(reloaded?.chunkClaimedAt?.toISOString()).toBe(stamp.toISOString());
   });
 
-  it('a superseded zero-chunk run: the guard aborts BEFORE the rollup write, even though there is nothing destructive to protect', async () => {
+  it('a superseded zero-chunk run: confirmChunkClaim fails for a file that would produce zero chunks', async () => {
     const originalStamp = new Date('2026-02-01T00:00:00.000Z');
     const successorStamp = new Date('2026-02-01T00:31:00.000Z');
     const file = await makeClaimedFile(successorStamp); // simulates a takeover having already landed
@@ -80,7 +86,9 @@ describe('the zero-chunk window, against real repositories', () => {
     // fails for a file that would have produced zero chunks, not just a file that produced some.
 
     const reloaded = await FabFile.findById(file._id).lean();
-    expect(reloaded?.chunked).toBe(false); // untouched - no rollup was ever attempted
+    // Still the seeded pre-state: the guard returned false, so the caller never reached a rollup.
+    expect(reloaded?.chunked).toBe(true);
+    expect(reloaded?.chunkCount).toBe(5);
     expect(reloaded?.chunkClaimedAt?.toISOString()).toBe(successorStamp.toISOString());
   });
 });
