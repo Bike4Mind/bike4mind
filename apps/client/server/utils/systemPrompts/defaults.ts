@@ -74,10 +74,9 @@ HOW TO CARRY THIS
  * corpus-inlining default on both fact accuracy and refusal, at near-zero token cost, by deciding
  * WHETHER and HOW to answer before touching retrieval. Registry-backed so it is versioned and
  * admin-editable (tune the exact wording with no deploy). Activated per session via
- * `session.systemPromptId = 'triage_router'`; it deliberately leaves retrieval AVAILABLE but not
- * forced, so the model searches only when step 1 says to.
+ * `session.systemPromptId = 'triage_router'`.
  *
- * The three steps are ordered on purpose - step 0 is load-bearing: authoritative context makes a
+ * The two steps are ordered on purpose - step 0 is load-bearing: authoritative context makes a
  * model better at stating facts and worse at declining, so legitimacy is settled before capability.
  *
  * PRECONDITION: step 1 tells the model to SEARCH, but `search_knowledge_base` is only offered when
@@ -85,13 +84,31 @@ HOW TO CARRY THIS
  * hasAttachedKnowledge || hasAccessibleDataLake). Activate this router on a session with neither and
  * step 1 instructs the model to use a tool it was never given - which does not fail loudly, it
  * produces retrieval-flavoured prose with no retrieval behind it. Pair the router with a lake.
+ *
+ * WHY THERE IS NO UNDERSPECIFIED STEP. An earlier revision carried a third step telling the model to
+ * withhold retrieval on vague requests and ask 2-4 clarifying questions instead. It was removed
+ * because it could not run where the router is actually deployed: the PRECONDITION above says to pair
+ * the router with a lake, and a lake session sets `forceKnowledgeRetrieval` unconditionally, so
+ * retrieval completes before the model's turn. Measured on production, the retrieved content arrives
+ * as a ~3,847-token system prompt against this router's ~384 - step 1 is satisfied by construction and
+ * a "do not search yet" instruction has nothing left to withhold. A live A/B on the same lake, with
+ * the router bound and unbound, produced no behavioural difference on that step's own worked example.
+ *
+ * Two consequences worth keeping in view before re-adding it. First, the vague-request case is not
+ * unhandled: ABSTENTION_PROMPT ships always-on and admin-sourced, and covers naming what is missing
+ * rather than guessing - what was lost is specifically the "offer interpretations, ask 2-4 questions"
+ * half. Second, an instruction that cannot fire is worse than an absent one, because it reads as a
+ * capability in review and in the admin editor while changing nothing at runtime. If forced retrieval
+ * ever becomes conditional, re-adding this step is the right move - but re-add it with a measurement
+ * on a session that does NOT force retrieval, which is the configuration it was written for and the
+ * one no measurement has yet covered.
  */
 function buildTriageRouterPrompt(): DefaultSystemPrompt {
   return {
     promptId: 'triage_router',
     name: 'Triage Router',
     description:
-      'Grounding-first request router. Decides whether a request is legitimate, specific, or underspecified BEFORE retrieving, so the model refuses fabrication, searches only specific questions, and asks rather than guessing on vague ones.',
+      'Grounding-first request router. Decides whether a request is legitimate before deciding whether it is answerable, so the model refuses fabrication and grounds specific questions in retrieval rather than memory.',
     content: `You are a careful request router. Before answering, classify the request and follow the matching step. The order is deliberate: settle whether you SHOULD answer before deciding whether you CAN.
 
 STEP 0 - IS THE REQUEST LEGITIMATE?
@@ -100,10 +117,7 @@ Decide this first, before considering any retrieval. If the request asks you to 
 STEP 1 - IS THE REQUEST SPECIFIC?
 If it names a definite, answerable thing: answer from your working context if it is already there; otherwise SEARCH the knowledge base for it. Never answer a specific factual question from memory or assumption - retrieve, then answer, and ground the answer in what you retrieved. If retrieval returns nothing relevant, say so rather than filling the gap.
 
-STEP 2 - IS THE REQUEST UNDERSPECIFIED?
-If it is vague, ambiguous, or could mean several materially different things: do NOT search yet. Searching a vague question returns material that makes a poorly-scoped answer look well-sourced. Instead, give a brief frame of what the request could mean, name the distinct interpretations, and ask 2-4 sharp clarifying questions. Let the user's answer narrow it to a specific request you can then route through Step 1.
-
-Default posture: be direct and grounded. Retrieval is available - use it for specific questions, withhold it for vague ones, and never let it substitute for declining an illegitimate request.`,
+Default posture: be direct and grounded. Use retrieval for specific questions, and never let it substitute for declining an illegitimate request.`,
     category: AdminSystemPromptCategory.SYSTEM,
     tags: ['triage', 'router', 'grounding', 'retrieval', 'system-message'],
     variables: [],
