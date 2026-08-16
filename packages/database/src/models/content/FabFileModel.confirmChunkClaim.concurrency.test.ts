@@ -47,24 +47,17 @@ describe('FabFileRepository.confirmChunkClaim - genuine concurrent takeover', ()
 
     let releaseTakeover: () => void;
     const takeoverReady = new Promise<void>(resolve => (releaseTakeover = resolve));
-    // Signals the ACTUAL commit of the external takeover, not a fixed timer (see below for why
-    // a timer was flaky). The guard's own delay awaits this instead of sleeping a hardcoded
-    // duration, so the guard's write is deterministically ordered after the takeover, whatever
-    // the takeover's real latency happens to be in a given environment.
     let signalTakeoverCommitted: () => void;
     const takeoverCommitted = new Promise<void>(resolve => (signalTakeoverCommitted = resolve));
 
     // Mirrors chunkFabfile's real shape: an early read establishes the transaction's snapshot,
-    // then simulated chunking work (S3 download, tokenize) elapses, THEN the guard runs.
-    //
-    // Previously this delay was a fixed `setTimeout(..., 300)`, racing the external takeover below
-    // on a hoped-for timing margin - the test's own `await`s only order ITS control flow, they do
-    // not causally order the guard's independently-running transaction against the takeover. Under
-    // CI's more variable latency (replica-set convergence, runner load), the takeover could still
-    // be in flight when the guard's 300ms elapsed, so the guard's write would land first, see no
-    // conflict, and this test's central assertion would flip - reproduced as a real, non-flaky-once
-    // failure on main (not this branch) at the exact commit this file was merged in. Awaiting an
-    // explicit signal instead makes the ordering a guarantee, not a race.
+    // then simulated chunking work (S3 download, tokenize) elapses, THEN the guard runs. The delay
+    // awaits the takeover's actual commit rather than a fixed sleep - a prior `setTimeout(..., 300)`
+    // here raced the takeover below on a hoped-for timing margin (the test's own `await`s only
+    // order ITS control flow, not the guard's independently-running transaction), and under CI's
+    // more variable latency the takeover could still be in flight when 300ms elapsed, flipping this
+    // test's central assertion - reproduced as a real failure on main, not this branch, at the exact
+    // commit this file was added in. An explicit signal makes the ordering a guarantee, not a race.
     const guardPromise = withTransaction(async () => {
       await FabFile.findById(fabFileId);
       releaseTakeover();
@@ -73,17 +66,24 @@ describe('FabFileRepository.confirmChunkClaim - genuine concurrent takeover', ()
     });
 
     await takeoverReady;
-    // The real mechanism this simulates: fabFileChunk.ts's stale-arm CAS, a plain findOneAndUpdate
-    // with no session, via a wholly separate client - genuinely concurrent, genuinely external.
-    const takeoverResult = await externalClient
-      .db(mongoose.connection.name)
-      .collection('fabfiles')
-      .findOneAndUpdate(
-        { _id: new ObjectId(fabFileId) },
-        { $set: { isChunking: true, chunkClaimedAt: successorStamp } }
-      );
-    expect(takeoverResult).not.toBeNull();
-    signalTakeoverCommitted();
+    try {
+      // The real mechanism this simulates: fabFileChunk.ts's stale-arm CAS, a plain
+      // findOneAndUpdate with no session, via a wholly separate client - genuinely concurrent,
+      // genuinely external.
+      const takeoverResult = await externalClient
+        .db(mongoose.connection.name)
+        .collection('fabfiles')
+        .findOneAndUpdate(
+          { _id: new ObjectId(fabFileId) },
+          { $set: { isChunking: true, chunkClaimedAt: successorStamp } }
+        );
+      expect(takeoverResult).not.toBeNull();
+    } finally {
+      // Always release the guard's transaction, even if the takeover itself failed - otherwise a
+      // failure here leaves guardPromise's transaction open through afterAll's teardown, trading a
+      // clean assertion error for a noisy disconnect/timeout on top of it.
+      signalTakeoverCommitted();
+    }
 
     const guardResult = await guardPromise;
     expect(guardResult).toBe(false);
