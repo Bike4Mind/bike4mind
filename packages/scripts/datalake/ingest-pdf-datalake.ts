@@ -35,8 +35,10 @@ import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { Resource } from 'sst';
 import { createHash } from 'crypto';
+import { realpathSync } from 'fs';
 import { readFile, stat } from 'fs/promises';
 import * as path from 'path';
+import { pathToFileURL } from 'url';
 import { glob } from 'glob';
 import pLimit from 'p-limit';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
@@ -76,7 +78,7 @@ const STRAGGLER_MIN_AGE_MS = 2 * 60_000;
  * Keep in sync with CHUNK_CLAIM_STALE_MS in server/worker/chunkScan.ts. */
 const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
 
-interface Options {
+export interface Options {
   dir?: string;
   slug: string;
   userId: string;
@@ -211,7 +213,7 @@ async function statusReport(lake: LakeTarget): Promise<number> {
   return 0;
 }
 
-async function requeueStragglers(lake: LakeTarget, opts: Options): Promise<number> {
+export async function requeueStragglers(lake: LakeTarget, opts: Options): Promise<number> {
   // Exclude files the pipeline already marked failed (markFailedIfNotAlready sets `error`):
   // SQS retried them 3x before DLQ, so blind re-enqueueing only churns slots. `$in` also
   // matches a missing field. Failed files stay visible in --status for manual triage.
@@ -230,30 +232,49 @@ async function requeueStragglers(lake: LakeTarget, opts: Options): Promise<numbe
 
   const queueUrl = Resource.fabFileChunkQueue.url;
   const sqs = new SQSClient({});
+  let enqueued = 0;
   for (const f of files) {
-    // Reset processing flags first (parity with POST /api/files/reprocess) so a
-    // partially-failed extraction starts clean.
-    await FabFile.updateOne(
-      { _id: f._id },
+    // Reset processing flags EXCEPT the worker-owned claim fields (#1802 follow-up):
+    // isChunking/chunkClaimedAt are deliberately excluded here - the chunk worker's own
+    // compare-and-set (fabFileChunk.ts) is the single point of mutual exclusion for those, and an
+    // unconditional write to them here could clear a claim out from under a worker that is still
+    // genuinely running (a stale-looking claim on self-host, which has no handler timeout, may
+    // still be live). Everything else below is this script's own reprocess mechanism (parity with
+    // POST /api/files/reprocess) and must stay - `notes` in particular is what clears the
+    // "no extractable text" guard (fabFileChunk.ts) that would otherwise make a re-enqueued
+    // straggler silently no-op at the worker.
+    //
+    // Precondition mirrors resetChunkStateByIds's per-document mechanism (FabFileModel.ts):
+    // selection (above) and this write are separated by up to requeueLimit round-trips in a
+    // serial loop, so a file can genuinely still be claimed by the time its turn comes. Without
+    // the isChunking:{$ne:true} guard, the reset would still land on that live worker for every
+    // field it touches - including re-admitting a just-failed file to the pool via error:null,
+    // the one field here that's genuinely new versus the pre-#1802-follow-up reset. Skipping the
+    // enqueue when the write doesn't match (rather than sending it unconditionally) keeps the
+    // reported count from overstating the work, same as resetChunkStateByIds's own contract.
+    const result = await FabFile.updateOne(
+      { _id: f._id, isChunking: { $ne: true } },
       {
         $set: {
-          isChunking: false,
           chunked: false,
           chunkCount: 0,
           vectorized: false,
           vectorizedChunkCount: 0,
           notes: '',
+          error: null,
         },
       }
     );
+    if (result.matchedCount === 0) continue;
     await sqs.send(
       new SendMessageCommand({
         QueueUrl: queueUrl,
         MessageBody: JSON.stringify({ fabFileId: String(f._id), userId: String(f.userId) }),
       })
     );
+    enqueued++;
   }
-  console.log(`Re-enqueued ${files.length} file(s) to fabFileChunkQueue.`);
+  console.log(`Re-enqueued ${enqueued} of ${files.length} file(s) to fabFileChunkQueue.`);
   return 0;
 }
 
@@ -508,41 +529,62 @@ async function main(opts: Options): Promise<number> {
   return ingest(lake, opts);
 }
 
-const argv = yargs(hideBin(process.argv))
-  .option('dir', { type: 'string', describe: 'Directory tree of PDFs to ingest' })
-  .option('slug', { type: 'string', demandOption: true, describe: 'Target data lake slug' })
-  .option('userId', { type: 'string', demandOption: true, describe: 'FabFile owner (lake creator or admin)' })
-  .option('organizationId', { type: 'string', describe: 'Charge storage to this org instead of the user' })
-  .option('concurrency', {
-    type: 'number',
-    default: 4,
-    describe: 'Parallel uploads, clamped to 1-8 (drives objectCreated lambda concurrency)',
-  })
-  .option('limit', { type: 'number', describe: 'Upload at most N files (smoke tests)' })
-  .option('execute', { type: 'boolean', default: false, describe: 'Actually write (default: dry-run)' })
-  .option('status', { type: 'boolean', default: false, describe: 'Read-only pipeline progress report' })
-  .option('requeue-stragglers', {
-    type: 'boolean',
-    default: false,
-    describe: 'Re-enqueue complete-but-unchunked lake files',
-  })
-  .option('requeue-limit', { type: 'number', default: 50, describe: 'Max stragglers to re-enqueue per run' })
-  .parseSync();
+// Guard the CLI entrypoint (#1802 follow-up): without this, importing the module - as a test
+// must, to reach requeueStragglers - parses process.argv through yargs' demandOption'd
+// --slug/--userId and calls process.exit(), killing the test runner.
+//
+// realpath-resolved, NOT the naive `import.meta.url === file://${process.argv[1]}` form: Node's
+// ESM loader canonicalizes import.meta.url (symlinks followed), but process.argv[1] is the raw
+// argv string, so on an invocation path that traverses a symlink (e.g. macOS's /tmp ->
+// /private/tmp) the naive comparison silently evaluates false - the guard skips, nothing prints,
+// and the process exits 0 having done nothing. Verified: pathToFileURL(argv[1]).href alone does
+// NOT fix this (it only closes percent-encoding gaps, not symlink resolution) - realpathSync is
+// the part that actually matters here (PR review finding, reproduced empirically).
+const isMainModule = (() => {
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+})();
 
-main({
-  dir: argv.dir,
-  slug: argv.slug,
-  userId: argv.userId,
-  organizationId: argv.organizationId,
-  concurrency: argv.concurrency,
-  limit: argv.limit,
-  execute: argv.execute,
-  status: argv.status,
-  requeueStragglers: argv['requeue-stragglers'],
-  requeueLimit: argv['requeue-limit'],
-})
-  .then(code => process.exit(code))
-  .catch(err => {
-    console.error(err);
-    process.exit(1);
-  });
+if (isMainModule) {
+  const argv = yargs(hideBin(process.argv))
+    .option('dir', { type: 'string', describe: 'Directory tree of PDFs to ingest' })
+    .option('slug', { type: 'string', demandOption: true, describe: 'Target data lake slug' })
+    .option('userId', { type: 'string', demandOption: true, describe: 'FabFile owner (lake creator or admin)' })
+    .option('organizationId', { type: 'string', describe: 'Charge storage to this org instead of the user' })
+    .option('concurrency', {
+      type: 'number',
+      default: 4,
+      describe: 'Parallel uploads, clamped to 1-8 (drives objectCreated lambda concurrency)',
+    })
+    .option('limit', { type: 'number', describe: 'Upload at most N files (smoke tests)' })
+    .option('execute', { type: 'boolean', default: false, describe: 'Actually write (default: dry-run)' })
+    .option('status', { type: 'boolean', default: false, describe: 'Read-only pipeline progress report' })
+    .option('requeue-stragglers', {
+      type: 'boolean',
+      default: false,
+      describe: 'Re-enqueue complete-but-unchunked lake files',
+    })
+    .option('requeue-limit', { type: 'number', default: 50, describe: 'Max stragglers to re-enqueue per run' })
+    .parseSync();
+
+  main({
+    dir: argv.dir,
+    slug: argv.slug,
+    userId: argv.userId,
+    organizationId: argv.organizationId,
+    concurrency: argv.concurrency,
+    limit: argv.limit,
+    execute: argv.execute,
+    status: argv.status,
+    requeueStragglers: argv['requeue-stragglers'],
+    requeueLimit: argv['requeue-limit'],
+  })
+    .then(code => process.exit(code))
+    .catch(err => {
+      console.error(err);
+      process.exit(1);
+    });
+}

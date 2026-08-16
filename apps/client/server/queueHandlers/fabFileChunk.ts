@@ -220,7 +220,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         // WARN, not log/info: this is a RETURN/swallow path (see queueHandlers/utils.ts's own
         // documented contract), and a benign no-op is still the event an operator triaging a stuck
         // file wants visible above INFO noise.
-        logger.warn(`FabFile ${fabFileId}: chunk claim lost to a successor mid-run - this delivery is a no-op`);
+        // Wording deliberately names both possible causes rather than asserting one (#1802
+        // follow-up): a hard-deleted FabFile and a genuinely-superseded claim both fail the guard
+        // identically, and a DB read to tell them apart was tried and dropped - it ran inside a
+        // catch whose whole contract is "must never fail this delivery," and a soft-deleted file
+        // (the common case) would have been mislabeled as hard-deleted regardless.
+        logger.warn(
+          `FabFile ${fabFileId}: chunk claim lost (a successor claimed it, or the file was removed) - this delivery is a no-op`
+        );
         return null;
       }
 

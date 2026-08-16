@@ -580,8 +580,12 @@ describe('fabFileChunk handler - stale-claim takeover mid-run (#1802 Phase 2)', 
 
   it("logs at WARN, not INFO - a swallow path per queueHandlers/utils.ts's own documented contract", async () => {
     await dispatch(makeEvent(payload), {} as never, mockLogger);
-    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('chunk claim lost to a successor'));
-    expect(mockLogger.log).not.toHaveBeenCalledWith(expect.stringContaining('chunk claim lost to a successor'));
+    // Pins the actual wording this PR changed, not just "chunk claim lost" - that substring is
+    // also present in the OLD (pre-fix) message, so asserting only it would still pass against a
+    // full revert of the reword (round-2 PR review finding, verified: reverting to the old string
+    // keeps this test green unless the "or the file was removed" clause is also asserted).
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('or the file was removed'));
+    expect(mockLogger.log).not.toHaveBeenCalledWith(expect.stringContaining('chunk claim lost'));
   });
 
   // Regression guard for the cross-package instanceof gap: a rejection that is NOT an instance of
