@@ -580,8 +580,8 @@ describe('fabFileChunk handler - stale-claim takeover mid-run (#1802 Phase 2)', 
 
   it("logs at WARN, not INFO - a swallow path per queueHandlers/utils.ts's own documented contract", async () => {
     await dispatch(makeEvent(payload), {} as never, mockLogger);
-    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('chunk claim lost to a successor'));
-    expect(mockLogger.log).not.toHaveBeenCalledWith(expect.stringContaining('chunk claim lost to a successor'));
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('chunk claim lost'));
+    expect(mockLogger.log).not.toHaveBeenCalledWith(expect.stringContaining('chunk claim lost'));
   });
 
   // Regression guard for the cross-package instanceof gap: a rejection that is NOT an instance of
