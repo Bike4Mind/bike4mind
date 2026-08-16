@@ -29,16 +29,20 @@ describe('getDefaultSystemPrompts - triage_router', () => {
     expect(p.content.indexOf('STEP 0')).toBeLessThan(p.content.indexOf('STEP 1'));
   });
 
-  // Guards a deliberate removal, not an oversight. The underspecified step told the model to withhold
-  // retrieval and ask clarifying questions, which cannot happen on the lake sessions this router is
-  // documented to pair with: they force retrieval before the model's turn, so the content is already
-  // in context. Re-adding it silently would restore an instruction that reads as a capability in the
-  // admin editor and changes nothing at runtime. Re-add only alongside a configuration that does not
-  // force retrieval, and measure it there.
-  it('carries no underspecified/withhold-retrieval step, which cannot fire under forced retrieval', () => {
+  // Guards a deliberate removal, not an oversight - see the WHY THERE IS NO UNDERSPECIFIED STEP block
+  // in defaults.ts for the measurements. Re-adding it silently would restore an instruction measured
+  // not to fire, which reads as a capability in the admin editor while changing nothing at runtime.
+  //
+  // Deliberately matches the step's SEMANTICS, not its number. An earlier version asserted `/STEP 2/`,
+  // which was wrong twice over: it pinned the step COUNT, so an unrelated future second step would
+  // fail a test that is about the underspecified step; and it caught only a literal revert, since
+  // renumbering to "STEP 3" or rewording to "hold off on retrieval" slipped through untouched.
+  it('carries no underspecified/withhold-retrieval step, however it is worded or numbered', () => {
     const content = triage()!.content;
-    expect(content).not.toMatch(/STEP 2/);
     expect(content).not.toMatch(/UNDERSPECIFIED/i);
+    expect(content).not.toMatch(/vague/i);
+    expect(content).not.toMatch(/clarifying question/i);
+    expect(content).not.toMatch(/withhold/i);
     expect(content).not.toMatch(/do NOT search/i);
   });
 

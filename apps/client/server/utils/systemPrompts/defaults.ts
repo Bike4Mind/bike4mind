@@ -85,23 +85,35 @@ HOW TO CARRY THIS
  * step 1 instructs the model to use a tool it was never given - which does not fail loudly, it
  * produces retrieval-flavoured prose with no retrieval behind it. Pair the router with a lake.
  *
- * WHY THERE IS NO UNDERSPECIFIED STEP. An earlier revision carried a third step telling the model to
- * withhold retrieval on vague requests and ask 2-4 clarifying questions instead. It was removed
- * because it could not run where the router is actually deployed: the PRECONDITION above says to pair
- * the router with a lake, and a lake session sets `forceKnowledgeRetrieval` unconditionally, so
- * retrieval completes before the model's turn. Measured on production, the retrieved content arrives
- * as a ~3,847-token system prompt against this router's ~384 - step 1 is satisfied by construction and
- * a "do not search yet" instruction has nothing left to withhold. A live A/B on the same lake, with
- * the router bound and unbound, produced no behavioural difference on that step's own worked example.
+ * WHY THERE IS NO UNDERSPECIFIED STEP. An earlier revision carried a third step that told the model
+ * BOTH to withhold retrieval on vague requests ("do NOT search yet", with the reasoning that searching
+ * a vague question returns material which makes a poorly-scoped answer look well-sourced) AND to name
+ * the distinct readings and ask 2-4 clarifying questions. Both halves went, not just the second.
  *
- * Two consequences worth keeping in view before re-adding it. First, the vague-request case is not
- * unhandled: ABSTENTION_PROMPT ships always-on and admin-sourced, and covers naming what is missing
- * rather than guessing - what was lost is specifically the "offer interpretations, ask 2-4 questions"
- * half. Second, an instruction that cannot fire is worse than an absent one, because it reads as a
- * capability in review and in the admin editor while changing nothing at runtime. If forced retrieval
- * ever becomes conditional, re-adding this step is the right move - but re-add it with a measurement
- * on a session that does NOT force retrieval, which is the configuration it was written for and the
- * one no measurement has yet covered.
+ * It was removed because it did not fire in either retrieval mode, measured on production against a
+ * real corpus (n=1 each, `gpt-4.1-2025-04-14`):
+ *   - Retrieval FORCED, which is what a lake session sets at creation: the retrieved content arrives
+ *     as a ~3,847-token system prompt against this router's ~384, so step 1 is satisfied before the
+ *     model reasons and "do not search yet" has nothing left to withhold.
+ *   - Retrieval NOT forced - reachable today, not hypothetical: a user can turn it off on a live
+ *     session without unbinding the router, since `useSetDataLakeMode` sends only
+ *     `forceKnowledgeRetrieval`. That removes the block entirely (systemPrompts 4,957 -> 719) and the
+ *     model still called `search_knowledge_base` of its own accord, which the step forbids.
+ *
+ * One reading is NOT ruled out at n=1: the model may have judged the question specific enough to
+ * search, which would be a WORDING problem rather than a reachability one. That distinction decides
+ * the fix - anyone re-adding an ambiguity instruction should word it differently AND measure it,
+ * rather than restoring this text.
+ *
+ * NOT established, and the case to check first if you are re-adding: no-lake activation. The
+ * PRECONDITION above treats it as reachable, and there `search_knowledge_base` is never offered, so
+ * this was the one retrieval-decision step that could still have functioned. It has never been
+ * measured. Nothing above is evidence about that configuration.
+ *
+ * Two standing reasons not to restore it blind. ABSTENTION_PROMPT ships always-on and admin-sourced
+ * and covers naming what is missing rather than guessing, so the vague-request case is not unhandled.
+ * And an instruction that does not fire is worse than an absent one: it reads as a capability in
+ * review and in the admin editor while changing nothing at runtime.
  */
 function buildTriageRouterPrompt(): DefaultSystemPrompt {
   return {
