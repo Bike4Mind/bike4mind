@@ -1523,6 +1523,46 @@ export default function AdvancedSearchDrawer({ metadata, isLoading = false }: Ad
                 </Box>
               )}
 
+              {/* No-results state: a search ran (results is non-null) but nothing matched -
+                  including the zero-session 200 that has no debug/scores block (#1775). */}
+              {hasSemanticSearch &&
+                !semanticSearch.isSearching &&
+                !isSemanticSearchPending &&
+                !(semanticSearch.debugInfo && semanticSearch.debugInfo.scores.length > 0) && (
+                  <Box
+                    sx={{
+                      flex: 1,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 2,
+                    }}
+                  >
+                    <Box
+                      sx={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: '10px',
+                        bgcolor: theme => (theme.palette.mode === 'dark' ? brandAlpha[100][12] : brandAlpha[400][8]),
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <SearchIcon sx={{ fontSize: 18, color: 'text.tertiary' }} />
+                    </Box>
+                    <Box sx={{ textAlign: 'center' }}>
+                      <Typography sx={{ fontSize: '13px', color: 'text.tertiary', lineHeight: 1.5 }}>
+                        No results found
+                      </Typography>
+                      <Typography sx={{ fontSize: '13px', color: 'text.tertiary', lineHeight: 1.5 }}>
+                        Try a different query or adjust your filters
+                      </Typography>
+                    </Box>
+                  </Box>
+                )}
+
               {/* Search results list */}
               {semanticSearch.debugInfo && semanticSearch.debugInfo.scores.length > 0 && (
                 <Box sx={{ px: 3, pb: 2 }}>
