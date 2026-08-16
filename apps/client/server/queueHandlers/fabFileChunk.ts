@@ -84,11 +84,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   // a producer pre-claim and a consumer token is what broke this path repeatedly - the producer marks
   // a file busy, and the consumer then cannot tell its own reservation from someone else's run.
   //
-  // It is NOT the only guard for the whole run, and the distinction matters if you change either
-  // half: chunkFabfile writes isChunking:false alongside chunked:true partway through
-  // (fabFileService/chunk.ts) - BEFORE its destructive delete - so from that write onward a duplicate
-  // is turned away by the `chunked` guard below rather than by this CAS. Pre-existing, and the
-  // handoff holds because whichever of the two is live rejects the duplicate.
+  // chunkFabfile (#1802) never writes isChunking or chunkClaimedAt itself - the claim is held for
+  // the ENTIRE run and released only by this handler's own `finally` below. A second, independent
+  // guard lives inside chunkFabfile itself: immediately before any write, it re-confirms this run's
+  // chunkClaimedAt stamp still matches (a guarded write, not a read - see chunk.ts), which is what
+  // catches a run that outlived the 30-minute stale window and was already taken over by a
+  // successor.
   //
   // The three arms are: free (not being chunked), or a claim stale past CHUNK_CLAIM_STALE_MS (a
   // worker hard-killed before its finally), or the null-stamp backfill arm for files stuck

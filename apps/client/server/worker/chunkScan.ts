@@ -16,8 +16,14 @@ export const CHUNK_SCAN_BATCH = 50;
 
 /** A file claimed for chunking (isChunking:true) longer ago than this is treated as a stranded
  * claim - a worker hard-killed (OOM/timeout/deploy) before its `finally` cleared the flag - and is
- * eligible for rescue. Must exceed the chunk handler's 13-minute timeout (infra/queues.ts) so a
- * legitimately in-flight large file is never reclaimed mid-run and double-processed. */
+ * eligible for rescue. Chosen to exceed the chunk handler's 13-minute hosted timeout
+ * (infra/queues.ts), so on hosted a legitimately in-flight run is never reclaimed at all. Self-host
+ * has no handler timeout, so a genuinely long run CAN be reclaimed there before it finishes - but
+ * that no longer risks double-processing on either deployment: chunkFabfile's guarded-write
+ * ownership check (#1802 Phase 2, chunk.ts) re-confirms this stamp before any write and aborts as a
+ * benign no-op if a successor already took over. This value only trades off how soon a genuinely
+ * stranded claim gets rescued against how long a reclaimed-but-still-running self-host worker keeps
+ * doing now-discarded work before hitting that check. */
 export const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
 
 /**

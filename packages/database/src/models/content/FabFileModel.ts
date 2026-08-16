@@ -1265,11 +1265,6 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // Returns the ids actually reset - never the input set - so the caller enqueues exactly what it
     // changed and its reported count cannot overstate the work.
     //
-    // KNOWN RESIDUAL (#1802): this does not close every double-run window. chunkFabfile persists
-    // isChunking:false + chunked:true partway through its own run, BEFORE its destructive delete, so
-    // during that window a file looks idle and repaired: the precondition passes, the reset clears
-    // `chunked`, and a second worker's guard is disarmed. That window is chunkFabfile's to close.
-    //
     // `error` MUST be cleared with the rest. A file that chunked then FAILED vectorization carries a
     // non-empty error with chunked:true, and detection doesn't check error, so it can land in a wave.
     // Leaving it set would strand the file: chunked:false + a stale error is invisible to both
