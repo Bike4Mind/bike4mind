@@ -79,10 +79,24 @@ vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   isBatchComplete: (...a: unknown[]) => h.isBatchComplete(...a),
   deferFailureIfRetryable: (...a: unknown[]) => h.deferFailureIfRetryable(...a),
 }));
-vi.mock('@bike4mind/common', () => ({
-  isSupportedEmbeddingModel: vi.fn(() => true),
-  DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT: 50,
-}));
+vi.mock('@bike4mind/common', () => {
+  class ChunkClaimLostError extends Error {
+    constructor(public fabFileId: string) {
+      super(`Chunk claim for FabFile ${fabFileId} was lost to a successor mid-run`);
+      this.name = 'ChunkClaimLostError';
+    }
+  }
+  return {
+    isSupportedEmbeddingModel: vi.fn(() => true),
+    DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT: 50,
+    ChunkClaimLostError,
+    // Mirrors the REAL dual-check in errors.ts exactly (not just re-declaring the class) - an
+    // `instanceof`-only mock here would make F2's regression test below tautological, the same gap
+    // the real bug would hide behind.
+    isChunkClaimLostError: (err: unknown): boolean =>
+      Boolean(err && (err instanceof ChunkClaimLostError || (err as Error).name === 'ChunkClaimLostError')),
+  };
+});
 vi.mock('@bike4mind/utils', () => ({ BadRequestError: class BadRequestError extends Error {} }));
 vi.mock('@bike4mind/fab-pipeline', () => ({
   FabFileChunkSearchIndex: { deleteByFabFileId: vi.fn() },
@@ -98,6 +112,7 @@ const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(),
 import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from './sqsDelivery';
 import { NO_EXTRACTABLE_TEXT_NOTE_PREFIX } from '@server/worker/chunkScan';
 import { dispatch } from './fabFileChunk';
+import { ChunkClaimLostError } from '@bike4mind/common';
 
 const makeEvent = (body: Record<string, unknown>) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
 const payload = { fabFileId: 'ff1', userId: 'u1' };
@@ -511,5 +526,72 @@ describe('fabFileChunk handler - single-run claim (human review)', () => {
     // Critically: the finally must NOT run for a delivery that never won the claim, or it would
     // release the ACTUAL owner's claim mid-run.
     expect(h.fabFileUpdateOne).not.toHaveBeenCalled();
+  });
+
+  it("threads this run's claimed chunkClaimedAt stamp into chunkFabfile", async () => {
+    h.fabFileFindOneAndUpdate.mockResolvedValue({ _id: 'ff1' });
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    const [, claimUpdate] = h.fabFileFindOneAndUpdate.mock.calls[0];
+    expect(h.chunkFabfile).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ chunkClaimedAt: claimUpdate.$set.chunkClaimedAt }),
+      expect.anything()
+    );
+  });
+});
+
+describe('fabFileChunk handler - stale-claim takeover mid-run (#1802 Phase 2)', () => {
+  // chunkFabfile's guarded-write ownership check throws ChunkClaimLostError when a successor has
+  // already taken over this file's claim. This must be treated as a benign no-op - not a failure,
+  // not a retry, not DLQ-bound - since the successor is the one actually finishing the file.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1' });
+    h.fabFileFindOneAndUpdate.mockResolvedValue({ _id: 'ff1' });
+    h.chunkFabfile.mockRejectedValue(new ChunkClaimLostError('ff1'));
+  });
+
+  it('resolves successfully instead of rejecting', async () => {
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+  });
+
+  it('does not defer/retry, mark the file failed, or touch batch failure accounting', async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+    expect(h.updateFileStatus).not.toHaveBeenCalled();
+    expect(h.incrementCounters).not.toHaveBeenCalled();
+  });
+
+  it('does not dispatch vectorize work or batch-progress notifications for this stale run', async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(h.claimFileStatus).not.toHaveBeenCalled();
+  });
+
+  it("still releases this run's own claim stamp in the finally (a safe no-op since the successor already re-stamped it)", async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith(
+      { _id: 'ff1', chunkClaimedAt: expect.any(Date) },
+      { $set: { isChunking: false } }
+    );
+  });
+
+  it("logs at WARN, not INFO - a swallow path per queueHandlers/utils.ts's own documented contract", async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('chunk claim lost to a successor'));
+    expect(mockLogger.log).not.toHaveBeenCalledWith(expect.stringContaining('chunk claim lost to a successor'));
+  });
+
+  // Regression guard for the cross-package instanceof gap: a rejection that is NOT an instance of
+  // this test file's own mocked ChunkClaimLostError class - only carrying the same `.name` - must
+  // still be treated as the benign no-op, exactly as it would be if @bike4mind/common were ever
+  // resolved as two distinct module realms in production. An instanceof-only check fails this.
+  it('still treats a same-named-but-different-realm error as the benign no-op', async () => {
+    h.chunkFabfile.mockRejectedValue(Object.assign(new Error('cross-realm'), { name: 'ChunkClaimLostError' }));
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
   });
 });

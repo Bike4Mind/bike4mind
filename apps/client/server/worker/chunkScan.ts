@@ -16,8 +16,30 @@ export const CHUNK_SCAN_BATCH = 50;
 
 /** A file claimed for chunking (isChunking:true) longer ago than this is treated as a stranded
  * claim - a worker hard-killed (OOM/timeout/deploy) before its `finally` cleared the flag - and is
- * eligible for rescue. Must exceed the chunk handler's 13-minute timeout (infra/queues.ts) so a
- * legitimately in-flight large file is never reclaimed mid-run and double-processed. */
+ * eligible for rescue. Chosen to exceed the chunk handler's 13-minute hosted timeout
+ * (infra/queues.ts), so on hosted a legitimately in-flight run is never reclaimed at all. Self-host
+ * has no handler timeout, so a genuinely long run CAN be reclaimed there before it finishes - but
+ * that no longer risks double-processing on either deployment: chunkFabfile's guarded-write
+ * ownership check (#1802 Phase 2, chunk.ts) re-confirms this stamp before any write and aborts as a
+ * benign no-op if a successor already took over. This value only trades off how soon a genuinely
+ * stranded claim gets rescued against how long a reclaimed-but-still-running self-host worker keeps
+ * doing now-discarded work before hitting that check.
+ *
+ * Two hosted consumers of this cutoff, not one: the daily `dataLakeBatchReconcile` sweep, AND
+ * fabFileChunk.ts's own CAS re-evaluating it on every redelivery - so the practical hosted rescue
+ * path is usually SQS's 60-minute visibility timeout re-delivering the message, which then sees the
+ * claim as stale and proceeds, well before the daily sweep would ever see it. That also makes this
+ * value load-bearing in the other direction: it must stay BELOW the queue's 60-minute visibility
+ * timeout, or a redelivery would still see an in-flight-looking claim and decline, burning the
+ * retry budget toward the DLQ instead of rescuing.
+ *
+ * Considered lowering this now that a claim is held for the WHOLE run (a hard-killed worker is
+ * stuck claimed for up to this long, not just from wherever it died to its own premature release,
+ * which no longer exists). Left at 30 minutes: since a too-early reclaim is now safe rather than
+ * corrupting, the only cost of leaving this long is rescue latency for a genuinely stranded claim,
+ * not correctness - and there's no production crash-rate data yet to justify tuning it against.
+ * Lowering it further wouldn't meaningfully speed up hosted rescue anyway (SQS redelivery already
+ * dominates), so the tradeoff is really self-host-only. */
 export const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
 
 /**

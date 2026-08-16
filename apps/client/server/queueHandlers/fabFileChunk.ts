@@ -24,7 +24,7 @@ import {
   deferFailureIfRetryable,
 } from '@server/queueHandlers/dataLakeBatchProgress';
 import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
-import { isSupportedEmbeddingModel } from '@bike4mind/common';
+import { isChunkClaimLostError, isSupportedEmbeddingModel } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { NO_EXTRACTABLE_TEXT_NOTE_PREFIX, CHUNK_CLAIM_STALE_MS } from '@server/worker/chunkScan';
 import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
@@ -84,11 +84,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   // a producer pre-claim and a consumer token is what broke this path repeatedly - the producer marks
   // a file busy, and the consumer then cannot tell its own reservation from someone else's run.
   //
-  // It is NOT the only guard for the whole run, and the distinction matters if you change either
-  // half: chunkFabfile writes isChunking:false alongside chunked:true partway through
-  // (fabFileService/chunk.ts) - BEFORE its destructive delete - so from that write onward a duplicate
-  // is turned away by the `chunked` guard below rather than by this CAS. Pre-existing, and the
-  // handoff holds because whichever of the two is live rejects the duplicate.
+  // chunkFabfile (#1802) never writes isChunking or chunkClaimedAt itself - the claim is held for
+  // the ENTIRE run and released only by this handler's own `finally` below. A second, independent
+  // guard lives inside chunkFabfile itself: immediately before any write, it re-confirms this run's
+  // chunkClaimedAt stamp still matches (a guarded write, not a read - see chunk.ts), which is what
+  // catches a run that outlived the 30-minute stale window and was already taken over by a
+  // successor.
   //
   // The three arms are: free (not being chunked), or a claim stale past CHUNK_CLAIM_STALE_MS (a
   // worker hard-killed before its finally), or the null-stamp backfill arm for files stuck
@@ -193,6 +194,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           fabFileId,
           embeddingModel: defaultEmbeddingModel,
           passageTokenTarget: requestedPassageTokenTarget,
+          chunkClaimedAt: claimedAt,
         },
         {
           db: {
@@ -210,6 +212,18 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         }
       )
     ).catch(async (err: unknown) => {
+      // A stale-claim takeover already reassigned this file to a successor mid-run (#1802 Phase
+      // 2) - not a failure, so this delivery must NOT count toward batch failure accounting or
+      // reach the DLQ. Returning null (rather than throwing) lets SQS delete the message as
+      // successfully processed; the successor is the one actually finishing this file.
+      if (isChunkClaimLostError(err)) {
+        // WARN, not log/info: this is a RETURN/swallow path (see queueHandlers/utils.ts's own
+        // documented contract), and a benign no-op is still the event an operator triaging a stuck
+        // file wants visible above INFO noise.
+        logger.warn(`FabFile ${fabFileId}: chunk claim lost to a successor mid-run - this delivery is a no-op`);
+        return null;
+      }
+
       const errorMessage = err instanceof Error ? err.message : String(err);
 
       // Only account a failure into the batch/file state on the LAST SQS delivery attempt -
@@ -261,6 +275,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       }
       throw err;
     });
+
+    // The claim was lost to a successor mid-run (see the catch above) - that successor owns
+    // finishing this file (notifications, batch progress, vectorize dispatch), so this delivery
+    // stops here rather than acting on a stale/absent chunk result.
+    if (fabFileChunks === null) {
+      return;
+    }
 
     logger.updateMetadata({
       fabFileChunksCount: fabFileChunks.length,
