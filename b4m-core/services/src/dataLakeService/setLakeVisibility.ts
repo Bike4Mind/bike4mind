@@ -4,6 +4,8 @@ import { canManageLake, isEffectiveOwner, type ManageActor } from './manageRule'
 import { loadActiveLakeGrants } from './authorizeLakeManage';
 import { findCollidingPrefixLakes } from './tagPrefixCollision';
 import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
+import { diffLakeConfig } from './diffLakeConfig';
+import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 
 /**
  * Private = owner-only (no org, not public); organization = scoped to the actor's own org;
@@ -11,8 +13,14 @@ import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
  */
 export type LakeVisibility = 'private' | 'organization' | 'public';
 
-interface SetLakeVisibilityAdapters {
-  db: {
+interface SetLakeVisibilityAdapters extends LakeConfigAuditAdapters {
+  // The event repo is REQUIRED here, unlike the optional shape LakeConfigAuditAdapters carries
+  // for recomputeLakeStats: every caller of this service is an API route (there is exactly one
+  // per service), so nothing is spared by making it optional and a route that forgot to wire it
+  // would go dark silently - the one failure mode an audit must not have. Required here turns
+  // that into a compile error.
+  db: LakeConfigAuditAdapters['db'] & {
+    lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'find'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
   };
@@ -42,7 +50,7 @@ export const setLakeVisibility = async (
   actor: ManageActor & { organizationId?: string },
   dataLakeId: string,
   visibility: LakeVisibility,
-  { db }: SetLakeVisibilityAdapters
+  { db, logger }: SetLakeVisibilityAdapters
 ): Promise<IDataLakeDocument> => {
   const existing = await db.dataLakes.findById(dataLakeId);
   if (!existing) {
@@ -138,5 +146,13 @@ export const setLakeVisibility = async (
   if (!updated) {
     throw new NotFoundError('Data lake not found after visibility change');
   }
+
+  // Reuses the grants already loaded for the gate above, so the recorded rung is the one that
+  // actually authorized this write rather than a second, later read of the grant set.
+  await recordLakeConfigChange(
+    { actor, lake: existing, grants, action: 'visibility', changes: diffLakeConfig(existing, updated) },
+    { db, logger }
+  );
+
   return updated;
 };
