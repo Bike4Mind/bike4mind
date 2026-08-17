@@ -67,8 +67,10 @@ export const KnowledgeChunkControls: React.FC<IKnowledgeChunkControlsProps> = ({
             onBlur={e => {
               // Ceiling matches the route's own limit (POST /api/files/chunk rejects above
               // OVERSIZED_PASSAGE_TOKEN_THRESHOLD), so this input can't suggest a value the
-              // policy will not honor.
-              const next = Math.min(Number(e.target.value), OVERSIZED_PASSAGE_TOKEN_THRESHOLD);
+              // policy will not honor. Falls back to the last valid size on a blank/non-numeric
+              // blur, rather than committing NaN.
+              const parsed = Number(e.target.value);
+              const next = Number.isFinite(parsed) ? Math.min(parsed, OVERSIZED_PASSAGE_TOKEN_THRESHOLD) : chunkSize;
               setChunkSizeDisplay(`${next} tokens`);
               setChunkSize(next);
             }}

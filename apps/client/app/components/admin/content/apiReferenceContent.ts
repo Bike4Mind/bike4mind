@@ -263,8 +263,8 @@ Initiates the chunking and embedding pipeline for a file.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| fileId | string | Yes | File ID to chunk |
-| chunkSize | integer | No | Passage target in tokens. Must be a positive integer, capped at ${OVERSIZED_PASSAGE_TOKEN_THRESHOLD}. |
+| fabFileId | string | Yes | File ID to chunk |
+| chunkSize | integer | Yes | Passage target in tokens. Must be a positive integer, capped at ${OVERSIZED_PASSAGE_TOKEN_THRESHOLD}. |
 
 #### File Endpoints Summary
 
