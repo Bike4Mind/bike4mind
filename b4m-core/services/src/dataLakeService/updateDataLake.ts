@@ -104,12 +104,31 @@ export const updateDataLake = async (
     throw new NotFoundError('Data lake not found after update');
   }
 
-  // Diffed against what actually LANDED, not against the projection the early-out used: the
-  // projection is what we intended to write, and the stored document is what the lake will answer
-  // from. This is the only place in the codebase where both halves exist - the route sees the
-  // result alone - which is why the diff is computed here and never there.
+  // Diffed against the INTENDED post-write document, never against `updated`. Both describe this
+  // write, but `updated` is whatever the collection happened to hold at that instant: a second
+  // writer's `$set` landing between the `findById` above and this update is included in the
+  // `findOneAndUpdate` result too, and diffing it would record THAT writer's field changes under
+  // THIS caller's principal and manage rung - an audit row naming the wrong person, which is worse
+  // than a missing one. The projection is bounded to the keys this caller supplied, so it can only
+  // ever describe this caller's own change. Under mongoose `$set` semantics it is also what the
+  // write asks for, so nothing real is lost by not reading the result back.
+  //
+  // Built key-by-key rather than by spreading `writes`, for the same reason the no-op gate skips
+  // `undefined` above: a key present with an `undefined` value spreads OVER the existing one and
+  // reads as a deliberate clear, inventing a change out of a field the caller merely omitted.
+  const projected: Record<string, unknown> = { ...storedValues };
+  for (const [key, value] of Object.entries(writes)) {
+    if (value !== undefined) projected[key] = value;
+  }
+
   await recordLakeConfigChange(
-    { actor, lake: existing, grants, action: 'update', changes: diffLakeConfig(existing, updated) },
+    {
+      actor,
+      lake: existing,
+      grants,
+      action: 'update',
+      changes: diffLakeConfig(existing, projected as Partial<IDataLakeDocument>),
+    },
     { db, logger }
   );
 
