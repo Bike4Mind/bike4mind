@@ -1638,6 +1638,33 @@ describe('Context Management Tests', () => {
         expect(meta.excludedOlderQuestCount).toBe(1);
       });
 
+      it('does not count replayed tool calls toward the budget for a Gemini model, which never replays them', async () => {
+        // Same fixture as the test above, but for a Gemini model - Priority 2 replay is disabled
+        // for Gemini, so the same heavy tool payload must not count against the verbatim budget.
+        const heavyToolItem = (n: number) =>
+          makeItem(n, {
+            prompt: `prompt ${n}`,
+            structuredReplies: undefined,
+            promptMeta: {
+              functionCalls: [
+                { id: `toolu_${n}`, name: 'web_search', parameters: { blob: 'y'.repeat(4000) }, returnValue: 'ok' },
+              ],
+            },
+          });
+
+        const items = [makeItem(3), heavyToolItem(2), heavyToolItem(1)];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, count, meta] = await fetchAndProcessPreviousMessages(makeSession(), 10, {
+          db,
+          verbatimTokenBudget: 1500,
+          model: 'gemini-3-pro',
+        });
+
+        expect(count).toBe(2);
+        expect(meta.excludedOlderQuestCount).toBe(0);
+      });
+
       it('always keeps the most recent turn even if it alone exceeds the budget', async () => {
         const items = [makeBigItem(3), makeBigItem(2), makeBigItem(1)];
         const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };

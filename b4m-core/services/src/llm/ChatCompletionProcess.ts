@@ -282,7 +282,7 @@ export const KNOWLEDGE_SEARCH_TOOL_NAME = 'search_knowledge_base';
  * fraction of the raw window. Overridable per-deploy via the
  * ContextVerbatimWindowFraction admin setting.
  */
-const DEFAULT_VERBATIM_WINDOW_FRACTION = 0.55;
+export const DEFAULT_VERBATIM_WINDOW_FRACTION = 0.55;
 
 /**
  * Non-history input competes with the verbatim window for the same safe-input
@@ -294,7 +294,7 @@ const DEFAULT_VERBATIM_WINDOW_FRACTION = 0.55;
  * conservative floors used only to pick the summary boundary; the exact tokenizer
  * still enforces the real budget downstream in buildAndSortMessages.
  */
-const SYSTEM_PROMPT_RESERVE_TOKENS = 1200; // persona + artifact/help/date guidance, typical floor
+export const SYSTEM_PROMPT_RESERVE_TOKENS = 1200; // persona + artifact/help/date guidance, typical floor
 const PER_TOOL_SCHEMA_RESERVE_TOKENS = 120; // rough serialized {name,description,input_schema} per enabled tool
 
 /** Coerce an admin-setting value to a fraction in (0, 1], falling back when invalid. */

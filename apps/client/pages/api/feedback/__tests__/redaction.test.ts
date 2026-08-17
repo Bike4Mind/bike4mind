@@ -11,12 +11,16 @@ import { createMocks } from 'node-mocks-http';
 
 const mockRefs = vi.hoisted(() => ({
   postHandler: null as null | ((req: unknown, res: unknown) => unknown),
+  getHandler: null as null | ((req: unknown, res: unknown) => unknown),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chain: any = {
-    get: () => chain,
+    get: (fn: unknown) => {
+      mockRefs.getHandler = fn as (req: unknown, res: unknown) => unknown;
+      return chain;
+    },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     post: (fn: any) => {
       mockRefs.postHandler = fn;
@@ -28,10 +32,12 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 const savedFeedback = { id: 'fb1' };
 const mockSave = vi.fn().mockResolvedValue(undefined);
+const mockFind = vi.fn();
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function FeedbackModelMock(this: any, data: unknown) {
   Object.assign(this, data, { id: savedFeedback.id, save: mockSave });
 }
+FeedbackModelMock.find = mockFind;
 
 vi.mock('@bike4mind/database', () => ({
   FeedbackModel: FeedbackModelMock,
@@ -116,5 +122,27 @@ describe('POST /api/feedback - redacts tool output before third-party egress', (
     expect(mockEmailPublish).toHaveBeenCalled();
     const emailBody = mockEmailPublish.mock.calls[0][0].body as string;
     expect(emailBody).not.toContain('PRIVATE TOOL OUTPUT');
+  });
+});
+
+describe('GET /api/feedback - redacts tool output before returning it to an admin', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('strips returnValue from every reporters functionCalls', async () => {
+    mockFind.mockResolvedValue([
+      {
+        toJSON: () => ({ id: 'fb1', promptMeta: PROMPT_META_WITH_TOOL_OUTPUT }),
+      },
+    ]);
+    const { req, res } = createMocks({ method: 'GET' });
+    (req as unknown as { ability: { can: () => boolean } }).ability = { can: () => true };
+
+    await mockRefs.getHandler!(req, res);
+
+    const body = JSON.stringify(res._getJSONData());
+    expect(body).not.toContain('PRIVATE TOOL OUTPUT');
+    expect(body).toContain('web_search');
   });
 });

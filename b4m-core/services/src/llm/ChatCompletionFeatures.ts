@@ -2,8 +2,10 @@ import {
   ChatCompletionCreateInput,
   ChatCompletionCreateInputSchema,
   ChatModels,
+  CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
   ContextTelemetry,
   ContextTelemetryAlerts,
+  DEFAULT_UNKNOWN_CONTEXT_WINDOW,
   IConnection,
   IChatHistoryItemDocument,
   IMessage,
@@ -83,7 +85,11 @@ import { MongoAbility } from '@casl/ability';
 import mongoose from 'mongoose';
 import { z } from 'zod';
 import { GetEffectiveApiKeyAdapters } from '@bike4mind/auth/apiKeyService';
-import { ChatCompletionProcess } from './ChatCompletionProcess';
+import {
+  ChatCompletionProcess,
+  DEFAULT_VERBATIM_WINDOW_FRACTION,
+  SYSTEM_PROMPT_RESERVE_TOKENS,
+} from './ChatCompletionProcess';
 import { MCPClient } from '@bike4mind/mcp';
 import uniq from 'lodash/uniq.js';
 
@@ -881,9 +887,26 @@ export class QuestMasterFeature implements ChatCompletionFeature {
       // is what gates Priority 2 tool replay for Gemini (see fetchAndProcessPreviousMessages's own
       // doc comment) - this call site went live without it (missed sibling of the one in
       // ChatCompletionProcess.ts), so the flag is derived from the model id, not opt-in per caller.
+      //
+      // verbatimTokenBudget bounds the history that createQuestPlan later splices in whole
+      // (QuestMaster has no downstream trim of its own). Unlike ChatCompletionProcess.ts's own
+      // budget, this can't size against the real model's context window - resolving ModelInfo here
+      // would mean threading the async model catalog into a code path that doesn't otherwise need
+      // it - so it reasons against the conservative unknown-model floor instead. That is smaller
+      // than most real windows, so this trims somewhat earlier than necessary, never later.
+      const verbatimTokenBudget = Math.floor(
+        Math.max(
+          0,
+          DEFAULT_UNKNOWN_CONTEXT_WINDOW -
+            CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS -
+            SYSTEM_PROMPT_RESERVE_TOKENS -
+            Math.ceil(message.length / 4)
+        ) * DEFAULT_VERBATIM_WINDOW_FRACTION
+      );
       const [conversationHistory] = await fetchAndProcessPreviousMessages(session, historyCount, {
         db: this.chatCompletion.db,
         model,
+        verbatimTokenBudget,
       });
 
       this.logger.log(`QuestMaster: Fetched ${conversationHistory.length} history messages for context`);

@@ -5,6 +5,7 @@ import {
   IOrganizationDocument,
   PromptMetaZodSchema,
   redactFunctionCallsForViewer,
+  redactPromptMetaForViewer,
 } from '@bike4mind/common';
 import { logEvent } from '@server/utils/analyticsLog';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
@@ -42,7 +43,16 @@ const handler = baseApi()
       throw new NotFoundError('Feedback not found');
     }
 
-    return res.json(feedback);
+    // Same cross-user exposure admin/model-logs.ts redacts: this route serves every reporter's
+    // feedback to any admin, not just their own, so functionCalls[].returnValue must be stripped
+    // here too. .toJSON() first - spreading a hydrated Mongoose subdocument leaks the unredacted
+    // value back in through its _doc/$__ internals.
+    const redactedFeedback = feedback.map(doc => {
+      const plain = doc.toJSON();
+      return { ...plain, promptMeta: redactPromptMetaForViewer(plain.promptMeta, false) };
+    });
+
+    return res.json(redactedFeedback);
   })
   .post(async (req, res) => {
     const newFeedbackData = CreateFeedbackRequestSchema.parse(req.body);

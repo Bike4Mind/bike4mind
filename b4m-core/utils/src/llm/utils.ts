@@ -337,13 +337,16 @@ const estimateMessagesTokens = (messages: IMessage[]): number =>
  * staying synchronous (no N async tokenizer calls over a long history). Mirrors
  * the fields the conversion below actually emits into the prompt.
  */
-function estimateQuestTokenLength(item: {
-  prompt?: string;
-  replies?: string[];
-  structuredReplies?: unknown[];
-  toolResults?: unknown[];
-  promptMeta?: { functionCalls?: RecordedFunctionCall[] };
-}): number {
+function estimateQuestTokenLength(
+  item: {
+    prompt?: string;
+    replies?: string[];
+    structuredReplies?: unknown[];
+    toolResults?: unknown[];
+    promptMeta?: { functionCalls?: RecordedFunctionCall[] };
+  },
+  disableToolReplay = false
+): number {
   const parts: string[] = [item.prompt ?? ''];
   if (item.structuredReplies?.length) {
     parts.push(JSON.stringify(item.structuredReplies));
@@ -354,8 +357,10 @@ function estimateQuestTokenLength(item: {
     parts.push(JSON.stringify(item.toolResults));
   }
   // Priority 2 replays these as tool_use/tool_result blocks, and the serialized parameters can
-  // dwarf the text reply. Only counted when it will actually be taken (structuredReplies wins).
-  if (!item.structuredReplies?.length) {
+  // dwarf the text reply. Only counted when it will actually be taken (structuredReplies wins,
+  // and a backend with replay disabled - Gemini - never takes this branch either, so its window
+  // shouldn't shrink to make room for a payload it will never receive).
+  if (!item.structuredReplies?.length && !disableToolReplay) {
     const toolCalls = replayableToolCalls(item.promptMeta?.functionCalls);
     if (toolCalls.length) parts.push(JSON.stringify(toolCalls));
   }
@@ -595,7 +600,7 @@ export async function fetchAndProcessPreviousMessages(
     let usedTokens = 0;
     let keepFromIndex = 0;
     for (let i = chatHistoryItems.length - 1; i >= 0; i--) {
-      usedTokens += estimateQuestTokenLength(chatHistoryItems[i]);
+      usedTokens += estimateQuestTokenLength(chatHistoryItems[i], disableToolReplay);
       // Never drop the most recent turn (i === length-1), even if oversized.
       if (usedTokens > verbatimTokenBudget && i < chatHistoryItems.length - 1) {
         keepFromIndex = i + 1;
