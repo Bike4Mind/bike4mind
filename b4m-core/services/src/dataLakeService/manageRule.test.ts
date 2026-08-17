@@ -5,6 +5,7 @@ import {
   isEffectiveOwner,
   isLakeCreator,
   resolveEffectiveOwnerIds,
+  resolveLakeManageRung,
   type LakeGrant,
   type ManageActor,
 } from './manageRule';
@@ -129,5 +130,86 @@ describe('canManageLake', () => {
 
   it('fails closed on a blank identity even for a blank-creator lake', () => {
     expect(canManageLake(lake(''), actor({ userId: '' }))).toBe(false);
+  });
+});
+
+describe('resolveLakeManageRung', () => {
+  it('names each rung that canManageLake collapses to true', () => {
+    expect(resolveLakeManageRung(lake('creator'), actor({ isAdmin: true, userId: 'anyone' }))).toBe('platform-admin');
+    expect(resolveLakeManageRung(lake('creator'), actor({ userId: 'creator' }))).toBe('creator');
+    expect(
+      resolveLakeManageRung(lake('creator'), actor({ userId: 'newOwner' }), [grant('user', 'newOwner', 'owner')])
+    ).toBe('grant-owner');
+    expect(resolveLakeManageRung(lake('creator'), actor({ userId: 'cur' }), [grant('user', 'cur', 'curator')])).toBe(
+      'grant-curator'
+    );
+    expect(
+      resolveLakeManageRung(lake('creator', 'org-1'), actor({ userId: 'admin', administeredOrgIds: ['org-1'] }))
+    ).toBe('org-admin');
+    expect(
+      resolveLakeManageRung(lake('creator'), actor({ userId: 'admin', administeredOrgIds: ['org-2'] }), [
+        grant('organization', 'org-2', 'curator'),
+      ])
+    ).toBe('org-grant');
+  });
+
+  it('returns null for an actor who cannot manage the lake at all', () => {
+    expect(resolveLakeManageRung(lake('creator'), actor({ userId: 'stranger' }))).toBeNull();
+    expect(resolveLakeManageRung(lake('creator'), actor({ userId: '' }))).toBeNull();
+    // A reader grant is read access, never management.
+    expect(resolveLakeManageRung(lake('creator'), actor({ userId: 'r' }), [grant('user', 'r', 'reader')])).toBeNull();
+  });
+
+  // The split isEffectiveOwner deliberately does NOT make: after a transfer, "the original author"
+  // and "whoever ownership was moved to" are different answers to "who did this".
+  it('reports the superseded creator as no rung at all once an owner grant exists', () => {
+    const grants = [grant('user', 'newOwner', 'owner')];
+    expect(resolveLakeManageRung(lake('creator'), actor({ userId: 'creator' }), grants)).toBeNull();
+  });
+
+  it('reports the demoted-to-curator creator as grant-curator, not creator', () => {
+    const grants = [grant('user', 'newOwner', 'owner'), grant('user', 'creator', 'curator')];
+    expect(resolveLakeManageRung(lake('creator'), actor({ userId: 'creator' }), grants)).toBe('grant-curator');
+  });
+
+  it('reports the MOST privileged rung when several apply - what actually let them do it', () => {
+    // A platform admin who also owns the lake could have acted either way; the admin rung is the
+    // one worth surfacing, because it is the one with no standing relationship to the lake.
+    const rung = resolveLakeManageRung(lake('creator', 'org-1'), {
+      userId: 'creator',
+      isAdmin: true,
+      administeredOrgIds: ['org-1'],
+    });
+    expect(rung).toBe('platform-admin');
+  });
+
+  // The two functions must agree in BOTH directions, or a new rung added to canManageLake without
+  // one here would silently record every write under an older rung.
+  it('agrees with canManageLake on every actor/grant combination', () => {
+    const lakes = [lake('creator'), lake('creator', 'org-1'), lake('')];
+    const actors: ManageActor[] = [
+      actor({ userId: 'creator' }),
+      actor({ userId: 'stranger' }),
+      actor({ userId: 'admin', isAdmin: true }),
+      actor({ userId: '' }),
+      actor({ userId: 'orgAdmin', administeredOrgIds: ['org-1'] }),
+      actor({ userId: 'orgAdmin', administeredOrgIds: ['org-2'] }),
+    ];
+    const grantSets: LakeGrant[][] = [
+      [],
+      [grant('user', 'stranger', 'owner')],
+      [grant('user', 'stranger', 'curator')],
+      [grant('user', 'stranger', 'reader')],
+      [grant('organization', 'org-2', 'owner')],
+      [grant('organization', 'org-2', 'reader')],
+    ];
+
+    for (const l of lakes) {
+      for (const a of actors) {
+        for (const g of grantSets) {
+          expect(resolveLakeManageRung(l, a, g) !== null).toBe(canManageLake(l, a, g));
+        }
+      }
+    }
   });
 });
