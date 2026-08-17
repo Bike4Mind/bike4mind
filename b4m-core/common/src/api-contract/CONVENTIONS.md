@@ -172,9 +172,10 @@ for the whole window. Removing an alias is a major-version change.
   old path stays and keeps working.
 - The other roots in the tree (`/api/ai/v1`, `/api/voice/v2`, `/api/overwatch/v1`) are
   frozen, as is unversioned `/api/*`. They keep serving; nothing new is added to them.
-- `LEGACY_PUBLIC_PATHS` in `assertContractConventions.ts` is the baseline: the six
-  already-published paths that predate this rule. **The list is frozen - entries are only
-  ever removed.** Adding to it is the thing this convention exists to prevent.
+- `LEGACY_PUBLIC_PATHS` in `assertContractConventions.ts` is the baseline: the seven paths
+  already shipped in `apps/client/public/openapi.json` when this rule landed. **The list is
+  frozen - entries are only ever removed.** Adding to it is the thing this convention
+  exists to prevent.
 
 ---
 

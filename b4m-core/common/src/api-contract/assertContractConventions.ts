@@ -35,6 +35,10 @@ const VERSION_ROOT = '/api/v1/';
  * they cannot move. FROZEN: entries are only ever REMOVED (when a path is retired
  * behind a sunset). Adding one is exactly the drift this gate exists to prevent -
  * a new endpoint goes under /api/v1/.
+ *
+ * The baseline is "shipped in apps/client/public/openapi.json before this gate
+ * landed", not "committed before this file was written" - which is why
+ * /api/sessions/{id} is here despite being published only days earlier.
  */
 const LEGACY_PUBLIC_PATHS: readonly string[] = [
   '/api/chat',
@@ -43,6 +47,7 @@ const LEGACY_PUBLIC_PATHS: readonly string[] = [
   '/api/ai/tts',
   '/api/ai/music',
   '/api/ai/sound-effects',
+  '/api/sessions/{id}',
 ];
 
 /** operationId becomes the SDK method name, so it must be a valid camelCase identifier. */
