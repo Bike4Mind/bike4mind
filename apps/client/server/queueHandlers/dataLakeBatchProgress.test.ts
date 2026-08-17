@@ -56,10 +56,15 @@ import {
 // let the code under test silently fall back to console.warn while the test still passed.
 const logger = { warn: vi.fn(), error: vi.fn() };
 // A batch at its completion threshold (vectorized+failed+skipped >= total).
+// `userId` is deliberately a real user, not absent: the invariant this file pins is that batch
+// completion attributes its auto-activate to NOBODY even when the batch has a known owner, because
+// the queue handler is not acting for that person at completion time. A userId-less fixture would
+// satisfy the assertion below for the wrong reason.
 const batch = (overrides: Record<string, unknown> = {}) =>
   ({
     id: 'b1',
     dataLakeId: 'lake1',
+    userId: 'u1',
     totalFiles: 2,
     vectorizedFiles: 2,
     failedFiles: 0,
@@ -100,6 +105,10 @@ describe('finalizeBatchIfComplete - batch-completion metric parity', () => {
         logger: expect.objectContaining({ warn: expect.any(Function) }),
       })
     );
+    // No third argument, so no actor: the batch above IS owned by 'u1', and the flip still records
+    // under a `system` principal. Threading the batch owner here would name someone who was not
+    // present at completion time - see recomputeLakeStats' note on the honest answer.
+    expect(h.recomputeLakeStats.mock.calls[0][2]).toBeUndefined();
   });
 
   it('records an errored completion when a file failed', async () => {
@@ -181,10 +190,14 @@ describe('enqueueTaxonomyAnalysisIfWanted - guarded, ingest-independent enqueue'
     expect(h.setTaxonomyStatusIfActive).toHaveBeenCalledWith('b1', ['none'], 'queued', {
       taxonomyStartedAt: expect.any(Date),
     });
+    // The batch OWNER is carried onto the queue message. This previously asserted `undefined`, which
+    // held only because the fixture had no owner - it pinned the absence of a field rather than the
+    // propagation of one. The distinction matters here: taxonomy analysis runs as work requested by
+    // this user, unlike the auto-activate above, which deliberately records no principal.
     expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs.example/taxonomy', {
       batchId: 'b1',
       dataLakeId: 'lake1',
-      userId: undefined,
+      userId: 'u1',
     });
   });
 
