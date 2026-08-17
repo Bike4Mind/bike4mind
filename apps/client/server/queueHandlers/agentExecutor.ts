@@ -81,6 +81,9 @@ import { creditService, apiKeyService, estimateGeneratedMediaUsd } from '@bike4m
 // definitions); see that module's header for the Next-tracing split and the
 // continuation-fallback rationale.
 import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
+// Artifact launch-gate. Same admin-AND-caller resolution the chat pipeline uses; see that module's
+// header for why the start-payload/doc precedence is the part worth pinning in a test.
+import { resolveAgentArtifactGate } from './agentExecutor.artifactGate';
 import { selectGatedAction } from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
 import { buildTruncatedRunReply } from './agentExecutorUtils/truncatedReply';
@@ -949,6 +952,12 @@ async function processExecution(
           // it. The parent's Lattice toolbelt is scoped to the parent run; a
           // child that needs Lattice must be granted it explicitly. A future PR
           // adding a sibling flag should make the same deliberate choice.
+          //
+          // `enableArtifacts` is the deliberate exception: it is a caller opt-OUT, not a grant, so
+          // scoping it to the parent run would let a delegating agent route around it - the child
+          // would emit <artifact> markup the caller asked not to receive, and the parent's summary
+          // can carry it through. Inherited verbatim so `undefined` still means "admin decides".
+          ...(execution.enableArtifacts !== undefined && { enableArtifacts: execution.enableArtifacts }),
         };
 
         // Three execution modes mapped to schema state:
@@ -1143,6 +1152,7 @@ async function processExecution(
         sessionId: execution.sessionId,
         questId: execution.questId,
         spawnedByExecutionId: executionId,
+        enableArtifacts: execution.enableArtifacts,
       },
       logger,
     });
@@ -1415,12 +1425,18 @@ async function processExecution(
     //
     // Resolved only on NEW executions: continuations already carry the composed
     // system message in the checkpoint (messages[0]), same as `personaPrompt`.
-    // `enableArtifacts` is read on every invocation (new + continuation) because
+    // The gate is re-resolved on every invocation (new + continuation) because
     // the DAG bubble-up at persist-time gates on it too, and reading it here
     // avoids a second settings round-trip further down.
-    // `?? true` is defensive: `EnableArtifacts` .prefault's to true, so
-    // getSettingsValue can't actually return undefined - kept as belt-and-suspenders.
-    const enableArtifacts = (await adminSettingsRepository.getSettingsValue('EnableArtifacts')) ?? true;
+    //
+    // Admin setting AND the caller's request flag, via the same resolver the chat pipeline uses - so
+    // an opt-out is honoured on an autonomous run too, where no human is reading each turn. See
+    // `agentExecutor.artifactGate.ts` for the start-payload/doc precedence.
+    const enableArtifacts = resolveAgentArtifactGate({
+      adminEnableArtifacts: await adminSettingsRepository.getSettingsValue('EnableArtifacts'),
+      startPayloadEnableArtifacts: startPayload?.enableArtifacts,
+      executionEnableArtifacts: execution.enableArtifacts,
+    });
     // NOTE: this `|| ARTIFACT_EMISSION_PROMPT` fallback must resolve to the SAME default as the chat
     // path, which uses the util getSettingsValue('ArtifactEmissionPrompt', settings, ARTIFACT_EMISSION_PROMPT)
     // in ChatCompletionProcess. Two resolvers, one default - keep them in sync so an empty/unset value
@@ -2729,12 +2745,16 @@ async function processSubagentDispatch(
     // Artifact-emission parity for dispatched subagents (DAG worker nodes and
     // Lambda-dispatched delegates). Give them the same `<artifact>` guidance as
     // the top-level agent so their answers carry tags the parent can surface on
-    // the completion. Gated on the admin `EnableArtifacts` setting; dispatched
-    // children are always fresh in-process runs (no checkpoint), so no
+    // the completion. Gated on the admin `EnableArtifacts` setting AND the artifact intent the
+    // child inherited from its parent at creation, so a caller opt-out survives delegation;
+    // dispatched children are always fresh in-process runs (no checkpoint), so no
     // isNewExecution guard is needed.
     // Hoist the gate into a local (mirrors the top-level path) so we only read
     // ArtifactEmissionPrompt when artifacts are actually on.
-    const childArtifactsEnabled = await adminSettingsRepository.getSettingsValue('EnableArtifacts');
+    const childArtifactsEnabled = resolveAgentArtifactGate({
+      adminEnableArtifacts: await adminSettingsRepository.getSettingsValue('EnableArtifacts'),
+      executionEnableArtifacts: child.enableArtifacts,
+    });
     const childArtifactEmissionPrompt = childArtifactsEnabled
       ? (await adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt')) || ARTIFACT_EMISSION_PROMPT
       : undefined;

@@ -149,7 +149,7 @@ import {
 } from '../telemetry';
 import type { ToolTelemetry, ToolErrorCategory, SystemPromptDetail } from '@bike4mind/common';
 import { buildAlwaysOnFloorDetails } from './systemPromptFloorTelemetry';
-import { resolveArtifactsEnabled } from './artifactGating';
+import { buildArtifactEmissionMessages, resolveArtifactsEnabled } from './artifactGating';
 import { resolveMementoGates } from './mementoGating';
 import {
   ContextTelemetryAlertsSchema,
@@ -2398,7 +2398,7 @@ export class ChatCompletionProcess {
         // is left to the model's defaults and large HTML/code can leak into the chat
         // body as raw markup. Gated on the same effective flag as extraction, so a turn is
         // never told to emit artifacts that the post-processing below will not extract.
-        artifactEmission: artifactsEnabled ? [{ role: 'system' as const, content: artifactEmissionContent }] : [],
+        artifactEmission: buildArtifactEmissionMessages(artifactsEnabled, artifactEmissionContent),
         // Help-center awareness. Makes the model aware of the in-app
         // Help Center so a user who types a how-to question ("how do I add to my data lake?")
         // gets pointed to it instead of an ungrounded guess. Skipped for local models (lean prompt).

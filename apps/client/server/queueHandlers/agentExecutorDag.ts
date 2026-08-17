@@ -50,6 +50,12 @@ export function makeDagDispatcher(args: {
     questId: string;
     /** Pulled from the parent execution doc - used for audit lineage. */
     spawnedByExecutionId?: string;
+    /**
+     * The parent's per-request artifact intent. Inherited so a caller opt-out survives fan-out -
+     * see the matching note on `baseFields` in `agentExecutor.ts`. `undefined` leaves the admin
+     * `EnableArtifacts` setting as the only gate for the node.
+     */
+    enableArtifacts?: boolean;
   };
   logger: Logger;
 }): DagDispatcher {
@@ -101,6 +107,7 @@ export function makeDagDispatcher(args: {
           thoroughness,
           maxIterations,
         },
+        ...(nodeDefaults.enableArtifacts !== undefined && { enableArtifacts: nodeDefaults.enableArtifacts }),
       });
       return { childExecutionId: child.id, dagNodeId: node.id };
     },

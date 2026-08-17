@@ -77,6 +77,12 @@ interface AgentExecuteStart {
    */
   enableLattice?: boolean;
   /**
+   * Artifact parity with chat_completion's `enableArtifacts`. The user's per-request intent, which
+   * the executor ANDs with the admin `EnableArtifacts` setting; omitting it leaves the admin setting
+   * as the only gate, and only an explicit `false` opts the run out of artifact emission.
+   */
+  enableArtifacts?: boolean;
+  /**
    * User's selected image-generation config. Forwarded
    * so the executor's image_generation / edit_image tools resolve a model;
    * without it they short-circuit with "Image model selection required" (no
