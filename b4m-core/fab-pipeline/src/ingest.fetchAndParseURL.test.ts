@@ -13,6 +13,7 @@ const axiosGet = vi.hoisted(() => vi.fn());
 vi.mock('axios', () => ({ default: { get: axiosGet } }));
 
 import { fetchAndParseURL } from './ingest';
+import { ssrfSafeHttpAgent, ssrfSafeHttpsAgent } from './ssrfProtection';
 
 const logger = { updateMetadata: vi.fn(), log: vi.fn(), debug: vi.fn() } as never;
 
@@ -78,6 +79,22 @@ describe('fetchAndParseURL redirect handling', () => {
 
     // Without this, axios follows up to 21 hops on its own and the guard sees only the first.
     expect(axiosGet.mock.calls[0][1]).toMatchObject({ maxRedirects: 0 });
+  });
+
+  it('pins every request through the SSRF-safe agents', async () => {
+    axiosGet.mockResolvedValueOnce(ok(PAGE));
+
+    await fetchAndParseURL(PUBLIC_URL, { logger });
+
+    // These two options ARE the DNS-rebinding defence: without them the per-hop URL check still runs
+    // but the socket re-resolves, so a rebinding host passes validation and connects internally.
+    // Asserted here because deleting them from ingest.ts leaves the whole suite green otherwise - the
+    // only other backstop is an unused-import lint error, which an IDE autofix removes along with them.
+    // BOTH are required: a redirect chain can cross schemes, and axios picks the agent per scheme.
+    expect(axiosGet.mock.calls[0][1]).toMatchObject({
+      httpAgent: ssrfSafeHttpAgent,
+      httpsAgent: ssrfSafeHttpsAgent,
+    });
   });
 
   it('gives up after too many redirects instead of looping', async () => {
