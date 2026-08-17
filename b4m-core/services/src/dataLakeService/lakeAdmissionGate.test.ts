@@ -125,6 +125,19 @@ describe('decideLakeAdmission (pure admission decision)', () => {
     expect(verdict.status === 'quarantined' && verdict.message).toContain('512');
   });
 
+  it('says "This content" not "This file" for a single subject - the pre-upload doors have no file yet', () => {
+    // The batch-create and presign doors refuse before any FabFile exists (they pass one synthetic
+    // owner-to-be member), so "This file cannot be added" described something never sent. Caught on
+    // a live preview run against the batch door.
+    const verdict = decideLakeAdmission([subject('u1', 512)], [req('a', 1000)], new Set());
+    expect(verdict.status === 'quarantined' && verdict.message).toMatch(/^This content cannot be added/);
+  });
+
+  it('counts real files in the plural arm, which only ever runs where files were named', () => {
+    const verdict = decideLakeAdmission([subject('u1', 512), subject('u2', 512)], [req('a', 1000)], new Set());
+    expect(verdict.status === 'quarantined' && verdict.message).toMatch(/^2 files cannot be added/);
+  });
+
   it('describes only the BLOCKING lake when some violated lakes merely report', () => {
     const verdict = decideLakeAdmission(
       [subject('u1', 512)],

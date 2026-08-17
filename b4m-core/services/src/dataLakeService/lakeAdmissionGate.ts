@@ -124,7 +124,11 @@ function describeViolations(violations: readonly InadmissibleMember[], enforcedL
       `"${v.lake.name}" requires passages of ${v.lake.effectiveRequiredTarget} tokens, but this content ` +
       `chunks at ${v.effectiveTarget}`
   );
-  const subject = reported.length === 1 ? 'This file cannot' : `${reported.length} files cannot`;
+  // "This content", not "This file", in the singular: the pre-upload doors (batch create, presign)
+  // refuse before any FabFile exists, so naming a file there describes something the caller never
+  // sent. Verified live on a preview - the batch door really does surface this string. The plural
+  // arm only ever runs where real files were named, so a count is accurate there.
+  const subject = reported.length === 1 ? 'This content cannot' : `${reported.length} files cannot`;
   return (
     `${subject} be added: ${parts.join('; ')}. Content that does not match a lake's passage policy is ` +
     `not retrievable from it. Change the lake's required passage size or the file owner's default ` +
