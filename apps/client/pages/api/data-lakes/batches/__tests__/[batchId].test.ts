@@ -66,7 +66,21 @@ describe('/api/data-lakes/batches/[batchId] lake stats on a terminal batch', () 
 
     await run('PUT', res, { status: 'failed', failedFiles: 1 });
 
-    expect(h.recomputeLakeStats).toHaveBeenCalledWith(expect.objectContaining({ id: 'lake1' }), expect.anything());
+    // Asserts the audit adapters BY NAME, not expect.anything(): both reach recomputeLakeStats
+    // through one shared `db` literal, and `adminSettings` is optional, so a route that dropped
+    // either would still compile and silently write no event (or pin every event to the floor
+    // retention) with nothing else going red.
+    expect(h.recomputeLakeStats).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'lake1' }),
+      expect.objectContaining({
+        db: expect.objectContaining({
+          lakeConfigChangeEvents: expect.anything(),
+          adminSettings: expect.anything(),
+        }),
+      }),
+      // The actor: this route is authenticated, so its auto-activate must not record as `system`.
+      expect.objectContaining({ actor: expect.objectContaining({ userId: 'u1' }) })
+    );
   });
 
   it('recomputes the lake on a cancel', async () => {
@@ -74,7 +88,21 @@ describe('/api/data-lakes/batches/[batchId] lake stats on a terminal batch', () 
 
     await run('DELETE', res);
 
-    expect(h.recomputeLakeStats).toHaveBeenCalledWith(expect.objectContaining({ id: 'lake1' }), expect.anything());
+    // Asserts the audit adapters BY NAME, not expect.anything(): both reach recomputeLakeStats
+    // through one shared `db` literal, and `adminSettings` is optional, so a route that dropped
+    // either would still compile and silently write no event (or pin every event to the floor
+    // retention) with nothing else going red.
+    expect(h.recomputeLakeStats).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'lake1' }),
+      expect.objectContaining({
+        db: expect.objectContaining({
+          lakeConfigChangeEvents: expect.anything(),
+          adminSettings: expect.anything(),
+        }),
+      }),
+      // The actor: this route is authenticated, so its auto-activate must not record as `system`.
+      expect.objectContaining({ actor: expect.objectContaining({ userId: 'u1' }) })
+    );
   });
 
   it('does not recompute a terminal status the batch already holds', async () => {
