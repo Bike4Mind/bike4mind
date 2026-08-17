@@ -895,16 +895,23 @@ export class QuestMasterFeature implements ChatCompletionFeature {
       // (QuestMaster has no downstream trim of its own), sized against the REAL model's context
       // window via the same helper ChatCompletionProcess.ts's own call site uses, so the two
       // cannot drift the way an unknown-model floor would for a model with a small real window.
-      // Unlike that call site, this one does not read the ContextVerbatimWindowFraction admin
-      // override (no admin-settings map is threaded into QuestMasterFeature) - it always uses the
-      // compiled-in default fraction.
+      // Two known divergences from that call site's overhead: it does not read the
+      // ContextVerbatimWindowFraction admin override (no admin-settings map is threaded into
+      // QuestMasterFeature) - it always uses the compiled-in default fraction. It also omits
+      // enabledTools.length * PER_TOOL_SCHEMA_RESERVE_TOKENS, which does apply on the GPT-5
+      // function-calling quest-plan path (createQuestPlan is passed { history } only, so omitting
+      // contextSummary's reserve is correct, but the tool-schema reserve is not); this makes that
+      // path's budget slightly over-generous rather than unsafe, and QuestMasterFeature has no
+      // enabled-tool count in scope to reserve for without threading more state through.
       const verbatimTokenBudget = computeVerbatimTokenBudget(modelInfo, startParams.max_tokens, {
         verbatimWindowFraction: DEFAULT_VERBATIM_WINDOW_FRACTION,
         nonHistoryOverheadTokens: SYSTEM_PROMPT_RESERVE_TOKENS + Math.ceil(message.length / 4),
       });
       const [conversationHistory] = await fetchAndProcessPreviousMessages(session, historyCount, {
         db: this.chatCompletion.db,
-        model,
+        // modelInfo.id (post-resolveDeprecatedModelId), matching ChatCompletionProcess.ts's own
+        // call site, so a future Gemini id landing in the deprecation map can't desync the two.
+        model: modelInfo.id,
         verbatimTokenBudget,
       });
 
