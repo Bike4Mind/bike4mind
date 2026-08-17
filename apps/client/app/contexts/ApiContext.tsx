@@ -1,25 +1,20 @@
 import axios, { isAxiosError } from 'axios';
-import qs from 'qs';
 import React, { PropsWithChildren } from 'react';
 import { useAccessToken } from '../hooks/useAccessToken';
-import { getOrCreateIdempotencyKeyWithUUID } from '@client/lib/utils/idempotency';
 import { clearClientCaches } from '@client/app/utils/clearClientCaches';
 import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
-import { generateRequestId } from '@bike4mind/common';
+import { api, isPublicPath } from './apiClient';
+import { refreshSession } from '@client/app/utils/refreshCoordinator';
 
-const PUBLIC_PATHS = ['/login', '/register', '/auth/callback'];
-
-// Concurrency guard: only one token refresh at a time.
-// All parallel 401s wait on the same promise instead of each spawning their own refresh.
-// Exported so login flows can reset it (clears any stale pending promise from previous sessions).
-export let refreshPromise: Promise<void> | null = null;
-export function resetRefreshPromise() {
-  refreshPromise = null;
-}
+// The axios instance and its request-side interceptors live in ./apiClient (a leaf module, so the
+// refresh coordinator can reach the transport without importing this file back). Re-exported here
+// because THIS is the module that registers the 401 refresh-and-retry interceptor: importing `api`
+// from anywhere else would silently opt out of it.
+export { api, isPublicPath };
 
 // Guard so a burst of concurrent unrecoverable 401s triggers exactly one
 // redirect instead of racing multiple window.location.replace calls.
-// Exported so login flows can reset it, mirroring resetRefreshPromise above.
+// Exported so login flows can reset it (as they reset the refresh coordinator).
 let redirecting = false;
 export function resetRedirectingGuard() {
   redirecting = false;
@@ -63,17 +58,6 @@ export async function forceSessionExpiredRedirect(): Promise<void> {
   window.location.replace(buildLoginRedirectUrl('session_expired', window.location));
 }
 
-// Helper function to check if a path is public.
-// Exported so the cross-tab logout listener (providers.tsx) can apply the same
-// "don't redirect away from a public/auth page" guard the interceptor uses.
-export const isPublicPath = (path: string): boolean => {
-  if (PUBLIC_PATHS.includes(path)) {
-    return true;
-  }
-  // Match the /auth/*/callback pattern
-  return /^\/auth\/[^/]+\/callback$/.test(path);
-};
-
 // Exported so callers outside the interceptor (e.g. accept-policies.tsx) can apply the
 // same "is this actually an unrecoverable auth rejection, or just a transient failure"
 // distinction the refresh-retry catch below makes, instead of re-deriving it per caller.
@@ -87,49 +71,9 @@ export const getAxiosErrorStatus = (error: unknown): number | undefined =>
 export const getAxiosRetryCount = (error: unknown): number =>
   (isAxiosError(error) ? (error.config as { _retryCount?: number } | undefined)?._retryCount : undefined) ?? 0;
 
-const IDEMPOTENT_METHODS = ['post', 'put', 'patch', 'delete'];
-
-export const api = axios.create({
-  paramsSerializer: params => qs.stringify(params, { arrayFormat: 'brackets' }),
-  withCredentials: true,
-});
-
-// Attach a correlation ID to every request. The server echoes it back as the
-// X-Request-ID response header so a failure can be traced to server logs.
-api.interceptors.request.use(config => {
-  config.headers = config.headers || {};
-
-  const requestId = config.headers['X-Request-ID'] || generateRequestId();
-  config.headers['X-Request-ID'] = requestId;
-
-  // Idempotency key for mutations (server middleware currently disabled).
-  if (config.method && IDEMPOTENT_METHODS.includes(config.method.toLowerCase()) && config.url) {
-    config.headers['Idempotency-Key'] = getOrCreateIdempotencyKeyWithUUID(config.url, requestId);
-  }
-  return config;
-});
-
-// Auth interceptors are registered at MODULE scope (not inside ApiProvider's
-// useEffect) so they are active before the first React render or data query.
-// A useEffect runs AFTER children's effects/mount, so a cold-load query gated on
-// synchronously-rehydrated state (e.g. useGetOwnSessions, enabled once the
-// persisted currentUser rehydrates) could fire through `api` before the
-// token-attach + 401-retry interceptors existed - sending an unauthenticated
-// request that 401'd with no interceptor to refresh-and-retry it, leaving the
-// sidebar/UI empty until a manual reload (#627). Registering here closes that
-// window. `api` is a singleton, so one-time registration needs no eject.
-
-// Attach the current bearer token. Reads the store at request time so a
-// post-refresh token is always used (no stale closure).
-api.interceptors.request.use(config => {
-  const currentToken = useAccessToken.getState().accessToken;
-  if (currentToken) {
-    config.headers.Authorization = `Bearer ${currentToken}`;
-  }
-  return config;
-});
-
 // On 401: refresh the token once and retry; tear down cleanly if unrecoverable.
+// Registered at MODULE scope (not inside ApiProvider's useEffect) for the same reason as the
+// request interceptors in ./apiClient - see the note there.
 api.interceptors.response.use(
   response => response,
   async error => {
@@ -192,9 +136,36 @@ api.interceptors.response.use(
         return Promise.reject(error);
       }
 
-      // A refresh already succeeded (_retryCount is only bumped after refreshPromise
-      // RESOLVES) and we retried once, yet this request STILL 401s. When it is a bare
-      // auth-layer rejection, the freshly minted token is being rejected, so the session is
+      const retryCount = error.config?._retryCount || 0;
+
+      // A 401 about a token we have ALREADY replaced is stale news, not a reason to refresh again -
+      // and not evidence that the session is dead. A request that was in flight when someone else's
+      // refresh landed (or when a sibling tab broadcast its token) comes back rejecting the
+      // credential it was SENT with, which is no longer the credential we hold. Exchanging the
+      // cookie again would spend a rotation the first one already consumed, and its 400 would read
+      // as a revocation and log the user out of a perfectly healthy session.
+      //
+      // This is checked BEFORE the teardown below, deliberately. The teardown's premise is "we
+      // refreshed and the token we minted was still rejected" - but if the store has moved on since
+      // this request was sent, that premise is false: there is a newer token nobody has tried yet.
+      // Tearing down there would sign out a tab holding a working credential, which is the exact
+      // failure class this change exists to remove. Ordering it first cannot weaken the teardown,
+      // which is independently bounded by its own flag.
+      //
+      // Bounded by its OWN flag, not _retryCount: the token we swap in may itself be expired
+      // (sibling tabs' tokens expire together), and a 401 on it must still be allowed to drive a
+      // real refresh below. Charging it to _retryCount would instead trip the teardown on the next
+      // pass, logging the user out without ever having refreshed.
+      const presentedToken = String(error.config?.headers?.Authorization ?? '').replace(/^Bearer /, '');
+      const heldToken = getState().accessToken;
+      if (!error.config?._staleTokenRetried && heldToken && presentedToken && heldToken !== presentedToken) {
+        error.config._staleTokenRetried = true;
+        return api.request(error.config);
+      }
+
+      // A refresh already succeeded (_retryCount is only bumped after the refresh RESOLVES) and we
+      // retried once, yet this request STILL 401s with the token we currently hold. When it is a
+      // bare auth-layer rejection, the freshly minted token is being rejected, so the session is
       // unrecoverable - e.g. a server-side token/session mismatch where /api/auth/refreshToken
       // keeps returning 200 but the access verifier keeps rejecting the token it mints. Left
       // un-torn-down, the session stays alive (expired: false) and every repeating trigger -
@@ -208,7 +179,6 @@ api.interceptors.response.use(
       // user out of the app on a scoped, expected error. So only tear down on a code-less
       // rejection; a coded 401 falls through to the plain reject (the pre-PR behavior, letting
       // the caller surface its own error).
-      const retryCount = error.config?._retryCount || 0;
       if (retryCount >= 1) {
         if (!error.response?.data?.code) {
           await forceSessionExpiredRedirect();
@@ -216,74 +186,38 @@ api.interceptors.response.use(
         return Promise.reject(error);
       }
 
-      // If another request is already refreshing, wait for it then retry
-      if (refreshPromise) {
-        try {
-          await refreshPromise;
-          error.config._retryCount = retryCount + 1;
-          return api.request(error.config);
-        } catch {
-          return Promise.reject(error);
-        }
-      }
-
-      // This request initiates the refresh - all other 401s will queue on this promise
-      refreshPromise = (async () => {
-        try {
-          // No token in the body: the refresh token rides the HttpOnly cookie, which
-          // `withCredentials` on this axios instance sends. The rotated one comes back the
-          // same way and is never visible to this code.
-          const response = await api.post<{ accessToken: string }>(
-            '/api/auth/refreshToken',
-            {},
-            {
-              skipAuthRefresh: true,
-              // Bound the refresh attempt so a cold Lambda or hanging server
-              // can't leave refreshPromise pending forever, which would cause
-              // every concurrent 401 (including admin-settings) to hang and
-              // keep "Checking security settings..." stuck indefinitely.
-              timeout: 10000,
-            }
-          );
-          getState().setVerifiedSession(response.data.accessToken);
-        } catch (e) {
-          // Only the initiator runs the teardown. Distinguish a genuine
-          // revocation from a transient outage by the refresh endpoint's
-          // status: a 400 (invalid_grant) / 401 means the refresh token was
-          // rejected - the session can't be recovered, so tear down. A 5xx /
-          // network error / the 10s timeout is a transient outage (a cold or
-          // hanging refresh Lambda - the very case the timeout above guards) -
-          // reject and let the caller retry rather than logging the user out
-          // on a blip. This matters most during a deploy, when WS connections
-          // drop (triggering the WebsocketContext probe through this same
-          // interceptor) at the exact moment the refresh Lambda is coldest -
-          // without this gate that correlation causes spurious logout storms.
-          // Mirrors the CLI ApiClient's SessionRevokedError distinction.
-          //
-          // The teardown: forceSessionExpiredRedirect mirrors the reload-recovery
-          // path (RestrictedPage redirects on a missing user) and the logout
-          // redirect - a full-page window.location.replace (inside the helper)
-          // avoids a circular import on the user store, unmounts the app, and
-          // stops the in-flight 401 cascade. The session_expired code surfaces a
-          // toast on the login screen, and redirectTo returns the user to where
-          // they were after re-login.
-          const refreshStatus = getAxiosErrorStatus(e);
-          if (refreshStatus === 400 || refreshStatus === 401) {
-            await forceSessionExpiredRedirect();
-          }
-          throw e;
-        } finally {
-          refreshPromise = null;
-        }
-      })();
-
+      // The refresh cookie rides along on `withCredentials`; the rotated one comes back the same
+      // way and is never visible to this code. refreshSession deduplicates across every concurrent
+      // 401 in every tab, so a burst here costs one exchange, not one per request.
       try {
-        await refreshPromise;
-        error.config._retryCount = retryCount + 1;
-        return api.request(error.config);
-      } catch {
+        await refreshSession();
+      } catch (e) {
+        // Distinguish a genuine revocation from a transient outage by the refresh endpoint's
+        // status: a 400 (invalid_grant) / 401 means the refresh token was rejected - the session
+        // can't be recovered, so tear down. A 5xx / network error / the 10s timeout is a transient
+        // outage (a cold or hanging refresh Lambda) - reject and let the caller retry rather than
+        // logging the user out on a blip. This matters most during a deploy, when WS connections
+        // drop (triggering the WebsocketContext probe through this same interceptor) at the exact
+        // moment the refresh Lambda is coldest - without this gate that correlation causes
+        // spurious logout storms. Mirrors the CLI ApiClient's SessionRevokedError distinction.
+        //
+        // The teardown: forceSessionExpiredRedirect mirrors the reload-recovery path (RestrictedPage
+        // redirects on a missing user) and the logout redirect - a full-page window.location.replace
+        // (inside the helper) avoids a circular import on the user store, unmounts the app, and
+        // stops the in-flight 401 cascade. The session_expired code surfaces a toast on the login
+        // screen, and redirectTo returns the user to where they were after re-login.
+        //
+        // Every queued caller runs this, but forceSessionExpiredRedirect is idempotent, so the
+        // burst still produces exactly one teardown and one redirect.
+        const refreshStatus = getAxiosErrorStatus(e);
+        if (refreshStatus === 400 || refreshStatus === 401) {
+          await forceSessionExpiredRedirect();
+        }
         return Promise.reject(error);
       }
+
+      error.config._retryCount = retryCount + 1;
+      return api.request(error.config);
     }
 
     return Promise.reject(error);

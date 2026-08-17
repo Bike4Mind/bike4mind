@@ -35,12 +35,15 @@ const handler = baseApi({ auth: false })
     // localStorage from before this change sends it in the body ONCE with this flag, and is
     // moved onto the cookie without being logged out.
     const useCookie = !bodyToken || req.body.cookie === true;
-    const respond = (payload: Record<string, unknown>, refreshToken: string) => {
+    // `refreshToken: null` means this refresh did not advance the chain (a concurrent sibling did),
+    // so the caller's existing token is still the live one. Emitting nothing is what keeps the
+    // cookie jar on the single surviving token - see rotateSession's `coalesced` outcome.
+    const respond = (payload: Record<string, unknown>, refreshToken: string | null) => {
       if (useCookie) {
-        setRefreshCookie(res, refreshToken);
+        if (refreshToken) setRefreshCookie(res, refreshToken);
         return res.status(200).json(payload);
       }
-      return res.status(200).json({ ...payload, refreshToken });
+      return res.status(200).json(refreshToken ? { ...payload, refreshToken } : payload);
     };
 
     const signAccessToken = (id: string, tokenVersion: number, extra?: Record<string, unknown>) =>
@@ -63,7 +66,7 @@ const handler = baseApi({ auth: false })
           accessToken: rotated.accessToken,
           impersonating: !!rotated.impersonatedBy,
         },
-        rotated.refreshToken
+        rotated.status === 'rotated' ? rotated.refreshToken : null
       );
     }
 
