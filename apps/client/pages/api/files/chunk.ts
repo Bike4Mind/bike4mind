@@ -1,4 +1,4 @@
-import { OVERSIZED_PASSAGE_TOKEN_THRESHOLD, Permission } from '@bike4mind/common';
+import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD, Permission } from '@bike4mind/common';
 import { getFabFileById } from '@server/managers/fabFileManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -26,6 +26,12 @@ const handler = baseApi().post(
     // non-convergent for this file. Detection is `$gt`, so the threshold itself is accepted.
     if (Number(chunkSize) > OVERSIZED_PASSAGE_TOKEN_THRESHOLD) {
       throw new BadRequestError(`chunkSize must not exceed ${OVERSIZED_PASSAGE_TOKEN_THRESHOLD} tokens`);
+    }
+    // Below MIN_PASSAGE_TOKEN_TARGET, the chunker (effectiveChunkTokenLimit) silently raises the
+    // value instead of honoring it - reject here rather than letting a caller's request get
+    // ignored with no signal, same reasoning as the ceiling above.
+    if (Number(chunkSize) < MIN_PASSAGE_TOKEN_TARGET) {
+      throw new BadRequestError(`chunkSize must be at least ${MIN_PASSAGE_TOKEN_TARGET} tokens`);
     }
 
     const fabFile = await getFabFileById(fabFileId, req.ability!, Permission.update);

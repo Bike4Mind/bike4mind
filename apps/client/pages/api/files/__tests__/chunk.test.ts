@@ -41,7 +41,7 @@ const run = (body: unknown, res: unknown) => (handler as (req: unknown, res: unk
 
 // Unit-level: baseApi is stubbed to a bare pass-through above, so this exercises the handler's own
 // logic, not the throw-to-400 mapping (that lives in the real baseApi/asyncHandler chain).
-describe('chunk handler (unit) - chunkSize ceiling', () => {
+describe('chunk handler (unit) - chunkSize bounds', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.getFabFileById.mockResolvedValue(FILE);
@@ -72,6 +72,19 @@ describe('chunk handler (unit) - chunkSize ceiling', () => {
     const { res, json } = makeRes();
     await run({ fabFileId: 'f1', chunkSize: '1500' }, res);
     expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/chunk', expect.objectContaining({ chunkSize: '1500' }));
+    expect(json).toHaveBeenCalledWith({ messageId: 'msg-1' });
+  });
+
+  it('rejects a chunkSize below the chunker floor instead of silently raising it', async () => {
+    const { res } = makeRes();
+    await expect(run({ fabFileId: 'f1', chunkSize: '10' }, res)).rejects.toThrow(/at least 64/i);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('accepts a chunkSize exactly at the chunker floor', async () => {
+    const { res, json } = makeRes();
+    await run({ fabFileId: 'f1', chunkSize: '64' }, res);
+    expect(h.sendToQueue).toHaveBeenCalledWith('http://sqs/chunk', expect.objectContaining({ chunkSize: '64' }));
     expect(json).toHaveBeenCalledWith({ messageId: 'msg-1' });
   });
 
