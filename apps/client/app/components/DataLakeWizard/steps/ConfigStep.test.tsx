@@ -219,7 +219,7 @@ describe('ConfigStep - embedding cost estimate banner', () => {
     expect(screen.getByTestId('datalake-estimate-over-budget-alert')).toHaveTextContent(/rounds up/i);
   });
 
-  it('renders nothing when spend governance is off', () => {
+  it('warns that indexing is paused (not silent) when spend governance is off', () => {
     settingsValues.current.dataLakeEmbeddingSpendEnabled = 'false';
     seedConfig({ allFiles: [mockWizardFile('a.txt', 50_000)] });
 
@@ -227,6 +227,7 @@ describe('ConfigStep - embedding cost estimate banner', () => {
 
     expect(screen.queryByTestId('datalake-estimate-line')).not.toBeInTheDocument();
     expect(screen.queryByTestId('datalake-estimate-over-budget-alert')).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-estimate-spend-disabled-alert')).toHaveTextContent(/indexing is paused/i);
   });
 
   it('renders nothing for a self-host zero-price embedding model', () => {

@@ -56,7 +56,6 @@ export function renderSpendNotificationEmail(input: SpendNotificationEmailInput)
   // chars with no newline restriction - strip CR/LF locally rather than assume the mail
   // transport sanitizes header injection.
   const subjectName = input.lakeName.replace(/[\r\n]+/g, ' ');
-  const reason = detail.reason ? escapeHtml(detail.reason) : undefined;
   const budget = detail.budgetMicroUsd !== undefined ? formatMicroUsd(detail.budgetMicroUsd) : undefined;
   const spent = detail.spentMicroUsd !== undefined ? formatMicroUsd(detail.spentMicroUsd) : undefined;
   const pct =
@@ -77,12 +76,14 @@ export function renderSpendNotificationEmail(input: SpendNotificationEmailInput)
   }
 
   if (kind === 'stopped' && scope === 'rate') {
+    // `reason` is deliberately not interpolated here - its only producer sends a fragment meant
+    // for logs ("the embedding rate limit is 0 (stopped)"), not a mid-paragraph clause, and
+    // splicing it in read as a lowercase, unpunctuated restatement of the sentence before it.
     return {
       subject: `Indexing paused for "${subjectName}" - the embedding rate limit is set to 0`,
       html: wrap(
         lake,
         `<p>A platform admin set the embedding rate limit to 0, which stops all indexing. ` +
-          (reason ? `${reason} ` : '') +
           `No action is available to you.</p>`
       ),
     };
@@ -118,12 +119,21 @@ export function renderSpendNotificationEmail(input: SpendNotificationEmailInput)
     // Period scope is platform-wide, shared across every tenant lake - recipients here are
     // lake owners/org admins, not platform admins, so the dollar figure is never shown (it
     // would disclose the platform's aggregate spend/budget to every affected lake's owner).
+    //
+    // windowEndsAt's presence is the ONLY signal for whether this actually resolves on its own:
+    // its producer (enforceEmbeddingSpendGate) withholds it for a STUCK denial (budget set to
+    // 0, or a single message's own estimate exceeding the whole platform budget) - neither
+    // case ever clears within the current window, so this copy must never promise automatic
+    // resumption unless a real window is in hand.
     return {
       subject: `Platform embedding budget exhausted - "${subjectName}" indexing paused`,
       html: wrap(
         lake,
-        `<p>Indexing is paused platform-wide because the shared embedding budget is exhausted. ` +
-          `This resumes automatically${windowEndsAt ? ` at ${windowEndsAt}` : ''} - re-index then.</p>`
+        windowEndsAt
+          ? `<p>Indexing is paused platform-wide because the shared embedding budget is exhausted. ` +
+              `This resumes automatically at ${windowEndsAt} - re-index then.</p>`
+          : `<p>Indexing is paused platform-wide because the shared embedding budget is exhausted. ` +
+              `No action is available to you until a platform admin raises the budget or resets the meter.</p>`
       ),
     };
   }

@@ -86,9 +86,12 @@ describe('DataLakeSpendPanel', () => {
     expect(screen.getByTestId('datalake-spend-overtime-table')).toBeInTheDocument();
   });
 
-  it('shows the disabled-alert instead of a budget block when spendEnabled is false', () => {
+  it('shows the halted-indexing alert (not an "off = unconstrained" reading) when spendEnabled is false', () => {
     renderPanel({ summary: baseSummary({ spendEnabled: false }) });
-    expect(screen.getByTestId('datalake-spend-disabled-alert')).toBeInTheDocument();
+    const alert = screen.getByTestId('datalake-spend-disabled-alert');
+    expect(alert).toBeInTheDocument();
+    expect(alert).toHaveTextContent(/indexing is paused/i);
+    expect(alert).not.toHaveTextContent(/turned off/i);
     expect(screen.queryByTestId('datalake-spend-lake-progress')).not.toBeInTheDocument();
   });
 

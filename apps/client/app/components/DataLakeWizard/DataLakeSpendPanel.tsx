@@ -124,8 +124,8 @@ export function DataLakeSpendPanel({
       </Stack>
 
       {!summary.spendEnabled ? (
-        <Alert size="sm" color="neutral" data-testid="datalake-spend-disabled-alert">
-          Spend limits are turned off for this deployment; totals above are informational.
+        <Alert size="sm" color="warning" data-testid="datalake-spend-disabled-alert">
+          Indexing is paused: a platform admin turned embedding spend off. Totals above are historical.
         </Alert>
       ) : (
         <Stack gap={1.5}>

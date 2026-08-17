@@ -246,7 +246,12 @@ describe('enforceEmbeddingSpendGate - spend notifications', () => {
     await gate(db, 1_000, notify).catch(() => {});
 
     expect(notify).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: 'budget_exhausted', scope: 'period', periodKey: `w:${expiresAt.toISOString()}` })
+      expect.objectContaining({
+        kind: 'budget_exhausted',
+        scope: 'period',
+        periodKey: `w:${expiresAt.toISOString()}`,
+        detail: expect.objectContaining({ windowEndsAt: expiresAt }),
+      })
     );
   });
 
@@ -266,13 +271,17 @@ describe('enforceEmbeddingSpendGate - spend notifications', () => {
     await gate(db, 1_000, notify).catch(() => {});
     await gate(db, 1_000, notify).catch(() => {});
 
-    const periodKeys = notify.mock.calls
-      .map(([event]) => event as { scope: string; periodKey: string })
-      .filter(event => event.scope === 'period')
-      .map(event => event.periodKey);
+    const periodEvents = notify.mock.calls
+      .map(([event]) => event as { scope: string; periodKey: string; detail: { windowEndsAt?: Date } })
+      .filter(event => event.scope === 'period');
+    const periodKeys = periodEvents.map(event => event.periodKey);
     expect(periodKeys).toHaveLength(2);
     expect(periodKeys[0]).toEqual(periodKeys[1]);
     expect(periodKeys[0]).toMatch(/^t:\d+$/);
+    // B2: a STUCK denial (budget <= 0) must never carry a windowEndsAt - its presence is the
+    // renderer's only signal for whether to promise automatic resumption, and neither this
+    // sub-case nor an over-budget single message ever actually resolves on its own.
+    expect(periodEvents.every(event => event.detail.windowEndsAt === undefined)).toBe(true);
   });
 
   it('fires approaching_cap/lake at exactly 80% of the per-lake budget', async () => {

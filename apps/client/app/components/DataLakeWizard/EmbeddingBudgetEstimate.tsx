@@ -33,11 +33,23 @@ export function EmbeddingBudgetEstimate({ files }: EmbeddingBudgetEstimateProps)
   const spendEnabled = toBool(spendEnabledRaw, true);
   const perRunBudgetUsd = perRunBudgetRaw !== undefined ? Number(perRunBudgetRaw) : undefined;
 
-  // Silent (return null, not a $0 banner) whenever there's nothing worth warning about: spend
-  // limits off, no usable budget figure, no model resolved yet, nothing selected, or the
-  // estimate settles at exactly 0 (a zero-price self-host model, or an unpriced one - both are
-  // correctly silent, never a misleading "estimated cost: $0.00").
-  if (!spendEnabled) return null;
+  // spendEnabled false is the master kill switch, not "no limit" - enforceEmbeddingSpendGate
+  // throws before any file reaches a provider call, so every pending upload is guaranteed not
+  // to index. That is the one case here that needs its own loud banner, not silence.
+  if (!spendEnabled) {
+    return (
+      <Alert size="md" color="danger" variant="soft" data-testid="datalake-estimate-spend-disabled-alert">
+        <Typography level="body-sm">
+          Indexing is paused: a platform admin turned embedding spend off. Files uploaded now will not be processed
+          until an admin turns it back on.
+        </Typography>
+      </Alert>
+    );
+  }
+  // Silent (return null, not a $0 banner) whenever there's nothing worth warning about: no
+  // usable budget figure, no model resolved yet, nothing selected, or the estimate settles at
+  // exactly 0 (a zero-price self-host model, or an unpriced one - both are correctly silent,
+  // never a misleading "estimated cost: $0.00").
   if (perRunBudgetUsd === undefined || !Number.isFinite(perRunBudgetUsd) || perRunBudgetUsd <= 0) return null;
   if (!model) return null;
   if (files.length === 0) return null;

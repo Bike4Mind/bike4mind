@@ -249,10 +249,12 @@ export async function enforceEmbeddingSpendGate(params: {
     // deny an operator triggers by pulling the stop lever to 0 never dedupes at all: one
     // notification claim (and up to MAX_LAKE_SPEND_ADDRESSEES emails) per denied message.
     // Fall back to the same hour-bucketed clock key the switch/rate stop notices already use.
-    const periodKey =
-      levers.perPeriodBudgetMicroUsd <= 0 || estimatedMicroUsd > levers.perPeriodBudgetMicroUsd
-        ? periodKeyForClock(new Date())
-        : periodKeyForWindow(period.expiresAt);
+    // Same condition also marks a STUCK denial (the budget is 0, or this one message's own
+    // estimate already exceeds the whole platform budget) - neither ever resolves within the
+    // current window, so windowEndsAt is withheld rather than naming a time that will not help;
+    // the renderer treats its absence as "do not promise automatic resumption".
+    const periodIsStuck = levers.perPeriodBudgetMicroUsd <= 0 || estimatedMicroUsd > levers.perPeriodBudgetMicroUsd;
+    const periodKey = periodIsStuck ? periodKeyForClock(new Date()) : periodKeyForWindow(period.expiresAt);
     await fire({
       kind: 'budget_exhausted',
       scope: 'period',
@@ -260,7 +262,7 @@ export async function enforceEmbeddingSpendGate(params: {
       detail: {
         budgetMicroUsd: levers.perPeriodBudgetMicroUsd,
         periodHours: levers.periodHours,
-        windowEndsAt: period.expiresAt,
+        windowEndsAt: periodIsStuck ? undefined : period.expiresAt,
       },
     });
     throw new EmbeddingSpendDeniedError(

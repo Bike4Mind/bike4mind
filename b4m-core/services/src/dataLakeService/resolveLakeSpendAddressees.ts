@@ -20,7 +20,15 @@ export interface LakeSpendAddresseeDb {
   users: { findActiveEmailsByIds(ids: string[]): Promise<Array<{ id: string; email: string }>> };
 }
 
-/** Bounds SMTP fan-out per notification - a pathological adminUserIds array must not turn one embedding call into a mail blast. */
+/**
+ * Bounds SMTP fan-out per notification - a pathological adminUserIds array must not turn one
+ * embedding call into a mail blast. Bounds per lake, not across lakes: a `stopped`/`switch` (or
+ * `/rate`) event has no platform-scope dedup claim, only the per-lake hourly key in
+ * spendNotificationKeys.ts, so flipping the master switch off with a broad backlog can still
+ * fan out lakes x up to this many emails within the hour. Accepted for now - narrowing it to a
+ * single platform-wide claim is a real scope/design change (a new notification scope), not a
+ * same-class fix to make alongside the copy corrections in this PR.
+ */
 export const MAX_LAKE_SPEND_ADDRESSEES = 20;
 
 /** Bounds the ORG lookup fan-out itself (Promise.all over org.findById), separately from the

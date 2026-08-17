@@ -117,7 +117,7 @@ describe('renderSpendNotificationEmail', () => {
     }
   );
 
-  it('does not nest a <p> inside a <p> when a reason string is present (stopped/rate)', () => {
+  it('does not nest a <p> inside a <p>, and does not splice the raw log-style reason into the copy (stopped/rate)', () => {
     const result = renderSpendNotificationEmail({
       kind: 'stopped',
       scope: 'rate',
@@ -126,7 +126,24 @@ describe('renderSpendNotificationEmail', () => {
     });
 
     expect(result.html).not.toMatch(/<p>[^<]*<p>/);
-    expect(result.html).toContain('the embedding rate limit is 0 (stopped)');
+    // N1: the raw reason fragment used to land mid-paragraph as a lowercase, unpunctuated
+    // restatement of the sentence before it - the fixed copy never quotes it verbatim.
+    expect(result.html).not.toContain('the embedding rate limit is 0 (stopped)');
+  });
+
+  it('never promises automatic resumption for a STUCK platform-period denial (B2 - budget at 0, or a single message exceeding the whole budget)', () => {
+    const result = renderSpendNotificationEmail({
+      kind: 'budget_exhausted',
+      scope: 'period',
+      lakeName: 'My Lake',
+      // No windowEndsAt: enforceEmbeddingSpendGate withholds it for exactly this case, since
+      // neither sub-case (budget set to 0, or one message's estimate exceeding the whole
+      // budget) ever clears within the current window.
+      detail: { budgetMicroUsd: 0, periodHours: 24 },
+    });
+
+    expect(result.html).not.toMatch(/resumes automatically/i);
+    expect(result.html).not.toMatch(/re-index then/i);
   });
 
   it('throws on an unhandled kind/scope pair instead of silently rendering the last branch copy', () => {
