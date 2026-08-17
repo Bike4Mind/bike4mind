@@ -380,6 +380,13 @@ export const SSRF_BLOCKED_CODE = 'ERR_SSRF_BLOCKED_ADDRESS';
  *
  * Refuses if ANY resolved address is private, matching `validateUrlForFetch` - a dual-stack host must
  * not become reachable just because Node happened to prefer the healthy family this time.
+ *
+ * The two match in POLICY but deliberately differ in RESOLVER: `validateUrlForFetch` uses
+ * `dns.resolve4`/`resolve6` (c-ares, straight to DNS) while this uses `dns.lookup` (getaddrinfo, which
+ * also reads `/etc/hosts` and the OS cache). They can therefore legitimately disagree - an
+ * `/etc/hosts` entry passes the pre-flight and is refused here. That is fail-closed and the right way
+ * round, but it means "the URL validated and then the connection was blocked" is reachable in normal
+ * operation and is NOT evidence that the pin is broken.
  */
 export const ssrfSafeLookup: LookupFunction = (hostname, options, callback) => {
   // `all: true` regardless of what the caller asked for, because a single-address lookup would only

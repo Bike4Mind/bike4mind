@@ -13,9 +13,15 @@ import { ingestSlackLinkIntoLake, type SlackLinkIngestDeps, type SlackLinkIngest
  * than silently ignored.
  *
  * This surface is now LIVE BY DEFAULT. `EnableDataLakeSlackAdd` defaults on, so the effective gate
- * is the parent `EnableDataLakes` - which still defaults OFF, so nothing reaches here until an org
- * has turned Data Lakes on. The child flag remains the per-install off switch and the rollback
- * lever; see `runDataLakeSlackCommand` below, which enforces both.
+ * is the parent `EnableDataLakes` - which still defaults OFF, so nothing reaches here on a deployment
+ * that has never enabled Data Lakes.
+ *
+ * Both flags are DEPLOYMENT-GLOBAL, not per-org: `adminSettingsRepository.getSettingsValue` is a
+ * `findOne({ settingName })` against a collection keyed on `settingName` alone, and this path never
+ * touches the scoped-override machinery in `@bike4mind/utils` settings. So the bound is "the whole
+ * deployment, once Data Lakes is on" - do NOT read it as a per-org opt-in. The child flag is the
+ * off switch and rollback lever for that deployment; see `runDataLakeSlackCommand` below, which
+ * enforces both.
  */
 
 /** DataLake repository surface the command needs (injected for testability). */
