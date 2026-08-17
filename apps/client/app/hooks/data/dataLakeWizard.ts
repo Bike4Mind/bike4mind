@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { IMessageDataToClient } from '@bike4mind/common';
-import { isSupportedFabFileMimeType, folderTagForFile } from '@bike4mind/common';
+import { isSupportedFabFileMimeType, folderTagForFile, hasBlankTagPrefixSegment } from '@bike4mind/common';
 import type { CreateDataLakeRequestInputType } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
@@ -211,6 +211,13 @@ function classifyUploadError(error: unknown): { kind: UploadErrorKind; message: 
         return {
           kind: 'validation',
           message: 'The tag prefix is too short. Use at least 2 characters ending in ":" (e.g. "legal:").',
+        };
+      }
+      if (hasBlankTagPrefixSegment(prefix)) {
+        return {
+          kind: 'validation',
+          message:
+            'The tag prefix has a blank ":" segment. Give every segment a visible character (e.g. "legal:" or "legal:contracts:").',
         };
       }
     }
@@ -641,6 +648,7 @@ export function useBatchProgressListener() {
   // cause re-render then unsubscribe/resubscribe on every progress tick
   const batchId = useDataLakeWizardStore(s => s.uploadProgress.currentBatchId);
   const updateUploadProgress = useDataLakeWizardStore(s => s.updateUploadProgress);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     if (!batchId) return;
@@ -665,6 +673,11 @@ export function useBatchProgressListener() {
       }
       if (message.status === 'completed' || message.status === 'completed_with_errors') {
         updates.status = 'complete';
+        // Ingest just finished, so a lake's derived health has changed (pending "indexing" members are
+        // now measured). The message carries no lake id, so refresh every mounted health badge; only
+        // the active lake-detail view mounts one, so this is a single cheap refetch at most. Without
+        // it the badge keeps its pending chip until staleTime (2 min) or a remount. (#1666)
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.healthRoot });
       }
       if (message.taxonomyStatus !== undefined) {
         updates.taxonomyStatus = message.taxonomyStatus;
@@ -676,5 +689,5 @@ export function useBatchProgressListener() {
     });
 
     return unsubscribe;
-  }, [batchId, subscribeToAction, updateUploadProgress]);
+  }, [batchId, subscribeToAction, updateUploadProgress, queryClient]);
 }

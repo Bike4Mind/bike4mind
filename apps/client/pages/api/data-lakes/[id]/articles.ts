@@ -3,6 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import {
   adminSettingsRepository,
+  dataLakeAccessGrantRepository,
   dataLakeRepository,
   fabFileRepository,
   projectRepository,
@@ -37,7 +38,7 @@ const handler = baseApi()
 
     // Single shared gate (org-aware; not-found-style denial).
     const dataLake = await dataLakeService.assertLakeAccess(id, await toAccessContext(req), {
-      db: { dataLakes: dataLakeRepository },
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
     const datalakeTag = dataLake.datalakeTag;

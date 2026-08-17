@@ -195,3 +195,50 @@ describe('ImageGenerationService.selectInputImage', () => {
     expect(result.imageSource).toBe('notebook_attachment');
   });
 });
+
+describe('ImageGenerationService.validateUserCredits (per-member cap)', () => {
+  // GROK image quality has a flat usdCost, so requiredCredits is deterministic here.
+  const modelInfo = { id: ImageModels.GROK_IMAGINE_IMAGE_QUALITY } as ModelInfo;
+  const user = { id: 'user1', currentCredits: 1_000_000 } as any;
+  const logger = { ...silentLogger, updateMetadata: vi.fn() } as unknown as Logger;
+  const validate = (organization: unknown) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (new ImageGenerationService({ db: {} } as any) as any).validateUserCredits(
+      user,
+      modelInfo,
+      1,
+      {},
+      logger,
+      organization
+    );
+
+  it('throws when the member is over the org per-member cap even though the pool is funded', async () => {
+    const organization = {
+      id: 'org1',
+      currentCredits: 1_000_000,
+      maxCreditsPerMember: 500,
+      userDetails: [{ id: 'user1', usedCredits: 1000 }],
+    };
+    await expect(validate(organization)).rejects.toThrow(/member credit limit/i);
+  });
+
+  it('allows a member who is still under the cap', async () => {
+    const organization = {
+      id: 'org1',
+      currentCredits: 1_000_000,
+      maxCreditsPerMember: 1_000_000,
+      userDetails: [{ id: 'user1', usedCredits: 0 }],
+    };
+    await expect(validate(organization)).resolves.toMatchObject({ requiredCredits: expect.any(Number) });
+  });
+
+  it('does not gate when the org configures no per-member cap', async () => {
+    const organization = {
+      id: 'org1',
+      currentCredits: 1_000_000,
+      maxCreditsPerMember: null,
+      userDetails: [{ id: 'user1', usedCredits: 999_999 }],
+    };
+    await expect(validate(organization)).resolves.toMatchObject({ requiredCredits: expect.any(Number) });
+  });
+});

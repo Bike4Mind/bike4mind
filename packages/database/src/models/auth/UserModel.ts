@@ -288,9 +288,17 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   async findAllByEmailsOrUsernames(emails: string[], usernames: string[]) {
-    const result = await this.model.find({
-      $or: [{ email: { $in: emails } }, { username: { $in: usernames } }],
-    });
+    // Case-insensitive to match findByUsernameOrEmail below -- email/username are stored
+    // verbatim (no lowercase transform), so a caller-typed case variant must still resolve.
+    // Caveat for callers: uniqueness on this schema is case-SENSITIVE (username_1, email_1),
+    // so two distinct real accounts differing only by case can both match one input string.
+    // A caller that grants access based on a result here (sharingService/create.ts is the one
+    // that does) must treat more than one match per input as ambiguous, not pick one silently.
+    const result = await this.model
+      .find({
+        $or: [{ email: { $in: emails } }, { username: { $in: usernames } }],
+      })
+      .collation({ locale: 'en', strength: 2 });
     return result.map(d => d.toJSON());
   }
 
@@ -891,6 +899,12 @@ UserSchema.index(
     name: 'email_ci',
   }
 );
+
+// Case-insensitive username index for collation-based lookups (findAllByEmailsOrUsernames).
+// Same reasoning as email_ci above: the case-sensitive username_1 index above won't be used
+// by a .collation() query, and without a matching collated index that $in falls back to a
+// full collection scan.
+UserSchema.index({ username: 1 }, { collation: { locale: 'en', strength: 2 }, name: 'username_ci' });
 
 // resetPasswordToken index intentionally removed - password reset flow replaced by OTC email auth
 // Non-unique multikey index for the two-stage OAuth lookup (stage-1 matches by provider identity).

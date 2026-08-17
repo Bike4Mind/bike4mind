@@ -46,6 +46,7 @@ import LogoDevIcon from '@mui/icons-material/LogoDev';
 import LogoutIcon from '@mui/icons-material/LogoutOutlined';
 import RefreshIcon from '@mui/icons-material/RefreshOutlined';
 import { useNotebookLayout } from '..';
+import { MENU_ROW_ICON_SX, menuRowSx, menuSurfaceSx } from './menuSurfaceSx';
 
 export const closeSideNavOnOverlay = (isOverlay: boolean, setOpenSideNav: (open: boolean) => void) => {
   if (isOverlay) setOpenSideNav(false);
@@ -77,35 +78,9 @@ const MenuRow = ({ icon, label, onClick, endDecorator, testId, danger }: MenuRow
         onClick?.();
       }
     }}
-    sx={theme => ({
-      display: 'flex',
-      alignItems: 'center',
-      gap: '12px',
-      px: '10px',
-      height: '40px',
-      borderRadius: '8px',
-      cursor: 'pointer',
-      color: danger ? theme.palette.danger[500] : theme.palette.sidenav?.navItemText,
-      // Joy icons - and the Credits Bike4MindIcon, which fills with var(--Icon-color) -
-      // read --Icon-color, not `color`. Tint them brand light-blue @50% (text.tertiary).
-      '--Icon-color': danger ? theme.palette.danger[500] : theme.palette.text.tertiary,
-      transition: 'background 0.15s',
-      '&:hover': { backgroundColor: theme.palette.notebooklist.hoverBg },
-      '&:focus-visible': { outline: `2px solid ${theme.palette.primary[500]}`, outlineOffset: '-2px' },
-    })}
+    sx={theme => menuRowSx(theme, danger)}
   >
-    <Box
-      sx={{
-        width: 22,
-        height: 22,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        flexShrink: 0,
-      }}
-    >
-      {icon}
-    </Box>
+    <Box sx={MENU_ROW_ICON_SX}>{icon}</Box>
     <Typography level="body-sm" sx={{ flex: 1, color: 'inherit', fontSize: '14px', fontWeight: 400 }} noWrap>
       {label}
     </Typography>
@@ -286,18 +261,9 @@ const ProfileMenu = () => {
   const planLabel =
     selectedAccount && !selectedAccount.personal ? t('account.team', 'Team') : t('account.personal', 'Personal');
 
-  const panelSx = (t2: typeof theme) => ({
-    backgroundColor: t2.palette.background.popup,
-    border: `1px solid ${t2.palette.divider}`,
-    borderRadius: '12px',
-    // Soft, diffuse lift (same recipe as the tutorial frame): a wide low-opacity ambient layer
-    // plus a tighter contact layer, stronger in dark mode where light shadows disappear.
-    boxShadow:
-      t2.palette.mode === 'dark'
-        ? '0 24px 70px rgba(0, 0, 0, 0.28), 0 8px 20px rgba(0, 0, 0, 0.14)'
-        : '0 24px 30px rgba(0, 0, 0, 0.03), 0 8px 20px rgba(0, 0, 0, 0.02)',
-    p: 1,
-  });
+  // menuSurfaceSx is shared with the Data Lake row menu. 12px is the flyout's radius; the
+  // main panel below tightens it to 8px.
+  const panelSx = (t2: typeof theme) => ({ ...menuSurfaceSx(t2), borderRadius: '12px' });
 
   return (
     <Box ref={rootRef} sx={{ position: 'relative' }}>
@@ -307,7 +273,6 @@ const ProfileMenu = () => {
           role="menu"
           sx={theme2 => ({
             ...panelSx(theme2),
-            backgroundColor: theme2.palette.background.surface, // #0E1214 in dark
             borderRadius: '8px',
             position: 'absolute',
             bottom: 'calc(100% + 8px)',
@@ -523,7 +488,6 @@ const ProfileMenu = () => {
                 role="menu"
                 sx={theme2 => ({
                   ...panelSx(theme2),
-                  backgroundColor: theme2.palette.background.surface, // match the panel surface (#0E1214 in dark)
                   position: 'absolute',
                   left: 'calc(100% + 16px)',
                   bottom: 0,

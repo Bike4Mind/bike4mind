@@ -6,6 +6,7 @@ import { buildFabFileChunkScanFilter, NO_EXTRACTABLE_TEXT_NOTE_PREFIX } from './
 type Doc = Record<string, unknown>;
 const matches = (doc: Doc, filter: Record<string, unknown>): boolean =>
   Object.entries(filter).every(([key, cond]) => {
+    if (key === '$or') return (cond as Record<string, unknown>[]).some(sub => matches(doc, sub));
     const value = doc[key];
     if (cond === null) return value === null || value === undefined;
     if (cond && typeof cond === 'object' && '$ne' in cond) return value !== (cond as { $ne: unknown }).$ne;
@@ -112,5 +113,35 @@ describe('buildFabFileChunkScanFilter', () => {
     const base = { status: 'complete', chunkCount: 0, isChunking: false, createdAt: old, deletedAt: null };
     expect(matches({ ...base, mimeType: 'text/markdown' }, filter)).toBe(true);
     expect(matches({ ...base, mimeType: 'application/pdf' }, filter)).toBe(true);
+  });
+});
+
+describe('buildFabFileChunkScanFilter - stale-claim recovery arm', () => {
+  const cutoff = new Date('2026-01-01T00:00:00Z');
+  const staleClaimBefore = new Date('2026-01-01T00:00:00Z'); // a claim older than this is stranded
+  const old = new Date('2025-12-31T00:00:00Z'); // before both cutoffs
+  const filter = buildFabFileChunkScanFilter(cutoff, staleClaimBefore);
+  const base = { status: 'complete', chunkCount: 0, createdAt: old, deletedAt: null };
+
+  it('still selects a normal not-in-progress file', () => {
+    expect(matches({ ...base, isChunking: false }, filter)).toBe(true);
+  });
+
+  it('rescues a claim stranded past the stale cutoff (worker hard-killed before its finally)', () => {
+    expect(matches({ ...base, isChunking: true, chunkClaimedAt: old }, filter)).toBe(true);
+  });
+
+  it('does NOT rescue a fresh in-flight claim (recent chunkClaimedAt)', () => {
+    const recent = new Date('2026-01-01T00:10:00Z'); // after staleClaimBefore
+    expect(matches({ ...base, isChunking: true, chunkClaimedAt: recent }, filter)).toBe(false);
+  });
+
+  it('RESCUES an isChunking:true claim with no timestamp - the backfill for files stuck before chunkClaimedAt existed', () => {
+    // Every code path that sets isChunking:true now stamps chunkClaimedAt in the same write, so a
+    // null/missing stamp on an in-flight file can only be a pre-migration straggler - which would
+    // otherwise stay claimed and unrescuable forever. The sweep re-claims it via a CAS before
+    // enqueue, so a still-running (not crashed) file isn't double-processed.
+    expect(matches({ ...base, isChunking: true, chunkClaimedAt: null }, filter)).toBe(true);
+    expect(matches({ ...base, isChunking: true }, filter)).toBe(true);
   });
 });

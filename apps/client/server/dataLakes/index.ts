@@ -22,7 +22,7 @@ import {
   isImageServeable,
   normalizeTagPrefix,
 } from '@bike4mind/common';
-import type { DataLakeConfig, IFabFileDocument, ManageableDataLakeConfig } from '@bike4mind/common';
+import type { DataLakeConfig, IFabFileDocument } from '@bike4mind/common';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import {
   adminSettingsRepository,
@@ -46,8 +46,14 @@ import { toAccessContext } from './toAccessContext';
  * happen not to carry. Static lakes (no owner concept) still go through that filter.
  * The retrieval resolver does run that filter and compensates with its own owner re-check
  * (see getDynamicDataLakeAccess) - so if the two are ever unified, ownership must survive.
+ *
+ * Returns `DataLakeConfig[]`, not the manageable projection: the dynamic half carries the
+ * `canManage`/`isOwn` labels but the static half does not, and every caller here (article,
+ * tag-count, and answer scoping) reads only id/tag/prefix - never a manage field. Typing the
+ * mixed result as the narrower shared shape keeps the manager-only labels off a path that has
+ * no use for them.
  */
-export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<ManageableDataLakeConfig[]> {
+export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<DataLakeConfig[]> {
   // toAccessContext, not a local literal: it is the one place this shape is built, and it is
   // what resolves entitlementKeys. Building it inline here silently dropped them, so
   // findAccessible saw no entitlement arm and browse lost a lake gated by requiredEntitlement
@@ -57,8 +63,10 @@ export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<M
   // it to stop the two halves of the merge disagreeing about what the caller holds.
   const ctx = await toAccessContext(req);
 
+  // No `users` adapter: this is the content-scope path (article/tag-count/answer gating), which
+  // never renders an owner, so it must not pay for the owner-name lookup the manager list does.
   const dynamic = ctx.isAdmin
-    ? await dataLakeService.listAllDataLakes({ db: { dataLakes: dataLakeRepository } })
+    ? await dataLakeService.listAllDataLakes(ctx, { db: { dataLakes: dataLakeRepository } })
     : await dataLakeService.listDataLakes(ctx, { db: { dataLakes: dataLakeRepository } });
 
   // Admin/developer see every static lake; everyone else is scoped by the any-of

@@ -283,6 +283,56 @@ describe('GET /api/admin/users/:userId/entitlements', () => {
     expect(row.held).toBe(false);
   });
 
+  it('surfaces a partner-granted key OUTSIDE the fixed catalog (e.g. a datalake: grant) as its own row', async () => {
+    const key = 'datalake:acme-legal';
+    expect(allKnownEntitlementKeys()).not.toContain(key); // fixture assumption: pattern-family keys are never listed
+    mockPartnerKeys.mockResolvedValue(new Set([key]));
+    mockUserFind.mockResolvedValue({
+      id: 'u1',
+      tags: [],
+      isAdmin: false,
+      email: 'person@partner.example',
+      emailVerified: true,
+    });
+    const { res, promise } = run({ user: ADMIN });
+    await promise;
+    const row = res._getJSONData().entitlements.find((r: { key: string }) => r.key === key);
+    expect(row).toBeDefined();
+    expect(row.held).toBe(true);
+    expect(
+      row.sources.some(
+        (s: { type: string; detail: string }) => s.type === 'domain' && s.detail.includes('partner rule')
+      )
+    ).toBe(true);
+  });
+
+  it('reports admin-bypass for a partner-granted key outside the catalog too, matching real enforcement', async () => {
+    const key = 'datalake:acme-legal';
+    mockPartnerKeys.mockResolvedValue(new Set([key]));
+    mockUserFind.mockResolvedValue({ id: 'u1', tags: [], isAdmin: true, email: null, emailVerified: false });
+    const { res, promise } = run({ user: ADMIN });
+    await promise;
+    const row = res._getJSONData().entitlements.find((r: { key: string }) => r.key === key);
+    expect(row.held).toBe(true);
+    expect(row.sources).toEqual(expect.arrayContaining([{ type: 'admin-bypass', detail: 'Super Admin' }]));
+  });
+
+  it('does not duplicate a row when a partner rule grants a key already in the fixed catalog', async () => {
+    const key = allKnownEntitlementKeys()[0];
+    mockPartnerKeys.mockResolvedValue(new Set([key]));
+    mockUserFind.mockResolvedValue({
+      id: 'u1',
+      tags: [],
+      isAdmin: false,
+      email: 'person@partner.example',
+      emailVerified: true,
+    });
+    const { res, promise } = run({ user: ADMIN });
+    await promise;
+    const rows = res._getJSONData().entitlements.filter((r: { key: string }) => r.key === key);
+    expect(rows).toHaveLength(1);
+  });
+
   it('surfaces an active subscription as a subscription source', async () => {
     const [priceId, keys] = [...PRICE_ENTITLEMENTS.entries()][0] ?? [];
     if (!priceId || !keys?.[0]) return; // no price row configured in this environment

@@ -1,5 +1,8 @@
-import type { IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
+import type { IDataLakeAccessGrantRepository, IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { type ManageActor } from './manageRule';
+import { resolveCanManageLake } from './authorizeLakeManage';
+import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 import { recomputeLakeStats } from './recomputeLakeStats';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import type { UnarchiveResult } from './unarchiveDataLake';
@@ -7,6 +10,7 @@ import type { UnarchiveResult } from './unarchiveDataLake';
 interface RestoreDeletedDataLakeAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'setStats' | 'activateIfDraft'>;
+    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
     fabFiles: Pick<
       IFabFileRepository,
       'findDeletedByDataLakeTag' | 'findByContentHashesInDataLake' | 'undeleteByDataLakeTag' | 'computeDataLakeStats'
@@ -32,7 +36,7 @@ interface RestoreDeletedDataLakeAdapters {
  * the pre-existing, known behavior for a lake archived before that field existed.
  */
 export const restoreDeletedDataLake = async (
-  actor: { userId: string; isAdmin: boolean },
+  actor: ManageActor,
   dataLakeId: string,
   { db }: RestoreDeletedDataLakeAdapters
 ): Promise<UnarchiveResult> => {
@@ -40,8 +44,8 @@ export const restoreDeletedDataLake = async (
   if (!existing) {
     throw new NotFoundError('Data lake not found');
   }
-  if (!actor.isAdmin && existing.createdByUserId !== actor.userId) {
-    throw new BadRequestError('Only the creator can restore this data lake');
+  if (!(await resolveCanManageLake(existing, actor, { db }))) {
+    throw new BadRequestError('You do not have permission to restore this data lake');
   }
   // Allow re-entry from the transitional 'restoring' state so a crashed prior attempt
   // can be retried (the dedup + undelete + recompute below are idempotent).
@@ -78,7 +82,14 @@ export const restoreDeletedDataLake = async (
   const restoredCount = await db.fabFiles.undeleteByDataLakeTag(scope, duplicateIds, stampedAt, archiveStampToClear);
 
   // Explicit null, not undefined, which mongoose would drop and leave the spent mark in place.
-  await db.dataLakes.update({ id: dataLakeId, status: 'active', filesDeletedAt: null, filesArchivedAt: null });
+  // Terminal transition only - see the note on archiveDataLake's settle step.
+  await db.dataLakes.update({
+    id: dataLakeId,
+    status: 'active',
+    filesDeletedAt: null,
+    filesArchivedAt: null,
+    ...lakeConfigWriteStamp(actor),
+  });
   await recomputeLakeStats(existing, { db });
 
   return { restoredCount, skippedDuplicates };

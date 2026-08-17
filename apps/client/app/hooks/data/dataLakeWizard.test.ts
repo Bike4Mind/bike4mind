@@ -200,6 +200,25 @@ describe('useBatchUpload onError', () => {
     expect(progress.errorMessage).not.toBe(rawZod);
   });
 
+  it('translates a 422 for a blank-segment prefix into the specific field message', async () => {
+    apiPost.mockRejectedValue({ isAxiosError: true, response: { status: 422, data: { error: 'Validation error' } } });
+    seedWizardFile();
+    useDataLakeWizardStore.getState().setConfig({ tagPrefix: 'legal::' });
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
+
+    const progress = useDataLakeWizardStore.getState().uploadProgress;
+    expect(progress.errorKind).toBe('validation');
+    expect(progress.errorMessage).toBe(
+      'The tag prefix has a blank ":" segment. Give every segment a visible character (e.g. "legal:" or "legal:contracts:").'
+    );
+  });
+
   it('classifies a 5xx as a server error', async () => {
     apiPost.mockRejectedValue({ isAxiosError: true, response: { status: 500, data: { error: 'boom' } } });
     seedWizardFile();

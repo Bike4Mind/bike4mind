@@ -18,6 +18,11 @@ import { z } from 'zod';
 export const SimplifiedChatRequestSchema = z.object({
   sessionId: z.string().nullish(), // Accepts string, null, or undefined - null treated as "not provided"
   message: z.string(),
+  // Billing target. When set, the turn is billed to this organization's credit pool - but only
+  // after the handler validates the caller actually belongs to it (never trusted as-is; see
+  // resolveActiveOrg). Omitted (the default) bills the caller personally, matching the app UI's
+  // selected-account model. An org member is no longer forced onto the org pool.
+  organizationId: z.string().optional(),
   model: z.string().optional(), // Made optional - will use admin setting if not provided
   temperature: z.number().min(0).max(2).optional(),
   // Output-budget override. `max_tokens` is the canonical field; `maxTokens` and
@@ -54,6 +59,10 @@ export const SimplifiedChatRequestSchema = z.object({
   // assembled from (promptDetails), so callers can verify what fed the model instead of
   // inferring it from behavior.
   includePromptDetails: z.boolean().optional(),
+  // With wait, also return the system prompt TEXT itself (promptText), not just the breakdown.
+  // Returned inline on this response only and never persisted, since a stored prompt would
+  // reach every reader of the quest. Server-authored blocks stay redacted even here.
+  includeSystemPrompt: z.boolean().optional(),
 });
 
 export type SimplifiedChatRequest = z.infer<typeof SimplifiedChatRequestSchema>;
@@ -82,5 +91,17 @@ export type ChatAck = z.infer<typeof ChatAckSchema>;
 /** Reusable JSON error envelope (plain; the OpenAPI layer annotates it). */
 export const ApiErrorSchema = z.object({
   error: z.string(),
+  request_id: z.string().optional(),
+});
+
+/**
+ * Error envelope for the 422 a credit-metered endpoint returns for two unrelated
+ * reasons: "your body is invalid" and "you cannot afford this". `errorCode` is
+ * what separates them - `insufficientCreditsError` (see insufficientCredits.ts)
+ * tags the credit case, so its absence means an ordinary validation failure.
+ */
+export const InsufficientCreditsErrorSchema = z.object({
+  error: z.string(),
+  errorCode: z.literal('insufficient_credits').optional(),
   request_id: z.string().optional(),
 });

@@ -178,21 +178,42 @@ export function buildOwnershipConditions(
      * name any user and read their files - keep it out of every parsed-input surface.
      */
     lakeMembership?: DataLakeMembershipScope;
+    /**
+     * Drop the "shared 1:1 with this user" arm from base access, keeping owned + group +
+     * data-lake arms, for the per-user WORKSPACES tag/namespace count only (GET
+     * /api/files/tags/counts opts in; GET /api/files/tags does not - see userFileScope.ts).
+     *
+     * The write paths that keep a tag's denormalized name in sync (removeTagByUserId,
+     * updateTagsByUserId) only ever touch files the user owns, so a tag string surviving solely
+     * on a file merely shared with them can never be cleared by renaming/deleting their own tag -
+     * it keeps counting as an orphan bucket (the bug this flag fixes).
+     *
+     * That reconciliation argument is EQUALLY true of a group-shared or data-lake file owned by
+     * someone else - the write paths can't fix those either. Group/data-lake access stays IN as
+     * a deliberate product choice (they are the user's own persistent, subscribed-to workspaces,
+     * not an incidental share), not because it is more reconcilable. The group/data-lake orphan
+     * case this does not cover is a known, accepted gap - see issue #1353's own options 1-3.
+     */
+    excludePersonalShares?: boolean;
   }
 ): object[] {
   // Base access: the file genuinely belongs to / is shared with this user. Reused both
   // as top-level $or arms and to scope the dynamic-lake prefix match.
   const baseAccess: object[] = [
     { userId }, // Files owned by user
-    {
-      // Files explicitly shared with user
-      users: {
-        $elemMatch: {
-          userId,
-          permissions: { $in: ['read', 'write'] },
-        },
-      },
-    },
+    ...(options?.excludePersonalShares
+      ? []
+      : [
+          {
+            // Files explicitly shared with user
+            users: {
+              $elemMatch: {
+                userId,
+                permissions: { $in: ['read', 'write'] },
+              },
+            },
+          },
+        ]),
   ];
 
   // Add group-level sharing if user has groups (organization sharing)
@@ -248,6 +269,9 @@ export function buildOwnershipConditions(
 
   // SCOPED prefix arm (dynamic lakes) - prefix match ANDed with base access, so a
   // user-chosen prefix colliding with another tenant's tags can never bypass ownership.
+  // Inherits excludePersonalShares through baseAccess: a scoped-lake file reachable ONLY via a
+  // 1:1 share would also drop out. Currently unreachable - no caller passes scopedTagPrefixes
+  // alongside excludePersonalShares - but documented so a future one doesn't get surprised.
   const scopedPrefixes = validPrefixes(options?.scopedTagPrefixes);
   if (scopedPrefixes.length > 0) {
     const prefixPattern = scopedPrefixes.map(p => escapeRegex(p)).join('|');

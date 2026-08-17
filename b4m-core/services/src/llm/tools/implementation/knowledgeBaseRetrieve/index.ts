@@ -3,7 +3,13 @@ import { CitableSource, IFabFileDocument } from '@bike4mind/common';
 import { filterRetrievalExcluded, isRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
+import {
+  defangRetrievedContent,
+  renderRetrievedContentBlock,
+  toContentLabel,
+} from '../../../../dataLakeService/renderRetrievedContentBlock';
 import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
+import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
 
 interface KnowledgeBaseRetrieveParams {
   file_id?: string;
@@ -204,7 +210,16 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
               const searchDesc = [query && `query "${query}"`, tags?.length && `tags [${tags.join(', ')}]`]
                 .filter(Boolean)
                 .join(' and ');
-              return `No documents found matching ${searchDesc}. Try broadening your search with search_knowledge_base.`;
+              // This search is over file NAME/TAGS/NOTES, not content, so a freshly attached file
+              // whose metadata does not match the query lands here even though its raw content is
+              // already in the prompt - the caller cannot tell which specific file that is from a
+              // metadata miss alone, so the note stays generic (see attachmentInlineNotice in
+              // knowledgeBaseSearch for the sibling case where the matched file IS identifiable).
+              const inlinedCount = context.inlinedAttachmentIds?.length ?? 0;
+              const inlinedNote = inlinedCount
+                ? ` ${inlinedCount} file(s) attached to this conversation may not be indexed for search yet - if so, their content was already included directly in the conversation above; answer from that instead of reporting them as inaccessible.`
+                : '';
+              return `No documents found matching ${searchDesc}. Try broadening your search with search_knowledge_base.${inlinedNote}`;
             }
           }
 
@@ -212,6 +227,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           let totalCharsUsed = 0;
           const sections: string[] = [];
           const retrievedFiles: IFabFileDocument[] = [];
+          const zeroChunkFiles: IFabFileDocument[] = [];
 
           for (const file of files) {
             if (totalCharsUsed >= charBudget) break;
@@ -275,6 +291,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
 
             if (chunksRead === 0) {
               context.logger.log(`📖 Knowledge Retrieve: No chunks for file ${file.fileName} (${file.id})`);
+              zeroChunkFiles.push(file);
               continue;
             }
 
@@ -302,12 +319,18 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                   ? `${content.length} (truncated at budget)`
                   : `${content.length}`;
 
+            // Untrusted on every part that comes from the document, not just the body: the file
+            // name and tag list are attacker-influenced too, and a newline in either would carry a
+            // forged marker into the header lines. See renderRetrievedContentBlock.
             sections.push(
-              `### ${file.fileName} (ID: ${file.id})\n` +
-                `Tags: ${fileTags}\n` +
+              `### ${toContentLabel(file.fileName)} (ID: ${file.id})\n` +
+                `Tags: ${toContentLabel(fileTags)}\n` +
                 `Chunks: ${chunkLabel} | Characters: ${charLabel}\n` +
+                // Deliberately a literal, not RETRIEVED_SECTION_SEPARATOR: this rule divides one
+                // file's metadata from its body, while that constant joins one section to the next.
+                // Same glyph, different jobs - they are free to diverge.
                 `---\n` +
-                content
+                defangRetrievedContent(content)
             );
 
             totalCharsUsed += content.length;
@@ -315,7 +338,46 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           }
 
           if (retrievedFiles.length === 0) {
-            return 'Found matching documents but they have no indexed content. The files may not have been processed yet.';
+            // A file already inlined into this turn's prompt (attached but still chunking) has its
+            // content in front of the model regardless of this zero-chunk result - say so explicitly
+            // so a tool-eager model does not read "no indexed content" as "I cannot access this file"
+            // and discard content it already has. A file NOT in inlinedAttachmentIds (e.g. a lake doc
+            // genuinely still indexing) keeps the honest "not yet processed" wording - it is not
+            // inline anywhere, so claiming otherwise would be false. "Full content" is only claimed
+            // for fullyInlinedAttachmentIds - a merely-inlined file can be a cosine excerpt or a
+            // truncated head (#1163 review), so that claim would be false for it.
+            const inlined = new Set(context.inlinedAttachmentIds ?? []);
+            const fullyInlined = new Set(context.fullyInlinedAttachmentIds ?? []);
+            const inlinedZeroChunkFiles = zeroChunkFiles.filter(f => inlined.has(f.id));
+            const fullNames = inlinedZeroChunkFiles.filter(f => fullyInlined.has(f.id)).map(f => `"${f.fileName}"`);
+            const partialNames = inlinedZeroChunkFiles.filter(f => !fullyInlined.has(f.id)).map(f => `"${f.fileName}"`);
+            if (fullNames.length > 0 || partialNames.length > 0) {
+              const parts: string[] = [];
+              if (fullNames.length > 0) {
+                parts.push(
+                  `The document(s) ${fullNames.join(', ')} are attached to this conversation and still ` +
+                    `being indexed, so this tool has no stored text for them yet. Their full content was ` +
+                    `already provided earlier in this conversation (look for a message starting with ` +
+                    `"Here is the content from the attached file" or, with multiple files, "Here are the ` +
+                    `contents from"). Answer the user's question from that content.`
+                );
+              }
+              if (partialNames.length > 0) {
+                parts.push(
+                  `The document(s) ${partialNames.join(', ')} are attached to this conversation and still ` +
+                    `being indexed, so this tool has no stored text for them yet. PART of their content was ` +
+                    `already provided earlier in this conversation, but what was shown may be an excerpt or ` +
+                    `a truncated head - answer from that if it covers the question, but do not assume it is ` +
+                    `the whole document.`
+                );
+              }
+              return `${parts.join(' ')} Do NOT tell the user you cannot access the attachment.`;
+            }
+            return (
+              'Found matching documents but no stored text for them yet - indexing may still be in ' +
+              'progress. If content for these documents already appears earlier in this conversation, ' +
+              'answer from that; only report them as unavailable if nothing about them appears above.'
+            );
           }
 
           // Create citable source chips for the UI - mirrors web_search pattern
@@ -352,8 +414,16 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             context.logger.log(`📖 Knowledge Retrieve: Stored ${citables.length} citables`);
           }
 
+          // This channel returns WHOLE documents (up to ABSOLUTE_MAX_CHARS) and is reachable
+          // without a prior search, so the delimiter matters more here than on the search path.
+          // The count line is ours and stays outside the block.
           const header = `Retrieved content from ${retrievedFiles.length} of ${files.length} document(s):\n`;
-          const result = header + '\n' + sections.join('\n\n---\n\n');
+          // Anti-invention rule ahead of the raw document text so it frames how to use it: this tool
+          // returns the largest, unclipped block of chunk content, and both patched search surfaces
+          // route the model here for "more detail" - the exact moment a leading question tempts it to
+          // top off the answer with an unsupported specific. Same shared const as the other surfaces.
+          // The rule is our framing and stays outside the delimited content block.
+          const result = header + '\n' + `${GROUNDED_NO_INVENTION_RULE}\n\n` + renderRetrievedContentBlock(sections);
 
           // Retrieval-scoped lake-prompt injection (#1108): prepend the operating instructions of
           // the trusted lakes this content came from. Skipped for the agent-scoped branch, which

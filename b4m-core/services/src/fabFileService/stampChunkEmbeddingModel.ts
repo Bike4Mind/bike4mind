@@ -33,7 +33,13 @@ export const stampChunkEmbeddingModel = async (
   fabFileId: string,
   embeddingModel: string,
   { db }: StampChunkEmbeddingModelAdapters,
-  fileUpdate: { vectorized?: boolean; vectorizedChunkCount?: number; isVectorizing?: boolean } = {}
+  fileUpdate: {
+    vectorized?: boolean;
+    vectorizedChunkCount?: number;
+    isVectorizing?: boolean;
+    embeddedChunkCount?: number;
+    embeddedCharCount?: number;
+  } = {}
 ): Promise<void> => {
   await withTransaction(async () => {
     await db.fabFileChunks.updateEmbeddingModel(fabFileId, embeddingModel);
