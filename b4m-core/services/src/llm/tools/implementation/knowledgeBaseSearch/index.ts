@@ -14,6 +14,7 @@ import {
   type ITokenizer,
 } from '@bike4mind/utils';
 import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
+import { normalizeId } from '@bike4mind/utils/normalizeId';
 import type { Logger } from '@bike4mind/observability';
 import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
@@ -36,6 +37,8 @@ import {
 } from '../../../../dataLakeService/semanticDataLakeSearch';
 import { resolveSearchBudgets, type ResolvedSearchBudgets } from '../../../../dataLakeService/resolveSearchBudgets';
 import { openSearchChunkAdapter } from '../../../../dataLakeService/openSearchChunkAdapter';
+import { attributeAccessedLakeIds, type AttributableLake } from '../../../../dataLakeService/attributeAccessedLakes';
+import { recordLakeAccessEvent } from '../../../../dataLakeService/recordLakeAccessEvent';
 import { getEffectiveLLMApiKeys } from '../../../../apiKeyService';
 import { recordOperationalUsage } from '../../../../billing';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
@@ -349,10 +352,22 @@ interface SemanticArmResult {
   /** Files this arm actually matched, for attachmentInlineNotice - see its call site. Empty
    *  whenever `output` is null (nothing matched, or the arm never ran). */
   fileHits: Array<{ id: string; fileName: string }>;
+  /** Lake ids attributed from the matched files' tags, for the access-event audit.
+   *  Always empty for the agent-scoped arm, which never consults lake access at all. */
+  lakeIds: string[];
+  /** Chunk ids of the matched passages, for the same audit event. */
+  chunkIds: string[];
 }
 
 /** Nothing to report: dependency missing, no accessible corpus, or the arm threw. */
-const NO_SEMANTIC_RESULT: SemanticArmResult = { output: null, skipNotice: null, datalakeTags: [], fileHits: [] };
+const NO_SEMANTIC_RESULT: SemanticArmResult = {
+  output: null,
+  skipNotice: null,
+  datalakeTags: [],
+  fileHits: [],
+  lakeIds: [],
+  chunkIds: [],
+};
 
 /**
  * Semantic-first KB search: embed the query and cosine-rank against the pre-computed chunk
@@ -379,7 +394,7 @@ async function trySemanticKbSearch(
     if (!embedCtx) return NO_SEMANTIC_RESULT;
     const { embeddingModel, provider, apiKeyTable, budgets, vectorSearchEnabled } = embedCtx;
 
-    const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await getDynamicDataLakeAccess(context);
+    const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } = await getDynamicDataLakeAccess(context);
     // No accessible data lake - keyword search owns the user's own files.
     if (dataLakeTags.length === 0) return NO_SEMANTIC_RESULT;
 
@@ -414,7 +429,8 @@ async function trySemanticKbSearch(
 
     const skipNotice = describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
     // No hits: the keyword arm answers, but it has to carry the notice with it.
-    if (search.results.length === 0) return { output: null, skipNotice, datalakeTags: [], fileHits: [] };
+    if (search.results.length === 0)
+      return { output: null, skipNotice, datalakeTags: [], fileHits: [], lakeIds: [], chunkIds: [] };
 
     // Honor the max_results contract: topK fetches a wider pool (>=6) so cosine ranking has
     // candidates, but we return at most maxResults passages - parity with the keyword path's
@@ -433,6 +449,16 @@ async function trySemanticKbSearch(
       skipNotice,
       datalakeTags: datalakeTagsFrom(ranked.flatMap(r => r.fileTags)),
       fileHits: ranked.map(r => ({ id: r.fileId, fileName: r.fileName })),
+      // semanticDataLakeSearch's file search is a MIXED corpus (includeShared: true, no
+      // restrictToDataLake - collectScopedFiles ORs the caller's own/shared files in alongside
+      // the lake arms), same as the keyword arm below - a hit with no recoverable tag may be the
+      // caller's own private file, so this must NOT fall back to the full scope.
+      lakeIds: attributeAccessedLakeIds(
+        ranked.map(r => r.fileTags),
+        lakes,
+        { allowFullScopeFallback: false }
+      ),
+      chunkIds: ranked.map(r => r.chunkId),
     };
   } catch (err) {
     context.logger.warn('📚 [semantic] KB search failed, falling back to keyword:', err);
@@ -486,7 +512,8 @@ async function tryScopedSemanticKbSearch(
     await recordAllEmbeddingUsage(context, query, embeddingModel, provider, search.alternateModelsEmbedded ?? []);
 
     const skipNotice = describeEmbeddingMismatch(search.embeddingMismatch, search.embeddingModel);
-    if (search.results.length === 0) return { output: null, skipNotice, datalakeTags: [], fileHits: [] };
+    if (search.results.length === 0)
+      return { output: null, skipNotice, datalakeTags: [], fileHits: [], lakeIds: [], chunkIds: [] };
 
     const ranked = search.results.slice(0, maxResults);
     await emitSemanticCitables(context, ranked, "this agent's knowledge base", skipNotice);
@@ -497,6 +524,8 @@ async function tryScopedSemanticKbSearch(
       skipNotice,
       datalakeTags: [],
       fileHits: ranked.map(r => ({ id: r.fileId, fileName: r.fileName })),
+      lakeIds: [],
+      chunkIds: ranked.map(r => r.chunkId),
     };
   } catch (err) {
     context.logger.warn('📚 [semantic] scoped KB search failed, falling back to scoped keyword:', err);
@@ -727,11 +756,41 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             semantic.datalakeTags,
             injectedLakeTags
           );
+          // Best-effort audit write, only reached when semantic.output is non-null - a null output
+          // means the search was skipped or found nothing, so there is no lake read to record.
+          // resolvedLakeIds stays empty for the agent-scoped arm by design (semantic.lakeIds is
+          // always [] there) - it never consults lake access, and it is recorded regardless
+          // (membership IS the authorization). The unscoped arm's corpus is mixed, so it is
+          // skipped entirely when nothing retrieved is actually attributable to a lake.
+          if (scope || semantic.lakeIds.length > 0) {
+            recordLakeAccessEvent(
+              context.db.lakeAccessEvents,
+              {
+                // Always 'user', including an agent-executor run - see ToolContext.userId's doc comment.
+                principalKind: 'user',
+                principalId: context.userId,
+                organizationId: normalizeId(context.user.organizationId),
+                resolvedLakeIds: semantic.lakeIds,
+                // semantic.fileHits is chunk-level (one entry per ranked passage, per fileHits'
+                // own construction below) - deduped the same way semantic-search.ts's sibling
+                // route does, so this counts files read, not chunks matched.
+                fileIds: [...new Set(semantic.fileHits.map(f => f.id))],
+                chunkIds: semantic.chunkIds,
+                surface: scope ? 'chat-kb-search-scoped' : 'chat-kb-search',
+                queryText: query,
+              },
+              context.logger,
+              context.db.adminSettings
+            );
+          }
           return withLakePrompts + attachmentInlineNotice(context, semantic.fileHits);
         }
 
         try {
           let searchResults;
+          // Populated only in the unscoped arm below (mirrors the semantic arm: a scoped call
+          // never consults lake access, so its audit event carries no lake attribution either).
+          let keywordArmLakes: AttributableLake[] = [];
           if (scope) {
             // Scoped keyword arm: restrictToFileIds is the sole authority (skipOwnership -
             // curated files match even when owned by another user, mirroring the semantic
@@ -759,7 +818,9 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             );
           } else {
             // Search files the user has access to (owned + shared + org-shared + data lake)
-            const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await getDynamicDataLakeAccess(context);
+            const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } =
+              await getDynamicDataLakeAccess(context);
+            keywordArmLakes = lakes;
             searchResults = await context.db.fabfiles.search(
               context.userId,
               query,
@@ -899,6 +960,40 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
                 ? `📭 No matches in this agent's knowledge base for "${clippedQuery}"`
                 : `📭 No data-lake matches for "${clippedQuery}" - broadening...`) + skipSuffix
             );
+          }
+
+          // Best-effort audit write, only when the keyword fallback actually found
+          // something - an empty rankedResults means nothing was read. The unscoped arm's
+          // corpus is mixed (owned + shared + org-shared + data lake), so a hit with no
+          // recoverable datalake tag may just be the caller's own private file - never fall
+          // back to the full scope here (unlike the semantic arms, whose corpus is lake-scoped
+          // by construction), and skip the row entirely if nothing is actually attributable to a
+          // lake, since a read that touched zero lake content is not lake access. The scoped arm
+          // has no lake concept at all (resolvedLakeIds is always []) but is recorded regardless -
+          // see the surface's own note on why that row still matters.
+          if (rankedResults.length > 0) {
+            const resolvedLakeIds = attributeAccessedLakeIds(
+              rankedResults.map((f: IFabFileDocument) => f.tags?.map(t => t.name) ?? []),
+              keywordArmLakes,
+              { allowFullScopeFallback: false }
+            );
+            if (scope || resolvedLakeIds.length > 0) {
+              recordLakeAccessEvent(
+                context.db.lakeAccessEvents,
+                {
+                  // Always 'user', including an agent-executor run - see ToolContext.userId's doc comment.
+                  principalKind: 'user',
+                  principalId: context.userId,
+                  organizationId: normalizeId(context.user.organizationId),
+                  resolvedLakeIds,
+                  fileIds: rankedResults.map((f: IFabFileDocument) => f.id),
+                  surface: scope ? 'chat-kb-search-scoped' : 'chat-kb-search',
+                  queryText: query,
+                },
+                context.logger,
+                context.db.adminSettings
+              );
+            }
           }
 
           return (

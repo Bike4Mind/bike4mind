@@ -1522,3 +1522,133 @@ describe('KnowledgeRetrievalFeature untrusted-content delimiter (#1659)', () => 
     expect(content).toContain('cite ONLY by bracketed index');
   });
 });
+
+describe('KnowledgeRetrievalFeature access-event audit', () => {
+  const embeddingFactory = {
+    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+  };
+
+  const LAKE = {
+    id: 'lake1',
+    slug: 'lake1',
+    name: 'Lake One',
+    fileTagPrefix: 'lake1:',
+    datalakeTag: 'datalake:lake1',
+    createdByUserId: 'u1',
+    status: 'active',
+  };
+
+  const record = vi.fn().mockResolvedValue(undefined);
+  // recordLakeAccessEvent awaits a platform-retention settings read before calling record(), so
+  // the call lands one microtask after getContextMessages itself returns - flush before asserting.
+  const flushAsync = () => new Promise(resolve => setImmediate(resolve));
+
+  const makeCtx = (fileTags: { name: string }[] = [{ name: 'datalake:lake1' }]) => {
+    const files = [{ id: 'fileA', fileName: 'Handbook.pdf', tags: fileTags, vectorized: true }];
+    return {
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+      user: { id: 'u1', tags: [], groups: [] },
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: files, hasMore: false, total: files.length }) },
+        fabfilechunks: {
+          findByFabFileId: vi.fn(),
+          findVectorsByFabFileIds: vi.fn(() =>
+            Promise.resolve([{ id: 'chA1', fabFileId: 'fileA', text: 'pto accrues monthly', vector: [1, 0] }])
+          ),
+        },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
+        dataLakes: {
+          findActiveByUserTags: vi.fn().mockResolvedValue([]),
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([LAKE]),
+        },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        lakeAccessEvents: { record },
+      },
+      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+  };
+
+  beforeEach(() => record.mockClear());
+
+  it('records a forced-retrieval event attributed to the tag-matched lake', async () => {
+    const ctx = makeCtx();
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+
+    await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'pto policy'
+    );
+    await flushAsync();
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principalKind: 'user',
+        principalId: 'u1',
+        resolvedLakeIds: ['lake1'],
+        fileIds: ['fileA'],
+        chunkIds: ['chA1'],
+        surface: 'forced-retrieval',
+        queryText: 'pto policy',
+      })
+    );
+  });
+
+  // Forced retrieval's candidate search is a MIXED corpus (owned + shared + org-shared + data
+  // lake, via includeShared:true with no restrictToDataLake) - unlike the route/semantic-arm
+  // sites, a grounded file with no recoverable tag might just be the caller's own private file,
+  // so this must NOT fall back to the full scope, and must not record at all.
+  it('does not record when the grounded file carries no recoverable tag (mixed corpus, no fallback)', async () => {
+    const ctx = makeCtx([{ name: 'opti:policy' }]);
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+
+    await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'pto policy'
+    );
+    await flushAsync();
+
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('does not record an event when nothing grounds (abstention)', async () => {
+    const ctx = makeCtx();
+    ctx.db.fabfiles.search = vi.fn().mockResolvedValue({ data: [], hasMore: false, total: 0 });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+
+    await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'pto policy'
+    );
+
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('still returns the retrieved context when the audit write rejects', async () => {
+    record.mockRejectedValueOnce(new Error('mongo blip'));
+    const ctx = makeCtx();
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+
+    const messages = await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'pto policy'
+    );
+    await flushAsync();
+
+    expect(messages[0]?.content).toContain('Handbook.pdf');
+    expect(record).toHaveBeenCalled();
+  });
+});

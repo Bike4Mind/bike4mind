@@ -16,6 +16,7 @@ import {
   ImageModerationIncident,
   IUsageEventRepository,
   IOrganizationRepository,
+  ILakeAccessEventRepository,
   ModelInfo,
 } from '@bike4mind/common';
 
@@ -61,6 +62,10 @@ export type ToolLlmUsage = {
 };
 
 export interface ToolContext {
+  /** The only principal signal a tool call carries - identical whether this turn is a live chat
+   * message or an autonomous agent-executor run. Lake access audit events (recordLakeAccessEvent)
+   * record every ToolContext-driven read as principalKind: 'user' for this reason; distinguishing
+   * an agent run would need a new marker threaded through here first. */
   userId: string;
   user: IUserDocument; // Full user document for tools that need user data (e.g., blog integration)
   /**
@@ -109,6 +114,11 @@ export interface ToolContext {
      * an absent resolver would silently drop every org lake from retrieval.
      */
     organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds'>;
+    /**
+     * Lake access audit sink. Optional - a host that hasn't wired it in degrades to a
+     * silent no-op (see recordLakeAccessEvent) rather than blocking retrieval.
+     */
+    lakeAccessEvents?: Pick<ILakeAccessEventRepository, 'record'>;
   };
   /**
    * Caller's RESOLVED entitlement keys (subscription- + tag-derived), resolved app-side

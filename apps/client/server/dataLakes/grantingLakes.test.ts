@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { DataLakeConfig, IFabFileDocument } from '@bike4mind/common';
-import { isFileInAccessibleLake } from './index';
+import { grantingLakes, isFileInAccessibleLake } from './grantingLakes';
 
 // A STATIC-registry lake: id matches a DATA_LAKES entry, so its fileTagPrefix is an OPEN prefix
 // (shared KB, ownership-bypass by design).
@@ -49,5 +49,49 @@ describe('isFileInAccessibleLake (single-file lake authorization gate)', () => {
 
   it('handles a file with no tags', () => {
     expect(isFileInAccessibleLake([staticLake], fileWith([]))).toBe(false);
+  });
+});
+
+describe('grantingLakes (names the specific grantor(s), not just a boolean)', () => {
+  // The same predicate as isFileInAccessibleLake, but the caller that needs to know WHICH lake
+  // granted access - notably the lake-access-audit attribution - must use this, not a full-scope
+  // fallback, or an open-prefix grant (which has no tag to reverse) over-attributes to every
+  // accessible lake instead of the one that actually granted it.
+  const otherDynamicLake = {
+    id: 'team-beta-lake',
+    slug: 'team-beta',
+    name: 'Team Beta',
+    fileTagPrefix: 'teambeta:',
+    datalakeTag: 'datalake:team-beta',
+  } as DataLakeConfig;
+
+  it('names the one static lake whose OPEN prefix matched, not every accessible lake', () => {
+    expect(grantingLakes([staticLake, dynamicLake], ['opti:family:scheduling']).map(l => l.id)).toEqual([
+      'opti-knowledge',
+    ]);
+  });
+
+  it('names the dynamic lake granted by its meta-tag', () => {
+    expect(grantingLakes([staticLake, dynamicLake], ['datalake:team-alpha', 'teamalpha:notes']).map(l => l.id)).toEqual(
+      ['team-alpha-lake']
+    );
+  });
+
+  it('can name more than one grantor when tags match multiple lakes', () => {
+    expect(
+      grantingLakes([staticLake, dynamicLake, otherDynamicLake], ['opti:family:scheduling', 'datalake:team-beta'])
+        .map(l => l.id)
+        .sort()
+    ).toEqual(['opti-knowledge', 'team-beta-lake']);
+  });
+
+  it('never names a dynamic lake from its scoped prefix alone (cross-tenant safety)', () => {
+    expect(grantingLakes([dynamicLake], ['teamalpha:notes'])).toEqual([]);
+  });
+
+  it('returns empty for unrelated tags, an empty lake list, or no tags at all', () => {
+    expect(grantingLakes([staticLake, dynamicLake], ['personal:draft'])).toEqual([]);
+    expect(grantingLakes([], ['opti:family:scheduling'])).toEqual([]);
+    expect(grantingLakes([staticLake], [])).toEqual([]);
   });
 });

@@ -38,6 +38,7 @@ import {
   skillRepository,
   usageEventRepository,
   imageModerationIncidentRepository,
+  lakeAccessEventRepository,
   mcpServerRepository,
 } from '@bike4mind/database';
 import { registerLambdaErrorHandlers, getSettingsByNames, fetchAgentConversationHistory } from '@bike4mind/utils';
@@ -1274,6 +1275,7 @@ async function processExecution(
         // inline in the tool) - this only wires the incident record, not the block.
         imageModerationIncidents: imageModerationIncidentRepository,
         organizations: organizationRepository,
+        lakeAccessEvents: lakeAccessEventRepository,
       },
       sessionRepository: sessionRepository,
       storage: getFilesStorage(),
@@ -2848,6 +2850,7 @@ async function processSubagentDispatch(
         // inline in the tool) - this only wires the incident record, not the block.
         imageModerationIncidents: imageModerationIncidentRepository,
         organizations: organizationRepository,
+        lakeAccessEvents: lakeAccessEventRepository,
       },
       sessionRepository,
       storage: getFilesStorage(),

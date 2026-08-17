@@ -44,6 +44,7 @@ import {
   CitableSource,
   OpenAIEmbeddingModel,
   ImageModerationIncident,
+  ILakeAccessEventRepository,
   isExperimentalFeatureEnabled,
   isSupportedEmbeddingModel,
   resolveHistoryFetchLimit,
@@ -58,6 +59,8 @@ import {
   resolveMajorityEmbeddingModel,
 } from '../dataLakeService/embeddingMismatch';
 import { getAccessibleDataLakePrompts, datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
+import { attributeAccessedLakeIds } from '../dataLakeService/attributeAccessedLakes';
+import { recordLakeAccessEvent } from '../dataLakeService/recordLakeAccessEvent';
 import { renderDataLakePromptSection } from '../dataLakeService/renderDataLakePromptBlock';
 import {
   defangRetrievedContent,
@@ -73,6 +76,7 @@ import {
   fetchAndProcessPreviousMessages,
   IQueueService,
   ITokenizer,
+  normalizeId,
   postMessageToSlack,
   QuestMaster,
 } from '@bike4mind/utils';
@@ -166,6 +170,11 @@ interface DatabaseAdapters {
    * incident audit record, not the block.
    */
   imageModerationIncidents?: { record(input: ImageModerationIncident): Promise<unknown> };
+  /**
+   * Lake access audit sink. Optional - see recordLakeAccessEvent, which no-ops when
+   * a host hasn't wired it in rather than blocking forced retrieval.
+   */
+  lakeAccessEvents?: Pick<ILakeAccessEventRepository, 'record'>;
 }
 export type featureNames =
   | 'slack'
@@ -1559,6 +1568,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     dataLakeTags: string[];
     dataLakeTagPrefixes: string[];
     scopedTagPrefixes: string[];
+    lakes: Awaited<ReturnType<typeof getDynamicDataLakeAccess>>['lakes'];
   }> {
     const { db, user } = this.chatCompletion;
     const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
@@ -1723,7 +1733,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     }
 
     try {
-      const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await this.resolveDataLakeAccess();
+      const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } = await this.resolveDataLakeAccess();
 
       // 1. List the lake-accessible files (empty query -> all accessible). Ranking is by semantic
       //    similarity below, but the ORDER still matters: on a lake larger than the candidate cap
@@ -1919,9 +1929,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       let used = 0;
       const sections: string[] = [];
       const sourceFileIds: string[] = [];
+      const injectedChunkIds: string[] = [];
       // `scored` is already floor-filtered during the scan, so the walk only enforces the budget.
       for (const candidate of scored) {
         if (used >= FORCED_RETRIEVAL_CHAR_BUDGET) break;
+        injectedChunkIds.push(candidate.id);
         const file = fileById.get(candidate.fabFileId);
         const remaining = FORCED_RETRIEVAL_CHAR_BUDGET - used;
         // Defang BEFORE the budget slice, not after: the defang adds one space per line-initial
@@ -2082,6 +2094,36 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // prompt. Ahead of the retrieved content so it frames how to use it. Fail-safe: any failure
       // here degrades to no lake prompt and never drops the retrieved context.
       const lakePromptMessage = await this.resolveRetrievedLakePromptMessage(sourceFileIds, fileById);
+
+      // Best-effort audit write, attributed via the tags on the files this turn actually
+      // grounded on (sourceFileIds), not the wider scanned candidate pool. The candidate search
+      // is a mixed corpus (owned + shared + org-shared + data lake, via includeShared:true with
+      // no restrictToDataLake), so a grounded file with no recoverable datalake tag may be the
+      // caller's own private file - never fall back to the full scope, and skip the row entirely
+      // if the turn grounded on zero lake content.
+      const forcedRetrievalLakeIds = attributeAccessedLakeIds(
+        sourceFileIds.map(fid => fileById.get(fid)?.tags?.map(t => t.name) ?? []),
+        lakes,
+        { allowFullScopeFallback: false }
+      );
+      if (forcedRetrievalLakeIds.length > 0) {
+        recordLakeAccessEvent(
+          this.chatCompletion.db.lakeAccessEvents,
+          {
+            principalKind: 'user',
+            principalId: user.id,
+            organizationId: normalizeId(user.organizationId),
+            resolvedLakeIds: forcedRetrievalLakeIds,
+            fileIds: sourceFileIds,
+            chunkIds: injectedChunkIds,
+            surface: 'forced-retrieval',
+            queryText: query,
+          },
+          this.logger,
+          this.chatCompletion.db.adminSettings
+        );
+      }
+
       return lakePromptMessage ? [lakePromptMessage, retrievedContext] : [retrievedContext];
     } catch (error) {
       // A failed search still leaves the turn ungrounded, so it gets the abstention block for the
