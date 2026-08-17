@@ -400,7 +400,7 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
     {
       label: 'Output Format',
       type: 'select' as const,
-      value: (_output_format ?? 'jpeg') as 'jpeg' | 'png',
+      value: (_output_format ?? 'png') as 'jpeg' | 'png',
       onChange: (value: 'jpeg' | 'png' | null) => value && setLLM({ output_format: value }),
       options: [
         { value: 'jpeg', label: 'JPEG' },

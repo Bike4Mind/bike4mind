@@ -496,7 +496,7 @@ const ResetButton: React.FC<{
       width: undefined,
       height: undefined,
       aspect_ratio: undefined,
-      output_format: isImageModel(model) ? 'jpeg' : undefined,
+      output_format: isImageModel(model) ? 'png' : undefined,
       prompt_upsampling: supportsPromptUpsampling(model) ? false : undefined,
       safety_tolerance: isBflImageModel(model) ? BFL_SAFETY_TOLERANCE.DEFAULT : undefined,
     });
@@ -1803,7 +1803,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
       {
         label: 'Output Format',
         type: 'select' as const,
-        value: (output_format ?? 'jpeg') as 'jpeg' | 'png',
+        value: (output_format ?? 'png') as 'jpeg' | 'png',
         onChange: (value: 'jpeg' | 'png' | null) => value && setLLM({ output_format: value }),
         options: [
           { value: 'jpeg', label: 'JPEG' },

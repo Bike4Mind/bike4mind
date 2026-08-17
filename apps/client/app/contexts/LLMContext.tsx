@@ -149,7 +149,7 @@ const DEFAULTS = {
   safety_tolerance: undefined,
   prompt_upsampling: false,
   seed: null,
-  output_format: 'jpeg' as 'jpeg' | 'png',
+  output_format: 'png' as 'jpeg' | 'png',
   width: 1024,
   height: 768,
   aspect_ratio: '16:9',
