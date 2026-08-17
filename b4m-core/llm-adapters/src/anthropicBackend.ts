@@ -18,6 +18,7 @@ import {
   type ModelInfo,
 } from '@bike4mind/common';
 import { executeToolsBatch } from './executeToolsBatch';
+import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   CompletionInfo,
   DEFAULT_MAX_TOOL_CALLS,
@@ -686,7 +687,7 @@ export class AnthropicBackend implements ICompletionBackend {
     messages: IMessage[],
     options: Partial<ICompletionOptions>,
     cb: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
-    toolsUsed: Array<{ name: string; arguments?: string; id?: string }> = []
+    toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     this.currentModel = model;
     options = {
@@ -858,7 +859,19 @@ export class AnthropicBackend implements ICompletionBackend {
       this.logger.debug(
         `[Pre-API #6181] Sending ${filteredMessages.length} messages with ${toolUseCount} tool_use and ${toolResultCount} tool_result blocks`
       );
-      if (toolUseCount !== toolResultCount) {
+      // A replayed history turn (utils.ts Priority 2) can carry perfectly-paired tool blocks from
+      // a PRIOR turn that had tools, even when THIS turn offers none (e.g. toolMode switched off
+      // between turns) - Anthropic rejects any tool_use/tool_result block when `tools` is absent
+      // from the request regardless of pairing, and a balanced count means the mismatch repair
+      // below never fires. Strip proactively instead of relying on the post-400 retry in
+      // ChatCompletionProcess's isToolPairingError net to recover a request we can predict fails.
+      if (!options.tools?.length) {
+        this.logger.warn(
+          `[Pre-API #6181] Tool blocks present (tool_use: ${toolUseCount}, tool_result: ${toolResultCount}) but no tools offered this turn. Stripping all tool blocks.`
+        );
+        filteredMessages = stripAllToolBlocks(filteredMessages, this.logger);
+        ({ useCount: toolUseCount, resultCount: toolResultCount } = countToolBlocks(filteredMessages));
+      } else if (toolUseCount !== toolResultCount) {
         this.logger.warn(
           `[Pre-API #6181] Tool block mismatch! tool_use: ${toolUseCount}, tool_result: ${toolResultCount}. Attempting auto-repair...`
         );
@@ -1702,6 +1715,14 @@ export class AnthropicBackend implements ICompletionBackend {
                 // Normalize the toolsUsed entry so callers can safely JSON.parse arguments
                 const entry = toolsUsed.find(t => t.name === name && t.id === id);
                 if (entry) entry.arguments = '{}';
+                // Mirrors the non-streaming site below: stamp toolsUsed too, so a call that
+                // never ran (not merely failed) still shows as such in promptMeta.
+                recordToolResult(
+                  toolsUsed,
+                  { id, name },
+                  'Error: Tool parameters were corrupted due to a stream interruption. Please retry.',
+                  false
+                );
                 continue;
               }
 
@@ -1790,6 +1811,10 @@ export class AnthropicBackend implements ICompletionBackend {
                   await cb(results, { inputTokens: 0, outputTokens: 0, toolsUsed });
                 });
 
+                // outcome.id (not toolId, which falls back to a fresh randomUUID) is what
+                // toolsUsed was pushed with, so it's what correlates back to that entry.
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
+
                 this.pushToolMessages(
                   messages,
                   { id: toolId, name: outcome.name, parameters: outcome.parameters },
@@ -1799,16 +1824,19 @@ export class AnthropicBackend implements ICompletionBackend {
                 // Re-throw permission denials; inject error result for all others
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
 
+                const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
                 this.logger.error('[Tool Execution] Tool failed', {
                   model,
                   toolName: outcome.name,
-                  error: outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
+                  error: errorMessage,
                 });
 
+                const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
                 this.pushToolMessages(
                   messages,
                   { id: toolId, name: outcome.name, parameters: outcome.parameters },
-                  `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`
+                  observation
                 );
               }
             }
@@ -2048,7 +2076,16 @@ export class AnthropicBackend implements ICompletionBackend {
                 { id, name, model, isMcpTool, streaming: false },
                 messages
               );
-              if (!parsedParams) continue;
+              if (!parsedParams) {
+                // Non-streaming twin of the streaming site above.
+                recordToolResult(
+                  toolsUsed,
+                  { id, name },
+                  'Error: Tool parameters were corrupted due to a stream interruption. Please retry.',
+                  false
+                );
+                continue;
+              }
 
               resolvedTools.push({ id: id ?? '', name, parameters, parsedParams, toolFn, isMcpTool });
             }
@@ -2135,6 +2172,8 @@ export class AnthropicBackend implements ICompletionBackend {
                   await cb(results, { toolsUsed });
                 });
 
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
+
                 this.pushToolMessages(
                   messages,
                   { id: toolId, name: outcome.name, parameters: outcome.parameters },
@@ -2143,16 +2182,19 @@ export class AnthropicBackend implements ICompletionBackend {
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
 
+                const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
                 this.logger.error('[Tool Execution] Tool failed (non-streaming)', {
                   model,
                   toolName: outcome.name,
-                  error: outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
+                  error: errorMessage,
                 });
 
+                const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
                 this.pushToolMessages(
                   messages,
                   { id: toolId, name: outcome.name, parameters: outcome.parameters },
-                  `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`
+                  observation
                 );
               }
             }

@@ -877,9 +877,13 @@ export class QuestMasterFeature implements ChatCompletionFeature {
 
       await this.sendQuestMasterRapidReply(quest, message);
 
-      // Fetch conversation history to provide context for quest plan generation
+      // Fetch conversation history to provide context for quest plan generation. Passing `model`
+      // is what gates Priority 2 tool replay for Gemini (see fetchAndProcessPreviousMessages's own
+      // doc comment) - this call site went live without it (missed sibling of the one in
+      // ChatCompletionProcess.ts), so the flag is derived from the model id, not opt-in per caller.
       const [conversationHistory] = await fetchAndProcessPreviousMessages(session, historyCount, {
         db: this.chatCompletion.db,
+        model,
       });
 
       this.logger.log(`QuestMaster: Fetched ${conversationHistory.length} history messages for context`);

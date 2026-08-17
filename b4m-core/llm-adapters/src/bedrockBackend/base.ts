@@ -1,7 +1,8 @@
 import { Logger } from '@bike4mind/observability';
 import { ChatModels, IMessage, ModelBackend, PermissionDeniedError, type ModelInfo } from '@bike4mind/common';
-import { stripToolDependentMessages } from '../toolPairingUtils';
+import { stripAllToolBlocks, stripToolDependentMessages } from '../toolPairingUtils';
 import { executeToolsBatch } from '../executeToolsBatch';
+import { recordToolResult, type RecordableToolUse } from '../recordToolResult';
 import {
   ChoiceEndReason,
   type CompletionInfo,
@@ -127,7 +128,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     messages: IMessage[],
     options: Partial<ICompletionOptions>,
     callback: (text: (string | null | undefined)[], completionInfo?: CompletionInfo) => Promise<void>,
-    toolsUsed: Array<{ name: string; arguments?: string; id?: string }> = []
+    toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     this.currentModel = model;
     // Update client region if needed for this specific model
@@ -174,8 +175,27 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     // native structured-output API, so we inject the schema as a system-level
     // instruction and surface `responseFormatMode: 'best-effort'` so callers
     // know to post-validate.
-    const messagesWithFormat = injectJsonSchemaInstruction(messages, options.responseFormat);
+    let messagesWithFormat = injectJsonSchemaInstruction(messages, options.responseFormat);
     const bestEffortFormat = isBestEffortJsonSchema(options.responseFormat);
+
+    // A replayed history turn (utils.ts Priority 2) can carry perfectly-paired tool_use/
+    // tool_result blocks from a PRIOR turn, even when THIS turn offers no tools - Bedrock talks
+    // the same Anthropic Messages API as anthropicBackend.ts and rejects any tool block when
+    // `tools` is absent regardless of pairing. Mirrors the same proactive strip added there;
+    // the reactive count-mismatch warning below only logs, it never stripped this case either.
+    if (!options.tools?.length) {
+      const hasToolBlocks = messagesWithFormat.some(
+        m =>
+          Array.isArray(m.content) &&
+          m.content.some((b: { type?: string }) => b.type === 'tool_use' || b.type === 'tool_result')
+      );
+      if (hasToolBlocks) {
+        Logger.globalInstance.warn(
+          '[BaseBedrockBackend Pre-API #6181] Tool blocks present but no tools offered this turn. Stripping all tool blocks.'
+        );
+        messagesWithFormat = stripAllToolBlocks(messagesWithFormat, Logger.globalInstance);
+      }
+    }
 
     let formattedMessages = this.formatMessages(messagesWithFormat);
     let input = this.getPayload(model, formattedMessages, options);
@@ -423,6 +443,14 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 resolvedTools.push({ id, name, parameters, parsedParams: JSON.parse(parameters), toolFn });
               } catch {
                 Logger.globalInstance.warn('[BaseBedrockBackend] Tool parameter parse error, skipping tool:', name);
+                const entry = toolsUsed.find(t => t.name === name && t.id === id);
+                if (entry) entry.arguments = '{}';
+                recordToolResult(
+                  toolsUsed,
+                  { id, name },
+                  'Error: Tool arguments were malformed and could not be parsed.',
+                  false
+                );
               }
             }
 
@@ -468,10 +496,12 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                   await callback(results, buildCompletionInfo());
                 });
 
+                const resultStr = outcome.result.toString();
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
                 this.pushToolMessages(
                   messages,
                   { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  outcome.result.toString()
+                  resultStr
                 );
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
@@ -480,11 +510,14 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                   `[BaseBedrockBackend] Tool ${outcome.name} failed:`,
                   outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
                 );
+                const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
+                const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
                 // Push error result so the model can continue
                 this.pushToolMessages(
                   messages,
                   { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`
+                  observation
                 );
               }
             }
@@ -568,6 +601,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 if (!toolFn) continue;
                 const safeParameters = parameters || '{}';
                 let result: { toString(): string };
+                let succeeded = true;
                 try {
                   result = await toolFn(JSON.parse(safeParameters));
                 } catch (err) {
@@ -577,6 +611,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                     `[BaseBedrockBackend] Tool ${name} failed:`,
                     err instanceof Error ? err.message : String(err)
                   );
+                  succeeded = false;
                   result = `Error processing ${name} tool: ${err instanceof Error ? err.message : 'Unknown error'}`;
                 }
 
@@ -585,6 +620,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                   await callback(results, buildCompletionInfo());
                 });
 
+                recordToolResult(toolsUsed, { id, name }, result.toString(), succeeded);
                 this.pushToolMessages(messages, { id, name, parameters }, result.toString());
               }
 

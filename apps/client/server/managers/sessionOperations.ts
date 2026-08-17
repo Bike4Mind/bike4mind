@@ -3,7 +3,13 @@ import { accessibleBy } from '@casl/mongoose';
 import { mongoose, Quest, Session } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { NotFoundError } from '@server/utils/errors';
-import { Permission, ISessionDocument, IChatHistoryItem, IUserDocument } from '@bike4mind/common';
+import {
+  Permission,
+  ISessionDocument,
+  IChatHistoryItem,
+  IUserDocument,
+  redactPromptMetaForViewer,
+} from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { Session as SessionModel, sessionRepository } from '@bike4mind/database/auth';
 import { createSession } from './sessionCrud';
@@ -61,8 +67,19 @@ export const getMessagesFromSession = async (
   const hasMore = result.length === pagination.limit + 1;
   if (hasMore) result.pop();
 
+  // A share grant authorizes reading the conversation, not re-reading whatever the owner's
+  // tools touched on the owner's behalf - see redactPromptMetaForViewer. Owner reads are
+  // untouched; only the returnValue/error fields are stripped, name/parameters/success survive.
+  // Both branches call .toJSON() (not just the non-owner one) so the return type doesn't
+  // diverge by viewer - this only goes straight to res.json, never back into the domain model.
+  const isOwner = session.userId === user.id;
+  const data = result.map(quest => {
+    const plain = quest.toJSON();
+    return { ...plain, promptMeta: redactPromptMetaForViewer(plain.promptMeta, isOwner) };
+  });
+
   return {
-    data: result,
+    data,
     hasMore,
   };
 };
@@ -174,50 +191,6 @@ export const forkSession = async (sessionId: string, messageId: string, ability:
     })
   );
   return newSession;
-};
-
-export const cloneSession = async (sessionId: string, adminUserId: string, ability: Ability) => {
-  try {
-    if (!ability.can('clone', Session)) {
-      throw new Error('User does not have permission to clone sessions');
-    }
-
-    const session = await Session.findById(sessionId);
-    if (!session) throw new NotFoundError('Session not found');
-
-    const newSession = await createSession(
-      adminUserId,
-      {
-        name: `Cloned ${session.name}`,
-        knowledgeIds: session.knowledgeIds,
-      },
-      ability
-    );
-
-    newSession.tags = session.tags ? [...session.tags] : [];
-    newSession.summary = session.summary;
-    newSession.summaryAt = session.summaryAt;
-
-    await newSession.save();
-
-    const messagesToClone = await Quest.find({ sessionId });
-
-    await Promise.all(
-      messagesToClone.map(async message => {
-        const { _id, id, ...messageData } = message.toObject();
-        return await addMessageToSession(adminUserId, newSession.id, messageData, ability);
-      })
-    );
-
-    await newSession.save();
-
-    Logger.log(`Session ${sessionId} cloned to new session ${newSession.id} for admin ${adminUserId}`);
-
-    return newSession;
-  } catch (error) {
-    Logger.error('Error cloning session:', error);
-    throw error;
-  }
 };
 
 export const snipSession = async (sessionId: string, messageId: string, ability: Ability) => {
