@@ -2,6 +2,7 @@ import type { IDataLakeAccessGrantRepository, IDataLakeRepository, IFabFileRepos
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { type ManageActor } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
+import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 import { recomputeLakeStats } from './recomputeLakeStats';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import type { UnarchiveResult } from './unarchiveDataLake';
@@ -81,7 +82,14 @@ export const restoreDeletedDataLake = async (
   const restoredCount = await db.fabFiles.undeleteByDataLakeTag(scope, duplicateIds, stampedAt, archiveStampToClear);
 
   // Explicit null, not undefined, which mongoose would drop and leave the spent mark in place.
-  await db.dataLakes.update({ id: dataLakeId, status: 'active', filesDeletedAt: null, filesArchivedAt: null });
+  // Terminal transition only - see the note on archiveDataLake's settle step.
+  await db.dataLakes.update({
+    id: dataLakeId,
+    status: 'active',
+    filesDeletedAt: null,
+    filesArchivedAt: null,
+    ...lakeConfigWriteStamp(actor),
+  });
   await recomputeLakeStats(existing, { db });
 
   return { restoredCount, skippedDuplicates };

@@ -3,7 +3,9 @@ import { describe, it, expect, vi } from 'vitest';
 import { MAX_SEND_TEXT_LENGTH, sendReport, type SendReportDeps, type SendReportParams } from './sendReport';
 import type { ChatPostTarget, PostResult, SendDedupeStore, SendReservation } from './types';
 
-const DESTINATION: ChatPostTarget = { token: 'xoxb-super-secret-token', channel: 'C0DIGEST1' };
+const DESTINATION: ChatPostTarget = {
+  webhookUrl: 'https://hooks.slack.com/services/T00000000/B00000000/example-webhook-token',
+};
 
 /**
  * A stand-in for the shared store, with the same three primitives and the same
@@ -152,8 +154,7 @@ describe('sendReport - destination guard', () => {
     const outcome = await sendReport(params(), deps);
     const serialized = JSON.stringify(outcome);
 
-    expect(serialized).not.toContain(DESTINATION.token);
-    expect(serialized).not.toContain(DESTINATION.channel);
+    expect(serialized).not.toContain(DESTINATION.webhookUrl);
   });
 });
 
@@ -313,7 +314,7 @@ describe('sendReport - ambiguous vs definite failure', () => {
         accepted: false,
         delivery: 'notDelivered',
         // The realistic case: the provider error echoes the credential back.
-        reason: `request to ${DESTINATION.token} failed`,
+        reason: `request to ${DESTINATION.webhookUrl} failed`,
       },
       store
     );
@@ -322,7 +323,7 @@ describe('sendReport - ambiguous vs definite failure', () => {
     const serialized = JSON.stringify(outcome);
 
     expect(outcome).toEqual({ ok: false, failure: { kind: 'notDelivered' } });
-    expect(serialized).not.toContain(DESTINATION.token);
+    expect(serialized).not.toContain(DESTINATION.webhookUrl);
     expect(serialized).not.toContain('channel_not_found');
   });
 });

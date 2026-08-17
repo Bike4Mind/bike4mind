@@ -23,6 +23,9 @@ let mongoServer: MongoMemoryServer;
 const USER = 'rename-lifecycle-user';
 const OTHER_USER = 'someone-else';
 const SCOPE = { userGroups: [], dataLakeTags: [] };
+// Models GET /api/files/tags/counts's WORKSPACES half specifically (see countOf below) - listFileTags
+// (SCOPE, unnarrowed) and the WORKSPACES aggregate no longer share one scope, so this test needs both.
+const WORKSPACE_SCOPE = { ...SCOPE, excludePersonalShares: true };
 
 const db = { tags: fileTagRepository, fabFiles: fabFileRepository, dataLakes: dataLakeRepository };
 
@@ -62,7 +65,7 @@ const rawTagsOf = async (id: string): Promise<string[]> => {
 };
 
 const countOf = async (tag: string): Promise<number> => {
-  const counts = await fabFileRepository.countFilesByTagForUser(USER, SCOPE);
+  const counts = await fabFileRepository.countFilesByTagForUser(USER, WORKSPACE_SCOPE);
   return counts.find(c => c.tag === tag)?.count ?? 0;
 };
 

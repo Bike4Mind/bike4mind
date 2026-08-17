@@ -44,3 +44,37 @@ describe('OrganizationRepository.findMembershipOrgIds', () => {
     expect(await organizationRepository.findMembershipOrgIds('u1')).toEqual([]);
   });
 });
+
+describe('OrganizationRepository.search - users[] ACL membership arm', () => {
+  setupMongoTest();
+
+  const searchByUser = async (userId: string) =>
+    (
+      await organizationRepository.search('', { userId }, { page: 1, limit: 10 }, { field: 'name', direction: 'asc' })
+    ).data.map(d => String(d._id));
+
+  it('a write-only ACL member finds the org (same predicate as findMembershipOrgIds)', async () => {
+    // Raw insert because no app write path can produce a write-only ACL row (writers hard-code
+    // ['read']) - the predicate is defensive against legacy/out-of-band data, and the schema
+    // enum must stay untouched.
+    const result = await Organization.collection.insertOne({
+      name: 'write-only-search',
+      userId: 'someone-else',
+      users: [{ userId: 'u1', permissions: ['write'] }],
+      groups: [],
+      isGlobalRead: false,
+      isGlobalWrite: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    const orgId = String(result.insertedId);
+    expect(await searchByUser('u1')).toEqual([orgId]);
+    // The read-side set must agree - the whole point of the shared constant.
+    expect(await organizationRepository.findMembershipOrgIds('u1')).toEqual([orgId]);
+  });
+
+  it('a user with no ACL entry and no ownership matches nothing', async () => {
+    await makeOrg('unrelated', { users: [{ userId: 'someone', permissions: ['read'] }] });
+    expect(await searchByUser('u1')).toEqual([]);
+  });
+});

@@ -1,24 +1,20 @@
 /**
  * PR report generator - Slack adapter.
  *
- * This deliberately does NOT go through `SlackClient`, which is the repo's usual
- * Slack entry point. Two of its behaviours are disqualifying for this capability:
+ * The post path is a direct `fetch` to a Slack Incoming Webhook URL. It deliberately
+ * does NOT go through `SlackClient`, the repo's usual Slack entry point, whose
+ * `sendMessage` collapses every failure into `null` (the send dedupe's release rule
+ * turns on exactly the accepted-vs-not distinction that erases) and silently truncates
+ * at `MAX_TEXT_LENGTH` 4000 (a ~36-PR digest runs well past that, so the channel would
+ * get a report cut off mid-section that still reads as complete). So the poster reads
+ * the HTTP result itself, classifies failures, and never truncates.
  *
- *  1. `sendMessage` collapses every failure into `null`. The send dedupe's release
- *     rule turns on exactly one distinction - did the provider accept the post or
- *     not - and a caller that cannot read it has to guess. Both guesses are wrong:
- *     always releasing re-opens the double-post window, always holding wedges a send
- *     for a full TTL after a plain connection refusal.
- *  2. `MAX_TEXT_LENGTH` is 4000 and `sendMessage` silently truncates to it. A digest
- *     covering ~36 open PRs runs well past that, so the channel would receive a
- *     report cut off mid-section that still reads as complete. Slack's actual
- *     `chat.postMessage` text limit is 40,000.
- *
- * So the two ports below drive `WebClient` directly, classify failures, and never
- * truncate.
+ * The member-name lookup below still drives `WebClient` directly, because it needs a
+ * read scope (`users.info`) that a webhook does not carry - it runs off the optional
+ * workspace bot token instead.
  */
 
-import { ErrorCode, WebClient } from '@slack/web-api';
+import { WebClient } from '@slack/web-api';
 import type { Logger } from '@bike4mind/observability';
 import type { ChatMemberId, ChatMemberNameResult, ChatPostTarget, PostDelivery, PostResult } from '@bike4mind/services';
 
@@ -30,6 +26,38 @@ const MEMBER_LOOKUP_CONCURRENCY = 4;
 
 /** Anything token-shaped, in case a provider error echoes the credential back. */
 const TOKEN_PATTERN = /xox[abposr]-[A-Za-z0-9-]+/g;
+/**
+ * An incoming-webhook URL or its secret `/services/T.../B.../...` tail, in case a
+ * network error echoes the destination. The URL is bearer-equivalent, so it must not
+ * reach a log line any more than a bot token may. The host group matches scheme+host
+ * only (no slashes) and the token segment stops at the first non-token char, so a
+ * whitespace-free run of several URLs cannot be redacted as one over-broad span.
+ */
+const WEBHOOK_URL_PATTERN = /(?:https?:\/\/[^\s/]+)?\/services\/[A-Za-z0-9]+\/[A-Za-z0-9]+\/[A-Za-z0-9_-]+/g;
+
+function redactSecrets(text: string): string {
+  return text.replace(TOKEN_PATTERN, '[redacted]').replace(WEBHOOK_URL_PATTERN, '[redacted-webhook]');
+}
+
+/**
+ * Redact the specific destination from a would-be log line, LITERAL-first.
+ *
+ * A self-hosted webhook (the egress guard supports an operator-named host) need not follow
+ * Slack's `/services/T.../B.../...` path shape, so the shape regex alone can miss it. Match
+ * the exact URL and its origin first, then fall back to the general token/shape redaction.
+ */
+function redactDestination(text: string, webhookUrl: string): string {
+  let out = text;
+  if (webhookUrl) {
+    out = out.split(webhookUrl).join('[redacted-webhook]');
+    try {
+      out = out.split(new URL(webhookUrl).origin).join('[redacted-webhook]');
+    } catch {
+      // Not a valid URL - the literal split above still applied.
+    }
+  }
+  return redactSecrets(out);
+}
 
 /**
  * Reduce a provider error to server-side-loggable detail.
@@ -48,7 +76,7 @@ function scrubReason(error: unknown): string {
   if (code) parts.push(`code=${code}`);
   if (typeof status === 'number') parts.push(`status=${status}`);
   if (slackError) parts.push(`slackError=${slackError}`);
-  if (!parts.length && error instanceof Error) parts.push(error.message.replace(TOKEN_PATTERN, '[redacted]'));
+  if (!parts.length && error instanceof Error) parts.push(redactSecrets(error.message));
 
   return parts.join(' ') || 'unclassified post failure';
 }
@@ -62,41 +90,26 @@ function scrubReason(error: unknown): string {
  * falls through to `unknown`.
  */
 function classifyPostFailure(error: unknown): PostDelivery {
-  const code = (error as { code?: string }).code;
+  // Node fetch (undici) surfaces the socket-level failure on `error.cause`; our own
+  // timeout is a plain Error with no code.
+  const cause = (error as { cause?: { code?: string } }).cause;
+  const code = cause?.code ?? (error as { code?: string }).code;
 
-  // Slack answered and declined - `ok: false` with an error string, or a 429. The
-  // body was read and refused, so nothing was posted.
-  if (code === ErrorCode.PlatformError) return 'notDelivered';
-  if (code === ErrorCode.RateLimitedError) return 'notDelivered';
+  // Never transmitted: name resolution, refused connection, or a rejected certificate.
+  // A retry cannot duplicate what was never sent, so the reservation is safe to release.
+  const definitelyNotSent = [
+    'ENOTFOUND',
+    'EAI_AGAIN',
+    'ECONNREFUSED',
+    'CERT_HAS_EXPIRED',
+    'ERR_TLS_CERT_ALTNAME_INVALID',
+    'DEPTH_ZERO_SELF_SIGNED_CERT',
+    'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  ];
+  if (code && definitelyNotSent.includes(code)) return 'notDelivered';
 
-  if (code === ErrorCode.HTTPError) {
-    const status = (error as { statusCode?: number }).statusCode;
-    // 4xx: Slack responded before accepting the body. 5xx: it may have accepted the
-    // post and then failed on the way back.
-    if (typeof status === 'number' && status >= 400 && status < 500) return 'notDelivered';
-    return 'unknown';
-  }
-
-  if (code === ErrorCode.RequestError) {
-    const cause = (error as { original?: { code?: string } }).original?.code;
-    // Never transmitted: name resolution, refused connection, or a rejected
-    // certificate. A retry cannot duplicate what was never sent.
-    const definitelyNotSent = [
-      'ENOTFOUND',
-      'EAI_AGAIN',
-      'ECONNREFUSED',
-      'CERT_HAS_EXPIRED',
-      'ERR_TLS_CERT_ALTNAME_INVALID',
-      'DEPTH_ZERO_SELF_SIGNED_CERT',
-      'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
-    ];
-    if (cause && definitelyNotSent.includes(cause)) return 'notDelivered';
-    // ECONNRESET, ETIMEDOUT, ECONNABORTED and friends: transmitted, outcome unknown.
-    return 'unknown';
-  }
-
-  // Unrecognized - including an AbortError from our own timeout, which is precisely
-  // the case that must hold rather than release.
+  // Everything else - a reset or timeout after the bytes left, our own abort, or an
+  // unrecognized error - MIGHT have landed, so hold rather than release.
   return 'unknown';
 }
 
@@ -115,7 +128,7 @@ async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, label: s
 }
 
 /**
- * Post the final, human-approved text.
+ * Post the final, human-approved text to the incoming webhook.
  *
  * NON-IDEMPOTENT: a post Slack already accepted can still time out. No retry or
  * backoff is applied here - that would be the double-post the send dedupe exists to
@@ -123,38 +136,55 @@ async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, label: s
  */
 export function createPostReport(logger: Logger) {
   return async function postReport(text: string, destination: ChatPostTarget): Promise<PostResult> {
-    const client = new WebClient(destination.token, { timeout: POST_TIMEOUT_MS, retryConfig: { retries: 0 } });
-
+    let response: Awaited<ReturnType<typeof fetch>>;
     try {
-      const result = await withTimeout(
-        client.chat.postMessage({
-          channel: destination.channel,
-          text,
-          // The digest is pre-rendered mrkdwn with its own escaping; Slack must not
-          // second-guess it by linkifying names or channels.
-          mrkdwn: true,
-          unfurl_links: false,
-          unfurl_media: false,
+      response = await withTimeout(
+        // Incoming webhooks take the message JSON; the digest is pre-rendered, pre-escaped
+        // mrkdwn, and webhooks render `text` as mrkdwn by default.
+        fetch(destination.webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+          // NEVER follow a redirect. The egress guard vetted only THIS host; undici's
+          // default `follow` would resend the entire report body to whatever a 3xx
+          // Location names, with no re-validation against the allowlist - the exact
+          // exfiltration channel the guard exists to close. 'manual' returns an opaque
+          // redirect we refuse rather than following.
+          redirect: 'manual',
         }),
         POST_TIMEOUT_MS,
-        'Slack chat.postMessage'
+        'Slack incoming webhook'
       );
-
-      if (result.ok) return { accepted: true };
-
-      // `ok: false` without a thrown error: Slack answered and declined.
-      return { accepted: false, delivery: 'notDelivered', reason: scrubReason(result) };
     } catch (error) {
       const delivery = classifyPostFailure(error);
-      const reason = scrubReason(error);
-
-      // Logged server-side only. Never returned to the client - for a webhook-style
-      // credential the URL *is* the authentication, and the same rule is applied to
-      // the bot token here.
-      logger.error('[PrReport] Slack post failed', { delivery, reason, channel: destination.channel });
-
+      // Literal-first redaction: a self-hosted webhook path need not match Slack's URL
+      // shape, so scrub the exact destination before the shape-regex backstop.
+      const reason = redactDestination(scrubReason(error), destination.webhookUrl);
+      // Server-side only. Never returned to the client and never naming the URL - the
+      // webhook URL is the authentication.
+      logger.error('[PrReport] Slack webhook post failed', { delivery, reason });
       return { accepted: false, delivery, reason };
     }
+
+    // A refused redirect ('manual' yields an opaque response; some runtimes surface the raw
+    // 3xx). The body reached only the vetted host and was NOT followed onward. A webhook
+    // signals success with 200 "ok", so a 3xx posted nothing - safe to retry, not uncertain.
+    if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+      const reason = `redirect refused (status=${response.status || 'opaque'})`;
+      logger.error('[PrReport] Slack webhook returned a redirect - refused, not followed', { reason });
+      return { accepted: false, delivery: 'notDelivered', reason };
+    }
+
+    // A 2xx (webhooks answer 200 with the body "ok") is acceptance.
+    if (response.ok) return { accepted: true };
+
+    // 4xx: Slack read the request and declined it, so nothing was posted and the
+    // reservation is safe to release. 5xx: it may have accepted the body and then failed
+    // on the way back, so hold. Status only - the body may echo the destination.
+    const delivery: PostDelivery = response.status >= 400 && response.status < 500 ? 'notDelivered' : 'unknown';
+    const reason = `status=${response.status}`;
+    logger.error('[PrReport] Slack webhook rejected the post', { delivery, reason });
+    return { accepted: false, delivery, reason };
   };
 }
 

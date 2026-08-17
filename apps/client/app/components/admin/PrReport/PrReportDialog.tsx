@@ -221,6 +221,22 @@ export function PrReportDialog({ open, onClose }: PrReportDialogProps) {
                 </Alert>
               )}
 
+              {report.rosterWarnings?.length > 0 && (
+                <Alert color="warning" variant="soft" sx={{ mb: 1 }}>
+                  <Box>
+                    <Typography level="title-sm">Some roster pools will not be mentioned</Typography>
+                    <Typography level="body-xs">
+                      Add these role keys to the identity map to @-mention their pool. The digest still posts.
+                    </Typography>
+                    {report.rosterWarnings.map(warning => (
+                      <Typography key={`${warning.bucket}-${warning.reason}`} level="body-xs">
+                        {warning.bucket}: {warning.reason}
+                      </Typography>
+                    ))}
+                  </Box>
+                </Alert>
+              )}
+
               <Tabs defaultValue="edit" size="sm" aria-label="PR report edit and preview">
                 <TabList>
                   <Tab value="edit">Edit</Tab>

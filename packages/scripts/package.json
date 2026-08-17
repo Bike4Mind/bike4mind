@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/scripts",
-  "version": "0.1.64",
+  "version": "0.1.65",
   "private": true,
   "type": "module",
   "main": "index.ts",

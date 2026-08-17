@@ -1,4 +1,4 @@
-import { SupportedEmbeddingModelSchema } from '@bike4mind/common';
+import { SupportedEmbeddingModelSchema, CONVERGENCE_PAUSED_NOTE } from '@bike4mind/common';
 import { getVector } from '@server/managers/fabFileManager';
 import {
   adminSettingsRepository,
@@ -69,8 +69,9 @@ const VectorizePayload = z.object({
  * `POST /api/files/reprocess` clears it as part of its `notes` reset. Distinct from
  * NO_EXTRACTABLE_TEXT_NOTE_PREFIX, which excludes a file from the chunk-rescue sweep; this does not.
  */
-export const CONVERGENCE_PAUSED_NOTE =
-  'Indexing paused by the data-lake convergence kill switch - reprocess to complete.';
+// Re-exported, not defined here: the lake-health evaluator in b4m-core reads this marker to tell a
+// permanently-stalled file from one still indexing, and b4m-core cannot import from apps/client.
+export { CONVERGENCE_PAUSED_NOTE };
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = event.Records[0].body;
@@ -415,11 +416,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       }
     }
 
-    // Recompute vectorizedChunkCount from SOURCE (terminal = has-vector OR oversized)
-    // rather than `+= validChunks.length`. With multiple vectorize messages per file,
-    // an SQS redelivery of an already-processed message would otherwise double-count
-    // and prematurely cross chunkCount. Recompute is idempotent.
-    const vectorizedChunkCount = await fabFileChunkRepository.countTerminalChunks(fabFileId, contextWindow);
+    // Recompute vectorizedChunkCount (terminal = has-vector OR oversized) AND the lake-health rollups
+    // (#1666, only truly vector-bearing chunks - P3) from SOURCE in ONE pass rather than `+=`. With
+    // multiple vectorize messages per file, an SQS redelivery of an already-processed message would
+    // otherwise double-count and prematurely cross chunkCount; recompute-from-source is idempotent.
+    // One aggregate, not two, because `vector` is in no index so each pass fetches every chunk row.
+    const {
+      terminalChunkCount: vectorizedChunkCount,
+      embeddedChunkCount,
+      embeddedCharCount,
+    } = await fabFileChunkRepository.computeChunkVectorRollup(fabFileId, contextWindow);
     const fabFile = await fabFileRepository.shareable.findAccessibleById(user, fabFileId);
     if (!fabFile) throw new NotFoundError(`FabFile ${fabFileId} not found`);
 
@@ -437,7 +443,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         fabFileId,
         embeddingModel,
         { db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository } },
-        { vectorized: true, vectorizedChunkCount, isVectorizing: false }
+        { vectorized: true, vectorizedChunkCount, isVectorizing: false, embeddedChunkCount, embeddedCharCount }
       );
     } else {
       await fabFileRepository.update({
@@ -445,9 +451,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         vectorized: true,
         vectorizedChunkCount,
         isVectorizing: true,
+        embeddedChunkCount,
+        embeddedCharCount,
       });
     }
     fabFile.vectorizedChunkCount = vectorizedChunkCount;
+    fabFile.embeddedChunkCount = embeddedChunkCount;
+    fabFile.embeddedCharCount = embeddedCharCount;
     fabFile.isVectorizing = !isFileVectorized;
 
     if (isFileVectorized) {

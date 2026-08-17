@@ -75,6 +75,13 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   requiredUserTag: 'reader',
   requiredEntitlement: 'reader',
   createdByUserId: 'reader',
+  // Editor-visible, not owner-specific: every rung canManageLake grants - creator, curator,
+  // org-admin, platform admin - receives this, matching how the rest of this map treats editor
+  // fields. It answers "did someone else steer this lake", to be served by the config-history
+  // surface (planned, #1769) rather than as a raw field on the reader document.
+  // `createdByUserId` stays reader-visible (it is the lake's authorship, already shipped); this one
+  // reports an ongoing management relationship a reader has no role in.
+  lastUpdatedByUserId: 'withheld',
   organizationId: 'reader',
   isPublic: 'reader',
   // A reader whose questions may be logged should be able to see that the lake records them.

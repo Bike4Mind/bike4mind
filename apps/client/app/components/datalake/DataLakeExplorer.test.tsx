@@ -293,30 +293,41 @@ describe('DataLakeExplorer chat-first surface', () => {
     errSpy.mockRestore();
   });
 
-  it('view opens the KnowledgeViewer split on the embedded host', async () => {
+  it('view opens the KnowledgeViewer split on the embedded host without touching the workbench', async () => {
     renderExplorer();
     fireEvent.click(screen.getByTestId('mock-view'));
-    // The viewer builds its tabs from the workbench, so the file must land there to have a tab.
+    // The viewer shows the file through the transient previewFile slot - viewing must not
+    // attach it to the prompt (the explicit [+] action does that).
     await vi.waitFor(() => {
-      expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function));
-      expect(setSessionLayout).toHaveBeenCalledWith({ layout: 'vertical', selectedArtifactId: 'file-123' });
+      expect(setSessionLayout).toHaveBeenCalledWith({
+        layout: 'vertical',
+        previewFile: expect.objectContaining({ id: 'file-123' }),
+        selectedArtifactId: 'file-123',
+      });
     });
-    // waitFor (not vi.waitFor) - see the useWorkBenchFiles mock comment above.
-    await waitFor(() => expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123'));
+    expect(setWorkBenchFiles).not.toHaveBeenCalled();
+    // No highlight either: the highlight tracks workbench membership (#1693), and View no
+    // longer changes membership.
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', '');
     // The rail keeps the tree; the chat's own SessionContainer renders the viewer here.
     expect(screen.queryByTestId('datalake-rail-viewer')).toBeNull();
   });
 
-  it('view on /new mints the session first, then opens the split', async () => {
+  it('view on /new opens the split without minting a session', async () => {
     sessionState.currentSessionId = null;
     const createSessionForFile = vi.fn().mockResolvedValue('sess-new');
     renderExplorer({ createSessionForFile });
     fireEvent.click(screen.getByTestId('mock-view'));
     await vi.waitFor(() => {
-      expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-new', expect.any(Function));
-      expect(setSessionLayout).toHaveBeenCalledWith({ layout: 'vertical', selectedArtifactId: 'file-123' });
+      expect(setSessionLayout).toHaveBeenCalledWith({
+        layout: 'vertical',
+        previewFile: expect.objectContaining({ id: 'file-123' }),
+        selectedArtifactId: 'file-123',
+      });
     });
-    expect(createSessionForFile).toHaveBeenCalledTimes(1);
+    // Previewing is not a chat mutation, so it must not create the session either.
+    expect(createSessionForFile).not.toHaveBeenCalled();
+    expect(setWorkBenchFiles).not.toHaveBeenCalled();
   });
 
   it('view on an overlay host mounts the viewer in the rail and never sets a layout', async () => {
@@ -332,8 +343,11 @@ describe('DataLakeExplorer chat-first surface', () => {
     expect(screen.getByTestId('mock-tree')).toBeInTheDocument();
     expect(screen.getByTestId('my-chat')).toBeInTheDocument();
     expect(screen.getByTestId('my-chat')).not.toBeVisible();
-    expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function));
-    expect(setSessionLayout).toHaveBeenCalledWith({ selectedArtifactId: 'file-123' });
+    expect(setWorkBenchFiles).not.toHaveBeenCalled();
+    expect(setSessionLayout).toHaveBeenCalledWith({
+      previewFile: expect.objectContaining({ id: 'file-123' }),
+      selectedArtifactId: 'file-123',
+    });
     expect(setSessionLayout).not.toHaveBeenCalledWith(
       expect.objectContaining({ layout: expect.anything() as unknown as string })
     );
@@ -352,10 +366,9 @@ describe('DataLakeExplorer chat-first surface', () => {
     expect(screen.queryByTestId('datalake-rail-viewer')).toBeNull();
     expect(screen.getByTestId('my-chat')).toBeVisible();
     expect(setSessionLayout).toHaveBeenCalledWith({ layout: 'dockRight' });
-    // Closing the viewer does not detach the file - View attaches it to the workbench as a side
-    // effect, and that attachment outlives the look (#1693: highlight tracks "in the prompt",
-    // not "currently open"), so the row must stay highlighted.
-    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
+    // View never attached anything, so there is no highlight to keep or clear (the highlight
+    // tracks workbench membership, #1693 - not viewer state).
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', '');
   });
 
   it('any other layout departure closes the viewer without fighting the write (overlay host)', async () => {
@@ -374,20 +387,20 @@ describe('DataLakeExplorer chat-first surface', () => {
     );
   });
 
-  it('view toasts the attachment it performs, and only when it actually attaches', async () => {
-    // Opening a file attaches it by construction (the viewer's tabs come from the workbench),
-    // and that side effect of "just looking" must never be silent - this path also serves
-    // ?article= deep links, where there is no click at all.
+  it('view is silent - it attaches nothing, so there is nothing to toast', async () => {
     renderExplorer();
     fireEvent.click(screen.getByTestId('mock-view'));
-    await vi.waitFor(() => expect(toastSuccess).toHaveBeenCalledWith(expect.stringContaining('Added')));
+    await vi.waitFor(() => expect(setSessionLayout).toHaveBeenCalled());
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(toastInfo).not.toHaveBeenCalled();
   });
 
-  it('view does not re-toast a file already in the workbench', async () => {
+  it('view of an already-attached file opens the viewer without workbench writes', async () => {
     workBenchState.files = [{ id: 'file-123', fileName: 'x.pdf' }];
     renderExplorer();
     fireEvent.click(screen.getByTestId('mock-view'));
     await vi.waitFor(() => expect(setSessionLayout).toHaveBeenCalled());
+    expect(setWorkBenchFiles).not.toHaveBeenCalled();
     expect(toastSuccess).not.toHaveBeenCalled();
   });
 
@@ -400,8 +413,6 @@ describe('DataLakeExplorer chat-first surface', () => {
     fireEvent.click(screen.getByTestId('mock-navigate-back'));
 
     expect(screen.getByTestId('datalake-rail-viewer')).toBeInTheDocument();
-    // The highlight survives too, so returning to the category still shows which file is open.
-    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
   });
 
   it('browsing the tree never touches the layout on the embedded host', () => {
@@ -410,25 +421,29 @@ describe('DataLakeExplorer chat-first surface', () => {
     expect(setSessionLayout).not.toHaveBeenCalled();
   });
 
-  it('closing the viewer keeps the row highlighted on the embedded host too, since the file stays attached', async () => {
+  it('attach-driven highlight survives the viewer closing (embedded host)', async () => {
+    // The highlight is workbench membership (#1693): the explicit attach sets it, and viewer
+    // state (open, closed, never opened) has no bearing on it.
     renderExplorer();
-    fireEvent.click(screen.getByTestId('mock-view'));
+    fireEvent.click(screen.getByTestId('mock-attach'));
     // waitFor (not vi.waitFor) - see the useWorkBenchFiles mock comment above.
     await waitFor(() => expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123'));
 
     act(() => useSessionLayoutStore.setState({ layout: 'hide' }));
 
-    // Same reasoning as the overlay-host case above: View's attach is not undone by closing the
-    // viewer, so the highlight (driven by workbench membership, not viewer-open state) persists.
     expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
   });
 
-  it('deep-linked articleId opens it the same way View does', async () => {
+  it('deep-linked articleId opens it the same way View does - preview only, no attach', async () => {
     renderExplorer({ articleId: 'deep-1' });
     await vi.waitFor(() => {
-      expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function));
-      expect(setSessionLayout).toHaveBeenCalledWith({ layout: 'vertical', selectedArtifactId: 'deep-1' });
+      expect(setSessionLayout).toHaveBeenCalledWith({
+        layout: 'vertical',
+        previewFile: expect.objectContaining({ id: 'deep-1' }),
+        selectedArtifactId: 'deep-1',
+      });
     });
+    expect(setWorkBenchFiles).not.toHaveBeenCalled();
   });
 
   it('delete is offered only for a uniquely-resolved manageable lake', () => {
