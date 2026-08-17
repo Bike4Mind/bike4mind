@@ -281,7 +281,18 @@ export const reconcileLakeTags = async (
   // leave a door through which unretrievable content still lands in a lake. Runs before `commit()`,
   // so a refusal happens before any join is applied. Leaves and preserved memberships are
   // deliberately absent: the contract governs admission, never eviction.
-  if (owner !== undefined) {
+  //
+  // An unresolvable owner is the one case this cannot grade - the chunk policy it predicts against
+  // is owner-altitude, so there is no scope to resolve. That is a FAILED READ, not a clean pass, so
+  // it is logged rather than waved through silently: unreachable from `updateFabFile` and the PUT
+  // route (both always supply an owner signal), and a future caller that trips it should see why
+  // its contract never fired instead of concluding the content was admissible.
+  if (owner === undefined) {
+    logger?.warn?.(
+      'reconcileLakeTags: could not resolve file owner; admission contract NOT evaluated for this write',
+      fabFileId
+    );
+  } else {
     await assertLakeAdmission(
       [...joins, ...statsOnlyJoins],
       [

@@ -188,10 +188,14 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
     // leave half the door open. Run in this same all-or-nothing pre-write pass as the leave gate
     // above: the writes below are concurrent, so refusing mid-batch would leave some files written.
     // Only JOINS are graded - a leave is never refused for a contract the file is exiting.
-    const filesById = new Map(fabFiles.map(file => [file.id, file]));
-    for (const [fileId, joins] of prefixJoinsByFile) {
-      const file = filesById.get(fileId);
-      if (!file) continue;
+    //
+    // ONE CALL PER FILE, deliberately: `assertLakeAdmission` grades every member it is handed
+    // against every lake it is handed, so flattening this into a single call would check file A
+    // against a lake only file B is joining and invent violations that do not exist. Do not
+    // "optimize" it into one call without first grouping files by an identical join set.
+    for (const file of fabFiles) {
+      const joins = prefixJoinsByFile.get(file.id);
+      if (!joins) continue;
       await assertLakeAdmission(
         joins.map(({ lake }) => lake),
         [{ id: file.id, userId: file.userId, chunkedPassageTokenTarget: file.chunkedPassageTokenTarget }],
