@@ -467,6 +467,63 @@ describe('lifecycle services', () => {
     expect(audit.record).not.toHaveBeenCalled();
   });
 
+  // The sibling of the archive case above. Each lifecycle service refuses a no-op differently -
+  // delete returns the document silently, unarchive and restore throw - and only archive was pinned,
+  // so dropping any of the other three guards would leave this suite green while a second audit row
+  // appeared for an operator action that did not happen.
+  it('records nothing when delete short-circuits on an already-deleted lake', async () => {
+    const existing = lake({ status: 'deleted' });
+    const audit = auditSpy();
+    await expect(
+      deleteDataLake(owner, 'lake1', { db: { ...lifecycleDb(existing), ...audit.db } })
+    ).resolves.toMatchObject({ status: 'deleted' });
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['unarchive', unarchiveDataLake, lake({ status: 'active' })],
+    ['restore', restoreDeletedDataLake, lake({ status: 'active' })],
+  ] as const)('%s records nothing when it rejects a lake in the wrong status', async (_n, service, existing) => {
+    const audit = auditSpy();
+    await expect(service(owner, 'lake1', { db: { ...lifecycleDb(existing), ...audit.db } })).rejects.toThrow(
+      /Cannot restore a data lake/
+    );
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  // The lifecycle half of the updateDataLake swallow test above. The config write has already
+  // landed by the time the recorder runs, so an audit failure must never turn a completed archive
+  // into a reported failure - and each of these four reaches the recorder independently.
+  it.each([
+    ['archive', archiveDataLake, lake({ status: 'active' })],
+    ['delete', deleteDataLake, lake({ status: 'archived' })],
+    ['unarchive', unarchiveDataLake, lake({ status: 'archived' })],
+    ['restore', restoreDeletedDataLake, lake({ status: 'deleted' })],
+  ] as const)('%s does not fail the write when the audit write throws', async (_n, service, existing) => {
+    const warn = vi.fn();
+    const db = {
+      ...lifecycleDb(existing),
+      lakeConfigChangeEvents: { record: vi.fn().mockRejectedValue(new Error('mongo down')) },
+    };
+
+    await expect(service(owner, 'lake1', { db, logger: { warn } })).resolves.toBeTruthy();
+    expect(warn).toHaveBeenCalled();
+  });
+
+  // Documents an ACCEPTED consequence rather than a defect, so a future reader does not "fix" it
+  // silently: the transitional hop is deliberately unaudited, so a crash-retry that re-enters from
+  // 'restoring' records `restoring -> active` and the original `archived` provenance is not
+  // recoverable from the event. Auditing the hop instead would put two rows on one operator action.
+  it('records the transitional status as `before` when unarchive re-enters from a crashed attempt', async () => {
+    const existing = lake({ status: 'restoring' });
+    const audit = auditSpy();
+
+    await unarchiveDataLake(owner, 'lake1', { db: { ...lifecycleDb(existing), ...audit.db } });
+
+    const statusChange = audit.only().changes.find(c => c.field === 'status');
+    expect(statusChange).toMatchObject({ before: 'restoring', after: 'active' });
+  });
+
   // The record call is placed BEFORE the stats recompute deliberately: the lake is already archived
   // by then, so a recompute failure must not also cost the audit row. Reordering the two is an easy
   // refactor to make by accident, and nothing else would go red.
