@@ -146,7 +146,8 @@ export function defineLambdaRoute<C extends EndpointContract>(
     if (process.env.NODE_ENV !== 'production') {
       try {
         const spec = contract.responses[result.statusCode];
-        const check = spec?.schema.safeParse(result.body);
+        // No schema => the contract declares a raw (non-JSON) body for this status.
+        const check = spec?.schema?.safeParse(result.body);
         if (check && !check.success) {
           console.warn(
             `[contract] ${contract.operationId} response ${result.statusCode} violates schema: ${check.error.message}`

@@ -15,7 +15,7 @@ Reference example: `contracts/chat.contract.ts` + `apps/client/pages/api/chat.ts
 ## Expose a public endpoint (6 steps)
 
 1. **Put the request/response schemas in `@bike4mind/common`** (`src/schemas/`), as
-   plain Zod. The handler must validate with the *same* object the contract uses.
+   plain Zod. The handler must validate with the _same_ object the contract uses.
 2. **Write the contract** in `src/api-contract/contracts/<name>.contract.ts` with
    `defineEndpoint({...})`. Add it to `contracts/index.ts` (`CONTRACTS`).
 3. **Wire the handler:** `nextRouteForContract(contract).post((req, res) => { ... })`.
@@ -49,6 +49,13 @@ Reference example: `contracts/chat.contract.ts` + `apps/client/pages/api/chat.ts
 - **Responses assembled inline** in a handler are validated against the contract in
   non-prod by both adapters, so drift shows up in tests. Keep the response schema
   accurate.
+- **Non-JSON bodies:** omit `schema` on a response to document it as raw bytes of
+  its `contentType` (`audio/*`, etc.) - there is no JSON shape to model, and the
+  drift check skips it. When one status can return several media types (TTS returns
+  audio bytes by default and JSON for `encoding: 'base64'`), put the JSON shape in
+  `schema` so the drift check still runs, and list the rest in `alsoReturns`. Use
+  `headers` for anything a caller can only learn from a header - e.g. where the
+  saved copy of generated audio lives, which a raw-bytes body cannot carry.
 - **422 is auto-documented.** A contract with a `request` schema returns 422 on
   validation failure (both adapters guarantee it), so `registerContract` injects a
   standard 422 response - you do not (and should not) declare it per endpoint.
