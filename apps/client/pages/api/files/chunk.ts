@@ -1,4 +1,4 @@
-import { Permission } from '@bike4mind/common';
+import { OVERSIZED_PASSAGE_TOKEN_THRESHOLD, Permission } from '@bike4mind/common';
 import { getFabFileById } from '@server/managers/fabFileManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -18,6 +18,14 @@ const handler = baseApi().post(
     // chunk at the default instead of what the caller asked for.
     if (!/^\d+$/.test(String(chunkSize)) || Number(chunkSize) < 1) {
       throw new BadRequestError('chunkSize must be a positive integer (tokens)');
+    }
+    // This payload value overrides the resolved chunk-size policy entirely (fabFileChunk.ts:
+    // requestedPassageTokenTarget = chunkSize ?? resolvedChunkPolicy.value), so it is the one
+    // door the policy's own ceiling (DefaultChunkSize's max) cannot reach. Enforce the same
+    // detection-threshold ceiling here, or a caller can still make "Rebuild passages"
+    // non-convergent for this file. Detection is `$gt`, so the threshold itself is accepted.
+    if (Number(chunkSize) > OVERSIZED_PASSAGE_TOKEN_THRESHOLD) {
+      throw new BadRequestError(`chunkSize must not exceed ${OVERSIZED_PASSAGE_TOKEN_THRESHOLD} tokens`);
     }
 
     const fabFile = await getFabFileById(fabFileId, req.ability!, Permission.update);
