@@ -1,7 +1,6 @@
 import React from 'react';
 import { Box, Sheet, Table, Typography } from '@mui/joy';
-import { formatUsd } from '@client/app/utils/formatUsd';
-import { formatCredits, numberCell } from '@client/app/components/admin/CreditAnalysis/utils/format';
+import { formatUsd, formatCredits, numberCell } from '@client/app/utils/formatUsd';
 
 export type BreakdownRow = {
   key: string;

@@ -23,10 +23,18 @@ export interface LakeSpendAddresseeDb {
 /** Bounds SMTP fan-out per notification - a pathological adminUserIds array must not turn one embedding call into a mail blast. */
 export const MAX_LAKE_SPEND_ADDRESSEES = 20;
 
+/** Bounds the ORG lookup fan-out itself (Promise.all over org.findById), separately from the
+ * final MAX_LAKE_SPEND_ADDRESSEES cap on the resolved user list - a lake with many org-principal
+ * grants would otherwise run an unbounded Promise.all inside the caller's send-timeout window. */
+export const MAX_ORG_IDS_TO_RESOLVE = 20;
+
 /**
- * Resolve who to notify about a data lake's spend. Never throws - a notification
- * failure must never break the ingestion path it would otherwise report on; any failure
- * resolves to `[]` and is logged.
+ * Resolve who to notify about a data lake's spend. Never throws - a notification failure must
+ * never break the ingestion path it would otherwise report on. Returns `null` (not `[]`) on
+ * failure so the caller can distinguish "the lookup itself failed" from "the lookup succeeded
+ * and genuinely found nobody" - conflating the two would let a transient DB blip permanently
+ * suppress a lake's notifications, since the caller treats `[]` as a stable, keep-the-claim
+ * outcome.
  *
  * Org-owned lake: the org's billing owner (`userId`) + `managerId` + `adminUserIds` - the
  * SAME field set `administeredOrgIds` is built from (see OrganizationModel.findIdsWithAdminRights)
@@ -50,7 +58,7 @@ export async function resolveLakeSpendAddressees(
   /** Pass the caller's already-fetched lake to skip a second findById; `undefined` (default)
    * still fetches it here, `null` short-circuits to [] the same as a lake that no longer exists. */
   prefetchedLake?: IDataLakeDocument | null
-): Promise<LakeSpendAddressee[]> {
+): Promise<LakeSpendAddressee[] | null> {
   try {
     const lake = prefetchedLake !== undefined ? prefetchedLake : await db.dataLakes.findById(dataLakeId);
     if (!lake) return [];
@@ -73,7 +81,13 @@ export async function resolveLakeSpendAddressees(
 
     let orgAdminIds: string[] = [];
     if (orgIdsToResolve.size > 0) {
-      const orgs = await Promise.all(Array.from(orgIdsToResolve).map(id => db.organizations.findById(id)));
+      const boundedOrgIds = Array.from(orgIdsToResolve).slice(0, MAX_ORG_IDS_TO_RESOLVE);
+      if (boundedOrgIds.length < orgIdsToResolve.size) {
+        logger?.warn?.(
+          `[resolveLakeSpendAddressees] truncated ${orgIdsToResolve.size} org ids to ${boundedOrgIds.length} for lake ${dataLakeId}`
+        );
+      }
+      const orgs = await Promise.all(boundedOrgIds.map(id => db.organizations.findById(id)));
       orgAdminIds = orgs.flatMap(org =>
         [org?.userId, org?.managerId, ...(org?.adminUserIds ?? [])].filter(
           (id): id is string => !!id && id.trim().length > 0
@@ -112,6 +126,6 @@ export async function resolveLakeSpendAddressees(
     return addressees;
   } catch (err) {
     logger?.warn?.(`[resolveLakeSpendAddressees] failed for lake ${dataLakeId}: ${err}`);
-    return [];
+    return null;
   }
 }

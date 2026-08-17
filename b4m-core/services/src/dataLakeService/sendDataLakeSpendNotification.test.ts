@@ -96,6 +96,22 @@ describe('sendDataLakeSpendNotification', () => {
     });
   });
 
+  it('DELETES the claim (does not keep it) when addressee resolution FAILS - null must not be treated like []', async () => {
+    // A transient DB blip on the grant/org/user reads returns null (not []) from
+    // resolveLakeSpendAddressees. Treating that like a genuinely-ownerless lake would keep the
+    // claim and permanently silence this lake for the life of the period - the whole point of
+    // distinguishing the two.
+    const deps = makeDeps();
+    h.resolveLakeSpendAddressees.mockResolvedValue(null);
+
+    const outcome = await sendDataLakeSpendNotification(baseEvent, deps);
+
+    expect(outcome).toBe('failed');
+    expect(deps.sendEmail).not.toHaveBeenCalled();
+    expect(deps.markDelivered).not.toHaveBeenCalled();
+    expect(deps.deleteNotification).toHaveBeenCalledWith('notif-1');
+  });
+
   it('counts a mailer false-return as undelivered and reports failed when nothing delivered', async () => {
     const deps = makeDeps();
     deps.sendEmail.mockResolvedValue(false);
@@ -202,5 +218,19 @@ describe('sendDataLakeSpendNotification', () => {
       name: 'My Lake',
       organizationId: null,
     });
+  });
+
+  it('renders BEFORE claiming, so an unhandled kind/scope pair never creates a claim row to delete/re-arm', async () => {
+    // If the claim were taken first, a render throw would land in the not-dispatched catch and
+    // delete the just-created claim - re-arming it for the next message to hit the same
+    // unhandled pair and repeat forever. Rendering first means no claim ever exists for this case.
+    const deps = makeDeps();
+    const unhandledEvent = { ...baseEvent, kind: 'stopped' as const, scope: 'lake' as const };
+
+    const outcome = await sendDataLakeSpendNotification(unhandledEvent, deps);
+
+    expect(outcome).toBe('failed');
+    expect(deps.claimNotification).not.toHaveBeenCalled();
+    expect(deps.deleteNotification).not.toHaveBeenCalled();
   });
 });

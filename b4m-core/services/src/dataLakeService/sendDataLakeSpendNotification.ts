@@ -10,7 +10,7 @@ import type {
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { resolveLakeSpendAddressees, type LakeSpendAddresseeDb } from './resolveLakeSpendAddressees';
-import { renderSpendNotificationEmail } from './renderSpendNotificationEmail';
+import { renderSpendNotificationEmail, type SpendNotificationEmailContent } from './renderSpendNotificationEmail';
 
 export type SpendNotificationOutcome = 'sent' | 'deduped' | 'no-addressees' | 'failed';
 
@@ -46,7 +46,8 @@ export const DEFAULT_SEND_TIMEOUT_MS = 2_500;
 
 /**
  * Resolve addressees and send, on an already-claimed row. Split out so the caller can race it
- * against a timeout without racing the claim call above it.
+ * against a timeout without racing the claim call above it. `rendered` is passed in (rendered
+ * BEFORE the claim by the caller) rather than computed here - see that call site's comment.
  *
  * `dispatchedRef` is set to true immediately BEFORE the actual sends start (not before addressee
  * resolution) - a mutable ref, not a return value, because a losing `Promise.race` abandons this
@@ -61,9 +62,17 @@ async function sendToAddressees(
   db: SendSpendNotificationDb,
   mailer: SpendNotificationMailer,
   logger: Logger | undefined,
-  dispatchedRef: { dispatched: boolean }
+  dispatchedRef: { dispatched: boolean },
+  rendered: SpendNotificationEmailContent
 ): Promise<SpendNotificationOutcome> {
   const addressees = await resolveLakeSpendAddressees(event.dataLakeId, db, logger, lake);
+  if (addressees === null) {
+    // Distinguish "resolution failed" from "genuinely no addressees" (resolveLakeSpendAddressees
+    // returns null vs [] for exactly this reason) - throwing here (nothing dispatched yet) lands
+    // in the caller's not-dispatched catch branch, which deletes the claim so a transient blip on
+    // this lake's grant/org/user reads doesn't permanently silence it for the life of the period.
+    throw new Error(`addressee resolution failed for lake ${event.dataLakeId}`);
+  }
   if (addressees.length === 0) {
     // Keep the claim (do not delete it) - deleting would re-arm and make every subsequent
     // call on an ownerless lake redo the lake/grant/org/user reads for nothing.
@@ -75,13 +84,6 @@ async function sendToAddressees(
     logger?.warn?.(`[sendDataLakeSpendNotification] no addressees for lake ${event.dataLakeId}`);
     return 'no-addressees';
   }
-
-  const rendered = renderSpendNotificationEmail({
-    kind: event.kind,
-    scope: event.scope,
-    lakeName: lake?.name ?? 'a data lake',
-    detail: event.detail,
-  });
 
   dispatchedRef.dispatched = true;
   // One message PER RECIPIENT - never a comma-joined `to:` - so org admins never learn each
@@ -101,11 +103,16 @@ async function sendToAddressees(
 
 /**
  * One lake read always happens first - its organizationId is denormalized onto the claim row
- * via $setOnInsert, so it is needed before the claim can be taken. From there the dominant
- * hot-path case (a lake already notified this period) short-circuits on ONE indexed claim
- * call, before any grant/org/user read or SMTP attempt. Never throws - every failure resolves
- * to `'failed'` and is logged, so a notification problem can never break the ingestion path it
- * reports on.
+ * via $setOnInsert, so it is needed before the claim can be taken. The email is also rendered
+ * BEFORE the claim: renderSpendNotificationEmail throws on an unhandled kind/scope pair, and
+ * claiming first would mean that throw lands in the not-dispatched catch below and deletes the
+ * claim - re-arming it for the NEXT message to hit the exact same unhandled pair and throw
+ * again, forever. Rendering first means an unhandled pair fails before any claim row exists at
+ * all: still logged and retried on redelivery, but never a permanent claim/delete churn loop.
+ * From there the dominant hot-path case (a lake already notified this period) short-circuits on
+ * ONE indexed claim call, before any grant/org/user read or SMTP attempt. Never throws - every
+ * failure resolves to `'failed'` and is logged, so a notification problem can never break the
+ * ingestion path it reports on.
  */
 export async function sendDataLakeSpendNotification(
   event: DataLakeSpendNotificationEvent,
@@ -123,6 +130,12 @@ export async function sendDataLakeSpendNotification(
   const dispatchedRef = { dispatched: false };
   try {
     const lake = await db.dataLakes.findById(event.dataLakeId);
+    const rendered: SpendNotificationEmailContent = renderSpendNotificationEmail({
+      kind: event.kind,
+      scope: event.scope,
+      lakeName: lake?.name ?? 'a data lake',
+      detail: event.detail,
+    });
     const claim = await db.spendNotifications.claimNotification({
       dataLakeId: event.dataLakeId,
       organizationId: lake?.organizationId ?? undefined,
@@ -136,7 +149,7 @@ export async function sendDataLakeSpendNotification(
     claimId = claim.id;
 
     return await Promise.race([
-      sendToAddressees(event, lake, claim.id, db, mailer, logger, dispatchedRef),
+      sendToAddressees(event, lake, claim.id, db, mailer, logger, dispatchedRef, rendered),
       new Promise<never>((_, reject) => {
         sendTimer = setTimeout(() => reject(new Error(`send exceeded ${sendTimeoutMs}ms`)), sendTimeoutMs);
       }),

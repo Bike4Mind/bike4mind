@@ -291,22 +291,10 @@ export async function enforceEmbeddingSpendGate(params: {
       });
     }
   }
-  if (levers.perPeriodBudgetMicroUsd > 0) {
-    const thresholdMicroUsd = levers.perPeriodBudgetMicroUsd * EMBEDDING_SPEND_NOTIFY_THRESHOLD_PCT;
-    const spendBeforeMicroUsd = period.count - estimatedMicroUsd;
-    if (spendBeforeMicroUsd < thresholdMicroUsd && period.count >= thresholdMicroUsd) {
-      await fire({
-        kind: 'approaching_cap',
-        scope: 'period',
-        periodKey: periodKeyForWindow(period.expiresAt),
-        thresholdPct: EMBEDDING_SPEND_NOTIFY_THRESHOLD_PCT,
-        detail: {
-          spentMicroUsd: period.count,
-          budgetMicroUsd: levers.perPeriodBudgetMicroUsd,
-          periodHours: levers.periodHours,
-          windowEndsAt: period.expiresAt,
-        },
-      });
-    }
-  }
+  // Deliberately no approaching_cap/period notice: period.count is ONE global counter, so its
+  // crossing test is true for exactly one message platform-wide, and that message belongs to
+  // one arbitrary lake - its owner/org-admins would get "platform budget approaching" while
+  // every other affected lake hears nothing, and no platform admin (the only party who can
+  // actually act on it) is reached at all. budget_exhausted/period does not have this problem -
+  // it fires on every denial, so it correctly reaches every affected lake once per window.
 }

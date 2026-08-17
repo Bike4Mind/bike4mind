@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   MAX_LAKE_SPEND_ADDRESSEES,
+  MAX_ORG_IDS_TO_RESOLVE,
   resolveLakeSpendAddressees,
   type LakeSpendAddresseeDb,
 } from './resolveLakeSpendAddressees';
@@ -273,9 +274,32 @@ describe('resolveLakeSpendAddressees', () => {
     expect(result.map(a => a.userId)).toContain('the-owner');
   });
 
-  it('never throws - a repository failure resolves to [] and logs a warning', async () => {
+  it('never throws - a repository failure resolves to null (NOT []) so the caller can distinguish it from a genuinely empty result', async () => {
     const db = makeDb({ dataLakes: { findById: vi.fn().mockRejectedValue(new Error('mongo down')) } });
 
-    await expect(resolveLakeSpendAddressees('lake-1', db, logger)).resolves.toEqual([]);
+    await expect(resolveLakeSpendAddressees('lake-1', db, logger)).resolves.toBeNull();
+  });
+
+  it('caps the ORG lookup fan-out itself, separately from the final addressee cap', async () => {
+    const orgIds = Array.from({ length: MAX_ORG_IDS_TO_RESOLVE + 5 }, (_, i) => `org-${i}`);
+    const findByIdOrg = vi.fn(async (id: string) => ({ userId: `owner-of-${id}` }));
+    const db = makeDb({
+      dataLakes: { findById: vi.fn().mockResolvedValue(lake({ organizationId: 'org-0' })) },
+      dataLakeAccessGrants: {
+        listByLake: vi
+          .fn()
+          .mockResolvedValue(
+            orgIds.slice(1).map(id => ({ principalType: 'organization', principalId: id, role: 'owner' }))
+          ),
+      },
+      organizations: { findById: findByIdOrg },
+      users: {
+        findActiveEmailsByIds: vi.fn(async (ids: string[]) => ids.map(id => ({ id, email: `${id}@example.com` }))),
+      },
+    });
+
+    await resolveLakeSpendAddressees('lake-1', db, logger);
+
+    expect(findByIdOrg).toHaveBeenCalledTimes(MAX_ORG_IDS_TO_RESOLVE);
   });
 });

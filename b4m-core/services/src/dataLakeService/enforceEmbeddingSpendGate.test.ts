@@ -297,7 +297,7 @@ describe('enforceEmbeddingSpendGate - spend notifications (#1677)', () => {
     expect(notify).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'approaching_cap' }));
   });
 
-  it('fires approaching_cap/period at 80% of the platform-period budget', async () => {
+  it('never fires approaching_cap/period, even at 80%+ of the platform-period budget (deliberate: one arbitrary tenant, no platform admin)', async () => {
     const db = grantAll();
     const expiresAt = new Date(Date.now() + 3_600_000);
     db.cache.tryAddWithinLimitFixedWindow.mockImplementation(async (key: string) => ({
@@ -309,7 +309,7 @@ describe('enforceEmbeddingSpendGate - spend notifications (#1677)', () => {
 
     await gate(db, 1_000, notify);
 
-    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'approaching_cap', scope: 'period' }));
+    expect(notify).not.toHaveBeenCalledWith(expect.objectContaining({ scope: 'period', kind: 'approaching_cap' }));
   });
 
   it('never fires approaching_cap when a reservation was denied (checked only after every grant)', async () => {
@@ -358,21 +358,6 @@ describe('enforceEmbeddingSpendGate - spend notifications (#1677)', () => {
     // already happened on a prior message, so this one must not re-fire.
     const db = grantAll();
     db.dataLakes.tryAddEmbeddingSpendMetered.mockResolvedValue({ granted: true, spendMicroUsd: 85_001_000 });
-    const notify = vi.fn().mockResolvedValue(undefined);
-
-    await gate(db, 1_000, notify);
-
-    expect(notify).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'approaching_cap' }));
-  });
-
-  it('does not fire approaching_cap/period again on a later message that stays over the threshold', async () => {
-    const db = grantAll();
-    const expiresAt = new Date(Date.now() + 3_600_000);
-    db.cache.tryAddWithinLimitFixedWindow.mockImplementation(async (key: string) => ({
-      success: true,
-      count: key === EMBEDDING_SPEND_PERIOD_KEY ? 45_001_000 : 1,
-      expiresAt,
-    }));
     const notify = vi.fn().mockResolvedValue(undefined);
 
     await gate(db, 1_000, notify);
