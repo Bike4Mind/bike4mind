@@ -31,8 +31,10 @@ import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
  * is bursting the embedding provider's tokens-per-minute, so the caller repeats bounded waves (the
  * UI reads `remaining`) rather than fanning out the whole lake at once.
  *
- * Auth diverges from per-file /api/files/reprocess (CASL ability) on purpose: this is a lake-level
- * management action, so it gates on lake ownership/admin like every other /api/data-lakes write.
+ * Auth diverges from per-file /api/files/reprocess (CASL ability) on purpose: this re-chunks files
+ * already in the lake, attaching nothing and mutating no lake document, so the POST gates on
+ * `assertLakeRebuildAccess` rather than `assertLakeWriteAccess` - the one /api/data-lakes write
+ * that does not require a lake document to exist (see that gate's comment for why).
  */
 
 const RechunkInput = z.object({
@@ -61,7 +63,7 @@ const handler = baseApi()
     const { id } = req.query;
     const { limit } = RechunkInput.parse(req.body ?? {});
     const ctx = await toAccessContext(req);
-    const lake = await dataLakeService.assertLakeWriteAccess(id, ctx, {
+    const lake = await dataLakeService.assertLakeRebuildAccess(id, ctx, {
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
