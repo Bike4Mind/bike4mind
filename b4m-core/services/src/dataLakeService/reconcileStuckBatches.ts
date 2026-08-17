@@ -99,7 +99,10 @@ export const reconcileStuckBatches = async (
     try {
       const lake = await db.dataLakes.findById(batch.dataLakeId);
       if (lake) {
-        await recomputeLakeStats(lake, { db });
+        // `logger` forwarded, not just `db`: the audit write inside is best-effort and reports a
+        // failure through `warn`, so without it an audit going dark on this path falls to
+        // console.warn where log-based alerting cannot see it.
+        await recomputeLakeStats(lake, { db, logger });
       }
     } catch (error) {
       logger?.warn(`Reconciler stat recompute failed for batch ${batch.id}:`, error);
