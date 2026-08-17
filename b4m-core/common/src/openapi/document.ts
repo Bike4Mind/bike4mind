@@ -1,12 +1,13 @@
 import { OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
 import { registry } from './registry';
 import { ALL_API_KEY_SCOPES, REQUIRED_SCOPES } from './security';
-import { CONTRACTS } from '../api-contract';
 
 // Importing these modules is what registers their schemas/paths against the
 // shared registry (side-effect imports). Keep them before generateDocument().
+// `registeredContracts` is the same import: it reports what ./operations put in
+// the registry, which is the only honest source for per-operation metadata.
 import './schemas';
-import './operations';
+import { registeredContracts } from './operations';
 
 // Neutral placeholder default so the committed openapi.json never hardcodes a
 // real deployment domain in this public repo (matches apiReferenceContent.ts).
@@ -147,23 +148,41 @@ function codeSamples(path: string, body: unknown, streaming: boolean, authToken:
 // that carries its own `codeSample`. Kept as an extension point (see REQUIRED_SCOPES).
 const CODE_SAMPLES: Record<string, { streaming: boolean; authToken: string; body: unknown }> = {};
 
-// Merge legacy (hand-registered) scopes/samples with contract-derived ones, so a
-// contract-based operation publishes x-required-scopes + x-codeSamples with no
-// second declaration. Contracts are the source of truth for their own metadata.
-const REQUIRED_SCOPES_BY_OP: Record<string, readonly string[]> = {
-  ...(REQUIRED_SCOPES as Record<string, readonly string[]>),
-  ...Object.fromEntries(CONTRACTS.filter(c => c.scopes?.length).map(c => [c.operationId, c.scopes as string[]])),
-};
+type CodeSampleSpec = { streaming: boolean; authToken: string; body: unknown };
 
-const CODE_SAMPLES_BY_OP: Record<string, { streaming: boolean; authToken: string; body: unknown }> = {
-  ...CODE_SAMPLES,
-  ...Object.fromEntries(
-    CONTRACTS.filter(c => c.codeSample).map(c => [
-      c.operationId,
-      { streaming: c.codeSample!.streaming ?? false, authToken: c.codeSample!.authToken, body: c.codeSample!.body },
-    ])
-  ),
-};
+/**
+ * Per-operationId metadata for the post-generation pass, merging legacy
+ * (hand-registered) scopes/samples with contract-derived ones so a contract-based
+ * operation publishes x-required-scopes + x-codeSamples with no second declaration.
+ *
+ * Derived from the contracts actually REGISTERED, not from `CONTRACTS`:
+ * `registerContracts` takes an explicit array, so the two can differ and the
+ * document must describe what the registry holds. Computed per call for the same
+ * reason - the registry is module-global and callers register into it.
+ */
+function operationMetadata() {
+  const contracts = registeredContracts();
+  const withCodeSample = contracts.filter(c => c.codeSample);
+  return {
+    scopes: {
+      ...(REQUIRED_SCOPES as Record<string, readonly string[]>),
+      ...Object.fromEntries(contracts.filter(c => c.scopes?.length).map(c => [c.operationId, c.scopes as string[]])),
+    } as Record<string, readonly string[] | undefined>,
+    codeSamples: {
+      ...CODE_SAMPLES,
+      ...Object.fromEntries(
+        withCodeSample.map(c => [
+          c.operationId,
+          { streaming: c.codeSample!.streaming ?? false, authToken: c.codeSample!.authToken, body: c.codeSample!.body },
+        ])
+      ),
+    } as Record<string, CodeSampleSpec | undefined>,
+    rateLimitHeaderOps: new Set(contracts.filter(c => c.emitsRateLimitHeaders).map(c => c.operationId)),
+    // Statuses each contract declares ITSELF, as opposed to the 401/403 that
+    // registerContract injects - the distinction rate-limit headers turn on below.
+    declaredStatuses: new Map(contracts.map(c => [c.operationId, new Set(Object.keys(c.responses))])),
+  };
+}
 
 const REQUEST_ID_HEADER_SPEC = {
   'X-Request-ID': {
@@ -192,19 +211,22 @@ const RATE_LIMIT_HEADER_SPEC = {
 };
 
 /**
- * Operations whose responses carry those headers, per their contract. Derived
- * rather than hardcoded: the previous hardcode attached them to `executeTool`,
- * which is JWT-only and served by the Lambda adapter, so it emits none of them.
- */
-const RATE_LIMIT_HEADER_OPS = new Set(CONTRACTS.filter(c => c.emitsRateLimitHeaders).map(c => c.operationId));
-
-/**
- * Auth failures never carry rate-limit headers: `apiKeyAuth` throws on an invalid
- * key (401) or an under-scoped one (403), and `apiKeyRateLimit` is mounted AFTER
- * it, so it never runs. 429 is fine - the middleware sets the headers before
+ * The auth failures `registerContract` INJECTS carry no rate-limit headers:
+ * `apiKeyAuth` throws on an invalid key (401) or an under-scoped one (403), and
+ * `apiKeyRateLimit` is mounted AFTER it, so it never runs.
+ *
+ * That reasoning covers only the injected pair. A contract declaring its own 401
+ * or 403 means something else entirely - `/api/ai/tts` 401s `provider_not_configured`
+ * from its handler, long after the middleware set all six headers - so the
+ * exclusion keys off "the contract did not declare this status", not off the
+ * status alone. 429 is never excluded: the middleware sets the headers before
  * throwing TooManyRequests.
  */
-const STATUSES_WITHOUT_RATE_LIMIT_HEADERS = new Set(['401', '403']);
+const INJECTED_AUTH_STATUSES = new Set(['401', '403']);
+
+function isInjectedAuthFailure(status: string, declaredStatuses: ReadonlySet<string> | undefined): boolean {
+  return INJECTED_AUTH_STATUSES.has(status) && !declaredStatuses?.has(status);
+}
 
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace']);
 
@@ -238,6 +260,7 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
 
   // Attach per-operation vendor extensions + headers by operationId. Restrict to
   // HTTP verbs: a Path Item can also carry summary/description/parameters/servers.
+  const meta = operationMetadata();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- OpenAPI doc is loosely typed for vendor extensions
   const paths = (doc.paths ?? {}) as Record<string, any>;
   for (const pathKey of Object.keys(paths)) {
@@ -247,15 +270,17 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       const opId = op?.operationId as string | undefined;
       if (!opId) continue;
 
-      const scopes = REQUIRED_SCOPES_BY_OP[opId];
+      const scopes = meta.scopes[opId];
       if (scopes) op['x-required-scopes'] = scopes;
-      const sample = CODE_SAMPLES_BY_OP[opId];
+      const sample = meta.codeSamples[opId];
       if (sample) op['x-codeSamples'] = codeSamples(pathKey, sample.body, sample.streaming, sample.authToken, method);
 
+      const emitsRateLimitHeaders = meta.rateLimitHeaderOps.has(opId);
+      const declaredStatuses = meta.declaredStatuses.get(opId);
       for (const status of Object.keys(op.responses ?? {})) {
         const response = op.responses[status];
         response.headers = { ...REQUEST_ID_HEADER_SPEC, ...(response.headers ?? {}) };
-        if (RATE_LIMIT_HEADER_OPS.has(opId) && !STATUSES_WITHOUT_RATE_LIMIT_HEADERS.has(status)) {
+        if (emitsRateLimitHeaders && !isInjectedAuthFailure(status, declaredStatuses)) {
           response.headers = { ...response.headers, ...RATE_LIMIT_HEADER_SPEC };
         }
       }

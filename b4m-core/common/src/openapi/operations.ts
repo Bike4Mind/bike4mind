@@ -4,6 +4,18 @@ import { CONTRACTS } from '../api-contract';
 import type { EndpointContract } from '../api-contract/types';
 import { assertContractConventions } from '../api-contract/assertContractConventions';
 
+const registered: EndpointContract[] = [];
+
+/**
+ * The contracts actually registered against the shared registry. document.ts
+ * derives its per-operation metadata from this rather than from CONTRACTS: since
+ * `registerContracts` takes an explicit array, the registry can hold a different
+ * set than CONTRACTS, and a document must describe what was registered.
+ */
+export function registeredContracts(): readonly EndpointContract[] {
+  return registered;
+}
+
 /**
  * Operation (path) registrations for the versioned public surface.
  *
@@ -28,6 +40,7 @@ export function registerContracts(contracts: readonly EndpointContract[] = CONTR
 
   for (const contract of contracts) {
     registerContract(contract);
+    registered.push(contract);
   }
 }
 

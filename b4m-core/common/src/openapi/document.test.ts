@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import { buildOpenApiDocument, toPythonLiteral } from './document';
 import { registerContracts } from './operations';
+import { assertUniqueOperations } from './assertUniqueOperations';
+import { assertContractConventions } from '../api-contract/assertContractConventions';
 import { ApiKeyScope } from '../types/entities/UserApiKeyTypes';
-import { chatContract } from '../api-contract';
+import { chatContract, synthesizeSpeechContract } from '../api-contract';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spec doc is loosely typed for traversal
 const doc = buildOpenApiDocument('9.9.9') as any;
@@ -199,9 +201,36 @@ describe('buildOpenApiDocument', () => {
     // route: neither sets a rate-limit header, so neither may publish one.
     expect(tools.responses['200'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
     expect(completions.responses['200'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
-    // Every baseApi-served endpoint does emit them.
-    for (const path of ['/api/ai/tts', '/api/ai/music', '/api/ai/sound-effects']) {
-      expect(doc.paths[path].post.responses['200'].headers['X-RateLimit-Limit-Minute']).toBeDefined();
+    // Every baseApi-served endpoint does emit them. This list is deliberately
+    // spelled out rather than derived from the flag: enumerating the real
+    // baseApi-served surface is what catches a contract that forgot to declare it,
+    // which is how PUT /api/sessions/{id} shipped without the flag.
+    const baseApiServed: readonly [string, string][] = [
+      ['/api/ai/tts', 'post'],
+      ['/api/ai/music', 'post'],
+      ['/api/ai/sound-effects', 'post'],
+      ['/api/sessions/{id}', 'put'],
+    ];
+    for (const [path, method] of baseApiServed) {
+      const headers = doc.paths[path][method].responses['200'].headers;
+      expect(headers['X-RateLimit-Limit-Minute'], `${method.toUpperCase()} ${path}`).toBeDefined();
+    }
+  });
+
+  it('excludes rate-limit headers from the INJECTED 401/403 but keeps them on a contract-declared 401', () => {
+    // chat declares neither status: both come from registerContract's auth injection
+    // and mean "apiKeyAuth rejected the credential", which happens before
+    // apiKeyRateLimit runs - so those responses genuinely carry no rate-limit headers.
+    expect(chat.responses['401'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
+    expect(chat.responses['403'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
+    // tts declares its OWN 401 (provider_not_configured), thrown from the handler
+    // long after the middleware set all six. A status-keyed exclusion would have
+    // published it as header-less, which is the same spec-vs-runtime drift as the
+    // unwindowed names above.
+    expect(synthesizeSpeechContract.responses[401]).toBeDefined();
+    const tts = doc.paths['/api/ai/tts'].post;
+    for (const window of ['Minute', 'Day']) {
+      expect(tts.responses['401'].headers[`X-RateLimit-Limit-${window}`]).toBeDefined();
     }
   });
 
@@ -224,6 +253,14 @@ describe('buildOpenApiDocument', () => {
 // The guards are called from operations.ts at module scope. Testing them directly
 // proves they WORK; this proves they are actually WIRED - delete either call in
 // registerContracts and these fail, which was not true when they were inlined.
+//
+// Only the REJECTING cases may go through registerContracts. It writes into the
+// module-global registry and zod-openapi's `definitions` getter returns a copy, so
+// there is no removal API: a conforming contract would leave a phantom
+// /api/v1/widgets operation behind for anything that builds a document afterwards.
+// That is invisible today only because `doc` above is built at module load, before
+// any test body runs - which is exactly the trap. The positive control therefore
+// calls the two guards directly, registering nothing.
 describe('registerContracts wiring', () => {
   const conformingContract = {
     method: 'post' as const,
@@ -243,7 +280,11 @@ describe('registerContracts wiring', () => {
     expect(() => registerContracts([conformingContract, conformingContract])).toThrow(/Duplicate operationId/);
   });
 
-  it('accepts a conforming contract, so the guards are not rejecting everything', () => {
-    expect(() => registerContracts([conformingContract])).not.toThrow();
+  it('rejects those two for the injected violation, not for the fixture itself', () => {
+    // Without this control, both throws above would still pass if the fixture were
+    // independently non-conforming and the guards were rejecting everything.
+    const { operationId, method, path } = conformingContract;
+    expect(() => assertUniqueOperations([{ operationId, method, path }])).not.toThrow();
+    expect(() => assertContractConventions([conformingContract])).not.toThrow();
   });
 });

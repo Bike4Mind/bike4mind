@@ -227,6 +227,13 @@ cannot derive: the Lambda adapter sets no rate-limit headers, and the Fargate SS
 computes them and then discards them (`sseRoute.ts`). Set the flag if and only if the
 handler mounts `baseApi`.
 
+One exception to "every response of a flagged endpoint": the `401`/`403` that
+`registerContract` auto-injects for an authenticated route. Those mean `apiKeyAuth`
+rejected the credential, and `apiKeyRateLimit` is mounted after it, so it never ran. A
+`401`/`403` a **contract declares itself** is a different failure - thrown from the
+handler, after the middleware set all six - and does carry them. So the exclusion keys off
+who declared the status, not off the status number.
+
 There is no unwindowed `X-RateLimit-Limit`/`-Remaining`/`-Reset`. A client reading those
 names gets `undefined`.
 
