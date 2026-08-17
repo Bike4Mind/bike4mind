@@ -30,6 +30,34 @@ afterAll(async () => {
   await server.stop();
 });
 
+/**
+ * Fail a handshake wait with a message naming WHICH side hung, instead of letting the whole test
+ * die on vitest's timeout with no indication of where.
+ *
+ * Deliberately generous: this must never fire on a merely slow runner (the waits it guards are one
+ * transaction-start-plus-read and one non-transactional write), only on a genuine deadlock. It
+ * exists because a previous CI failure was an unexplained 30s timeout whose cause - slow vs stuck -
+ * could not be told apart from the log.
+ */
+const HANDSHAKE_DEADLINE_MS = 20_000;
+function withDeadline<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      // "stalled", not "deadlock": this cannot tell a true deadlock from extreme contention, and
+      // naming the wrong cause in a diagnostic is worse than naming neither.
+      () =>
+        reject(
+          new Error(
+            `${label} did not settle within ${HANDSHAKE_DEADLINE_MS}ms - handshake stalled (deadlock or extreme contention)`
+          )
+        ),
+      HANDSHAKE_DEADLINE_MS
+    );
+  });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
+}
+
 describe('FabFileRepository.confirmChunkClaim - genuine concurrent takeover', () => {
   it("detects a stale-claim takeover that commits WHILE the guard's own transaction is still open", async () => {
     const file = await FabFile.create({
@@ -61,12 +89,16 @@ describe('FabFileRepository.confirmChunkClaim - genuine concurrent takeover', ()
     const guardPromise = withTransaction(async () => {
       await FabFile.findById(fabFileId);
       releaseTakeover();
-      await takeoverCommitted;
+      await withDeadline(takeoverCommitted, 'takeoverCommitted');
       return fabFileRepository.confirmChunkClaim(fabFileId, originalStamp);
     });
 
-    await takeoverReady;
     try {
+      // Inside the try: withDeadline can REJECT (a bare `await takeoverReady` could only hang), so
+      // leaving it outside would skip the finally below and strand guardPromise unresolved into
+      // teardown - resurfacing the MongoClientClosedError noise that made the original failure hard
+      // to read. Signalling on this path is harmless: the transaction is still before its own await.
+      await withDeadline(takeoverReady, 'takeoverReady');
       // The real mechanism this simulates: fabFileChunk.ts's stale-arm CAS, a plain
       // findOneAndUpdate with no session, via a wholly separate client - genuinely concurrent,
       // genuinely external.
@@ -90,5 +122,24 @@ describe('FabFileRepository.confirmChunkClaim - genuine concurrent takeover', ()
 
     const finalFile = await FabFile.findById(fabFileId).lean();
     expect(finalFile?.chunkClaimedAt?.toISOString()).toBe(successorStamp.toISOString());
-  }, 30000);
+    // 30s was too tight and timed out on CI twice, blocking a production promotion. This test is
+    // heavier than its ~2s local runtime suggests: a single-node replica set (so every transaction
+    // commit needs majority acknowledgement) plus a guarded write that can raise a WriteConflict and
+    // send withTransaction through up to two more full attempts with backoff. Under the shard's
+    // parallelism the database package logs ~2470s of test-time in ~221s of wall clock locally, and
+    // a 2-core CI runner is slower again - so the ceiling has to be sized for a contended runner,
+    // not for an idle laptop.
+    //
+    // The deadlines above cover the HANDSHAKE only. So a bare 90s timeout with no deadline message
+    // means the handshake was fine and the time went somewhere unguarded - most likely the first
+    // write's cold start (vitest.config.ts explains why: Mongoose builds every model's indexes on
+    // connect and autoIndex cannot be disabled) or confirmChunkClaim's WriteConflict re-attempts.
+    // Look there, not at the handshake.
+    //
+    // Only one other test in this package shares the expensive shape - a replica set plus real
+    // transactions - and that is deleteTransaction.integration.test.ts, whose cases still sit at the
+    // 30s default. It has never blown it (it aborts deliberately, so it pays no retry cost), but it
+    // is the one place to check first if this class of timeout shows up again. The other ~50 suites
+    // here use a standalone server and never pay the transaction cost at all.
+  }, 90_000);
 });
