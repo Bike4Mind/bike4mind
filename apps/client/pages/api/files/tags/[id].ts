@@ -3,6 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { tagService } from '@bike4mind/services';
 import { dataLakeRepository, fabFileRepository, fileTagRepository, userRepository } from '@bike4mind/database';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
 type TagIdQuery = { id?: string | string[] };
 
@@ -45,6 +46,9 @@ const handler = baseApi()
             fabFiles: fabFileRepository,
             dataLakes: dataLakeRepository,
             users: userRepository,
+            // A prefix-arm rename can flip a draft lake to active; without these that transition
+            // would be the one status change the history does not contain.
+            ...lakeConfigAuditDb,
           },
         }
       );
@@ -68,6 +72,8 @@ const handler = baseApi()
             tags: fileTagRepository,
             fabFiles: fabFileRepository,
             dataLakes: dataLakeRepository,
+            // Same reason as the rename above: a prefix-arm delete can drive an auto-activate.
+            ...lakeConfigAuditDb,
           },
         }
       );
