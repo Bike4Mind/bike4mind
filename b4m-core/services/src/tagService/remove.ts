@@ -24,6 +24,13 @@ interface TagRemoveAdapters {
     lakeConfigChangeEvents?: LakeConfigAuditAdapters['db']['lakeConfigChangeEvents'];
     adminSettings?: LakeConfigAuditAdapters['db']['adminSettings'];
   };
+  /**
+   * Forwarded to recomputeLakeStats so a best-effort audit failure on the draft -> active flip is
+   * reported through the caller's structured logger instead of falling to `console.warn`, where
+   * log-based alerting cannot see it. Optional, matching the audit repos above: this service has
+   * many callers, and an absent logger degrades to the console fallback rather than failing.
+   */
+  logger?: LakeConfigAuditAdapters['logger'];
 }
 
 /**
@@ -44,7 +51,7 @@ interface TagRemoveAdapters {
  * the bulk strip below does NOT do on its own is recompute the affected lakes' stats.
  */
 export const remove = async (userId: string, params: TagRemoveParams, adapters: TagRemoveAdapters) => {
-  const { db } = adapters;
+  const { db, logger } = adapters;
   const { id } = secureParameters(params, tagRemoveSchema);
 
   const tag = await db.tags.findByIdAndUserId(id, userId);
@@ -77,7 +84,7 @@ export const remove = async (userId: string, params: TagRemoveParams, adapters: 
     // causes should not read as `system`. `isAdmin` is immaterial on this path - recomputeLakeStats
     // forces the rung to `system` because activateIfDraft authorizes nothing.
     await Promise.all(
-      affectedLakes.map(lake => recomputeLakeStats(lake, { db }, { actor: { userId, isAdmin: false } }))
+      affectedLakes.map(lake => recomputeLakeStats(lake, { db, logger }, { actor: { userId, isAdmin: false } }))
     );
   }
 
