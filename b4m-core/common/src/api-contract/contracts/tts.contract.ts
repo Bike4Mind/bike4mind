@@ -90,6 +90,13 @@ export const synthesizeSpeechContract = defineEndpoint({
     429: { description: 'The provider rate-limited the request.', schema: ttsErrorResponseSchema },
     502: { description: 'The provider failed to generate speech.', schema: ttsErrorResponseSchema },
   },
+  // Both exemptions are live-caller compatibility, not oversight: a 402 -> 422 move
+  // and a newly required scope are the two kinds of change that cannot be aliased.
+  // Removing either needs a published sunset. See CONVENTIONS.md.
+  conventionExemptions: {
+    'status-table': 'Insufficient credits is 402 here and 422 everywhere else; changing it breaks live callers.',
+    'scope-required': 'The route has always accepted any valid API key; gating it now would 403 keys that work today.',
+  },
   codeSample: {
     authToken: 'b4m_live_<key>',
     streaming: false,

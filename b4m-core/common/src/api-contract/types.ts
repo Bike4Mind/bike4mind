@@ -63,6 +63,14 @@ export type ResponseSpec = {
    * `X-Request-ID` is attached to every response centrally; do not repeat it.
    */
   headers?: Readonly<Record<string, string>>;
+  /**
+   * Documented exemption from the shared `ApiErrorSchema` envelope for a >= 400
+   * response, carrying the REASON it cannot conform. Deliberately a string, not a
+   * boolean: the exemptions must be greppable and justified in place, since every
+   * one of them is a shape a generated client has to special-case.
+   * Enforced by assertContractConventions.ts; see CONVENTIONS.md section 1.
+   */
+  bespokeErrorShape?: string;
 };
 
 /** curl/JS/Python sample body for the docs (attached as x-codeSamples). */
@@ -71,6 +79,14 @@ export type CodeSample = {
   authToken: string;
   streaming?: boolean;
 };
+
+/**
+ * A rule in CONVENTIONS.md that `assertContractConventions` enforces, and that a
+ * contract can be exempted from. Exemptions exist because this gate was added to
+ * an ALREADY-PUBLISHED surface: some conforming change would break live callers,
+ * which the conventions themselves forbid.
+ */
+export type ConventionRule = 'error-envelope' | 'status-table' | 'scope-required' | 'version-root';
 
 export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
   method: HttpMethod;
@@ -112,4 +128,14 @@ export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
   /** SSE endpoint: skips JSON response-body docs and gets streaming code samples. */
   streaming?: boolean;
   codeSample?: CodeSample;
+  /**
+   * Conventions this endpoint is exempt from, each mapped to WHY. The only
+   * legitimate reason: the endpoint was published before the rule existed and
+   * conforming now would break live callers - a status code and a required scope
+   * cannot be aliased the way a URL or a field can. A record rather than a list
+   * so the justification lives next to the exemption and stays greppable.
+   * This is debt: entries are meant to be removed behind a sunset, never added
+   * for a new endpoint. See CONVENTIONS.md.
+   */
+  conventionExemptions?: Readonly<Partial<Record<ConventionRule, string>>>;
 };

@@ -12,6 +12,12 @@ three things so they can never drift:
 
 Reference example: `contracts/chat.contract.ts` + `apps/client/pages/api/chat.ts`.
 
+This file covers **how** to build a contract. [CONVENTIONS.md](./CONVENTIONS.md) covers
+**what it must say** - error envelope, status table, scopes, naming, versioning - so the
+published surface stays consistent across endpoints. Much of it is enforced structurally
+by `assertContractConventions.ts` at spec-generation time; read it before adding a
+contract, because a violation fails the build.
+
 ## Expose a public endpoint (6 steps)
 
 1. **Put the request/response schemas in `@bike4mind/common`** (`src/schemas/`), as

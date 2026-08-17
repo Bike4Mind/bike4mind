@@ -49,6 +49,8 @@ export const executeToolContract = defineEndpoint({
     500: {
       description: 'Tool execution failed (`success: false` with `error`) or an unexpected server error.',
       schema: z.union([ToolExecutionResponseSchema, ApiErrorSchema]),
+      bespokeErrorShape:
+        'A tool that ran but failed returns the full ToolExecutionResponse (success: false), not an error envelope.',
     },
   },
   codeSample: {
