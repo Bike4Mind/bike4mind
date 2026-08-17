@@ -1125,7 +1125,11 @@ function LakeInfoPanel({
   // document to manage but can still be rebuilt by an admin (see assertLakeRebuildAccess). Only
   // surfaced when the lake actually has legacy oversized-chunk files to repair (the count
   // self-polls down as a rebuild wave drains).
-  const { data: rebuildStatus } = useUnderChunkedCount(lake.id, lake.canRebuild);
+  // !!: useUnderChunkedCount's `enabled` param defaults to true, which fires on `undefined`
+  // specifically - an absent canRebuild (e.g. a rolling-deploy skew window against an older
+  // server) would otherwise ENABLE the query rather than disable it. Coerce so absent reads as
+  // false, matching every other truthiness check on this flag.
+  const { data: rebuildStatus } = useUnderChunkedCount(lake.id, !!lake.canRebuild);
   const underChunkedCount = rebuildStatus?.underChunkedCount ?? 0;
   const failedCount = rebuildStatus?.failedCount ?? 0;
   const rechunk = useRechunkDataLake(lake.id);

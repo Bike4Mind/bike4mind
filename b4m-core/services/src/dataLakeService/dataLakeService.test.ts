@@ -956,6 +956,14 @@ describe('assertLakeRebuildAccess - narrower-than-write gate that DOES reach fal
   // registry so the two predicates can actually diverge, confirms canManageLake WOULD have granted
   // the actor (so the refusal below is a genuine choice, not an unrelated denial), then confirms
   // assertLakeRebuildAccess refuses them anyway.
+  //
+  // TRAP FOR A FUTURE TEST: only gates that read DATA_LAKES LIVE (isFallbackLake,
+  // resolveFallbackLake, used here) see this synthetic entry. assertCanWriteDataLakeTags
+  // (authorizeLakeWrite.ts) checks STATIC_REGISTRY_DATALAKE_TAGS, a Set snapshotted from
+  // DATA_LAKES at MODULE LOAD - a test reusing this push-into-DATA_LAKES pattern against that
+  // gate would get a passing test via the WRONG branch (falls through to findByDatalakeTag ->
+  // null -> "no such lake", not "static registry lake is admin-only"), with no signal that
+  // anything is wrong.
   describe('org-scoped fallback lake (synthetic registry entry - proves the org rung is truly bypassed)', () => {
     const ORG_LAKE_ID = 'test-only-org-scoped-fallback';
     const orgLakeConfig = {
