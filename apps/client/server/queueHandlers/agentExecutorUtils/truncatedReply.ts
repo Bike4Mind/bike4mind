@@ -59,6 +59,11 @@ export function resolveDisplayAnswer(args: {
   configuredMaxIterations: number;
   isOverCapGraceIteration: boolean;
 }): string | undefined {
+  // Returned raw, with no truncation notice wrapper, even on the credit-cap path: the
+  // aggregated report IS the complete answer for this wake (nothing failed to finish, the
+  // loop just had no room to run), so wrapping it in "this run stopped early" would describe
+  // a run that did not happen. This does mean the reply gives no hint that the member is
+  // over cap on this specific path - accepted, since the report itself is genuinely complete.
   if (!args.ranAnyIteration && args.dagAggregationFallbackSummary !== undefined) {
     return args.dagAggregationFallbackSummary;
   }
