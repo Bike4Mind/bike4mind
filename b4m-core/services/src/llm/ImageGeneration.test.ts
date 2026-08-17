@@ -196,6 +196,55 @@ describe('ImageGenerationService.selectInputImage', () => {
   });
 });
 
+describe('ImageGenerationService.invoke (image-parameter passthrough)', () => {
+  // Regression: safety_tolerance, prompt_upsampling, seed, and output_format were undeclared on
+  // GenerateImageIvokeParamsSchema, so Zod stripped them from parsedBody before `...rest` ever
+  // reached the queue payload - the user's chosen values were silently replaced by schema defaults.
+  const makeService = (startImageGenerationProcess: ReturnType<typeof vi.fn>) => {
+    const findById = vi.fn(async () => ({ id: 'session1' }) as ISessionDocument);
+    const create = vi.fn(async (input: any) => ({ id: 'quest1', ...input }));
+    const update = vi.fn(async () => undefined);
+    const getMostRecentChatHistory = vi.fn(async () => []);
+    const questsFindById = vi.fn(async () => ({ id: 'quest1' }) as any);
+    const service = new ImageGenerationService({
+      db: {
+        sessions: { findById },
+        quests: { create, update, getMostRecentChatHistory, findById: questsFindById },
+      },
+      startImageGenerationProcess,
+    } as any);
+    return service;
+  };
+
+  it('forwards the user-set safety_tolerance, prompt_upsampling, seed, and output_format to the queue payload', async () => {
+    const startImageGenerationProcess = vi.fn(async () => undefined);
+    const service = makeService(startImageGenerationProcess);
+
+    await service.invoke({
+      body: {
+        sessionId: 'session1',
+        prompt: 'a cat',
+        model: ImageModels.FLUX_PRO_1_1,
+        fabFileIds: [],
+        safety_tolerance: 1,
+        prompt_upsampling: true,
+        seed: 42,
+        output_format: 'jpeg',
+      } as any,
+      userId: 'user1',
+    });
+
+    expect(startImageGenerationProcess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        safety_tolerance: 1,
+        prompt_upsampling: true,
+        seed: 42,
+        output_format: 'jpeg',
+      })
+    );
+  });
+});
+
 describe('ImageGenerationService.validateUserCredits (per-member cap)', () => {
   // GROK image quality has a flat usdCost, so requiredCredits is deterministic here.
   const modelInfo = { id: ImageModels.GROK_IMAGINE_IMAGE_QUALITY } as ModelInfo;
