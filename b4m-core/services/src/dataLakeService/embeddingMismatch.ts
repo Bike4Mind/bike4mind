@@ -109,7 +109,7 @@ export interface EmbeddingMismatchReport {
    *  - `unlabeled`: those chunks WERE searched, and most legacy lakes are entirely unlabeled.
    *  - `missingVector`: a chunk with no vector was never embedded, which is not a mismatch. Some
    *    are permanently unembeddable (oversized past the model's context window - a terminal state,
-   *    see countTerminalChunks), so counting them would flag such a lake on every turn with no
+   *    see computeChunkVectorRollup's terminalChunkCount), so counting them would flag such a lake on every turn with no
    *    remedy available to the user.
    *  - `unknownFile`: an orphan chunk cannot be attributed to a model, so nothing can be claimed
    *    about whether it was comparable.

@@ -67,6 +67,11 @@ export interface PendingMessageFile {
 interface SessionLayoutControlState {
   layout: DefaultLayoutType;
   artifactData?: ArtifactData;
+  // Data-lake View: a file shown in the KnowledgeViewer WITHOUT being attached to the session
+  // workbench (viewing must not mutate the prompt - the explicit [+] action does that). The
+  // viewer renders it as one extra tab; replaced by the next View, cleared on session switch.
+  // Not persisted: a preview is a transient look, not session state.
+  previewFile: IFabFileDocument | null;
   recentArtifacts: ArtifactData[]; // Collection of recently clicked artifacts
   selectedArtifactId?: string;
   // Selected version number for viewing, keyed by artifact id. Per-artifact so a version
@@ -102,6 +107,7 @@ const useSessionLayout = create<SessionLayoutControlState>()(
   persist(
     _set => ({
       layout: 'hide',
+      previewFile: null,
       knowledgeViewerWidth: 50, // Default to 50% width
       recentArtifacts: [],
       maxRecentArtifacts: 10, // Default max cache size

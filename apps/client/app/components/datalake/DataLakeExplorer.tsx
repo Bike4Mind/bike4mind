@@ -98,9 +98,10 @@ interface DataLakeExplorerProps {
    */
   chatEmbedded?: boolean;
   /**
-   * Called when a file is ATTACHED or VIEWED with no active session (/new, where creation is
-   * deferred to the first message): must create + adopt the session and resolve its id so the
-   * file can land in a real workbench. Omitted (overlay) -> a guidance toast instead.
+   * Called when a file is ATTACHED with no active session (/new, where creation is deferred to
+   * the first message): must create + adopt the session and resolve its id so the file can land
+   * in a real workbench. Omitted (overlay) -> a guidance toast instead. View never needs this -
+   * previewing a file must not mint a session.
    *
    * Receives the file so the session can be created ALREADY HOLDING it (knowledgeIds): adoption
    * rehydrates the workbench from the session's knowledgeIds, so a file merely written into the
@@ -175,7 +176,7 @@ export default function DataLakeExplorer({
   // Guards double-clicks while createSessionForFile's POST is in flight - a second click
   // would otherwise mint a second session.
   const creatingSessionRef = useRef(false);
-  // The session both chat actions need. On /new creation is deferred to the first message, so
+  // The session the attach action needs. On /new creation is deferred to the first message, so
   // hosts that can mint the grounded session do it here; the rest get guidance. Returns null
   // when there is no session to be had (already explained to the user), so callers just bail.
   const ensureSessionId = useCallback(
@@ -228,10 +229,10 @@ export default function DataLakeExplorer({
     [ensureSessionId, addToWorkBench]
   );
 
-  // View opens the file in the KnowledgeViewer on both hosts. The viewer builds its tabs FROM
-  // the session workbench, so the file has to be attached for it to have a tab at all - and
-  // since that attachment is a side effect of "just looking", it is toasted so it never
-  // happens silently (this path also serves ?article= deep links, where there is no click).
+  // View opens the file in the KnowledgeViewer on both hosts - and ONLY that. It must not
+  // mutate the chat: no workbench attach (the explicit [+] action does that) and no session
+  // mint. The viewer shows the file through the transient `previewFile` slot (see
+  // useSessionLayout), which also serves ?article= deep links, where there is no click.
   //
   // How the viewer gets on screen differs, and only by necessity: with the chat embedded, the
   // chat's own SessionContainer renders it once the layout is `vertical`. External-chat hosts
@@ -240,21 +241,17 @@ export default function DataLakeExplorer({
   // surface restores it. So we set the selected artifact WITHOUT touching `layout` and mount
   // the viewer in our own rail (with its layout-switching controls hidden, for the same reason).
   const handleViewFile = useCallback(
-    async (file: IFabFileDocument) => {
-      const sessionId = await ensureSessionId(file);
-      if (!sessionId) return;
-      const added = addToWorkBench(sessionId, file);
-      if (added) toast.success(`Added "${file.fileName.replace(/\.[^/.]+$/, '')}" to the chat's files`);
+    (file: IFabFileDocument) => {
       if (chatEmbedded) {
-        setSessionLayout({ layout: 'vertical', selectedArtifactId: file.id });
+        setSessionLayout({ layout: 'vertical', previewFile: file, selectedArtifactId: file.id });
       } else {
         hostLayoutRef.current = useSessionLayout.getState().layout;
-        setSessionLayout({ selectedArtifactId: file.id });
+        setSessionLayout({ previewFile: file, selectedArtifactId: file.id });
         railViewerOpenRef.current = true;
         setRailViewerOpen(true);
       }
     },
-    [chatEmbedded, ensureSessionId, addToWorkBench, setRailViewerOpen]
+    [chatEmbedded, setRailViewerOpen]
   );
 
   // Delete gating: the lake list is only needed in chat mode (page mode has no row actions).
@@ -383,7 +380,7 @@ export default function DataLakeExplorer({
   useEffect(() => {
     if (chatMode && deepLinkTarget && openedDeepLinkRef.current !== deepLinkTarget.id) {
       openedDeepLinkRef.current = deepLinkTarget.id;
-      void handleViewFile(deepLinkTarget);
+      handleViewFile(deepLinkTarget);
     }
   }, [chatMode, deepLinkTarget, handleViewFile]);
 

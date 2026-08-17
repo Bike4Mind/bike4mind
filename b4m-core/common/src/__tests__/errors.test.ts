@@ -12,6 +12,8 @@ import {
   CorruptedFileError,
   isZodError,
   PermissionDeniedError,
+  ChunkClaimLostError,
+  isChunkClaimLostError,
 } from '../errors';
 
 describe('HttpStatus enum', () => {
@@ -84,6 +86,27 @@ describe('isZodError', () => {
   it('returns true for objects with name ZodError', () => {
     const fakeZod = { name: 'ZodError' };
     expect(isZodError(fakeZod)).toBe(true);
+  });
+});
+
+describe('isChunkClaimLostError', () => {
+  it('returns true for a real ChunkClaimLostError', () => {
+    expect(isChunkClaimLostError(new ChunkClaimLostError('ff1'))).toBe(true);
+  });
+
+  // The `.name` arm is the point: `instanceof` fails if `@bike4mind/common` is ever resolved as
+  // two module realms across a package boundary (e.g. services -> apps/client). Only this test
+  // exercises the real dual-check - fabFileChunk.test.ts mocks this module and re-declares its own
+  // copy of ChunkClaimLostError, so it never loads the real function.
+  it('returns true for a same-named error from another module realm', () => {
+    const crossRealm = Object.assign(new Error('cross-realm'), { name: 'ChunkClaimLostError' });
+    expect(isChunkClaimLostError(crossRealm)).toBe(true);
+  });
+
+  it('returns false for unrelated errors and non-errors', () => {
+    expect(isChunkClaimLostError(new Error('nope'))).toBe(false);
+    expect(isChunkClaimLostError(null)).toBe(false);
+    expect(isChunkClaimLostError(undefined)).toBe(false);
   });
 });
 

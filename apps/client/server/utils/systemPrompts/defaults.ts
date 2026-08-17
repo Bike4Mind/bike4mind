@@ -74,10 +74,9 @@ HOW TO CARRY THIS
  * corpus-inlining default on both fact accuracy and refusal, at near-zero token cost, by deciding
  * WHETHER and HOW to answer before touching retrieval. Registry-backed so it is versioned and
  * admin-editable (tune the exact wording with no deploy). Activated per session via
- * `session.systemPromptId = 'triage_router'`; it deliberately leaves retrieval AVAILABLE but not
- * forced, so the model searches only when step 1 says to.
+ * `session.systemPromptId = 'triage_router'`.
  *
- * The three steps are ordered on purpose - step 0 is load-bearing: authoritative context makes a
+ * The two steps are ordered on purpose - step 0 is load-bearing: authoritative context makes a
  * model better at stating facts and worse at declining, so legitimacy is settled before capability.
  *
  * PRECONDITION: step 1 tells the model to SEARCH, but `search_knowledge_base` is only offered when
@@ -85,13 +84,48 @@ HOW TO CARRY THIS
  * hasAttachedKnowledge || hasAccessibleDataLake). Activate this router on a session with neither and
  * step 1 instructs the model to use a tool it was never given - which does not fail loudly, it
  * produces retrieval-flavoured prose with no retrieval behind it. Pair the router with a lake.
+ *
+ * WHY THERE IS NO UNDERSPECIFIED STEP. An earlier revision carried a third step that told the model
+ * BOTH to withhold retrieval on vague requests ("do NOT search yet", with the reasoning that searching
+ * a vague question returns material which makes a poorly-scoped answer look well-sourced) AND to name
+ * the distinct readings and ask 2-4 clarifying questions. Both halves went, not just the second.
+ *
+ * It was removed because it did not fire in either retrieval mode, measured on production against a
+ * real corpus (n=1 each, `gpt-4.1-2025-04-14`):
+ *   - Retrieval FORCED, which is what a lake session sets at creation: the retrieved content arrives
+ *     as a ~3,847-token system prompt against this router's ~384, so step 1 is satisfied before the
+ *     model reasons and "do not search yet" has nothing left to withhold.
+ *   - Retrieval NOT forced - reachable today, not hypothetical: a user can turn it off on a live
+ *     session without unbinding the router, since `useSetDataLakeMode` sends only
+ *     `forceKnowledgeRetrieval`. That removes the retrieval block entirely, and the model still
+ *     called `search_knowledge_base` of its own accord, which the step forbids. (systemPrompts 4,957
+ *     vs 719 - two sessions on the same lake, not one measured before and after; the delta also
+ *     includes `lake_memory` at 394, so it is not all retrieval.)
+ *
+ * One reading is NOT ruled out at n=1: the model may have judged the question specific enough to
+ * search, which would be a WORDING problem rather than a reachability one. That distinction decides
+ * the fix - anyone re-adding an ambiguity instruction should word it differently AND measure it,
+ * rather than restoring this text.
+ *
+ * NOT established, and the case to check first if you are re-adding: the "neither" configuration the
+ * PRECONDITION above names - no attached knowledge AND no reachable lake. That is strictly NARROWER
+ * than "a session with no lake attached": `hasAccessibleDataLake` offers `search_knowledge_base` to
+ * any caller who can reach a lake at all, so an ordinary user with any lake access still gets the
+ * tool on an otherwise bare session (see the containment note above `resolveEnabledTools`). Only in
+ * the genuinely toolless case is this the one retrieval-decision step that could still have
+ * functioned, and that case has never been measured. Nothing above is evidence about it.
+ *
+ * Two standing reasons not to restore it blind. ABSTENTION_PROMPT ships always-on and admin-sourced
+ * and covers naming what is missing rather than guessing, so the vague-request case is not unhandled.
+ * And an instruction that does not fire is worse than an absent one: it reads as a capability in
+ * review and in the admin editor while changing nothing at runtime.
  */
 function buildTriageRouterPrompt(): DefaultSystemPrompt {
   return {
     promptId: 'triage_router',
     name: 'Triage Router',
     description:
-      'Grounding-first request router. Decides whether a request is legitimate, specific, or underspecified BEFORE retrieving, so the model refuses fabrication, searches only specific questions, and asks rather than guessing on vague ones.',
+      'Grounding-first request router. Decides whether a request is legitimate before deciding whether it is answerable, so the model refuses fabrication and grounds specific questions in retrieval rather than memory.',
     content: `You are a careful request router. Before answering, classify the request and follow the matching step. The order is deliberate: settle whether you SHOULD answer before deciding whether you CAN.
 
 STEP 0 - IS THE REQUEST LEGITIMATE?
@@ -100,10 +134,7 @@ Decide this first, before considering any retrieval. If the request asks you to 
 STEP 1 - IS THE REQUEST SPECIFIC?
 If it names a definite, answerable thing: answer from your working context if it is already there; otherwise SEARCH the knowledge base for it. Never answer a specific factual question from memory or assumption - retrieve, then answer, and ground the answer in what you retrieved. If retrieval returns nothing relevant, say so rather than filling the gap.
 
-STEP 2 - IS THE REQUEST UNDERSPECIFIED?
-If it is vague, ambiguous, or could mean several materially different things: do NOT search yet. Searching a vague question returns material that makes a poorly-scoped answer look well-sourced. Instead, give a brief frame of what the request could mean, name the distinct interpretations, and ask 2-4 sharp clarifying questions. Let the user's answer narrow it to a specific request you can then route through Step 1.
-
-Default posture: be direct and grounded. Retrieval is available - use it for specific questions, withhold it for vague ones, and never let it substitute for declining an illegitimate request.`,
+Default posture: be direct and grounded. Use retrieval for specific questions, and never let it substitute for declining an illegitimate request.`,
     category: AdminSystemPromptCategory.SYSTEM,
     tags: ['triage', 'router', 'grounding', 'retrieval', 'system-message'],
     variables: [],

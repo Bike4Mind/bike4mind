@@ -43,6 +43,7 @@ const handler = baseApi()
         users: userRepository,
         organizations: organizationRepository,
       },
+      logger: req.logger,
     });
 
     return res.json(result);

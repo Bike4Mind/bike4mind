@@ -14,7 +14,11 @@ import {
   type AdminSettingDoc,
   ABSTENTION_PROMPT,
 } from './settings';
-import { DEFAULT_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET } from '../constants/chunking';
+import {
+  DEFAULT_PASSAGE_TOKEN_TARGET,
+  MIN_PASSAGE_TOKEN_TARGET,
+  OVERSIZED_PASSAGE_TOKEN_THRESHOLD,
+} from '../constants/chunking';
 import {
   LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS,
   LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS,
@@ -435,6 +439,30 @@ describe('DefaultChunkSize agrees with the chunker', () => {
     // makeNumberSetting does `prefault(config.defaultValue ?? 0)`, so a broken import resolves to
     // 0 silently instead of throwing. Pin it.
     expect(settingsMap.DefaultChunkSize.schema.parse(undefined)).toBe(DEFAULT_PASSAGE_TOKEN_TARGET);
+  });
+
+  it('cannot be set above the under-chunked detection threshold (#1804)', () => {
+    // Above it, a file re-chunks to a size that is correct per policy and STILL trips detection
+    // (findUnderChunkedFabFileIds matches tokenCount $gt threshold), so "Rebuild passages" never
+    // converges and each click destructively re-chunks and re-embeds the same files.
+    expect(settingsMap.DefaultChunkSize.max).toBe(OVERSIZED_PASSAGE_TOKEN_THRESHOLD);
+    expect(() => settingsMap.DefaultChunkSize.schema.parse(OVERSIZED_PASSAGE_TOKEN_THRESHOLD + 1)).toThrow();
+    // Detection is $gt, so the threshold ITSELF is convergent and must stay accepted.
+    expect(settingsMap.DefaultChunkSize.schema.parse(OVERSIZED_PASSAGE_TOKEN_THRESHOLD)).toBe(
+      OVERSIZED_PASSAGE_TOKEN_THRESHOLD
+    );
+  });
+
+  it('CLAMPS an already-stored oversized value, so the bound is retroactive (#1804)', () => {
+    // `max` only rejects new writes. A value saved before this shipped would otherwise keep
+    // resolving at its stored size and keep the badge non-convergent, which is the actual defect.
+    const clamp = settingsMap.DefaultChunkSize.scope?.clamp;
+    expect(clamp).toBeDefined();
+    expect(clamp!(8192)).toBe(OVERSIZED_PASSAGE_TOKEN_THRESHOLD);
+    expect(clamp!(2048)).toBe(OVERSIZED_PASSAGE_TOKEN_THRESHOLD);
+    // Still clamps up at the floor, and leaves an in-range value alone.
+    expect(clamp!(1)).toBe(MIN_PASSAGE_TOKEN_TARGET);
+    expect(clamp!(DEFAULT_PASSAGE_TOKEN_TARGET)).toBe(DEFAULT_PASSAGE_TOKEN_TARGET);
   });
 });
 

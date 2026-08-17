@@ -50,7 +50,6 @@ import {
   isDataLakeCommand,
 } from '@bike4mind/slack';
 import { adminSettingsRepository } from '@bike4mind/database';
-import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { runDataLakeSlackCommand } from '@server/slack/handleDataLakeCommand';
 import { buildSlackLakeIngestDeps } from '@server/slack/dataLakeIngestDeps';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -720,7 +719,6 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         id: user.id,
         isAdmin: user.isAdmin,
         tags: user.tags,
-        organizationId: normalizeId(user.organizationId),
         email: user.email,
         emailVerified: user.emailVerified,
       },
