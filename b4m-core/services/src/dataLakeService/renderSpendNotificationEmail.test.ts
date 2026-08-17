@@ -39,6 +39,18 @@ describe('renderSpendNotificationEmail', () => {
     expect(result.html).toContain('&lt;img');
   });
 
+  it('strips CR/LF from the lake name before it reaches any Subject header (B2)', () => {
+    const result = renderSpendNotificationEmail({
+      kind: 'stopped',
+      scope: 'switch',
+      lakeName: 'evil\r\nBcc: attacker@example.com',
+      detail: {},
+    });
+
+    expect(result.subject).not.toMatch(/[\r\n]/);
+    expect(result.subject).toContain('evil Bcc: attacker@example.com');
+  });
+
   it('never includes chunk/file/query text - only what detail explicitly carries', () => {
     const result = renderSpendNotificationEmail({
       kind: 'budget_exhausted',

@@ -135,23 +135,54 @@ describe('sendDataLakeSpendNotification', () => {
     await expect(sendDataLakeSpendNotification(baseEvent, deps)).resolves.toBe('failed');
   });
 
-  it('resolves to failed (not hung) and DELETES the claim so it re-arms when the send times out (S2)', async () => {
+  it('resolves to failed (not hung) and DELETES the claim when the timeout fires BEFORE anything was dispatched (S2)', async () => {
     // markDelivered(deliveryFailed:true) would NOT re-arm - claimNotification's upsert keys
     // purely on (dataLakeId, kind, scope, periodKey) and never reads deliveryFailed. Only
-    // deleting the row frees that unique-index slot for a future genuine attempt.
+    // deleting the row frees that unique-index slot for a future genuine attempt. Addressee
+    // resolution hanging (not sendEmail) is what puts the timeout BEFORE dispatch starts.
     const deps = makeDeps();
-    deps.sendEmail.mockImplementation(() => new Promise(() => {})); // never resolves - simulates a hung mailer
+    h.resolveLakeSpendAddressees.mockImplementation(() => new Promise(() => {})); // hangs pre-dispatch
 
     const outcome = await sendDataLakeSpendNotification(baseEvent, { ...deps, sendTimeoutMs: 10 });
 
     expect(outcome).toBe('failed');
+    expect(deps.sendEmail).not.toHaveBeenCalled();
     expect(deps.deleteNotification).toHaveBeenCalledWith('notif-1');
     expect(deps.markDelivered).not.toHaveBeenCalled();
   });
 
-  it('never throws if the re-arm delete itself fails on timeout - the claim just stands', async () => {
+  it('does NOT delete the claim when the timeout fires mid-dispatch - a slow-but-working mailer must not be re-sent to (B1)', async () => {
+    // The failure mode this guards: sendEmail is genuinely slow, not hung - it resolves AFTER
+    // the race times out. Deleting here would free the claim for a re-send of mail that is
+    // still going to be delivered by this same, still-running (abandoned, not cancelled) call.
     const deps = makeDeps();
-    deps.sendEmail.mockImplementation(() => new Promise(() => {}));
+    let resolveSend: () => void = () => {};
+    deps.sendEmail.mockImplementation(
+      () =>
+        new Promise<undefined>(resolve => {
+          resolveSend = () => resolve(undefined);
+        })
+    );
+
+    const outcome = await sendDataLakeSpendNotification(baseEvent, { ...deps, sendTimeoutMs: 10 });
+
+    expect(outcome).toBe('failed');
+    expect(deps.deleteNotification).not.toHaveBeenCalled();
+
+    // The abandoned send eventually completes - its OWN markDelivered call records the real
+    // outcome, which is only possible because the claim was left standing above.
+    resolveSend();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(deps.markDelivered).toHaveBeenCalledWith('notif-1', {
+      recipientUserIds: ['u1'],
+      deliveredCount: 1,
+      deliveryFailed: false,
+    });
+  });
+
+  it('never throws if the re-arm delete itself fails when nothing was dispatched - the claim just stands', async () => {
+    const deps = makeDeps();
+    h.resolveLakeSpendAddressees.mockImplementation(() => new Promise(() => {}));
     deps.deleteNotification.mockRejectedValue(new Error('mongo down'));
 
     await expect(sendDataLakeSpendNotification(baseEvent, { ...deps, sendTimeoutMs: 10 })).resolves.toBe('failed');

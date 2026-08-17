@@ -21,7 +21,7 @@ import { useSearchOrganizations } from '@client/app/hooks/data/organizations';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { formatCredits, formatUsd, numberCell } from '../utils/format';
 import { useOwnerUsage } from '../hooks/useOwnerUsage';
-import { BreakdownTable } from './BreakdownTable';
+import { BreakdownTable } from '@client/app/components/common/BreakdownTable';
 
 const DAY_RANGES = [30, 60, 90] as const;
 type DayRange = (typeof DAY_RANGES)[number];

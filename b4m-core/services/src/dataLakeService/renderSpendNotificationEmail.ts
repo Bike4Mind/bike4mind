@@ -52,6 +52,10 @@ function wrap(lakeNameEscaped: string, bodyHtml: string): string {
 export function renderSpendNotificationEmail(input: SpendNotificationEmailInput): SpendNotificationEmailContent {
   const { kind, scope, detail } = input;
   const lake = escapeHtml(input.lakeName);
+  // Subject headers are not HTML (no escapeHtml needed), but a lake name is free-text up to 200
+  // chars with no newline restriction - strip CR/LF locally rather than assume the mail
+  // transport sanitizes header injection.
+  const subjectName = input.lakeName.replace(/[\r\n]+/g, ' ');
   const reason = detail.reason ? escapeHtml(detail.reason) : undefined;
   const budget = detail.budgetMicroUsd !== undefined ? formatMicroUsd(detail.budgetMicroUsd) : undefined;
   const spent = detail.spentMicroUsd !== undefined ? formatMicroUsd(detail.spentMicroUsd) : undefined;
@@ -63,7 +67,7 @@ export function renderSpendNotificationEmail(input: SpendNotificationEmailInput)
 
   if (kind === 'stopped' && scope === 'switch') {
     return {
-      subject: `Indexing paused for "${input.lakeName}" - embedding spend is switched off`,
+      subject: `Indexing paused for "${subjectName}" - embedding spend is switched off`,
       html: wrap(
         lake,
         `<p>A platform admin turned embedding spend off for this data lake. Nothing was lost: queued ` +
@@ -74,7 +78,7 @@ export function renderSpendNotificationEmail(input: SpendNotificationEmailInput)
 
   if (kind === 'stopped' && scope === 'rate') {
     return {
-      subject: `Indexing paused for "${input.lakeName}" - the embedding rate limit is set to 0`,
+      subject: `Indexing paused for "${subjectName}" - the embedding rate limit is set to 0`,
       html: wrap(
         lake,
         `<p>A platform admin set the embedding rate limit to 0, which stops all indexing. ` +
@@ -86,7 +90,7 @@ export function renderSpendNotificationEmail(input: SpendNotificationEmailInput)
 
   if (kind === 'budget_exhausted' && scope === 'lake') {
     return {
-      subject: `"${input.lakeName}" has reached its embedding budget`,
+      subject: `"${subjectName}" has reached its embedding budget`,
       html: wrap(
         lake,
         `<p>"${lake}" has spent ${spent ?? 'its'} of the ${budget ?? ''} per-lake embedding budget. ` +
@@ -97,7 +101,7 @@ export function renderSpendNotificationEmail(input: SpendNotificationEmailInput)
 
   if (kind === 'budget_exhausted' && scope === 'run') {
     return {
-      subject: `Upload to "${input.lakeName}" hit the per-run embedding budget`,
+      subject: `Upload to "${subjectName}" hit the per-run embedding budget`,
       html: wrap(
         lake,
         `<p>This upload batch stopped at ${budget ?? 'its per-run budget'}. Split the upload or ask an admin ` +
@@ -111,7 +115,7 @@ export function renderSpendNotificationEmail(input: SpendNotificationEmailInput)
     // lake owners/org admins, not platform admins, so the dollar figure is never shown (it
     // would disclose the platform's aggregate spend/budget to every affected lake's owner).
     return {
-      subject: `Platform embedding budget exhausted - "${input.lakeName}" indexing paused`,
+      subject: `Platform embedding budget exhausted - "${subjectName}" indexing paused`,
       html: wrap(
         lake,
         `<p>Indexing is paused platform-wide because the shared embedding budget is exhausted. ` +
@@ -122,7 +126,7 @@ export function renderSpendNotificationEmail(input: SpendNotificationEmailInput)
 
   if (kind === 'throttled' && scope === 'rate') {
     return {
-      subject: `Indexing for "${input.lakeName}" is being throttled`,
+      subject: `Indexing for "${subjectName}" is being throttled`,
       html: wrap(
         lake,
         `<p>The embedding rate limit is saturated; work retries automatically and no action is needed ` +
@@ -133,7 +137,7 @@ export function renderSpendNotificationEmail(input: SpendNotificationEmailInput)
 
   if (kind === 'approaching_cap' && scope === 'lake') {
     return {
-      subject: `"${input.lakeName}" has used ${pct ?? 80}% of its embedding budget`,
+      subject: `"${subjectName}" has used ${pct ?? 80}% of its embedding budget`,
       html: wrap(
         lake,
         `<p>${spent ?? ''} of ${budget ?? ''} (${pct ?? 80}%) has been spent. At 100% indexing stops until a ` +

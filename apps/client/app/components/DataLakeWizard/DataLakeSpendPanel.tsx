@@ -13,8 +13,8 @@ import {
 } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import type { IDataLakeSpendResponse } from '@bike4mind/common';
-import { formatUsd } from '@client/app/components/admin/CreditAnalysis/utils/format';
-import { BreakdownTable } from '@client/app/components/admin/CreditAnalysis/components/BreakdownTable';
+import { formatUsd } from '@client/app/utils/formatUsd';
+import { BreakdownTable } from '@client/app/components/common/BreakdownTable';
 
 const DAY_RANGES = [30, 60, 90] as const;
 type DayRange = (typeof DAY_RANGES)[number];

@@ -348,13 +348,13 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         </RadioGroup>
         <FormHelperText>
           {visibility === 'public'
-            ? 'Public - readable by everyone across the app. Only you can manage or add files.'
+            ? 'Public \u2014 readable by everyone across the app. Only you can manage or add files.'
             : hasGate
               ? "This lake has an access gate, so it can't be made public. Clear the gate below and save, then reopen settings to publish."
               : visibility === 'organization'
                 ? `Shared with everyone in ${lakeOrgName ?? 'your organization'}.`
                 : canShareToOrg
-                  ? `Private. "Organization" scopes it to "${activeOrg?.name}"; "Public" exposes it to everyone.`
+                  ? `Private. \u201COrganization\u201D scopes it to \u201C${activeOrg?.name}\u201D; \u201CPublic\u201D exposes it to everyone.`
                   : belongsToOrg
                     ? 'Private. Switch to your team account (top-left account switcher) to share with your organization, or make it public.'
                     : 'Private. Make it public to share with everyone, or join an organization to share with a team.'}
@@ -370,7 +370,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         />
         <FormHelperText data-testid="datalake-settings-usertag-help">
           {clearingUserTag
-            ? `Saving removes the "${lake?.requiredUserTag}" gate. Access then follows Visibility above.`
+            ? `Saving removes the \u201C${lake?.requiredUserTag}\u201D gate. Access then follows Visibility above.`
             : 'Users must hold this tag to access the lake. Leave blank for no tag gate.'}
         </FormHelperText>
       </FormControl>
@@ -384,8 +384,8 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         />
         <FormHelperText data-testid="datalake-settings-entitlement-help">
           {clearingEntitlement
-            ? `Saving removes the "${lake?.requiredEntitlement}" gate. Access then follows Visibility above.`
-            : 'Namespaced key (e.g. "product:pro"). Leave blank for no entitlement gate.'}
+            ? `Saving removes the \u201C${lake?.requiredEntitlement}\u201D gate. Access then follows Visibility above.`
+            : 'Namespaced key (e.g. \u201Cproduct:pro\u201D). Leave blank for no entitlement gate.'}
         </FormHelperText>
       </FormControl>
     </Stack>

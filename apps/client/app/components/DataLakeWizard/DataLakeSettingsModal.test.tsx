@@ -173,7 +173,9 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
 
     expect(screen.getByTestId('datalake-settings-usertag-help')).toHaveTextContent(/must hold this tag/i);
     await user.clear(screen.getByPlaceholderText('e.g. Opti'));
-    expect(screen.getByTestId('datalake-settings-usertag-help')).toHaveTextContent(/removes the "Opti" gate/i);
+    expect(screen.getByTestId('datalake-settings-usertag-help')).toHaveTextContent(
+      /removes the \u201COpti\u201D gate/i
+    );
     expect(screen.getByTestId('datalake-settings-usertag-help')).toHaveTextContent(/follows Visibility/i);
   });
 

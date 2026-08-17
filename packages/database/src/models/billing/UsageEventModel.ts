@@ -105,7 +105,14 @@ UsageEventSchema.index({ source: 1, createdAt: -1 });
 // Supports platformUsageSummary()'s byConsumer cut ($match apiKeyId present).
 UsageEventSchema.index({ apiKeyId: 1, createdAt: -1 });
 // Supports lakeUsageSummary()'s $match on dataLakeId (data-lake spend view).
-UsageEventSchema.index({ dataLakeId: 1, createdAt: -1 });
+// partialFilterExpression (not sparse): dataLakeId is only ever set on ingestion-embed
+// rows, a small slice of this collection, unlike sessionId/apiKeyId below which are
+// populated on most rows via their own request paths. Same pattern as
+// SreErrorTrackingModel's fixVerdict.value index.
+UsageEventSchema.index(
+  { dataLakeId: 1, createdAt: -1 },
+  { partialFilterExpression: { dataLakeId: { $exists: true } } }
+);
 
 export type IUsageEventModel = Model<IUsageEventDocument>;
 

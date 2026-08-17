@@ -47,6 +47,12 @@ export const DEFAULT_SEND_TIMEOUT_MS = 2_500;
 /**
  * Resolve addressees and send, on an already-claimed row. Split out so the caller can race it
  * against a timeout without racing the claim call above it.
+ *
+ * `dispatchedRef` is set to true immediately BEFORE the actual sends start (not before addressee
+ * resolution) - a mutable ref, not a return value, because a losing `Promise.race` abandons this
+ * function's promise rather than cancelling it: the underlying sends keep running in the
+ * background and the caller's catch block needs to see whether they were ever started, even
+ * though it can never see this function's own return value.
  */
 async function sendToAddressees(
   event: DataLakeSpendNotificationEvent,
@@ -54,7 +60,8 @@ async function sendToAddressees(
   claimId: string,
   db: SendSpendNotificationDb,
   mailer: SpendNotificationMailer,
-  logger: Logger | undefined
+  logger: Logger | undefined,
+  dispatchedRef: { dispatched: boolean }
 ): Promise<SpendNotificationOutcome> {
   const addressees = await resolveLakeSpendAddressees(event.dataLakeId, db, logger, lake);
   if (addressees.length === 0) {
@@ -76,6 +83,7 @@ async function sendToAddressees(
     detail: event.detail,
   });
 
+  dispatchedRef.dispatched = true;
   // One message PER RECIPIENT - never a comma-joined `to:` - so org admins never learn each
   // other's addresses from a spend alert.
   const results = await Promise.allSettled(addressees.map(a => mailer.sendEmail(a.email, rendered)));
@@ -110,6 +118,9 @@ export async function sendDataLakeSpendNotification(
   // Lambda's event loop non-empty for the full sendTimeoutMs even after sendToAddressees
   // already resolved.
   let sendTimer: ReturnType<typeof setTimeout> | undefined;
+  // Set by sendToAddressees the instant real sends start, NOT when the race times out - a slow
+  // but working mailer can still deliver mail after this function gives up on it.
+  const dispatchedRef = { dispatched: false };
   try {
     const lake = await db.dataLakes.findById(event.dataLakeId);
     const claim = await db.spendNotifications.claimNotification({
@@ -125,20 +136,27 @@ export async function sendDataLakeSpendNotification(
     claimId = claim.id;
 
     return await Promise.race([
-      sendToAddressees(event, lake, claim.id, db, mailer, logger),
+      sendToAddressees(event, lake, claim.id, db, mailer, logger, dispatchedRef),
       new Promise<never>((_, reject) => {
         sendTimer = setTimeout(() => reject(new Error(`send exceeded ${sendTimeoutMs}ms`)), sendTimeoutMs);
       }),
     ]);
   } catch (err) {
     logger?.warn?.(`[sendDataLakeSpendNotification] failed for lake ${event.dataLakeId}: ${err}`);
-    if (claimId) {
+    if (claimId && !dispatchedRef.dispatched) {
       // DELETE, not markDelivered(deliveryFailed:true): claimNotification's upsert keys purely
       // on (dataLakeId, kind, scope, periodKey) and never reads deliveryFailed, so a flag alone
       // would leave the row permanently deduped with an unknown real outcome. Deleting frees the
       // unique-index slot so a future crossing of the SAME period gets a fresh, genuine attempt -
       // best-effort: if this delete itself fails, the claim stands (matches the pre-existing
       // fail-safe posture: a notification problem never re-throws into the ingestion path).
+      //
+      // Guarded on !dispatched: once real sends are in flight, the abandoned sendToAddressees
+      // promise is not cancelled and can still deliver mail after this catch runs. Deleting the
+      // claim in that case would free the slot for a re-send of mail that already went out -
+      // exactly the storm the period-key fix was written to prevent, just from a different
+      // angle. Leaving the row standing here means the eventual (possibly late) markDelivered
+      // from that still-running send is the one that records the real outcome.
       await db.spendNotifications
         .delete(claimId)
         .catch(deleteErr =>

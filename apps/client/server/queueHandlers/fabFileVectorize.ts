@@ -317,9 +317,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         throw providerErr;
       }
 
-      // Ledger the ingestion spend (cost attribution). Only for lake-scoped work
-      // (grantedReservation implies dataLakeId came from a real batch) - a cache-hit-only
-      // run never reaches this block, so cache hits already never produce a row.
+      // Ledger the ingestion spend (cost attribution). Only for lake-scoped work - a
+      // cache-hit-only run never reaches this block, so cache hits already never produce
+      // a row. dataLakeId can still be undefined here (batch?.dataLakeId), which just
+      // writes an unattributed row - harmless, since dataLakeId is optional on UsageEvent.
       // bypassCreditBilling: true because this spend is already governed by the dedicated
       // spend-lever/gate above; debiting credits on top of it would double-charge.
       if (grantedReservation) {

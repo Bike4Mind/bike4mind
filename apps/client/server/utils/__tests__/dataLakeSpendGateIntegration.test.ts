@@ -298,4 +298,88 @@ describe('cross-milestone seam: ingest -> ledger -> notification claim -> mailer
     const ledgerRows = await UsageEvent.find({ dataLakeId: lake.id });
     expect(ledgerRows).toHaveLength(2);
   });
+
+  it('the ledger and the lake meter agree on a single real call, then drift TOGETHER (not independently) on a redelivery (N8)', async () => {
+    const owner = await User.create({ username: 'lake-owner-5', name: 'Lake Owner 5', email: 'owner5@example.com' });
+    const lake = await dataLakeRepository.create({
+      name: 'spend-integration-lake-5',
+      slug: 'spend-integration-lake-5',
+      fileTagPrefix: 'spend-integration-lake-5:',
+      datalakeTag: 'datalake:spend-integration-lake-5',
+      createdByUserId: String(owner._id),
+      status: 'active',
+    } as never);
+
+    mockedGetSettings.mockResolvedValue({
+      dataLakeEmbeddingSpendEnabled: 'true',
+      dataLakeEmbeddingBudgetPerRunUsd: '5',
+      dataLakeEmbeddingBudgetPerLakeUsd: '5',
+      dataLakeEmbeddingBudgetPerPeriodUsd: '50',
+      dataLakeEmbeddingBudgetPeriodHours: '24',
+      dataLakeEmbeddingMaxCallsPerMinute: '120',
+      dataLakeVectorizeChunkBatchSize: '50',
+    });
+
+    const gateDb = {
+      adminSettings: { findBySettingNames: vi.fn().mockResolvedValue([]), findAll: vi.fn().mockResolvedValue([]) },
+      cache: cacheRepository,
+      dataLakes: dataLakeRepository,
+      dataLakeBatches: { tryAddEmbeddingSpend: vi.fn().mockResolvedValue(true) },
+    };
+    const estimatedMicroUsd = 40;
+
+    // Mirrors fabFileVectorize's actual sequence: gate reserves against the meter, THEN the
+    // caller ledgers the same amount - two separate writes to two separate collections, no
+    // shared transaction.
+    const ingestOnce = async () => {
+      await dataLakeService.enforceEmbeddingSpendGate({ estimatedMicroUsd, dataLakeId: lake.id, db: gateDb });
+      await recordOperationalUsage(
+        {
+          requestId: 'batch-agreement',
+          user: owner as never,
+          dataLakeId: lake.id,
+          feature: 'embedding',
+          provider: 'openai',
+          model: 'text-embedding-3-small',
+          inputTokens: 7,
+          costUsd: estimatedMicroUsd / 1_000_000,
+          bypassCreditBilling: true,
+        },
+        {
+          db: {
+            usageEvents: usageEventRepository,
+            adminSettings: {
+              findAll: vi.fn().mockResolvedValue([]),
+              findBySettingNames: vi.fn().mockResolvedValue([]),
+            },
+          },
+        }
+      );
+    };
+
+    await ingestOnce();
+
+    const lakeAfterOne = await DataLakeModel.findById(lake.id);
+    const ledgerAfterOne = await UsageEvent.find({ dataLakeId: lake.id });
+    // Agreement on a single real call: the meter's reservation and the ledger's recorded cost
+    // are the exact same amount, since both derive from the same estimatedMicroUsd.
+    expect(lakeAfterOne?.embeddingSpendMicroUsd).toBe(estimatedMicroUsd);
+    expect(ledgerAfterOne).toHaveLength(1);
+    expect(ledgerAfterOne[0].costUsd).toBeCloseTo(estimatedMicroUsd / 1_000_000, 10);
+    expect(ledgerAfterOne[0].inputTokens).toBe(7);
+
+    // A redelivery of the SAME logical message repeats the whole sequence - no idempotency key
+    // on either write. Both sides double, TOGETHER, rather than one moving and not the other -
+    // the accepted drift is that they double in lockstep, not that they diverge from each other.
+    await ingestOnce();
+
+    const lakeAfterTwo = await DataLakeModel.findById(lake.id);
+    const ledgerAfterTwo = await UsageEvent.find({ dataLakeId: lake.id });
+    expect(lakeAfterTwo?.embeddingSpendMicroUsd).toBe(estimatedMicroUsd * 2);
+    expect(ledgerAfterTwo).toHaveLength(2);
+    expect(ledgerAfterTwo.reduce((sum, row) => sum + row.costUsd, 0)).toBeCloseTo(
+      (estimatedMicroUsd * 2) / 1_000_000,
+      10
+    );
+  });
 });
