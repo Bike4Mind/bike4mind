@@ -34,7 +34,16 @@ export const recomputeStatsForLakeTags = async (
     logger,
     actor,
   }: {
-    logger: { error: (msg: string, meta?: Record<string, unknown>) => void };
+    /**
+     * `warn` as well as `error`, and both are forwarded into the adapters below: the audit write
+     * inside `recordLakeConfigChange` is best-effort and reports a failure through `warn`, so an
+     * unforwarded logger sends an audit going dark to `console.warn`, where log-based alerting
+     * cannot see it. Optional so the existing callers that supply only `error` still compile.
+     */
+    logger: {
+      error: (msg: string, meta?: Record<string, unknown>) => void;
+      warn?: (msg: string, ...args: unknown[]) => void;
+    };
     /**
      * The signed-in user, when the calling door has one. Optional because the doors differ: the
      * file DELETE routes act for a request and pass it, while the upload path arrives from an S3
@@ -57,7 +66,7 @@ export const recomputeStatsForLakeTags = async (
       // authorized this write and naming a rung would be an invention.
       await dataLakeService.recomputeLakeStats(
         lake,
-        { db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, ...lakeConfigAuditDb } },
+        { db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, ...lakeConfigAuditDb }, logger },
         actor ? { actor } : undefined
       );
     } catch (error) {
