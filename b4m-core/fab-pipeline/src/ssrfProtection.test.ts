@@ -265,7 +265,9 @@ describe('SSRF - connect-time lookup pin (DNS rebinding)', () => {
   });
 
   it('preserves the array shape when the caller asked for all addresses', async () => {
-    // Node's own connect path requests `all`, so returning a bare string here would break it.
+    // Node's socket path asks for ONE address, so it is not what needs this branch. The array shape
+    // matters for direct callers of the agent's lookup that pass `all: true` - a bare string would
+    // break them, and this test is one such caller.
     const resolved: dns.LookupAddress[] = [
       { address: '93.184.216.34', family: 4 },
       { address: '2606:4700:4700::1111', family: 6 },
