@@ -252,6 +252,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         // Ceil, never round: a spend meter may overcount a fraction of a micro-USD, not under.
         const estimatedMicroUsd = Math.ceil(getEmbeddingModelCost(embeddingModel, missTokens) * 1_000_000);
         const batch = await dataLakeBatchRepository.findById(existingFabFile.batchId);
+        // The gate resolves the lake's cost tier itself (#1675) - it needs the lake's ownership,
+        // which only `dataLakeId` can reach, so passing the id is what enables the tier here.
         await dataLakeService.enforceEmbeddingSpendGate({
           estimatedMicroUsd,
           batchId: existingFabFile.batchId,

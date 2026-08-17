@@ -1,4 +1,5 @@
 import {
+  CreditHolderType,
   DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_DEFAULT,
   DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_MAX,
   DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_DEFAULT,
@@ -9,9 +10,13 @@ import {
   DATA_LAKE_EMBEDDING_BUDGET_PERIOD_HOURS_MAX,
   DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_DEFAULT,
   DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_MAX,
+  DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_INDIVIDUAL_DEFAULT,
+  DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX,
+  DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_ORGANIZATION_DEFAULT,
   DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT,
   DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_MAX,
   IAdminSettingsRepository,
+  SettingOwnerType,
 } from '@bike4mind/common';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
@@ -25,12 +30,16 @@ export const MICRO_USD_PER_USD = 1_000_000;
  */
 export interface DataLakeSpendLevers {
   spendEnabled: boolean;
+  /** Tiered by lake ownership - see {@link pickTierMultiplier}. */
   perRunBudgetMicroUsd: number;
+  /** Tiered by lake ownership - see {@link pickTierMultiplier}. */
   perLakeBudgetMicroUsd: number;
   perPeriodBudgetMicroUsd: number;
   periodHours: number;
   maxCallsPerMinute: number;
   vectorizeChunkBatchSize: number;
+  /** The tier factor the two budgets above were scaled by. Returned so a caller can log it. */
+  tierMultiplier: number;
 }
 
 /**
@@ -57,10 +66,16 @@ export class SpendLeverResolutionError extends Error {
  * - negative / unparseable  -> SpendLeverResolutionError: halt, never resume at a default
  * - settings read outage    -> SpendLeverResolutionError: fail closed
  * - value above the rail    -> clamped to the MAX_* constant, logged ("adjustable is not unbounded")
+ *
+ * `ownerType` selects the cost tier (#1675) applied to the two per-resource budgets: an
+ * individual-owned lake and an organization-owned one are different economic cases. Omit it for a
+ * caller that reads a platform-wide lever only (the chunk handler wants the batch size); see
+ * {@link pickTierMultiplier} for what an absent owner means.
  */
 export async function resolveSpendLevers(
   db: { adminSettings: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'> },
-  logger?: Logger
+  logger?: Logger,
+  ownerType?: SettingOwnerType
 ): Promise<DataLakeSpendLevers> {
   let values: Record<string, string | null>;
   try {
@@ -73,6 +88,8 @@ export async function resolveSpendLevers(
         'dataLakeEmbeddingBudgetPeriodHours',
         'dataLakeEmbeddingMaxCallsPerMinute',
         'dataLakeVectorizeChunkBatchSize',
+        'dataLakeEmbeddingTierMultiplierIndividual',
+        'dataLakeEmbeddingTierMultiplierOrganization',
       ],
       db,
       { logger }
@@ -90,6 +107,26 @@ export async function resolveSpendLevers(
     );
   }
 
+  // Both tiers are parsed even though only one is used, so a typo in the tier an operator is NOT
+  // currently on still halts the spend path instead of lying dormant until a lake changes hands.
+  const tierMultiplier = pickTierMultiplier(
+    ownerType,
+    nonNegativeNumberLever(
+      values.dataLakeEmbeddingTierMultiplierIndividual,
+      DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_INDIVIDUAL_DEFAULT,
+      DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX,
+      'dataLakeEmbeddingTierMultiplierIndividual',
+      logger
+    ),
+    nonNegativeNumberLever(
+      values.dataLakeEmbeddingTierMultiplierOrganization,
+      DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_ORGANIZATION_DEFAULT,
+      DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX,
+      'dataLakeEmbeddingTierMultiplierOrganization',
+      logger
+    )
+  );
+
   return {
     spendEnabled: booleanLever(values.dataLakeEmbeddingSpendEnabled, true, 'dataLakeEmbeddingSpendEnabled'),
     perRunBudgetMicroUsd: usdLeverToMicroUsd(
@@ -97,14 +134,16 @@ export async function resolveSpendLevers(
       DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_DEFAULT,
       DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_MAX,
       'dataLakeEmbeddingBudgetPerRunUsd',
-      logger
+      logger,
+      tierMultiplier
     ),
     perLakeBudgetMicroUsd: usdLeverToMicroUsd(
       values.dataLakeEmbeddingBudgetPerLakeUsd,
       DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_DEFAULT,
       DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_MAX,
       'dataLakeEmbeddingBudgetPerLakeUsd',
-      logger
+      logger,
+      tierMultiplier
     ),
     perPeriodBudgetMicroUsd: usdLeverToMicroUsd(
       values.dataLakeEmbeddingBudgetPerPeriodUsd,
@@ -134,7 +173,32 @@ export async function resolveSpendLevers(
       'dataLakeVectorizeChunkBatchSize',
       logger
     ),
+    tierMultiplier,
   };
+}
+
+/**
+ * Choose the cost tier (#1675) for a lake from its owner type. The individual-vs-org distinction is
+ * a lever pair, never a branch on a hard-coded number, so this function only picks WHICH configured
+ * multiplier applies - the ratio between the two stays an operator's to tune.
+ *
+ * An absent `ownerType` means the caller could not establish who owns the work - the lake row was
+ * unreadable, or there is no lake at all (the chunk handler reads the batch-size lever alone). A
+ * money gate must not resolve that ambiguity in the spender's favour, so it takes the SMALLER of
+ * the two tiers rather than assuming either one.
+ *
+ * Deliberately silent: "no owner" is routine for a caller that never had a lake, so warning here
+ * would bury the case that actually matters. The gate warns where a lake WAS expected and could
+ * not be read, and logs the tier it ended up applying.
+ */
+export function pickTierMultiplier(
+  ownerType: SettingOwnerType | undefined,
+  individual: number,
+  organization: number
+): number {
+  if (ownerType === CreditHolderType.Organization) return organization;
+  if (ownerType === CreditHolderType.User) return individual;
+  return Math.min(individual, organization);
 }
 
 // Raw values are TYPED string|null but can arrive as number 0 or boolean false at runtime
@@ -155,18 +219,41 @@ function clamp(value: number, max: number, label: string, logger?: Logger): numb
   return max;
 }
 
-/** Spend value in USD -> integer micro-USD. 0 is valid ("stop"); negative/NaN halts. */
+/**
+ * Spend value in USD -> integer micro-USD. 0 is valid ("stop"); negative/NaN halts.
+ *
+ * `tierMultiplier` scales the configured budget for this lake's cost tier BEFORE the rail is
+ * applied, so a generous tier still cannot lift spend past the platform ceiling. The default is
+ * scaled too - a tier that only moved explicitly-set budgets would be a lever that does nothing on
+ * a fresh install.
+ */
 function usdLeverToMicroUsd(
   raw: string | null | undefined,
   fallbackUsd: number,
   maxUsd: number,
   label: string,
+  logger?: Logger,
+  tierMultiplier = 1
+): number {
+  const baseUsd = isAbsent(raw) ? fallbackUsd : Number(String(raw));
+  if (!Number.isFinite(baseUsd) || baseUsd < 0) halt(label, raw);
+  // Round, not floor: 0.29 * 1e6 is 289999.99999999994 in binary floating point, and a spend
+  // budget must not silently lose a micro-USD to that.
+  return Math.round(clamp(baseUsd * tierMultiplier, maxUsd, label, logger) * MICRO_USD_PER_USD);
+}
+
+/** Ratio lever (a cost-tier multiplier): fractional values are legal, 0 is a valid "stop". */
+function nonNegativeNumberLever(
+  raw: string | null | undefined,
+  fallback: number,
+  max: number,
+  label: string,
   logger?: Logger
 ): number {
-  if (isAbsent(raw)) return fallbackUsd * MICRO_USD_PER_USD;
+  if (isAbsent(raw)) return fallback;
   const parsed = Number(String(raw));
   if (!Number.isFinite(parsed) || parsed < 0) halt(label, raw);
-  return Math.round(clamp(parsed, maxUsd, label, logger) * MICRO_USD_PER_USD);
+  return clamp(parsed, max, label, logger);
 }
 
 /** Integer lever where 0 is a valid "stop" value (e.g. the rate limit). */
