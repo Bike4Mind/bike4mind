@@ -21,14 +21,15 @@ import {
   type PrefixArmChange,
 } from '../dataLakeService/prefixArmMembership';
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
+import type { LakeConfigAuditAdapters } from '../dataLakeService/recordLakeConfigChange';
 
 const fabFileToggleTagsSchema = z.object({
   ids: z.array(z.string()),
   tags: z.array(z.string()),
 });
 
-interface FabFileToggleTagsAdapters {
-  db: {
+interface FabFileToggleTagsAdapters extends LakeConfigAuditAdapters {
+  db: LakeConfigAuditAdapters['db'] & {
     fabFiles: Pick<
       IFabFileRepository,
       'shareable' | 'findById' | 'pullTagsByFabFileId' | 'pushTagsByFabFileId' | 'computeDataLakeStats'
@@ -352,10 +353,10 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
   );
 
   for (const lake of touchedLakes.values()) {
-    await recomputeLakeStats(lake, { db });
+    await recomputeLakeStats(lake, { db, logger }, { actor });
   }
   for (const lake of statsOnlyLakes.values()) {
-    if (!touchedLakes.has(lake.id)) await recomputeLakeStats(lake, { db }, { skipActivation: true });
+    if (!touchedLakes.has(lake.id)) await recomputeLakeStats(lake, { db, logger }, { skipActivation: true });
   }
 
   // Lake meta-tags are deliberately absent from this set: they are lake membership, not entries in
