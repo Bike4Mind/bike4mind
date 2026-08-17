@@ -50,6 +50,9 @@ const handler = baseApi()
             // would be the one status change the history does not contain.
             ...lakeConfigAuditDb,
           },
+          // Threaded so a failed audit write on that flip is reported through the request logger
+          // rather than console.warn, which alerting cannot see.
+          logger: req.logger,
         }
       );
 
@@ -75,6 +78,8 @@ const handler = baseApi()
             // Same reason as the rename above: a prefix-arm delete can drive an auto-activate.
             ...lakeConfigAuditDb,
           },
+          // Same reason as the rename above.
+          logger: req.logger,
         }
       );
 
