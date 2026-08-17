@@ -276,6 +276,15 @@ export interface ServerOrchestratorDeps {
    * child's tool list to enforce the UI depth cap. Defaults to 1.
    */
   depth?: number;
+  /**
+   * Returns true when the delegating user is at or over their organization's
+   * per-member credit cap. Checked before any in-process delegation starts -
+   * unlike the Lambda-dispatched path (`processSubagentDispatch`), an in-process
+   * run has no separate pre-flight gate of its own. Omitted (no-op) by callers
+   * with no organization context (Slack, voice API, embed) or that already gate
+   * the whole request upstream (ChatCompletionProcess's credit reservation).
+   */
+  checkMemberCreditCap?: () => boolean;
 }
 
 /**
@@ -326,6 +335,10 @@ export class ServerSubagentOrchestrator {
 
   async delegateToAgent(options: ServerSpawnOptions): Promise<ServerAgentExecutionResult> {
     const { task, agentDef, thoroughness, variables, attachedFiles } = options;
+
+    if (this.deps.checkMemberCreditCap?.()) {
+      throw new Error('Organization member credit limit reached');
+    }
 
     // Use the agent's preferred model if specified, fall back to parent's model
     const effectiveModel = agentDef.model || this.deps.llm.currentModel;

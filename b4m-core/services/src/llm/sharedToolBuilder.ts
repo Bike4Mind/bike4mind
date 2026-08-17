@@ -119,6 +119,15 @@ export interface ToolBuilderDeps {
    * `dagDispatcher` is provided.
    */
   getCurrentExecutionId?: () => string;
+
+  /**
+   * Returns true when the calling user is at or over their organization's
+   * per-member credit cap. Forwarded to `delegate_to_agent` and
+   * `coordinate_task`'s in-process orchestrators. Omit for callers with no
+   * organization context, or that already gate the whole request upstream
+   * (see `ServerOrchestratorDeps.checkMemberCreditCap`).
+   */
+  checkMemberCreditCap?: () => boolean;
 }
 
 /**
@@ -415,6 +424,7 @@ export function buildSharedTools(
     handoffSignal: deps.handoffSignal,
     depth: deps.depth,
     optInTools: deps.optInTools,
+    checkMemberCreditCap: deps.checkMemberCreditCap,
   });
   tools.push(delegateTool);
 
@@ -442,6 +452,7 @@ export function buildSharedTools(
       getParentExecutionId: deps.getCurrentExecutionId,
       dagHandoffSignal: deps.dagHandoffSignal,
       optInTools: deps.optInTools,
+      checkMemberCreditCap: deps.checkMemberCreditCap,
     });
     tools.push(coordinateTool);
   }

@@ -157,6 +157,13 @@ export interface CoordinateTaskToolDeps {
    * converts them to observation strings).
    */
   dagHandoffSignal?: DagHandoffSignal;
+
+  /**
+   * Returns true when the delegating user is at or over their organization's
+   * per-member credit cap. Forwarded to the orchestrator that runs the
+   * coordinator agent in-process; see `ServerOrchestratorDeps.checkMemberCreditCap`.
+   */
+  checkMemberCreditCap?: () => boolean;
 }
 
 /**
@@ -223,6 +230,7 @@ export function createCoordinateTaskTool(deps: CoordinateTaskToolDeps): IComplet
         getRemainingTimeMs: deps.getRemainingTimeMs,
         handoffSignal: deps.subagentHandoffSignal,
         optInTools: deps.optInTools,
+        checkMemberCreditCap: deps.checkMemberCreditCap,
       });
 
       try {

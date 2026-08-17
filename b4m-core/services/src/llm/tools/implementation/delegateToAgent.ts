@@ -126,6 +126,14 @@ export interface DelegateToAgentToolDeps {
    * events so they route to the correct node in the client store.
    */
   getParentExecutionId?: () => string | undefined;
+  /**
+   * Returns true when the delegating user is at or over their organization's
+   * per-member credit cap. Forwarded to the orchestrator; see
+   * `ServerOrchestratorDeps.checkMemberCreditCap`. Spread into the nested
+   * grandchild delegate tool below (`...deps`) so the gate applies at every
+   * delegation depth, not just the first.
+   */
+  checkMemberCreditCap?: () => boolean;
 }
 
 /**
@@ -254,6 +262,7 @@ export function createDelegateToAgentTool(deps: DelegateToAgentToolDeps): ICompl
         handoffSignal: deps.handoffSignal,
         depth: childDepth,
         optInTools: deps.optInTools,
+        checkMemberCreditCap: deps.checkMemberCreditCap,
       });
 
       // Background mode: dispatch + return a structured payload immediately. The LLM

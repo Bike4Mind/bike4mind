@@ -311,6 +311,83 @@ describe('createDelegateToAgentTool — depth cap enforcement (#8577)', () => {
   });
 });
 
+describe('createDelegateToAgentTool \u2014 per-member credit cap gate', () => {
+  it('rejects the foreground delegation and reports failure telemetry without spending any LLM tokens', async () => {
+    const llm = makeLlm();
+    const onTelemetry = vi.fn();
+
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm,
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+      onTelemetry,
+      checkMemberCreditCap: () => true,
+    });
+
+    await expect(tool.toolFn({ task: 't', agent: 'researcher' })).rejects.toThrow(/credit limit reached/);
+
+    expect(llm.complete).not.toHaveBeenCalled();
+    expect(onTelemetry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentName: 'researcher',
+        success: false,
+        error: expect.stringContaining('credit limit reached'),
+      })
+    );
+  });
+
+  it('rejects the background-without-tracker fallback the same way as the foreground path', async () => {
+    // No tracker -> falls back to synchronous foreground execution (see the
+    // "background dispatch requires a tracker" guard in delegateToAgent.ts).
+    const llm = makeLlm();
+
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm,
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+      checkMemberCreditCap: () => true,
+    });
+
+    await expect(tool.toolFn({ task: 't', agent: 'researcher', background: true })).rejects.toThrow(
+      /credit limit reached/
+    );
+    expect(llm.complete).not.toHaveBeenCalled();
+  });
+
+  it('does not affect delegation when checkMemberCreditCap is absent or returns false', async () => {
+    const tracker = makeTracker();
+    const resultBase: ServerAgentExecutionResult = {
+      agentName: 'researcher',
+      thoroughness: 'medium',
+      summary: 'done',
+      finalAnswer: 'done',
+      model: 'claude-sonnet-4-6',
+      steps: [],
+      completionInfo: { totalCredits: 0, iterations: 1, toolCalls: 0, reachedMaxIterations: false },
+    } as ServerAgentExecutionResult;
+    const spy = vi.spyOn(ServerSubagentOrchestrator.prototype, 'delegateToAgent').mockResolvedValue(resultBase);
+
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+      tracker,
+      checkMemberCreditCap: () => false,
+    });
+
+    const result = await tool.toolFn({ task: 't', agent: 'researcher' });
+    expect(result).toBe('done');
+
+    spy.mockRestore();
+  });
+});
+
 describe('createDelegateToAgentTool — usage-event cost basis (#151)', () => {
   const MODEL_ID = 'claude-sonnet-4-6';
   // Numeric-keyed tier: inputTokens <= threshold selects this pricing. No explicit
