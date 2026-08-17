@@ -23,6 +23,7 @@ import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLa
 import { getFilesStorage } from '@server/utils/storage';
 import { Request } from 'express';
 import { Types } from 'mongoose';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
 const handler = baseApi()
   .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
@@ -119,6 +120,7 @@ const handler = baseApi()
               fabFiles: fabFileRepository,
               dataLakes: dataLakeRepository,
               dataLakeAccessGrants: dataLakeAccessGrantRepository,
+              ...lakeConfigAuditDb,
             },
             logger: req.logger,
             storage: {
