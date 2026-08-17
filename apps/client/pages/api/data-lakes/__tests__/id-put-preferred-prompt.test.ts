@@ -28,6 +28,14 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
+  // The config-audit repos this route wires (see lakeConfigAuditDb). Stubbed rather than
+  // omitted because the mock replaces the whole module: a missing export is an import-time
+  // failure, not a silent undefined.
+  lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
+  adminSettingsRepository: {
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
   dataLakeBatchRepository: {},
   fabFileRepository: {},
   dataLakeAccessGrantRepository: {
@@ -84,7 +92,15 @@ describe('PUT /api/data-lakes/[id] - preferredSystemPromptId allowlist is enforc
       expect.objectContaining({ userId: 'owner', isAdmin: false }),
       'lake1',
       expect.objectContaining({ preferredSystemPromptId: 'triage_router' }),
-      expect.anything()
+      // Not expect.anything(): the config-audit repos are wired through one shared helper and a
+      // route that dropped `adminSettings` would still compile (it is optional so the retention
+      // read stays best-effort) and would silently pin every event to the floor default.
+      expect.objectContaining({
+        db: expect.objectContaining({
+          lakeConfigChangeEvents: expect.anything(),
+          adminSettings: expect.anything(),
+        }),
+      })
     );
     expect(json.mock.calls[0][0].preferredSystemPromptId).toBe('triage_router');
   });
