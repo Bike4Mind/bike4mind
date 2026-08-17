@@ -67,6 +67,23 @@ export interface RecordOperationalUsageAdapters {
  * is measuring. The billing (deduct) path reuses the `text_generation_usage` ledger machinery
  * for both features - the precise feature ('operations' | 'embedding') lives on the UsageEvent;
  * the ledger row (opt-in, off by default) does not distinguish embeddings from operational text.
+ *
+ * PER-MEMBER CAP: deliberately EXEMPT (#1651). `maxCreditsPerMember` BELONGS at the reservation
+ * pre-flight of the paths that trigger this spend, never here - this helper must not throw, so a
+ * cap check could only skip the debit (already what an unbilled call does), break the operational
+ * call it measures, or mark the UsageEvent over-cap (observability, not enforcement). That is
+ * where the cap belongs, not a claim that it is there today: see below for where it is missing.
+ *
+ * The bound is uneven, so do not read this as "every caller is gated upstream". The LLM-tool and
+ * knowledge-base callers pass a narrowed db with no billing repos, so they can never reach the
+ * deduct path at all - their safety comes from the adapter shape, not from a gated caller. The two
+ * debit-capable callers are `server/events/recordSessionOperationalUsage` and
+ * `pages/api/data-lakes/semantic-search`, and NEITHER is gated today: session ops are queued with
+ * no pre-flight by at least `POST /api/sessions/[id]/tag`, `POST /api/sessions/[id]/summary`, the
+ * project-attach fan-out (`pages/api/projects/[id]/sessions.ts`) and the admin spider (#1852;
+ * other `SessionEvents` publishers do sit behind gated primary actions), and semantic-search has
+ * no credit check of its own (#1843). Gating belongs at those entry points, not in a measurement
+ * helper.
  */
 export async function recordOperationalUsage(
   params: RecordOperationalUsageParams,
