@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Box, Button, CircularProgress, Input, Stack, Tooltip, Typography } from '@mui/joy';
 import SegmentIcon from '@mui/icons-material/Segment';
 import CheckIcon from '@mui/icons-material/Check';
-import { DEFAULT_PASSAGE_TOKEN_TARGET, IFabFileDocument } from '@bike4mind/common';
+import { DEFAULT_PASSAGE_TOKEN_TARGET, IFabFileDocument, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '@bike4mind/common';
 import { useChunkFile } from '@client/app/hooks/data/fabFiles';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { toast } from 'sonner';
@@ -59,13 +59,18 @@ export const KnowledgeChunkControls: React.FC<IKnowledgeChunkControlsProps> = ({
         <Typography>Chunks &amp; Vectorize</Typography>
         <Tooltip title="Chunking breaks your file into smaller pieces.">
           <Input
+            data-testid="knowledge-chunk-controls-size-input"
             type="string"
             color="success"
             value={chunkSizeDisplay}
             onChange={e => setChunkSizeDisplay(e.target.value)}
             onBlur={e => {
-              setChunkSizeDisplay(`${chunkSize} tokens`);
-              setChunkSize(Number(e.target.value));
+              // Ceiling matches the route's own limit (POST /api/files/chunk rejects above
+              // OVERSIZED_PASSAGE_TOKEN_THRESHOLD), so this input can't suggest a value the
+              // policy will not honor.
+              const next = Math.min(Number(e.target.value), OVERSIZED_PASSAGE_TOKEN_THRESHOLD);
+              setChunkSizeDisplay(`${next} tokens`);
+              setChunkSize(next);
             }}
             onFocus={() => {
               setChunkSizeDisplay(chunkSizeDisplay.replace(' tokens', ''));
@@ -87,6 +92,7 @@ export const KnowledgeChunkControls: React.FC<IKnowledgeChunkControlsProps> = ({
       <Stack direction="row" spacing={2} justifyContent="space-between">
         <Tooltip title="Chunking breaks your file into smaller pieces, while vectorizing creates a vector representation of your chunks.">
           <Button
+            data-testid="knowledge-chunk-controls-chunk-btn"
             color="success"
             variant="solid"
             fullWidth
