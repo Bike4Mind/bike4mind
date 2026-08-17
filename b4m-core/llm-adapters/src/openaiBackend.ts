@@ -27,6 +27,7 @@ import type {
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
 import { executeToolsBatch } from './executeToolsBatch';
+import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   CompletionInfo,
   DEFAULT_MAX_TOOL_CALLS,
@@ -948,7 +949,7 @@ export class OpenAIBackend implements ICompletionBackend {
     messages: IMessage[],
     options: Partial<ICompletionOptions>,
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
-    toolsUsed: Array<{ name: string; arguments?: string; id?: string }> = []
+    toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     this.currentModel = model;
     options = {
@@ -1228,6 +1229,12 @@ export class OpenAIBackend implements ICompletionBackend {
                 this.logger.warn(`JSON parse error for ${toolCall.function.name} arguments`);
                 const entry = toolsUsed.find(t => t.name === toolCall.function.name && t.id === toolCall.id);
                 if (entry) entry.arguments = '{}';
+                recordToolResult(
+                  toolsUsed,
+                  { id: toolCall.id, name: toolCall.function.name },
+                  'Error: Tool arguments were malformed and could not be parsed.',
+                  false
+                );
               }
             }
 
@@ -1293,6 +1300,7 @@ export class OpenAIBackend implements ICompletionBackend {
                   outcome.error instanceof Error ? outcome.error.message : 'Unknown error'
                 }`;
                 streamedText[c.index] = errorMsg;
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, errorMsg, false);
                 // Push error result so the model can acknowledge the failure
                 this.pushToolMessages(
                   messages,
@@ -1333,6 +1341,9 @@ export class OpenAIBackend implements ICompletionBackend {
                     '[Artifact rendered and delivered to user]'
                   )
                 : resultStr;
+
+              // Record the sanitized string, not resultStr - that's what the model actually saw.
+              recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, sanitizedResult, true);
 
               this.pushToolMessages(
                 messages,
@@ -1596,6 +1607,12 @@ export class OpenAIBackend implements ICompletionBackend {
             this.logger.warn('JSON parse error for tool parameters (skipping):', { name, parameters });
             const entry = toolsUsed.find(t => t.name === name && t.id === id);
             if (entry) entry.arguments = '{}';
+            recordToolResult(
+              toolsUsed,
+              { id, name },
+              'Error: Tool arguments were malformed and could not be parsed.',
+              false
+            );
           }
         }
 
@@ -1658,11 +1675,13 @@ export class OpenAIBackend implements ICompletionBackend {
         for (const outcome of outcomes) {
           if (!outcome.ok) {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
+            const errorMsg = `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`;
+            recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, errorMsg, false);
             // Push error result so the model can acknowledge the failure
             this.pushToolMessages(
               messages,
               { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-              `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`
+              errorMsg
             );
             continue;
           }
@@ -1698,6 +1717,8 @@ export class OpenAIBackend implements ICompletionBackend {
                 '[Artifact rendered and delivered to user]'
               )
             : resultStr;
+
+          recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, sanitizedResult, true);
 
           this.pushToolMessages(
             messages,
@@ -1990,7 +2011,7 @@ export class OpenAIBackend implements ICompletionBackend {
     messages: IMessage[],
     options: Partial<ICompletionOptions>,
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
-    toolsUsed: Array<{ name: string; arguments?: string; id?: string }> = []
+    toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     const toolCallCount = options._internal?.toolCallCount ?? 0;
     const accumInputTokens = options._internal?.accumInputTokens ?? 0;
@@ -2133,6 +2154,12 @@ export class OpenAIBackend implements ICompletionBackend {
         });
       } catch {
         this.logger.warn(`JSON parse error for ${fc.name} arguments (Responses path)`);
+        recordToolResult(
+          toolsUsed,
+          { id: fc.call_id, name: fc.name },
+          'Error: Tool arguments were malformed and could not be parsed.',
+          false
+        );
       }
     }
 
@@ -2155,16 +2182,15 @@ export class OpenAIBackend implements ICompletionBackend {
       const outcome = batchOutcomes[i];
       const r = resolved[i];
       if (outcome.ok) {
-        this.pushToolMessages(
-          messages,
-          { id: r.callId, name: r.name, parameters: r.args },
-          outcome.result.result.toString()
-        );
+        const resultStr = outcome.result.result.toString();
+        recordToolResult(toolsUsed, { id: r.callId, name: r.name }, resultStr, true);
+        this.pushToolMessages(messages, { id: r.callId, name: r.name, parameters: r.args }, resultStr);
       } else {
         if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
         const errorMsg = `Error processing ${r.name} tool: ${
           outcome.error instanceof Error ? outcome.error.message : 'Unknown error'
         }`;
+        recordToolResult(toolsUsed, { id: r.callId, name: r.name }, errorMsg, false);
         this.pushToolMessages(messages, { id: r.callId, name: r.name, parameters: r.args }, errorMsg);
       }
     }

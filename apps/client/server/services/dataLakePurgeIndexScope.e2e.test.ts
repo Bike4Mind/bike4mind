@@ -11,6 +11,7 @@ import {
   fabFileChunkRepository,
   dataLakeRepository,
   dataLakeBatchRepository,
+  dataLakeAccessGrantRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import type { RetrievalIndexPort, RetrievalIndexRemoval } from '@bike4mind/services';
@@ -100,6 +101,7 @@ const runCleanup = (lakeId: string, retrievalIndex: RetrievalIndexPort) =>
   dataLakeService.cleanupDeletedDataLake({ userId: CREATOR, isAdmin: false }, lakeId, {
     db: {
       dataLakes: dataLakeRepository,
+      dataLakeAccessGrants: dataLakeAccessGrantRepository,
       batches: dataLakeBatchRepository,
       fabFiles: fabFileRepository,
       fabFileChunks: fabFileChunkRepository,

@@ -43,12 +43,60 @@ Our AI automatically:
 - **Optimizes Size** - Balances detail with performance
 - **Handles Tables** - Special processing for structured data
 
+### Chunk Policy (passage size)
+The passage target - how large each chunk is, in tokens - is a configurable lever, not a fixed
+constant:
+- **Resolved at the file owner's altitude** - the effective target is the owner's configured
+  `Default Chunk Size` (an individual or organization may pin their own default), falling back to the
+  platform default. It is always capped to the embedding model's context window, so a value larger
+  than the model can embed is reduced automatically rather than failing vectorization.
+- **A data lake is a constraint, not an override** - chunks are shared by every consumer of a file,
+  so a lake never rewrites a file's chunks to its own size. A lake may declare a *required* passage
+  target; a file whose chunks do not meet it (including a file in two lakes whose requirements
+  disagree) is flagged with a **chunk-policy conflict** instead of being silently re-chunked. Resolve
+  a conflict by aligning the owner's chunk policy, or by removing the file from the conflicting lake.
+
 ### Vector Embeddings
 Every chunk is:
 - **Semantically Indexed** - Meaning-based search
 - **Cross-Referenced** - Links between related content
 - **Ranked by Relevance** - Best matches first
 - **Context-Aware** - Understands surrounding information
+
+### Lake Health (retrievability)
+A data lake reports **how much of its content can actually be found**, not just how much was
+uploaded. Every processing counter can read "complete" while a large share of a lake is unreachable -
+so health is *computed* from four checkable rules, and shown on the lake in the manager panel:
+
+- **One headline metric: reachable content.** The share of the lake's stored text that a search can
+  actually deliver to the model. This is the number to watch - it accounts for content that was
+  stored but is clipped at serve time or was never embedded.
+- **A three-state badge** - healthy, degraded, or unhealthy - derived from that share and the rules
+  below.
+- **A drill-down** naming which files are affected and why.
+
+The four rules, per file:
+1. **No oversized chunk** - no chunk is larger than the policy passage size.
+2. **Chunk count fits the chunked text** - a document split into too few chunks for its size (in the
+   extreme, a whole document in one oversized chunk) is flagged, because most of it can never rank in
+   search. This rule is measured against the text that was actually chunked, so in practice it moves
+   together with rule 1 (an under-chunked file is an oversized-chunk file); it is reported separately
+   so the drill-down still names the shape explicitly.
+3. **Fully vectorized** - every chunk carries a vector; a chunk with no vector is invisible to
+   semantic search even though it was "processed".
+4. **Serve cap meets policy** - the retrieval serve limit is at least the policy passage size, so an
+   in-policy chunk is never clipped before the model sees it.
+
+Health is **advisory** - it never blocks a search. A degraded lake still answers; the model is simply
+told the results may be incomplete, so it does not assert completeness over content it cannot see.
+
+:::note Not yet measured
+A lake shows **"Health: not measured"** until the one-time indexing backfill has run for its content -
+the reachable-content figure needs a per-chunk character measurement that older content predates.
+This is not the same as unhealthy: it means the measurement, not the content, is missing. New and
+re-ingested content is measured automatically. If a lake stays unmeasured, re-run indexing (or ask an
+administrator to run the char-length backfill) to populate it.
+:::
 
 ## Organization Features
 

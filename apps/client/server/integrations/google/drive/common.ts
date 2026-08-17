@@ -1,7 +1,7 @@
 import { Config } from '@server/utils/config';
 import { google } from 'googleapis';
 import dayjs from 'dayjs';
-import { User } from '@bike4mind/database';
+import { User, orgGoogleDriveConnectionRepository } from '@bike4mind/database';
 import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
 import { BadRequestError } from '@server/utils/errors';
 
@@ -14,6 +14,12 @@ const oauth2Client = new google.auth.OAuth2(Config.GOOGLE_CLIENT_ID, Config.GOOG
 export function getAuthUrl(): string {
   return oauth2Client.generateAuthUrl({
     access_type: 'offline',
+    // Force the consent screen so Google ALWAYS returns a refresh_token. With `access_type: offline`
+    // alone, a REPEAT authorization omits refresh_token and the callback persists
+    // `refreshToken: undefined` - survivable for a short-lived personal session, but fatal for an
+    // org-owned connection, which copies this token as its durable credential (see drive-sync.ts) and
+    // must keep syncing after the connecting user's access token expires or they leave the org.
+    prompt: 'consent',
     scope: SCOPES,
   });
 }
@@ -93,4 +99,40 @@ export async function getValidUserDriveAccessToken(userId: string): Promise<stri
   );
 
   return credentials.access_token;
+}
+
+/**
+ * Resolve a valid Drive access token for an ORG connection (the ingest job's credential).
+ *
+ * Prefers the connection's own org-owned refresh token; until the org-owned connect flow (issue D)
+ * populates it, falls back to the connecting user's personal Drive credential (`connectedBy`). On a
+ * credential failure it marks the connection `credential_error` so the failure is observable rather
+ * than silent. Loads the encrypted token via the org-scoped credential accessor (the caller passes
+ * the connection's organizationId), never a default read.
+ */
+export async function getValidConnectionDriveAccessToken(
+  connectionId: string,
+  organizationId: string
+): Promise<string> {
+  const connection = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(connectionId, organizationId);
+  if (!connection) throw new Error('Google Drive connection not found');
+
+  if (connection.oauthRefreshToken) {
+    try {
+      const refreshToken = decryptToken(connection.oauthRefreshToken);
+      if (refreshToken) {
+        const credentials = await refreshAccessToken(refreshToken);
+        if (credentials.access_token) return credentials.access_token;
+      }
+    } catch (e) {
+      await orgGoogleDriveConnectionRepository.updateHealth(connection.id, {
+        status: 'credential_error',
+        lastError: e instanceof Error ? e.message : String(e),
+      });
+      throw e;
+    }
+  }
+
+  // Fallback: the connecting user's personal Drive token (today's connect flow stores there).
+  return getValidUserDriveAccessToken(connection.connectedBy);
 }

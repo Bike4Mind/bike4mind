@@ -1,6 +1,9 @@
-import type { IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
+import type { IDataLakeAccessGrantRepository, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
 import { UpdateDataLakeRequestInput, normalizeEntitlementKey } from '@bike4mind/common';
 import { secureParameters, BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { type ManageActor } from './manageRule';
+import { resolveCanManageLake } from './authorizeLakeManage';
+import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 import type { z } from 'zod';
 
 type UpdateDataLakeParams = z.infer<typeof UpdateDataLakeRequestInput>;
@@ -8,6 +11,7 @@ type UpdateDataLakeParams = z.infer<typeof UpdateDataLakeRequestInput>;
 interface UpdateDataLakeAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'update'>;
+    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
   };
 }
 
@@ -20,7 +24,7 @@ interface UpdateDataLakeAdapters {
  * Private-by-default in canAccessLake.
  */
 export const updateDataLake = async (
-  actor: { userId: string; isAdmin: boolean },
+  actor: ManageActor,
   dataLakeId: string,
   parameters: UpdateDataLakeParams,
   { db }: UpdateDataLakeAdapters
@@ -32,8 +36,8 @@ export const updateDataLake = async (
     throw new NotFoundError(`Data lake not found`);
   }
 
-  if (!actor.isAdmin && existing.createdByUserId !== actor.userId) {
-    throw new BadRequestError('Only the creator can update this data lake');
+  if (!(await resolveCanManageLake(existing, actor, { db }))) {
+    throw new BadRequestError('You do not have permission to update this data lake');
   }
 
   // Mirror the setLakeVisibility guardrail from the other side so the "public => no gate"
@@ -50,6 +54,10 @@ export const updateDataLake = async (
   const updated = await db.dataLakes.update({
     id: dataLakeId,
     ...params,
+    // After `params`, never before: the stamp is resolved from the authenticated actor, so it must
+    // win over anything a crafted body carried. `secureParameters` already strips unknown keys
+    // (UpdateDataLakeRequestInput declares no such field), making this order belt-and-braces.
+    ...lakeConfigWriteStamp(actor),
     // Normalize the entitlement key at write time (Mongo $in is case-sensitive; the
     // resolver produces lowercase keys). Only override when present so an absent field isn't
     // written as undefined, and so the '' clear-sentinel passes through untouched.

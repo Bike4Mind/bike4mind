@@ -27,6 +27,15 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
+  dataLakeAccessGrantRepository: {
+    listByLake: vi.fn().mockResolvedValue([]),
+    listActiveByLakes: vi.fn().mockResolvedValue([]),
+    listByPrincipal: vi.fn().mockResolvedValue([]),
+    findGrant: vi.fn().mockResolvedValue(null),
+    upsertGrant: vi.fn().mockResolvedValue({}),
+    removeGrant: vi.fn().mockResolvedValue(true),
+    removeAllForLake: vi.fn().mockResolvedValue(0),
+  },
   projectRepository: {},
   sessionRepository: {},
   fabFileRepository: {},
@@ -81,7 +90,18 @@ describe('POST /api/sessions/create - lake-derived session defaults', () => {
       forceKnowledgeRetrieval: true,
       retrievalTags: ['datalake:acme'],
       systemPromptId: 'triage_router',
+      // Always resolved onto a lake session; this lake set no mode -> the default.
+      corpusGroundingMode: 'retrieve',
     });
+  });
+
+  it("carries a lake's explicit grounding mode onto the session", async () => {
+    h.assertLakeAccess.mockResolvedValue({ datalakeTag: 'datalake:acme', groundingMode: 'inline' });
+    const { res } = makeRes();
+
+    await run(post({ name: 'N', dataLakeId: 'acme' }), res);
+
+    expect(paramsOf().corpusGroundingMode).toBe('inline');
   });
 
   it('lets an explicit request systemPromptId/retrievalTags win over the lake defaults', async () => {

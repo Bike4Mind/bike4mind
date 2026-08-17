@@ -15,6 +15,30 @@ export const DATALAKE_TAG_PREFIX = 'datalake:';
 export const DATALAKE_TAG_STRENGTH = 1;
 
 /**
+ * How a lake's attached corpus is grounded into a chat turn, as a DELIBERATE per-lake product
+ * choice rather than a side effect of who is asking (see IDataLake.groundingMode):
+ * - `inline`: paste the corpus into the prompt (never defer to the search tool).
+ * - `retrieve`: leave the corpus to the offered search_knowledge_base tool (always defer the
+ *   tool-retrievable subset), so an owner and an entitlement-only reader ground identically.
+ * - `auto-by-size`: keep the size heuristic - defer only when the per-doc even-split inline depth
+ *   falls below the `CorpusRetrievalMinInlineTokensPerDoc` floor (see shouldDeferCorpusToRetrieval).
+ *
+ * The resolution seam is create-time (resolveLakeSessionDefaults -> session.corpusGroundingMode);
+ * the enforcement seam is the completion-path defer plan. Keep this tuple and DataLakeGroundingMode
+ * as the single source both the Zod schema and the Mongoose enum derive from.
+ */
+export const DATA_LAKE_GROUNDING_MODES = ['inline', 'retrieve', 'auto-by-size'] as const;
+export type DataLakeGroundingMode = (typeof DATA_LAKE_GROUNDING_MODES)[number];
+
+/**
+ * Default per-lake grounding mode: `retrieve`. Chosen so inline-vs-retrieve is a deliberate choice
+ * that defaults SAFE - an owner and a reader of the same lake behave identically (retrieval) unless
+ * an editor opts the lake into inlining. Applied to a lake that never set the field (including lakes
+ * that predate it, whose stored value is absent) at the create-time resolution seam.
+ */
+export const DEFAULT_DATA_LAKE_GROUNDING_MODE: DataLakeGroundingMode = 'retrieve';
+
+/**
  * Trim a lake's `fileTagPrefix` and return it only if it is usable as a tag prefix
  * (non-empty, ends with ':'), else null. An empty prefix would match every tag, so it is
  * rejected rather than honored.
@@ -219,12 +243,61 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    */
   systemPrompt?: string;
   /**
+   * Whether the requesting caller CREATED this lake (createdByUserId === caller). Server-computed
+   * per request. The manager list is "lakes I can reach", not "lakes I own": it also surfaces org
+   * lakes, strangers' public lakes, and - for a global admin - every tenant's lakes. So the UI
+   * marks a not-own lake to keep an admin from mistaking someone else's (even private) lake for
+   * their own and managing it by accident. Built-in fallback lakes have no owner, so `false`.
+   *
+   * REQUIRED, not optional: both producers (toManageableConfig, toFallbackConfig) set it
+   * unconditionally, and the UI safety-gates on `isOwn === false` - an absent field would render
+   * no warning, so a future projection that forgot it would silently reintroduce the bug with a
+   * green typecheck. Required makes that a compile error instead.
+   */
+  isOwn: boolean;
+  /**
+   * Display name (name || username, never email) of the lake's creator. Populated ONLY for lakes
+   * the caller does NOT own, and ONLY when the list projection was given a user lookup (the
+   * manager list route) - the content-scope resolver and Slack omit it and pay for no extra
+   * query. Mirrors the discover catalog's owner rule: never the owner's email, so a cross-org or
+   * admin view can't leak an address. Undefined when the owner can't be resolved (deleted
+   * account), or for own/fallback lakes.
+   */
+  ownerDisplayName?: string;
+  /**
    * Preferred registry system-prompt id (see IDataLake.preferredSystemPromptId). EDITOR-ONLY,
    * like `systemPrompt`: surfaced only when the caller can manage the lake, so the settings
    * picker can seed its current selection. Absent (never an empty-string stand-in) otherwise,
    * so "not yours to see" and "no preferred prompt" stay distinguishable.
    */
   preferredSystemPromptId?: string;
+  /**
+   * Per-lake grounding mode (see IDataLake.groundingMode). EDITOR-ONLY, like the two prompt fields:
+   * surfaced only when the caller can manage the lake, so the settings picker can seed its current
+   * selection. Absent when the caller can't manage it OR the lake never set the field (readers get
+   * its EFFECT via the create-time resolver, never the setting itself).
+   */
+  groundingMode?: DataLakeGroundingMode;
+  /**
+   * Whether the requesting caller may REBUILD this lake's passages (re-chunk files already in
+   * it). Narrower than `canManage` on purpose: a fallback (built-in) lake has no document to
+   * mutate, so `canManage` is always false for it, but rebuild attaches nothing and mutates no
+   * lake document - see `assertLakeRebuildAccess`. For a DB lake the two are identical
+   * (`canRebuild === canManage`); for a fallback lake `canRebuild` is `ctx.isAdmin` while
+   * `canManage` stays `false`. Kept as a SEPARATE flag rather than folded into `canManage` so the
+   * client can gate the Rebuild affordance without also lighting up rename/delete/visibility/
+   * file-removal, which would still fail server-side on a fallback lake.
+   *
+   * REQUIRED, not optional - same reasoning as `isOwn`: both producers (toManageableConfig,
+   * toFallbackConfig) set it unconditionally, so an absent field is a compile error rather than a
+   * silently-reintroduced gap FOR EVERY IN-REPO CALLER. That guarantee has two known exceptions
+   * that TypeScript cannot see: a test fixture built via an `as ManageableDataLakeConfig` cast
+   * (e.g. resolveManageableLake.test.ts), and the actual HTTP response at the wire boundary
+   * (hooks/data/dataLakes.ts's `api.get<{ data: ManageableDataLakeConfig[] }>(...)`), which is
+   * trusted with no runtime validation. Both fail CLOSED (an absent field reads as falsy, hiding
+   * the affordance rather than exposing it), so this is a precision note, not a safety concern.
+   */
+  canRebuild: boolean;
 }
 
 /**

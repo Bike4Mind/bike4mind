@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import type { ModelInfo } from '@bike4mind/common';
 import { ModelBackend } from '@bike4mind/common';
-import { agentOpsModelOptions, agentOpsModelRejection, isSelectableAgentOpsModel } from '../agentOpsModels';
+import {
+  agentOpsModelLabels,
+  agentOpsModelOptions,
+  agentOpsModelRejection,
+  isSelectableAgentOpsModel,
+} from '../agentOpsModels';
 
 /**
  * Agent-ops used to keep its own model lists -- an allowlist in the endpoint, a picker array in
@@ -105,5 +110,46 @@ describe('agentOpsModelRejection', () => {
 
   it('reports an unknown id as an invalid model', () => {
     expect(agentOpsModelRejection(catalog, 'nonesuch')).toBe('Invalid LLM model specified');
+  });
+});
+
+describe('agentOpsModelLabels', () => {
+  it('leaves a unique name untouched', () => {
+    const labels = agentOpsModelLabels([model({ id: 'claude-opus-5', name: 'Claude 5 Opus' })]);
+
+    expect(labels.get('claude-opus-5')).toBe('Claude 5 Opus');
+  });
+
+  it('suffixes the backend on names shared across two backends (the #1596 case)', () => {
+    // The direct-provider and Bedrock twins of the same model carry an identical `name`.
+    const labels = agentOpsModelLabels([
+      model({ id: 'us.anthropic.claude-opus-4-20250514-v1:0', name: 'Claude 4 Opus', backend: ModelBackend.Bedrock }),
+      model({ id: 'claude-opus-4-20250514', name: 'Claude 4 Opus', backend: ModelBackend.Anthropic }),
+    ]);
+
+    expect(labels.get('us.anthropic.claude-opus-4-20250514-v1:0')).toBe('Claude 4 Opus (Bedrock)');
+    expect(labels.get('claude-opus-4-20250514')).toBe('Claude 4 Opus (Anthropic)');
+  });
+
+  it('does not suffix a backend-unique name that merely shares a substring', () => {
+    const labels = agentOpsModelLabels([
+      model({ id: 'claude-sonnet-4', name: 'Claude 4 Sonnet' }),
+      model({ id: 'claude-opus-5', name: 'Claude 5 Opus' }),
+    ]);
+
+    expect(labels.get('claude-sonnet-4')).toBe('Claude 4 Sonnet');
+    expect(labels.get('claude-opus-5')).toBe('Claude 5 Opus');
+  });
+
+  it('falls back to the id when the backend does not break the tie either', () => {
+    // Two same-name options on the SAME backend: the backend suffix alone stays ambiguous, so the
+    // id is appended to keep every option distinguishable.
+    const labels = agentOpsModelLabels([
+      model({ id: 'twin-a', name: 'Twin', backend: ModelBackend.Bedrock }),
+      model({ id: 'twin-b', name: 'Twin', backend: ModelBackend.Bedrock }),
+    ]);
+
+    expect(labels.get('twin-a')).toBe('Twin (Bedrock: twin-a)');
+    expect(labels.get('twin-b')).toBe('Twin (Bedrock: twin-b)');
   });
 });

@@ -78,6 +78,7 @@ import { z } from 'zod';
 import XLSXViewer from './XLSXViewer';
 import { toast } from 'react-hot-toast';
 import DownloadMenu, { downloadFile, copyToClipboard } from '../common/DownloadMenu';
+import { openInNewTab } from '@client/app/utils/externalLinks';
 import ShareIcon from '@mui/icons-material/Share';
 import { useUser } from '@client/app/contexts/UserContext';
 import { usePublishShare } from '@client/app/hooks/usePublishShare';
@@ -342,9 +343,16 @@ const buttonTooltipTitle = (item: KnowledgeItem) => {
 interface KnowledgeViewerProps {
   /** When true (default), auto-hides the layout when no knowledge items or artifacts exist. Set to false for pages like /opti that manage their own layout. */
   autoHideOnEmpty?: boolean;
+  /**
+   * When false, hides the layout-switching ButtonGroup (vertical/horizontal/pip/floating/noAI);
+   * Close stays. For mounts on hosts whose global layout must not change - a docked-chat host
+   * renders its chat 0x0 in any non-docked layout and nothing on that surface restores it
+   * (see DataLakeRailViewer).
+   */
+  showLayoutControls?: boolean;
 }
 
-const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = true }) => {
+const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = true, showLayoutControls = true }) => {
   const { currentSession, currentSessionId } = useSessions();
   const workBenchFiles = useWorkBenchFiles(currentSessionId);
   const { systemFiles } = useSystemPromptFiles();
@@ -383,6 +391,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
   const artifactData = useSessionLayout(s => s.artifactData);
   const recentArtifacts = useSessionLayout(s => s.recentArtifacts);
   const selectedArtifactId = useSessionLayout(s => s.selectedArtifactId);
+  const previewFile = useSessionLayout(s => s.previewFile);
   const { canUseAdminTools } = useAdminTools();
   const isMobile = useIsMobile();
   const { selectedTabIndex, showLineNumbers } = useKnowledgeViewer();
@@ -586,6 +595,24 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
         });
       });
 
+    // Data-lake View preview: a file being looked at WITHOUT being attached to the session
+    // (see useSessionLayout.previewFile). Skipped when the same file already has a tab through
+    // any attached list, so attaching a previewed file never duplicates it.
+    if (
+      previewFile &&
+      !workBenchFileIds.has(previewFile.id) &&
+      !systemFileIds.has(previewFile.id) &&
+      !messageFileIds.has(previewFile.id)
+    ) {
+      items.push({
+        id: previewFile.id,
+        type: 'file' as const,
+        content: previewFile,
+        title: previewFile.fileName,
+        timestamp: previewFile.createdAt ? new Date(previewFile.createdAt).getTime() : 0,
+      });
+    }
+
     // Stable timestamp derived from the artifact ID (avoids infinite loops).
     // IDs follow artifact_type_identifier_timestamp_index; extract the timestamp part.
     const getStableTimestamp = (id: string): number => {
@@ -715,7 +742,15 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
 
     return items;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recentArtifacts, workBenchFiles, systemFiles, messageFiles, pendingMessageFiles, latestArtifact?.artifact.id]);
+  }, [
+    recentArtifacts,
+    workBenchFiles,
+    systemFiles,
+    messageFiles,
+    pendingMessageFiles,
+    previewFile,
+    latestArtifact?.artifact.id,
+  ]);
 
   // Effect: Reset view when no selection
   useEffect(() => {
@@ -760,6 +795,11 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
     // Only clear if session ID actually changed (not just on re-render)
     if (prevSessionIdRef.current !== currentSessionId) {
       clearRecentArtifacts();
+      // The data-lake View preview is just as session-transient: leaving it set would surface a
+      // stale "just looking" tab inside a different notebook's viewer.
+      if (useSessionLayout.getState().previewFile) {
+        setSessionLayout({ previewFile: null });
+      }
       prevSessionIdRef.current = currentSessionId;
     }
   }, [currentSessionId]);
@@ -1186,7 +1226,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
             toast.error('No file URL available');
             return;
           }
-          window.open(currentItem.content.fileUrl, '_blank');
+          openInNewTab(currentItem.content.fileUrl);
         } else if (currentItem.content.mimeType === 'text/markdown') {
           try {
             if (!currentItem.content.fileUrl) {
@@ -1349,82 +1389,84 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
               </IconButton>
             </Tooltip>
 
-            <ButtonGroup className="knowledge-viewer-layout-controls" size="sm" variant="solid">
-              <Tooltip title="Vertical" disableInteractive>
-                <IconButton
-                  size="sm"
-                  sx={(theme: Theme) => ({
-                    borderColor: theme.palette.divider,
-                    ...(layout === 'vertical' && {
-                      backgroundColor: theme.palette.primary.softActiveBg,
-                    }),
-                  })}
-                  onClick={() => setSessionLayout({ layout: layout === 'vertical' ? 'hide' : 'vertical' })}
-                >
-                  <Splitscreen sx={{ rotate: '90deg' }} />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title="Horizontal" disableInteractive>
-                <IconButton
-                  size="sm"
-                  sx={(theme: Theme) => ({
-                    borderColor: theme.palette.divider,
-                    ...(layout === 'horizontal' && {
-                      backgroundColor: theme.palette.primary.softActiveBg,
-                    }),
-                  })}
-                  onClick={() => setSessionLayout({ layout: layout === 'horizontal' ? 'hide' : 'horizontal' })}
-                >
-                  <Splitscreen />
-                </IconButton>
-              </Tooltip>
+            {showLayoutControls && (
+              <ButtonGroup className="knowledge-viewer-layout-controls" size="sm" variant="solid">
+                <Tooltip title="Vertical" disableInteractive>
+                  <IconButton
+                    size="sm"
+                    sx={(theme: Theme) => ({
+                      borderColor: theme.palette.divider,
+                      ...(layout === 'vertical' && {
+                        backgroundColor: theme.palette.primary.softActiveBg,
+                      }),
+                    })}
+                    onClick={() => setSessionLayout({ layout: layout === 'vertical' ? 'hide' : 'vertical' })}
+                  >
+                    <Splitscreen sx={{ rotate: '90deg' }} />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title="Horizontal" disableInteractive>
+                  <IconButton
+                    size="sm"
+                    sx={(theme: Theme) => ({
+                      borderColor: theme.palette.divider,
+                      ...(layout === 'horizontal' && {
+                        backgroundColor: theme.palette.primary.softActiveBg,
+                      }),
+                    })}
+                    onClick={() => setSessionLayout({ layout: layout === 'horizontal' ? 'hide' : 'horizontal' })}
+                  >
+                    <Splitscreen />
+                  </IconButton>
+                </Tooltip>
 
-              <Tooltip title="Picture in Picture" disableInteractive>
-                <IconButton
-                  size="sm"
-                  sx={(theme: Theme) => ({
-                    borderColor: theme.palette.divider,
-                    ...(layout === 'pip' && {
-                      backgroundColor: theme.palette.primary.softActiveBg,
-                    }),
-                  })}
-                  onClick={() => setSessionLayout({ layout: layout === 'pip' ? 'hide' : 'pip' })}
-                >
-                  <PictureInPictureIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Tooltip>
+                <Tooltip title="Picture in Picture" disableInteractive>
+                  <IconButton
+                    size="sm"
+                    sx={(theme: Theme) => ({
+                      borderColor: theme.palette.divider,
+                      ...(layout === 'pip' && {
+                        backgroundColor: theme.palette.primary.softActiveBg,
+                      }),
+                    })}
+                    onClick={() => setSessionLayout({ layout: layout === 'pip' ? 'hide' : 'pip' })}
+                  >
+                    <PictureInPictureIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </Tooltip>
 
-              <Tooltip title="Floating Chat" disableInteractive>
-                <IconButton
-                  size="sm"
-                  data-testid="floating-chat-layout-btn"
-                  sx={(theme: Theme) => ({
-                    borderColor: theme.palette.divider,
-                    ...(layout === 'floatingChat' && {
-                      backgroundColor: theme.palette.primary.softActiveBg,
-                    }),
-                  })}
-                  onClick={() => setSessionLayout({ layout: layout === 'floatingChat' ? 'hide' : 'floatingChat' })}
-                >
-                  <OpenInNewIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Tooltip>
+                <Tooltip title="Floating Chat" disableInteractive>
+                  <IconButton
+                    size="sm"
+                    data-testid="floating-chat-layout-btn"
+                    sx={(theme: Theme) => ({
+                      borderColor: theme.palette.divider,
+                      ...(layout === 'floatingChat' && {
+                        backgroundColor: theme.palette.primary.softActiveBg,
+                      }),
+                    })}
+                    onClick={() => setSessionLayout({ layout: layout === 'floatingChat' ? 'hide' : 'floatingChat' })}
+                  >
+                    <OpenInNewIcon sx={{ fontSize: 16 }} />
+                  </IconButton>
+                </Tooltip>
 
-              <Tooltip title="Hide AI" disableInteractive>
-                <IconButton
-                  size="sm"
-                  sx={(theme: Theme) => ({
-                    borderColor: theme.palette.divider,
-                    ...(layout === 'noAI' && {
-                      backgroundColor: theme.palette.primary.softActiveBg,
-                    }),
-                  })}
-                  onClick={() => setSessionLayout({ layout: layout === 'noAI' ? 'hide' : 'noAI' })}
-                >
-                  <ExtensionOff />
-                </IconButton>
-              </Tooltip>
-            </ButtonGroup>
+                <Tooltip title="Hide AI" disableInteractive>
+                  <IconButton
+                    size="sm"
+                    sx={(theme: Theme) => ({
+                      borderColor: theme.palette.divider,
+                      ...(layout === 'noAI' && {
+                        backgroundColor: theme.palette.primary.softActiveBg,
+                      }),
+                    })}
+                    onClick={() => setSessionLayout({ layout: layout === 'noAI' ? 'hide' : 'noAI' })}
+                  >
+                    <ExtensionOff />
+                  </IconButton>
+                </Tooltip>
+              </ButtonGroup>
+            )}
 
             <ButtonGroup className="knowledge-viewer-action-buttons" size="sm" variant="solid" sx={{ ml: 1 }}>
               {knowledgeItems[selectedTabIndex]?.type === 'file' && (

@@ -49,6 +49,48 @@ describe('OrgGoogleDriveConnectionModel - credential handling', () => {
     // org-scoped: another org cannot load this connection's credential by id alone.
     expect(await orgGoogleDriveConnectionRepository.findByIdWithCredentials(created.id, 'org-2')).toBeFalsy();
   });
+
+  it('updateCredential rewrites the token, re-stamps connectedBy, heals status, and is org-scoped', async () => {
+    const created = await OrgGoogleDriveConnection.create({ ...base, oauthRefreshToken: 'enc-old' });
+    await orgGoogleDriveConnectionRepository.updateHealth(created.id, {
+      status: 'credential_error',
+      lastError: 'invalid_grant',
+    });
+
+    // Wrong org cannot overwrite this connection's credential.
+    expect(
+      await orgGoogleDriveConnectionRepository.updateCredential(created.id, 'org-2', 'enc-new', 'user-2')
+    ).toBeFalsy();
+    const stillOld = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(created.id, 'org-1');
+    expect(stillOld?.oauthRefreshToken).toBe('enc-old');
+
+    // Correct org: token rewritten, connectedBy re-stamped to the re-syncer, status healed, error cleared.
+    const updated = await orgGoogleDriveConnectionRepository.updateCredential(created.id, 'org-1', 'enc-new', 'user-2');
+    expect(updated?.status).toBe('connected');
+    expect(updated?.connectedBy).toBe('user-2');
+    expect(updated?.lastError ?? null).toBeNull();
+    const withCreds = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(created.id, 'org-1');
+    expect(withCreds?.oauthRefreshToken).toBe('enc-new');
+  });
+
+  it('updateCredential writes the credential but does NOT heal a syncing connection (no claim flip)', async () => {
+    // A Re-sync issued while an ingest is in flight must not flip 'syncing' -> 'connected', or
+    // claimForSync would let the re-triggered run claim on top of the live one (duplicate ingest).
+    const created = await OrgGoogleDriveConnection.create({
+      ...base,
+      oauthRefreshToken: 'enc-old',
+      status: 'syncing',
+    });
+
+    const updated = await orgGoogleDriveConnectionRepository.updateCredential(created.id, 'org-1', 'enc-new', 'user-2');
+
+    // Credential + connectedBy are written unconditionally...
+    expect(updated?.connectedBy).toBe('user-2');
+    const withCreds = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(created.id, 'org-1');
+    expect(withCreds?.oauthRefreshToken).toBe('enc-new');
+    // ...but the claim is left intact, so the second ingest defers instead of running concurrently.
+    expect(updated?.status).toBe('syncing');
+  });
 });
 
 describe('OrgGoogleDriveConnectionModel - uniqueness invariants', () => {
@@ -72,6 +114,25 @@ describe('OrgGoogleDriveConnectionModel - uniqueness invariants', () => {
         driveFolderId: 'folder-2', // different folder, same lake
       })
     ).rejects.toThrow();
+  });
+
+  it('release hard-deletes so the freed folder can be re-claimed (even by another org)', async () => {
+    const created = await OrgGoogleDriveConnection.create(base);
+
+    // Wrong org cannot release it.
+    expect(await orgGoogleDriveConnectionRepository.release(created.id, 'org-2')).toBe(false);
+    await expect(
+      OrgGoogleDriveConnection.create({ ...base, organizationId: 'org-2', targetDataLakeId: 'lake-2' })
+    ).rejects.toThrow();
+
+    // Owning org releases it; the global folder claim is freed for a fresh claim.
+    expect(await orgGoogleDriveConnectionRepository.release(created.id, 'org-1')).toBe(true);
+    const reclaimed = await OrgGoogleDriveConnection.create({
+      ...base,
+      organizationId: 'org-2',
+      targetDataLakeId: 'lake-2',
+    });
+    expect(reclaimed.id).toBeTruthy();
   });
 
   it('allows one org to hold multiple connections (distinct folders + lakes)', async () => {
@@ -158,5 +219,62 @@ describe('OrgGoogleDriveConnectionModel - health + sync cursor', () => {
     const updated = await orgGoogleDriveConnectionRepository.updateSyncCursor(created.id, 'page-token-2', when);
     expect(updated?.syncCursor).toBe('page-token-2');
     expect(updated?.lastPolledAt?.getTime()).toBe(when.getTime());
+  });
+});
+
+describe('OrgGoogleDriveConnectionModel - sync claim (per-connection serialization)', () => {
+  it('claimForSync wins once and blocks a concurrent second claim until released', async () => {
+    const created = await OrgGoogleDriveConnection.create(base);
+
+    expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBe(true);
+    expect((await OrgGoogleDriveConnection.findById(created.id))?.status).toBe('syncing');
+
+    // A second run for the same connection cannot claim while the first holds it.
+    expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBe(false);
+
+    // Once released, a later run can claim again.
+    await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id);
+    expect((await OrgGoogleDriveConnection.findById(created.id))?.status).toBe('connected');
+    expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBe(true);
+  });
+
+  it('releaseSyncClaim is guarded: it never clobbers a terminal status set under the claim', async () => {
+    const created = await OrgGoogleDriveConnection.create(base);
+    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+
+    // Simulate a credential failure marking the connection while a run held 'syncing'.
+    await orgGoogleDriveConnectionRepository.updateHealth(created.id, { status: 'credential_error' });
+
+    // The failure-path release must be a no-op now - status is not 'syncing' anymore.
+    const released = await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id);
+    expect(released).toBeNull();
+    expect((await OrgGoogleDriveConnection.findById(created.id))?.status).toBe('credential_error');
+  });
+
+  it('reclaims a STALE syncing claim so a dead ingest process cannot wedge it forever', async () => {
+    const created = await OrgGoogleDriveConnection.create(base);
+    expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBe(true);
+
+    // A fresh claim is not reclaimable...
+    expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBe(false);
+
+    // ...but once the claim ages past the stale bound (simulating a process that died without
+    // releasing), the next run can reclaim it instead of the connection being stuck 'syncing'.
+    await OrgGoogleDriveConnection.updateOne(
+      { _id: created.id },
+      { $set: { syncClaimedAt: new Date(Date.now() - 60 * 60 * 1000) } } // 1h ago >> 20min bound
+    );
+    expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBe(true);
+    expect((await OrgGoogleDriveConnection.findById(created.id))?.status).toBe('syncing');
+  });
+
+  it('does not claim OVER an error state (credential_error / needs_reconnect)', async () => {
+    const created = await OrgGoogleDriveConnection.create(base);
+    await orgGoogleDriveConnectionRepository.updateHealth(created.id, { status: 'credential_error' });
+
+    // Claiming a broken connection would let a later release flip it to 'connected' and erase the
+    // real error. The claim must refuse, leaving the error state intact.
+    expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).toBe(false);
+    expect((await OrgGoogleDriveConnection.findById(created.id))?.status).toBe('credential_error');
   });
 });

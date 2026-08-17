@@ -1,25 +1,41 @@
 import { DATALAKE_TAG_PREFIX, DATALAKE_TAG_STRENGTH, prefixArmTagNames } from '@bike4mind/common';
-import type { IDataLakeDocument, IFabFileDocument, IFabFileRepository } from '@bike4mind/common';
+import type {
+  IDataLakeAccessGrantRepository,
+  IDataLakeDocument,
+  IFabFileDocument,
+  IFabFileRepository,
+} from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from './assertLakeAccess';
-import { canManageLake } from './authorizeLakeWrite';
+import { type ManageActor } from './manageRule';
+import { resolveCanManageLake } from './authorizeLakeManage';
 
 /** The acting principal for a membership write - resolved from auth, never from the body. */
-export type MembershipActor = { userId: string; isAdmin: boolean };
+export type MembershipActor = ManageActor;
 
 /**
  * The lake fields a membership write needs. Taking the resolved document rather than an id lets
  * a caller that already holds the lake (or resolved it by meta-tag rather than by id) reuse it
- * instead of refetching.
+ * instead of refetching. `organizationId` feeds the org-manageable manage rung.
  */
-export type MembershipLake = Pick<IDataLakeDocument, 'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId'>;
+export type MembershipLake = Pick<
+  IDataLakeDocument,
+  'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId' | 'organizationId'
+>;
 
 interface RemoveMembershipAdapters {
-  db: { fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId'> };
+  db: {
+    fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId'>;
+    // Optional: absent -> manage falls back to createdByUserId + org rung (see loadActiveLakeGrants).
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+  };
 }
 
 interface AddMembershipAdapters {
-  db: { fabFiles: Pick<IFabFileRepository, 'pushTagsByFabFileId'> };
+  db: {
+    fabFiles: Pick<IFabFileRepository, 'pushTagsByFabFileId'>;
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+  };
 }
 
 /** The file fields a membership signal is read from - always the persisted document. */
@@ -44,7 +60,13 @@ export interface LakeMembershipSignals {
  * `buildDataLakeMembershipFilter`'s own ownership conjunct: both ids must be present AND equal, so
  * a file with no owner does not fall through as a match, and a file admitted only by the meta-tag
  * (an admin added a stranger's file) does not have unrelated same-prefix tags stripped by a write
- * the read arm never admitted it to.
+ * the read arm never admitted it to. `prefixArmTagNames` itself drops an empty/reserved-namespace
+ * prefix, matching what the read arm's query would.
+ *
+ * This is also why #1040 (a prefix-only file reached through a share or a group looked listed but
+ * unremovable) cannot happen: the same anchor excludes such a file from the single-lake browse
+ * (buildDataLakeMembershipFilter) too, so it is never listed in the first place. See the #1040
+ * tests in lakeMembership.test.ts and FabFileModel.dataLakeLifecycle.test.ts.
  *
  * Shared by the single-file removal door and the purge sweep's orphan cleanup, so the question
  * "what does this lake hold on this file" has exactly one answer.
@@ -79,8 +101,8 @@ export const removeFileFromLake = async (
   fabFileId: string,
   { db }: RemoveMembershipAdapters
 ): Promise<void> => {
-  if (!canManageLake(lake, actor)) {
-    throw new BadRequestError('Only the creator can remove files from this data lake');
+  if (!(await resolveCanManageLake(lake, actor, { db }))) {
+    throw new BadRequestError('You do not have permission to remove files from this data lake');
   }
   // A fallback lake has no document to hold membership, so there is nothing to remove from.
   assertLakeWritable(lake);
@@ -119,8 +141,8 @@ export const addFileToLake = async (
   fabFileId: string,
   { db }: AddMembershipAdapters
 ): Promise<void> => {
-  if (!canManageLake(lake, actor)) {
-    throw new BadRequestError('Only the creator can add files to this data lake');
+  if (!(await resolveCanManageLake(lake, actor, { db }))) {
+    throw new BadRequestError('You do not have permission to add files to this data lake');
   }
   assertLakeWritable(lake);
 

@@ -9,6 +9,11 @@ import BaseRepository from '@bike4mind/db-core';
 
 const MAX_LAST_ERROR_LEN = 500;
 
+// A 'syncing' claim older than this is treated as abandoned and is reclaimable. The ingest queue's
+// Lambda has a hard 10-minute timeout (visibility 12 min - see infra/queues.ts), so a run that dies
+// without releasing cannot legitimately hold a claim past this bound; anything older is a dead owner.
+const SYNC_CLAIM_STALE_MS = 20 * 60 * 1000; // 20 min, comfortably past the 10-min Lambda ceiling
+
 /**
  * lastError is client-visible (a response-DTO member, no select:false) and its predictable writer is
  * `lastError: err.message` from a provider (Gaxios) failure, which can carry URLs, query strings, or
@@ -39,10 +44,12 @@ const OrgGoogleDriveConnectionSchema = new Schema<IOrgGoogleDriveConnectionDocum
     folderName: { type: String },
     targetDataLakeId: { type: String, required: true },
 
-    // OAuth refresh token. select:false so it never leaks into default reads or toJSON. NO writer
-    // exists yet - the org-owned connect flow that persists this (and MUST encryptToken it first)
-    // lands with issue D. Encryption is call-site convention here, as with the sibling Org*
-    // connections and User.googleDrive; a pre-save encrypt guard should land with that first writer.
+    // OAuth refresh token. select:false so it never leaks into default reads or toJSON. Written by
+    // the connect flow (POST /api/data-lakes/drive-sync), which copies the connecting user's
+    // already-encrypted refresh token. Encryption is CALL-SITE convention (as with the sibling Org*
+    // connections and User.googleDrive) because the crypto helpers live in apps/client and are not
+    // reachable from packages/database - so the encrypt/isEncrypted guard lives at that writer, not a
+    // pre-save hook here. A pre-save hook cannot encrypt without the key it has no access to.
     oauthRefreshToken: { type: String, select: false },
 
     // Metadata
@@ -53,12 +60,14 @@ const OrgGoogleDriveConnectionSchema = new Schema<IOrgGoogleDriveConnectionDocum
     // Health tracking
     status: {
       type: String,
-      enum: ['connected', 'needs_reconnect', 'credential_error'],
+      enum: ['connected', 'syncing', 'needs_reconnect', 'credential_error'],
       default: 'connected',
     },
     lastError: { type: String },
     lastUsedAt: { type: Date },
     lastPolledAt: { type: Date },
+    // When the current 'syncing' claim was taken; a stale one is reclaimable (see claimForSync).
+    syncClaimedAt: { type: Date },
 
     // Incremental-sync resumption (Drive changes pageToken)
     syncCursor: { type: String },
@@ -71,11 +80,13 @@ const OrgGoogleDriveConnectionSchema = new Schema<IOrgGoogleDriveConnectionDocum
 );
 
 // FIRST-CLAIM-WINS on the Drive folder id: the unique index rejects a SECOND row for a folder
-// already claimed. It does NOT verify the first claimant actually owns the folder - that ownership
-// check (a files.get capabilities lookup with the connecting user's credential) lands with the
-// connect flow (issue D). This is a NEW pattern, not sibling precedent: the sibling Org* connections
-// scope uniqueness to the org and never make a third-party resource id globally unique; making
-// driveFolderId global is a deliberate anti-double-claim choice.
+// already claimed. The index alone does NOT verify the claimant owns the folder; that ownership check
+// - a files.get read probe with the connecting user's own credential (getFolderAccess) - runs BEFORE
+// the claim in drive-sync.ts, so a folder can only be claimed by someone who can actually read it
+// (without it, a manager could squat a folder id they don't own and lock out its real owner). This is
+// a NEW pattern, not sibling precedent: the sibling Org* connections scope uniqueness to the org and
+// never make a third-party resource id globally unique; making driveFolderId global is a deliberate
+// anti-double-claim choice.
 OrgGoogleDriveConnectionSchema.index({ driveFolderId: 1 }, { unique: true, name: 'org_gdrive_conn_folder_id' });
 
 // A lake is fed by at most one Drive folder (v1: one-folder-per-lake).
@@ -139,6 +150,40 @@ class OrgGoogleDriveConnectionRepository
     return result?.toJSON() || null;
   }
 
+  /**
+   * (Re)write the org-owned encrypted refresh token and re-stamp `connectedBy` to the re-syncing user
+   * (the identity ingest runs as - see driveLakeIngest), org-scoped so one org can't overwrite
+   * another's. The value must already be encrypted by the caller (crypto is not reachable from
+   * packages/database).
+   *
+   * The credential + connectedBy are written UNCONDITIONALLY, but status/lastError are healed to
+   * 'connected' only from a NON-'syncing' state (pipeline `$cond`): a Re-sync issued while an ingest
+   * is in flight must not flip 'syncing' -> 'connected', or claimForSync would let the re-triggered
+   * run claim ON TOP of the live one and both would walk the folder (duplicate FabFiles). Leaving the
+   * status 'syncing' makes the new run defer behind the running one instead.
+   */
+  async updateCredential(
+    id: string,
+    organizationId: string,
+    encryptedRefreshToken: string,
+    connectedBy: string
+  ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
+    return this.model.findOneAndUpdate(
+      { _id: id, organizationId },
+      [
+        {
+          $set: {
+            oauthRefreshToken: encryptedRefreshToken,
+            connectedBy,
+            status: { $cond: [{ $eq: ['$status', 'syncing'] }, '$status', 'connected'] },
+            lastError: { $cond: [{ $eq: ['$status', 'syncing'] }, '$lastError', null] },
+          },
+        },
+      ],
+      { new: true }
+    );
+  }
+
   /** Update health state; clears `lastError` on a healthy update (mirrors OrgGitHubConnection.updateHealthInfo). */
   async updateHealth(
     id: string,
@@ -160,6 +205,53 @@ class OrgGoogleDriveConnectionRepository
     polledAt: Date
   ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
     return this.model.findByIdAndUpdate(id, { $set: { syncCursor, lastPolledAt: polledAt } }, { new: true });
+  }
+
+  /**
+   * Guarded ingest lock: atomically flip status to 'syncing' (stamping `syncClaimedAt`) only when the
+   * connection is idle ('connected') OR its existing 'syncing' claim is STALE. A single atomic
+   * compare-and-set - a losing concurrent caller matches nothing and gets `null`, so exactly one run
+   * proceeds. Returns whether THIS caller claimed it.
+   *
+   * Deliberately NOT `$ne: 'syncing'`: that also claimed OVER a `credential_error`/`needs_reconnect`
+   * connection, and a later release would erase the real error state (leaving it reading healthy with
+   * a broken credential). And a plain equality on 'syncing' could never recover a claim left by a
+   * process that died past the Lambda timeout without releasing - the connection would be wedged in
+   * 'syncing' forever with no operator path back. The stale-claim arm makes that failure degrade to
+   * "one ingest was lost" (reclaimable next run) instead of "this connection can never sync again".
+   */
+  async claimForSync(id: string): Promise<boolean> {
+    const staleBefore = new Date(Date.now() - SYNC_CLAIM_STALE_MS);
+    const claimed = await this.model.findOneAndUpdate(
+      {
+        _id: id,
+        $or: [{ status: 'connected' }, { status: 'syncing', syncClaimedAt: { $lt: staleBefore } }],
+      },
+      { $set: { status: 'syncing', syncClaimedAt: new Date() } }
+    );
+    return claimed !== null;
+  }
+
+  /**
+   * Guarded release for the failure path: 'syncing' -> 'connected' only. The `status: 'syncing'`
+   * conjunct means it no-ops if a terminal status (e.g. credential_error) was set underneath, so a
+   * failed run never overwrites a real error state.
+   */
+  async releaseSyncClaim(id: string): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
+    return this.model.findOneAndUpdate(
+      { _id: id, status: 'syncing' },
+      { $set: { status: 'connected' } },
+      { new: true }
+    );
+  }
+
+  /**
+   * Delete a connection (org-scoped), releasing its global Drive-folder claim. HARD delete on purpose:
+   * a soft-deleted/disabled row would keep the unique driveFolderId index populated and block re-claim.
+   */
+  async release(id: string, organizationId: string): Promise<boolean> {
+    const res = await this.model.deleteMany({ _id: id, organizationId }, { hardDelete: true });
+    return (res?.deletedCount ?? 0) > 0;
   }
 }
 

@@ -1,7 +1,9 @@
 import { ProjectEvents } from '@bike4mind/common';
 import { projectRepository, userRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
+import { UnprocessableEntityError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
+import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { logEvent } from '@server/utils/analyticsLog';
 
 const handler = baseApi()
@@ -15,18 +17,29 @@ const handler = baseApi()
     return res.json(project);
   })
   .put(async (req, res) => {
-    const project = await projectService.update(
-      req.user.id,
-      {
-        ...(req.query as any),
-        ...(req.body as any),
-      },
-      {
-        db: {
-          projects: projectRepository,
+    let project;
+    try {
+      project = await projectService.update(
+        req.user.id,
+        {
+          ...(req.query as any),
+          ...(req.body as any),
         },
+        {
+          db: {
+            projects: projectRepository,
+          },
+        }
+      );
+    } catch (error) {
+      // Renaming to a name the user already has trips the userId_1_name_1 partial-unique
+      // index (code 11000). Surface a 4xx instead of a 500 that leaks the raw index name,
+      // matching the POST handler in ../index.ts.
+      if (isDuplicateKeyError(error) && req.body?.name !== undefined) {
+        throw new UnprocessableEntityError(`Project ${req.body.name} already exists`);
       }
-    );
+      throw error;
+    }
 
     await logEvent(
       {

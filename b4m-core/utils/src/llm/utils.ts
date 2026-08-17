@@ -11,6 +11,7 @@ import {
   IFabFileRepository,
   IMessage,
   isAudioMimeType,
+  isGeminiModelId,
   isImageAttachment,
   isImageServeable,
   ISessionDocument,
@@ -109,6 +110,26 @@ const KNOWLEDGE_FILE_TOKEN_ALLOCATION = 0.7;
  */
 export const IMAGE_PROMPT_PRIORITY = 50;
 export const FORMAT_PROMPT_PRIORITY = 60;
+
+/**
+ * The two always-on blocks this function injects itself, downstream of the caller's own
+ * systemPromptDetails assembly - so a caller reporting per-source token telemetry (see
+ * ChatCompletionProcess) cannot see them without reading this list back off the return value.
+ */
+export const BUILDER_INJECTED_BLOCK_IDS = ['formatPrompt', 'imagePrompt'] as const;
+export type BuilderInjectedBlockId = (typeof BUILDER_INJECTED_BLOCK_IDS)[number];
+
+export interface BuilderInjectedBlock {
+  id: BuilderInjectedBlockId;
+  /** The exact string prepended, read back off the injected message - never re-derived. */
+  content?: string;
+  /** The gate let the injector run and it prepended a message. */
+  injected: boolean;
+  /** That message survived the system-token cap into the returned payload. */
+  delivered: boolean;
+  /** Why the injector did not run or declined, when `injected` is false. */
+  reason?: 'mode_skipped' | 'setting_disabled' | 'not_triggered';
+}
 
 /**
  * Rounds the final safety pass may spend shrinking the payload. It has to re-measure between rounds
@@ -244,6 +265,13 @@ const urlDerivedMessages = new WeakSet<IMessage>();
  */
 const IMAGE_TOKEN_ESTIMATE = 1600;
 
+/**
+ * Block types a caller-supplied user-role message can deliver on its own. An allowlist rather than
+ * a denylist, so a block type added to MessageContentTypes later is dropped loudly by the
+ * classifier below instead of forwarded to a provider that rejects it.
+ */
+const DELIVERABLE_USER_BLOCK_TYPES = new Set<string>(['text']);
+
 /** Bounded so building a log label never walks a multi-MB attachment. */
 const ATTACHMENT_LABEL_SCAN_CHARS = 400;
 
@@ -264,7 +292,11 @@ const estimateTokenLength = (text: string): number => {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
 };
 
-const isImageBlock = (obj: { type?: string }): boolean => obj.type === 'image' || obj.type === 'image_url';
+// Array content is caller-controlled (extraContextMessages accepts z.array(z.any())), so a block can
+// be null/undefined/not-an-object at runtime despite the static type; every caller here iterates raw
+// message.content, so the null-safety has to live in this one shared helper rather than at each call site.
+const isImageBlock = (obj: { type?: string } | null | undefined): boolean =>
+  obj?.type === 'image' || obj?.type === 'image_url';
 
 /**
  * Flattens a message's content to its text, skipping image blocks - their base64 payload is not text
@@ -460,6 +492,7 @@ export async function fetchAndProcessPreviousMessages(
   {
     db,
     verbatimTokenBudget,
+    model,
   }: {
     db: {
       quests: Pick<IChatHistoryItemRepository, 'getMostRecentChatHistory'>;
@@ -471,6 +504,20 @@ export async function fetchAndProcessPreviousMessages(
      * contextSummary. Omit to keep the legacy count-only behavior.
      */
     verbatimTokenBudget?: number;
+    /**
+     * The model this history is being fetched for. Used to decide whether Priority 2
+     * tool-pairing reconstruction is safe for the TARGET backend - currently, Gemini is
+     * excluded (falls through to the Priority 3 text-only reply) because
+     * PromptMetaFunctionCallSchema never persists thought_signature, so every replayed
+     * tool_use call reaches Gemini without one, which its own formatter warns "may cause
+     * a 400 error with Gemini 3 Pro". Revisit once thought_signature is persisted.
+     *
+     * Deliberately taken as the model id rather than a caller-computed boolean: the prior
+     * design made this an opt-out flag, and a second caller (QuestMasterFeature) went
+     * live without ever setting it. Pass the model here and this stays correct
+     * automatically for every caller instead of depending on each one remembering to opt in.
+     */
+    model?: string;
   }
 ): Promise<
   [
@@ -485,6 +532,16 @@ export async function fetchAndProcessPreviousMessages(
       excludedOlderQuestCount?: number;
       /** Recently generated images (bare storage keys + originating prompt), newest first. */
       recentGeneratedImages?: { key: string; prompt: string }[];
+      /**
+       * Names of tools actually invoked across the returned window, read straight off each
+       * turn's `promptMeta.functionCalls` rather than the reconstructed IMessage history. Priority
+       * 1 (`structuredReplies`) still never fires (nothing writes that field); Priority 2 now does
+       * fire once a backend records `returnValue` - but a Gemini `model` still skips it (see the
+       * `model` param below), so scanning `convertedMessages` would still miss a prior tool call
+       * for Gemini. This reads the raw field instead, at no extra DB cost since chatHistoryItems is
+       * already in hand.
+       */
+      priorToolNames?: string[];
     },
   ]
 > {
@@ -494,6 +551,7 @@ export async function fetchAndProcessPreviousMessages(
   }
 
   const limit = resolveHistoryFetchLimit(historyCount);
+  const disableToolReplay = !!model && isGeminiModelId(model);
 
   // Query with descending timestamp, to get the <limit> most-recent messages
   // Add 1 to the limit to account for the current prompt
@@ -585,7 +643,7 @@ export async function fetchAndProcessPreviousMessages(
     // information the model can use, and replaying it would cost the turn its real text reply:
     // this branch and Priority 3 are mutually exclusive, so entering here on result-less calls
     // replaces a genuine answer with a list of tool invocations and empty outcomes.
-    else if (toolCalls.length > 0) {
+    else if (toolCalls.length > 0 && !disableToolReplay) {
       // Get text reply (excluding thinking blocks)
       const textReply = cur.replies?.find((reply: string) => !reply.trim().startsWith('<think>')) || '';
 
@@ -649,6 +707,12 @@ export async function fetchAndProcessPreviousMessages(
     }
   }
 
+  // Real tool-usage signal for this window - see the field's own doc comment above for why the
+  // reconstructed message history cannot answer "was this tool used earlier in the conversation".
+  const priorToolNames = chatHistoryItems
+    .flatMap(item => (item.promptMeta?.functionCalls ?? []).map(fc => fc.name))
+    .filter((name): name is string => Boolean(name));
+
   return [
     convertedMessages,
     chatHistoryItems.length,
@@ -659,6 +723,7 @@ export async function fetchAndProcessPreviousMessages(
       oldestIncludedQuestId,
       excludedOlderQuestCount,
       recentGeneratedImages,
+      priorToolNames,
     },
   ];
 }
@@ -1174,15 +1239,33 @@ export async function processFabFilesServer(
     resizeImageForModel?: ResizeImageForModel;
   },
   progressCallback?: (progress: number, total: number) => Promise<void>
-): Promise<{ userMessages: IMessage[]; errorMessages: IExtendedMessage[] }> {
+): Promise<{
+  userMessages: IMessage[];
+  errorMessages: IExtendedMessage[];
+  deliveredFileIds: string[];
+  fullyDeliveredFileIds: string[];
+}> {
   if (!fabFiles || fabFiles.length === 0) {
-    return { userMessages: [], errorMessages: [] };
+    return { userMessages: [], errorMessages: [], deliveredFileIds: [], fullyDeliveredFileIds: [] };
   }
 
   const fileProcessingStartTime = Date.now();
   let systemContent = '';
   const userMessages: IMessage[] = [];
   const errorMessages: IExtendedMessage[] = [];
+  // Ids that actually contributed content below - NOT every id in `fabFiles`. A file can be
+  // silently skipped (audio, an unserveable/oversized/unsupported-backend image, an unsupported
+  // file type, a corrupted/404 read) with no content ever reaching a message. Callers that need
+  // to tell a caller-facing consumer "this file's content is already in the prompt" must use this
+  // set, not the input list (see #1163 - a caller claiming inclusion for a silently-skipped file
+  // asserts something false).
+  const deliveredFileIds = new Set<string>();
+  // Subset of deliveredFileIds whose ENTIRE content reached the prompt - excludes a cosine
+  // excerpt, a scan that never reached every chunk, or a raw-content read truncated to fit the
+  // token budget. A caller claiming "you have everything, no need to search further" for a file
+  // that is only in `deliveredFileIds` (delivered, but not fully) asserts something false (#1163
+  // review: partial delivery was being described with wording that implied completeness).
+  const fullyDeliveredFileIds = new Set<string>();
 
   // Collect non-system file contents to combine into a single context message
   const contextFiles: { fileName: string; content: string }[] = [];
@@ -1252,6 +1335,13 @@ export async function processFabFilesServer(
   const fileContentCache = new Map<string, string>();
 
   const processFileInParallel = async (file: IFabFileDocument): Promise<void> => {
+    // Set true only at an actual content-adding site below; read once at the end of the try
+    // block. Local per-invocation state, so concurrent files in the same batch never interfere.
+    let delivered = false;
+    // Set alongside `delivered` only when the WHOLE file (not an excerpt/truncated head) reached
+    // the prompt. Defaults to true at each image site (always delivered whole) and is narrowed to
+    // false explicitly on the two text paths that can partially deliver.
+    let fullyDelivered = false;
     try {
       // Audio (generated TTS / sound effects) is never LLM input: no model
       // accepts audio, and the non-image branch below would otherwise try to
@@ -1306,6 +1396,8 @@ export async function processFabFilesServer(
               type: 'text',
               text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}" — do not rename based on image content.`,
             });
+            delivered = true;
+            fullyDelivered = true; // images are always delivered whole
             break;
           }
 
@@ -1359,6 +1451,8 @@ export async function processFabFilesServer(
                 type: 'text',
                 text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}" — do not rename based on image content.`,
               });
+              delivered = true;
+              fullyDelivered = true; // images are always delivered whole
             } else if (modelInfo.id.startsWith('moonshot')) {
               // Bedrock-served Kimi speaks OpenAI on the Invoke path, so it takes
               // the base64 `image_url` block rather than the Anthropic `source`
@@ -1395,6 +1489,8 @@ export async function processFabFilesServer(
                 type: 'text',
                 text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}" — do not rename based on image content.`,
               });
+              delivered = true;
+              fullyDelivered = true; // images are always delivered whole
             } else {
               logger.warn(
                 `Vision support for the model ${modelInfo.id} is not implemented. Skipping image processing.`
@@ -1438,6 +1534,8 @@ export async function processFabFilesServer(
               type: 'text',
               text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}". Do not rename based on image content.`,
             });
+            delivered = true;
+            fullyDelivered = true; // images are always delivered whole
             break;
           }
 
@@ -1525,6 +1623,7 @@ export async function processFabFilesServer(
 
           if (truncatedResults.length > 0) {
             deliveredViaCosine = true;
+            delivered = true;
             // Results arrive in file order, so every chunk with none cut is the whole file and needs
             // no notice. Every chunk WITH a cut is still contiguous, and the excerpt wording ("parts
             // between them were not sent") would misdescribe it - that is a head slice reached by
@@ -1539,6 +1638,9 @@ export async function processFabFilesServer(
             // `usedUnranked` cannot claim the whole file on its own: the head is capped at the same
             // top-K, so it is only the whole file when the count agrees, which the comparison covers.
             const deliveredEveryChunk = !scanTruncated && totalChunks === truncatedResults.length;
+            // Every chunk AND none cut is the only case with no notice below - that is the actual
+            // "nothing missing" claim fullyDeliveredFileIds needs to make.
+            fullyDelivered = deliveredEveryChunk && !anyChunkCut;
             let notice = '';
             if (!deliveredEveryChunk) notice = excerptNotice(file.fileName);
             else if (anyChunkCut) notice = CONTENT_TRUNCATION_NOTICE;
@@ -1588,6 +1690,8 @@ export async function processFabFilesServer(
             logger.log(`[processFabFilesServer] Final max file size: ${finalMaxFileSize}`);
 
             sendStatusUpdate('Adding file content to prompt...');
+            // Captured before the truncation branch below mutates fabContent to the sliced head.
+            fullyDelivered = fabContent.length <= finalMaxFileSize;
             if (fabContent.length > finalMaxFileSize) {
               await sendStatusUpdate('File is too large, truncating...');
               const originalFileSize = fabContent.length;
@@ -1613,6 +1717,7 @@ export async function processFabFilesServer(
               errorMsg = null;
             }
 
+            delivered = true;
             if (file.system) {
               systemContent += fabContent;
             } else {
@@ -1648,6 +1753,8 @@ export async function processFabFilesServer(
           }
         }
       }
+      if (delivered) deliveredFileIds.add(file.id);
+      if (fullyDelivered) fullyDeliveredFileIds.add(file.id);
     } catch (error) {
       logger.updateMetadata({ fileId: file.id });
       logger.error(`🕐 [processFabFilesServer] Error processing file ${file.fileName}: ${error}`);
@@ -1707,7 +1814,12 @@ export async function processFabFilesServer(
   }
   const fileProcessingTime = Date.now() - fileProcessingStartTime;
   logger.info(`📁 File processing completed in ${fileProcessingTime}ms for ${fabFiles.length} files`);
-  return { userMessages, errorMessages };
+  return {
+    userMessages,
+    errorMessages,
+    deliveredFileIds: Array.from(deliveredFileIds),
+    fullyDeliveredFileIds: Array.from(fullyDeliveredFileIds),
+  };
 }
 
 /**
@@ -1964,6 +2076,23 @@ const processMessages = (
 };
 
 /**
+ * Truncation telemetry for one buildAndSortMessages call. Non-nullable here because
+ * ContextDebugInfo always carries a real value once assembled; buildAndSortMessages itself
+ * returns this or null on its non-positive-budget early exit.
+ */
+export interface MessageTruncationInfo {
+  wasTruncated: boolean;
+  originalMessageCount: number;
+  truncatedMessageCount: number;
+  truncationMethod?: 'priority' | 'token-budget' | 'history-limit';
+  removedMessages?: Array<{
+    role: string;
+    tokens: number;
+    priority: number;
+  }>;
+}
+
+/**
  * Context debug info return type.
  */
 export interface ContextDebugInfo {
@@ -1977,17 +2106,7 @@ export interface ContextDebugInfo {
     overflowDetected?: boolean;
     overflowAmount?: number;
   };
-  messageTruncation: {
-    wasTruncated: boolean;
-    originalMessageCount: number;
-    truncatedMessageCount: number;
-    truncationMethod?: 'priority' | 'token-budget' | 'history-limit';
-    removedMessages?: Array<{
-      role: string;
-      tokens: number;
-      priority: number;
-    }>;
-  };
+  messageTruncation: MessageTruncationInfo;
 }
 
 export async function buildAndSortMessages(
@@ -2031,12 +2150,16 @@ export async function buildAndSortMessages(
      */
     systemMessagePriority?: (message: IMessage) => number | undefined;
   } = { verbose: false }
-): Promise<IMessage[]> {
+): Promise<{
+  messages: IMessage[];
+  messageTruncation: MessageTruncationInfo | null;
+  injectedBlocks: BuilderInjectedBlock[];
+}> {
   // Negated like processMessages' budget guard so a NaN lands here rather than sailing past every
   // comparison below.
   if (!(maxInputTokens > 0)) {
     logger.error(`Invalid maxInputTokens: ${maxInputTokens}. Must be greater than 0.`);
-    return [];
+    return { messages: [], messageTruncation: null, injectedBlocks: [] };
   }
 
   const VERBOSE_CHAT_CONTEXT = process.env.VERBOSE_CHAT_CONTEXT !== 'false';
@@ -2096,15 +2219,30 @@ export async function buildAndSortMessages(
   // only handle on a message this function created itself; identified by length because each injector
   // either prepends exactly one message or returns its input untouched.
   const builderInjectedPriorities = new Map<IMessage, number>();
+  // Gate/injection outcome per block, resolved into BuilderInjectedBlock[] once admittedSystemMessages
+  // is known below (delivery cannot be decided until then). `message` set means the injector prepended
+  // it; absent means declined, with `reason` saying why.
+  const injectedBlockGateResults = new Map<
+    BuilderInjectedBlockId,
+    { message?: IMessage; reason?: BuilderInjectedBlock['reason'] }
+  >();
 
-  if (!options.skipAdminPromptTemplates) {
+  if (options.skipAdminPromptTemplates) {
+    injectedBlockGateResults.set('formatPrompt', { reason: 'mode_skipped' });
+    injectedBlockGateResults.set('imagePrompt', { reason: 'mode_skipped' });
+  } else {
     if (getSettingsValue('UseFormatPrompt', settings)) {
       const formatPromptTemplate = settings.FormatPromptTemplate;
       const withFormatPrompt = includeHardcodedSystemMessage(fabMessages, formatPromptTemplate);
       if (withFormatPrompt.length > fabMessages.length) {
         builderInjectedPriorities.set(withFormatPrompt[0], FORMAT_PROMPT_PRIORITY);
+        injectedBlockGateResults.set('formatPrompt', { message: withFormatPrompt[0] });
+      } else {
+        injectedBlockGateResults.set('formatPrompt', { reason: 'not_triggered' });
       }
       fabMessages = withFormatPrompt;
+    } else {
+      injectedBlockGateResults.set('formatPrompt', { reason: 'setting_disabled' });
     }
 
     if (getSettingsValue('UseImagePrompt', settings)) {
@@ -2115,8 +2253,13 @@ export async function buildAndSortMessages(
       );
       if (withImagePrompt.length > fabMessages.length) {
         builderInjectedPriorities.set(withImagePrompt[0], IMAGE_PROMPT_PRIORITY);
+        injectedBlockGateResults.set('imagePrompt', { message: withImagePrompt[0] });
+      } else {
+        injectedBlockGateResults.set('imagePrompt', { reason: 'not_triggered' });
       }
       fabMessages = withImagePrompt;
+    } else {
+      injectedBlockGateResults.set('imagePrompt', { reason: 'setting_disabled' });
     }
   }
 
@@ -2126,9 +2269,76 @@ export async function buildAndSortMessages(
   // CSS classes only", and said nothing about publishing - so the model followed it and produced
   // non-publishable artifacts. It has been removed so ArtifactEmissionPrompt is the single source of truth.
 
-  const nonImageMessages: IMessage[] = fabMessages.filter(
-    message => message.role === 'user' && !Array.isArray(message.content)
-  );
+  // Classifies every non-system fabMessage into exactly one bucket (system messages are handled by
+  // systemCandidates below), rather than two positive filters that could both miss a message: a
+  // role:user array-content message with no image block (only text, or a tool_use/tool_result/
+  // thinking block) used to match neither the old nonImageMessages nor imageMessages filter and
+  // vanish with no trace. This is reachable today - extraContextMessages accepts z.array(z.any())
+  // content, so a caller can post exactly that shape.
+  const imageMessages: IMessage[] = [];
+  const nonImageMessages: IMessage[] = [];
+  const undeliverableBlockMessages: Array<{ index: number; message: IMessage }> = [];
+  const unassignableMessages: Array<{ index: number; message: IMessage }> = [];
+
+  fabMessages.forEach((message, index) => {
+    if (message.role === 'system') return; // handled by systemCandidates below
+    if (message.role !== 'user') {
+      unassignableMessages.push({ index, message });
+      return;
+    }
+    const blocks = message.content;
+    if (!Array.isArray(blocks)) {
+      nonImageMessages.push(message);
+      return;
+    }
+    if (blocks.length === 0) {
+      unassignableMessages.push({ index, message });
+      return;
+    }
+    // Image priority checked first so a block mixing an image with e.g. a tool_result still delivers
+    // as an image message rather than being caught by the undeliverable-block bucket below.
+    if (blocks.some(isImageBlock)) {
+      imageMessages.push(message);
+      return;
+    }
+    if (blocks.every(block => DELIVERABLE_USER_BLOCK_TYPES.has((block as { type?: string })?.type ?? ''))) {
+      nonImageMessages.push(message);
+      return;
+    }
+    undeliverableBlockMessages.push({ index, message });
+  });
+
+  // Content-free labels (block types, position, est. tokens only - never payload text), matching the
+  // no-content-in-logs convention attachmentLabel already follows below.
+  const blockTypesLabel = ({ index, message }: { index: number; message: IMessage }): string => {
+    const types = Array.isArray(message.content)
+      ? Array.from(new Set(message.content.map(block => (block as { type?: string })?.type ?? 'untyped')))
+      : [];
+    return `message ${index + 1} [${types.join(', ')}] (~${estimateMessageTokens(message)} est. tokens)`;
+  };
+
+  if (undeliverableBlockMessages.length > 0) {
+    logger.warn(
+      `Dropped ${undeliverableBlockMessages.length} user context message(s) carrying block types that cannot ` +
+        `be delivered in a user turn: ${undeliverableBlockMessages.map(blockTypesLabel).join(' | ')}. A ` +
+        `tool_result supplied here has no tool_use to pair with - replayed history already pairs every ` +
+        `tool_use it emits - so it would be stripped as an orphan after assembly; a thinking block is ` +
+        `assistant-only and the provider rejects it on a user turn.`
+    );
+  }
+  if (unassignableMessages.length > 0) {
+    logger.warn(
+      `Ignored ${unassignableMessages.length} context message(s) assembly has no slot for: ` +
+        `${unassignableMessages
+          .map(
+            ({ index, message }) =>
+              `message ${index + 1} (role ${message.role}${
+                Array.isArray(message.content) && message.content.length === 0 ? ', empty content array' : ''
+              })`
+          )
+          .join(' | ')}. Only system and user messages are assembled from this argument.`
+    );
+  }
 
   // Attached content is reserved out of the budget BEFORE system instructions are charged against it,
   // and only on a turn that actually carries a file: with no attachment the reserve is 0 and the cap
@@ -2176,6 +2386,21 @@ export async function buildAndSortMessages(
   // Re-filtering the original array is what restores assembly order, so the cached-prefix ordering
   // cannot drift away from the selection logic above.
   systemMessages.push(...systemCandidates.filter(message => admittedSystemMessages.has(message)));
+
+  // Resolved now that delivery is known. Iterates the fixed id list, not injectedBlockGateResults, so
+  // a caller-facing consumer always gets a complete two-row inventory even if a gate above never ran.
+  const injectedBlocks: BuilderInjectedBlock[] = BUILDER_INJECTED_BLOCK_IDS.map(id => {
+    const gateResult = injectedBlockGateResults.get(id);
+    if (!gateResult?.message) {
+      return { id, injected: false, delivered: false, ...(gateResult?.reason ? { reason: gateResult.reason } : {}) };
+    }
+    return {
+      id,
+      injected: true,
+      delivered: admittedSystemMessages.has(gateResult.message),
+      ...(typeof gateResult.message.content === 'string' ? { content: gateResult.message.content } : {}),
+    };
+  });
 
   if (systemCandidates.length > 0 && systemMessages.length === 0) {
     // The one new failure mode this cap introduces, and silence would make it look like a turn that
@@ -2237,6 +2462,12 @@ export async function buildAndSortMessages(
   // not. URL-derived content opens with the fetched page body and has no header at all, so it is
   // labelled positionally rather than by echoing what it contains.
   const attachmentLabel = (message: IMessage, index: number): string => {
+    // Array content (e.g. caller-supplied text blocks routed here by the classifier above) has no
+    // filename header to find; naming it "attachment N" would misreport a context block as a file.
+    if (Array.isArray(message.content)) {
+      const types = Array.from(new Set(message.content.map(block => (block as { type?: string })?.type ?? 'untyped')));
+      return `context blocks [${types.join(', ')}] (~${estimateMessageTokens(message)} est. tokens)`;
+    }
     const head = messageContentText(message).slice(0, ATTACHMENT_LABEL_SCAN_CHARS);
     const named: string[] = [];
     for (const pattern of ATTACHMENT_NAME_HEADERS) {
@@ -2345,8 +2576,15 @@ export async function buildAndSortMessages(
   // counting it would report a truncation on a completely healthy turn. URL-derived content is
   // excluded on the same grounds: it rides in this block but is not an attachment, and counting it
   // made the note claim a file was lost on turns where the file arrived whole, or where the prompt
-  // carried only a link and no file existed at all.
-  const isAttachment = (message: IMessage): boolean => !urlDerivedMessages.has(message) && fileTokens(message) > 0;
+  // carried only a link and no file existed at all. The array-content builders that exist today
+  // (processUrlsFromPrompt's image URLs, processFabFilesServer's image blocks) emit image-only
+  // arrays, which imageMessages claims before nonImageMessages ever sees them - so nonImageMessages
+  // only ever held string content until the classifier above started routing caller-supplied
+  // array-content context blocks here too. The string guard excludes those: without it, one could
+  // join attachmentsWithContent, get told to the model as an undelivered FILE it never was, and be
+  // deleted outright by the sliver rule below.
+  const isAttachment = (message: IMessage): boolean =>
+    typeof message.content === 'string' && !urlDerivedMessages.has(message) && fileTokens(message) > 0;
   const attachmentsWithContent = nonImageMessages.filter(isAttachment);
   let undeliveredNote: IMessage | null = null;
 
@@ -2419,14 +2657,6 @@ export async function buildAndSortMessages(
 
   processedContentMessages = declareUndeliveredAttachments(processedContentMessages);
 
-  // Separate image and non-image messages
-  const imageMessages: IMessage[] = fabMessages.filter(
-    message =>
-      message.role === 'user' &&
-      Array.isArray(message.content) &&
-      message.content.some(obj => obj.type.startsWith('image'))
-  );
-
   // Check if the user prompt contains a tool_result
   const promptHasToolResult = userPrompt.some(
     msg =>
@@ -2478,19 +2708,17 @@ export async function buildAndSortMessages(
   // telemetry to history being windowed exactly as configured, which is why that bug went unnoticed
   // for so long. `contentSqueezed` is needed alongside allRemovedMessages because content cut
   // mid-message is a budget loss that drops no message and so leaves allRemovedMessages empty.
-  // Called on BOTH return paths: the overflow path below returns early, so assigning this only at
-  // the end left the worst-loss turn reporting the previous call's numbers from a warm container.
-  const recordDebugInfo = (finalContentMessages: IMessage[]) => {
+  // Called on BOTH return paths: the overflow path below returns early, so building this only at
+  // the end would report the wrong finalContentMessages for that path.
+  const buildDebugInfo = (finalContentMessages: IMessage[]): MessageTruncationInfo => {
     const historyWindowed = previousMessages.length > historyMessages.length;
     const budgetTruncated = allRemovedMessages.length > 0 || contentSqueezed || historyCutMidMessage;
-    (buildAndSortMessages as any).lastDebugInfo = {
-      messageTruncation: {
-        wasTruncated: budgetTruncated,
-        originalMessageCount: originalTotalMessageCount,
-        truncatedMessageCount: processedPreviousMessages.length + finalContentMessages.length,
-        truncationMethod: budgetTruncated ? 'token-budget' : historyWindowed ? 'history-limit' : undefined,
-        removedMessages: allRemovedMessages.length > 0 ? allRemovedMessages : undefined,
-      },
+    return {
+      wasTruncated: budgetTruncated,
+      originalMessageCount: originalTotalMessageCount,
+      truncatedMessageCount: processedPreviousMessages.length + finalContentMessages.length,
+      truncationMethod: budgetTruncated ? 'token-budget' : historyWindowed ? 'history-limit' : undefined,
+      removedMessages: allRemovedMessages.length > 0 ? allRemovedMessages : undefined,
     };
   };
 
@@ -2596,9 +2824,12 @@ export async function buildAndSortMessages(
       );
     }
 
-    recordDebugInfo(reducedContentMessages);
     // Ensure tool_use/tool_result pairing integrity after truncation
-    return ensureToolPairingIntegrity(assemble(reducedContentMessages, processedPreviousMessages), logger);
+    return {
+      messages: ensureToolPairingIntegrity(assemble(reducedContentMessages, processedPreviousMessages), logger),
+      messageTruncation: buildDebugInfo(reducedContentMessages),
+      injectedBlocks,
+    };
   }
 
   const VERBOSE_MESSAGE_BUILDING = process.env.VERBOSE_MESSAGE_BUILDING === 'true';
@@ -2621,15 +2852,10 @@ export async function buildAndSortMessages(
     logger.log('=== End of Verbose Message Building Log ===');
   }
 
-  recordDebugInfo(processedContentMessages);
-
   // Ensure tool_use/tool_result pairing integrity after any truncation
-  return ensureToolPairingIntegrity(messages, logger);
-}
-
-/**
- * Returns the debug info populated by the most recent buildAndSortMessages call.
- */
-export function getLastBuildDebugInfo(): ContextDebugInfo['messageTruncation'] | null {
-  return (buildAndSortMessages as any).lastDebugInfo?.messageTruncation || null;
+  return {
+    messages: ensureToolPairingIntegrity(messages, logger),
+    messageTruncation: buildDebugInfo(processedContentMessages),
+    injectedBlocks,
+  };
 }

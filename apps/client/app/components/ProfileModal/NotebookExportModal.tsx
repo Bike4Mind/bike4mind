@@ -29,6 +29,7 @@ import {
   downloadBlob,
   BulkExportData,
 } from '@client/app/utils/bulkNotebookExport';
+import { openInNewTab } from '@client/app/utils/externalLinks';
 
 type ExportFormat = 'json' | 'excel' | 'word' | 'markdown';
 
@@ -95,7 +96,7 @@ const NotebookExportModal: React.FC<NotebookExportModalProps> = ({ open, onClose
 
     if (options.format === 'json') {
       // Direct download for JSON
-      window.open(exportResult.downloadUrl, '_blank');
+      openInNewTab(exportResult.downloadUrl);
       return;
     }
 

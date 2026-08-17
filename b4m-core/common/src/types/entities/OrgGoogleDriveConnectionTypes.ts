@@ -10,11 +10,13 @@ export type GoogleDriveConnectionAuthMode = 'oauth' | 'service_account';
 
 /**
  * Health/lifecycle state of the connection.
- * - connected: syncing normally
+ * - connected: idle, healthy
+ * - syncing: an ingest is in flight; a guarded per-connection claim so two concurrent runs
+ *   (a double-clicked connect, a retried request) can't both walk and duplicate every file
  * - needs_reconnect: the folder is no longer reachable (un-shared / trashed: 403/404 on the folder)
  * - credential_error: the stored credential failed (e.g. invalid_grant) - operator/admin attention
  */
-export type GoogleDriveConnectionStatus = 'connected' | 'needs_reconnect' | 'credential_error';
+export type GoogleDriveConnectionStatus = 'connected' | 'syncing' | 'needs_reconnect' | 'credential_error';
 
 /**
  * Organization-level Google Drive connection: binds a single Drive folder to a single
@@ -76,6 +78,13 @@ export interface IOrgGoogleDriveConnection {
 
   /** Last time the folder was polled for changes. */
   lastPolledAt?: Date;
+
+  /**
+   * When the current 'syncing' claim was taken. Lets a STALE claim - left by an ingest process that
+   * died past the queue's Lambda timeout without releasing - be reclaimed, instead of wedging the
+   * connection in 'syncing' forever. Only meaningful while status === 'syncing'.
+   */
+  syncClaimedAt?: Date;
 
   // === Incremental sync ===
 
@@ -168,6 +177,21 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    */
   findByIdWithCredentials(id: string, organizationId: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
+  /**
+   * (Re)write the org-owned encrypted refresh token and re-stamp `connectedBy` to the re-syncing
+   * user, scoped to an org. organizationId is REQUIRED so one org can never overwrite another org's
+   * credential. Credential + connectedBy are written unconditionally; status/lastError heal to
+   * `connected` only from a non-`syncing` state, so a Re-sync during an in-flight ingest cannot flip
+   * the claim and start a duplicate run (see the model note). SECURITY: `encryptedRefreshToken` must
+   * already be encrypted by the caller (packages/database cannot reach the crypto helpers).
+   */
+  updateCredential(
+    id: string,
+    organizationId: string,
+    encryptedRefreshToken: string,
+    connectedBy: string
+  ): Promise<IOrgGoogleDriveConnectionDocument | null>;
+
   /** Update health state; clears `lastError` on a healthy update. */
   updateHealth(
     id: string,
@@ -176,4 +200,27 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
 
   /** Advance the incremental-sync cursor after a sync batch is durably created. */
   updateSyncCursor(id: string, syncCursor: string, polledAt: Date): Promise<IOrgGoogleDriveConnectionDocument | null>;
+
+  /**
+   * Guarded per-connection ingest lock. Atomically flips `status` to 'syncing' (stamping
+   * `syncClaimedAt`) iff the connection is idle ('connected') OR its existing 'syncing' claim is
+   * STALE (older than the Lambda timeout) - so a process that died mid-sync can't wedge it forever,
+   * and a claim never lands OVER a credential_error/needs_reconnect state (which a later release
+   * would erase). Returns whether THIS caller won the claim; exactly one concurrent run proceeds.
+   */
+  claimForSync(id: string): Promise<boolean>;
+
+  /**
+   * Release a 'syncing' claim on a failure path, guarded so it only moves 'syncing' -> 'connected'
+   * and can never clobber a terminal status (e.g. credential_error) set underneath it. The success
+   * path releases via `updateHealth({ status: 'connected' })` instead.
+   */
+  releaseSyncClaim(id: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
+
+  /**
+   * Delete a connection (org-scoped), releasing its GLOBAL Drive-folder claim so the folder can be
+   * connected elsewhere. Must HARD delete: a merely-disabled row still holds the unique driveFolderId
+   * index and would keep blocking re-claim. Returns true if a row was removed.
+   */
+  release(id: string, organizationId: string): Promise<boolean>;
 }
