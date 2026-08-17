@@ -179,7 +179,18 @@ export const archiveDataLake = async (
   // scope: one operator action, one audit row. Placed BEFORE the stats recompute so the archive is
   // attributed even if the recompute throws - the lake is already archived by this point either way.
   await recordLakeConfigChange(
-    { actor, lake: existing, grants, action: 'archive', changes: diffLakeConfig(existing, updated) },
+    {
+      actor,
+      lake: existing,
+      grants,
+      action: 'archive',
+      // Diffed against THIS write's own fields, never against `updated`: `BaseModel.update` is a
+      // `findOneAndUpdate` returning the merged document, so a concurrent writer's `$set` landing in
+      // the gap would be recorded under this caller's principal and rung. Same reasoning, and the
+      // same fix, as `updateDataLake` - see its note. The field set here is fixed and small, so the
+      // projection is exact rather than reconstructed.
+      changes: diffLakeConfig(existing, { ...existing, status: 'archived' }),
+    },
     { db, logger }
   );
   // Always recompute from source, never short-circuit on the sweep's own count ("it archived
