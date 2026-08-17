@@ -72,7 +72,11 @@ export async function deferFailureIfRetryable(
  */
 export async function finalizeBatchIfComplete(
   batch: IDataLakeBatchDocument | null,
-  logger: { error: (msg: string) => void }
+  // `warn` as well as `error`: this is the highest-volume producer of the auto-activate config
+  // event, and `recordLakeConfigChange` is best-effort - it warns and swallows rather than failing
+  // the batch. Without a real logger threaded to it that warning lands on `console.warn`, which is
+  // invisible to log-based alerting, so an audit trail could go quietly dark here of all places.
+  logger: { warn: (msg: string, ...args: unknown[]) => void; error: (msg: string) => void }
 ): Promise<void> {
   if (!batch) return;
   if (batch.vectorizedFiles + batch.failedFiles + batch.skippedFiles < batch.totalFiles) return;
@@ -93,6 +97,7 @@ export async function finalizeBatchIfComplete(
       // status change most likely to happen is the one the history would not contain.
       await dataLakeService.recomputeLakeStats(lake, {
         db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, ...lakeConfigAuditDb },
+        logger,
       });
     }
   } catch (error) {
