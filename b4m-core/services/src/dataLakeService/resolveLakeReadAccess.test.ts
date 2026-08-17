@@ -100,9 +100,9 @@ describe('resolveReadGrant - the new explicit read-grant arm (user + org princip
   });
 
   it('true for an org-principal grant when the caller is a MEMBER of that org', () => {
-    expect(
-      resolveReadGrant(ctx({ userId: 'u1', organizationIds: ['orgA'] }), [grant('reader', 'orgA', 'organization')])
-    ).toBe(true);
+    expect(resolveReadGrant(ctx({ userId: 'u1', organizationIds: ['orgA'] }), [grant('reader', 'orgA', 'organization')])).toBe(
+      true
+    );
   });
 
   it('true for an org owner/curator grant reaching a plain member (read follows membership)', () => {
@@ -112,9 +112,9 @@ describe('resolveReadGrant - the new explicit read-grant arm (user + org princip
   });
 
   it('false for an org-principal grant when the caller is NOT a member of that org', () => {
-    expect(
-      resolveReadGrant(ctx({ userId: 'u1', organizationIds: ['orgB'] }), [grant('reader', 'orgA', 'organization')])
-    ).toBe(false);
+    expect(resolveReadGrant(ctx({ userId: 'u1', organizationIds: ['orgB'] }), [grant('reader', 'orgA', 'organization')])).toBe(
+      false
+    );
   });
 
   it('false for a grant belonging to a different user', () => {
@@ -162,9 +162,7 @@ describe('resolveLakeReadAccess - report-only vs enforce', () => {
 
   it('org grant to a NON-member: no divergence, stays denied', () => {
     const outsider = ctx({ userId: 'x1', organizationIds: ['orgB'] });
-    const d = resolveLakeReadAccess(lake(), outsider, [grant('reader', 'orgA', 'organization')], {
-      enforceReadGrants: true,
-    });
+    const d = resolveLakeReadAccess(lake(), outsider, [grant('reader', 'orgA', 'organization')], { enforceReadGrants: true });
     expect(d).toMatchObject({ allowed: false, readGrantAllows: false, diverges: false });
   });
 

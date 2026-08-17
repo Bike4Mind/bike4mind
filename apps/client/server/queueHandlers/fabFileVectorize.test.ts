@@ -97,8 +97,9 @@ vi.mock('@bike4mind/common', async () => ({
   // evaluator READS it to tell a permanently-stalled file from one still indexing; production cannot
   // drift (both import the same constant), but a literal here would let THIS suite keep passing
   // against a string the constant no longer has.
-  CONVERGENCE_PAUSED_NOTE: (await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common'))
-    .CONVERGENCE_PAUSED_NOTE,
+  CONVERGENCE_PAUSED_NOTE: (
+    await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common')
+  ).CONVERGENCE_PAUSED_NOTE,
 }));
 vi.mock('@bike4mind/fab-pipeline', () => ({
   ChunkSchema: z.object({}).passthrough(),
@@ -400,11 +401,7 @@ describe('fabFileVectorize handler - notification failures are non-fatal (human 
     });
     h.getEmbedding.mockResolvedValue(null);
     h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
-    h.computeChunkVectorRollup.mockResolvedValue({
-      terminalChunkCount: 1,
-      embeddedChunkCount: 0,
-      embeddedCharCount: 0,
-    });
+    h.computeChunkVectorRollup.mockResolvedValue({ terminalChunkCount: 1, embeddedChunkCount: 0, embeddedCharCount: 0 });
     h.claimFileStatus.mockResolvedValue(true);
     h.incrementCounter.mockResolvedValue({ vectorizedFiles: 1, failedFiles: 0, totalFiles: 1 });
   });
@@ -503,11 +500,7 @@ describe('fabFileVectorize handler - retry gating (#1412)', () => {
     h.getEmbedding.mockResolvedValue(null);
     h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
     h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
-    h.computeChunkVectorRollup.mockResolvedValue({
-      terminalChunkCount: 1,
-      embeddedChunkCount: 0,
-      embeddedCharCount: 0,
-    });
+    h.computeChunkVectorRollup.mockResolvedValue({ terminalChunkCount: 1, embeddedChunkCount: 0, embeddedCharCount: 0 });
     h.claimFileStatus.mockResolvedValue(true);
     h.incrementCounter.mockResolvedValue({ vectorizedFiles: 1, failedFiles: 0, totalFiles: 1 });
 
@@ -537,11 +530,7 @@ describe('fabFileVectorize handler - embeddingModel discriminator stamp', () => 
       tokenCount: 5,
     });
     h.getEmbedding.mockResolvedValue(null);
-    h.computeChunkVectorRollup.mockResolvedValue({
-      terminalChunkCount: 1,
-      embeddedChunkCount: 0,
-      embeddedCharCount: 0,
-    });
+    h.computeChunkVectorRollup.mockResolvedValue({ terminalChunkCount: 1, embeddedChunkCount: 0, embeddedCharCount: 0 });
   });
 
   it('stamps the chunk embeddingModel once the whole file is fully vectorized', async () => {
@@ -588,11 +577,7 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
       tokenCount: 5,
     });
     h.getEmbedding.mockResolvedValue(null);
-    h.computeChunkVectorRollup.mockResolvedValue({
-      terminalChunkCount: 1,
-      embeddedChunkCount: 0,
-      embeddedCharCount: 0,
-    });
+    h.computeChunkVectorRollup.mockResolvedValue({ terminalChunkCount: 1, embeddedChunkCount: 0, embeddedCharCount: 0 });
     h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
     h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
   });

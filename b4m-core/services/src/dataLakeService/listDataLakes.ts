@@ -215,12 +215,7 @@ export const listDataLakes = async (
   { db }: ListDataLakesAdapters
 ): Promise<ManageableDataLakeConfig[]> => {
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const grantedLakeIds = await grantedLakeIdsFor(
-    ctx.userId,
-    ctx.organizationIds ?? [],
-    db.dataLakeAccessGrants,
-    includeReaders
-  );
+  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, ctx.organizationIds ?? [], db.dataLakeAccessGrants, includeReaders);
   let dynamicLakes: IDataLakeDocument[] = [];
   try {
     dynamicLakes = await db.dataLakes.findAccessible(ctx, { statuses: ['draft', 'active'], grantedLakeIds });
@@ -303,12 +298,7 @@ export const listArchivedDataLakes = async (
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const grantedLakeIds = await grantedLakeIdsFor(
-    ctx.userId,
-    ctx.organizationIds ?? [],
-    db.dataLakeAccessGrants,
-    includeReaders
-  );
+  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, ctx.organizationIds ?? [], db.dataLakeAccessGrants, includeReaders);
   const lakes = await db.dataLakes.findAccessible(ctx, {
     statuses: ['archived'],
     includePublic: false,
@@ -328,12 +318,7 @@ export const listDeletedDataLakes = async (
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const grantedLakeIds = await grantedLakeIdsFor(
-    ctx.userId,
-    ctx.organizationIds ?? [],
-    db.dataLakeAccessGrants,
-    includeReaders
-  );
+  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, ctx.organizationIds ?? [], db.dataLakeAccessGrants, includeReaders);
   const lakes = await db.dataLakes.findAccessible(ctx, { statuses: ['deleted'], includePublic: false, grantedLakeIds });
   const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
   return redactLakesForActor(lakes, ctx, grantsByLake);
