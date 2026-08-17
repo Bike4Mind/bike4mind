@@ -1,14 +1,13 @@
 import {
-  ApiKeyScope,
   ApiKeyType,
   CreditHolderType,
+  generateSoundEffectContract,
   ICreditHolder,
   ICreditHolderMethods,
   insufficientCreditsError,
   IOrganizationDocument,
   IUserDocument,
   SoundGenerationVendor,
-  soundEffectsRequestSchema,
 } from '@bike4mind/common';
 import {
   adminSettingsRepository,
@@ -20,7 +19,7 @@ import {
 } from '@bike4mind/database';
 import { apiKeyService, creditService, estimateSoundCredits } from '@bike4mind/services';
 import { aiSoundService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { baseApi } from '@server/middlewares/baseApi';
+import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { BadRequestError } from '@server/utils/errors';
 import { persistGeneratedAudio } from '@server/utils/persistGeneratedAudio';
 
@@ -39,8 +38,12 @@ const PROVIDER_API_KEY_TYPE: Record<SoundGenerationVendor, ApiKeyType> = {
 // billing is gated on the enforceCredits admin setting, so self-host /
 // credits-off deployments run free. Scope-gated (AI_GENERATE) so an under-scoped
 // API key can't drive paid provider generation, matching image/video.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(async (req, res) => {
-  const { provider, text, durationSeconds, promptInfluence, format } = soundEffectsRequestSchema.parse(req.body);
+//
+// Auth mode, required scopes, and request validation all come from
+// generateSoundEffectContract (the same source of truth that drives the OpenAPI
+// spec); `req.validated` is the parsed, typed body.
+const handler = nextRouteForContract(generateSoundEffectContract).post(async (req, res) => {
+  const { provider, text, durationSeconds, promptInfluence, format } = req.validated;
   const userId = req.user?.id;
 
   const apiKey = await apiKeyService.getEffectiveApiKey(

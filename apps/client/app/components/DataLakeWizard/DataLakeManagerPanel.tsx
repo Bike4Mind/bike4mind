@@ -37,6 +37,7 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
+import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import {
   buildTagTree,
   getNodeAtPath,
@@ -71,12 +72,15 @@ import {
   usePermanentDeleteDataLake,
   useRestoreDeletedDataLake,
   useUnarchiveDataLake,
+  useUnderChunkedCount,
+  useRechunkDataLake,
 } from '@client/app/hooks/data/dataLakes';
 import { toast } from 'sonner';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import useStartChatWithLake from '@client/app/hooks/useStartChatWithLake';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import DataLakeEmptyState from '@client/app/components/datalake/DataLakeEmptyState';
+import LakeHealthBadge from '@client/app/components/datalake/LakeHealthBadge';
 import { RowActionsMenu, RowMenuItem } from '@client/app/components/datalake/rowActionsMenu';
 import DataLakeArticlePanel from './DataLakeArticlePanel';
 import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
@@ -1117,6 +1121,18 @@ function LakeInfoPanel({
   const startChatWithLake = useStartChatWithLake();
   const [startingChat, setStartingChat] = useState(false);
   const visibility = lake.isPublic ? 'Public' : lake.organizationId ? 'Organization' : 'Private';
+  // "Rebuild passages": gated on canRebuild, NOT canManage - a fallback (built-in) lake has no
+  // document to manage but can still be rebuilt by an admin (see assertLakeRebuildAccess). Only
+  // surfaced when the lake actually has legacy oversized-chunk files to repair (the count
+  // self-polls down as a rebuild wave drains).
+  // !!: useUnderChunkedCount's `enabled` param defaults to true, which fires on `undefined`
+  // specifically - an absent canRebuild (e.g. a rolling-deploy skew window against an older
+  // server) would otherwise ENABLE the query rather than disable it. Coerce so absent reads as
+  // false, matching every other truthiness check on this flag.
+  const { data: rebuildStatus } = useUnderChunkedCount(lake.id, !!lake.canRebuild);
+  const underChunkedCount = rebuildStatus?.underChunkedCount ?? 0;
+  const failedCount = rebuildStatus?.failedCount ?? 0;
+  const rechunk = useRechunkDataLake(lake.id);
 
   return (
     <Box
@@ -1206,6 +1222,30 @@ function LakeInfoPanel({
               </Tooltip>
             </>
           )}
+          {/* Rebuild passages is gated on canRebuild, a NARROWER flag than canManage: a fallback
+              (built-in) lake has no document (canManage is always false for it) but can still be
+              rebuilt by an admin. Deliberately its own condition, not folded into the canManage
+              fragment above - that fragment's other affordances (rename/delete/visibility/file
+              removal) would still 400 on a fallback lake. */}
+          {lake.canRebuild && underChunkedCount > 0 && (
+            <Tooltip
+              title="Re-chunk files stored as oversized passages into retrieval-sized ones. Runs in bounded waves; safe to repeat until zero."
+              size="sm"
+            >
+              <Button
+                size="sm"
+                variant="outlined"
+                color="primary"
+                startDecorator={<AutoFixHighIcon sx={{ fontSize: 16 }} />}
+                data-testid={`datalake-rebuild-passages-btn-${lake.id}`}
+                loading={rechunk.isPending}
+                onClick={() => rechunk.mutate(undefined)}
+                sx={{ flexShrink: 0, fontSize: '13px' }}
+              >
+                Rebuild passages
+              </Button>
+            </Tooltip>
+          )}
         </Box>
         <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
           {/* Not-your-lake marker: the sidebar lists lakes the caller can REACH, not only ones
@@ -1239,6 +1279,51 @@ function LakeInfoPanel({
             <Chip size="sm" variant="outlined" color="neutral" sx={{ fontSize: '11px' }}>
               {fileCount} {fileCount === 1 ? 'file' : 'files'}
             </Chip>
+          )}
+          {/* Derived retrievability health (#1666): reachable-content share + affected-file drill-down.
+              Advisory only. Fetched lazily for the lake in view; renders nothing for an empty lake. */}
+          <LakeHealthBadge lakeId={lake.id} failedFileCount={failedCount} />
+          {/* Retrievability health: files still stored as oversized (pre-passage-target) chunks.
+              Gated on canRebuild (not canManage), matching the button above - the count self-polls
+              down as the Rebuild passages wave drains. */}
+          {lake.canRebuild && underChunkedCount > 0 && (
+            <Tooltip
+              title="These files are stored as oversized passages; use Rebuild passages to re-chunk them."
+              size="sm"
+            >
+              <Chip
+                size="sm"
+                variant="soft"
+                color="warning"
+                startDecorator={<AutoFixHighIcon sx={{ fontSize: 12 }} />}
+                sx={{ fontSize: '11px' }}
+                data-testid={`datalake-manager-rebuild-chip-${lake.id}`}
+              >
+                {underChunkedCount} to rebuild
+              </Chip>
+            </Tooltip>
+          )}
+          {/* A rebuild badge reaching zero doesn't mean success if some files failed to process -
+              those won't retry on their own, so surface them distinctly. Gated on canRebuild OR
+              canManage (not canManage alone): failedCount now comes from the canRebuild-gated
+              rebuild-status query, so a fallback-lake admin who can rebuild but not manage must
+              still see it, or "0 failed" is invisible to the only actor who can act on it. */}
+          {(lake.canRebuild || lake.canManage) && failedCount > 0 && (
+            <Tooltip
+              title="These files failed to process (e.g. a corrupt or unparseable file) and won't retry automatically. Includes files that failed at upload, not only rebuild attempts - Rebuild passages cannot clear them. Open the file and Re-process, or re-upload it."
+              size="sm"
+            >
+              <Chip
+                size="sm"
+                variant="soft"
+                color="danger"
+                startDecorator={<ErrorOutlineIcon sx={{ fontSize: 12 }} />}
+                sx={{ fontSize: '11px' }}
+                data-testid={`datalake-manager-rebuild-failed-chip-${lake.id}`}
+              >
+                {failedCount} failed
+              </Chip>
+            </Tooltip>
           )}
           {/* Background AI-tag suggestion progress - an independent clock from ingest, so this
               can appear well after the lake's files are already fully uploaded/searchable. */}

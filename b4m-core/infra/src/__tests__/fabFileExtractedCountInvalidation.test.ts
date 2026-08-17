@@ -84,8 +84,21 @@ describe('every FabFile content rewrite clears the cached extracted length', () 
     expect(source).toMatch(/FAB_FILE_CONTENT_REWRITE_PATCH\s*=\s*\{[^}]*extractedCharCount:\s*null[^}]*\}/);
   });
 
-  it('the shared patch also clears the chunk-derived length (chunkedCharCount)', () => {
+  it('the shared patch also clears every chunk-derived rollup a rewrite invalidates', () => {
     const source = read('b4m-core/common/src/types/entities/FabFileTypes.ts');
-    expect(source).toContain('FAB_FILE_CONTENT_REWRITE_PATCH = { extractedCharCount: null, chunkedCharCount: null }');
+    // The patch object literal spans from the const to its first closing brace.
+    const patch = source.match(/FAB_FILE_CONTENT_REWRITE_PATCH\s*=\s*\{[^}]*\}/)?.[0] ?? '';
+    // A rewrite invalidates the chunks these rollups were computed from, so all must be nulled - a
+    // stale one would grade lake health (#1666) against the previous content.
+    for (const field of ['chunkedCharCount', 'maxChunkCharLength', 'embeddedChunkCount', 'embeddedCharCount']) {
+      expect(patch).toMatch(new RegExp(`${field}:\\s*null`));
+    }
+  });
+
+  // The admission-contract text hash (#1679) is content-derived too, so a byte rewrite must clear it
+  // rather than leave a fingerprint that claims text the file no longer holds.
+  it('the shared patch also clears the server-verified text hash (serverTextHash)', () => {
+    const source = read('b4m-core/common/src/types/entities/FabFileTypes.ts');
+    expect(source).toMatch(/FAB_FILE_CONTENT_REWRITE_PATCH\s*=\s*\{[^}]*serverTextHash:\s*null[^}]*\}/);
   });
 });

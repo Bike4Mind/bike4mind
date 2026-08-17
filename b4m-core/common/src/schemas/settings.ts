@@ -2,8 +2,8 @@ import { z } from 'zod';
 import { CREDITS_PER_USD_COST } from '../pricing';
 import {
   DEFAULT_PASSAGE_TOKEN_TARGET,
-  MAX_PASSAGE_TOKEN_TARGET,
   MIN_PASSAGE_TOKEN_TARGET,
+  OVERSIZED_PASSAGE_TOKEN_THRESHOLD,
 } from '../constants/chunking';
 import {
   LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS,
@@ -189,6 +189,7 @@ export const SettingKeySchema = z.enum([
   'EnableLakeMemory',
   'EnableDataLakeVectorSearch',
   'PauseLakeConvergence',
+  'EnforceLakeReadGrants',
   'EnableBriefcase',
   'EnableBriefcaseDefault',
   'EnableImageTemplates',
@@ -420,7 +421,7 @@ export const SettingKeySchema = z.enum([
   // PR REPORT GENERATOR
   'prReportRepo',
   'prReportIdentityMap',
-  'prReportSlackChannel',
+  'prReportWebhookUrl',
   'prReportEgressAllowlist',
 ]);
 export type SettingKey = z.infer<typeof SettingKeySchema>;
@@ -1914,6 +1915,17 @@ export const settingsMap = {
     // also pause all of an org's/owner's lake convergence, not only one lake at a time.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
   }),
+  EnforceLakeReadGrants: makeBooleanSetting({
+    key: 'EnforceLakeReadGrants',
+    name: 'Data Lakes: Enforce read-time grant resolution',
+    defaultValue: false,
+    description:
+      'Read-time grant cutover (#1673). OFF by default = report-only: the read gate resolves a persisted READER/org grant into an ephemeral membership view and logs where it WOULD change access ([lakeReadGrantCutover] lines), but the enforced decision stays the legacy owner/org/tag/entitlement/public rule so no one gains or loses access. NOTE: turning this ON is currently a NO-OP guarded by a source-level interlock (READ_GRANT_ENFORCEMENT_READY) - enforcement will not activate until the follow-up code (member-management write path + retrieval arm) lands and flips it, and a premature toggle just logs a warning and stays report-only. This is deliberate so the setting cannot half-enable a half-wired gate. Platform altitude on purpose: a one-time install-wide migration cutover, not a per-lake lever. Tag and entitlement grants always resolve live and are never affected by this flag; only persisted reader/org rows are gated by it.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 94,
+    dependsOn: 'EnableDataLakes',
+  }),
   EnableBriefcase: makeBooleanSetting({
     key: 'EnableBriefcase',
     name: 'Enable Briefcase',
@@ -2155,11 +2167,19 @@ export const settingsMap = {
     // Floor matches the chunker's own clamp, so the UI cannot report a value the chunker will
     // silently raise (chunk.ts clamps to MIN_PASSAGE_TOKEN_TARGET).
     min: MIN_PASSAGE_TOKEN_TARGET,
+    // Ceiling is the under-chunked DETECTION threshold, not the chunker's capability bound (#1804).
+    // Above it, "Rebuild passages" stops converging: files re-chunk to a target that is correct per
+    // policy but still trips detection (tokenCount > OVERSIZED_PASSAGE_TOKEN_THRESHOLD), so the badge
+    // never reaches zero and every click destructively re-chunks and re-embeds the same files at real
+    // cost. Detection is `$gt`, so a target of exactly the threshold is safe.
+    max: OVERSIZED_PASSAGE_TOKEN_THRESHOLD,
     description:
       'Passage target in TOKENS for splitting large documents. The DEFAULT matches the chunker; a ' +
       'value stored here overrides it, and a stored value larger than the chunker default makes the ' +
       'UI reprocess path produce coarser chunks than /api/files/reprocess. Coarser chunks measurably ' +
-      'worsen retrieval. Resolves at file-OWNER altitude: an org/individual owner may pin their own ' +
+      'worsen retrieval, and values above the under-chunked detection threshold also stop "Rebuild ' +
+      'passages" converging, so the accepted range is capped there. Resolves at file-OWNER altitude: ' +
+      'an org/individual owner may pin their own ' +
       'default above the platform value; a data lake does NOT override it (epic decision 7) - a lake ' +
       'declares the policy it REQUIRES and a file that cannot satisfy every lake it belongs to is ' +
       'reported as a conflict rather than silently re-chunked.',
@@ -2176,8 +2196,12 @@ export const settingsMap = {
     // chunker (effectiveChunkTokenLimit), which reduces an over-large value further if needed.
     scope: {
       settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner],
+      // Ceiling matches the setting's own `max` rather than MAX_PASSAGE_TOKEN_TARGET, and that is
+      // what makes the #1804 bound RETROACTIVE: `max` only rejects new writes, so a value stored
+      // above the threshold before this shipped would still resolve at its stored size and keep the
+      // rebuild badge non-convergent. Clamping here bounds resolution itself.
       clamp: (value: number) =>
-        Math.min(Math.max(Math.floor(value), MIN_PASSAGE_TOKEN_TARGET), MAX_PASSAGE_TOKEN_TARGET),
+        Math.min(Math.max(Math.floor(value), MIN_PASSAGE_TOKEN_TARGET), OVERSIZED_PASSAGE_TOKEN_THRESHOLD),
     },
   }),
   ModerationEnabled: makeBooleanSetting({
@@ -4034,21 +4058,22 @@ export const settingsMap = {
     category: 'Admin',
     order: 142,
   }),
-  prReportSlackChannel: makeStringSetting({
-    key: 'prReportSlackChannel',
-    name: 'PR Report Slack Channel',
+  prReportWebhookUrl: makeStringSetting({
+    key: 'prReportWebhookUrl',
+    name: 'PR Report Slack Webhook URL',
     defaultValue: '',
+    isSensitive: true,
     description:
-      'Slack channel ID the PR status digest posts to. The bot token itself is resolved from the credential store, never from admin settings.',
+      'Slack Incoming Webhook URL the PR status digest posts to (https://hooks.slack.com/services/...). It already encodes its channel and workspace, so no bot token or channel ID is needed to send. Bearer-equivalent: anyone holding it can post to the channel, so it is stored encrypted and never returned to the browser.',
     category: 'Slack',
     order: 143,
   }),
   prReportEgressAllowlist: makeObjectSetting({
     key: 'prReportEgressAllowlist',
     name: 'PR Report Egress Allowlist',
-    defaultValue: { hosts: ['slack.com', 'www.slack.com'] },
+    defaultValue: { hosts: ['hooks.slack.com'] },
     description:
-      'Hosts the PR digest may post to. FAILS CLOSED: an empty list rejects every send rather than degrading to allow-any, because the post body carries PR titles, author logins and the staffing implied by the role rosters. Validated against the Slack API origin, so the default lists slack.com; self-hosted (non-Slack) origins are not yet supported.',
+      'Hosts the PR digest may post to, checked against the webhook URL its own hostname. FAILS CLOSED: an empty list rejects every send rather than degrading to allow-any, because the post body carries PR titles, author logins and the staffing implied by the role rosters. Slack incoming webhooks live at hooks.slack.com, so that is the default.',
     category: 'Slack',
     order: 144,
     schema: z.object({

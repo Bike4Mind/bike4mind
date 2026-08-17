@@ -648,9 +648,9 @@ read \`files\` (see [Poll Quest Status](#poll-quest-status)).
 }
 \`\`\`
 
-#### v1 API (OpenAPI 3.1)
+#### OpenAPI 3.1 documented endpoints
 
-The versioned \`/api/ai/v1/*\` endpoints (\`/api/ai/v1/completions\` and \`/api/ai/v1/tools\`) publish a machine-readable OpenAPI 3.1 contract generated directly from the request-validation schemas, so the documentation never drifts from the running code.
+A growing set of endpoints publishes a machine-readable OpenAPI 3.1 contract generated directly from the request-validation schemas, so the documentation never drifts from the running code. Currently: \`/api/chat\`, \`/api/ai/v1/completions\`, \`/api/ai/v1/tools\`, and the audio generation endpoints (\`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`). Everything documented there is omitted from the summary tables below - the spec is the source of truth for those.
 
 | Resource | Path | Description |
 |----------|------|-------------|
@@ -659,7 +659,7 @@ The versioned \`/api/ai/v1/*\` endpoints (\`/api/ai/v1/completions\` and \`/api/
 
 The spec is public and served with permissive CORS, and it rewrites its \`servers\` URL to the deployment you fetch it from, so a generated SDK targets the right origin. Point any OpenAPI generator (openapi-generator, openapi-typescript, and similar) at \`/api/v1/openapi.json\` to build a typed client.
 
-Note: \`/api/ai/v1/completions\` streams a custom SSE contract and is not OpenAI-compatible; the spec models both the completion event stream and the tools endpoint in full.
+Note: \`/api/ai/v1/completions\` streams a custom SSE contract and is not OpenAI-compatible; the spec models the completion event stream in full. The audio endpoints return raw audio bytes by default, so the spec documents their \`audio/*\` media types and the \`X-B4M-Audio-*\` response headers that report where the saved copy lives.
 
 #### AI Endpoints Summary
 
@@ -667,7 +667,6 @@ Note: \`/api/ai/v1/completions\` streams a custom SSE contract and is not OpenAI
 |--------|----------|-------------|
 | POST | /api/ai/llm | Raw LLM completion |
 | POST | /api/ai/transcribe | Audio/video to text (Whisper) |
-| POST | /api/ai/tts | Multi-provider text-to-speech (openai, elevenlabs) |
 | POST | /api/ai/text-to-speech | Text to speech synthesis (OpenAI; legacy, use /api/ai/tts) |
 | POST | /api/ai/generate-image | Image generation (DALL-E) |
 | POST | /api/ai/edit-image | Image editing |

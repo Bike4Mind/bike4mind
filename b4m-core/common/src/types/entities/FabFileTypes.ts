@@ -176,9 +176,39 @@ export interface IFabFile {
    * strips undefined from $set) and the re-chunk that follows re-stamps it.
    */
   chunkedCharCount?: number | null;
+  /**
+   * Largest single chunk's `charLength` (Unicode code points), stamped by chunkFabfile beside
+   * `chunkedCharCount`. Feeds lake-health predicate P1 (#1666: no chunk exceeds the policy size)
+   * as a per-file rollup, so health never rescans the chunk collection - the read that #1665
+   * measured as ruinous on a connector-fed lake. `null`/absent = UNMEASURED (predates the field or
+   * a content rewrite cleared it), distinct from `0`; nulled with `chunkedCharCount` on rewrite.
+   */
+  maxChunkCharLength?: number | null;
+  /**
+   * Count of this file's chunk rows that carry a VECTOR, recomputed from source at vectorize
+   * completion. Feeds lake-health predicate P3 (#1666: vector-bearing rows >= chunkCount).
+   * Deliberately NOT `vectorizedChunkCount`, which counts a chunk terminal if it has a vector OR is
+   * too large to embed - so an un-embeddable oversized chunk reads as "done" there and would hide
+   * exactly the gap P3 exists to catch. Measurable from vector presence alone (no char data), so P3
+   * grades before the char-length backfill runs. Absent = not yet computed (distinct from `0`).
+   */
+  embeddedChunkCount?: number | null;
+  /**
+   * Sum of `charLength` over this file's VECTOR-bearing chunks, recomputed at vectorize completion.
+   * The reachable-content numerator for lake health (#1666): a chunk's characters count toward what
+   * can reach the model only if the chunk is retrievable (has a vector). Nullable/absent =
+   * unmeasured; nulled with `chunkedCharCount` on a content rewrite.
+   */
+  embeddedCharCount?: number | null;
 
   /** Whether this FabFile is currently being chunked. */
   isChunking?: boolean;
+  /** When `isChunking` was last set true - the rescue sweep uses this to reclaim a claim stranded
+   *  by a hard worker crash that never cleared it (see buildFabFileChunkScanFilter). */
+  chunkClaimedAt?: Date | null;
+  /** Written by confirmChunkClaim on every matched call - purely so that write is never a
+   *  byte-for-byte no-op MongoDB could elide. Not read anywhere; see confirmChunkClaim's doc. */
+  chunkClaimConfirmedAt?: Date | null;
   /** Whether this FabFile has been chunked */
   chunked?: boolean;
   /**
@@ -278,6 +308,18 @@ export interface IFabFile {
 
   /** SHA-256 hash of file content for deduplication */
   contentHash?: string;
+
+  /**
+   * SHA-256 (hex) over the file's normalized server-extracted text, computed at chunk time by the
+   * admission contract (`computeServerTextHash`). Hashed over the CANONICAL EXTRACTED TEXT, not the
+   * chunk output, so it is stable across chunk-policy/embedding-model changes - the trustworthy dedup
+   * input for #1671, distinct from `contentHash` (client-side raw BYTES, unverified, absent on
+   * connector files). Tri-state: absent = never chunked (treat as UNKNOWN, never "no text"); null =
+   * chunked with no extractable text; hex = fingerprint. Nulled by FAB_FILE_CONTENT_REWRITE_PATCH on
+   * a byte rewrite and by the chunk pass on a text-less re-chunk, so it never outlives its text.
+   */
+  serverTextHash?: string | null;
+
   /** Batch ID linking this file to a data lake upload batch */
   batchId?: string;
   /** Original relative path from folder upload (preserves directory structure) */
@@ -327,10 +369,21 @@ export interface IFabFileDocument extends IFabFile, IShareableDocument {}
  * null, NOT undefined - Mongoose strips undefined from a `$set`, so the undefined form of this leaves
  * the stale number in place and only looks correct.
  *
- * Also clears `chunkedCharCount`, the chunk-derived sum: a content rewrite invalidates the chunks
- * it was summed from, and the re-chunk that follows re-stamps it.
+ * Also clears the chunk-derived rollups (`chunkedCharCount`, `maxChunkCharLength`, `embeddedChunkCount`,
+ * `embeddedCharCount`) and `serverTextHash`, the admission contract's fingerprint of the extracted text
+ * (#1679): each is derived from the file's content, so a byte rewrite invalidates them, and the
+ * re-chunk / re-vectorize that follows re-stamps them. Leaving the rollups would grade lake health
+ * (#1666) against the PREVIOUS content's chunks - reporting a reachability the current bytes do not
+ * have; leaving the hash would let a stale fingerprint claim text the file no longer holds.
  */
-export const FAB_FILE_CONTENT_REWRITE_PATCH = { extractedCharCount: null, chunkedCharCount: null } as const;
+export const FAB_FILE_CONTENT_REWRITE_PATCH = {
+  extractedCharCount: null,
+  chunkedCharCount: null,
+  maxChunkCharLength: null,
+  embeddedChunkCount: null,
+  embeddedCharCount: null,
+  serverTextHash: null,
+} as const;
 
 export interface IFabFileListItem {
   userId: string;
@@ -368,8 +421,31 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
   distinctEmbeddingModelsByFabFileIds(fabFileIds: string[]): Promise<string[]>;
   bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]): Promise<IFabFileChunkDocument[]>;
   findByFabFileId(fabFileId: string): Promise<IFabFileChunkDocument[]>;
-  /** Count chunks that are terminal (have a vector OR are oversized) - for idempotent vectorizedChunkCount recompute. */
-  countTerminalChunks(fabFileId: string, contextWindow: number): Promise<number>;
+  /**
+   * The file's vectorize rollup in ONE pass over its chunks (the `vector` fetch is unavoidable and
+   * must not be paid twice per batch):
+   *  - `terminalChunkCount`: chunks that have a vector OR are oversized past the context window
+   *    (permanently unembeddable) - i.e. `vectorizedChunkCount`, recomputed from source (not `+=`) so
+   *    an SQS redelivery of a partial-batch vectorize message is idempotent.
+   *  - `embeddedChunkCount`/`embeddedCharCount`: only chunks that TRULY carry a vector (lake-health
+   *    P3, #1666), because P3 asks whether content is FINDABLE; an oversized-unembeddable chunk counts
+   *    toward terminal but not here. `embeddedCharCount` reflects only chunks whose `charLength` is present.
+   */
+  computeChunkVectorRollup(
+    fabFileId: string,
+    contextWindow: number
+  ): Promise<{ terminalChunkCount: number; embeddedChunkCount: number; embeddedCharCount: number }>;
+  /**
+   * All four lake-health (#1666) file rollups in one pass over a file's chunks - the metadata
+   * backfill's per-file input. `chunkedCharCount`/`maxChunkCharLength` cover all chunks;
+   * `embeddedChunkCount`/`embeddedCharCount` cover only vector-bearing ones.
+   */
+  computeFileChunkRollups(fabFileId: string): Promise<{
+    chunkedCharCount: number;
+    maxChunkCharLength: number;
+    embeddedChunkCount: number;
+    embeddedCharCount: number;
+  }>;
   /** Bulk-stamp every chunk of a file with the model its vectors were generated under. */
   updateEmbeddingModel(fabFileId: string, embeddingModel: string): Promise<void>;
   /** One page of vector-bearing chunks missing `embeddingModel`, ascending by `_id` - backfill's keyset cursor. */
@@ -417,6 +493,13 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
   backfillCharLengthByIds(chunkIds: string[]): Promise<number>;
   /** Sum of a file's chunks' charLength, unstamped chunks counted as 0. */
   sumChunkCharLengthByFabFileId(fabFileId: string): Promise<number>;
+  /**
+   * Of the given files, those with at least one chunk larger than `tokenThreshold` - i.e. files
+   * whose passages predate the passage-target fix (a whole-document blob, not a ~512-token
+   * passage). Returned worst-first (largest oversized chunk first) so a bounded rebuild wave
+   * repairs the least-retrievable files first. Powers the lake "Rebuild passages" detection.
+   */
+  findUnderChunkedFabFileIds(fabFileIds: string[], tokenThreshold: number): Promise<string[]>;
 }
 
 /**
@@ -455,6 +538,21 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     chunkedPassageTokenTarget: number,
     conflict: FabFileChunkPolicyConflict | null
   ): Promise<void>;
+
+  /**
+   * Guarded-write ownership check for `chunkFabfile` (#1802 Phase 2): matches on BOTH `_id` and
+   * `chunkClaimedAt` so a stale-claim takeover mid-run is caught via MongoDB's write-conflict
+   * detection rather than a transaction-isolation READ (`withTransaction` configures no read
+   * concern, and the competing CAS commits outside any transaction). `chunkClaimedAt` itself is
+   * written back unchanged - the release CAS later matches on this run's exact original stamp - but
+   * the write ALSO stamps `chunkClaimConfirmedAt` so it is never a byte-for-byte no-op: verified
+   * against a real replica set that an update matching-and-writing only the SAME value can be
+   * silently elided (no conflict raised, stale match succeeds), so a genuinely-changing field is
+   * required for the write-conflict detection this depends on to actually fire. Returns `false`
+   * when `chunkClaimedAt` no longer matches: a successor already reassigned this file's claim, and
+   * the caller must abort before any further write.
+   */
+  confirmChunkClaim(fabFileId: string, chunkClaimedAt: Date): Promise<boolean>;
 
   /**
    * Find all files for a user.
@@ -592,7 +690,10 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   countByUserIdAndTag(userId: string, tag: string): Promise<number>;
 
   /**
-   * Count the number of files by tag for a user.
+   * Count the number of files by tag for a user. Widens to shared/group/data-lake files when
+   * options are supplied. `excludePersonalShares` additionally drops a file merely shared 1:1
+   * with the user - see buildOwnershipConditions (packages/database) for the full why and which
+   * kind of caller should or should not opt in.
    * @param userId - The ID of the user.
    * @returns A promise that resolves to the number of files.
    */
@@ -603,6 +704,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
       scopedTagPrefixes?: string[];
+      excludePersonalShares?: boolean;
     }
   ): Promise<{ tag: string; count: number }[]>;
 
@@ -638,8 +740,10 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   ): Promise<{ total: number; byPrefix: Record<string, number> }>;
 
   /**
-   * Count unique files per root tag namespace for a user. Takes the same optional scope as
-   * countFilesByTagForUser, which it is served beside; omitting it counts owned files only.
+   * Count unique files per root tag namespace for a user. Takes the SAME optional scope
+   * (including `excludePersonalShares`) as countFilesByTagForUser, which it is served beside -
+   * the two must move in lockstep or a namespace's size disagrees with its tag count. Omitting
+   * the scope counts owned files only.
    */
   countUniqueFilesByNamespaceForUser(
     userId: string,
@@ -648,6 +752,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
       scopedTagPrefixes?: string[];
+      excludePersonalShares?: boolean;
     }
   ): Promise<{ namespace: string; fileCount: number }[]>;
 
@@ -790,12 +895,80 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     scope: DataLakeMembershipScope
   ): Promise<{ fileCount: number; totalSizeBytes: number; totalChunkedChars: number }>;
   /**
+   * Per-member health rollups (#1666) for a lake, read from FabFile documents only (never the chunk
+   * collection). Raw numbers the pure evaluator grades; char fields stay `null` when unmeasured.
+   * Members with no chunks are excluded. `limit` fetches one extra row so the caller can detect and
+   * report overflow instead of silently truncating.
+   */
+  findDataLakeHealthMembers(
+    scope: DataLakeMembershipScope,
+    limit?: number
+  ): Promise<
+    Array<{
+      fabFileId: string;
+      fileName?: string;
+      chunkCount: number;
+      // vectorizedChunkCount + error drive the in-flight vs settled decision in the pure evaluator;
+      // omitting them here would silently disable that gate (rows arrive without them -> treated as
+      // settled), re-arming the mid-ingest "0% reachable" bug at the type level. Keep in sync.
+      vectorizedChunkCount: number | null;
+      error: string | null;
+      // Third terminal-stall input, same keep-in-sync rule as the two above: the convergence kill
+      // switch stalls a file via `notes` (CONVERGENCE_PAUSED_NOTE) without ever setting `error`.
+      notes: string | null;
+      chunkedCharCount: number | null;
+      maxChunkCharLength: number | null;
+      embeddedChunkCount: number | null;
+      embeddedCharCount: number | null;
+    }>
+  >;
+  /**
    * One page of file ids that have chunks but no `chunkedCharCount` (missing or nulled by a
    * content rewrite), ascending by `_id` - the char-length backfill's phase-2 cursor.
    */
   findFileIdsMissingChunkedCharCount(options?: { limit?: number; afterFileId?: string }): Promise<string[]>;
   /** Stamp a file's recomputed `chunkedCharCount` - the char-length backfill's phase-2 write. */
   setChunkedCharCount(id: string, chunkedCharCount: number): Promise<void>;
+  /**
+   * One page of file ids with chunks but missing the lake-health (#1666) rollups (keyed by absent
+   * `maxChunkCharLength`), ascending by `_id` - the health backfill's phase-2 cursor.
+   */
+  findFileIdsMissingChunkRollups(options?: { limit?: number; afterFileId?: string }): Promise<string[]>;
+  /** Stamp all four recomputed chunk-derived rollups together - the health backfill's phase-2 write. */
+  setChunkRollups(
+    id: string,
+    rollups: {
+      chunkedCharCount: number;
+      maxChunkCharLength: number;
+      embeddedChunkCount: number;
+      embeddedCharCount: number;
+    }
+  ): Promise<void>;
+  /**
+   * Live, already-chunked files in the lake, as {id, userId} - the input set for under-chunked
+   * detection. userId is the file OWNER, needed to re-enqueue the chunk job under the same
+   * identity the original ingest used. Excludes deleted/archived/still-pending files, and files
+   * already claimed and in-flight (isChunking) so a concurrent wave can't re-select them.
+   */
+  findChunkedFilesByScope(scope: DataLakeMembershipScope): Promise<{ id: string; userId: string }[]>;
+  /**
+   * Reset the chunk/vector flags on a set of files so a re-enqueued chunk job actually re-chunks
+   * instead of hitting the "already chunked" guard. Clears `error` too - a file that chunked then
+   * failed vectorization would otherwise be stranded (chunked:false + stale error is invisible to
+   * both re-detection and the rescue sweep). Shared by the bulk rebuild wave and the per-file
+   * reprocess route so the two cannot drift. Returns the number modified.
+   *
+   * Preconditioned on `isChunking: {$ne: true}`: the reset WRITES isChunking:false, so without it a
+   * reset would release a live worker's lease and let a second worker into chunkFabfile's
+   * delete-then-insert. Returns the ids actually reset, so the caller enqueues exactly what changed.
+   */
+  resetChunkStateByIds(ids: string[]): Promise<string[]>;
+  /**
+   * Count the lake's files whose re-chunk failed (error set, no chunks) - invisible to both the
+   * under-chunked detection and the rescue sweep, so surfaced separately so a manager can tell
+   * "rebuild done" from "some files gave up".
+   */
+  countFailedFilesByScope(scope: DataLakeMembershipScope): Promise<number>;
   /**
    * Distinct live file count per lake, keyed by `datalakeTag`. Same predicate as
    * computeDataLakeStats, so what a browse surface displays cannot disagree with a lake's

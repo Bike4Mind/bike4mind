@@ -373,3 +373,38 @@ describe('SmartChunker', () => {
     });
   });
 });
+
+describe('getExtractedText (lake admission fingerprint source, #1679)', () => {
+  const buildChunker = (passageTokenTarget: number): SmartChunker =>
+    new SmartChunker(MODEL, mockStorage, new Logger({ component: 'chunk-test' }), { passageTokenTarget });
+
+  it('is identical across chunk sizes even when the chunk OUTPUT is not - the fingerprint is policy-independent', async () => {
+    // A long whitespace-free token routes through splitOversizedSegment (mid-token splits): it is
+    // fragmented into many chunks at a small target and stays whole at a large one, so the chunk
+    // TEXT differs by policy. The extracted text - what the admission hash fingerprints - must not.
+    const text = 'x'.repeat(4000);
+    const buf = Buffer.from(text, 'utf8');
+
+    const small = buildChunker(MIN_PASSAGE_TOKEN_TARGET); // 64
+    const chunksSmall = await small.chunkFile(buf, 'text/plain');
+    small.freeEncoder();
+
+    const large = buildChunker(6000);
+    const chunksLarge = await large.chunkFile(buf, 'text/plain');
+    large.freeEncoder();
+
+    // Output genuinely diverges with policy...
+    expect(chunksSmall.length).toBeGreaterThan(chunksLarge.length);
+    expect(chunksSmall.map(c => c.text)).not.toEqual(chunksLarge.map(c => c.text));
+    // ...but the extracted text (and therefore the fingerprint) is stable and equals the source.
+    expect(small.getExtractedText()).toBe(text);
+    expect(small.getExtractedText()).toBe(large.getExtractedText());
+  });
+
+  it('is undefined for a file that yields no extractable text', async () => {
+    const chunker = buildChunker(DEFAULT_PASSAGE_TOKEN_TARGET);
+    await chunker.chunkFile(Buffer.from('anything'), 'application/octet-stream');
+    chunker.freeEncoder();
+    expect(chunker.getExtractedText()).toBeUndefined();
+  });
+});

@@ -5,7 +5,7 @@ import {
   isReservedTagPrefix,
   DATA_LAKE_GROUNDING_MODES,
 } from '../constants/dataLakes';
-import { MAX_PASSAGE_TOKEN_TARGET, MIN_PASSAGE_TOKEN_TARGET } from '../constants/chunking';
+import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '../constants/chunking';
 
 // Slug validation
 
@@ -98,7 +98,7 @@ export const UpdateDataLakeRequestInput = z.object({
   // The chunk passage target (TOKENS) this lake REQUIRES of its member files (#1662). A
   // CONSTRAINT the chunk handler checks, never an override of the file-owner-altitude policy: a
   // member file whose effective target differs is reported as a conflict, not re-chunked. Bounded
-  // to the same [MIN, MAX] the scoped DefaultChunkSize setting uses. `null` is the explicit clear
+  // to the same range the scoped DefaultChunkSize setting uses. `null` is the explicit clear
   // sentinel (remove the requirement); omitting the field leaves it unchanged ($set strips
   // undefined). Setting it does NOT re-chunk existing files - it only changes what future conflict
   // checks compare against.
@@ -106,7 +106,11 @@ export const UpdateDataLakeRequestInput = z.object({
     .number()
     .int()
     .min(MIN_PASSAGE_TOKEN_TARGET)
-    .max(MAX_PASSAGE_TOKEN_TARGET)
+    // Same ceiling as the scoped DefaultChunkSize setting, which is what the comment above promises.
+    // A lake requiring a target above the detection threshold is the other route into #1804: its
+    // members re-chunk to a compliant size that still trips detection, so its rebuild badge never
+    // reaches zero. Bounding only the setting would leave this route open.
+    .max(OVERSIZED_PASSAGE_TOKEN_THRESHOLD)
     .nullable()
     .optional(),
   // NOTE: status is intentionally NOT updatable here. Lifecycle transitions

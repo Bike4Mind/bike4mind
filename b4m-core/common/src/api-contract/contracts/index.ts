@@ -3,6 +3,9 @@ import { chatContract } from './chat.contract';
 import { sessionUpdateContract } from './sessionUpdate.contract';
 import { executeToolContract } from './tools.contract';
 import { createCompletionContract } from './completions.contract';
+import { synthesizeSpeechContract } from './tts.contract';
+import { generateMusicContract } from './music.contract';
+import { generateSoundEffectContract } from './soundEffects.contract';
 
 /**
  * Every public endpoint, as a contract. The OpenAPI generator registers each of
@@ -15,4 +18,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   sessionUpdateContract,
   executeToolContract,
   createCompletionContract,
+  synthesizeSpeechContract,
+  generateMusicContract,
+  generateSoundEffectContract,
 ];

@@ -287,9 +287,7 @@ export const hearthRepository = {
   async actorIdentitiesById(actorIds: string[]): Promise<Map<string, HearthActorIdentity>> {
     const unique = [...new Set(actorIds)].map(id => new Types.ObjectId(id));
     const actors = await HearthActor.find({ _id: { $in: unique } }, { displayName: 1, displayLabel: 1, kind: 1 });
-    return new Map(
-      actors.map(a => [a._id.toString(), { displayName: a.displayLabel ?? a.displayName, kind: a.kind }])
-    );
+    return new Map(actors.map(a => [a._id.toString(), { displayName: a.displayLabel ?? a.displayName, kind: a.kind }]));
   },
 
   /**

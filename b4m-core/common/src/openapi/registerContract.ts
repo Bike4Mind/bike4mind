@@ -7,7 +7,20 @@ import { ErrorResponse } from './schemas';
 import { ApiErrorSchema } from '../schemas/chat';
 import type { EndpointContract } from '../api-contract';
 
-type ContractResponse = { description: string; content: Record<string, { schema: z.ZodTypeAny }> };
+type ContractSchema = z.ZodTypeAny | { type: 'string'; contentEncoding: 'binary' };
+type ContractResponse = {
+  description: string;
+  content: Record<string, { schema: ContractSchema }>;
+  headers?: Record<string, { description: string; schema: { type: 'string' } }>;
+};
+
+/**
+ * OpenAPI 3.1 (JSON Schema 2020-12) spelling for "opaque bytes"; 3.0's
+ * `format: 'binary'` is not a JSON Schema keyword and is ignored by 3.1 tooling.
+ * Used for a response whose contract declares no `schema` - a raw body has no
+ * JSON shape to model, only a media type.
+ */
+const BINARY_SCHEMA = { type: 'string', contentEncoding: 'binary' } as const;
 
 /**
  * Register a transport-agnostic {@link EndpointContract} as an OpenAPI operation.
@@ -25,19 +38,45 @@ export function registerContract(contract: EndpointContract): void {
         ? undefined
         : SECURITY_REQUIREMENT;
 
+  // Error bodies reuse the single shared ErrorResponse component ($ref) instead of
+  // minting an identical per-operation copy; other schemas get an operation-scoped
+  // component so their examples/shape stay endpoint-specific. A body with no schema
+  // is raw bytes, which have only a media type.
+  const componentSchema = (
+    body: { schema?: z.ZodTypeAny; example?: unknown },
+    componentName: string
+  ): ContractSchema =>
+    !body.schema
+      ? BINARY_SCHEMA
+      : body.schema === ApiErrorSchema
+        ? ErrorResponse
+        : body.schema.openapi(componentName, {
+            ...(body.example !== undefined && { example: body.example }),
+          });
+
   const responses: Record<string, ContractResponse> = {};
   for (const [status, spec] of Object.entries(contract.responses)) {
-    const contentType = spec.contentType ?? 'application/json';
-    // Error bodies reuse the single shared ErrorResponse component ($ref) instead
-    // of minting an identical per-operation copy; other schemas get an
-    // operation-scoped component so their examples/shape stay endpoint-specific.
-    const schema =
-      spec.schema === ApiErrorSchema
-        ? ErrorResponse
-        : spec.schema.openapi(`${contract.operationId}Response${status}`, {
-            ...(spec.example !== undefined && { example: spec.example }),
-          });
-    responses[status] = { description: spec.description, content: { [contentType]: { schema } } };
+    const content: Record<string, { schema: ContractSchema }> = {
+      [spec.contentType ?? 'application/json']: {
+        schema: componentSchema(spec, `${contract.operationId}Response${status}`),
+      },
+    };
+    spec.alsoReturns?.forEach((body, i) => {
+      content[body.contentType] = { schema: componentSchema(body, `${contract.operationId}Response${status}Alt${i}`) };
+    });
+
+    responses[status] = {
+      description: spec.description,
+      content,
+      ...(spec.headers && {
+        headers: Object.fromEntries(
+          Object.entries(spec.headers).map(([name, description]) => [
+            name,
+            { description, schema: { type: 'string' as const } },
+          ])
+        ),
+      }),
+    };
   }
 
   // Any NON-streaming contract with a request body OR path params returns 422 on
