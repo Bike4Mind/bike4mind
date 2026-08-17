@@ -19,6 +19,14 @@ import { normalizeId } from '@bike4mind/utils';
 export const LAKE_ACCESS_VIEW_HISTORY_LIMIT = 2000;
 
 /**
+ * The org `users[]` permissions that count as membership - IDENTICAL to the DB gate's
+ * `MEMBER_PERMISSIONS` (OrganizationModel `findMembershipOrgIds`, #1674). Must stay in lockstep:
+ * the org channel's `holderCount` counts exactly the members the gate would admit, so an owner is
+ * never shown a member total larger than the set that can actually read.
+ */
+const ORG_MEMBER_PERMISSIONS = new Set(['read', 'write']);
+
+/**
  * Whether a grant is live at `now`. IDENTICAL boundary to the DB `buildActiveGrantFilter` and the
  * read gate: active when there is no expiry OR the expiry is strictly after `now`; expired the
  * instant `expiresAt <= now`. Kept in lockstep on purpose - a view that called a grant `active`
@@ -108,10 +116,15 @@ export interface AssembleLakeAccessViewAdapters {
   now?: Date;
 }
 
-/** A display name for a user, best-effort: real name, else username, else email, else undefined. */
-const userDisplayName = (
-  u: { name?: string; username?: string; email?: string | null } | undefined
-): string | undefined => (u ? u.name || u.username || u.email || undefined : undefined);
+/**
+ * A display name for a user, best-effort: real name, else username, else undefined. Deliberately
+ * does NOT fall back to email: this view resolves arbitrary principal ids (a public/tag-gated lake
+ * accumulates readers across tenants), and leaking an email as a "name" into a manager's export
+ * would disclose a cross-tenant identity the manager was never meant to see. An unresolved user
+ * shows as its opaque id, not its address.
+ */
+const userDisplayName = (u: { name?: string; username?: string } | undefined): string | undefined =>
+  u ? u.name || u.username || undefined : undefined;
 
 /**
  * Assemble the owner-facing access & membership view (#1672) for one already-resolved, manage-gated
@@ -155,6 +168,9 @@ export async function assembleLakeAccessView(
     if (h.principalKind === 'user') userIds.add(h.principalId);
     if (h.onBehalfOfUserId) userIds.add(h.onBehalfOfUserId);
   }
+  // A history row can carry a non-ObjectId principal/on-behalf id (a Slack id, an agent handle).
+  // findByIds drops the id-invalid ones rather than throwing in convertId (which would 500 the whole
+  // view); such principals simply render as their opaque id, the honest fallback.
   const users = userIds.size > 0 ? await db.users.findByIds(Array.from(userIds)) : [];
   const userNameById = new Map(users.map(u => [u.id, userDisplayName(u)]));
 
@@ -174,12 +190,23 @@ export async function assembleLakeAccessView(
     const org = orgById.get(orgChannel.value);
     if (org) {
       orgChannel.label = org.name;
-      // Members = the billing owner plus the users[] ACL, de-duplicated. A single cheap read, so
-      // the org channel carries a real count where tag/entitlement channels cannot (see the type).
-      const memberIds = new Set<string>([org.userId, ...(org.users ?? []).map(u => u.userId)].filter(Boolean));
+      // Members = the billing owner plus the users[] entries the gate would ADMIT (read/write
+      // permission), de-duplicated - see ORG_MEMBER_PERMISSIONS. Counting the raw ACL would overstate
+      // the total by including share-only members the gate denies, and an over-stated count is exactly
+      // the kind of false reassurance a compliance reader cannot detect.
+      const admitted = (org.users ?? []).filter(
+        u => u.userId && (u.permissions ?? []).some(p => ORG_MEMBER_PERMISSIONS.has(p))
+      );
+      const memberIds = new Set<string>([org.userId, ...admitted.map(u => u.userId)].filter(Boolean));
       orgChannel.holderCount = memberIds.size;
     }
   }
+
+  // When the audit read hit the cap, the per-row aggregates only cover the fetched window. Events
+  // come back newest-first, so the oldest fetched event is the window's start - carried so a consumer
+  // can qualify readCount/firstAccessedAt rather than present them as all-time.
+  const historyTruncated = events.length >= historyLimit;
+  const windowStartsAt = historyTruncated ? events[events.length - 1]?.createdAt : undefined;
 
   const grants: LakeAccessGrantView[] = grantRows.map((g: IDataLakeAccessGrantDocument) => ({
     principalType: g.principalType,
@@ -203,7 +230,8 @@ export async function assembleLakeAccessView(
       principalName: h.principalKind === 'user' ? userNameById.get(h.principalId) : undefined,
       onBehalfOfName: h.onBehalfOfUserId ? userNameById.get(h.onBehalfOfUserId) : undefined,
     })),
-    historyTruncated: events.length >= historyLimit,
+    historyTruncated,
+    windowStartsAt,
     generatedAt: now,
   };
 }

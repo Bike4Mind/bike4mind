@@ -1,24 +1,25 @@
 import type { LakeAccessView } from '@bike4mind/common';
+import { lakeAccessChannelsComposeConjunctively } from '@bike4mind/common';
+import { escapeCsvCell } from '@client/app/utils/csv';
 
 /**
- * RFC-4180 field escaping: quote a field that contains a comma, quote, CR or LF, and double any
- * embedded quote. Everything else passes through unquoted. Null/undefined -> empty field.
+ * Render one CSV row. Every field is escaped via the shared `escapeCsvCell`, which quotes the cell
+ * AND defuses spreadsheet formula injection (a leading =,+,-,@,tab in a user-controlled name or org
+ * name would otherwise execute on open). This is a compliance artifact carrying user-supplied text,
+ * so it must not be the one CSV surface in the repo that skips that guard.
  */
-const csvField = (value: string | number | null | undefined): string => {
-  if (value == null) return '';
-  const s = String(value);
-  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-};
-
-const row = (fields: (string | number | null | undefined)[]): string => fields.map(csvField).join(',');
+const row = (fields: (string | number | null | undefined)[]): string => fields.map(escapeCsvCell).join(',');
 
 const iso = (d: Date | null | undefined): string => (d ? new Date(d).toISOString() : '');
 
 /**
- * Render an assembled access view as a sectioned CSV compliance artifact - three labeled blocks
- * (members & grants, access channels, access history) in one downloadable file. Sectioned rather
- * than one wide sparse table because the audience is human compliance review in a spreadsheet;
- * each block keeps its own header so every column is meaningful. A blank line separates blocks.
+ * Render an assembled access view as a sectioned CSV compliance artifact - a metadata block plus
+ * three labeled blocks (members & grants, access channels, access history) in one downloadable file.
+ * Sectioned rather than one wide sparse table because the audience is human compliance review in a
+ * spreadsheet; each block keeps its own header so every column is meaningful. A blank line separates
+ * blocks. Static section labels are raw `#` comments; every value that could carry user input goes
+ * through an escaped field (never an interpolated comment), so a lake name with a newline or comma
+ * cannot inject or corrupt rows.
  *
  * Pure and deterministic (input order is already stabilized by the assembler), so it is unit-tested
  * directly and the route just streams the string.
@@ -26,10 +27,16 @@ const iso = (d: Date | null | undefined): string => (d ? new Date(d).toISOString
 export function lakeAccessViewToCsv(view: LakeAccessView): string {
   const lines: string[] = [];
 
-  lines.push(`# Data lake access view: ${view.lakeName} (${view.lakeId})`);
-  lines.push(`# Generated at ${iso(view.generatedAt)}`);
+  lines.push('# Data lake access view');
+  lines.push(row(['lakeName', view.lakeName]));
+  lines.push(row(['lakeId', view.lakeId]));
+  lines.push(row(['generatedAt', iso(view.generatedAt)]));
   if (view.historyTruncated) {
-    lines.push(`# NOTE: access history was truncated to the most recent window; this is not the full trail.`);
+    lines.push(row(['historyNote', 'access history truncated to the most recent window; not the full trail']));
+    if (view.windowStartsAt) {
+      // The per-row readCount/firstAccessedAt below cover only reads at or after this instant.
+      lines.push(row(['historyWindowStartsAt', iso(view.windowStartsAt)]));
+    }
   }
   lines.push('');
 
@@ -65,6 +72,14 @@ export function lakeAccessViewToCsv(view: LakeAccessView): string {
   lines.push('');
 
   lines.push('# Access channels (gate-based read paths, resolved live)');
+  if (lakeAccessChannelsComposeConjunctively(view.channels)) {
+    // These channels are not independent read paths: org membership is a prerequisite and a
+    // tag/entitlement narrows it further, so effective access is their intersection and a holderCount
+    // is an upper bound on that one channel. Mirrors the gate (assertLakeAccess).
+    lines.push(
+      '# NOTE: channels compose conjunctively - effective access is their intersection, not the sum; a holderCount bounds one channel only'
+    );
+  }
   lines.push(row(['kind', 'value', 'label', 'holderCount']));
   for (const c of view.channels) {
     // holderCount is left blank (not 0) when uncounted - a tag/entitlement channel is never scanned.
@@ -73,6 +88,10 @@ export function lakeAccessViewToCsv(view: LakeAccessView): string {
   lines.push('');
 
   lines.push('# Access history (who actually read the lake)');
+  if (view.historyTruncated) {
+    // readCount/firstAccessedAt are window-scoped when truncated - label them so, never as all-time.
+    lines.push('# NOTE: readCount and firstAccessedAt below cover only the truncated window above, not all time');
+  }
   lines.push(
     row([
       'principalKind',

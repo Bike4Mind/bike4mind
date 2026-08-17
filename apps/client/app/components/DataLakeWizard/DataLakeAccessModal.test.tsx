@@ -55,6 +55,7 @@ const fullView: LakeAccessView = {
     },
   ],
   historyTruncated: true,
+  windowStartsAt: new Date('2026-08-01T00:00:00.000Z'),
   generatedAt: new Date('2026-08-14T12:00:00.000Z'),
 };
 
@@ -80,9 +81,29 @@ describe('DataLakeAccessModal', () => {
     expect(screen.getByTestId('datalake-access-history-table')).toBeInTheDocument();
   });
 
-  it('warns when the history was truncated', () => {
+  it('warns when the history was truncated, saying the CSV carries the same window (not the full trail)', () => {
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-    expect(screen.getByTestId('datalake-access-history-truncated')).toBeInTheDocument();
+    const alert = screen.getByTestId('datalake-access-history-truncated');
+    expect(alert).toBeInTheDocument();
+    // Must NOT tell the reader the CSV is the complete record - it is the same truncated window.
+    expect(alert).toHaveTextContent(/same window/i);
+    expect(alert).not.toHaveTextContent(/complete retained window/i);
+  });
+
+  it('flags that the channels compose conjunctively when a prerequisite narrows access', () => {
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    // fullView has an org channel AND a tag channel - effective access is their intersection.
+    expect(screen.getByTestId('datalake-access-channels-compose-note')).toBeInTheDocument();
+  });
+
+  it('omits the composition note when a single channel is a standalone path', () => {
+    viewState = {
+      isLoading: false,
+      isError: false,
+      data: { ...fullView, channels: [{ kind: 'public' }] },
+    };
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    expect(screen.queryByTestId('datalake-access-channels-compose-note')).not.toBeInTheDocument();
   });
 
   it('exports the CSV via the download helper', async () => {

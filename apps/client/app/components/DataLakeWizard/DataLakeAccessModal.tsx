@@ -22,6 +22,7 @@ import type {
   LakeAccessHistoryEntry,
   LakeAccessView,
 } from '@bike4mind/common';
+import { lakeAccessChannelsComposeConjunctively } from '@bike4mind/common';
 import type { ColorPaletteProp } from '@mui/joy';
 import { useLakeAccessView, downloadLakeAccessCsv } from '@client/app/hooks/data/dataLakes';
 import { toast } from 'sonner';
@@ -176,11 +177,25 @@ function AccessViewBody({ view }: { view: LakeAccessView }) {
             Private - reachable only by the owner, managers, and the grants above.
           </Typography>
         ) : (
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }} data-testid="datalake-access-channels">
-            {view.channels.map(c => (
-              <ChannelChip key={`${c.kind}:${c.value ?? ''}`} channel={c} />
-            ))}
-          </Box>
+          <>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }} data-testid="datalake-access-channels">
+              {view.channels.map(c => (
+                <ChannelChip key={`${c.kind}:${c.value ?? ''}`} channel={c} />
+              ))}
+            </Box>
+            {lakeAccessChannelsComposeConjunctively(view.channels) && (
+              <Typography
+                level="body-xs"
+                textColor="text.tertiary"
+                sx={{ mt: 1 }}
+                data-testid="datalake-access-channels-compose-note"
+              >
+                A reader must satisfy all conditions: organization membership is required, and a tag or entitlement
+                narrows it further. Effective access is the intersection of these channels, so a member count is an
+                upper bound on that channel alone.
+              </Typography>
+            )}
+          </>
         )}
       </Box>
 
@@ -197,8 +212,9 @@ function AccessViewBody({ view }: { view: LakeAccessView }) {
             sx={{ mb: 1 }}
             data-testid="datalake-access-history-truncated"
           >
-            Showing the most recent reads only - the full trail is longer than this view. Export the CSV for the
-            complete retained window.
+            Showing the most recent reads only - the full trail is longer than this view, and the CSV export carries
+            this same window (not the complete trail). Read counts and first-read dates below cover
+            {view.windowStartsAt ? ` reads since ${fmtDateTime(view.windowStartsAt)}` : ' this window'}, not all time.
           </Alert>
         )}
         {view.history.length === 0 ? (

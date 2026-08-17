@@ -58,6 +58,24 @@ export interface LakeAccessChannel {
   holderCount?: number;
 }
 
+/**
+ * Whether a lake's access channels compose CONJUNCTIVELY - i.e. they are NOT independent read paths.
+ * The read gate (assertLakeAccess) treats an organization channel as a hard prerequisite, and keeps
+ * any tag/entitlement requirement in force even for a public lake. So when an org channel appears
+ * alongside any other channel, or a public channel appears with a tag/entitlement, effective access
+ * is the INTERSECTION of the channels, not their union - and a per-channel `holderCount` is then an
+ * upper bound on that one channel, not the reachable set. Presentation surfaces (the access modal,
+ * the CSV export) use this to warn the reader rather than imply each channel is a standalone path.
+ *
+ * Must stay aligned with `assertLakeAccess`: org is AND-composed, tag/entitlement are OR among
+ * themselves, and public does not bypass a tag/entitlement gate.
+ */
+export function lakeAccessChannelsComposeConjunctively(channels: LakeAccessChannel[]): boolean {
+  const kinds = new Set(channels.map(c => c.kind));
+  const hasNarrowing = kinds.has('tag') || kinds.has('entitlement');
+  return (kinds.has('organization') && channels.length > 1) || (kinds.has('public') && hasNarrowing);
+}
+
 /** Per-principal read aggregation from the access-audit trail: how often, when, and through what. */
 export interface LakeAccessHistoryEntry {
   principalKind: LakeAccessPrincipalKind;
@@ -91,8 +109,15 @@ export interface LakeAccessView {
   /** Per-principal read aggregation from the access-audit events. */
   history: LakeAccessHistoryEntry[];
   /** True when the audit read hit its cap: `history` is then the most-recent window, not the whole
-   * trail. Surfaced so an owner is never misled into reading a capped view as complete. */
+   * trail. Surfaced so an owner is never misled into reading a capped view as complete. Note that even
+   * an UNtruncated view is only "complete within retention" - access events expire on their own TTL. */
   historyTruncated: boolean;
+  /**
+   * The start of the audit window the per-row aggregates cover, set ONLY when `historyTruncated`.
+   * When truncated, each history row's `readCount`/`firstAccessedAt` describe reads AT OR AFTER this
+   * instant, not all-time - so a consumer (JSON or CSV) can qualify those numbers rather than read
+   * them as absolute. Absent when the window is the whole retained trail. */
+  windowStartsAt?: Date;
   /** When the view was assembled - the instant grant expiry (`status`) was resolved against. */
   generatedAt: Date;
 }

@@ -81,10 +81,13 @@ describe('aggregateAccessHistory', () => {
     const t0 = new Date('2026-08-10T00:00:00Z');
     const t1 = new Date('2026-08-11T00:00:00Z');
     const t2 = new Date('2026-08-12T00:00:00Z');
+    // Insertion order is deliberately unsorted AND ends on the MIDDLE timestamp (t1), and the
+    // surfaces are inserted in non-alphabetical order, so a dropped min/max guard or a dropped
+    // surfaces .sort() changes the result rather than passing by fixture coincidence.
     const rows = aggregateAccessHistory([
+      event({ principalId: 'u1', createdAt: t0, surface: 'forced-retrieval' }),
+      event({ principalId: 'u1', createdAt: t2, surface: 'data-lake-semantic-search' }),
       event({ principalId: 'u1', createdAt: t1, surface: 'chat-kb-search' }),
-      event({ principalId: 'u1', createdAt: t0, surface: 'data-lake-semantic-search' }),
-      event({ principalId: 'u1', createdAt: t2, surface: 'chat-kb-search' }),
       event({ principalId: 'u2', createdAt: t1, surface: 'forced-retrieval' }),
     ]);
     expect(rows).toHaveLength(2);
@@ -92,7 +95,7 @@ describe('aggregateAccessHistory', () => {
     expect(u1.readCount).toBe(3);
     expect(u1.firstAccessedAt).toEqual(t0);
     expect(u1.lastAccessedAt).toEqual(t2);
-    expect(u1.surfaces).toEqual(['chat-kb-search', 'data-lake-semantic-search']); // distinct + sorted
+    expect(u1.surfaces).toEqual(['chat-kb-search', 'data-lake-semantic-search', 'forced-retrieval']); // distinct + sorted
   });
 
   it('groups by ACTING principal, not the on-behalf human, but retains the human', () => {
@@ -136,7 +139,7 @@ const makeAdapters = (opts: {
   grants?: IDataLakeAccessGrantDocument[];
   events?: ILakeAccessEventDocument[];
   users?: { id: string; name?: string; username?: string; email?: string | null }[];
-  org?: { name: string; userId: string; users: { userId: string }[] } | null;
+  org?: { name: string; userId: string; users: { userId: string; permissions?: string[] }[] } | null;
 }) => {
   const listByLakeGrants = vi.fn().mockResolvedValue(opts.grants ?? []);
   const listByLakeEvents = vi.fn().mockResolvedValue(opts.events ?? []);
@@ -202,11 +205,35 @@ describe('assembleLakeAccessView', () => {
 
   it('enriches the org channel with the org name and a de-duplicated member count', async () => {
     const { adapters } = makeAdapters({
-      org: { name: 'Acme', userId: 'ownerU', users: [{ userId: 'ownerU' }, { userId: 'm2' }, { userId: 'm3' }] },
+      org: {
+        name: 'Acme',
+        userId: 'ownerU',
+        users: [
+          { userId: 'ownerU', permissions: ['read'] },
+          { userId: 'm2', permissions: ['read'] },
+          { userId: 'm3', permissions: ['write'] },
+        ],
+      },
     });
     const view = await assembleLakeAccessView(lakeDoc({ organizationId: 'orgA' }), adapters);
     const org = view.channels.find(c => c.kind === 'organization')!;
     expect(org).toMatchObject({ value: 'orgA', label: 'Acme', holderCount: 3 }); // ownerU counted once
+  });
+
+  it('counts only members the gate would admit - a share-only member is excluded from holderCount', async () => {
+    const { adapters } = makeAdapters({
+      org: {
+        name: 'Acme',
+        userId: 'ownerU',
+        users: [
+          { userId: 'reader1', permissions: ['read'] },
+          { userId: 'shareOnly', permissions: ['share'] }, // denied by the gate -> not counted
+        ],
+      },
+    });
+    const view = await assembleLakeAccessView(lakeDoc({ organizationId: 'orgA' }), adapters);
+    const org = view.channels.find(c => c.kind === 'organization')!;
+    expect(org.holderCount).toBe(2); // ownerU + reader1, NOT shareOnly
   });
 
   it('leaves tag/entitlement channels without a holderCount (never scans the user table)', async () => {
@@ -235,8 +262,11 @@ describe('assembleLakeAccessView', () => {
     });
   });
 
-  it('aggregates history and marks truncation when the event read hits the cap', async () => {
-    const events = [event({ principalId: 'u1' }), event({ principalId: 'u1' })];
+  it('aggregates history, marks truncation, and carries the window start when the read hits the cap', async () => {
+    const older = new Date('2026-08-12T00:00:00Z');
+    const newer = new Date('2026-08-13T00:00:00Z');
+    // Events arrive newest-first (as listByLake returns them), so the oldest fetched is the window start.
+    const events = [event({ principalId: 'u1', createdAt: newer }), event({ principalId: 'u1', createdAt: older })];
     const { adapters, spies } = makeAdapters({ events, users: [{ id: 'u1', name: 'Alice' }] });
     const view = await assembleLakeAccessView(lakeDoc(), {
       ...(adapters as object),
@@ -247,9 +277,10 @@ describe('assembleLakeAccessView', () => {
     expect(view.history).toHaveLength(1);
     expect(view.history[0]).toMatchObject({ principalName: 'Alice', readCount: 2 });
     expect(view.historyTruncated).toBe(true);
+    expect(view.windowStartsAt).toEqual(older);
   });
 
-  it('does not mark truncation when fewer events than the cap come back', async () => {
+  it('does not mark truncation, and omits the window start, when fewer events than the cap come back', async () => {
     const { adapters } = makeAdapters({ events: [event({})], users: [{ id: 'u1', name: 'Alice' }] });
     const view = await assembleLakeAccessView(lakeDoc(), {
       ...(adapters as object),
@@ -257,6 +288,34 @@ describe('assembleLakeAccessView', () => {
       now: NOW,
     } as never);
     expect(view.historyTruncated).toBe(false);
+    expect(view.windowStartsAt).toBeUndefined();
+  });
+
+  it('renders a principal whose id never resolves as its opaque id, not a crash', async () => {
+    // A non-user principal (agent/slack) carries a non-ObjectId id; findByIds drops it (see the repo
+    // guard), so the assembler must still render the row, just without a resolved name.
+    const validId = 'a'.repeat(24);
+    const { adapters } = makeAdapters({
+      events: [
+        event({ principalKind: 'user', principalId: validId }),
+        event({ principalKind: 'agent', principalId: 'agent-handle', onBehalfOfUserId: 'slackU123' }),
+      ],
+      users: [{ id: validId, name: 'Valid' }],
+    });
+    const view = await assembleLakeAccessView(lakeDoc(), adapters);
+    const agentRow = view.history.find(h => h.principalId === 'agent-handle')!;
+    expect(agentRow.principalName).toBeUndefined();
+    expect(agentRow.onBehalfOfUserId).toBe('slackU123'); // still carried, just unresolved
+  });
+
+  it('does not fall back to a user email as a display name (avoids a cross-tenant identity leak)', async () => {
+    const uid = 'b'.repeat(24);
+    const { adapters } = makeAdapters({
+      grants: [grant({ principalId: uid })],
+      users: [{ id: uid, email: 'secret@corp.example' }], // no name, no username
+    });
+    const view = await assembleLakeAccessView(lakeDoc(), adapters);
+    expect(view.grants[0].principalName).toBeUndefined();
   });
 
   it('skips the user lookup entirely when there are no principals to resolve', async () => {

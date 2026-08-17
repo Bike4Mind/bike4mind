@@ -109,6 +109,15 @@ describe('GET /api/data-lakes/[id]/access', () => {
     expect(setHeader).toHaveBeenCalledWith('Content-Disposition', 'attachment; filename=lake-access-lake-oid-1.csv');
     const body = send.mock.calls[0][0] as string;
     expect(body).toContain('# Members and grants');
-    expect(body).toContain('user,u2,Bob,reader,active');
+    expect(body).toContain('"user","u2","Bob","reader","active"');
+  });
+
+  it('applies the identical manage gate to the CSV path (403 before assembling, no attachment)', async () => {
+    h.resolveCanManageLake.mockResolvedValue(false);
+    const { res, send, setHeader } = makeRes();
+    await expect(call(req({ id: 'lake1', format: 'csv' }), res)).rejects.toThrow(/manage/i);
+    expect(h.assembleLakeAccessView).not.toHaveBeenCalled();
+    expect(setHeader).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
   });
 });
