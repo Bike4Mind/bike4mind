@@ -14,6 +14,14 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  // The config-audit repos the code under test now wires (see lakeConfigAuditDb). Stubbed
+  // rather than omitted because this mock REPLACES the whole module: a missing export is an
+  // import-time failure, not a silent undefined.
+  lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
+  adminSettingsRepository: {
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
   dataLakeBatchRepository: {
     markTerminalIfActive: h.markTerminalIfActive,
     setTaxonomyStatusIfActive: h.setTaxonomyStatusIfActive,
