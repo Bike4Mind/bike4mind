@@ -359,8 +359,8 @@ export function buildDagResumeReport(args: {
  */
 export function isDagAggregationWake(args: {
   isDagResume: boolean;
-  dagSpec: unknown;
-  waitingOnDagChildren: unknown;
+  dagSpec: IDagSpec | undefined;
+  waitingOnDagChildren: { toolUseId: string } | undefined;
 }): boolean {
   return args.isDagResume && args.dagSpec != null && args.waitingOnDagChildren != null;
 }

@@ -84,7 +84,7 @@ import { creditService, apiKeyService, estimateGeneratedMediaUsd } from '@bike4m
 import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
 import { selectGatedAction } from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
-import { buildTruncatedRunReply } from './agentExecutorUtils/truncatedReply';
+import { resolveDisplayAnswer } from './agentExecutorUtils/truncatedReply';
 import { guardPlanCompletion } from './agentExecutorUtils/planCompletionGuard';
 import { injectBriefContext } from './agentExecutorUtils/briefContextInjector';
 import { rehydrateOptiPlanState, ledgerForWrite } from './agentExecutorUtils/optiPlanLedger';
@@ -790,15 +790,10 @@ async function processExecution(
     // cap mid-execution IS stopped, at its next handoff (like the pool gate above). Started,
     // in-flight iterations still settle - this bounds the overshoot, it does not refund it.
     //
-    // Exception: a DAG parent waking ONLY to aggregate children that have already
-    // finished (`isAggregationOnlyWake`) does no new billable work IN THE WAKE ITSELF
-    // (the read-and-splice), so gating it would hard-fail the parent and strand
-    // completed, already-paid-for child work with no aggregated result returned. The
-    // same invocation still runs one billed grace iteration afterward - see
-    // `clampMaxIterationsForOverCapAggregationWake` for why that is bounded and safe.
-    // Skipping the gate here is bounded
-    // to this one handoff - if the parent needs another continuation afterward, that
-    // next invocation is a normal `continuing` status and this gate applies in full.
+    // Exception: skip the gate for a genuine aggregation-only wake (`isAggregationOnlyWake`)
+    // so it doesn't strand already-paid-for child work. See `isDagAggregationWake` and
+    // `clampMaxIterationsForOverCapAggregationWake` in `agentExecutorDag.ts` for the full
+    // rationale and the bound on what this exception actually grants.
     if (organization && !isAggregationOnlyWake && creditService.isMemberAtOrOverCap(organization, execution.userId)) {
       logger.warn('[Credits] Member credit cap reached; refusing to start execution', {
         used: creditService.getMemberUsedCredits(organization, execution.userId),
@@ -1647,6 +1642,11 @@ async function processExecution(
     let maxIterations = orchestrationProfile
       ? pickEffectiveMaxIterations(startPayload?.maxIterations, orchestrationProfile)
       : (startPayload?.maxIterations ?? 25);
+    // Preserved before the aggregation-wake clamp below can shrink `maxIterations` for
+    // this invocation - the truncation message must report the run's real configured
+    // ceiling, not the one-iteration grace grant, or the number and the "send a
+    // follow-up" advice are both wrong (a follow-up hits the same cap gate again).
+    const configuredMaxIterations = maxIterations;
 
     // Track cumulative usage for delta-based billing.
     // Token counts in iterationBilling are stored as per-iteration deltas, so
@@ -1827,6 +1827,13 @@ async function processExecution(
       }
     }
 
+    // Fallback reply if the grace iteration below (a capped-out member's one-iteration
+    // aggregation grant) hits its own ceiling without producing a final_answer step -
+    // `extractFinalAnswer` would then find nothing, silently dropping the very
+    // already-paid-for child work this PR exists to return. See its use at
+    // `displayAnswer` below.
+    let dagAggregationFallbackSummary: string | undefined;
+
     // Phase 4a - resume from `awaiting_dag_children`. The completion hook for
     // the last terminal DAG child enqueued this continuation; load all child
     // results, build the aggregated markdown via shared `buildPipelineResult`,
@@ -1839,6 +1846,7 @@ async function processExecution(
         dagSpec: execution.dagSpec,
         children,
       });
+      dagAggregationFallbackSummary = summary;
       try {
         agent.replaceLastToolResultObservation(execution.waitingOnDagChildren.toolUseId, summary);
       } catch (err) {
@@ -2367,8 +2375,17 @@ async function processExecution(
     // A run that stopped on the iteration ceiling (not model completion) leaves `finalAnswer` as
     // a mid-sentence fragment; wrap it in a deterministic truncation notice so the user sees an
     // honest "partial, hit the limit" reply instead of a trailed-off thought. See #674.
+    // See `resolveDisplayAnswer` for the capped-out-member grace-iteration case this
+    // must also handle: `finalAnswer` can be undefined entirely, and falling back to
+    // `dagAggregationFallbackSummary` there is what keeps the aggregated child report
+    // from being silently dropped on exactly the path this PR exists to protect.
     const reachedMaxIterations = iterationResult?.reachedMaxIterations ?? false;
-    const displayAnswer = reachedMaxIterations ? buildTruncatedRunReply(maxIterations, finalAnswer) : finalAnswer;
+    const displayAnswer = resolveDisplayAnswer({
+      reachedMaxIterations,
+      finalAnswer,
+      dagAggregationFallbackSummary,
+      configuredMaxIterations,
+    });
 
     await agentExecutionRepository.markComplete(executionId, {
       answer: displayAnswer,
@@ -2488,6 +2505,21 @@ async function processExecution(
  * Lambda already owns this child and will complete it (and fire this hook) through
  * its own normal path. Firing here too would report a false terminal status for a
  * child that may still succeed.
+ *
+ * The `status` argument is NOT load-bearing for `onDagNodeTerminal` itself - it
+ * re-reads every sibling fresh from the DB rather than trusting the passed-in value,
+ * so passing 'failed' vs 'aborted' only affects logging. What actually matters is
+ * that `markFailed`/`markAborted` already landed before this call, which every
+ * caller here does.
+ *
+ * Narrow gap this does NOT close: if `agentExecutionRepository.findById` throws or
+ * returns null, or `child.subagentConfig` is missing, the function throws before
+ * `dagNodeId`/`dagParentExecutionId` are ever assigned, so the outer catch's call to
+ * this helper no-ops (both hoisted vars stay `undefined`). Not cheaply fixable - the
+ * dispatch message carries `dagNodeId` but not `parentExecutionId`
+ * (`agentExecutorDag.ts` `DagNodeDispatchSchema`), and `onDagNodeTerminal` requires
+ * both. A genuinely rare window (the dispatcher always sets `subagentConfig`; this
+ * needs a `findById` read blip immediately after create).
  */
 async function fireDagNodeTerminalOnRefusal(args: {
   dagNodeId: string | undefined;
@@ -3057,6 +3089,19 @@ async function processSubagentDispatch(
             partialAnswer: result.finalAnswer,
           });
         }
+        // This return was found to bypass the DAG completion hook entirely (a
+        // human review caught it - neither the success path below nor the catch
+        // block's own hook-fire cover this branch). Fire it here too, same as
+        // every other terminal exit in this function.
+        await fireDagNodeTerminalOnRefusal({
+          dagNodeId,
+          parentExecutionId: dagParentExecutionId,
+          childExecutionId,
+          connectionId,
+          logger,
+          sendWs,
+          status: userAborted ? 'aborted' : 'failed',
+        });
         return;
       }
 

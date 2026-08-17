@@ -14,3 +14,23 @@ export function buildTruncatedRunReply(maxIterations: number, finalAnswer?: stri
   const footer = 'Send a follow-up to continue from where this left off.';
   return partial ? `${header}\n\n${partial}\n\n${footer}` : `${header}\n\n${footer}`;
 }
+
+/**
+ * Resolves the user-facing reply for a completed run, including the one case
+ * `buildTruncatedRunReply` alone can silently get wrong: a capped-out member's
+ * one-iteration DAG-aggregation grace grant that hits its own ceiling without
+ * producing a `final_answer` step. Without the `dagAggregationFallbackSummary`
+ * fallback, that path would report the truncation notice with nothing behind it,
+ * dropping the already-paid-for child work this exemption exists to return.
+ * `configuredMaxIterations` must be the run's real ceiling, not a clamped one -
+ * see `clampMaxIterationsForOverCapAggregationWake` in `agentExecutorDag.ts`.
+ */
+export function resolveDisplayAnswer(args: {
+  reachedMaxIterations: boolean;
+  finalAnswer: string | undefined;
+  dagAggregationFallbackSummary: string | undefined;
+  configuredMaxIterations: number;
+}): string | undefined {
+  if (!args.reachedMaxIterations) return args.finalAnswer;
+  return buildTruncatedRunReply(args.configuredMaxIterations, args.finalAnswer ?? args.dagAggregationFallbackSummary);
+}
