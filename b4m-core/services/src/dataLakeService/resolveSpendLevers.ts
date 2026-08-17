@@ -16,12 +16,32 @@ import {
   DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT,
   DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_MAX,
   IAdminSettingsRepository,
+  SettingKey,
   SettingOwnerType,
 } from '@bike4mind/common';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 
 export const MICRO_USD_PER_USD = 1_000_000;
+
+/**
+ * Every spend lever this resolver reads. Exported because registering a setting is a THREE-place
+ * edit - the key union, the definition, and a service-group entry - and only the first two are
+ * compiler-checked (settingsMap is keyed by SettingKey). A lever missing the group entry never
+ * renders in the admin panel, so it silently becomes a lever nobody can move; pinning this list
+ * against the group's contents in a test is what closes that hole.
+ */
+export const DATA_LAKE_SPEND_LEVER_KEYS = [
+  'dataLakeEmbeddingSpendEnabled',
+  'dataLakeEmbeddingBudgetPerRunUsd',
+  'dataLakeEmbeddingBudgetPerLakeUsd',
+  'dataLakeEmbeddingBudgetPerPeriodUsd',
+  'dataLakeEmbeddingBudgetPeriodHours',
+  'dataLakeEmbeddingMaxCallsPerMinute',
+  'dataLakeVectorizeChunkBatchSize',
+  'dataLakeEmbeddingTierMultiplierIndividual',
+  'dataLakeEmbeddingTierMultiplierOrganization',
+] as const satisfies readonly SettingKey[];
 
 /**
  * Effective spend levers for data-lake embedding work. Budgets are integer micro-USD
@@ -79,21 +99,7 @@ export async function resolveSpendLevers(
 ): Promise<DataLakeSpendLevers> {
   let values: Record<string, string | null>;
   try {
-    values = await getSettingsByNames(
-      [
-        'dataLakeEmbeddingSpendEnabled',
-        'dataLakeEmbeddingBudgetPerRunUsd',
-        'dataLakeEmbeddingBudgetPerLakeUsd',
-        'dataLakeEmbeddingBudgetPerPeriodUsd',
-        'dataLakeEmbeddingBudgetPeriodHours',
-        'dataLakeEmbeddingMaxCallsPerMinute',
-        'dataLakeVectorizeChunkBatchSize',
-        'dataLakeEmbeddingTierMultiplierIndividual',
-        'dataLakeEmbeddingTierMultiplierOrganization',
-      ],
-      db,
-      { logger }
-    );
+    values = await getSettingsByNames([...DATA_LAKE_SPEND_LEVER_KEYS], db, { logger });
   } catch (err) {
     throw new SpendLeverResolutionError('could not read data-lake spend levers; halting spend (fail closed)', {
       cause: err,

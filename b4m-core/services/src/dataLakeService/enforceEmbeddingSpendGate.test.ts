@@ -419,19 +419,27 @@ describe('enforceEmbeddingSpendGate cost tier', () => {
     expect(ownerTypePassedToResolver()).toBe(CreditHolderType.User);
   });
 
-  // A lake that was deleted mid-run, or an unreadable row, must not be silently billed as an
-  // individual: an absent owner type is what makes the resolver fall to the restrictive tier.
-  it.each([
-    ['the lake row is gone', (db: ReturnType<typeof grantAll>) => db.dataLakes.findById.mockResolvedValue(null)],
-    [
-      'the lake read throws',
-      (db: ReturnType<typeof grantAll>) => db.dataLakes.findById.mockRejectedValue(new Error('mongo down')),
-    ],
-  ])('leaves the tier unresolved rather than guessing when %s', async (_name, breakRead) => {
+  // A lake deleted mid-run is a deterministic ABSENCE of ownership, so the restrictive tier is an
+  // honest answer and the run proceeds against it.
+  it('leaves the tier unresolved rather than guessing when the lake row is gone', async () => {
     const db = grantAll();
-    breakRead(db);
+    db.dataLakes.findById.mockResolvedValue(null);
     await expect(gate(db)).resolves.toBeUndefined();
     expect(ownerTypePassedToResolver()).toBeUndefined();
+  });
+
+  // But an ERRORING read is unknown, not absent. Swallowing it into the restrictive tier could
+  // deny on the per-lake budget, and that denial is non-retryable - the handler would permanently
+  // fail the file over a transient blip, blaming a budget that was never the problem. The error
+  // must surface so the message stays on the queue.
+  it('propagates a lake-read error instead of billing the run on a tier nobody chose', async () => {
+    const db = grantAll();
+    const outage = new Error('mongo down');
+    db.dataLakes.findById.mockRejectedValue(outage);
+    await expect(gate(db)).rejects.toThrow(outage);
+    // Not an EmbeddingSpendDeniedError: the caller must see a retryable error, not a verdict.
+    await expect(gate(db)).rejects.not.toBeInstanceOf(EmbeddingSpendDeniedError);
+    expect(db.dataLakeBatches.tryAddEmbeddingSpend).not.toHaveBeenCalled();
   });
 
   it('does not read a lake when the run has none (a per-run budget still applies)', async () => {

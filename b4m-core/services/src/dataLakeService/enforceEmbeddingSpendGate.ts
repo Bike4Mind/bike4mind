@@ -80,8 +80,10 @@ export interface SpendGateDb {
  * The per-run and per-lake budgets are TIERED by lake ownership (#1675): an individual-owned lake
  * and an organization-owned one are different economic cases, so the gate resolves which one this
  * lake is (via scopeForLake, the single place that derivation lives) and the levers scale
- * accordingly. When ownership cannot be answered - no lake in scope, or the row is unreadable -
- * the levers fall to the more restrictive tier rather than guessing (see pickTierMultiplier).
+ * accordingly. Where ownership is genuinely absent - no lake in scope, or the row is gone - the
+ * levers fall to the more restrictive tier rather than guessing (see pickTierMultiplier); where the
+ * lake read ERRORS, the error propagates so the message is retried instead of billed on a tier
+ * nobody chose (see resolveLakeOwnerType).
  *
  * That costs one indexed lake read, taken BEFORE the master switch is checked because the switch
  * and the tier come out of the same settings read. Accepted deliberately: the switch is on in
@@ -321,10 +323,16 @@ export async function enforceEmbeddingSpendGate(params: {
  * Which cost tier this work belongs to: the OWNER of the lake being written, not the actor who
  * triggered the run - an individual uploading into an org lake spends on the org's tier.
  *
- * Returns undefined when ownership cannot be established, which `pickTierMultiplier` reads as
- * "apply the more restrictive tier". A failed read is deliberately NOT collapsed into the
- * individual tier: that would let a Mongo blip quietly hand an org lake a different budget than
- * the operator configured, in whichever direction happened to be wrong.
+ * Returns undefined only where ownership is genuinely ABSENT - no lake in scope, or a lake whose
+ * row no longer exists - which `pickTierMultiplier` reads as "apply the more restrictive tier".
+ * Both are deterministic states, so denying on them is honest.
+ *
+ * A read that THROWS is a different thing and is deliberately NOT swallowed into that same
+ * "undefined": unknown is not absent. Collapsing it would let a transient Mongo blip apply a tier
+ * the operator never configured, and a budget denial here is NON-retryable - the vectorize handler
+ * skips SQS redelivery on it and fails the file for good, with a "budget is exhausted" message that
+ * would be a lie about what happened. Letting the error propagate keeps the message on the queue so
+ * a later delivery can resolve the tier properly.
  */
 async function resolveLakeOwnerType(
   dataLakeId: string | undefined,
@@ -332,15 +340,16 @@ async function resolveLakeOwnerType(
   logger?: Logger
 ): Promise<SettingOwnerType | undefined> {
   if (!dataLakeId) return undefined;
+  let lake: Awaited<ReturnType<SpendGateDb['dataLakes']['findById']>>;
   try {
-    const lake = await db.dataLakes.findById(dataLakeId);
-    if (!lake) {
-      logger?.warn?.(`[spendGate] lake ${dataLakeId} not found; cannot resolve its cost tier`);
-      return undefined;
-    }
-    return scopeForLake(lake).owner?.type;
+    lake = await db.dataLakes.findById(dataLakeId);
   } catch (err) {
-    logger?.warn?.(`[spendGate] could not read lake ${dataLakeId} to resolve its cost tier`, err);
+    logger?.warn?.(`[spendGate] could not read lake ${dataLakeId} to resolve its cost tier; retrying later`, err);
+    throw err;
+  }
+  if (!lake) {
+    logger?.warn?.(`[spendGate] lake ${dataLakeId} not found; applying the more restrictive cost tier`);
     return undefined;
   }
+  return scopeForLake(lake).owner?.type;
 }

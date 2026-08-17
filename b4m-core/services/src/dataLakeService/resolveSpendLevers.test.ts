@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  API_SERVICE_GROUPS,
   CreditHolderType,
   DATA_LAKE_EMBEDDING_BUDGET_PER_LAKE_USD_DEFAULT,
   DATA_LAKE_EMBEDDING_BUDGET_PER_PERIOD_USD_DEFAULT,
@@ -10,8 +11,10 @@ import {
   DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_INDIVIDUAL_DEFAULT,
   DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX,
   DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT,
+  settingsMap,
 } from '@bike4mind/common';
 import {
+  DATA_LAKE_SPEND_LEVER_KEYS,
   MICRO_USD_PER_USD,
   pickTierMultiplier,
   resolveSpendLevers,
@@ -227,6 +230,33 @@ describe('resolveSpendLevers cost tiers', () => {
     mockedGetSettings.mockResolvedValue(tiered('0.5', '5'));
     const levers = await resolveSpendLevers(db, undefined, CreditHolderType.User);
     expect(levers.perRunBudgetMicroUsd).toBe(DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_DEFAULT * 0.5 * MICRO_USD_PER_USD);
+  });
+});
+
+// The three-place edit: a setting needs its key in the union, a definition, AND a service-group
+// entry. Only the first two are compiler-checked, so a lever can ship complete-looking and simply
+// never render - the failure mode both #1660 and #1670 call out. This pins the third place.
+describe('spend lever registration', () => {
+  const groupKeys = API_SERVICE_GROUPS.DATA_LAKE_COST.settings.map(s => s.key);
+
+  it('renders every lever the resolver reads in the Data Lake Cost Governance group', () => {
+    for (const key of DATA_LAKE_SPEND_LEVER_KEYS) {
+      expect(groupKeys, `${key} is read by resolveSpendLevers but not registered in the admin group`).toContain(key);
+    }
+  });
+
+  it('has no lever in the group that the resolver never reads (a lever with no consumer)', () => {
+    for (const key of groupKeys) {
+      expect(DATA_LAKE_SPEND_LEVER_KEYS as readonly string[]).toContain(key);
+    }
+  });
+
+  it('defines every lever it reads, with the tier multipliers bounded by a shared rail', () => {
+    for (const key of DATA_LAKE_SPEND_LEVER_KEYS) expect(settingsMap[key]).toBeDefined();
+    // The rails must agree: the admin panel rejects an out-of-range write, and the resolver clamps
+    // anything that got stored some other way. If these drifted, one of the two would be dead code.
+    expect(settingsMap.dataLakeEmbeddingTierMultiplierIndividual.max).toBe(DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX);
+    expect(settingsMap.dataLakeEmbeddingTierMultiplierOrganization.max).toBe(DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX);
   });
 });
 
