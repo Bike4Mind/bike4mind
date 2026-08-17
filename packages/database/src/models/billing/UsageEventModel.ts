@@ -4,6 +4,7 @@ import {
   COMPLETION_SOURCES,
   CreditHolderType,
   IMongoDocument,
+  ILakeUsageSummary,
   IModelDayMargin,
   IOwnerSpendDay,
   IOwnerSpendFeature,
@@ -55,6 +56,7 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
     ownerId: { type: String, required: true },
     ownerType: { type: String, required: true, enum: ['User', 'Organization', 'Agent'] as CreditHolderType[] },
     sessionId: { type: String, required: false },
+    dataLakeId: { type: String, required: false },
     feature: { type: String, required: true, enum: [...USAGE_EVENT_FEATURES] },
     provider: { type: String, required: true },
     model: { type: String, required: true },
@@ -102,6 +104,15 @@ UsageEventSchema.index({ sessionId: 1, createdAt: -1 });
 UsageEventSchema.index({ source: 1, createdAt: -1 });
 // Supports platformUsageSummary()'s byConsumer cut ($match apiKeyId present).
 UsageEventSchema.index({ apiKeyId: 1, createdAt: -1 });
+// Supports lakeUsageSummary()'s $match on dataLakeId (data-lake spend view).
+// partialFilterExpression (not sparse): dataLakeId is only ever set on ingestion-embed
+// rows, a small slice of this collection, unlike sessionId/apiKeyId below which are
+// populated on most rows via their own request paths. Same pattern as
+// SreErrorTrackingModel's fixVerdict.value index.
+UsageEventSchema.index(
+  { dataLakeId: 1, createdAt: -1 },
+  { partialFilterExpression: { dataLakeId: { $exists: true } } }
+);
 
 export type IUsageEventModel = Model<IUsageEventDocument>;
 
@@ -575,6 +586,62 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     // the session's events (ownerId/ownerType are then matched in memory).
     const doc = await this.model.exists({ sessionId, ownerId, ownerType });
     return doc !== null;
+  }
+
+  async lakeUsageSummary(dataLakeId: string, days: number = 30): Promise<ILakeUsageSummary> {
+    const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const spendSums = {
+      requests: { $sum: 1 },
+      cogsUsd: { $sum: '$costUsd' },
+      creditsCharged: { $sum: '$creditsCharged' },
+    } as const;
+    const spendFields = { requests: 1, cogsUsd: 1, creditsCharged: 1 } as const;
+
+    // Same $facet shape as ownerUsageSummary minus byMember - a lake is just a different
+    // $match key over the same event set (only ingestion embeds carry dataLakeId), but the
+    // owner-facing spend view has no use for raw per-uploader userIds.
+    const [result] = await this.model.aggregate<{
+      overTime: IOwnerSpendDay[];
+      byModel: IOwnerSpendModel[];
+      byFeature: IOwnerSpendFeature[];
+      totals: IUsageSpendBucket[];
+    }>([
+      { $match: { dataLakeId, createdAt: { $gte: from } } },
+      {
+        $facet: {
+          overTime: [
+            {
+              $group: {
+                _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
+                ...spendSums,
+              },
+            },
+            { $project: { _id: 0, day: '$_id', ...spendFields } },
+            { $sort: { day: 1 } },
+          ],
+          byModel: [
+            { $group: { _id: { provider: '$provider', model: '$model' }, ...spendSums } },
+            { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...spendFields } },
+            { $sort: { cogsUsd: -1 } },
+          ],
+          byFeature: [
+            { $group: { _id: '$feature', ...spendSums } },
+            { $project: { _id: 0, feature: '$_id', ...spendFields } },
+            { $sort: { cogsUsd: -1 } },
+          ],
+          totals: [{ $group: { _id: null, ...spendSums } }, { $project: { _id: 0, ...spendFields } }],
+        },
+      },
+    ]);
+
+    const emptyTotals: IUsageSpendBucket = { requests: 0, cogsUsd: 0, creditsCharged: 0 };
+    return {
+      overTime: result?.overTime ?? [],
+      byModel: result?.byModel ?? [],
+      byFeature: result?.byFeature ?? [],
+      totals: result?.totals?.[0] ?? emptyTotals,
+    };
   }
 }
 

@@ -580,6 +580,50 @@ describe('listDataLakes - groundingMode is returned to a lake EDITOR only', () =
   });
 });
 
+// embeddingSpendMicroUsd is EDITOR-ONLY too, but unlike the fields above it is ALWAYS present
+// (defaulted to 0) when manageable, since its presence vs. absence is itself the client's
+// spend-tab visibility signal - a zero-spend manageable lake must not look identical to
+// a non-manageable one.
+describe('listDataLakes - embeddingSpendMicroUsd is returned to a lake EDITOR only, always defaulted', () => {
+  it("returns the real meter for the caller's own lake with nonzero spend", async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me', embeddingSpendMicroUsd: 5_000_000 });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.embeddingSpendMicroUsd).toBe(5_000_000);
+  });
+
+  it('defaults to 0 (never absent) for a manageable lake that has spent nothing yet', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+    const entry = result.find(l => l.id === 'mine');
+
+    expect(entry?.embeddingSpendMicroUsd).toBe(0);
+    expect(entry && 'embeddingSpendMicroUsd' in entry).toBe(true);
+  });
+
+  it("WITHHOLDS the meter from a stranger reading someone else's PUBLIC lake", async () => {
+    const theirs = lake({
+      id: 'theirs',
+      slug: 'theirs',
+      createdByUserId: 'other',
+      isPublic: true,
+      embeddingSpendMicroUsd: 5_000_000,
+    });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'stranger' }), { db });
+    const entry = result.find(l => l.id === 'theirs');
+
+    expect(entry?.embeddingSpendMicroUsd).toBeUndefined();
+    // Absent, not zeroed - a reader must not tell "no spend" from "withheld".
+    expect(entry && 'embeddingSpendMicroUsd' in entry).toBe(false);
+  });
+});
+
 describe('listAllDataLakes - the admin list still gates the prompt on canManage', () => {
   it('returns the prompt on every DB lake, since an admin manages them all', async () => {
     const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', systemPrompt: 'Cite sources.' });

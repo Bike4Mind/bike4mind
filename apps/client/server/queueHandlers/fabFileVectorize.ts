@@ -9,7 +9,9 @@ import {
   embeddingCacheRepository,
   fabFileChunkRepository,
   fabFileRepository,
+  organizationRepository,
   scopedSettingsRepository,
+  usageEventRepository,
   User,
   withTransaction,
 } from '@bike4mind/database';
@@ -25,7 +27,13 @@ import {
   FabFileChunkSearchIndex,
 } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
-import { apiKeyService, dataLakeService, embeddingCacheService, fabFilesService } from '@bike4mind/services';
+import {
+  apiKeyService,
+  dataLakeService,
+  embeddingCacheService,
+  fabFilesService,
+  recordOperationalUsage,
+} from '@bike4mind/services';
 import { getEmbeddingModelCost } from '@bike4mind/common';
 import {
   finalizeBatchIfComplete,
@@ -35,6 +43,7 @@ import {
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
+import { makeDataLakeSpendNotifier } from '@server/utils/dataLakeSpendNotifier';
 import { provenancePayloadShape } from '@server/queueHandlers/convergenceProvenance';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getProviderFromModel } from '@bike4mind/fab-pipeline';
@@ -254,6 +263,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             dataLakeBatches: dataLakeBatchRepository,
           },
           logger,
+          notify: makeDataLakeSpendNotifier(logger),
         });
         grantedReservation = { estimatedMicroUsd, batchId: existingFabFile.batchId, dataLakeId: batch?.dataLakeId };
         logger.log(`[spendGate] granted ~${estimatedMicroUsd} microUSD for ${missTokens} tokens`);
@@ -306,6 +316,45 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           }
         }
         throw providerErr;
+      }
+
+      // Ledger the ingestion spend (cost attribution). Only for lake-scoped work - a
+      // cache-hit-only run never reaches this block, so cache hits already never produce
+      // a row. dataLakeId can still be undefined here (batch?.dataLakeId), which just
+      // writes an unattributed row - harmless, since dataLakeId is optional on UsageEvent.
+      // bypassCreditBilling: true because this spend is already governed by the dedicated
+      // spend-lever/gate above; debiting credits on top of it would double-charge.
+      if (grantedReservation) {
+        // Best-effort like the ledger write below it - by this point the embeddings are
+        // already paid for and the reservation committed, with no release path from here (that
+        // is scoped strictly to the provider try/catch above). An unguarded rejection here would
+        // throw the whole run to failed/redelivered over a org lookup, double-charging the lake
+        // meter and writing a second ledger row for work that already succeeded.
+        const organization = user.organizationId
+          ? await organizationRepository.findById(user.organizationId).catch(() => null)
+          : null;
+        // SQS redelivery can double-write this row if the embedding-cache write above has not
+        // landed before the container freezes - the same double-count the lake meter already
+        // accepts above, so the ledger and meter at least drift together.
+        await recordOperationalUsage(
+          {
+            requestId: grantedReservation.batchId,
+            user,
+            organization,
+            dataLakeId: grantedReservation.dataLakeId,
+            feature: 'embedding',
+            provider: requiredProvider,
+            model: embeddingModel,
+            inputTokens: missTokenCounts.reduce((sum, n) => sum + n, 0),
+            costUsd: grantedReservation.estimatedMicroUsd / 1_000_000,
+            source: 'system',
+            bypassCreditBilling: true,
+          },
+          {
+            db: { usageEvents: usageEventRepository, adminSettings: adminSettingsRepository },
+            logger,
+          }
+        ).catch(err => logger.warn(`[recordOperationalUsage] ingestion spend record failed: ${err}`));
       }
 
       await Promise.all(

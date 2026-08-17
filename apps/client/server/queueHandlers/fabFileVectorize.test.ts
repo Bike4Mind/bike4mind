@@ -30,6 +30,9 @@ const h = vi.hoisted(() => ({
   batchReleaseSpend: vi.fn(async () => true),
   lakeReleaseSpend: vi.fn(async () => true),
   getSettingsValue: vi.fn(),
+  organizationFindById: vi.fn(async () => null),
+  recordOperationalUsage: vi.fn(async () => undefined),
+  spendNotifier: vi.fn(async () => undefined),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -59,6 +62,8 @@ vi.mock('@bike4mind/database', () => ({
     markFailedIfNotAlready: h.markFailedIfNotAlready,
     update: h.fabFileUpdate,
   },
+  organizationRepository: { findById: h.organizationFindById },
+  usageEventRepository: {},
   User: { findById: vi.fn(async () => ({ id: 'u1' })) },
   withTransaction: vi.fn((fn: () => unknown) => fn()),
 }));
@@ -67,6 +72,7 @@ vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: vi.fn(async () => ({})) },
   embeddingCacheService: { getEmbedding: h.getEmbedding, setEmbedding: vi.fn().mockResolvedValue(undefined) },
   fabFilesService: { stampChunkEmbeddingModel: h.stampChunkEmbeddingModel },
+  recordOperationalUsage: h.recordOperationalUsage,
   dataLakeService: {
     enforceEmbeddingSpendGate: h.enforceEmbeddingSpendGate,
     // Mirror the real class's retryable flag so the handler's terminal-denial branch classifies correctly.
@@ -87,6 +93,7 @@ vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
   deferFailureIfRetryable: (...a: unknown[]) => h.deferFailureIfRetryable(...a),
 }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
+vi.mock('@server/utils/dataLakeSpendNotifier', () => ({ makeDataLakeSpendNotifier: () => h.spendNotifier }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@server/utils/errors', () => ({ NotFoundError: class NotFoundError extends Error {} }));
 // Module-load zod schemas used by VectorizePayload.
@@ -97,9 +104,8 @@ vi.mock('@bike4mind/common', async () => ({
   // evaluator READS it to tell a permanently-stalled file from one still indexing; production cannot
   // drift (both import the same constant), but a literal here would let THIS suite keep passing
   // against a string the constant no longer has.
-  CONVERGENCE_PAUSED_NOTE: (
-    await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common')
-  ).CONVERGENCE_PAUSED_NOTE,
+  CONVERGENCE_PAUSED_NOTE: (await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common'))
+    .CONVERGENCE_PAUSED_NOTE,
 }));
 vi.mock('@bike4mind/fab-pipeline', () => ({
   ChunkSchema: z.object({}).passthrough(),
@@ -120,7 +126,7 @@ vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => new Proxy({}, { get
 
 const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() } as never;
 
-import { fabFileChunkRepository } from '@bike4mind/database';
+import { fabFileChunkRepository, User } from '@bike4mind/database';
 import { sendToClient } from '@server/websocket/utils';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from './sqsDelivery';
 import { dispatch, CONVERGENCE_PAUSED_NOTE } from './fabFileVectorize';
@@ -324,6 +330,15 @@ describe('fabFileVectorize handler - spend gate', () => {
     expect(h.enforceEmbeddingSpendGate).not.toHaveBeenCalled();
   });
 
+  it('wires the spend notifier into the gate call', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.enforceEmbeddingSpendGate).toHaveBeenCalledWith(expect.objectContaining({ notify: h.spendNotifier }));
+  });
+
   it('a terminal denial accounts the failure immediately and CONSUMES the message', async () => {
     h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
     h.enforceEmbeddingSpendGate.mockRejectedValueOnce(await denial('budget exhausted', false));
@@ -377,6 +392,88 @@ describe('fabFileVectorize handler - spend gate', () => {
   });
 });
 
+describe('fabFileVectorize handler - usage ledger', () => {
+  const unvectorizedFile = (batchId?: string) => ({
+    id: 'ff1',
+    batchId,
+    vectorized: false,
+    chunkCount: 1,
+    vectorizedChunkCount: 0,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text: 'hello world',
+      tokenCount: 5,
+    });
+    h.getEmbedding.mockResolvedValue(null); // cache miss -> the ledger call is in play
+    h.enforceEmbeddingSpendGate.mockResolvedValue(undefined);
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+  });
+
+  it('records a UsageEvent attributed to the lake, bypassing credit billing', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.recordOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dataLakeId: 'lake-1',
+        feature: 'embedding',
+        bypassCreditBilling: true,
+        inputTokens: 5,
+        // getEmbeddingModelCost is mocked as a flat 0.0001 USD return (see spend-gate describe
+        // above) -> ceil(0.0001*1e6)/1e6 = 0.0001.
+        costUsd: 0.0001,
+      }),
+      expect.anything()
+    );
+  });
+
+  it('never records for a turn-attached file (no batchId, no lake)', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.recordOperationalUsage).not.toHaveBeenCalled();
+  });
+
+  it('never records on a cache hit (no spend occurred)', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.getEmbedding.mockResolvedValue([0.1, 0.2, 0.3]); // cache hit
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.recordOperationalUsage).not.toHaveBeenCalled();
+  });
+
+  it('a recordOperationalUsage failure never fails the vectorize run', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    h.recordOperationalUsage.mockRejectedValueOnce(new Error('ledger down'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+  });
+
+  it('an organization lookup failure never fails the vectorize run (the embeddings are already paid for by this point)', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    // The default user fixture has no organizationId, which skips the lookup branch entirely -
+    // this test needs it set so organizationRepository.findById is actually reached and rejected.
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ id: 'u1', organizationId: 'org-1' });
+    h.organizationFindById.mockRejectedValueOnce(new Error('org lookup down'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+    expect(h.organizationFindById).toHaveBeenCalledWith('org-1');
+    // The ledger write still happens (organization just resolves to null), so this is not
+    // silently skipped along with the failure - it degrades gracefully instead.
+    expect(h.recordOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ organization: null }),
+      expect.anything()
+    );
+  });
+});
+
 describe('fabFileVectorize handler - notification failures are non-fatal (human review)', () => {
   // This message must actually complete vectorization DURING this call (not already be
   // fully vectorized) so it reaches the isFileVectorized branch at lines 233-253 rather than
@@ -401,7 +498,11 @@ describe('fabFileVectorize handler - notification failures are non-fatal (human 
     });
     h.getEmbedding.mockResolvedValue(null);
     h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
-    h.computeChunkVectorRollup.mockResolvedValue({ terminalChunkCount: 1, embeddedChunkCount: 0, embeddedCharCount: 0 });
+    h.computeChunkVectorRollup.mockResolvedValue({
+      terminalChunkCount: 1,
+      embeddedChunkCount: 0,
+      embeddedCharCount: 0,
+    });
     h.claimFileStatus.mockResolvedValue(true);
     h.incrementCounter.mockResolvedValue({ vectorizedFiles: 1, failedFiles: 0, totalFiles: 1 });
   });
@@ -500,7 +601,11 @@ describe('fabFileVectorize handler - retry gating (#1412)', () => {
     h.getEmbedding.mockResolvedValue(null);
     h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
     h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
-    h.computeChunkVectorRollup.mockResolvedValue({ terminalChunkCount: 1, embeddedChunkCount: 0, embeddedCharCount: 0 });
+    h.computeChunkVectorRollup.mockResolvedValue({
+      terminalChunkCount: 1,
+      embeddedChunkCount: 0,
+      embeddedCharCount: 0,
+    });
     h.claimFileStatus.mockResolvedValue(true);
     h.incrementCounter.mockResolvedValue({ vectorizedFiles: 1, failedFiles: 0, totalFiles: 1 });
 
@@ -530,7 +635,11 @@ describe('fabFileVectorize handler - embeddingModel discriminator stamp', () => 
       tokenCount: 5,
     });
     h.getEmbedding.mockResolvedValue(null);
-    h.computeChunkVectorRollup.mockResolvedValue({ terminalChunkCount: 1, embeddedChunkCount: 0, embeddedCharCount: 0 });
+    h.computeChunkVectorRollup.mockResolvedValue({
+      terminalChunkCount: 1,
+      embeddedChunkCount: 0,
+      embeddedCharCount: 0,
+    });
   });
 
   it('stamps the chunk embeddingModel once the whole file is fully vectorized', async () => {
@@ -577,7 +686,11 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
       tokenCount: 5,
     });
     h.getEmbedding.mockResolvedValue(null);
-    h.computeChunkVectorRollup.mockResolvedValue({ terminalChunkCount: 1, embeddedChunkCount: 0, embeddedCharCount: 0 });
+    h.computeChunkVectorRollup.mockResolvedValue({
+      terminalChunkCount: 1,
+      embeddedChunkCount: 0,
+      embeddedCharCount: 0,
+    });
     h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
     h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
   });
