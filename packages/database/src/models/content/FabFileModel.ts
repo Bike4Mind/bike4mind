@@ -1731,6 +1731,10 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     sessionId: { type: String, required: false },
     notes: { type: String, default: '' },
     contentHash: { type: String },
+    // Server-verified SHA-256 over normalized extracted text, stamped by the admission contract at
+    // chunk time (see IFabFile.serverTextHash). The trustworthy dedup input for #1671, distinct from
+    // the client-supplied byte hash in `contentHash`.
+    serverTextHash: { type: String },
     batchId: { type: String },
     relativePath: { type: String },
     // Provenance. Declared because strict mode drops undeclared paths silently: `sourceType` was

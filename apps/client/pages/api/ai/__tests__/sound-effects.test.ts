@@ -28,15 +28,20 @@ const {
   persistGeneratedAudio: vi.fn(),
 }));
 
-// baseApi mock: routes by req.method; a thrown ZodError maps to 422 (mirroring
+// Contract-adapter mock: stands in for the nextRouteForContract prelude, running
+// the contract's own request schema into `req.validated` (so body validation stays
+// under test), then routes by req.method. A thrown ZodError maps to 422 (mirroring
 // the real errorHandler), any other thrown error to its statusCode or 500.
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+vi.mock('@server/middlewares/defineNextRoute', () => ({
+  nextRouteForContract: (contract: { request: { parse: (body: unknown) => unknown } }) => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       async (req: unknown, res: unknown) => {
         try {
-          return await h[(req as { method?: string }).method ?? 'GET']?.(req, res);
+          const route = h[(req as { method?: string }).method ?? 'GET'];
+          if (!route) return;
+          (req as { validated?: unknown }).validated = contract.request.parse((req as { body?: unknown }).body);
+          return await route(req, res);
         } catch (err) {
           const status = isZodError(err)
             ? 422

@@ -30,15 +30,39 @@ export type AuthMode = 'apiKeyOrJwt' | 'jwtOnly' | 'public';
 
 export type ResponseSpec = {
   description: string;
-  schema: z.ZodTypeAny;
+  /**
+   * Shape of the response body. OMIT for a raw, non-JSON body (e.g. the audio
+   * bytes the TTS/music/sound-effects endpoints stream back): the spec then
+   * documents `contentType` as an opaque binary payload, and the adapters' dev
+   * response drift check skips the status because there is no JSON to check.
+   */
+  schema?: z.ZodTypeAny;
   /**
    * Response media type, default `application/json`. Set to `text/event-stream`
    * for an SSE endpoint so the generated spec advertises the stream shape rather
-   * than a JSON body (the schema then documents a single stream event).
+   * than a JSON body (the schema then documents a single stream event), or to an
+   * `audio/*` type alongside an omitted `schema` for raw bytes.
    */
   contentType?: string;
   /** Example response body, attached to the generated component. */
   example?: unknown;
+  /**
+   * Extra media types this status can also return, for an endpoint whose response
+   * encoding is caller-selected - currently only TTS, which returns raw audio
+   * bytes by default and JSON when the caller asks for `encoding: 'base64'`.
+   * `schema`/`contentType` above stay the primary body: they are what the
+   * adapters' dev drift check validates JSON responses against, so put the JSON
+   * shape there and list the raw-byte media types here.
+   */
+  alsoReturns?: readonly { contentType: string; schema?: z.ZodTypeAny; example?: unknown }[];
+  /**
+   * Response headers to publish, keyed by header name. All are documented as
+   * strings (HTTP headers have no other wire type). Worth declaring when a header
+   * carries information the body does not - e.g. the endpoints that return raw
+   * audio bytes report where the saved copy lives only in a header.
+   * `X-Request-ID` is attached to every response centrally; do not repeat it.
+   */
+  headers?: Readonly<Record<string, string>>;
 };
 
 /** curl/JS/Python sample body for the docs (attached as x-codeSamples). */

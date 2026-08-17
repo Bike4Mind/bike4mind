@@ -1,7 +1,12 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository, dataLakeAccessGrantRepository, userRepository } from '@bike4mind/database';
+import {
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+  userRepository,
+  adminSettingsRepository,
+} from '@bike4mind/database';
 import { CreateDataLakeRequestInput } from '@bike4mind/common';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
@@ -21,6 +26,9 @@ const handler = baseApi()
       users: userRepository,
       // Grant repo: makes isOwn/canManage labels grant-aware and surfaces a transferred/granted lake.
       dataLakeAccessGrants: dataLakeAccessGrantRepository,
+      // Settings repo: read-time grant cutover flag (#1673). Keeps the list in lockstep with the
+      // single gate - reader-granted lakes list only once EnforceLakeReadGrants is on (report-only off).
+      settings: adminSettingsRepository,
     };
     // Admins see all data lakes; non-admins see only those they can access (owner/org/tag).
     const dataLakes = ctx.isAdmin

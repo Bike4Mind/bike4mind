@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, Mock } from 'vitest';
 import { chunkFabfile } from './chunk';
 import { ChunkClaimLostError } from '@bike4mind/common';
+import { computeServerTextHash } from '../dataLakeService/admissionContract';
 import type { IUserDocument } from '@bike4mind/common';
 
 vi.mock('@bike4mind/utils', async importOriginal => {
@@ -44,6 +45,7 @@ describe('chunkFabfile', () => {
     (SmartChunker as unknown as Mock).mockImplementation(function MockSmartChunker(this: unknown) {
       return {
         chunkFile: vi.fn().mockResolvedValue([{ text: 'chunk one', tokenCount: 2 }]),
+        getExtractedText: vi.fn().mockReturnValue('chunk one'),
         freeEncoder: vi.fn(),
       };
     });
@@ -140,6 +142,7 @@ describe('chunkFabfile', () => {
           { text: 'chunk one', tokenCount: 2 }, // 9 code points
           { text: 'four\u{1F600}', tokenCount: 2 }, // 5 code points, 6 UTF-16 units
         ]),
+        getExtractedText: vi.fn().mockReturnValue('chunk one four\u{1F600}'),
         freeEncoder: vi.fn(),
       };
     });
@@ -227,5 +230,82 @@ describe('chunkFabfile', () => {
       // caller that doesn't, so it must be loud rather than silent.
       expect(mockAdapter.logger.warn).toHaveBeenCalledWith(expect.stringContaining('no claim stamp'));
     });
+  });
+
+  it('stamps the server-verified text hash over the CANONICAL EXTRACTED TEXT, not the chunk output (admission contract #1679)', async () => {
+    (SmartChunker as unknown as Mock).mockImplementation(function MockSmartChunker(this: unknown) {
+      return {
+        // Chunk output is deliberately unlike the extracted text (policy-dependent boundaries); the
+        // hash must derive from getExtractedText, so a mismatch here would fail the assertion.
+        chunkFile: vi.fn().mockResolvedValue([
+          { text: 'the quick', tokenCount: 2 },
+          { text: 'brown fox jumps', tokenCount: 3 },
+        ]),
+        getExtractedText: vi.fn().mockReturnValue('the quick brown fox jumps'),
+        freeEncoder: vi.fn(),
+      };
+    });
+
+    await chunkFabfile(
+      mockUser,
+      { fabFileId: 'file-1', embeddingModel: 'text-embedding-ada-002' },
+      mockAdapter as never
+    );
+
+    const updatedFile = mockAdapter.db.fabFiles.update.mock.calls[0][0] as { serverTextHash?: string };
+    expect(updatedFile.serverTextHash).toBe(computeServerTextHash('the quick brown fox jumps'));
+    expect(updatedFile.serverTextHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('clears serverTextHash to null for a file that yields no extractable text', async () => {
+    (SmartChunker as unknown as Mock).mockImplementation(function MockSmartChunker(this: unknown) {
+      return {
+        chunkFile: vi.fn().mockResolvedValue([]),
+        getExtractedText: vi.fn().mockReturnValue(undefined),
+        freeEncoder: vi.fn(),
+      };
+    });
+
+    await chunkFabfile(
+      mockUser,
+      { fabFileId: 'file-1', embeddingModel: 'text-embedding-ada-002' },
+      mockAdapter as never
+    );
+
+    const updatedFile = mockAdapter.db.fabFiles.update.mock.calls[0][0] as {
+      serverTextHash?: string | null;
+    };
+    // null, not undefined: db.update does a full-document $set and Mongoose strips undefined, so
+    // undefined would leave any prior hash in place (see next test).
+    expect(updatedFile.serverTextHash).toBeNull();
+  });
+
+  it('nulls a previously-stamped serverTextHash when a re-chunk yields no text (never outlives its text)', async () => {
+    // A reprocess resets chunked/chunkCount but not serverTextHash; if extraction now yields nothing
+    // (parser regression, mimeType change), the full-document $set must not re-persist the old hash.
+    const stale = 'a'.repeat(64);
+    mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({
+      ...mockFabFile,
+      serverTextHash: stale,
+    });
+    (SmartChunker as unknown as Mock).mockImplementation(function MockSmartChunker(this: unknown) {
+      return {
+        chunkFile: vi.fn().mockResolvedValue([]),
+        getExtractedText: vi.fn().mockReturnValue(undefined),
+        freeEncoder: vi.fn(),
+      };
+    });
+
+    await chunkFabfile(
+      mockUser,
+      { fabFileId: 'file-1', embeddingModel: 'text-embedding-ada-002' },
+      mockAdapter as never
+    );
+
+    const updatedFile = mockAdapter.db.fabFiles.update.mock.calls[0][0] as {
+      serverTextHash?: string | null;
+    };
+    expect(updatedFile.serverTextHash).toBeNull();
+    expect(updatedFile.serverTextHash).not.toBe(stale);
   });
 });

@@ -108,6 +108,12 @@ export class SmartChunker {
   private encoder?: Tiktoken;
   private storage: Storage;
   private bufferPercentOrValue: number;
+  // Canonical extracted document text from the most recent chunkFile() call, captured BEFORE any
+  // size-driven splitting, data-URL redaction, or structural (JSON/CSV/XLSX) enveloping - i.e. the
+  // text as extracted, independent of chunkTokenLimit/model. The lake admission contract hashes this
+  // (see computeServerTextHash) so the fingerprint is stable across chunk-policy changes; the chunk
+  // OUTPUT is not. Undefined for a file with no extractable text (image/audio/unsupported/empty).
+  private lastExtractedText: string | undefined;
 
   /**
    * @param model - The embedding model name
@@ -180,6 +186,14 @@ export class SmartChunker {
   }
 
   /**
+   * The canonical extracted text from the most recent chunkFile() call - policy-independent, unlike
+   * the returned chunks. Undefined when the file yielded no extractable text. See lastExtractedText.
+   */
+  public getExtractedText(): string | undefined {
+    return this.lastExtractedText;
+  }
+
+  /**
    * Chunk a file into smaller pieces that can be processed by the model
    * Overloaded method that accepts either an IFabFile or a Buffer with mimeType
    */
@@ -202,6 +216,10 @@ export class SmartChunker {
 
     this.logger.updateMetadata({ mimeType });
     this.logger.log(`Chunking file with type: ${mimeType}`);
+
+    // Cleared per call; each format handler below sets it to the text it extracted. Anything that
+    // returns no chunks (audio/image/unsupported) leaves it undefined.
+    this.lastExtractedText = undefined;
 
     // Audio (generated TTS / sound effects) is intentionally not vectorizable -
     // there is nothing to chunk. Short-circuit quietly so reprocess/on-demand
@@ -255,13 +273,18 @@ export class SmartChunker {
       case SupportedFabFileMimeTypes.PHP:
       case SupportedFabFileMimeTypes.RUBY:
       case SupportedFabFileMimeTypes.SH:
-      case SupportedFabFileMimeTypes.BASH:
-        chunks = await this.chunkText(content.toString());
+      case SupportedFabFileMimeTypes.BASH: {
+        const textContent = content.toString();
+        this.lastExtractedText = textContent;
+        chunks = await this.chunkText(textContent);
         break;
+      }
 
       default:
         if (mimeType && mimeType.startsWith('text/')) {
-          chunks = await this.chunkText(content.toString());
+          const textContent = content.toString();
+          this.lastExtractedText = textContent;
+          chunks = await this.chunkText(textContent);
           break;
         }
         this.logger.error(`Unsupported file type: ${mimeType}`);
@@ -280,6 +303,9 @@ export class SmartChunker {
   // Chunks CSV content into pieces that fit within the model's token limit
   private async chunkCSV(content: Buffer): Promise<Chunk[]> {
     const csvString = content.toString('utf8');
+    // Fingerprint the raw CSV text, not the token-split row chunks (whose boundaries move with
+    // chunkTokenLimit and whose oversized-row path splits on commas).
+    this.lastExtractedText = csvString;
     // Split by newlines (optionally handle \r\n)
     const rows = csvString.split(/\r?\n/).filter(row => row.trim().length > 0);
 
@@ -351,6 +377,9 @@ export class SmartChunker {
     // Extract text from the PDF
     const { text } = await extractText(pdf);
 
+    // The extracted text, page-joined - captured before size-chunking so the fingerprint is stable.
+    this.lastExtractedText = Array.isArray(text) ? text.join('\n') : text;
+
     if (typeof text === 'string') {
       // If text is a single string, chunk it as plain text
       return this.chunkText(text);
@@ -401,7 +430,11 @@ export class SmartChunker {
 
   // Chunks JSON content into pieces that fit within the model's token limit
   private async chunkJSON(content: Buffer): Promise<Chunk[]> {
-    const json = JSON.parse(content.toString());
+    const jsonString = content.toString();
+    // Fingerprint the raw JSON source, not chunkObject's `JSON.stringify({ path: value })` envelopes
+    // whose keys and `[i]` sub-indices are a function of chunkTokenLimit.
+    this.lastExtractedText = jsonString;
+    const json = JSON.parse(jsonString);
     return this.chunkObject(json);
   }
 
@@ -506,6 +539,7 @@ export class SmartChunker {
   private async chunkDOCX(content: Buffer): Promise<Chunk[]> {
     // Extract raw text from the DOCX file using mammoth
     const result = await mammoth.extractRawText({ buffer: content });
+    this.lastExtractedText = result.value;
     // Chunk the extracted text as plain text
     return this.chunkText(result.value);
   }
@@ -550,6 +584,7 @@ export class SmartChunker {
       this.logger.warn('PPTX contained no extractable slide text');
       return [];
     }
+    this.lastExtractedText = fullText;
     return this.chunkText(fullText);
   }
 
@@ -673,6 +708,19 @@ export class SmartChunker {
     const { read, utils } = await import('xlsx');
 
     const workbook = read(content, { type: 'buffer' });
+
+    // Canonical extracted text for the fingerprint: every sheet's rows serialized deterministically,
+    // independent of chunkTokenLimit. The chunk OUTPUT below flips between whole-row and per-cell
+    // (`{column,value}`) JSON at the token limit, so it cannot be the hash input.
+    this.lastExtractedText = workbook.SheetNames.map(sheetName => {
+      const rows = utils
+        .sheet_to_json<any[]>(workbook.Sheets[sheetName], { header: 1 })
+        .filter(Array.isArray)
+        .map(row => JSON.stringify(row))
+        .join('\n');
+      return `--- Sheet: ${sheetName} ---\n${rows}\n--- End of Sheet: ${sheetName} ---`;
+    }).join('\n');
+
     const chunks: Chunk[] = [];
     let currentChunk = '';
     let currentTokens = 0;
