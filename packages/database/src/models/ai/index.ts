@@ -11,6 +11,7 @@ export * from './DataLakeModel';
 export * from './DataLakeAccessGrantModel';
 export * from './EmbeddingCacheModel';
 export * from './LakeAccessEventModel';
+export * from './DataLakeSpendNotificationModel';
 export * from './LakeAccessQueryTextModel';
 export * from './LatticeModel';
 export * from './McpServerModel';

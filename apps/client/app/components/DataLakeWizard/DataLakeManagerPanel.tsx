@@ -198,6 +198,7 @@ export default function DataLakeManagerPanel() {
           // so the picker always shows a concrete mode (matching how the resolver treats absence).
           groundingMode: l.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE,
           canManage: !!l.canManage,
+          embeddingSpendMicroUsd: l.embeddingSpendMicroUsd,
         }
       : null;
   }, [dataLakes, editingLakeId]);
