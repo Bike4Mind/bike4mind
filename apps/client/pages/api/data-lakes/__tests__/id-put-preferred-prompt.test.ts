@@ -32,10 +32,6 @@ vi.mock('@bike4mind/database', () => ({
   // omitted because the mock replaces the whole module: a missing export is an import-time
   // failure, not a silent undefined.
   lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
-  adminSettingsRepository: {
-    findBySettingNames: vi.fn().mockResolvedValue([]),
-    findAll: vi.fn().mockResolvedValue([]),
-  },
   dataLakeBatchRepository: {},
   fabFileRepository: {},
   dataLakeAccessGrantRepository: {
@@ -47,9 +43,15 @@ vi.mock('@bike4mind/database', () => ({
     removeGrant: vi.fn().mockResolvedValue(true),
     removeAllForLake: vi.fn().mockResolvedValue(0),
   },
-  // The route module imports adminSettingsRepository (GET wires the #1673 cutover flag); the mock
-  // must export it or the whole module fails to load. The PUT path under test never reads it.
-  adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(false) },
+  // ONE declaration, deliberately: this key was previously declared twice and the second silently
+  // shadowed the first, dropping the retention methods the audit path reads. It serves two
+  // consumers - the GET route's #1673 cutover flag (getSettingsValue) and the config-audit
+  // retention resolver (findBySettingNames/findAll) - so both live here.
+  adminSettingsRepository: {
+    getSettingsValue: vi.fn().mockResolvedValue(false),
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 // Real allowlist predicate on purpose - the whole point is which ids pass.
