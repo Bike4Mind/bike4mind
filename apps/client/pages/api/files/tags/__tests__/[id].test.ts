@@ -35,6 +35,11 @@ vi.mock('@bike4mind/database', () => ({
   fileTagRepository: { __repo: 'fileTags' },
   dataLakeRepository: { __repo: 'dataLakes' },
   userRepository: { __repo: 'users' },
+  // The config-audit repos this route now wires (see lakeConfigAuditDb). Stubbed rather than
+  // omitted because this mock REPLACES the whole module: an unlisted export is an import-time
+  // failure, not a silent undefined, and the file reports zero tests rather than a failed one.
+  lakeConfigChangeEventRepository: { __repo: 'lakeConfigChangeEvents' },
+  adminSettingsRepository: { __repo: 'adminSettings' },
 }));
 
 import handler from '../[id]';
