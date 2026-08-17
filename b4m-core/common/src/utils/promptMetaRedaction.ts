@@ -1,7 +1,10 @@
 /**
  * promptMeta.functionCalls fields that must never reach a viewer who only holds a
- * "read this conversation" grant - a session share, a live subscription, or a bug-report
- * egress to a third party (Slack/email).
+ * "read this conversation" grant - a session share, a live subscription, a bug-report
+ * egress to a third party (Slack/email), or a session clone made by a share holder
+ * (b4m-core/services/src/sessionService/clone.ts, which copies quest.promptMeta wholesale
+ * onto a session the sharee then OWNS - a share/subscribe grant must not become a durable
+ * unredacted copy just because the copy has a new owner).
  *
  * `returnValue` is the verbatim output of a tool call the OWNER's turn made - up to 8000 chars
  * per call (see recordToolResult.ts) - and a tool can read the owner's private corpus, files, or

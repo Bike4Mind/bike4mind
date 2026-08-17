@@ -212,4 +212,68 @@ describe('GeminiBackend - replayed tool history (utils.ts Priority 2 shape)', ()
     const assistantContent = contents.find((c: any) => c.role === 'model');
     expect(assistantContent.parts.some((p: any) => p.functionCall?.name === 'web_search')).toBe(true);
   });
+
+  // The formatter runs on every recursive round of a LIVE tool-calling turn too, and a live
+  // round's own just-minted tool_use block can legitimately lack a thought_signature (Gemini
+  // omits one on some responses - see the "Missing thought_signature" warn). That is a different
+  // failure mode than a replayed block (guaranteed missing, degrade gracefully); a live one
+  // should reach Gemini as-is so its existing visible-rejection/retry path still applies, not be
+  // silently dropped by the gemini-3 replay guard.
+  it('does not drop a gemini-3 live tool_use block minted this same completion, even with no thought_signature', async () => {
+    const backend = new GeminiBackend('test-key');
+    const capturedRequests: any[] = [];
+    let call = 0;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (backend as unknown as { _api: any })._api = {
+      models: {
+        generateContentStream: async (request: unknown) => {
+          capturedRequests.push(request);
+          const thisCall = call++;
+          return (async function* () {
+            if (thisCall === 0) {
+              // Round 1: a live functionCall with no thoughtSignature - an observed, legitimate case.
+              yield {
+                candidates: [
+                  { content: { parts: [{ functionCall: { name: 'web_search', args: { query: 'weather' } } }] } },
+                ],
+                usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+              };
+            } else {
+              yield {
+                candidates: [{ content: { parts: [{ text: 'final answer' }] } }],
+                usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+              };
+            }
+          })();
+        },
+      },
+    };
+
+    await backend.complete(
+      'gemini-3-pro-preview' as never,
+      [{ role: 'user', content: 'what is the weather?' }],
+      {
+        stream: true,
+        tools: [
+          {
+            toolSchema: {
+              name: 'web_search',
+              description: 'Search the web',
+              parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+            },
+            toolFn: async () => 'sunny',
+          },
+        ],
+      },
+      async () => {}
+    );
+
+    // Round 2's request is the one that would silently drop round 1's live tool_use/tool_result
+    // if the replay guard did not exempt it.
+    const round2Contents = capturedRequests[1].contents;
+    const hasFunctionCall = round2Contents.some((c: any) => c.parts?.some((p: any) => p.functionCall));
+    const hasFunctionResponse = round2Contents.some((c: any) => c.parts?.some((p: any) => p.functionResponse));
+    expect(hasFunctionCall).toBe(true);
+    expect(hasFunctionResponse).toBe(true);
+  });
 });

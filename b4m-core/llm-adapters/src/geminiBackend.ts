@@ -565,6 +565,12 @@ export class GeminiBackend implements ICompletionBackend {
     const accumInputTokens = options._internal?.accumInputTokens ?? 0;
     const accumOutputTokens = options._internal?.accumOutputTokens ?? 0;
 
+    // Tool calls minted by an earlier round of THIS SAME completion chain - exempt from the
+    // gemini-3 replayed-history drop guard below, since a live call is a different failure mode
+    // (a visible, already-handled Gemini rejection) than a replayed one (a guaranteed-missing
+    // signature this backend should degrade gracefully for).
+    const liveToolUseIds = new Set(options._internal?.liveToolUseIds ?? []);
+
     // Check if we've exceeded the tool call limit (only when there are tools to execute).
     // Honor a per-request override (a surface-set maxToolCalls); else the default.
     const maxToolCalls = options._internal?.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
@@ -599,7 +605,7 @@ export class GeminiBackend implements ICompletionBackend {
     const systemInstruction = systemMessages.map(message => message.content).join('\n');
 
     const nonsystemMessages = messagesWithFormat.filter(message => message.role !== 'system');
-    const contents = this.formatMessagesIntoGeminiContent(nonsystemMessages);
+    const contents = this.formatMessagesIntoGeminiContent(nonsystemMessages, liveToolUseIds);
     const generationConfig = this.getGenerationConfig(modelInfo, options);
 
     // Zero or one tools; if one, then all the functionDefinitions are there, up to the
@@ -888,6 +894,7 @@ export class GeminiBackend implements ICompletionBackend {
                   toolCallCount: toolCallCount + 1,
                   accumInputTokens: accumInputTokens + turnInputTokens,
                   accumOutputTokens: accumOutputTokens + turnOutputTokens,
+                  liveToolUseIds: [...liveToolUseIds, ...toolCalls.map(tc => tc.id)],
                 },
               },
               callback,
@@ -1112,6 +1119,7 @@ export class GeminiBackend implements ICompletionBackend {
               toolCallCount: toolCallCount + 1,
               accumInputTokens: accumInputTokens + turnInputTokens,
               accumOutputTokens: accumOutputTokens + turnOutputTokens,
+              liveToolUseIds: [...liveToolUseIds, ...toolCalls.map(tc => tc.id)],
             },
           },
           callback,
@@ -1125,7 +1133,7 @@ export class GeminiBackend implements ICompletionBackend {
     }
   }
 
-  private formatMessagesIntoGeminiContent(messages: IMessage[]): any[] {
+  private formatMessagesIntoGeminiContent(messages: IMessage[], liveToolUseIds: Set<string>): any[] {
     const toolUseIdToName = new Map<string, string>();
     void toolUseIdToName;
     // Populated below when a tool_use message's FIRST call has no thought_signature - Gemini
@@ -1211,7 +1219,16 @@ export class GeminiBackend implements ICompletionBackend {
           // gemini-3.1-pro-preview, gemini-3.5-flash (a non-digit or end follows "gemini-3" in
           // every real id), but not a hypothetical future gemini-30/gemini-33 family, which this
           // repo has never observed to need the guard.
-          if (/^gemini-3(\D|$)/.test(this.currentModel) && !toolUseBlocks[0]?.thought_signature) {
+          //
+          // This formatter runs on every recursive round of a live tool-calling turn too, and a
+          // live round's own just-minted tool_use block can ALSO lack a thought_signature (see the
+          // warn a few lines up) - that is a different, already-handled failure mode (Gemini
+          // rejects the request with a visible error the existing fallback/retry net catches), not
+          // the guaranteed-missing-signature case a replay produces. liveToolUseIds excludes the
+          // former so the guard cannot silently swallow a block this same completion chain just
+          // generated.
+          const isReplayed = !toolUseBlocks.some(t => liveToolUseIds.has(t.id));
+          if (isReplayed && /^gemini-3(\D|$)/.test(this.currentModel) && !toolUseBlocks[0]?.thought_signature) {
             this.logger.warn(
               '[Gemini] Dropping replayed tool_use block(s) with no thought_signature on the first call:',
               { names: toolUseBlocks.map(t => t.name), messageRole: message.role }
