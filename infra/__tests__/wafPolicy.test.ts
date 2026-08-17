@@ -170,6 +170,23 @@ describe('wafPolicy', () => {
       expect(new Set(priorities).size).toBe(priorities.length);
     });
 
+    // The *-prod-shadow rules exist only to measure how often production's tighter thresholds
+    // would be crossed by staging traffic. Count is what keeps them measurement-only: flip one to
+    // Block and staging starts enforcing a limit nobody has validated, which would take the e2e
+    // gate (and therefore prod promotion) down with it. Pin the action so that cannot happen quietly.
+    it('keeps every prod-shadow rule on Count so staging enforcement is unchanged', () => {
+      const ruleJson = buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'dev' });
+      const parsed = JSON.parse(ruleJson);
+
+      const shadows = (parsed as WafRule[]).filter(rule => rule.Name.endsWith('-prod-shadow'));
+      expect(shadows.length).toBeGreaterThan(0);
+
+      for (const rule of shadows) {
+        expect(rule.Action).toEqual({ Count: {} });
+        expect(rule.OverrideAction).toBeUndefined();
+      }
+    });
+
     it('gives every rule a visibility config', () => {
       const ruleJson = buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'dev' });
       const parsed = JSON.parse(ruleJson);
