@@ -27,7 +27,6 @@ export interface SlackIngestActor {
   id: string;
   isAdmin?: boolean;
   tags?: string[] | null;
-  organizationId?: string;
   email?: string | null;
   emailVerified?: boolean | null;
 }

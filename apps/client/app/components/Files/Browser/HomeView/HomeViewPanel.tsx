@@ -82,7 +82,9 @@ const HomeViewPanel: FC<HomeViewPanelProps> = ({
 
   const workspaces = useMemo(
     () =>
-      tagCountsData?.tagCounts ? buildWorkspaces(tagCountsData.tagCounts, tagCountsData.namespaceCounts ?? []) : [],
+      tagCountsData?.workspaceTagCounts
+        ? buildWorkspaces(tagCountsData.workspaceTagCounts, tagCountsData.namespaceCounts ?? [])
+        : [],
     [tagCountsData]
   );
   const visibleWorkspaces = workspaces.slice(0, 6);
@@ -93,7 +95,7 @@ const HomeViewPanel: FC<HomeViewPanelProps> = ({
     if (!showDebug || !tagCountsData) return '';
     const totalSearchFiles = recentTotal ?? '?';
     const nsCounts = tagCountsData.namespaceCounts ?? [];
-    const tagCounts = tagCountsData.tagCounts ?? [];
+    const tagCounts = tagCountsData.workspaceTagCounts ?? [];
 
     const lines: string[] = [
       `Total Files (from search): ${totalSearchFiles}`,
@@ -107,7 +109,7 @@ const HomeViewPanel: FC<HomeViewPanelProps> = ({
           `  ${ws.namespace}: totalCount=${ws.totalCount}, children=[${ws.children.map(c => `${c.segment}(${c.count})`).join(', ')}]`
       ),
       '',
-      `=== Raw Tag Counts (${tagCounts.length} tags) ===`,
+      `=== Raw Tag Counts, WORKSPACES scope (${tagCounts.length} tags) ===`,
       ...tagCounts.slice(0, 30).map(tc => `  ${tc.tag}: ${tc.count}`),
       tagCounts.length > 30 ? `  ... and ${tagCounts.length - 30} more` : '',
     ];

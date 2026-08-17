@@ -19,7 +19,7 @@ const h = vi.hoisted(() => ({
   claimFileStatus: vi.fn(),
   deferFailureIfRetryable: vi.fn(),
   fabFileUpdate: vi.fn(),
-  countTerminalChunks: vi.fn(),
+  computeChunkVectorRollup: vi.fn(async () => ({ terminalChunkCount: 0, embeddedChunkCount: 0, embeddedCharCount: 0 })),
   chunkUpdate: vi.fn(),
   getAtlasIndexForModel: vi.fn(() => ({ name: 'idx', numDimensions: 3 })),
   stampChunkEmbeddingModel: vi.fn(),
@@ -49,7 +49,11 @@ vi.mock('@bike4mind/database', () => ({
   scopedSettingsRepository: { findOverrides: vi.fn() },
   cacheRepository: {},
   embeddingCacheRepository: {},
-  fabFileChunkRepository: { findById: vi.fn(), countTerminalChunks: h.countTerminalChunks, update: h.chunkUpdate },
+  fabFileChunkRepository: {
+    findById: vi.fn(),
+    computeChunkVectorRollup: h.computeChunkVectorRollup,
+    update: h.chunkUpdate,
+  },
   fabFileRepository: {
     shareable: { findAccessibleById: h.findAccessibleById },
     markFailedIfNotAlready: h.markFailedIfNotAlready,
@@ -86,9 +90,15 @@ vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => unde
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@server/utils/errors', () => ({ NotFoundError: class NotFoundError extends Error {} }));
 // Module-load zod schemas used by VectorizePayload.
-vi.mock('@bike4mind/common', () => ({
+vi.mock('@bike4mind/common', async () => ({
   SupportedEmbeddingModelSchema: z.string(),
   getEmbeddingModelCost: vi.fn(() => 0.0001),
+  // Pulled from the real module rather than retyped. This handler WRITES the note and the lake-health
+  // evaluator READS it to tell a permanently-stalled file from one still indexing; production cannot
+  // drift (both import the same constant), but a literal here would let THIS suite keep passing
+  // against a string the constant no longer has.
+  CONVERGENCE_PAUSED_NOTE: (await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common'))
+    .CONVERGENCE_PAUSED_NOTE,
 }));
 vi.mock('@bike4mind/fab-pipeline', () => ({
   ChunkSchema: z.object({}).passthrough(),
@@ -390,7 +400,11 @@ describe('fabFileVectorize handler - notification failures are non-fatal (human 
     });
     h.getEmbedding.mockResolvedValue(null);
     h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
-    h.countTerminalChunks.mockResolvedValue(1);
+    h.computeChunkVectorRollup.mockResolvedValue({
+      terminalChunkCount: 1,
+      embeddedChunkCount: 0,
+      embeddedCharCount: 0,
+    });
     h.claimFileStatus.mockResolvedValue(true);
     h.incrementCounter.mockResolvedValue({ vectorizedFiles: 1, failedFiles: 0, totalFiles: 1 });
   });
@@ -489,7 +503,11 @@ describe('fabFileVectorize handler - retry gating (#1412)', () => {
     h.getEmbedding.mockResolvedValue(null);
     h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
     h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
-    h.countTerminalChunks.mockResolvedValue(1);
+    h.computeChunkVectorRollup.mockResolvedValue({
+      terminalChunkCount: 1,
+      embeddedChunkCount: 0,
+      embeddedCharCount: 0,
+    });
     h.claimFileStatus.mockResolvedValue(true);
     h.incrementCounter.mockResolvedValue({ vectorizedFiles: 1, failedFiles: 0, totalFiles: 1 });
 
@@ -519,7 +537,11 @@ describe('fabFileVectorize handler - embeddingModel discriminator stamp', () => 
       tokenCount: 5,
     });
     h.getEmbedding.mockResolvedValue(null);
-    h.countTerminalChunks.mockResolvedValue(1);
+    h.computeChunkVectorRollup.mockResolvedValue({
+      terminalChunkCount: 1,
+      embeddedChunkCount: 0,
+      embeddedCharCount: 0,
+    });
   });
 
   it('stamps the chunk embeddingModel once the whole file is fully vectorized', async () => {
@@ -532,7 +554,7 @@ describe('fabFileVectorize handler - embeddingModel discriminator stamp', () => 
       'ff1',
       'text-embedding-3-small',
       expect.objectContaining({ db: expect.anything() }),
-      { vectorized: true, vectorizedChunkCount: 1, isVectorizing: false }
+      { vectorized: true, vectorizedChunkCount: 1, isVectorizing: false, embeddedChunkCount: 0, embeddedCharCount: 0 }
     );
   });
 
@@ -566,7 +588,11 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
       tokenCount: 5,
     });
     h.getEmbedding.mockResolvedValue(null);
-    h.countTerminalChunks.mockResolvedValue(1);
+    h.computeChunkVectorRollup.mockResolvedValue({
+      terminalChunkCount: 1,
+      embeddedChunkCount: 0,
+      embeddedCharCount: 0,
+    });
     h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
     h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
   });

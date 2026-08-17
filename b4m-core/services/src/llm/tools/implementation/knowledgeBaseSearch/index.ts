@@ -416,9 +416,10 @@ async function trySemanticKbSearch(
     // No hits: the keyword arm answers, but it has to carry the notice with it.
     if (search.results.length === 0) return { output: null, skipNotice, datalakeTags: [], fileHits: [] };
 
-    // Honor the max_results contract: topK fetches a wider pool (≥6) so cosine ranking has
+    // Honor the max_results contract: topK fetches a wider pool (>=6) so cosine ranking has
     // candidates, but we return at most maxResults passages - parity with the keyword path's
-    // .slice(0, max_results) so the tool output can't exceed what the caller asked for.
+    // .slice(0, maxResults) so the tool output can't exceed what the caller asked for. The
+    // value arrives already clamped to KB_SEARCH_MAX_RESULTS; this arm must not re-derive it.
     const ranked = search.results.slice(0, maxResults);
 
     await emitSemanticCitables(context, ranked, 'the data lake', skipNotice);
@@ -501,6 +502,37 @@ async function tryScopedSemanticKbSearch(
     context.logger.warn('📚 [semantic] scoped KB search failed, falling back to scoped keyword:', err);
     return NO_SEMANTIC_RESULT;
   }
+}
+
+/**
+ * Bounds on `max_results`. The tool schema below and the clamp in the handler BOTH read these,
+ * so the number advertised to the model and the number enforced on it cannot drift apart - the
+ * same reason the serve budget is derived from the chunk policy rather than set beside it.
+ */
+export const KB_SEARCH_MAX_RESULTS = 10;
+export const KB_SEARCH_DEFAULT_RESULTS = 5;
+
+/**
+ * Narrow a model-supplied `max_results` to the bound the schema advertises.
+ *
+ * The schema's `minimum`/`maximum` are advisory: nothing in the chat path's tool dispatch
+ * validates params, so whatever the model emits arrives here as-is and must be made safe at the
+ * handler (the shape knowledgeBaseRetrieve, bashExecute and wolfram_alpha already use). The CLI's
+ * tool_search takes the other route for the same problem - see ToolSearchParamsSchema in
+ * packages/cli/src/tools/toolSearchTool.ts, which safeParses and REJECTS out-of-range rather than
+ * clamping; that stays out of the chat path, where a rejected search costs the turn. Both ends are clamped
+ * because every out-of-range value fails SILENTLY otherwise: 0 serves no passages while telling
+ * the model nothing, a negative slices off the best-ranked results, and a non-numeric poisons
+ * topK as NaN. Typed `unknown` because the declared `number` is only a claim about JSON we parsed.
+ *
+ * Unset takes the default rather than the floor, matching positiveIntOr in resolveSearchBudgets:
+ * `null` and `''` are the model declining to choose, not a request for one result.
+ */
+function clampMaxResults(raw: unknown): number {
+  if (raw === undefined || raw === null || raw === '') return KB_SEARCH_DEFAULT_RESULTS;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return KB_SEARCH_DEFAULT_RESULTS;
+  return Math.min(Math.max(Math.floor(n), 1), KB_SEARCH_MAX_RESULTS);
 }
 
 interface KnowledgeBaseSearchParams {
@@ -636,7 +668,10 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
       toolFn: async value => {
         const params = value as KnowledgeBaseSearchParams;
         await context.onStart?.('search_knowledge_base', params);
-        const { query, tags, file_type, max_results = 5 } = params;
+        const { query, tags, file_type } = params;
+        // Every consumer below reads maxResults, never params.max_results: one clamp at the
+        // single entry point is what keeps a later edit from reopening the hole at one of them.
+        const maxResults = clampMaxResults(params.max_results);
 
         searchCallCount++;
         if (searchCallCount > MAX_SEARCHES) {
@@ -676,8 +711,8 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
         // embedding deps aren't wired or nothing matches. The scoped arm never consults
         // owner-wide data-lake access.
         const semantic = scope
-          ? await tryScopedSemanticKbSearch(context, scope.fileIds, query, max_results)
-          : await trySemanticKbSearch(context, query, tags, max_results);
+          ? await tryScopedSemanticKbSearch(context, scope.fileIds, query, maxResults)
+          : await trySemanticKbSearch(context, query, tags, maxResults);
         lastSkipNotice = semantic.skipNotice;
         // Attach the retrieved lakes' scoped prompts (no-op for the agent-scoped arm, whose
         // datalakeTags are empty). The keyword fallback below returns metadata only (no grounded
@@ -793,7 +828,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             })
             .map((f: IFabFileDocument) => ({ f, score: scoreFile(f) }))
             .sort((a, b) => b.score - a.score || a.f.fileName.localeCompare(b.f.fileName))
-            .slice(0, max_results)
+            .slice(0, maxResults)
             .map(r => r.f);
 
           context.logger.log(
@@ -901,9 +936,9 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             },
             max_results: {
               type: 'number',
-              description: 'Maximum number of results to return (default: 5, max: 10)',
+              description: `Maximum number of results to return (default: ${KB_SEARCH_DEFAULT_RESULTS}, max: ${KB_SEARCH_MAX_RESULTS})`,
               minimum: 1,
-              maximum: 10,
+              maximum: KB_SEARCH_MAX_RESULTS,
             },
           },
           required: ['query'],

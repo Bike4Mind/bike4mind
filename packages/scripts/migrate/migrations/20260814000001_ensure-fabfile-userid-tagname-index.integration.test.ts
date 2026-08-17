@@ -8,7 +8,7 @@ import { createMongoServer } from '../../../database/src/__test__/createMongoSer
 // that changes.
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
-import migration from './20260814000000_ensure-fabfile-userid-tagname-index';
+import migration from './20260814000001_ensure-fabfile-userid-tagname-index';
 
 const INDEX_NAME = 'userId_1_tags.name_1_archivedAt_1_deletedAt_1';
 

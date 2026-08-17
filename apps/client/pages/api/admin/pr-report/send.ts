@@ -1,7 +1,7 @@
 /**
  * POST /api/admin/pr-report/send
  *
- * Phase two: post the FINAL, human-edited text to the configured Slack channel.
+ * Phase two: post the FINAL, human-edited text to the configured Slack incoming webhook.
  *
  * Admin-gated, body-validated, audited and deduped. Note the accepted consequence of
  * putting a human in the loop: because the admin edits the text and this request
@@ -73,7 +73,8 @@ const handler = baseApi().post<Request<{}, {}, SendBody>>(async (req, res) => {
     actingUserId: req.user?.id ?? null,
     actingUserEmail: req.user?.email ?? null,
     repo: config.repo,
-    channel: config.destination?.channel ?? null,
+    // Never the webhook URL - it is bearer-equivalent. Only whether one was configured.
+    hasDestination: !!config.destination,
     textLength: parsedBody.data.text.length,
     hadIdempotencyKey: !!parsedBody.data.idempotencyKey,
     result: outcome.ok ? outcome.response.outcome : `failed:${outcome.failure.kind}`,

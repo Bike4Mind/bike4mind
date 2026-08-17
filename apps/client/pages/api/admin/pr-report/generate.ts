@@ -38,9 +38,11 @@ const handler = baseApi().post(async (req, res) => {
     );
   }
 
-  // Both of these fail silently and daily if not caught here: a roster whose role key
-  // does not resolve renders as a missing mention, and one with no specificOwner
-  // blanket-pings its whole pool on every run. Neither is visible from inside a report.
+  // Only STRUCTURAL spec errors block here (no catch-all, duplicate order, a roster with
+  // no roleKey or no specificOwner) - each fails silently and daily and is invisible from
+  // inside a report. A roster whose role key is merely unmapped is NOT blocking: it rides
+  // along as a `rosterWarnings` advisory below, because the renderer already omits the
+  // pool mention and a blank or partial identity map is a legitimate configuration.
   if (config.specErrors.length) {
     throw new BadRequestError(
       `Bucket configuration is invalid: ${config.specErrors
@@ -76,12 +78,14 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(502).json({ kind: 'error', reason: 'Failed to fetch pull requests from GitHub' });
   }
 
-  // `identityMapErrors` rides along so the admin UI can show line-numbered parse
-  // problems next to the report the map produced. Non-blocking: a partly-broken map
-  // still mentions everyone who parsed.
+  // `identityMapErrors` and `rosterWarnings` ride along so the admin UI can show, next to
+  // the report the map produced, the line-numbered parse problems and the roster pools
+  // that will post without an @-mention. Both non-blocking: a partly-configured map still
+  // mentions everyone who resolved.
   return res.status(200).json({
     ...outcome.response,
     identityMapErrors: config.identityMapErrors,
+    rosterWarnings: config.rosterWarnings,
   });
 });
 

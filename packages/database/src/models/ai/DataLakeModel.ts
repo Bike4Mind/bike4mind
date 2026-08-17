@@ -45,8 +45,9 @@ const DataLakeSchema = new mongoose.Schema(
     // with each other on slug - this is the desired behavior.
     slug: { type: String, required: true },
     description: { type: String },
-    // Per-lake system prompt (see IDataLake.systemPrompt). Not yet consumed; a later PR (#843)
-    // injects it at answer time. Stored uncapped, matching the other system-prompt fields.
+    // Per-lake system prompt, injected RETRIEVAL-SCOPED at answer time (see
+    // IDataLake.systemPrompt for the full contract). Stored uncapped, matching the other
+    // system-prompt fields.
     systemPrompt: { type: String },
     // Preferred registry system-prompt id for sessions created for this lake (see
     // IDataLake.preferredSystemPromptId). Validated against the session-activatable allowlist at
@@ -82,6 +83,10 @@ const DataLakeSchema = new mongoose.Schema(
       set: (v: unknown) => (typeof v === 'string' ? normalizeEntitlementKey(v) : v),
     },
     createdByUserId: { type: String, required: true },
+    // Last principal to write this lake's config (see IDataLake.lastUpdatedByUserId). Server-set
+    // from the authenticated actor by every config-write service; no index (tiny collection, only
+    // ever read from a lake already in hand, same rationale as the fields below).
+    lastUpdatedByUserId: { type: String },
     organizationId: { type: String },
     // Public opt-in (see IDataLake.isPublic): a true value makes the lake readable app-wide,
     // bypassing the org prerequisite + Private-by-default. No dedicated index (tiny collection,

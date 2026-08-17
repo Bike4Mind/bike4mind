@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { CreateDataLakeRequestInput, ApplyTaxonomyRequestInput } from './dataLake';
+import { CreateDataLakeRequestInput, ApplyTaxonomyRequestInput, UpdateDataLakeRequestInput } from './dataLake';
+import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '../constants/chunking';
 
 const input = (fileTagPrefix: string) => ({ name: 'Lake', slug: 'my-lake', fileTagPrefix });
 
@@ -113,5 +114,28 @@ describe('ApplyTaxonomyRequestInput - size bounds', () => {
     expect(ApplyTaxonomyRequestInput.safeParse({ tags: [tag({ matchingFolders: ['x'.repeat(513)] })] }).success).toBe(
       false
     );
+  });
+});
+
+describe('UpdateDataLakeRequestInput.requiredPassageTokenTarget', () => {
+  // The lake-level route into #1804. A lake requiring a target above the under-chunked detection
+  // threshold has members that re-chunk to a compliant size and STILL trip detection, so its
+  // rebuild badge never reaches zero. Bounding only the DefaultChunkSize setting leaves this open.
+  const parse = (requiredPassageTokenTarget: number | null) =>
+    UpdateDataLakeRequestInput.safeParse({ requiredPassageTokenTarget });
+
+  it('rejects a required target above the detection threshold', () => {
+    expect(parse(OVERSIZED_PASSAGE_TOKEN_THRESHOLD + 1).success).toBe(false);
+    expect(parse(8192).success).toBe(false); // the old ceiling
+  });
+
+  it('accepts the threshold itself, which is convergent because detection is $gt', () => {
+    expect(parse(OVERSIZED_PASSAGE_TOKEN_THRESHOLD).success).toBe(true);
+  });
+
+  it('still accepts the floor and the explicit clear sentinel', () => {
+    expect(parse(MIN_PASSAGE_TOKEN_TARGET).success).toBe(true);
+    expect(parse(MIN_PASSAGE_TOKEN_TARGET - 1).success).toBe(false);
+    expect(parse(null).success).toBe(true);
   });
 });

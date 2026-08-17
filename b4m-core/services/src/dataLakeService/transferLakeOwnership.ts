@@ -8,14 +8,16 @@ import { BadRequestError, NotFoundError, normalizeId } from '@bike4mind/utils';
 import { isEffectiveOwner, resolveEffectiveOwnerIds, type ManageActor } from './manageRule';
 import { assertLakeGrantable } from './assertLakeAccess';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
+import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 
 interface TransferLakeOwnershipAdapters {
   db: {
-    dataLakes: Pick<IDataLakeRepository, 'findById'>;
+    dataLakes: Pick<IDataLakeRepository, 'findById' | 'update'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'upsertGrant'>;
     users: Pick<IUserRepository, 'findById'>;
     organizations: Pick<IOrganizationRepository, 'findById'>;
   };
+  logger?: { warn: (msg: string, ...args: unknown[]) => void };
 }
 
 export interface TransferLakeOwnershipResult {
@@ -52,7 +54,7 @@ export const transferLakeOwnership = async (
   actor: ManageActor,
   dataLakeId: string,
   newOwnerUserId: string,
-  { db }: TransferLakeOwnershipAdapters
+  { db, logger }: TransferLakeOwnershipAdapters
 ): Promise<TransferLakeOwnershipResult> => {
   const lake = await db.dataLakes.findById(dataLakeId);
   if (!lake) {
@@ -119,6 +121,47 @@ export const transferLakeOwnership = async (
       expiresAt: null,
     });
     demotedUserIds.push(priorOwnerUserId);
+  }
+
+  // Ownership lives in the grants, not on the document, so this is the one config write that would
+  // otherwise leave the lake itself untouched - and a transfer is the change most worth attributing.
+  // Written AFTER the grants so the stamp never claims a transfer that failed partway. The grant
+  // rows carry `grantedByUserId` independently; this keeps the lake's own "who last changed me"
+  // answer true rather than pointing at an older, smaller edit.
+  // Guarded, unlike the other call sites: this write exists ONLY to carry the stamp, so an
+  // unattributable actor would otherwise cost a round trip that sets nothing.
+  //
+  // Best-effort for the same reason it is ordered last: the grants above have already moved
+  // ownership, so throwing here would report a failed transfer that in fact succeeded and invite a
+  // retry of an operation that is done. An audit write must never fail the operation it audits -
+  // but it must not fail SILENTLY either, since the only other symptom is a stamp that quietly
+  // names an older, smaller edit.
+  const stamp = lakeConfigWriteStamp(actor);
+  if (stamp.lastUpdatedByUserId) {
+    // Falls back to console when no logger is wired, so neither failure shape below can go silent:
+    // `logger` is optional on the adapters, and a swallowed failure with no output would leave the
+    // stamp quietly naming an older, smaller edit with nothing anywhere to say why. Called through a
+    // closure rather than passing `logger.warn` by reference, so a logger whose method needs `this`
+    // still works.
+    const warn = (msg: string, meta: unknown) => (logger ? logger.warn(msg, meta) : console.warn(msg, meta));
+    try {
+      // The return value matters as much as the throw: `BaseModel.update` is a `findOneAndUpdate`
+      // that RESOLVES `null` when no document matches, so a lake deleted between this function's
+      // opening `findById` and this final write (several awaits apart - grant upserts, user and org
+      // lookups) would no-op with no exception for the catch to see. Checking the result is what
+      // makes "never fails silently" true for BOTH shapes, not just the throwing one.
+      const stamped = await db.dataLakes.update({ id: lake.id, ...stamp });
+      if (!stamped) {
+        warn('[dataLakes] ownership transferred but the lake was not found for the actor stamp', {
+          dataLakeId: lake.id,
+        });
+      }
+    } catch (err) {
+      warn('[dataLakes] ownership transferred but the actor stamp did not persist', {
+        dataLakeId: lake.id,
+        err,
+      });
+    }
   }
 
   return { newOwnerUserId, demotedUserIds };

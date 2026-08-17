@@ -17,7 +17,7 @@ import { type MigrationFile } from './index';
  * happens to be missing.
  */
 const migration: MigrationFile = {
-  id: 20260814000000,
+  id: 20260814000001,
   name: 'ensure fabfile userid tagname index',
 
   up: async () => {

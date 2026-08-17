@@ -3,6 +3,7 @@ import { UpdateDataLakeRequestInput, normalizeEntitlementKey } from '@bike4mind/
 import { secureParameters, BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { type ManageActor } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
+import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 import type { z } from 'zod';
 
 type UpdateDataLakeParams = z.infer<typeof UpdateDataLakeRequestInput>;
@@ -53,6 +54,10 @@ export const updateDataLake = async (
   const updated = await db.dataLakes.update({
     id: dataLakeId,
     ...params,
+    // After `params`, never before: the stamp is resolved from the authenticated actor, so it must
+    // win over anything a crafted body carried. `secureParameters` already strips unknown keys
+    // (UpdateDataLakeRequestInput declares no such field), making this order belt-and-braces.
+    ...lakeConfigWriteStamp(actor),
     // Normalize the entitlement key at write time (Mongo $in is case-sensitive; the
     // resolver produces lowercase keys). Only override when present so an absent field isn't
     // written as undefined, and so the '' clear-sentinel passes through untouched.

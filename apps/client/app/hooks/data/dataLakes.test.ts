@@ -37,11 +37,14 @@ vi.mock('@client/app/hooks/useGearsStatus', () => ({ invalidateGearsStatusWhileL
 
 import {
   __resetPurgingLakesForTests,
+  INITIAL_REBUILD_POLL_STATE,
+  nextRebuildPoll,
   useBrowsePublicDataLakes,
   useCleanupDataLake,
   useDuplicatePrefixLake,
   useGetDeletedDataLakes,
   useRemoveFileFromDataLake,
+  useRechunkDataLake,
 } from './dataLakes';
 
 const PAGE_SIZE = 24;
@@ -418,5 +421,78 @@ describe('useDuplicatePrefixLake freshness', () => {
     expect(result.current).toBeUndefined(); // the warm, collision-free list
     await waitFor(() => expect(result.current?.fileTagPrefix).toBe('legal:'));
     expect(apiGet).toHaveBeenCalledWith('/api/data-lakes');
+  });
+});
+
+/**
+ * Rebuild badge poll cadence. This logic has now carried two consecutive defects - it stopped
+ * polling before the work it reported on had finished, and then, once both counts were summed, it
+ * could never stop at all - and both shipped because nothing executed it. nextRebuildPoll is pure
+ * precisely so this file can.
+ */
+describe('nextRebuildPoll', () => {
+  const start = INITIAL_REBUILD_POLL_STATE;
+
+  it('backs off as the backlog grows', () => {
+    expect(nextRebuildPoll(1, start).interval).toBe(5_000);
+    expect(nextRebuildPoll(51, start).interval).toBe(15_000);
+    expect(nextRebuildPoll(201, start).interval).toBe(30_000);
+  });
+
+  it('stops immediately when there was never a backlog to drain', () => {
+    expect(nextRebuildPoll(0, start).interval).toBe(false);
+  });
+
+  it('TERMINATES after the backlog clears, even though a failed file keeps failedCount above zero', () => {
+    // The regression this exists to catch: gating the loop on underChunkedCount + failedCount. A
+    // permanently-failed file never retries on its own, so that sum is pinned above zero and the
+    // panel polls a full lake rescan every 5s forever. The count alone must be the loop condition.
+    let state = nextRebuildPoll(3, start).next; // a backlog was seen
+    let polls = 0;
+    let interval = nextRebuildPoll(0, state).interval;
+    while (interval !== false) {
+      polls += 1;
+      expect(polls).toBeLessThan(100); // fails loudly rather than hanging if it never terminates
+      state = nextRebuildPoll(0, state).next;
+      interval = nextRebuildPoll(0, state).interval;
+    }
+    expect(polls).toBeGreaterThan(0); // but it did keep polling for a while first
+  });
+
+  it('keeps polling briefly after the backlog clears, so a late failure still lands', () => {
+    // underChunkedCount drops when a wave is RESET, minutes before those chunk jobs finish.
+    const state = nextRebuildPoll(3, start).next;
+    expect(nextRebuildPoll(0, state).interval).not.toBe(false);
+  });
+
+  it('restarts the settle window when a new backlog appears', () => {
+    let state = nextRebuildPoll(3, start).next;
+    state = nextRebuildPoll(0, state).next; // one settle poll consumed
+    expect(nextRebuildPoll(5, state).next.settlePolls).toBe(0);
+  });
+});
+
+describe('useRechunkDataLake cache invalidation', () => {
+  it('refreshes lake HEALTH too, not just the rebuild badge', async () => {
+    // A rebuild mass-mutates the exact per-file rollups health is computed from. The health query has
+    // no refetchInterval and refetchOnWindowFocus:false, and its observer stays mounted while the
+    // panel re-renders, so staleTime alone never refreshes it. Without this invalidation the badge
+    // sits frozen for the whole rebuild while the "to rebuild" chip ticks to zero beside it - which
+    // reads as "the rebuild accomplished nothing". The other two lake mutations already do both.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiPost.mockResolvedValueOnce({ data: { detected: 2, enqueued: 2, remaining: 0 } });
+
+    const { result } = renderHook(() => useRechunkDataLake('lake1'), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync(undefined);
+    });
+
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['dataLakeHealth', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeRebuildStatus', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeFiles', 'lake1']));
   });
 });

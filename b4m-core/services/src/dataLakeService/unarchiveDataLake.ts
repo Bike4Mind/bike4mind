@@ -2,6 +2,7 @@ import type { IDataLakeAccessGrantRepository, IDataLakeRepository, IFabFileRepos
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { type ManageActor } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
+import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 import { recomputeLakeStats } from './recomputeLakeStats';
 import { lakeMembershipScope } from './lakeMembershipScope';
 
@@ -87,7 +88,13 @@ export const unarchiveDataLake = async (
 
   // Explicit null, not undefined (mongoose drops undefined): a later re-archive claims a FRESH
   // stamp via claimFilesArchivedAt's set-if-unset, rather than reusing this spent one.
-  await db.dataLakes.update({ id: dataLakeId, status: 'active', filesArchivedAt: null });
+  // Terminal transition only - see the note on archiveDataLake's settle step.
+  await db.dataLakes.update({
+    id: dataLakeId,
+    status: 'active',
+    filesArchivedAt: null,
+    ...lakeConfigWriteStamp(actor),
+  });
   await recomputeLakeStats(existing, { db });
 
   return { restoredCount, skippedDuplicates };
