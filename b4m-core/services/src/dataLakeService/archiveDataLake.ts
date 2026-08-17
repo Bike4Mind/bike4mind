@@ -6,16 +6,24 @@ import type {
   IFabFileRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { type ManageActor } from './manageRule';
-import { resolveCanManageLake } from './authorizeLakeManage';
+import { canManageLake, type ManageActor } from './manageRule';
+import { loadActiveLakeGrants } from './authorizeLakeManage';
 import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
+import { diffLakeConfig } from './diffLakeConfig';
+import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 import { recomputeLakeStats } from './recomputeLakeStats';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
 import { bestEffortIndexRemove, type RetrievalIndexPort } from './ports';
 
-interface ArchiveDataLakeAdapters {
-  db: {
+interface ArchiveDataLakeAdapters extends LakeConfigAuditAdapters {
+  // The event repo is REQUIRED here, unlike the optional shape LakeConfigAuditAdapters carries
+  // for recomputeLakeStats: every caller of this service is an API route (there is exactly one
+  // per service), so nothing is spared by making it optional and a route that forgot to wire it
+  // would go dark silently - the one failure mode an audit must not have. Required here turns
+  // that into a compile error.
+  db: LakeConfigAuditAdapters['db'] & {
+    lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
     dataLakes: Pick<
       IDataLakeRepository,
       'findById' | 'update' | 'setStats' | 'activateIfDraft' | 'find' | 'claimFilesArchivedAt'
@@ -50,7 +58,10 @@ export const archiveDataLake = async (
     throw new NotFoundError('Data lake not found');
   }
 
-  if (!(await resolveCanManageLake(existing, actor, { db }))) {
+  // Loaded once and reused for the audit event's manage rung: the gate and the recorded rung must
+  // agree on one grant set, not two reads that could disagree.
+  const grants = await loadActiveLakeGrants(existing, { db });
+  if (!canManageLake(existing, actor, grants)) {
     throw new BadRequestError('You do not have permission to archive this data lake');
   }
 
@@ -164,6 +175,13 @@ export const archiveDataLake = async (
   if (!updated) {
     throw new NotFoundError('Data lake not found after archive');
   }
+  // Recorded on the terminal transition alongside the stamp, for the same reason and with the same
+  // scope: one operator action, one audit row. Placed BEFORE the stats recompute so the archive is
+  // attributed even if the recompute throws - the lake is already archived by this point either way.
+  await recordLakeConfigChange(
+    { actor, lake: existing, grants, action: 'archive', changes: diffLakeConfig(existing, updated) },
+    { db, logger }
+  );
   // Always recompute from source, never short-circuit on the sweep's own count ("it archived
   // nothing, so stats can't have changed"): a re-entry sweeps 0 for rows a PRIOR attempt already
   // archived, and those rows are exactly what this recompute needs to reflect.
