@@ -77,8 +77,22 @@ describe('DataLakeAccessModal', () => {
     expect(screen.getByTestId('datalake-access-grants-table')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-access-grant-status-expired')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-access-channel-tag')).toHaveTextContent('vip');
-    expect(screen.getByTestId('datalake-access-channel-organization')).toHaveTextContent('Acme (3 members)');
+    expect(screen.getByTestId('datalake-access-channel-organization')).toHaveTextContent(
+      'Acme (3 members with access)'
+    );
     expect(screen.getByTestId('datalake-access-history-table')).toBeInTheDocument();
+  });
+
+  it('qualifies access history as a lower bound whether or not it has rows', () => {
+    const { rerender } = render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    // Present alongside real rows: a populated table must not read as the complete record either.
+    expect(screen.getByTestId('datalake-access-history-caveat')).toHaveTextContent(/lower bound/i);
+
+    viewState = { data: { ...fullView, history: [], historyTruncated: false }, isLoading: false, isError: false };
+    rerender(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />);
+    expect(screen.getByTestId('datalake-access-history-caveat')).toHaveTextContent(
+      /not proof that no one has read this lake/i
+    );
   });
 
   it('warns when the history was truncated, saying the CSV carries the same window (not the full trail)', () => {

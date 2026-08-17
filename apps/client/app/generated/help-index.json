@@ -6152,6 +6152,11 @@
           "anchor": "vector-embeddings"
         },
         {
+          "level": 3,
+          "text": "Lake Health (retrievability)",
+          "anchor": "lake-health-retrievability"
+        },
+        {
           "level": 2,
           "text": "Organization Features",
           "anchor": "organization-features"
@@ -15609,6 +15614,11 @@
               "anchor": "vector-embeddings"
             },
             {
+              "level": 3,
+              "text": "Lake Health (retrievability)",
+              "anchor": "lake-health-retrievability"
+            },
+            {
               "level": 2,
               "text": "Organization Features",
               "anchor": "organization-features"
@@ -18905,5 +18915,5 @@
       "accessLevel": "public"
     }
   ],
-  "version": "2026-08-14T12:23:16.373Z"
+  "version": "2026-08-17T12:42:57.473Z"
 }

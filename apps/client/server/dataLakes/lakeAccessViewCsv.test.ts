@@ -108,8 +108,48 @@ describe('lakeAccessViewToCsv', () => {
         ],
       })
     );
-    expect(csv).toContain('"tag","vip","",""'); // no label, no count
-    expect(csv).toContain('"organization","orgA","Acme","12"');
+    expect(csv).toContain('"tag","vip","","","Tag: vip"'); // no resolved label, no count
+    expect(csv).toContain('"organization","orgA","Acme","12","Organization: Acme (12 members with access)"');
+  });
+
+  it('exports a description matching the screen for every channel kind, not just organization', () => {
+    const csv = lakeAccessViewToCsv(
+      baseView({ channels: [{ kind: 'public' }, { kind: 'entitlement', value: 'pro' }] })
+    );
+    // The machine columns stay sparse for these kinds, but the human column is never blank - a
+    // reader comparing the file to the modal must not see one row explained and the others empty.
+    expect(csv).toContain('"public","","","","Public: everyone across the app"');
+    expect(csv).toContain('"entitlement","pro","","","Entitlement: pro"');
+  });
+
+  it('singularizes a one-member organization count', () => {
+    const csv = lakeAccessViewToCsv(
+      baseView({ channels: [{ kind: 'organization', value: 'orgA', label: 'Acme', holderCount: 1 }] })
+    );
+    expect(csv).toContain('Organization: Acme (1 member with access)');
+  });
+
+  it('always qualifies the history section as a lower bound, even when it has rows', () => {
+    const populated = lakeAccessViewToCsv(
+      baseView({
+        history: [
+          {
+            principalKind: 'user',
+            principalId: 'u1',
+            readCount: 2,
+            firstAccessedAt: new Date('2026-08-01T00:00:00.000Z'),
+            lastAccessedAt: new Date('2026-08-02T00:00:00.000Z'),
+            surfaces: ['chat-kb-search'],
+          },
+        ],
+      })
+    );
+    // Emitted for an empty AND a populated section: rows prove reads happened, never that these are
+    // all of them, since only instrumented surfaces emit events and events age out on their TTL.
+    expect(populated).toContain('# NOTE: covers reads through instrumented retrieval surfaces');
+    expect(lakeAccessViewToCsv(baseView({ history: [] }))).toContain(
+      'an empty section is not proof that no one read this lake'
+    );
   });
 
   it('notes conjunctive composition only when the channels actually compose', () => {

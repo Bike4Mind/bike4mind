@@ -263,11 +263,14 @@ opens a read-only compliance surface answering the two questions a lake owner is
     granted it and when, and its expiry. A grant past its expiry is shown as **expired**, resolved
     live at the moment you open the view - never as if it were still live.
   - **Access channels** - the gate-based ways in that are not explicit grants: a required tag, a
-    required entitlement, an organization (shown with its member count), or public. These are
-    resolved live on every request, so they are shown as channels rather than as member rows.
+    required entitlement, an organization (shown with the number of its members that can actually
+    reach the lake), or public. These are resolved live on every request, so they are shown as
+    channels rather than as member rows.
 - **Who actually has?**
   - **Access history** - who has read the lake, how many times, when they last read it, and through
-    which surface, aggregated from the access-audit trail.
+    which surface, aggregated from the access-audit trail. Read this as a **lower bound**: an entry
+    exists only for a retrieval surface that emits access events, and events age out on their own
+    retention window. An empty history means "no reads recorded", not "nobody read this lake".
 
 Use **Export CSV** for a downloadable artifact suitable for a compliance review; it contains the
 same three sections plus a note when the history was truncated.
@@ -282,8 +285,17 @@ same three sections plus a note when the history was truncated.
   in the install, which this feature is designed to avoid. A missing count means "not counted", not
   "zero".
 - **"Showing the most recent reads only".** The history read is capped for performance. When you see
-  this banner, the on-screen list is the most recent window, not the whole trail - export the CSV for
-  the complete retained window (audit retention is at least ~15 months).
+  this banner, the on-screen list is the most recent window, not the whole trail. The CSV export
+  carries that **same** window, so it is not a way around the cap; the banner and the export both
+  state the instant the window starts.
+- **Access history is empty after someone read the lake.** Only retrieval surfaces that have been
+  instrumented to emit access events appear here, and that instrumentation is still being rolled out
+  across the retrieval paths - so a read can succeed without producing a row. The empty state says
+  "no reads recorded" for exactly this reason.
+- **An organization's member count here is lower than on the organization page.** This count is the
+  members the read gate would actually admit. Members who have not accepted their invitation, or who
+  hold share-only permissions, are counted by the organization page but cannot read the lake, so they
+  are excluded here on purpose - an over-stated count would be the more dangerous error.
 - **A reader you expected is missing from Members.** Reader-role and organization grants only take
   effect once the platform enables read-time grant enforcement; until then they are recorded but do
   not yet open the lake. Tag/entitlement/org access appears under Access channels, not as grants.

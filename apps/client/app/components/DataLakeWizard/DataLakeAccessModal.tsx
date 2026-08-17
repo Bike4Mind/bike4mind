@@ -22,7 +22,7 @@ import type {
   LakeAccessHistoryEntry,
   LakeAccessView,
 } from '@bike4mind/common';
-import { lakeAccessChannelsComposeConjunctively } from '@bike4mind/common';
+import { describeLakeAccessChannel, lakeAccessChannelsComposeConjunctively } from '@bike4mind/common';
 import type { ColorPaletteProp } from '@mui/joy';
 import { useLakeAccessView, downloadLakeAccessCsv } from '@client/app/hooks/data/dataLakes';
 import { toast } from 'sonner';
@@ -44,13 +44,6 @@ const ROLE_COLOR: Record<DataLakeAccessRole, ColorPaletteProp> = {
   owner: 'primary',
   curator: 'success',
   reader: 'neutral',
-};
-
-const CHANNEL_LABEL: Record<LakeAccessChannel['kind'], string> = {
-  tag: 'Tag',
-  entitlement: 'Entitlement',
-  organization: 'Organization',
-  public: 'Public',
 };
 
 function GrantRow({ grant }: { grant: LakeAccessGrantView }) {
@@ -91,18 +84,10 @@ function GrantRow({ grant }: { grant: LakeAccessGrantView }) {
 }
 
 function ChannelChip({ channel }: { channel: LakeAccessChannel }) {
-  // Public has no value; org shows its resolved name + member count; tag/entitlement show the gate
-  // value and deliberately no count (we never scan the user table to count holders).
-  const detail =
-    channel.kind === 'public'
-      ? 'everyone across the app'
-      : channel.kind === 'organization'
-        ? `${channel.label ?? channel.value}${channel.holderCount != null ? ` (${channel.holderCount} members)` : ''}`
-        : channel.value;
+  // Rendered text comes from the shared describer so this chip and the CSV export can never drift.
   return (
     <Chip size="md" variant="outlined" color="neutral" data-testid={`datalake-access-channel-${channel.kind}`}>
-      {CHANNEL_LABEL[channel.kind]}
-      {detail ? `: ${detail}` : ''}
+      {describeLakeAccessChannel(channel)}
     </Chip>
   );
 }
@@ -201,8 +186,21 @@ function AccessViewBody({ view }: { view: LakeAccessView }) {
 
       {/* Who actually read it: audit history */}
       <Box>
-        <Typography level="title-sm" sx={{ mb: 1 }}>
+        <Typography level="title-sm" sx={{ mb: 0.5 }}>
           Access history
+        </Typography>
+        {/* Always shown, populated or not: history is a lower bound (only instrumented surfaces emit
+            events, and events age out), so neither a row count nor an empty list may be read as the
+            complete picture. Stating this only on the empty state would let a populated view read as
+            exhaustive. */}
+        <Typography
+          level="body-xs"
+          textColor="text.tertiary"
+          sx={{ mb: 1 }}
+          data-testid="datalake-access-history-caveat"
+        >
+          Covers reads through instrumented retrieval surfaces, within the audit retention window. Treat this as a lower
+          bound - an empty list is not proof that no one has read this lake.
         </Typography>
         {view.historyTruncated && (
           <Alert
@@ -219,7 +217,7 @@ function AccessViewBody({ view }: { view: LakeAccessView }) {
         )}
         {view.history.length === 0 ? (
           <Typography level="body-sm" textColor="text.tertiary" data-testid="datalake-access-history-empty">
-            No recorded reads yet.
+            No reads recorded.
           </Typography>
         ) : (
           <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto' }}>

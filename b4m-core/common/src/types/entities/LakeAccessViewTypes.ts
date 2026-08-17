@@ -58,6 +58,38 @@ export interface LakeAccessChannel {
   holderCount?: number;
 }
 
+/** Display label per channel kind, keyed by the enum so a new kind fails the build here. */
+const CHANNEL_KIND_LABEL: Record<LakeAccessChannelKind, string> = {
+  tag: 'Tag',
+  entitlement: 'Entitlement',
+  organization: 'Organization',
+  public: 'Public',
+};
+
+function describeChannelDetail(channel: LakeAccessChannel): string | undefined {
+  if (channel.kind === 'public') return 'everyone across the app';
+  if (channel.kind !== 'organization') return channel.value;
+  const name = channel.label ?? channel.value;
+  if (channel.holderCount == null) return name;
+  // "members with access", not "members": the count is the set the read gate would ADMIT, which is
+  // deliberately smaller than the organization's own member total (pending and share-only members
+  // are excluded). An unqualified "members" invites a reader to read that gap as a defect.
+  const noun = channel.holderCount === 1 ? 'member' : 'members';
+  return `${name} (${channel.holderCount} ${noun} with access)`;
+}
+
+/**
+ * The exact human text for one channel, SHARED by the access modal and the CSV export so a
+ * compliance reader comparing the exported file against the screen never sees the two disagree.
+ * The CSV keeps `kind`/`value`/`label`/`holderCount` as separate machine-readable columns; this is
+ * the rendered form that sits beside them.
+ */
+export function describeLakeAccessChannel(channel: LakeAccessChannel): string {
+  const detail = describeChannelDetail(channel);
+  const label = CHANNEL_KIND_LABEL[channel.kind];
+  return detail ? `${label}: ${detail}` : label;
+}
+
 /**
  * Whether a lake's access channels compose CONJUNCTIVELY - i.e. they are NOT independent read paths.
  * The read gate (assertLakeAccess) treats an organization channel as a hard prerequisite, and keeps
@@ -106,7 +138,14 @@ export interface LakeAccessView {
   grants: LakeAccessGrantView[];
   /** The gate-based effective-access channels - the read paths that are not explicit grants. */
   channels: LakeAccessChannel[];
-  /** Per-principal read aggregation from the access-audit events. */
+  /**
+   * Per-principal read aggregation from the access-audit events. Always a LOWER BOUND on reads, and
+   * presentation surfaces must say so: an event exists only for a retrieval surface that has been
+   * instrumented to emit one (#1678 is still wiring those call sites), and events age out on their
+   * own retention TTL. An empty `history` therefore means "no recorded reads", never "nobody read
+   * this lake" - stating the stronger claim would be the false reassurance a compliance reader has
+   * no way to detect.
+   */
   history: LakeAccessHistoryEntry[];
   /** True when the audit read hit its cap: `history` is then the most-recent window, not the whole
    * trail. Surfaced so an owner is never misled into reading a capped view as complete. Note that even

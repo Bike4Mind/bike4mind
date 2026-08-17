@@ -1,5 +1,5 @@
 import type { LakeAccessView } from '@bike4mind/common';
-import { lakeAccessChannelsComposeConjunctively } from '@bike4mind/common';
+import { describeLakeAccessChannel, lakeAccessChannelsComposeConjunctively } from '@bike4mind/common';
 import { escapeCsvCell } from '@client/app/utils/csv';
 
 /**
@@ -80,14 +80,23 @@ export function lakeAccessViewToCsv(view: LakeAccessView): string {
       '# NOTE: channels compose conjunctively - effective access is their intersection, not the sum; a holderCount bounds one channel only'
     );
   }
-  lines.push(row(['kind', 'value', 'label', 'holderCount']));
+  // `description` carries the SAME text the access modal renders for the row (via the shared
+  // describer), so a reader holding the export beside the screen sees them agree. The columns before
+  // it stay machine-readable: `label` is only a resolved name (an org's), blank where none resolves.
+  lines.push(row(['kind', 'value', 'label', 'holderCount', 'description']));
   for (const c of view.channels) {
     // holderCount is left blank (not 0) when uncounted - a tag/entitlement channel is never scanned.
-    lines.push(row([c.kind, c.value, c.label, c.holderCount ?? '']));
+    lines.push(row([c.kind, c.value, c.label, c.holderCount ?? '', describeLakeAccessChannel(c)]));
   }
   lines.push('');
 
   lines.push('# Access history (who actually read the lake)');
+  // Unconditional, exported populated or empty: only instrumented retrieval surfaces emit events and
+  // events age out on their retention TTL, so this section is a lower bound. Without the note an
+  // empty section reads as "nobody touched it" - a claim this file cannot support.
+  lines.push(
+    '# NOTE: covers reads through instrumented retrieval surfaces within the audit retention window - a lower bound; an empty section is not proof that no one read this lake'
+  );
   if (view.historyTruncated) {
     // readCount/firstAccessedAt are window-scoped when truncated - label them so, never as all-time.
     lines.push('# NOTE: readCount and firstAccessedAt below cover only the truncated window above, not all time');
