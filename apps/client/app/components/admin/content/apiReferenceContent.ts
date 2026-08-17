@@ -335,6 +335,21 @@ GET /api/sessions
 }
 \`\`\`
 
+#### Update a Session
+
+\`\`\`
+PUT /api/sessions/[id]
+\`\`\`
+
+> **This endpoint is now generated from its contract.** The full request/response
+> reference - every field, its type, defaults, and validation rules - lives in the
+> [generated API docs](/api/v1/docs) under \`updateSession\`, derived from the same
+> object the handler validates with.
+>
+> This is also the call that turns on grounded retrieval for \`POST /api/chat\`:
+> set \`knowledgeIds\` and \`forceKnowledgeRetrieval: true\` on the session first -
+> retrieval is gated by these session fields, not by anything in the chat request.
+
 #### Session Endpoints Summary
 
 | Method | Endpoint | Description |

@@ -1,5 +1,5 @@
 import { baseApi } from './baseApi';
-import type { EndpointContract, RequestBodyOf } from '@bike4mind/common';
+import type { EndpointContract, PathParamsOf, RequestBodyOf } from '@bike4mind/common';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 
 /**
@@ -32,7 +32,7 @@ export function nextRouteForContract<C extends EndpointContract>(
   contract: C,
   options: { maxBodySize?: number; exemptReadsFromDailyRateLimit?: boolean; rateLimit?: RequestHandler } = {}
 ) {
-  type ValidatedReq = Request & { validated: RequestBodyOf<C> };
+  type ValidatedReq = Request & { validated: RequestBodyOf<C>; validatedParams: PathParamsOf<C> };
   type Handler = (req: ValidatedReq, res: Response, next: NextFunction) => unknown;
 
   const { rateLimit, ...baseOptions } = options;
@@ -54,6 +54,20 @@ export function nextRouteForContract<C extends EndpointContract>(
   // against the limiter (see the function-doc note on ordering).
   if (rateLimit) {
     prelude.push(rateLimit as unknown as Handler);
+  }
+
+  // Path params are validated BEFORE the body: address the resource first, then
+  // its payload. A request with both a bad id and a bad body should report the id
+  // error, not bury it behind an unrelated body-validation failure.
+  //
+  // Next's file-based routing merges dynamic segments into req.query, not req.params
+  // (there is no req.params in a Next.js API route) - see the pathParams doc comment.
+  const pathParamsSchema = contract.pathParams;
+  if (pathParamsSchema) {
+    prelude.push((req, _res, next) => {
+      req.validatedParams = pathParamsSchema.parse(req.query) as PathParamsOf<C>;
+      next();
+    });
   }
 
   const requestSchema = contract.request;

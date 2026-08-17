@@ -79,15 +79,18 @@ export function registerContract(contract: EndpointContract): void {
     };
   }
 
-  // Any NON-streaming contract with a request body returns 422 on validation
-  // failure - both adapters guarantee it (Next: ZodError -> errorHandler ->
-  // UnprocessableEntity; Lambda: safeParse -> 422). Auto-document it (unless the
+  // Any NON-streaming contract with a request body OR path params returns 422 on
+  // validation failure. Body validation: both adapters guarantee it (Next: ZodError
+  // -> errorHandler -> UnprocessableEntity; Lambda: safeParse -> 422). Path-param
+  // validation currently only runs on the Next adapter (see the `pathParams` doc
+  // comment in api-contract/types.ts) - documenting 422 here regardless is still
+  // correct for every contract actually served today. Auto-document it (unless the
   // contract declares its own 422). Streaming endpoints are excluded: they open
   // the stream first, so a bad body arrives as an in-band SSE `error` event, not
   // a 422 JSON body.
-  if (contract.request && !contract.streaming && !responses['422']) {
+  if ((contract.request || contract.pathParams) && !contract.streaming && !responses['422']) {
     responses['422'] = {
-      description: 'Request body failed validation.',
+      description: 'Request failed validation.',
       content: { 'application/json': { schema: ErrorResponse } },
     };
   }
@@ -115,6 +118,11 @@ export function registerContract(contract: EndpointContract): void {
   }
 
   const requestSchema = contract.requestDoc ?? contract.request;
+  // No `.openapi(name)` here: zod-to-openapi always inlines `request.params` into the
+  // operation's `parameters` array rather than a referenceable component, so a name
+  // would never appear in the output - passing the schema directly is equivalent and
+  // doesn't imply a component that doesn't exist.
+  const params = contract.pathParams;
 
   registry.registerPath({
     method: contract.method,
@@ -124,20 +132,24 @@ export function registerContract(contract: EndpointContract): void {
     description: contract.description,
     tags: contract.tags,
     security,
-    request: requestSchema
-      ? {
-          body: {
-            required: true,
-            content: {
-              'application/json': {
-                schema: requestSchema.openapi(`${contract.operationId}Request`, {
-                  ...(contract.requestExample !== undefined && { example: contract.requestExample }),
-                }),
+    request:
+      requestSchema || params
+        ? {
+            ...(params && { params }),
+            ...(requestSchema && {
+              body: {
+                required: true,
+                content: {
+                  'application/json': {
+                    schema: requestSchema.openapi(`${contract.operationId}Request`, {
+                      ...(contract.requestExample !== undefined && { example: contract.requestExample }),
+                    }),
+                  },
+                },
               },
-            },
-          },
-        }
-      : undefined,
+            }),
+          }
+        : undefined,
     responses,
   });
 }

@@ -1,5 +1,6 @@
 import type { EndpointContract } from '../types';
 import { chatContract } from './chat.contract';
+import { sessionUpdateContract } from './sessionUpdate.contract';
 import { executeToolContract } from './tools.contract';
 import { createCompletionContract } from './completions.contract';
 import { synthesizeSpeechContract } from './tts.contract';
@@ -14,6 +15,7 @@ import { generateSoundEffectContract } from './soundEffects.contract';
  */
 export const CONTRACTS: readonly EndpointContract[] = [
   chatContract,
+  sessionUpdateContract,
   executeToolContract,
   createCompletionContract,
   synthesizeSpeechContract,
