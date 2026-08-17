@@ -97,6 +97,8 @@ export const synthesizeSpeechContract = defineEndpoint({
     'status-table': 'Insufficient credits is 402 here and 422 everywhere else; changing it breaks live callers.',
     'scope-required': 'The route has always accepted any valid API key; gating it now would 403 keys that work today.',
   },
+  // Served by baseApi, so apiKeyRateLimit sets the windowed X-RateLimit-* headers.
+  emitsRateLimitHeaders: true,
   codeSample: {
     authToken: 'b4m_live_<key>',
     streaming: false,

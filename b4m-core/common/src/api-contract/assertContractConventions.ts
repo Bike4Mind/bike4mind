@@ -48,7 +48,12 @@ const LEGACY_PUBLIC_PATHS: readonly string[] = [
 /** operationId becomes the SDK method name, so it must be a valid camelCase identifier. */
 const CAMEL_CASE = /^[a-z][A-Za-z0-9]*$/;
 
-function fail(contract: EndpointContract, rule: ConventionRule | 'operation-id', problem: string, remedy: string): never {
+function fail(
+  contract: EndpointContract,
+  rule: ConventionRule | 'operation-id',
+  problem: string,
+  remedy: string
+): never {
   throw new Error(
     `Contract "${contract.operationId}" (${contract.method.toUpperCase()} ${contract.path}) ` +
       `violates the public API convention [${rule}]: ${problem} ${remedy} ` +

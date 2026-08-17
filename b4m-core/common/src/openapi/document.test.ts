@@ -197,6 +197,10 @@ describe('buildOpenApiDocument', () => {
     // route: neither sets a rate-limit header, so neither may publish one.
     expect(tools.responses['200'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
     expect(completions.responses['200'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
+    // Every baseApi-served endpoint does emit them.
+    for (const path of ['/api/ai/tts', '/api/ai/music', '/api/ai/sound-effects']) {
+      expect(doc.paths[path].post.responses['200'].headers['X-RateLimit-Limit-Minute']).toBeDefined();
+    }
   });
 
   it('emits no orphaned component schemas (every schema is $ref-ed somewhere)', () => {
