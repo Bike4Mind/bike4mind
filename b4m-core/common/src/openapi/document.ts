@@ -202,7 +202,10 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     servers: servers(),
   });
 
-  doc.tags = [{ name: 'AI', description: 'Completions and server-side tool execution.' }];
+  doc.tags = [
+    { name: 'AI', description: 'Chat, completions, and server-side tool execution.' },
+    { name: 'Audio', description: 'Speech, music, and sound-effect generation.' },
+  ];
 
   // Attach per-operation vendor extensions + headers by operationId. Restrict to
   // HTTP verbs: a Path Item can also carry summary/description/parameters/servers.

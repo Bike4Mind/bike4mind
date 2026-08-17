@@ -93,3 +93,15 @@ export const ApiErrorSchema = z.object({
   error: z.string(),
   request_id: z.string().optional(),
 });
+
+/**
+ * Error envelope for the 422 a credit-metered endpoint returns for two unrelated
+ * reasons: "your body is invalid" and "you cannot afford this". `errorCode` is
+ * what separates them - `insufficientCreditsError` (see insufficientCredits.ts)
+ * tags the credit case, so its absence means an ordinary validation failure.
+ */
+export const InsufficientCreditsErrorSchema = z.object({
+  error: z.string(),
+  errorCode: z.literal('insufficient_credits').optional(),
+  request_id: z.string().optional(),
+});
