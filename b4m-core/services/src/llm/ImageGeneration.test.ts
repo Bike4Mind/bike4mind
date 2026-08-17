@@ -1,10 +1,44 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ImageGenerationService } from './ImageGeneration';
 import { SUMMARIZATION_CONFIG } from './ChatCompletionFeatures';
-import { ImageModels, type ISessionDocument, type ModelInfo } from '@bike4mind/common';
+import { ImageModels, ModelBackend, type ISessionDocument, type ModelInfo } from '@bike4mind/common';
+import { getAvailableModels } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 
-const silentLogger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
+vi.mock('@bike4mind/llm-adapters', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/llm-adapters')>();
+  return { ...actual, getAvailableModels: vi.fn() };
+});
+
+vi.mock('../apiKeyService', async importOriginal => {
+  const actual = await importOriginal<typeof import('../apiKeyService')>();
+  return { ...actual, getEffectiveLLMApiKeys: vi.fn(async () => ({ gemini: 'gemini-key' })) };
+});
+
+const mockGeminiGenerate = vi.fn();
+vi.mock('@bike4mind/utils', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/utils')>();
+  return {
+    ...actual,
+    aiImageService: vi.fn(() => ({ generate: mockGeminiGenerate })),
+    getSettingsMap: vi.fn().mockResolvedValue({}),
+    ClientMessageSender: vi.fn().mockImplementation(function () {
+      return { sendToClient: vi.fn().mockResolvedValue(undefined) };
+    }),
+  };
+});
+
+vi.mock('./questHeartbeat', () => ({
+  startQuestHeartbeat: vi.fn().mockResolvedValue(() => undefined),
+}));
+
+const silentLogger = {
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  updateMetadata: vi.fn(),
+} as unknown as Logger;
 
 const makeService = (overrides: {
   invokeSummarizeSession?: ReturnType<typeof vi.fn>;
@@ -239,6 +273,76 @@ describe('ImageGenerationService.invoke (image-parameter passthrough)', () => {
         safety_tolerance: 1,
         prompt_upsampling: true,
         seed: 42,
+        output_format: 'jpeg',
+      })
+    );
+  });
+});
+
+describe('ImageGenerationService.process (Gemini provider-dispatch parameter passthrough)', () => {
+  // Regression: invoke() forwarding the 4 fields into the queue payload (tested above) is not
+  // the same as process() actually forwarding them to the provider. process()'s Gemini
+  // text-to-image branch read `seed` into scope but never passed it to geminiService.generate() -
+  // same bug class already fixed in the agentic tool's Gemini branch, one function over.
+  const geminiModelInfo = {
+    id: ImageModels.GEMINI_2_5_FLASH_IMAGE,
+    type: 'image',
+    name: ImageModels.GEMINI_2_5_FLASH_IMAGE,
+    backend: ModelBackend.Gemini,
+    contextWindow: 10000,
+    max_tokens: 10000,
+    supportsImageVariation: false,
+    pricing: { 1: { input: 0, output: 0 } },
+  } as unknown as ModelInfo;
+
+  const makeService = () => {
+    const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined };
+    const findById = vi.fn(async () => quest as any);
+    const update = vi.fn(async () => undefined);
+    const updateMany = vi.fn(async () => undefined);
+    const findAllInIds = vi.fn(async () => []);
+    const service = new ImageGenerationService({
+      db: {
+        quests: { findById, update, updateMany },
+        users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
+        organizations: { findById: vi.fn(async () => null) },
+        fabFiles: { findAllInIds },
+      },
+      logEvent: vi.fn().mockResolvedValue(undefined),
+      abilityGetter: vi.fn().mockReturnValue({}),
+      storage: {} as any,
+      fabFileStorage: {} as any,
+      wsHttpsUrl: 'https://ws.example.com',
+    } as any);
+    return service;
+  };
+
+  it('forwards the user-set seed to GeminiImageService.generate on the composer/queue-handler path', async () => {
+    vi.mocked(getAvailableModels).mockResolvedValue([geminiModelInfo]);
+    mockGeminiGenerate.mockReset();
+    mockGeminiGenerate.mockResolvedValue([]); // empty images short-circuits storage/moderation below
+
+    const service = makeService();
+
+    await service.process({
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        userId: 'user1',
+        prompt: 'a red bicycle',
+        model: ImageModels.GEMINI_2_5_FLASH_IMAGE,
+        seed: 42,
+        prompt_upsampling: true,
+        output_format: 'jpeg',
+      } as any,
+      logger: silentLogger,
+    });
+
+    expect(mockGeminiGenerate).toHaveBeenCalledWith(
+      'a red bicycle',
+      expect.objectContaining({
+        seed: 42,
+        prompt_upsampling: true,
         output_format: 'jpeg',
       })
     );
