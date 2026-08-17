@@ -8,6 +8,7 @@ import {
 import { couldMatchTagPrefixArmLoosely, loadPrefixArmCandidateLakes } from '../dataLakeService/prefixArmMembership';
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
 import { foldTagName, isDataLakeTagName, normalizeTagName } from './tagName';
+import type { LakeConfigAuditAdapters } from '../dataLakeService/recordLakeConfigChange';
 
 const tagUpdateSchema = z.object({
   id: z.string(),
@@ -38,6 +39,12 @@ interface TagUpdateAdapters {
     // recomputeLakeStats below forwards this same `db` object and requires it on `fabFiles`.
     fabFiles: Pick<IFabFileRepository, 'updateTagsByUserId' | 'dedupeTagByUserId' | 'computeDataLakeStats'>;
     dataLakes: Pick<IDataLakeRepository, 'find' | 'setStats' | 'activateIfDraft'>;
+    // The config-audit repos, OPTIONAL and forwarded straight to recomputeLakeStats below: a
+    // prefix-arm rename or delete can flip a draft lake to active, and without these that
+    // transition records nothing at all. Optional because this service has many callers and the
+    // recorder degrades to a no-op when they are absent - see LakeConfigAuditAdapters.
+    lakeConfigChangeEvents?: LakeConfigAuditAdapters['db']['lakeConfigChangeEvents'];
+    adminSettings?: LakeConfigAuditAdapters['db']['adminSettings'];
     // Only for the static-registry admin check below - this door had no actor beyond a raw
     // userId string until that check needed isAdmin.
     users: { findById: (id: string) => Promise<Pick<IUserDocument, 'isAdmin'> | null> };
@@ -150,7 +157,10 @@ export const update = async (userId: string, params: TagUpdateParams, adapters: 
         couldMatchTagPrefixArmLoosely(tag.name, lake.fileTagPrefix) ||
         couldMatchTagPrefixArmLoosely(newName, lake.fileTagPrefix)
     );
-    await Promise.all(affectedLakes.map(lake => recomputeLakeStats(lake, { db })));
+    // See tagService/remove: the tag owner is the principal, and the rung stays `system`.
+    await Promise.all(
+      affectedLakes.map(lake => recomputeLakeStats(lake, { db }, { actor: { userId, isAdmin: false } }))
+    );
   }
 
   return buildData;
