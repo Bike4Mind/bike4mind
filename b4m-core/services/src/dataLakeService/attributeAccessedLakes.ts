@@ -66,10 +66,8 @@ export function attributeAccessedLakeIds(
     // A static-registry lake's files structurally cannot carry its meta-tag (no write path
     // stamps one for a fallback lake), so without this arm every retrieval of registry content
     // would fall through as "inconclusive" - not an edge case, the NORMAL shape of a read there.
-    if (openPrefixes.length > 0) {
-      for (const { id, prefix } of openPrefixes) {
-        if (tags.some(t => t.startsWith(prefix))) ids.add(id);
-      }
+    for (const { id, prefix } of openPrefixes) {
+      if (tags.some(t => t.startsWith(prefix))) ids.add(id);
     }
   }
   if (ids.size > 0) return [...ids];

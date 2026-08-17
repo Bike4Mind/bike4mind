@@ -37,7 +37,7 @@ import {
 } from '../../../../dataLakeService/semanticDataLakeSearch';
 import { resolveSearchBudgets, type ResolvedSearchBudgets } from '../../../../dataLakeService/resolveSearchBudgets';
 import { openSearchChunkAdapter } from '../../../../dataLakeService/openSearchChunkAdapter';
-import { attributeAccessedLakeIds } from '../../../../dataLakeService/attributeAccessedLakes';
+import { attributeAccessedLakeIds, type AttributableLake } from '../../../../dataLakeService/attributeAccessedLakes';
 import { recordLakeAccessEvent } from '../../../../dataLakeService/recordLakeAccessEvent';
 import { getEffectiveLLMApiKeys } from '../../../../apiKeyService';
 import { recordOperationalUsage } from '../../../../billing';
@@ -790,7 +790,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           let searchResults;
           // Populated only in the unscoped arm below (mirrors the semantic arm: a scoped call
           // never consults lake access, so its audit event carries no lake attribution either).
-          let keywordArmLakes: { id: string; datalakeTag: string }[] = [];
+          let keywordArmLakes: AttributableLake[] = [];
           if (scope) {
             // Scoped keyword arm: restrictToFileIds is the sole authority (skipOwnership -
             // curated files match even when owned by another user, mirroring the semantic
