@@ -36,11 +36,18 @@ describe('EnableDataLakeSlackAdd - the gate that makes the Slack surface live', 
     // The rollback lever: turning the toggle off has to beat an on-by-default schema.
     expect(entry.schema.safeParse(false).data).toBe(false);
     expect(entry.schema.safeParse(true).data).toBe(true);
+    // `settingValue` is Mixed and string rows demonstrably reach this schema - that is why
+    // `makeBooleanSetting` carries the string preprocess at all, and why the admin toggle branches on
+    // `typeof value === 'string'`. A rollback on a legacy row hits THIS shape, not the boolean one.
+    expect(entry.schema.safeParse('false').data).toBe(false);
+    expect(entry.schema.safeParse('true').data).toBe(true);
   });
 
   it('keeps the parent gate off by default, which is what bounds the blast radius', () => {
-    // `runDataLakeSlackCommand` checks EnableDataLakes FIRST and short-circuits, so flipping the
-    // child live only exposes the surface in orgs that already opted into Data Lakes.
+    // `runDataLakeSlackCommand` checks EnableDataLakes FIRST and short-circuits, so the flip is inert
+    // on any deployment that has not enabled Data Lakes. Both flags are deployment-global (settings are
+    // keyed on `settingName` alone), so this is NOT a per-org opt-in - once Data Lakes is on for a
+    // deployment, the flip is live across it.
     expect(settingsMap.EnableDataLakes.defaultValue).toBe(false);
     expect(entry.dependsOn).toBe('EnableDataLakes');
   });
