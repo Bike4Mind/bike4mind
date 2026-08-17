@@ -108,6 +108,15 @@ describe('dataLakeBatchReconcile cron handler', () => {
       [{ id: 'b1', dataLakeId: 'lake1' }],
       TIMEOUT,
       expect.objectContaining({
+        // The config-audit repos, named rather than covered by expect.anything(): this sweep forces
+        // terminal exactly the batches that never reached finalizeBatchIfComplete, so it is the only
+        // path that can activate those lakes. Both keys are optional on the service, so a sweep that
+        // stopped spreading lakeConfigAuditDb would record nothing and still pass every other
+        // assertion in this file.
+        db: expect.objectContaining({
+          lakeConfigChangeEvents: expect.objectContaining({ record: expect.any(Function) }),
+          adminSettings: expect.objectContaining({ findBySettingNames: expect.any(Function) }),
+        }),
         metrics: expect.objectContaining({
           emitForcedTerminal: expect.any(Function),
           emitStuckGauge: expect.any(Function),
