@@ -1250,15 +1250,25 @@ export class GeminiBackend implements ICompletionBackend {
                 },
               };
 
-              // Only first tool call gets thought_signature (Gemini 3 requirement for parallel calls)
+              // Only first tool call gets thought_signature (Gemini 3 requirement for parallel calls).
+              // Assigned only when present rather than unconditionally - an explicit `undefined`
+              // value serializes away via JSON.stringify same as an absent key, but there is no
+              // need to rely on that when the SDK sees the raw object first.
               if (index === 0) {
-                part.thoughtSignature = toolUse.thought_signature; // camelCase for some versions
-                part.thought_signature = toolUse.thought_signature; // snake_case for other versions
-                this.logger.debug('[Gemini] Including thought_signature in request (both formats):', {
-                  name: toolUse.name,
-                  id: toolUse.id,
-                  position: 'first',
-                });
+                if (toolUse.thought_signature) {
+                  part.thoughtSignature = toolUse.thought_signature; // camelCase for some versions
+                  part.thought_signature = toolUse.thought_signature; // snake_case for other versions
+                  this.logger.debug('[Gemini] Including thought_signature in request (both formats):', {
+                    name: toolUse.name,
+                    id: toolUse.id,
+                    position: 'first',
+                  });
+                } else {
+                  this.logger.warn('[Gemini] Missing thought_signature for first function call:', {
+                    name: toolUse.name,
+                    id: toolUse.id,
+                  });
+                }
               }
 
               return part;

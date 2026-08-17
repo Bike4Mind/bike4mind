@@ -19,6 +19,11 @@
  * `delete` per field (see below), so a future owner-only value nested inside another field (e.g. a
  * private blob inside `parameters`) would NOT be caught by adding its name here; that shape needs
  * its own per-field handling, not just a new entry in this array.
+ *
+ * Adjacent unredacted shape, not yet a leak: `promptMeta.executionTracking.steps[].result`/
+ * `.error` (PromptMetaZodSchema) are the same class of owner-only content but nothing writes them
+ * today, so there is nothing to redact yet. A future writer landing there bypasses this list
+ * entirely unless it is added here too.
  */
 export const OWNER_ONLY_FUNCTION_CALL_FIELDS = ['returnValue', 'error'] as const;
 

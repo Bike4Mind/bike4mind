@@ -126,15 +126,22 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     if (Object.keys(inclusions).length) {
       const haveExclusions = Object.values(scopedFields).some(v => !v);
       if (haveExclusions) {
-        // No current caller sends inclusion fields for the quests collection (all pass
-        // fields: {}), so fieldLimits' exclusions never reach here today - but if one ever
-        // does, this throws instead of silently losing the returnValue/error exclusion.
-        throw new Error('Cannot mix exclusions and inclusions');
+        // Mongo projections can't mix inclusion and exclusion keys. No current in-repo caller
+        // sends inclusion fields for the quests collection (all pass fields: {}), so
+        // fieldLimits' exclusions never meet an inclusion today - but the real callers live in
+        // the overlay, so that can't be verified from here. Killing the whole subscription over
+        // a caller's inclusion request would be a worse failure than just not honoring it, so
+        // drop the inclusions and keep fieldLimits' exclusions (e.g. returnValue/error) instead.
+        logger.warn(`[dataSubscribeRequest] Dropping inclusion fields mixed with exclusions for ${collectionName}`, {
+          fields,
+        });
+        scopedFields = pickBy(scopedFields, v => !v);
+      } else {
+        scopedFields = {
+          ...inclusions,
+          deletedAt: true,
+        };
       }
-      scopedFields = {
-        ...inclusions,
-        deletedAt: true,
-      };
     }
   }
 
@@ -192,6 +199,9 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   // old subscription is never mutated in place with the new exclusion; a client that reconnects
   // (getting a fresh scopedFields) lands on a new document instead. This is what keeps
   // $setOnInsert safe here rather than leaving pre-deploy subscriptions permanently unredacted.
+  // The gap is bounded by the connection's own lifetime, not by the deploy: API Gateway WebSocket
+  // connections are forcibly closed after 10 minutes idle or 2 hours total, so every pre-deploy
+  // subscriber reconnects (and re-hashes) well within a couple of hours regardless.
   const uniqueQuerySelector = crypto
     .createHash('sha256')
     .update(JSON.stringify(collectionName))
