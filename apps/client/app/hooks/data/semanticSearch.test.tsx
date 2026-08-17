@@ -29,9 +29,11 @@ describe('useSemanticSearch onSuccess', () => {
     });
   });
 
-  // #1775: the API's zero-session early return is a 200 with no `debug`/`scores` block.
-  // onSuccess used to dereference `data.debug.query`, throwing "Cannot read properties of
-  // undefined (reading 'query')" and leaving isSemanticSearching stuck true.
+  // The API's zero-session early return is a 200 with no `debug`/`scores` block. onSuccess used to
+  // dereference `data.debug.query`, throwing "Cannot read properties of undefined (reading 'query')";
+  // query-core routes an onSuccess throw to onError, so the mutation REJECTED and left an error the
+  // drawer rendered as a raw TypeError. The fix treats the missing block as a valid empty result, so
+  // the mutation resolves cleanly - the resolves() and error/results assertions below fail on the old code.
   it('handles the zero-session 200 (no debug/scores) without throwing', async () => {
     post.mockResolvedValue({ data: { sessionIds: [], count: 0 } });
     const { result } = renderSemanticSearch();
@@ -41,7 +43,7 @@ describe('useSemanticSearch onSuccess', () => {
     const state = useAdvancedSearch.getState();
     expect(state.semanticResults).toEqual([]);
     expect(state.semanticDebugInfo).toBeNull();
-    expect(state.isSemanticSearching).toBe(false); // old code left this stuck true after the throw
+    expect(state.isSemanticSearching).toBe(false);
     expect(state.semanticSearchError).toBeNull();
   });
 

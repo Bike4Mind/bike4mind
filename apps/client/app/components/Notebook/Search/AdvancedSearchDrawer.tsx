@@ -1487,46 +1487,11 @@ export default function AdvancedSearchDrawer({ metadata, isLoading = false }: Ad
                 </Box>
               )}
 
-              {/* Empty state */}
-              {!semanticSearch.results && !semanticSearch.isSearching && !isSemanticSearchPending && (
-                <Box
-                  sx={{
-                    flex: 1,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 2,
-                  }}
-                >
-                  <Box
-                    sx={{
-                      width: 40,
-                      height: 40,
-                      borderRadius: '10px',
-                      bgcolor: theme => (theme.palette.mode === 'dark' ? brandAlpha[100][12] : brandAlpha[400][8]),
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <SearchIcon sx={{ fontSize: 18, color: 'text.tertiary' }} />
-                  </Box>
-                  <Box sx={{ textAlign: 'center' }}>
-                    <Typography sx={{ fontSize: '13px', color: 'text.tertiary', lineHeight: 1.5 }}>
-                      Type a query and search
-                    </Typography>
-                    <Typography sx={{ fontSize: '13px', color: 'text.tertiary', lineHeight: 1.5 }}>
-                      Search by title, content, or topic ...
-                    </Typography>
-                  </Box>
-                </Box>
-              )}
-
-              {/* No-results state: a search ran (results is non-null) but nothing matched -
-                  including the zero-session 200 that has no debug/scores block (#1775). */}
-              {hasSemanticSearch &&
-                !semanticSearch.isSearching &&
+              {/* Empty state: pre-search prompt (results null) or a completed search with no matches
+                  (results non-null, no scores) - including the zero-session 200 with no debug/scores.
+                  hasSemanticSearch is `results !== null`; results and debugInfo are always nulled
+                  together, so the debugInfo guard is a no-op on the pre-search side. */}
+              {!semanticSearch.isSearching &&
                 !isSemanticSearchPending &&
                 !(semanticSearch.debugInfo && semanticSearch.debugInfo.scores.length > 0) && (
                   <Box
@@ -1554,10 +1519,12 @@ export default function AdvancedSearchDrawer({ metadata, isLoading = false }: Ad
                     </Box>
                     <Box sx={{ textAlign: 'center' }}>
                       <Typography sx={{ fontSize: '13px', color: 'text.tertiary', lineHeight: 1.5 }}>
-                        No results found
+                        {hasSemanticSearch ? 'No results found' : 'Type a query and search'}
                       </Typography>
                       <Typography sx={{ fontSize: '13px', color: 'text.tertiary', lineHeight: 1.5 }}>
-                        Try a different query or adjust your filters
+                        {hasSemanticSearch
+                          ? 'Try a different query or adjust your filters'
+                          : 'Search by title, content, or topic ...'}
                       </Typography>
                     </Box>
                   </Box>
