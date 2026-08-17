@@ -13,6 +13,7 @@ import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { sendToQueue } from '@server/utils/sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 
@@ -64,6 +65,7 @@ const handler = baseApi()
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
             batches: dataLakeBatchRepository,
             fabFiles: fabFileRepository,
+            ...lakeConfigAuditDb,
           },
           retrievalIndex: retrievalIndex(),
           logger: req.logger,
@@ -76,7 +78,9 @@ const handler = baseApi()
             dataLakes: dataLakeRepository,
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
             fabFiles: fabFileRepository,
+            ...lakeConfigAuditDb,
           },
+          logger: req.logger,
         });
         return res.json(result);
       }
@@ -87,7 +91,9 @@ const handler = baseApi()
             dataLakes: dataLakeRepository,
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
             fabFiles: fabFileRepository,
+            ...lakeConfigAuditDb,
           },
+          logger: req.logger,
         });
         return res.json(result);
       }
@@ -98,6 +104,7 @@ const handler = baseApi()
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
             batches: dataLakeBatchRepository,
             fabFiles: fabFileRepository,
+            ...lakeConfigAuditDb,
           },
           retrievalIndex: retrievalIndex(),
           // The prefix-overlap warning is the point of logging here: without a sink it no-ops.
