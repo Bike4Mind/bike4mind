@@ -14,7 +14,9 @@ const h = vi.hoisted(() => ({
   lakeFindById: vi.fn(),
   userFindById: vi.fn(),
   findByDriveConnectionIdInDataLake: vi.fn(),
-  deleteManyInIds: vi.fn(),
+  deleteFabFile: vi.fn(),
+  changeStorageSize: vi.fn(),
+  userSave: vi.fn(),
   removeFileFromLake: vi.fn(),
   recomputeLakeStats: vi.fn(),
   batchCreate: vi.fn(),
@@ -33,6 +35,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@bike4mind/database', () => ({
   User: { findById: h.userFindById },
+  changeStorageSize: h.changeStorageSize,
   dataLakeRepository: { findById: h.lakeFindById },
   dataLakeBatchRepository: {
     create: h.batchCreate,
@@ -42,8 +45,10 @@ vi.mock('@bike4mind/database', () => ({
   },
   fabFileRepository: {
     findByDriveConnectionIdInDataLake: h.findByDriveConnectionIdInDataLake,
-    deleteManyInIds: h.deleteManyInIds,
   },
+  fabFileChunkRepository: {},
+  sessionRepository: {},
+  userRepository: {},
   orgGoogleDriveConnectionRepository: {
     findById: h.connFindById,
     claimForSync: h.claimForSync,
@@ -57,7 +62,10 @@ vi.mock('@bike4mind/services', () => ({
     removeFileFromLake: h.removeFileFromLake,
     recomputeLakeStats: h.recomputeLakeStats,
   },
+  fabFilesService: { deleteFabFile: h.deleteFabFile },
 }));
+vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
+vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false }));
 vi.mock('@server/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
 vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ upload: h.upload }) }));
@@ -104,10 +112,16 @@ describe('driveLakeIngest consumer', () => {
       fileTagPrefix: 'demo:',
       createdByUserId: 'creator1',
     });
-    h.userFindById.mockResolvedValue({ id: 'user1' });
+    h.userFindById.mockResolvedValue({ id: 'user1', save: h.userSave });
     h.findByDriveConnectionIdInDataLake.mockResolvedValue([]);
     h.removeFileFromLake.mockResolvedValue(undefined);
-    h.deleteManyInIds.mockResolvedValue(undefined);
+    h.userSave.mockResolvedValue(undefined);
+    h.changeStorageSize.mockResolvedValue(undefined);
+    // The default retire outcome: a full delete that reclaims the stale copy's bytes.
+    h.deleteFabFile.mockImplementation(async (_userId, _params, adapter) => {
+      await adapter.onDeleteComplete?.({ id: 'stale' }, 100);
+      return { action: 'deleted' };
+    });
     h.recomputeLakeStats.mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 });
     h.batchCreate.mockResolvedValue({ id: 'batch1' });
     h.batchFindById.mockResolvedValue({
@@ -232,31 +246,137 @@ describe('driveLakeIngest consumer', () => {
     expect(h.updateHealth).toHaveBeenCalledWith('conn1', expect.objectContaining({ status: 'connected' }));
   });
 
-  it('re-ingests an EDITED file: recreates it fresh, THEN retires the stale copy (soft-delete)', async () => {
+  it('re-ingests an EDITED file: recreates it fresh, THEN unpicks and fully deletes the stale copy', async () => {
     // Same driveFileId, but the Drive md5 moved -> the stored copy is stale.
     h.walkFolder.mockResolvedValue([
       { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt', md5Checksum: 'NEW' },
     ]);
     h.findByDriveConnectionIdInDataLake.mockResolvedValue([
-      { id: 'ff-old', driveFileId: 'd1', driveMd5Checksum: 'OLD' },
+      { id: 'ff-old', driveFileId: 'd1', driveMd5Checksum: 'OLD', tags: [{ name: 'lake-tag' }] },
     ]);
     h.fetchDriveFileContent.mockResolvedValue(okBytes());
 
     await run();
 
-    // The fresh copy is created and uploaded FIRST; only then is the superseded copy retired - a
-    // soft-delete (not a membership-only unpick) so the pre-edit content leaves the owner's Files too.
+    // The fresh copy is created and uploaded FIRST; only then is the superseded copy retired.
     expect(h.createFabFile).toHaveBeenCalledWith(
       expect.objectContaining({ driveFileId: 'd1', driveMd5Checksum: 'NEW' }),
       expect.anything()
     );
     expect(h.order).toEqual(['append', 'upload']);
-    expect(h.deleteManyInIds).toHaveBeenCalledTimes(1);
-    expect(h.deleteManyInIds).toHaveBeenCalledWith(['ff-old']);
-    // An edited file is retired via soft-delete, NOT the membership-only removeFileFromLake path.
-    expect(h.removeFileFromLake).not.toHaveBeenCalled();
+    // Per-lake unpick FIRST, then the full delete - never a bare deletedAt stamp, which every other
+    // lake's read path would honour too.
+    expect(h.removeFileFromLake).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'ff-old',
+      expect.anything()
+    );
+    // The full delete reaps chunks / search index / session links / S3 / quota, unlike a soft-delete.
+    expect(h.deleteFabFile).toHaveBeenCalledTimes(1);
+    expect(h.deleteFabFile).toHaveBeenCalledWith('user1', { id: 'ff-old' }, expect.anything());
+    // Reclaimed bytes come off the connecting user's counted storage.
+    expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), -100);
+    expect(h.userSave).toHaveBeenCalledTimes(1);
     expect(h.recomputeLakeStats).toHaveBeenCalledTimes(1);
     expect(h.batchCreate).toHaveBeenCalledWith(expect.objectContaining({ totalFiles: 1 }));
+  });
+
+  it('does NOT delete a superseded copy that another lake also holds - only unpicks it (P1)', async () => {
+    // A file curated into a SECOND lake by hand must not be evicted from it by this poll. `deletedAt`
+    // is filtered by every lake's read path, so a blanket soft-delete would silently shrink lake B.
+    h.walkFolder.mockResolvedValue([
+      { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt', md5Checksum: 'NEW' },
+    ]);
+    h.findByDriveConnectionIdInDataLake.mockResolvedValue([
+      {
+        id: 'ff-old',
+        driveFileId: 'd1',
+        driveMd5Checksum: 'OLD',
+        tags: [{ name: 'lake-tag' }, { name: 'datalake:handbuilt-b' }],
+      },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+    await run();
+
+    // Leaves the Drive lake, keeps living in lake B.
+    expect(h.removeFileFromLake).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'ff-old',
+      expect.anything()
+    );
+    expect(h.deleteFabFile).not.toHaveBeenCalled();
+    expect(h.changeStorageSize).not.toHaveBeenCalled();
+    // The replacement is still ingested - lake A is up to date either way.
+    expect(h.createFabFile).toHaveBeenCalledWith(
+      expect.objectContaining({ driveFileId: 'd1', driveMd5Checksum: 'NEW' }),
+      expect.anything()
+    );
+  });
+
+  it('matches another lake tag case-insensitively before deciding to delete', async () => {
+    // Tag documents keep whatever casing they were created with, so the guard folds case - a
+    // `DATALAKE:Other` membership must protect the file exactly as `datalake:other` would.
+    h.walkFolder.mockResolvedValue([
+      { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt', md5Checksum: 'NEW' },
+    ]);
+    h.findByDriveConnectionIdInDataLake.mockResolvedValue([
+      {
+        id: 'ff-old',
+        driveFileId: 'd1',
+        driveMd5Checksum: 'OLD',
+        tags: [{ name: 'LAKE-TAG' }, { name: 'DATALAKE:Other' }],
+      },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+    await run();
+
+    expect(h.deleteFabFile).not.toHaveBeenCalled();
+  });
+
+  it('retires pre-existing DUPLICATE copies of a still-present file, keeping the newest (P3)', async () => {
+    // main's add-only handler had no walk de-dup, so a multi-parented file or an SQS retry could
+    // leave a second non-pending row. It stays a lake member holding pre-edit content and no future
+    // walk can see it, because the newest copy shadows it in the diff.
+    h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+    h.findByDriveConnectionIdInDataLake.mockResolvedValue([
+      { id: 'ff-older', driveFileId: 'd1', createdAt: '2026-01-01T00:00:00.000Z', tags: [{ name: 'lake-tag' }] },
+      { id: 'ff-newest', driveFileId: 'd1', createdAt: '2026-02-01T00:00:00.000Z', tags: [{ name: 'lake-tag' }] },
+    ]);
+
+    await run();
+
+    // Only the duplicate goes; the newest copy stays live, so the file never loses its lake member.
+    expect(h.deleteFabFile).toHaveBeenCalledTimes(1);
+    expect(h.deleteFabFile).toHaveBeenCalledWith('user1', { id: 'ff-older' }, expect.anything());
+    // Nothing was edited, so no re-ingest - the duplicate retire alone still recomputes stats.
+    expect(h.batchCreate).not.toHaveBeenCalled();
+    expect(h.recomputeLakeStats).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not double-retire duplicates whose driveFileId is gone from the folder', async () => {
+    // Every copy of a vanished driveFileId is already in `removed` and unpicked there; the duplicate
+    // sweep must skip it rather than unpick it a second time (removeFileFromLake throws NotFoundError
+    // the second time, which would abort the reconcile mid-prune). `keep` anchors the walk so the
+    // empty-walk guard does not fire and this actually exercises the prune.
+    h.walkFolder.mockResolvedValue([{ id: 'keep', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+    h.findByDriveConnectionIdInDataLake.mockResolvedValue([
+      { id: 'ff-keep', driveFileId: 'keep', createdAt: '2026-01-01T00:00:00.000Z', tags: [{ name: 'lake-tag' }] },
+      { id: 'ff-a', driveFileId: 'gone', createdAt: '2026-01-01T00:00:00.000Z', tags: [{ name: 'lake-tag' }] },
+      { id: 'ff-b', driveFileId: 'gone', createdAt: '2026-02-01T00:00:00.000Z', tags: [{ name: 'lake-tag' }] },
+    ]);
+
+    await run();
+
+    // Both vanished copies unpicked exactly once each, by the genuine-delete pass only.
+    expect(h.removeFileFromLake).toHaveBeenCalledTimes(2);
+    expect(h.removeFileFromLake).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'ff-a', expect.anything());
+    expect(h.removeFileFromLake).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'ff-b', expect.anything());
+    // A genuine delete is membership-only - the owner keeps their copy, nothing is deleted outright.
+    expect(h.deleteFabFile).not.toHaveBeenCalled();
   });
 
   it('does NOT retire the stale copy when the edited file fails to re-fetch (no eviction)', async () => {
@@ -272,9 +392,9 @@ describe('driveLakeIngest consumer', () => {
 
     await run();
 
-    // Nothing uploaded, so the stale copy stays: no soft-delete, no membership pull, no stats churn.
+    // Nothing uploaded, so the stale copy stays: no delete, no membership pull, no stats churn.
     expect(h.upload).not.toHaveBeenCalled();
-    expect(h.deleteManyInIds).not.toHaveBeenCalled();
+    expect(h.deleteFabFile).not.toHaveBeenCalled();
     expect(h.removeFileFromLake).not.toHaveBeenCalled();
     expect(h.recomputeLakeStats).not.toHaveBeenCalled();
     expect(h.incrementCounter).toHaveBeenCalledWith('batch1', 'skippedFiles');
@@ -307,7 +427,7 @@ describe('driveLakeIngest consumer', () => {
     await run();
 
     expect(h.removeFileFromLake).not.toHaveBeenCalled();
-    expect(h.deleteManyInIds).not.toHaveBeenCalled();
+    expect(h.deleteFabFile).not.toHaveBeenCalled();
     expect(h.recomputeLakeStats).not.toHaveBeenCalled();
     expect(h.batchCreate).not.toHaveBeenCalled();
     expect(h.createFabFile).not.toHaveBeenCalled();
@@ -405,8 +525,8 @@ describe('driveLakeIngest consumer', () => {
       { id: 'd2', name: 'b.txt', mimeType: 'text/plain', relativePath: 'b.txt', md5Checksum: 'NEW' },
     ]);
     h.findByDriveConnectionIdInDataLake.mockResolvedValue([
-      { id: 'ff-old1', driveFileId: 'd1', driveMd5Checksum: 'OLD' },
-      { id: 'ff-old2', driveFileId: 'd2', driveMd5Checksum: 'OLD' },
+      { id: 'ff-old1', driveFileId: 'd1', driveMd5Checksum: 'OLD', tags: [{ name: 'lake-tag' }] },
+      { id: 'ff-old2', driveFileId: 'd2', driveMd5Checksum: 'OLD', tags: [{ name: 'lake-tag' }] },
     ]);
     h.fetchDriveFileContent.mockResolvedValue(okBytes());
     // d1 uploads fine (and is retired); d2's upload throws before its own retire.
@@ -417,9 +537,12 @@ describe('driveLakeIngest consumer', () => {
     await expect(run()).rejects.toThrow('s3 blip');
 
     // d1's stale copy was already retired; d2's was not (it threw first) - no orphaned duplicate for d1.
-    expect(h.deleteManyInIds).toHaveBeenCalledWith(['ff-old1']);
-    expect(h.deleteManyInIds).not.toHaveBeenCalledWith(['ff-old2']);
+    expect(h.deleteFabFile).toHaveBeenCalledWith('user1', { id: 'ff-old1' }, expect.anything());
+    expect(h.deleteFabFile).not.toHaveBeenCalledWith('user1', { id: 'ff-old2' }, expect.anything());
     expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1');
+    // The `finally` still deducts what d1's committed delete gave back: the SQS retry re-walks and
+    // never sees that copy again, so an un-flushed deduction would bill those bytes forever.
+    expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), -100);
   });
 });
 

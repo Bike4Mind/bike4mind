@@ -1,13 +1,26 @@
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import {
   User,
+  changeStorageSize,
   dataLakeRepository,
   dataLakeBatchRepository,
+  fabFileChunkRepository,
   fabFileRepository,
   orgGoogleDriveConnectionRepository,
+  sessionRepository,
+  userRepository,
 } from '@bike4mind/database';
-import { DATALAKE_TAG_STRENGTH, KnowledgeType, FabFileSourceType, type IUserDocument } from '@bike4mind/common';
-import { dataLakeService } from '@bike4mind/services';
+import {
+  DATALAKE_TAG_STRENGTH,
+  KnowledgeType,
+  FabFileSourceType,
+  foldTagName,
+  isDataLakeTagName,
+  type IUserDocument,
+} from '@bike4mind/common';
+import { dataLakeService, fabFilesService } from '@bike4mind/services';
+import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
+import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { createFabFile } from '@server/managers/fabFileManager';
 import defineAbilitiesFor from '@server/auth/ability';
 import { getFilesStorage } from '@server/utils/storage';
@@ -86,10 +99,23 @@ export function hasDriveFileChanged(
  * evict a working lake member for good on any run where the re-fetch then fails a deterministic gate
  * (oversized / unsupported / export-too-large), since that skip creates no replacement.
  *
- * Retiring an edited file's stale copy is a SOFT-DELETE, not a membership-only unpick: a superseded Drive
- * doc must leave the owner's Files entirely (its pre-edit content must not stay retrievable outside the
- * lake, and one orphan copy must not accumulate per edit). A genuine delete keeps the membership-only
- * unpick - the file left the folder but the owner keeps their copy.
+ * Retiring an edited file's stale copy is two steps, in this order, and the order is the point. FIRST an
+ * unpick from THIS lake (removeFileFromLake), which is per-lake by construction - see the reserved-namespace
+ * note in lakeMembership.ts. THEN, only when the copy carries no OTHER lake's membership tag, a full delete
+ * through fabFileService.deleteFabFile. A superseded Drive doc must leave the owner's Files entirely (its
+ * pre-edit content must not stay retrievable, and one orphan copy per edit must not accumulate with its
+ * chunks, embeddings, S3 object and storage quota) - but a copy a human curated into a SECOND lake must not
+ * be yanked out of it by a background poll. A blanket soft-delete would do exactly that: `deletedAt` is
+ * filtered by EVERY lake's read path, so a per-lake operation would have become a global one. Keeping the
+ * membership unpick and gating the delete preserves the per-lake invariant instead of racing it.
+ *
+ * The full delete goes through fabFileService.deleteFabFile rather than a bare `deletedAt` stamp because
+ * only that path also reaps the chunks, the per-model search-index docs, the session (notebook) links, the
+ * S3 object and the owner's counted storage. A bare stamp leaves all of it billed and orphaned forever -
+ * nothing reaps soft-deleted FabFiles outside whole-lake teardown.
+ *
+ * A genuine delete (gone from the folder) keeps the membership-only unpick and never deletes - the file left
+ * the folder but the owner keeps their copy, which is not superseded by anything.
  *
  * OUT OF SCOPE for E1 (#1589 follow-ups): a rename/move in Drive (md5 unchanged, only modifiedTime
  * moves) is classified unchanged, so the stale fileName/relativePath is not reconciled; and a
@@ -201,13 +227,29 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
     //    so a re-sync never touches files added by other means.
     const datalakeTag = lake.datalakeTag;
     const existingDocs = await fabFileRepository.findByDriveConnectionIdInDataLake(connectionId, datalakeTag);
-    const existingByDriveId = new Map<string, (typeof existingDocs)[number]>();
+    //    One driveFileId can map to SEVERAL stored copies: `main`'s add-only handler had no walk
+    //    de-dup, so a multi-parented Drive file or an SQS retry after a partial run could already
+    //    have created a second non-pending row. Key to a list (not last-wins) so those duplicates
+    //    are visible here - otherwise they stay lake members holding pre-edit content that no
+    //    future walk can ever see again.
+    const existingByDriveId = new Map<string, (typeof existingDocs)[number][]>();
     for (const doc of existingDocs) {
-      if (doc.driveFileId) existingByDriveId.set(doc.driveFileId, doc);
+      if (!doc.driveFileId) continue;
+      const copies = existingByDriveId.get(doc.driveFileId);
+      if (copies) copies.push(doc);
+      else existingByDriveId.set(doc.driveFileId, [doc]);
     }
+    // Newest-first within each id: the head anchors change detection (it is what the last successful
+    // ingest wrote), and the tail is duplicates. Sorted rather than left in find() order so the
+    // representative is deterministic - an unsorted query could otherwise diff against an older row
+    // and re-ingest a file that is not actually stale.
+    for (const copies of existingByDriveId.values()) {
+      copies.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    }
+    const newestCopyOf = (driveFileId: string) => existingByDriveId.get(driveFileId)?.[0];
     const pureAdds = walked.filter(f => !existingByDriveId.has(f.id));
     const changed = walked.filter(f => {
-      const prior = existingByDriveId.get(f.id);
+      const prior = newestCopyOf(f.id);
       return prior != null && hasDriveFileChanged(prior, f);
     });
     let removed = existingDocs.filter(doc => doc.driveFileId != null && !walkedIds.has(doc.driveFileId));
@@ -238,6 +280,88 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
         db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
       });
 
+    // Bytes reclaimed by the full deletes below, deducted from the connecting user's counted storage
+    // once at the end rather than per file (one save on the already-loaded document).
+    let reclaimedBytes = 0;
+
+    /**
+     * Retire a superseded copy of an edited Drive file: unpick it from THIS lake, then delete it
+     * outright only if no OTHER lake still claims it. See the header for why the two steps cannot
+     * collapse into one soft-delete. Returns what it did, for the log.
+     */
+    const retireSupersededCopy = async (staleCopy: (typeof existingDocs)[number]) => {
+      // Per-lake by construction: clears this lake's meta-tag and prefixed content tags, nothing else.
+      await dataLakeService.removeFileFromLake(membershipActor, lake, staleCopy.id, {
+        db: { fabFiles: fabFileRepository },
+      });
+
+      // Read off the pre-unpick tags: removeFileFromLake only ever pulls THIS lake's signals, so any
+      // other `datalake:` tag present before the pull is still present after it.
+      const otherLakeTags = (staleCopy.tags ?? [])
+        .map(tag => tag?.name)
+        .filter((name): name is string => typeof name === 'string')
+        .filter(name => isDataLakeTagName(name) && foldTagName(name) !== foldTagName(datalakeTag));
+      if (otherLakeTags.length > 0) {
+        // Someone curated this file into another lake by hand. It leaves the Drive lake and keeps
+        // living there; deleting it would evict it from a lake this poll has no business touching.
+        // The consequence, deliberately: that other lake keeps the PRE-EDIT copy, because the fresh
+        // replacement is tagged into this lake only. Propagating an edit into a hand-curated lake is
+        // a decision for whoever curated it, not for a background poll - and holding stale content
+        // is recoverable (re-add the new copy), whereas a silent eviction is not.
+        logger.info('[driveLakeIngest] superseded copy belongs to another lake; unpicked only', {
+          fabFileId: staleCopy.id,
+          otherLakeTags,
+        });
+        return 'unpicked' as const;
+      }
+
+      // Sole-lake copy: delete for real, so the chunks, search-index docs, notebook links, S3 object
+      // and storage quota go with it. Actor is the row's creator (createFabFile stamps connectedBy);
+      // a copy owned by anyone else returns a non-'deleted' action and is left alone rather than
+      // half-reaped.
+      const { action } = await fabFilesService.deleteFabFile(
+        connection.connectedBy,
+        { id: staleCopy.id },
+        {
+          db: {
+            fabFiles: fabFileRepository,
+            fabFileChunks: fabFileChunkRepository,
+            users: userRepository,
+            sessions: sessionRepository,
+          },
+          storage: getFilesStorage(),
+          onDeleteComplete: async (_fabFile, size) => {
+            reclaimedBytes += size;
+          },
+          searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
+        }
+      );
+      if (action !== 'deleted') {
+        logger.warn('[driveLakeIngest] superseded copy could not be deleted; left unpicked', {
+          fabFileId: staleCopy.id,
+          action,
+        });
+      }
+      return action;
+    };
+
+    // Best-effort, and deliberately non-fatal: the files are already gone, so a failed quota write
+    // must not throw the whole reconcile into an SQS retry that would re-walk and re-ingest.
+    const flushReclaimedStorage = async () => {
+      if (reclaimedBytes <= 0) return;
+      try {
+        await changeStorageSize(user, -reclaimedBytes);
+        await user.save();
+      } catch (e) {
+        logger.error('[driveLakeIngest] failed to deduct reclaimed storage', {
+          connectionId,
+          reclaimedBytes,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+      reclaimedBytes = 0;
+    };
+
     // 3) Enforce the single-sync cap FIRST, before any membership write. An over-cap folder would time
     //    out mid-loop every attempt and accumulate duplicates (see MAX_INGEST_CANDIDATES); refusing here
     //    - a deterministic condition, so return cleanly rather than DLQ-ing a retry - guarantees nothing
@@ -265,13 +389,31 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
       });
     }
 
+    // 4b) Retire pre-existing duplicates: extra copies of a driveFileId that is STILL in the folder,
+    //     left behind by the add-only handler this replaced (a multi-parented file, or an SQS retry
+    //     after a partial run). They hold pre-edit content, stay lake members, and are invisible to
+    //     every future walk because the newest copy shadows them. Safe to retire up front and not
+    //     after an upload: the newest copy stays live either way, so nothing is left without a member.
+    //     A driveFileId gone from the folder is skipped here - all of its copies are already in
+    //     `removed` above.
+    let retired = 0;
+    for (const [driveFileId, copies] of existingByDriveId) {
+      if (!walkedIds.has(driveFileId) || copies.length < 2) continue;
+      for (const duplicate of copies.slice(1)) {
+        await retireSupersededCopy(duplicate);
+        retired++;
+      }
+    }
+
     if (candidates.length === 0) {
-      if (removed.length > 0) await recomputeStats();
+      await flushReclaimedStorage();
+      if (removed.length > 0 || retired > 0) await recomputeStats();
       logger.info('[driveLakeIngest] reconciled; no files to ingest', {
         walked: walked.length,
         existing: existingDocs.length,
         removed: removed.length,
         updated: changed.length,
+        retired,
       });
       await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
         status: 'connected',
@@ -311,7 +453,6 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
     const storage = getFilesStorage();
     let uploaded = 0;
     let skipped = 0;
-    let retired = 0;
 
     const skip = async (driveFileId: string, reason: string, extra?: Record<string, unknown>) => {
       skipped++;
@@ -322,78 +463,86 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
     // 6) One file at a time: size-gate -> fetch -> create FabFile -> append its manifest entry ->
     //    upload. Only one file's bytes are ever live, and the manifest entry precedes the upload so
     //    the objectCreated/chunk/vectorize claims the upload fires can find it (see header).
-    for (const file of candidates) {
-      // Native binaries carry a size, so skip the oversized ones BEFORE spending a Drive download.
-      // Editors exports have no size here; they are bounded by Drive's own ~10 MB export cap
-      // (surfaced as export_too_large) plus the post-fetch guard below.
-      if (file.size != null && file.size > MAX_INGEST_FILE_BYTES) {
-        await skip(file.id, 'oversized', { size: file.size });
-        continue;
+    //    `finally` so a mid-loop throw (rethrown for SQS retry) still deducts the storage the
+    //    already-retired copies gave back - those deletes are committed, and the retry re-walks
+    //    without seeing them, so the bytes would otherwise stay counted against the user forever.
+    try {
+      for (const file of candidates) {
+        // Native binaries carry a size, so skip the oversized ones BEFORE spending a Drive download.
+        // Editors exports have no size here; they are bounded by Drive's own ~10 MB export cap
+        // (surfaced as export_too_large) plus the post-fetch guard below.
+        if (file.size != null && file.size > MAX_INGEST_FILE_BYTES) {
+          await skip(file.id, 'oversized', { size: file.size });
+          continue;
+        }
+
+        const result = await fetchDriveFileContent(drive, file);
+        if (!result.ok) {
+          await skip(file.id, result.reason);
+          continue;
+        }
+        if (result.bytes.length > MAX_INGEST_FILE_BYTES) {
+          await skip(file.id, 'oversized_after_fetch', { size: result.bytes.length });
+          continue;
+        }
+
+        const { bytes, mimeType } = result;
+        const ext = mime.extension(mimeType);
+        const fileKey = `${uuidv4()}${ext ? `.${ext}` : ''}`;
+        const tags = await applyFallbackTags([{ name: datalakeTag, strength: DATALAKE_TAG_STRENGTH }]);
+
+        const fabFile = await createFabFile(
+          {
+            userId: connection.connectedBy,
+            filePath: fileKey,
+            fileSize: bytes.length,
+            fileName: file.name,
+            mimeType,
+            type: KnowledgeType.FILE,
+            tags,
+            batchId: batch.id,
+            relativePath: file.relativePath,
+            status: 'pending',
+            // Drive provenance (#1589): dedup key + change detection + source.
+            sourceType: FabFileSourceType.GOOGLE_DRIVE,
+            driveFileId: file.id,
+            ...(file.modifiedTime && { driveModifiedTime: new Date(file.modifiedTime) }),
+            ...(file.md5Checksum && { driveMd5Checksum: file.md5Checksum }),
+            sourceLakeId: connection.targetDataLakeId,
+            driveConnectionId: connectionId,
+          },
+          ability
+        );
+
+        // Manifest entry BEFORE the bytes land - the upload fires objectCreated synchronously and its
+        // downstream claims need this entry to already exist (ordering is load-bearing; see header).
+        await dataLakeBatchRepository.appendFiles(batch.id, [
+          {
+            fabFileId: fabFile.id,
+            fileName: file.name,
+            relativePath: file.relativePath,
+            status: 'pending',
+          },
+        ]);
+
+        await storage.upload(bytes, fileKey, { ContentType: mimeType });
+        uploaded++;
+
+        // Edited file: its fresh replacement is now durably uploaded, so retire the superseded copy
+        // (unpick from this lake, then delete outright unless another lake claims it - see the header).
+        // Done PER-FILE right after the upload, not batched at the end: a later file throwing then
+        // leaves every already-processed edit fully reconciled (old retired, new uploaded) instead of
+        // stranding the old copy as a duplicate lake member the next walk can no longer see (both
+        // share driveFileId). Only the newest copy is left to retire here - any older siblings were
+        // already retired up front in step 4b.
+        const staleCopy = newestCopyOf(file.id);
+        if (staleCopy) {
+          await retireSupersededCopy(staleCopy);
+          retired++;
+        }
       }
-
-      const result = await fetchDriveFileContent(drive, file);
-      if (!result.ok) {
-        await skip(file.id, result.reason);
-        continue;
-      }
-      if (result.bytes.length > MAX_INGEST_FILE_BYTES) {
-        await skip(file.id, 'oversized_after_fetch', { size: result.bytes.length });
-        continue;
-      }
-
-      const { bytes, mimeType } = result;
-      const ext = mime.extension(mimeType);
-      const fileKey = `${uuidv4()}${ext ? `.${ext}` : ''}`;
-      const tags = await applyFallbackTags([{ name: datalakeTag, strength: DATALAKE_TAG_STRENGTH }]);
-
-      const fabFile = await createFabFile(
-        {
-          userId: connection.connectedBy,
-          filePath: fileKey,
-          fileSize: bytes.length,
-          fileName: file.name,
-          mimeType,
-          type: KnowledgeType.FILE,
-          tags,
-          batchId: batch.id,
-          relativePath: file.relativePath,
-          status: 'pending',
-          // Drive provenance (#1589): dedup key + change detection + source.
-          sourceType: FabFileSourceType.GOOGLE_DRIVE,
-          driveFileId: file.id,
-          ...(file.modifiedTime && { driveModifiedTime: new Date(file.modifiedTime) }),
-          ...(file.md5Checksum && { driveMd5Checksum: file.md5Checksum }),
-          sourceLakeId: connection.targetDataLakeId,
-          driveConnectionId: connectionId,
-        },
-        ability
-      );
-
-      // Manifest entry BEFORE the bytes land - the upload fires objectCreated synchronously and its
-      // downstream claims need this entry to already exist (ordering is load-bearing; see header).
-      await dataLakeBatchRepository.appendFiles(batch.id, [
-        {
-          fabFileId: fabFile.id,
-          fileName: file.name,
-          relativePath: file.relativePath,
-          status: 'pending',
-        },
-      ]);
-
-      await storage.upload(bytes, fileKey, { ContentType: mimeType });
-      uploaded++;
-
-      // Edited file: its fresh replacement is now durably uploaded, so retire the superseded copy -
-      // a SOFT-DELETE (deleteManyInIds routes through the soft-delete plugin), so the pre-edit content
-      // leaves the owner's Files entirely rather than lingering as an orphan per edit. Done PER-FILE
-      // right after the upload, not batched at the end: a later file throwing then leaves every
-      // already-processed edit fully reconciled (old retired, new uploaded) instead of stranding the
-      // old copy as a duplicate lake member the next walk can no longer see (both share driveFileId).
-      const staleCopy = existingByDriveId.get(file.id);
-      if (staleCopy) {
-        await fabFileRepository.deleteManyInIds([staleCopy.id]);
-        retired++;
-      }
+    } finally {
+      await flushReclaimedStorage();
     }
 
     // Recompute stats once for every membership change this run made - genuine deletes above and the
