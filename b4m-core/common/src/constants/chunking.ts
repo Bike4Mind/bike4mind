@@ -34,12 +34,28 @@ export const MIN_PASSAGE_TOKEN_TARGET = 64;
 /**
  * Model-INDEPENDENT sanity ceiling for a configured passage target, in tokens. A passage larger
  * than a full typical embedding context window (~8K) defeats retrieval granularity - one vector
- * would average a whole document (see DEFAULT_PASSAGE_TOKEN_TARGET). This bounds the scoped
- * `DefaultChunkSize` setting (#1662) where the specific embedding model is NOT known (the resolver
- * clamp is pure); the EXACT per-model embedding-window cap is enforced downstream by the chunker
- * (`effectiveChunkTokenLimit` in fab-pipeline), which knows the model and reduces further if needed.
+ * would average a whole document (see DEFAULT_PASSAGE_TOKEN_TARGET).
+ *
+ * CURRENTLY UNREFERENCED. It bounded the scoped `DefaultChunkSize` setting until #1804 lowered that
+ * ceiling to OVERSIZED_PASSAGE_TOKEN_THRESHOLD - a configured target above the detection threshold
+ * makes "Rebuild passages" non-convergent, which is a tighter constraint than this one. Deliberately
+ * kept rather than deleted: it states a real invariant (a passage should not approach a whole
+ * embedding window) that a future non-lake caller may need, and deleting an exported symbol from
+ * `common` is the shape that passes public CI and breaks an overlay at deploy time.
+ *
+ * NOT enforced downstream in this value: `effectiveChunkTokenLimit` (fab-pipeline) clamps to the
+ * EMBEDDING MODEL's window, which is a different and model-dependent bound. Nothing enforces 8192.
  */
 export const MAX_PASSAGE_TOKEN_TARGET = 8192;
+
+/**
+ * A chunk larger than this (in tokens) marks a file whose chunking predates the passage-target
+ * fix: a whole-document / whole-section blob rather than a ~512-token passage. Used to detect the
+ * files a lake "Rebuild passages" pass should re-chunk. Deliberately well above
+ * DEFAULT_PASSAGE_TOKEN_TARGET (512) so a correctly-chunked passage never trips it, and below the
+ * ~6.5K model-window packing the old chunker produced, so every legacy blob does.
+ */
+export const OVERSIZED_PASSAGE_TOKEN_THRESHOLD = 1500;
 
 /**
  * Characters per token used to turn a chunk's TOKEN target into the SERVE path's CHARACTER budget.
@@ -104,3 +120,16 @@ export function deriveServeCharBudget(chunkTokenTarget?: number | null): ServeCh
     ceilingBound: derived > SERVE_CHUNK_CHARS_CEILING,
   };
 }
+
+/**
+ * `FabFile.notes` marker written when the data-lake convergence kill switch abandons a vectorize
+ * (#1676). The file keeps its chunks but has no vectors, so it is unsearchable until re-indexed, and
+ * it does NOT auto-resume.
+ *
+ * Lives here rather than beside its writer (apps/client fabFileVectorize) because it is a
+ * cross-layer contract: the queue handler writes it and the lake-health evaluator
+ * (constants/lakeHealth.ts) reads it to tell a permanently-stalled file from one still in flight.
+ * b4m-core cannot import from apps/client, so a copy there would have to drift silently.
+ */
+export const CONVERGENCE_PAUSED_NOTE =
+  'Indexing paused by the data-lake convergence kill switch - reprocess to complete.';

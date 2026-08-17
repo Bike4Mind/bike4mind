@@ -29,7 +29,11 @@ import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { recordReconcilerForcedTerminal, recordStuckBatchGauge, recordReconcileRun } from '@server/utils/cloudwatch';
 import { enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
-import { buildFabFileChunkScanFilter, CHUNK_SCAN_MIN_AGE_MS } from '@server/worker/chunkScan';
+import {
+  buildFabFileChunkScanFilter,
+  CHUNK_SCAN_MIN_AGE_MS,
+  CHUNK_CLAIM_STALE_MS,
+} from '@server/worker/chunkScan';
 import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
 import { sendToQueue } from '@server/utils/sqs';
 import { Resource } from 'sst';
@@ -50,23 +54,28 @@ const CHUNK_RESCUE_MAX_PER_RUN = 500;
 async function rescueUnchunkedFiles(): Promise<number> {
   if (!(await adminSettingsRepository.getSettingsValue('enableAutoChunk'))) return 0;
 
-  const cutoff = new Date(Date.now() - CHUNK_SCAN_MIN_AGE_MS);
-  const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff))
+  const now = Date.now();
+  const cutoff = new Date(now - CHUNK_SCAN_MIN_AGE_MS);
+  const staleClaimBefore = new Date(now - CHUNK_CLAIM_STALE_MS);
+  const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff, staleClaimBefore))
     .select('_id userId batchId')
     .limit(CHUNK_RESCUE_MAX_PER_RUN)
     .lean();
 
-  for (const file of candidates) {
+  // Enqueue the selected ids directly. No producer-side claim: the chunk worker's compare-and-set
+  // (fabFileChunk.ts) is the single point of mutual exclusion, so a file already in flight loses
+  // there and returns. The selection filter above already excludes in-flight files, so a merely-slow
+  // file is not re-sent every pass.
+  const userById = new Map(candidates.map(f => [String(f._id), String(f.userId)]));
+  const batchById = new Map(candidates.map(f => [String(f._id), f.batchId]));
+  for (const id of userById.keys()) {
     await sendToQueue(Resource.fabFileChunkQueue.url, {
-      fabFileId: String(file._id),
-      userId: file.userId,
-      // Only a data-lake file (has a batch) is convergence work the kill switch may halt (#1676).
-      // A plain upload rescued after a lost S3 event is user work - it must always run (#1420), so
-      // it carries no origin. No lakeId either: this global sweep is gated by the platform switch.
-      ...(file.batchId ? { origin: CONVERGENCE_ORIGIN } : {}),
+      fabFileId: id,
+      userId: userById.get(id)!,
+      ...(batchById.get(id) ? { origin: CONVERGENCE_ORIGIN } : {}),
     });
   }
-  return candidates.length;
+  return userById.size;
 }
 
 /**
