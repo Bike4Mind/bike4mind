@@ -115,4 +115,23 @@ describe('KnowledgeChunkControls - chunk-size ceiling', () => {
 
     await waitFor(() => expect(chunkFileUtility).toHaveBeenCalledWith('f1', 512));
   });
+
+  it('rounds a fractional chunk size instead of submitting it as-is', async () => {
+    render(
+      <TestWrapper>
+        <KnowledgeChunkControls fabFile={FAB_FILE} />
+      </TestWrapper>
+    );
+
+    const input = screen.getByTestId('knowledge-chunk-controls-size-input').querySelector('input')!;
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '800.5' } });
+    fireEvent.blur(input);
+
+    expect(input).toHaveValue('801 tokens');
+
+    fireEvent.click(screen.getByTestId('knowledge-chunk-controls-chunk-btn'));
+
+    await waitFor(() => expect(chunkFileUtility).toHaveBeenCalledWith('f1', 801));
+  });
 });

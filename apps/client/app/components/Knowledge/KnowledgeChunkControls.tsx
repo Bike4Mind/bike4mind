@@ -69,10 +69,13 @@ export const KnowledgeChunkControls: React.FC<IKnowledgeChunkControlsProps> = ({
               // OVERSIZED_PASSAGE_TOKEN_THRESHOLD), so this input can't suggest a value the
               // policy will not honor. Falls back to the last valid size on a blank, negative, or
               // non-numeric blur - Number('') is 0, not NaN, so that case must be checked
-              // explicitly rather than relying on Number.isFinite alone.
+              // explicitly rather than relying on Number.isFinite alone. Rounds a fractional entry
+              // (the route requires an integer) rather than letting it through to a submit-time error.
               const parsed = Number(e.target.value);
               const next =
-                Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, OVERSIZED_PASSAGE_TOKEN_THRESHOLD) : chunkSize;
+                Number.isFinite(parsed) && parsed > 0
+                  ? Math.min(Math.round(parsed), OVERSIZED_PASSAGE_TOKEN_THRESHOLD)
+                  : chunkSize;
               setChunkSizeDisplay(`${next} tokens`);
               setChunkSize(next);
             }}
