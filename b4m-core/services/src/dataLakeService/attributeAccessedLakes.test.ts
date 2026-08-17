@@ -56,4 +56,40 @@ describe('attributeAccessedLakeIds', () => {
       );
     });
   });
+
+  // `opti-knowledge` is a REAL id in @bike4mind/common's static registry (STATIC_LAKE_IDS) -
+  // a file granted through its open prefix structurally cannot carry `datalake:opti-knowledge`
+  // (no write path stamps a meta-tag on a fallback lake), so this is the NORMAL shape of a read
+  // there, not an edge case. A fixture id like 'lake1' above is never in the real registry, so
+  // it could never exercise this arm - these use the real id on purpose.
+  describe('open (static-registry) prefix attribution', () => {
+    const STATIC_LAKE = { id: 'opti-knowledge', datalakeTag: 'datalake:opti-knowledge', fileTagPrefix: 'opti:' };
+    const DYNAMIC_LAKE = { id: 'dyn-1', datalakeTag: 'datalake:org1:handbook', fileTagPrefix: 'handbook:' };
+
+    it('attributes a prefix-only match to the static lake even with allowFullScopeFallback: false', () => {
+      const ids = attributeAccessedLakeIds([['opti:policy']], [STATIC_LAKE], { allowFullScopeFallback: false });
+      expect(ids).toEqual(['opti-knowledge']);
+    });
+
+    it('prefers the exact meta-tag over the prefix arm when a file somehow carries both', () => {
+      const ids = attributeAccessedLakeIds([['datalake:opti-knowledge', 'opti:policy']], [STATIC_LAKE], {
+        allowFullScopeFallback: false,
+      });
+      expect(ids).toEqual(['opti-knowledge']);
+    });
+
+    it('does not attribute via a dynamic lake prefix - user-controlled, never a standalone signal', () => {
+      const ids = attributeAccessedLakeIds([['handbook:onboarding']], [DYNAMIC_LAKE], {
+        allowFullScopeFallback: false,
+      });
+      expect(ids).toEqual([]);
+    });
+
+    it('mixed result set: attributes only the file that actually carries the open prefix', () => {
+      const ids = attributeAccessedLakeIds([['opti:policy'], ['personal:draft']], [STATIC_LAKE], {
+        allowFullScopeFallback: false,
+      });
+      expect(ids).toEqual(['opti-knowledge']);
+    });
+  });
 });

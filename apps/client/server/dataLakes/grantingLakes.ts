@@ -1,4 +1,4 @@
-import { DATA_LAKES, normalizeTagPrefix } from '@bike4mind/common';
+import { normalizeTagPrefix, openLakeTagPrefix } from '@bike4mind/common';
 import type { DataLakeConfig, IFabFileDocument } from '@bike4mind/common';
 
 /**
@@ -10,21 +10,18 @@ import type { DataLakeConfig, IFabFileDocument } from '@bike4mind/common';
  * the module.
  */
 
-export const STATIC_LAKE_IDS = new Set(DATA_LAKES.map(l => l.id));
-
 /**
  * A lake's normalized file-tag prefix plus whether it's OPEN (static-registry) or SCOPED
- * (dynamic, user-controlled) - `undefined` if the lake has no usable prefix at all. The single
- * place this pairing is computed, shared by `grantingLakes` (per-lake, for naming a specific
- * grantor - only the open case is ever a grant on its own) and `splitTagPrefixes` in `./index.ts`
- * (aggregated, for scoping a browse/search query - both cases matter there). `splitTagPrefixes`'s
- * own doc comment already documents a past bug from two independent copies of prefix
- * normalization disagreeing; one copy is what keeps that from recurring here.
+ * (dynamic, user-controlled) - `undefined` if the lake has no usable prefix at all. Built on
+ * `openLakeTagPrefix` (`@bike4mind/common`), the shared open/dynamic split also used by
+ * `attributeAccessedLakeIds` - this just adds the scoped-prefix value that split alone doesn't
+ * carry, needed here and by `splitTagPrefixes` in `./index.ts`.
  */
 export function normalizedLakePrefix(lake: DataLakeConfig): { prefix: string; isOpen: boolean } | undefined {
+  const openPrefix = openLakeTagPrefix(lake);
+  if (openPrefix) return { prefix: openPrefix, isOpen: true };
   const prefix = normalizeTagPrefix(lake.fileTagPrefix);
-  if (!prefix) return undefined;
-  return { prefix, isOpen: STATIC_LAKE_IDS.has(lake.id) };
+  return prefix ? { prefix, isOpen: false } : undefined;
 }
 
 /**

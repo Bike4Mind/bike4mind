@@ -1,9 +1,15 @@
+import { openLakeTagPrefix } from '@bike4mind/common';
 import { datalakeTagsFrom } from './getDataLakePrompts';
 
-/** The subset of a resolved lake's fields needed to reverse a file's tags back to a lake id. */
+/**
+ * The subset of a resolved lake's fields needed to reverse a file's tags back to a lake id -
+ * `fileTagPrefix` (with `id`) is what lets `openLakeTagPrefix` recover a static-registry lake
+ * whose files carry only a content-tag prefix and no `datalake:<slug>` meta-tag at all.
+ */
 export interface AttributableLake {
   id: string;
   datalakeTag: string;
+  fileTagPrefix?: string;
 }
 
 export interface AttributeAccessedLakeIdsOptions {
@@ -45,11 +51,25 @@ export function attributeAccessedLakeIds(
 ): string[] {
   const { allowFullScopeFallback = true } = options;
   const tagToId = new Map(lakes.map(lake => [lake.datalakeTag, lake.id]));
+  // Open (static-registry) prefixes, reversible the same way `grantingLakes` does for a single
+  // file - a dynamic lake's prefix is user-controlled and excluded by `openLakeTagPrefix` itself,
+  // so it is never a standalone attribution signal here either.
+  const openPrefixes = lakes
+    .map(lake => ({ id: lake.id, prefix: openLakeTagPrefix(lake) }))
+    .filter((entry): entry is { id: string; prefix: string } => !!entry.prefix);
   const ids = new Set<string>();
   for (const tags of fileTagLists) {
     for (const tag of datalakeTagsFrom(tags)) {
       const id = tagToId.get(tag);
       if (id) ids.add(id);
+    }
+    // A static-registry lake's files structurally cannot carry its meta-tag (no write path
+    // stamps one for a fallback lake), so without this arm every retrieval of registry content
+    // would fall through as "inconclusive" - not an edge case, the NORMAL shape of a read there.
+    if (openPrefixes.length > 0) {
+      for (const { id, prefix } of openPrefixes) {
+        if (tags.some(t => t.startsWith(prefix))) ids.add(id);
+      }
     }
   }
   if (ids.size > 0) return [...ids];

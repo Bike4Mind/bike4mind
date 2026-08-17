@@ -349,6 +349,30 @@ export const DATA_LAKES: DataLakeConfig[] = [
   ...PREMIUM_DATA_LAKES,
 ];
 
+/** Static-registry lake ids - see `openLakeTagPrefix`'s doc comment for what this set decides. */
+export const STATIC_LAKE_IDS = new Set(DATA_LAKES.map(l => l.id));
+
+/**
+ * A lake's normalized file-tag prefix, but ONLY if the lake is in the static registry
+ * (`STATIC_LAKE_IDS`) - `undefined` for a dynamic (user-created) lake's prefix, which is
+ * user-controlled and can collide across tenants, so it is never usable as a standalone grant or
+ * attribution signal on its own; or for a static lake with no usable prefix at all.
+ *
+ * The ONE place "is this lake's prefix an OPEN one" is decided, so every consumer that reverses a
+ * content-tag-prefix match back to a specific lake - `grantingLakes`/`isFileInAccessibleLake`
+ * (`apps/client/server/dataLakes/grantingLakes.ts`, naming the grantor of a single already-
+ * authorized file), `splitTagPrefixes` (same file's barrel, scoping a browse/search query), and
+ * `attributeAccessedLakeIds` (`b4m-core/services/src/dataLakeService/attributeAccessedLakes.ts`,
+ * naming the lake a retrieved file's content actually came from) - agrees on the same answer.
+ * Two independently-normalized copies of this predicate have drifted before (a padded prefix
+ * passed create validation but mismatched between the ownership arm and the tag counter); one
+ * shared computation is what keeps that class of bug from recurring here.
+ */
+export function openLakeTagPrefix(lake: { id: string; fileTagPrefix?: string | null }): string | undefined {
+  if (!STATIC_LAKE_IDS.has(lake.id)) return undefined;
+  return normalizeTagPrefix(lake.fileTagPrefix) ?? undefined;
+}
+
 /**
  * Canonical normalization for entitlement keys + `requiredEntitlement` values - the ONE
  * rule, applied at write time (create/update/stamp) and at match time. Mirrors the

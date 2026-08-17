@@ -736,7 +736,10 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
                 principalId: context.userId,
                 organizationId: normalizeId(context.user.organizationId),
                 resolvedLakeIds: semantic.lakeIds,
-                fileIds: semantic.fileHits.map(f => f.id),
+                // semantic.fileHits is chunk-level (one entry per ranked passage, per fileHits'
+                // own construction below) - deduped the same way semantic-search.ts's sibling
+                // route does, so this counts files read, not chunks matched.
+                fileIds: [...new Set(semantic.fileHits.map(f => f.id))],
                 chunkIds: semantic.chunkIds,
                 surface: scope ? 'chat-kb-search-scoped' : 'chat-kb-search',
                 queryText: query,

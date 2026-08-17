@@ -136,6 +136,22 @@ describe('GET /api/data-lakes/articles access-event audit', () => {
     expect(mockRecord).toHaveBeenCalledWith(expect.objectContaining({ resolvedLakeIds: ['opti-knowledge'] }));
   });
 
+  // queryDataLakeArticles's deep-link (?id=) branch returns straight from its `if (query.id)` arm
+  // without ever reading query.search - a ?id=&search= request must not record a queryText that
+  // named no search that actually ran.
+  it('does not record queryText on the deep-link branch even when ?search= is also present', async () => {
+    mockQueryDataLakeArticles.mockResolvedValue({
+      data: [{ id: 'f1', tags: [{ name: 'opti:policy' }] }],
+      total: 1,
+      hasMore: false,
+      grantedLakeIds: ['opti-knowledge'],
+    });
+
+    await route(makeReq({ id: 'f1', search: 'anything' }), makeRes().res);
+
+    expect(mockRecord).toHaveBeenCalledWith(expect.not.objectContaining({ queryText: expect.anything() }));
+  });
+
   it('does not record an event when nothing was returned', async () => {
     mockQueryDataLakeArticles.mockResolvedValue({ data: [], total: 0, hasMore: false });
 

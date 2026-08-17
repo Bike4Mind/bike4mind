@@ -48,7 +48,10 @@ const handler = baseApi().get(async (req: Request<{}, unknown, unknown, DataLake
           { allowFullScopeFallback: false }
         );
     if (isDeepLink || resolvedLakeIds.length > 0) {
-      const searchTerm = firstQueryValue(req.query.search as string | string[] | undefined);
+      // Only the list/search branch actually runs a search - queryDataLakeArticles's deep-link
+      // (?id=) branch returns straight from its `if (query.id)` arm without ever reading
+      // query.search, so a ?id=&search= request must not record a queryText that named no search.
+      const searchTerm = isDeepLink ? undefined : firstQueryValue(req.query.search);
       // Awaited (never rethrows - see recordLakeAccessEvent's doc comment): this is a per-request
       // serverless route, so the write must land before the response ends, not race a post-response
       // freeze of the execution environment.

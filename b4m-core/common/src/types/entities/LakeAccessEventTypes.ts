@@ -63,11 +63,22 @@ export interface ILakeAccessEvent {
   /** Set when a system/agent principal acted for a human, so the human is still findable in "who
    * read this" without conflating the two identities in `principalId`. */
   onBehalfOfUserId?: string;
+  /**
+   * The READER's organization - whoever performed the retrieval, not necessarily the lake
+   * owner's. A caller answering "who read *my org's* lake" (the question an org-manageable-lake
+   * admin actually asks) must filter/join on the lake's own org, not this field; an outside
+   * grant-holder's read is a real row here under their own org, and `listByLake` returns nothing
+   * for that admin if they filter on this field instead.
+   */
   organizationId?: string;
   /**
    * Best-effort attribution: lakes whose `datalake:<slug>` meta-tag appears on a returned
-   * result, narrowed from the full authorized scope where that tag is recoverable. One retrieval
-   * call commonly spans several lakes.
+   * result, OR (for a static-registry lake only) whose open content-tag prefix appears - a
+   * registry lake's files structurally cannot carry its meta-tag (no write path stamps one for a
+   * fallback lake), so without this second arm every retrieval of registry content would be
+   * unattributable, which is the NORMAL shape of a read there, not an edge case. Narrowed from the
+   * full authorized scope where either is recoverable. One retrieval call commonly spans several
+   * lakes.
    *
    * When nothing in the result set carries a recoverable tag, `attributeAccessedLakeIds`'s
    * `allowFullScopeFallback` option decides what happens: `true` (the default) falls back to the

@@ -1567,6 +1567,78 @@ describe('search_knowledge_base access-event audit', () => {
     );
   });
 
+  // semanticDataLakeSearch's `results` are chunk-level (one entry per ranked passage) - two
+  // chunks from the same file must count as one file read, not two, in the audit's fileIds.
+  it('dedupes fileIds when multiple ranked chunks come from the same file', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+    semanticDataLakeSearchMock.mockResolvedValue({
+      results: [
+        {
+          chunkId: 'c1',
+          fileId: 'f1',
+          fileName: 'Handbook.pdf',
+          fileTags: ['datalake:x'],
+          chunkText: 'pto accrues monthly',
+          score: 0.81,
+        },
+        {
+          chunkId: 'c2',
+          fileId: 'f1',
+          fileName: 'Handbook.pdf',
+          fileTags: ['datalake:x'],
+          chunkText: 'sick leave is separate',
+          score: 0.79,
+        },
+      ],
+      totalChunksSearched: 9,
+      filesInScope: 3,
+      chunksScored: 9,
+      embeddingModel: ADA,
+      embeddingMismatch: emptyEmbeddingMismatchReport(),
+      alternateModelsEmbedded: [],
+      scan: {
+        truncated: false,
+        fileBudgetHit: false,
+        chunkBudgetHit: false,
+        filesMatching: 3,
+        filesScoped: 3,
+        filesScanned: 3,
+        chunksScanned: 9,
+        chunksSkippedDimensionMismatch: 0,
+        annFilesQueried: 0,
+        annHits: 0,
+        budgets: { maxFiles: 20000, maxChunks: 100000 },
+      },
+    });
+    const ctx = makeContext({
+      user: { id: 'u1', groups: [], organizationId: 'org1' } as never,
+      retrievalFilter: undefined,
+      db: {
+        lakeAccessEvents: { record },
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+    });
+
+    await run(ctx);
+    await flushAsync();
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chunkIds: ['c1', 'c2'],
+        fileIds: ['f1'],
+      })
+    );
+  });
+
   // semanticDataLakeSearch's own file search is a MIXED corpus too (includeShared: true, no
   // restrictToDataLake - collectScopedFiles ORs the caller's own/shared files in alongside the
   // lake arms), despite ranking by a lake-scoped embedding query - a hit with no recoverable tag

@@ -3126,7 +3126,9 @@ export const settingsMap = {
     description:
       'How long a lake access audit event (who read a lake, and when) is retained, in days. Has a ' +
       'floor of 450 days (12 months live plus a Type II observation tail) - this is a platform-wide ' +
-      'value, not per-organization, until a scoped settings resolver exists.',
+      'value, not per-organization, until a scoped settings resolver exists. Applies only to events ' +
+      'written after a change: expiresAt is computed once at write time and is immutable, so ' +
+      'raising or lowering this value never affects rows already recorded.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.DATA_LAKE_AUDIT.id,
     order: 1,
@@ -3140,7 +3142,9 @@ export const settingsMap = {
     description:
       'How long the opt-in query-text log (the natural-language question behind a lake retrieval) ' +
       'is retained, in days. Always resolved shorter than the audit event retention itself, ' +
-      'regardless of this value, since the query text is more sensitive than the event metadata.',
+      'regardless of this value, since the query text is more sensitive than the event metadata. ' +
+      'Applies only to events written after a change - already-recorded rows keep the expiry ' +
+      'computed at write time and are not retroactively shortened or extended.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.DATA_LAKE_AUDIT.id,
     order: 2,
