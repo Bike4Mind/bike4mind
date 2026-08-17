@@ -69,7 +69,7 @@ export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
    * Field names must match the `{name}` placeholders in `path`. Must be a plain
    * ZodObject - that is what zod-to-openapi's `request.params` accepts.
    */
-  pathParams?: z.ZodObject;
+  pathParams?: z.ZodObject<z.ZodRawShape>;
   /**
    * Optional OpenAPI-representable projection of `request`, used ONLY for the
    * generated spec. Needed when `request` carries wrappers zod-to-openapi cannot

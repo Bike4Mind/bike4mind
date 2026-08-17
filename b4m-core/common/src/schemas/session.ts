@@ -39,8 +39,20 @@ export const SessionUpdateRequestSchema = z.object({
    * context by default has consented to this notebook, not to the whole project. The
    * propagation is append-only (nothing ever removes a fileId from a project), so a
    * wrong `true` is not recoverable through the UI.
+   *
+   * This JSDoc block is for readers of this file only - it is NOT what reaches the
+   * published spec (zod-to-openapi reads .describe(), not comments). The .describe()
+   * below is the one an API caller actually sees.
    */
-  propagateToProjects: z.boolean().optional(),
+  propagateToProjects: z
+    .boolean()
+    .optional()
+    .describe(
+      'Defaults to true when omitted. When knowledgeIds grows, the newly-added file ids are also ' +
+        'appended to every project that contains this session, granting every member of that project ' +
+        'access to those files. This propagation is append-only and cannot be undone through the UI - ' +
+        'pass false if newly-attached files should not be shared with the project.'
+    ),
 });
 
 export type SessionUpdateRequest = z.infer<typeof SessionUpdateRequestSchema>;

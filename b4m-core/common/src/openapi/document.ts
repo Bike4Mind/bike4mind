@@ -210,7 +210,7 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
 
   doc.tags = [
     { name: 'AI', description: 'Completions and server-side tool execution.' },
-    { name: 'Sessions', description: 'Read and update a session (called a "notebook" in the product UI).' },
+    { name: 'Sessions', description: 'Update a session (called a "notebook" in the product UI).' },
   ];
 
   // Attach per-operation vendor extensions + headers by operationId. Restrict to

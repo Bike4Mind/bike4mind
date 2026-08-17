@@ -61,10 +61,12 @@ const getAndDeleteHandler = baseApi()
     return res.json({ newLastNotebookId: newLastNotebook?.id || null });
   });
 
-// Auth mode and request/path-param validation come from sessionUpdateContract (the single
-// source of truth also driving the OpenAPI spec). `req.validated` / `req.validatedParams`
-// are the parsed, typed body/id. sessionUpdateContract declares no scopes, matching this
-// route's pre-existing unscoped behavior (any valid API key or JWT).
+// Auth mode, required scope, and request/path-param validation come from sessionUpdateContract
+// (the single source of truth also driving the OpenAPI spec). `req.validated` /
+// `req.validatedParams` are the parsed, typed body/id. This is a deliberate behavior change
+// from the endpoint's pre-PR unscoped state: any valid API key could previously call this
+// (undocumented), including narrow-purpose ones like CC_BRIDGE/EMBED_CHAT that were never
+// meant to write to sessions - see sessionUpdateContract's `scopes` comment for why.
 const putHandler = nextRouteForContract(sessionUpdateContract).put(async (req, res) => {
   const { id } = req.validatedParams;
 

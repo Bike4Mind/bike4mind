@@ -335,7 +335,8 @@
             "type": "boolean"
           },
           "propagateToProjects": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Defaults to true when omitted. When knowledgeIds grows, the newly-added file ids are also appended to every project that contains this session, granting every member of that project access to those files. This propagation is append-only and cannot be undone through the UI - pass false if newly-attached files should not be shared with the project."
           }
         },
         "example": {
@@ -1083,7 +1084,7 @@
       "put": {
         "operationId": "updateSession",
         "summary": "Update a session",
-        "description": "Updates a session (called a \"notebook\" in the product UI): its name, attached knowledge files, tags, or retrieval settings. Set `knowledgeIds` and `forceKnowledgeRetrieval: true` together to enable grounded retrieval for `POST /api/chat` against this session - retrieval is gated by these session fields, not by the chat request. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "description": "Updates a session (called a \"notebook\" in the product UI): its name, attached knowledge files, tags, or retrieval settings. Set `knowledgeIds` and `forceKnowledgeRetrieval: true` together to enable grounded retrieval for `POST /api/chat` against this session - retrieval is gated by these session fields, not by the chat request. Authenticate with an API key (`b4m_live_`) or a JWT. Warning: adding to `knowledgeIds` shares those files with every member of every project containing this session by default (see `propagateToProjects`), and that sharing cannot be undone through the UI.",
         "tags": [
           "Sessions"
         ],
@@ -1153,6 +1154,24 @@
               }
             }
           },
+          "403": {
+            "description": "The API key does not hold any of the required scopes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "404": {
             "description": "No session exists with the given id.",
             "content": {
@@ -1190,6 +1209,9 @@
             }
           }
         },
+        "x-required-scopes": [
+          "notebooks:write"
+        ],
         "x-codeSamples": [
           {
             "lang": "curl",
@@ -1565,7 +1587,7 @@
     },
     {
       "name": "Sessions",
-      "description": "Read and update a session (called a \"notebook\" in the product UI)."
+      "description": "Update a session (called a \"notebook\" in the product UI)."
     }
   ]
 }
