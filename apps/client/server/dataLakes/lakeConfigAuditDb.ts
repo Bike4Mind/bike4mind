@@ -12,8 +12,11 @@ import { adminSettingsRepository, lakeConfigChangeEventRepository } from '@bike4
  *
  * Spread it into a service's `db`, e.g.
  *   db: { dataLakes: dataLakeRepository, ...lakeConfigAuditDb }
+ *
+ * Frozen: it is module-level shared state spread into every audited write path, so a stray
+ * mutation anywhere would silently repoint the audit for all of them at once.
  */
-export const lakeConfigAuditDb = {
+export const lakeConfigAuditDb = Object.freeze({
   lakeConfigChangeEvents: lakeConfigChangeEventRepository,
   adminSettings: adminSettingsRepository,
-};
+});
