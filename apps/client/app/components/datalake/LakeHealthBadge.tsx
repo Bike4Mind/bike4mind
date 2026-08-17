@@ -167,12 +167,7 @@ export default function LakeHealthBadge({ lakeId, failedFileCount = 0 }: { lakeI
 
   const level = deriveLakeHealthBadge(health, failedFileCount);
   return (
-    <Tooltip
-      title={<HealthTooltip health={health} failedFileCount={failedFileCount} />}
-      size="sm"
-      variant="outlined"
-      arrow
-    >
+    <Tooltip title={<HealthTooltip health={health} failedFileCount={failedFileCount} />} size="sm" variant="outlined" arrow>
       <Chip
         size="sm"
         variant="soft"
