@@ -243,11 +243,11 @@ export class ImageGenerationService {
         height: rest.height,
         aspect_ratio: rest.aspect_ratio,
         response_format: rest.response_format,
-        // BFL-specific parameters - these may not be available in GenerateImageRequestBodySchema
-        safety_tolerance: (parsedBody as any).safety_tolerance,
-        prompt_upsampling: (parsedBody as any).prompt_upsampling,
-        seed: (parsedBody as any).seed,
-        output_format: (parsedBody as any).output_format,
+        // BFL-specific parameters
+        safety_tolerance: rest.safety_tolerance,
+        prompt_upsampling: rest.prompt_upsampling,
+        seed: rest.seed,
+        output_format: rest.output_format,
       }).filter(([_, value]) => value !== undefined)
     );
 
