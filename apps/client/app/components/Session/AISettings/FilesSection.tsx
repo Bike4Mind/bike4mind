@@ -26,6 +26,7 @@ import { useChunkFile } from '@client/app/hooks/data/fabFiles';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
 import { useMessageFiles } from '@client/app/hooks/useMessageFiles';
+import { clampChunkSize } from '@client/app/utils/chunkSize';
 import { renameDuplicateFiles } from '@client/app/utils/fabFileUtils';
 import { buildSortedKnowledgeItems } from '@client/app/utils/knowledgeViewerSorting';
 import { useQueryClient } from '@tanstack/react-query';
@@ -161,8 +162,12 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
   const { currentUser } = useUser();
   const modelInfo = useModelInfo()?.data?.find(m => m.id === model);
   const currentEmbeddingModel = useGetSettingsValue('defaultEmbeddingModel');
-  // Fall back to the canonical chunker default, not a third hand-copied number.
-  const defaultChunkSize = useGetSettingsValue('DefaultChunkSize') || DEFAULT_PASSAGE_TOKEN_TARGET;
+  // Fall back to the canonical chunker default, not a third hand-copied number. Clamped: a legacy
+  // stored value above the ceiling reaches this raw (the settings-fetch route applies no clamp of
+  // its own), and submitting it unclamped now hard-400s at the route.
+  const defaultChunkSize = clampChunkSize(
+    Number(useGetSettingsValue('DefaultChunkSize')) || DEFAULT_PASSAGE_TOKEN_TARGET
+  );
   const chunkFile = useChunkFile();
   const queryClient = useQueryClient();
 
@@ -455,6 +460,7 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
                       arrow
                     >
                       <IconButton
+                        data-testid={`files-section-reprocess-btn-${file.id}`}
                         size="sm"
                         variant="plain"
                         color="danger"
@@ -558,6 +564,7 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
                       arrow
                     >
                       <IconButton
+                        data-testid={`files-section-reprocess-btn-${file.id}`}
                         size="sm"
                         variant="plain"
                         color="danger"

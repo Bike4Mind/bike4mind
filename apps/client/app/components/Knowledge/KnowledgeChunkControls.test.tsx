@@ -7,6 +7,7 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { KnowledgeChunkControls } from './KnowledgeChunkControls';
 
 const chunkFileUtility = vi.fn().mockResolvedValue(undefined);
+let configuredChunkSize: number | undefined;
 
 vi.mock('@client/app/utils/filesAPICalls', () => ({
   chunkFileUtility: (...args: unknown[]) => chunkFileUtility(...args),
@@ -14,7 +15,7 @@ vi.mock('@client/app/utils/filesAPICalls', () => ({
 }));
 
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useGetSettingsValue: () => undefined,
+  useGetSettingsValue: () => configuredChunkSize,
 }));
 
 vi.mock('sonner', () => ({ toast: { info: vi.fn(), success: vi.fn(), error: vi.fn() } }));
@@ -38,6 +39,7 @@ const FAB_FILE = {
 describe('KnowledgeChunkControls - chunk-size ceiling', () => {
   beforeEach(() => {
     chunkFileUtility.mockClear();
+    configuredChunkSize = undefined;
   });
 
   it('clamps a chunk size above the detection threshold before sending it', async () => {
@@ -116,7 +118,7 @@ describe('KnowledgeChunkControls - chunk-size ceiling', () => {
     await waitFor(() => expect(chunkFileUtility).toHaveBeenCalledWith('f1', 512));
   });
 
-  it('rounds a fractional chunk size instead of submitting it as-is', async () => {
+  it('floors a fractional chunk size instead of submitting it as-is', async () => {
     render(
       <TestWrapper>
         <KnowledgeChunkControls fabFile={FAB_FILE} />
@@ -128,10 +130,46 @@ describe('KnowledgeChunkControls - chunk-size ceiling', () => {
     fireEvent.change(input, { target: { value: '800.5' } });
     fireEvent.blur(input);
 
-    expect(input).toHaveValue('801 tokens');
+    expect(input).toHaveValue('800 tokens');
 
     fireEvent.click(screen.getByTestId('knowledge-chunk-controls-chunk-btn'));
 
-    await waitFor(() => expect(chunkFileUtility).toHaveBeenCalledWith('f1', 801));
+    await waitFor(() => expect(chunkFileUtility).toHaveBeenCalledWith('f1', 800));
+  });
+
+  it('raises a below-floor chunk size to the shared minimum', async () => {
+    render(
+      <TestWrapper>
+        <KnowledgeChunkControls fabFile={FAB_FILE} />
+      </TestWrapper>
+    );
+
+    const input = screen.getByTestId('knowledge-chunk-controls-size-input').querySelector('input')!;
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '5' } });
+    fireEvent.blur(input);
+
+    expect(input).toHaveValue('64 tokens');
+
+    fireEvent.click(screen.getByTestId('knowledge-chunk-controls-chunk-btn'));
+
+    await waitFor(() => expect(chunkFileUtility).toHaveBeenCalledWith('f1', 64));
+  });
+
+  it('clamps a legacy above-ceiling DefaultChunkSize prefill even if the input is never touched', async () => {
+    configuredChunkSize = 5000;
+
+    render(
+      <TestWrapper>
+        <KnowledgeChunkControls fabFile={FAB_FILE} />
+      </TestWrapper>
+    );
+
+    const input = screen.getByTestId('knowledge-chunk-controls-size-input').querySelector('input')!;
+    expect(input).toHaveValue('1500 tokens');
+
+    fireEvent.click(screen.getByTestId('knowledge-chunk-controls-chunk-btn'));
+
+    await waitFor(() => expect(chunkFileUtility).toHaveBeenCalledWith('f1', 1500));
   });
 });

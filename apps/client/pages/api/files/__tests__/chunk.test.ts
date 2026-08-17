@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { BadRequestError } from '@server/utils/errors';
 
 const h = vi.hoisted(() => ({
   getFabFileById: vi.fn(),
@@ -38,7 +39,9 @@ const req = (body: unknown) =>
 
 const run = (body: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(req(body), res);
 
-describe('POST /api/files/chunk - chunkSize ceiling', () => {
+// Unit-level: baseApi is stubbed to a bare pass-through above, so this exercises the handler's own
+// logic, not the throw-to-400 mapping (that lives in the real baseApi/asyncHandler chain).
+describe('chunk handler (unit) - chunkSize ceiling', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.getFabFileById.mockResolvedValue(FILE);
@@ -51,6 +54,18 @@ describe('POST /api/files/chunk - chunkSize ceiling', () => {
     const { res } = makeRes();
     await expect(run({ fabFileId: 'f1', chunkSize: '1501' }, res)).rejects.toThrow(/must not exceed 1500/i);
     expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('throws a BadRequestError (400) for an over-ceiling chunkSize', async () => {
+    const { res } = makeRes();
+    let caught: unknown;
+    try {
+      await run({ fabFileId: 'f1', chunkSize: '1501' }, res);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(BadRequestError);
+    expect((caught as BadRequestError).statusCode).toBe(400);
   });
 
   it('accepts a chunkSize exactly at the detection threshold (detection is $gt)', async () => {

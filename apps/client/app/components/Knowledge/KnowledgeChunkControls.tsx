@@ -2,10 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { Box, Button, CircularProgress, Input, Stack, Tooltip, Typography } from '@mui/joy';
 import SegmentIcon from '@mui/icons-material/Segment';
 import CheckIcon from '@mui/icons-material/Check';
-import { DEFAULT_PASSAGE_TOKEN_TARGET, IFabFileDocument, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '@bike4mind/common';
+import { DEFAULT_PASSAGE_TOKEN_TARGET, IFabFileDocument } from '@bike4mind/common';
 import { useChunkFile } from '@client/app/hooks/data/fabFiles';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { toast } from 'sonner';
+import { clampChunkSize } from '@client/app/utils/chunkSize';
 import { updateFileUtility } from '@client/app/utils/filesAPICalls';
 import { useQueryClient } from '@tanstack/react-query';
 
@@ -20,8 +21,12 @@ export const KnowledgeChunkControls: React.FC<IKnowledgeChunkControlsProps> = ({
   // stored value loads the fallback applies, and the two answers now differ by ~4x (512 vs a stored
   // 2100) where they used to differ by 5% - so a cold mount would silently chunk at a different
   // granularity than a warm one. The effect below resyncs if the setting arrives after mount.
+  // `clampChunkSize` matters here too: a legacy stored value above the ceiling reaches this raw
+  // (the settings-fetch route has no clamp of its own), and submitting it unclamped now hard-400s.
   const configuredChunkSize = useGetSettingsValue('DefaultChunkSize');
-  const [chunkSize, setChunkSize] = useState<number>(Number(configuredChunkSize) || DEFAULT_PASSAGE_TOKEN_TARGET);
+  const [chunkSize, setChunkSize] = useState<number>(
+    clampChunkSize(Number(configuredChunkSize) || DEFAULT_PASSAGE_TOKEN_TARGET)
+  );
   const [chunkSizeDisplay, setChunkSizeDisplay] = useState<string>(`${chunkSize} tokens`);
   const queryClient = useQueryClient();
   const [recheckingVectorization, setRecheckingVectorization] = useState<boolean>(false);
@@ -36,7 +41,7 @@ export const KnowledgeChunkControls: React.FC<IKnowledgeChunkControlsProps> = ({
   // rather than on `chunkSize` so a user's manual edit is not stomped on a later settings refetch.
   useEffect(() => {
     const resolved = Number(configuredChunkSize);
-    if (resolved) setChunkSize(resolved);
+    if (resolved) setChunkSize(clampChunkSize(resolved));
   }, [configuredChunkSize]);
 
   return (
@@ -65,17 +70,11 @@ export const KnowledgeChunkControls: React.FC<IKnowledgeChunkControlsProps> = ({
             value={chunkSizeDisplay}
             onChange={e => setChunkSizeDisplay(e.target.value)}
             onBlur={e => {
-              // Ceiling matches the route's own limit (POST /api/files/chunk rejects above
-              // OVERSIZED_PASSAGE_TOKEN_THRESHOLD), so this input can't suggest a value the
-              // policy will not honor. Falls back to the last valid size on a blank, negative, or
-              // non-numeric blur - Number('') is 0, not NaN, so that case must be checked
-              // explicitly rather than relying on Number.isFinite alone. Rounds a fractional entry
-              // (the route requires an integer) rather than letting it through to a submit-time error.
+              // Number('') is 0, not NaN, so a blank blur must be checked explicitly rather than
+              // relying on Number.isFinite alone - otherwise it clamps to a bogus 0 instead of
+              // falling back below.
               const parsed = Number(e.target.value);
-              const next =
-                Number.isFinite(parsed) && parsed > 0
-                  ? Math.min(Math.round(parsed), OVERSIZED_PASSAGE_TOKEN_THRESHOLD)
-                  : chunkSize;
+              const next = Number.isFinite(parsed) && parsed > 0 ? clampChunkSize(parsed) : chunkSize;
               setChunkSizeDisplay(`${next} tokens`);
               setChunkSize(next);
             }}
