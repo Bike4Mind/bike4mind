@@ -51,7 +51,10 @@ import {
   deferFailureIfRetryable,
 } from './dataLakeBatchProgress';
 
-const logger = { error: vi.fn() };
+// `warn` as well as `error`, matching what the real callers pass (the Lambda logger): the audit
+// write inside recomputeLakeStats reports failures through `warn`, and a fixture without it would
+// let the code under test silently fall back to console.warn while the test still passed.
+const logger = { warn: vi.fn(), error: vi.fn() };
 // A batch at its completion threshold (vectorized+failed+skipped >= total).
 const batch = (overrides: Record<string, unknown> = {}) =>
   ({
@@ -77,6 +80,26 @@ describe('finalizeBatchIfComplete - batch-completion metric parity', () => {
     await finalizeBatchIfComplete(batch(), logger as never);
     expect(h.markTerminalIfActive).toHaveBeenCalledWith('b1', 'completed');
     expect(h.recordBatchCompletion).toHaveBeenCalledWith('completed');
+  });
+
+  // Batch completion is the dominant producer of the auto-activate config event, so this is the
+  // worst place for the audit to go dark. Both adapters are named explicitly: `adminSettings` is
+  // optional and the event repo degrades to recording nothing, so dropping either from the shared
+  // `db` literal would still compile and no other assertion would notice. The logger is pinned too
+  // - unthreaded, a best-effort audit failure falls to console.warn where alerting cannot see it.
+  it('wires the audit repositories and a real logger into the stats recompute', async () => {
+    await finalizeBatchIfComplete(batch(), logger as never);
+
+    expect(h.recomputeLakeStats).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        db: expect.objectContaining({
+          lakeConfigChangeEvents: expect.anything(),
+          adminSettings: expect.anything(),
+        }),
+        logger: expect.objectContaining({ warn: expect.any(Function) }),
+      })
+    );
   });
 
   it('records an errored completion when a file failed', async () => {
