@@ -150,7 +150,25 @@ export const setLakeVisibility = async (
   // Reuses the grants already loaded for the gate above, so the recorded rung is the one that
   // actually authorized this write rather than a second, later read of the grant set.
   await recordLakeConfigChange(
-    { actor, lake: existing, grants, action: 'visibility', changes: diffLakeConfig(existing, updated) },
+    {
+      actor,
+      lake: existing,
+      grants,
+      action: 'visibility',
+      // Diffed against THIS write's own fields, never against `updated`: `BaseModel.update` is a
+      // `findOneAndUpdate` returning the merged document, so a concurrent writer's `$set` landing in
+      // the gap would be recorded under this caller's principal and rung. Same reasoning, and the
+      // same fix, as `updateDataLake` - see its note. The field set here is fixed and small, so the
+      // projection is exact rather than reconstructed.
+      // `undefined` rather than the write's `null`: the write needs `null` to actually unset the
+      // field in Mongo, while `diffLakeConfig` collapses `null` and `undefined` onto the same
+      // "not set" value, so the recorded change is identical either way.
+      changes: diffLakeConfig(existing, {
+        ...existing,
+        organizationId: targetOrg ?? undefined,
+        isPublic: targetIsPublic,
+      }),
+    },
     { db, logger }
   );
 
