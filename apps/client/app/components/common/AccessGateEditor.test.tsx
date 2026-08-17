@@ -170,6 +170,48 @@ describe('AccessGateEditor - passphrase show-once', () => {
     expect(screen.queryByTestId('manage-gate-passphrase-justset')).toBeNull();
   });
 
+  // Setting the first passphrase and replacing a live one have different consequences: the
+  // second revokes access for everyone already holding the old value. The affordance has to say
+  // so, because a forgotten passphrase leaves replacement as the ONLY route and the person doing
+  // it may not realise they are cutting off existing viewers.
+  it('offers "Generate" when no passphrase is set yet', () => {
+    renderEditor('public');
+    pickGate('passphrase');
+    expect(screen.getByTestId('manage-gate-passphrase-generate').textContent).toContain('Generate');
+  });
+
+  it('offers "Replace" and warns about revocation when a passphrase is already set', () => {
+    renderEditor('public', { kind: 'passphrase' });
+
+    const button = screen.getByTestId('manage-gate-passphrase-generate');
+    expect(button.textContent).toContain('Replace');
+    expect(screen.getByText(/cannot be shown or recovered/i)).not.toBeNull();
+    expect(screen.getByText(/stops the old one working/i)).not.toBeNull();
+  });
+
+  it('switches to the replace framing after the first passphrase is applied', async () => {
+    // The parent is notified but need not feed a new initialGate back, so this must not depend
+    // on the prop changing.
+    renderEditor('public');
+    pickGate('passphrase');
+    expect(screen.getByTestId('manage-gate-passphrase-generate').textContent).toContain('Generate');
+
+    fireEvent.change(input(), { target: { value: 'longenough1' } });
+    fireEvent.click(screen.getByTestId('manage-gate-apply'));
+
+    await waitFor(() => expect(screen.getByTestId('manage-gate-passphrase-generate').textContent).toContain('Replace'));
+  });
+
+  it('drops the replace framing when the gate is removed', async () => {
+    renderEditor('public', { kind: 'passphrase' });
+    pickGate('none');
+    fireEvent.click(screen.getByTestId('manage-gate-apply'));
+    await waitFor(() => expect(apiPatch).toHaveBeenCalled());
+
+    pickGate('passphrase');
+    expect(screen.getByTestId('manage-gate-passphrase-generate').textContent).toContain('Generate');
+  });
+
   it('copies the shown passphrase to the clipboard', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });

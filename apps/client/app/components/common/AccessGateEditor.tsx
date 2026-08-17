@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Box, Button, FormLabel, IconButton, Input, Radio, Sheet, Textarea, Typography } from '@mui/joy';
+import { Box, Button, FormLabel, IconButton, Input, Radio, Sheet, Textarea, Tooltip, Typography } from '@mui/joy';
 import LockOpenIcon from '@mui/icons-material/LockOpen';
 import KeyIcon from '@mui/icons-material/Key';
 import DomainIcon from '@mui/icons-material/Domain';
@@ -7,6 +7,7 @@ import PublicIcon from '@mui/icons-material/Public';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import AutorenewIcon from '@mui/icons-material/Autorenew';
+import LockResetIcon from '@mui/icons-material/LockReset';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import CheckIcon from '@mui/icons-material/Check';
 import { generatePassphrase } from '@client/app/utils/generatePassphrase';
@@ -70,8 +71,15 @@ export function AccessGateEditor({
    *  on any further edit; never re-derivable once gone, since the server keeps only a hash. */
   const [justSet, setJustSet] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  /** What is actually stored right now, tracked locally rather than read off `initialGate`: the
+   *  parent is notified via onGateChange but is not obliged to feed a new prop back, and after a
+   *  first apply the difference is exactly whether the button offers to "Generate" or warns that
+   *  it will "Replace" a live passphrase. */
+  const [liveGateKind, setLiveGateKind] = useState<GateKind>(initialGate?.kind ?? 'none');
 
   const isPublic = visibility === 'public';
+  /** A passphrase is already in force, so generating another REVOKES it for existing holders. */
+  const hasLiveGate = liveGateKind === 'passphrase';
 
   const copyJustSet = async () => {
     if (!justSet) return;
@@ -133,6 +141,7 @@ export function AccessGateEditor({
       // Move the plaintext out of the input and into the show-once panel. This is the last
       // moment it exists anywhere: the server stores only a bcrypt hash and no route returns it.
       setJustSet(gate !== null && gate.kind === 'passphrase' ? gate.passphrase : null);
+      setLiveGateKind(gate === null ? 'none' : gate.kind);
       setPassphrase('');
       setReveal(false);
       const applied: PublishAccessGateRead =
@@ -222,9 +231,7 @@ export function AccessGateEditor({
                 <Input
                   type={reveal ? 'text' : 'password'}
                   value={passphrase}
-                  placeholder={
-                    initialGate?.kind === 'passphrase' ? 'Enter a NEW passphrase to change it' : 'At least 8 characters'
-                  }
+                  placeholder={hasLiveGate ? 'Enter a NEW passphrase to change it' : 'At least 8 characters'}
                   onChange={e => {
                     setPassphrase(e.target.value);
                     setJustSet(null); // a new draft supersedes the one we are still displaying
@@ -233,38 +240,66 @@ export function AccessGateEditor({
                     input: { 'data-testid': `${testIdPrefix}-passphrase-input`, autoComplete: 'new-password' },
                   }}
                   endDecorator={
-                    <IconButton
+                    // The eye is where people reach expecting to unmask a SAVED passphrase, so
+                    // the tooltip says plainly why that is not on offer. It only ever reveals
+                    // the draft being typed: the stored value is a bcrypt hash and no route
+                    // returns it, which is what makes this show-once rather than "show".
+                    <Tooltip
+                      title="Shows what you are typing. A saved passphrase can never be shown - it is stored hashed."
                       size="sm"
-                      variant="plain"
-                      color="neutral"
-                      // Only ever reveals what the user is typing right now. There is no stored
-                      // passphrase to unmask: it is bcrypt-hashed on the way in and no route
-                      // returns it, which is why this editor can offer show-once and not "show".
-                      onClick={() => setReveal(v => !v)}
-                      aria-label={reveal ? 'Hide passphrase' : 'Show passphrase'}
-                      data-testid={`${testIdPrefix}-passphrase-reveal`}
                     >
-                      {reveal ? <VisibilityOffIcon sx={{ fontSize: 16 }} /> : <VisibilityIcon sx={{ fontSize: 16 }} />}
-                    </IconButton>
+                      <IconButton
+                        size="sm"
+                        variant="plain"
+                        color="neutral"
+                        onClick={() => setReveal(v => !v)}
+                        aria-label={reveal ? 'Hide passphrase' : 'Show passphrase'}
+                        data-testid={`${testIdPrefix}-passphrase-reveal`}
+                      >
+                        {reveal ? (
+                          <VisibilityOffIcon sx={{ fontSize: 16 }} />
+                        ) : (
+                          <VisibilityIcon sx={{ fontSize: 16 }} />
+                        )}
+                      </IconButton>
+                    </Tooltip>
                   }
                   sx={{ flex: 1 }}
                 />
-                <Button
+                {/* Setting the first passphrase and REPLACING a live one are different acts with
+                    different consequences, so they get different labels, icons and tooltips.
+                    Replacing is the forgotten-passphrase path - the only one there is - and it
+                    revokes access for everyone already holding the old value, which the button
+                    has to say out loud rather than leave to be discovered. */}
+                <Tooltip
+                  title={
+                    hasLiveGate
+                      ? 'Forgot the passphrase? Generate a replacement - the current one cannot be recovered. Anyone you already gave it to will need the new one.'
+                      : 'Generate a strong passphrase. You will see it once, after you apply it.'
+                  }
                   size="sm"
-                  variant="soft"
-                  color="neutral"
-                  startDecorator={<AutorenewIcon sx={{ fontSize: 16 }} />}
-                  onClick={() => {
-                    setPassphrase(generatePassphrase());
-                    setReveal(true); // a generated passphrase you cannot read is useless
-                  }}
-                  data-testid={`${testIdPrefix}-passphrase-generate`}
                 >
-                  Generate
-                </Button>
+                  <Button
+                    size="sm"
+                    variant="soft"
+                    color={hasLiveGate ? 'warning' : 'neutral'}
+                    startDecorator={
+                      hasLiveGate ? <LockResetIcon sx={{ fontSize: 16 }} /> : <AutorenewIcon sx={{ fontSize: 16 }} />
+                    }
+                    onClick={() => {
+                      setPassphrase(generatePassphrase());
+                      setReveal(true); // a generated passphrase you cannot read is useless
+                    }}
+                    data-testid={`${testIdPrefix}-passphrase-generate`}
+                  >
+                    {hasLiveGate ? 'Replace' : 'Generate'}
+                  </Button>
+                </Tooltip>
               </Box>
               <Typography level="body-xs" sx={{ opacity: 0.75, mt: 0.5 }}>
-                Stored hashed - it cannot be shown again after you apply it, so copy it now if you need to share it.
+                {hasLiveGate
+                  ? 'A passphrase is set. It cannot be shown or recovered - to change it, enter or generate a new one, which stops the old one working.'
+                  : 'Stored hashed - it cannot be shown again after you apply it, so copy it now if you need to share it.'}
               </Typography>
             </Box>
           )}
