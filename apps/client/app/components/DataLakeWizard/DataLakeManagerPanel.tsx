@@ -1300,8 +1300,11 @@ function LakeInfoPanel({
             </Tooltip>
           )}
           {/* A rebuild badge reaching zero doesn't mean success if some files failed to process -
-              those won't retry on their own, so surface them distinctly. */}
-          {lake.canManage && failedCount > 0 && (
+              those won't retry on their own, so surface them distinctly. Gated on canRebuild OR
+              canManage (not canManage alone): failedCount now comes from the canRebuild-gated
+              rebuild-status query, so a fallback-lake admin who can rebuild but not manage must
+              still see it, or "0 failed" is invisible to the only actor who can act on it. */}
+          {(lake.canRebuild || lake.canManage) && failedCount > 0 && (
             <Tooltip
               title="These files failed to process (e.g. a corrupt or unparseable file) and won't retry automatically. Includes files that failed at upload, not only rebuild attempts - Rebuild passages cannot clear them. Open the file and Re-process, or re-upload it."
               size="sm"

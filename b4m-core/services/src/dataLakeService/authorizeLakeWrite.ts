@@ -57,8 +57,12 @@ export const assertLakeWriteAccess = async (
  * `resolveFallbackLake` spreads the lake's config onto its synthetic document, so an org-scoped
  * overlay lake would carry `organizationId` and let a customer-side org admin (not a platform
  * admin) pass `canManageLake`'s org-admin rung. Gating on `ctx.isAdmin` directly keeps this
- * predicate identical to the `canRebuild` flag computed in `listDataLakes.ts`, so the two cannot
- * drift apart.
+ * predicate identical to the `canRebuild` flag computed in `listDataLakes.ts` for what each
+ * decides. They are not identical in every path to that decision, though: `resolveFallbackLake`
+ * (this gate's read step) applies the lake's org prerequisite before its `ctx.isAdmin` bypass, so
+ * an admin outside an org-scoped lake's org is refused here even though `listAllDataLakes` (which
+ * computes `canRebuild`) applies no such org filter to fallback lakes. That is a fail-CLOSED
+ * mismatch (a lit-up button that 404s), not an exposure - narrower is always the safe direction.
  */
 export const assertLakeRebuildAccess = async (
   lakeIdOrSlug: string,

@@ -290,7 +290,12 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    *
    * REQUIRED, not optional - same reasoning as `isOwn`: both producers (toManageableConfig,
    * toFallbackConfig) set it unconditionally, so an absent field is a compile error rather than a
-   * silently-reintroduced gap.
+   * silently-reintroduced gap FOR EVERY IN-REPO CALLER. That guarantee has two known exceptions
+   * that TypeScript cannot see: a test fixture built via an `as ManageableDataLakeConfig` cast
+   * (e.g. resolveManageableLake.test.ts), and the actual HTTP response at the wire boundary
+   * (hooks/data/dataLakes.ts's `api.get<{ data: ManageableDataLakeConfig[] }>(...)`), which is
+   * trusted with no runtime validation. Both fail CLOSED (an absent field reads as falsy, hiding
+   * the affordance rather than exposing it), so this is a precision note, not a safety concern.
    */
   canRebuild: boolean;
 }

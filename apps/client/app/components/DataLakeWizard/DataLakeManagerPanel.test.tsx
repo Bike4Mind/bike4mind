@@ -621,6 +621,25 @@ describe('DataLakeManagerPanel - canRebuild is narrower than canManage (fallback
     expect(screen.queryByTestId('datalake-settings-btn-opti-knowledge')).toBeNull();
     expect(screen.queryByTestId('datalake-archive-btn-opti-knowledge')).toBeNull();
     expect(screen.queryByTestId('datalake-delete-active-btn-opti-knowledge')).toBeNull();
+    // fallbackLakeAsAdmin has canManage: false, canRebuild: true - asserting the SECOND arg
+    // catches a revert to `lake.canManage` at the call site, which the render assertions above
+    // cannot: the mock's canned return value doesn't depend on what it was called with, so only
+    // this direct check on the call args would fail if the enable flag reverted.
+    expect(useUnderChunkedCount).toHaveBeenCalledWith('opti-knowledge', true);
+  });
+
+  it('shows the "N failed" chip for a canRebuild-only actor (fallback lake), not just canManage', async () => {
+    // Phase 4's definition of done needs failedCount visible to the actor doing the rebuild - a
+    // fallback-lake admin can rebuild but never canManage, so gating the chip on canManage alone
+    // would make "0 failed" unverifiable for the only actor who can act on it.
+    useGetDataLakes.mockReturnValue({ data: [fallbackLakeAsAdmin], isLoading: false });
+    useUnderChunkedCount.mockReturnValue({ data: { underChunkedCount: 0, failedCount: 2 } });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-opti-knowledge'));
+
+    expect(screen.getByTestId('datalake-manager-rebuild-failed-chip-opti-knowledge')).toHaveTextContent('2 failed');
   });
 
   it('hides Rebuild passages on a lake the caller cannot rebuild, even with a backlog', async () => {

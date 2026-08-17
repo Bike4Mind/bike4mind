@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -935,12 +935,11 @@ describe('assertLakeRebuildAccess - narrower-than-write gate that DOES reach fal
     ).rejects.toThrow(/permission to rebuild/i);
   });
 
-  // Pins the design decision that reversed this gate's first draft: resolveFallbackLake spreads the
-  // config's organizationId onto the synthetic doc, so canManageLake's org-admin rung would grant a
-  // CUSTOMER-side org admin (not a platform admin) if this gate consulted resolveCanManageLake for a
-  // fallback lake. Gating on ctx.isAdmin directly means administeredOrgIds has NO effect here -
-  // proved by setting it and confirming the actor is still refused.
-  it('an org admin (administeredOrgIds set) still CANNOT rebuild a fallback lake - org rung is never consulted', async () => {
+  // administeredOrgIds has no effect on opti-knowledge specifically, since it carries no
+  // organizationId at all - resolveCanManageLake's org rung has nothing to key on either way, so
+  // this does NOT distinguish ctx.isAdmin from resolveCanManageLake (see the positive control
+  // below, which does, via a synthetic org-scoped fallback lake).
+  it('administeredOrgIds has no effect on a fallback lake with no organizationId (opti-knowledge)', async () => {
     await expect(
       assertLakeRebuildAccess('opti-knowledge', ctx({ userTags: ['opti'], administeredOrgIds: ['orgA'] }), {
         db: fallbackDb(),
@@ -948,8 +947,65 @@ describe('assertLakeRebuildAccess - narrower-than-write gate that DOES reach fal
     ).rejects.toThrow(/permission to rebuild/i);
   });
 
+  // POSITIVE CONTROL for the design decision that reversed this gate's first draft:
+  // resolveFallbackLake spreads a config's organizationId onto the synthetic doc, so
+  // canManageLake's org-admin rung WOULD grant a customer-side org admin (not a platform admin) if
+  // this gate consulted resolveCanManageLake for a fallback lake. The test above cannot prove that,
+  // because opti-knowledge has no organizationId - the org rung never gets a chance to fire either
+  // way. This one pushes a synthetic org-scoped fallback lake into the real (mutable) DATA_LAKES
+  // registry so the two predicates can actually diverge, confirms canManageLake WOULD have granted
+  // the actor (so the refusal below is a genuine choice, not an unrelated denial), then confirms
+  // assertLakeRebuildAccess refuses them anyway.
+  describe('org-scoped fallback lake (synthetic registry entry - proves the org rung is truly bypassed)', () => {
+    const ORG_LAKE_ID = 'test-only-org-scoped-fallback';
+    const orgLakeConfig = {
+      id: ORG_LAKE_ID,
+      slug: ORG_LAKE_ID,
+      name: 'Test-only org-scoped fallback',
+      fileTagPrefix: 'testorgfallback:',
+      datalakeTag: `datalake:${ORG_LAKE_ID}`,
+      organizationId: 'orgA',
+    };
+
+    beforeEach(() => {
+      DATA_LAKES.push(orgLakeConfig);
+    });
+
+    afterEach(() => {
+      const idx = DATA_LAKES.indexOf(orgLakeConfig);
+      if (idx !== -1) DATA_LAKES.splice(idx, 1);
+    });
+
+    const orgAdminCtx = ctx({ userId: 'org-admin', organizationIds: ['orgA'], administeredOrgIds: ['orgA'] });
+
+    it('canManageLake WOULD grant this actor via the org rung (the case this gate must not reach)', () => {
+      // The org rung only fires because this synthetic lake carries organizationId: 'orgA' AND the
+      // actor administers 'orgA' - the exact shape resolveFallbackLake would produce if this gate
+      // consulted resolveCanManageLake instead of ctx.isAdmin directly.
+      expect(canManageLake({ createdByUserId: '', organizationId: 'orgA' }, orgAdminCtx)).toBe(true);
+    });
+
+    it('assertLakeRebuildAccess refuses this org admin anyway - the org rung is truly bypassed', async () => {
+      await expect(assertLakeRebuildAccess(ORG_LAKE_ID, orgAdminCtx, { db: fallbackDb() })).rejects.toThrow(
+        /permission to rebuild/i
+      );
+    });
+
+    it('a platform admin still CAN rebuild the org-scoped fallback lake', async () => {
+      const resolved = await assertLakeRebuildAccess(ORG_LAKE_ID, ctx({ isAdmin: true, organizationIds: ['orgA'] }), {
+        db: fallbackDb(),
+      });
+      expect(resolved.id).toBe(ORG_LAKE_ID);
+    });
+  });
+
   // The regression that matters most: this gate must not have weakened assertLakeWritable itself.
-  it('fallback lake still refuses rename, delete, visibility, and file-removal (assertLakeWritable untouched)', () => {
+  // A single call to the shared primitive proves it, rather than exercising each of the four
+  // route handlers (rename/describe, archive/delete, visibility, file-removal) that call it - they
+  // all delegate to this one function, so this is not four assertions in one, it is the same
+  // regression pin as the 'assertLakeWritable / isFallbackLake' describe block above, kept local
+  // to this describe block too since it is the fact this gate must never weaken.
+  it('assertLakeWritable itself still refuses a fallback lake (untouched by this gate)', () => {
     expect(() => assertLakeWritable({ id: 'opti-knowledge' })).toThrow(/read-only/i);
   });
 });
