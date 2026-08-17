@@ -53,9 +53,20 @@ describe('assertContractConventions', () => {
       const responses = { ...contract().responses, 402: errorResponse() };
       expect(() =>
         assertContractConventions([
-          contract({ responses, conventionExemptions: { 'status-table': 'live callers depend on 402' } }),
+          contract({ responses, conventionExemptions: { 'status-table': { 402: 'live callers depend on 402' } } }),
         ])
       ).not.toThrow();
+    });
+
+    // The leak that a contract-wide exemption would have: excusing 402 must not
+    // wave through an unrelated off-table status on the same endpoint.
+    it('does not let an exempted status excuse a DIFFERENT unexcused status', () => {
+      const responses = { ...contract().responses, 402: errorResponse(), 418: errorResponse() };
+      expect(() =>
+        assertContractConventions([
+          contract({ responses, conventionExemptions: { 'status-table': { 402: 'live callers depend on 402' } } }),
+        ])
+      ).toThrow(/status 418/);
     });
 
     it('lets a published endpoint stay scope-less with a stated reason', () => {
@@ -78,6 +89,27 @@ describe('assertContractConventions', () => {
       expect(() =>
         assertContractConventions([contract({ scopes: undefined, conventionExemptions: { 'scope-required': '' } })])
       ).toThrow(/declares no scopes/);
+    });
+
+    it('ignores an empty-string reason on a status exemption too', () => {
+      const responses = { ...contract().responses, 402: errorResponse() };
+      expect(() =>
+        assertContractConventions([contract({ responses, conventionExemptions: { 'status-table': { 402: '' } } })])
+      ).toThrow(/status 402/);
+    });
+  });
+
+  describe('emitsRateLimitHeaders', () => {
+    // apiKeyRateLimit is mounted only on the api-key chain (baseApi), so any other
+    // auth mode claiming the headers is publishing something it cannot send.
+    it.each(['jwtOnly', 'public'] as const)('rejects the flag on a %s contract', auth => {
+      expect(() =>
+        assertContractConventions([contract({ auth, scopes: undefined, emitsRateLimitHeaders: true })])
+      ).toThrow(/can never send them/);
+    });
+
+    it('accepts the flag on an apiKeyOrJwt contract', () => {
+      expect(() => assertContractConventions([contract({ emitsRateLimitHeaders: true })])).not.toThrow();
     });
   });
 
@@ -198,12 +230,20 @@ describe('assertContractConventions', () => {
       expect(() => assertContractConventions([contract({ responses })])).toThrow(/does not carry the shared error/);
     });
 
-    it('does not check a raw non-JSON body, which has no schema at all', () => {
+    it('does not check a raw non-JSON body declared with an explicit contentType', () => {
       const responses = {
         ...contract().responses,
         413: { description: 'Audio too large.', contentType: 'audio/mpeg' },
       };
       expect(() => assertContractConventions([contract({ responses })])).not.toThrow();
+    });
+
+    // registerContract defaults a schema-less response to application/json carrying
+    // an opaque binary schema, so "no schema" must not be read as "not JSON" - that
+    // would let a forgotten schema bypass the envelope gate entirely.
+    it('rejects a schema-less error response that defaults to JSON', () => {
+      const responses = { ...contract().responses, 500: { description: 'Boom.' } };
+      expect(() => assertContractConventions([contract({ responses })])).toThrow(/declares no schema/);
     });
 
     it('accepts a bespoke error schema that states its reason', () => {

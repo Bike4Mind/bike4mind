@@ -1,6 +1,7 @@
 import { registerContract } from './registerContract';
 import { assertUniqueOperations } from './assertUniqueOperations';
 import { CONTRACTS } from '../api-contract';
+import type { EndpointContract } from '../api-contract/types';
 import { assertContractConventions } from '../api-contract/assertContractConventions';
 
 /**
@@ -16,10 +17,18 @@ import { assertContractConventions } from '../api-contract/assertContractConvent
  * build instead of being published and then flagged. registerContract is the only
  * registerPath caller and REQUIRED_SCOPES is empty, so CONTRACTS is the complete
  * operation set - there are no hand-registered ops left to fold in.
+ *
+ * Exported (rather than inlined at module scope) so a test can prove the guards
+ * actually run here: called with a violating array it must throw, having
+ * registered nothing. Inline, deleting a guard line broke no test at all.
  */
-assertUniqueOperations(CONTRACTS.map(c => ({ operationId: c.operationId, method: c.method, path: c.path })));
-assertContractConventions(CONTRACTS);
+export function registerContracts(contracts: readonly EndpointContract[] = CONTRACTS): void {
+  assertUniqueOperations(contracts.map(c => ({ operationId: c.operationId, method: c.method, path: c.path })));
+  assertContractConventions(contracts);
 
-for (const contract of CONTRACTS) {
-  registerContract(contract);
+  for (const contract of contracts) {
+    registerContract(contract);
+  }
 }
+
+registerContracts();

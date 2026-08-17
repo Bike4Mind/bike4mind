@@ -85,8 +85,28 @@ export type CodeSample = {
  * contract can be exempted from. Exemptions exist because this gate was added to
  * an ALREADY-PUBLISHED surface: some conforming change would break live callers,
  * which the conventions themselves forbid.
+ *
+ * `error-envelope` is deliberately absent: `ResponseSpec.bespokeErrorShape`
+ * already excuses that rule per-RESPONSE, so a contract-wide version would only
+ * ever be the blunter way to say the same thing.
  */
-export type ConventionRule = 'error-envelope' | 'status-table' | 'scope-required' | 'version-root';
+export type ConventionRule = 'status-table' | 'scope-required' | 'version-root';
+
+/**
+ * Exemptions from {@link ConventionRule}, each carrying WHY.
+ *
+ * `status-table` is keyed by the individual status it excuses, not granted
+ * contract-wide: TTS needs `402` tolerated, and that must not also wave through
+ * an unrelated `418` on the same endpoint. The other two rules are contract-wide
+ * because that is genuinely their scope - a path has one shape, and an endpoint
+ * either gates on a scope or does not.
+ */
+export type ConventionExemptions = {
+  /** HTTP status -> why this endpoint may keep returning it. */
+  'status-table'?: Readonly<Record<number, string>>;
+  'scope-required'?: string;
+  'version-root'?: string;
+};
 
 export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
   method: HttpMethod;
@@ -146,5 +166,5 @@ export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
    * This is debt: entries are meant to be removed behind a sunset, never added
    * for a new endpoint. See CONVENTIONS.md.
    */
-  conventionExemptions?: Readonly<Partial<Record<ConventionRule, string>>>;
+  conventionExemptions?: Readonly<ConventionExemptions>;
 };

@@ -94,7 +94,9 @@ export const synthesizeSpeechContract = defineEndpoint({
   // and a newly required scope are the two kinds of change that cannot be aliased.
   // Removing either needs a published sunset. See CONVENTIONS.md.
   conventionExemptions: {
-    'status-table': 'Insufficient credits is 402 here and 422 everywhere else; changing it breaks live callers.',
+    'status-table': {
+      402: 'Insufficient credits is 402 here and 422 everywhere else; changing it breaks live callers.',
+    },
     'scope-required': 'The route has always accepted any valid API key; gating it now would 403 keys that work today.',
   },
   // Served by baseApi, so apiKeyRateLimit sets the windowed X-RateLimit-* headers.

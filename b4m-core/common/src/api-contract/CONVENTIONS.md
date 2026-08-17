@@ -16,17 +16,32 @@ the build, not review. Everything else is a review rule, and the gaps are listed
 ## Exemptions
 
 This gate was added to an already-published surface, so a few endpoints violate it and
-cannot be fixed without breaking live callers. Those declare
-`conventionExemptions: { '<rule>': '<why>' }` on the contract.
+cannot be fixed without breaking live callers. Those declare `conventionExemptions` on the
+contract, carrying the reason:
+
+```ts
+conventionExemptions: {
+  'status-table': { 402: 'Insufficient credits is 402 here and 422 everywhere else.' },
+  'scope-required': 'Gating it now would 403 keys that work today.',
+}
+```
+
+**`status-table` is keyed by the individual status**, not granted contract-wide, so
+excusing `402` does not also wave through an unrelated `418` on the same endpoint. The
+other two rules are contract-wide because that is genuinely their scope.
+
+There is no `error-envelope` exemption: `bespokeErrorShape` already excuses that rule
+per-response, which is strictly finer-grained than a contract-wide flag would be.
 
 There is exactly one legitimate reason to add an entry: **conforming would break a live
 caller.** In practice that means a status code or a newly required scope, the two things
 that cannot be aliased the way a URL or a wire field can. "It is easier this way" is not a
-reason, and a new endpoint has no live callers to protect, so it never qualifies.
+reason, and a new endpoint has no live callers to protect, so it never qualifies. An empty
+reason is not an exemption - the gate ignores it and still fails.
 
 Every entry is debt with an owner. The list should only ever shrink, each removal behind
 a published sunset. Grep `conventionExemptions` for the current set - today it is
-`/api/ai/tts` only (`status-table`, `scope-required`).
+`/api/ai/tts` only (`402`, `scope-required`).
 
 ---
 
@@ -76,9 +91,9 @@ re-deciding per endpoint:
 | Request body failed schema validation | `422` | - |
 | Missing or invalid credential | `401` | - |
 | Valid key, missing scope | `403` | - |
-| Provider rejected *our* credentials | `401` | `provider_not_configured` |
+| Provider rejected *our* credentials | `401` | `provider_rejected` |
 | Provider failed to generate (upstream error) | `502` | - |
-| No provider key configured for this deployment | `503` | - |
+| No provider key configured for this deployment | `503` | `provider_not_configured` |
 | Insufficient credits | `422` | `insufficient_credits` |
 | Spend cap exceeded | `422` | `spend_cap_exceeded` |
 | Rate limit exceeded | `429` | - |
@@ -88,6 +103,16 @@ re-deciding per endpoint:
 **[gated]** A contract may only declare statuses from the allowed set (`200`, `201`,
 `202`, `204`, `400`, `401`, `403`, `404`, `409`, `413`, `422`, `429`, `500`, `502`,
 `503`).
+
+The gate checks only that a status is **in the set**, not that a given *condition* maps
+to the status this table says. That half is review-only - see
+[What is not gated yet](#what-is-not-gated-yet). `/api/ai/tts` diverges today: it returns
+`401` with `provider_not_configured` for "no usable key is configured"
+(`pages/api/ai/tts.ts`), where this table says `503`.
+
+The two provider classifiers are easy to invert, so to be explicit:
+`provider_not_configured` means **we** have no usable key for that provider;
+`provider_rejected` means the provider **refused** the key we sent.
 
 **On 402 vs 422 for credits.** `402 Payment Required` is the more literal reading, and
 `/api/ai/tts` uses it. We standardise on `422` anyway, because the
@@ -226,7 +251,8 @@ mistakes "CI passed" for "conventions met":
 
 | Rule | Why it is not gated |
 |---|---|
-| `emitsRateLimitHeaders` matches the handler's middleware chain | The flag is declared on the contract and the published names are now correct, but nothing proves the declaration still matches the chain the handler mounts. Closing this needs the adapters to assert it at runtime in non-prod, the way they already assert response schemas. |
+| A condition maps to the status this guide gives it | The gate checks only that a status is in the allowed *set*. Nothing checks that "no provider key configured" is the `503` the table says - and `/api/ai/tts` returns `401` for it today. Not structurally derivable: the condition lives in handler control flow, not the contract. |
+| `emitsRateLimitHeaders` matches the handler's middleware chain | Half of this **is** now gated - the flag is rejected on any auth mode but `apiKeyOrJwt`, since `baseApi` mounts `apiKeyRateLimit` only on the api-key chain. What remains ungated is whether an `apiKeyOrJwt` handler actually mounts `baseApi`. Closing it needs the adapters to assert at runtime in non-prod, the way they already assert response schemas. |
 | Error bodies carry no undocumented keys | `errorHandler.ts` adds `name` to every body, including internal routes. Removing it is a behavioural change well outside the contract layer. |
 | Wire fields are `snake_case` | Requires walking Zod shapes, and today's schemas deliberately accept camelCase aliases, so the check would fail on arrival. Needs the alias metadata to exist first. |
 | One `errorCode` vocabulary | The TTS codes are not in the shared union yet. |

@@ -48,12 +48,14 @@ const LEGACY_PUBLIC_PATHS: readonly string[] = [
 /** operationId becomes the SDK method name, so it must be a valid camelCase identifier. */
 const CAMEL_CASE = /^[a-z][A-Za-z0-9]*$/;
 
-function fail(
-  contract: EndpointContract,
-  rule: ConventionRule | 'operation-id',
-  problem: string,
-  remedy: string
-): never {
+/**
+ * Diagnostic label in the error message. A superset of {@link ConventionRule}:
+ * these three are enforced but not exemptable via `conventionExemptions`
+ * (`error-envelope` uses the finer-grained per-response `bespokeErrorShape`).
+ */
+type ConventionLabel = ConventionRule | 'operation-id' | 'error-envelope' | 'rate-limit-headers';
+
+function fail(contract: EndpointContract, rule: ConventionLabel, problem: string, remedy: string): never {
   throw new Error(
     `Contract "${contract.operationId}" (${contract.method.toUpperCase()} ${contract.path}) ` +
       `violates the public API convention [${rule}]: ${problem} ${remedy} ` +
@@ -92,16 +94,27 @@ function carriesErrorEnvelope(schema: z.ZodTypeAny): boolean {
   return true;
 }
 
-/** A >= 400 response whose body is JSON, so the envelope rule applies to it. */
+/**
+ * A >= 400 response whose body is JSON, so the envelope rule applies to it.
+ *
+ * A missing `schema` does NOT mean "not JSON": registerContract falls back to
+ * `application/json` carrying an opaque binary schema, so treating schema-less as
+ * exempt would let a forgotten `schema` on a 500 bypass the envelope gate AND
+ * publish a JSON media type holding raw bytes. Only an explicit non-JSON
+ * `contentType` opts out - which the schema-less check below forces authors to
+ * declare.
+ */
 function isJsonErrorResponse(status: number, spec: ResponseSpec): boolean {
-  // `schema` is omitted for a raw, non-JSON body (e.g. audio bytes); there is no
-  // JSON envelope to check. An explicit non-JSON contentType is likewise exempt.
-  return status >= 400 && spec.schema !== undefined && (spec.contentType ?? 'application/json') === 'application/json';
+  return status >= 400 && (spec.contentType ?? 'application/json') === 'application/json';
 }
 
 export function assertContractConventions(contracts: readonly EndpointContract[]): void {
   for (const contract of contracts) {
-    const exempt = (rule: ConventionRule) => Boolean(contract.conventionExemptions?.[rule]);
+    const exemptions = contract.conventionExemptions;
+    // `scope-required` / `version-root` are contract-wide; `status-table` is keyed
+    // by the individual status, so excusing 402 cannot also excuse an unrelated 418.
+    const exempt = (rule: 'scope-required' | 'version-root') => Boolean(exemptions?.[rule]);
+    const statusExempt = (status: number) => Boolean(exemptions?.['status-table']?.[status]);
 
     if (!CAMEL_CASE.test(contract.operationId)) {
       fail(
@@ -147,10 +160,23 @@ export function assertContractConventions(contracts: readonly EndpointContract[]
       );
     }
 
+    // baseApi installs apiKeyRateLimit only for the api-key chain, so a jwtOnly or
+    // public endpoint provably cannot emit the headers. Claiming otherwise is the
+    // exact executeTool defect this flag replaced, and it IS derivable here.
+    if (contract.emitsRateLimitHeaders && contract.auth !== 'apiKeyOrJwt') {
+      fail(
+        contract,
+        'rate-limit-headers',
+        `a ${contract.auth} endpoint sets emitsRateLimitHeaders, but apiKeyRateLimit only runs on the ` +
+          'api-key chain, so it can never send them.',
+        'Drop the flag; publishing a header the runtime cannot send is what this flag exists to prevent.'
+      );
+    }
+
     for (const [rawStatus, spec] of Object.entries(contract.responses)) {
       const status = Number(rawStatus);
 
-      if (!ALLOWED_STATUSES.has(status) && !exempt('status-table')) {
+      if (!ALLOWED_STATUSES.has(status) && !statusExempt(status)) {
         fail(
           contract,
           'status-table',
@@ -159,20 +185,27 @@ export function assertContractConventions(contracts: readonly EndpointContract[]
         );
       }
 
-      if (
-        isJsonErrorResponse(status, spec) &&
-        !carriesErrorEnvelope(spec.schema!) &&
-        !spec.bespokeErrorShape &&
-        !exempt('error-envelope')
-      ) {
-        fail(
-          contract,
-          'error-envelope',
-          `the ${status} response body does not carry the shared error envelope (a required \`error\` string, ` +
-            'with `request_id` optional if present).',
-          'Extend the envelope with typed members rather than replacing it, or - if the shape genuinely ' +
-            'cannot conform - set `bespokeErrorShape: "<reason>"` on that response.'
-        );
+      if (isJsonErrorResponse(status, spec) && !spec.bespokeErrorShape) {
+        // A schema-less JSON error is published as an opaque binary body, which no
+        // client can read an `error` out of. Force the author to say which it is.
+        if (!spec.schema) {
+          fail(
+            contract,
+            'error-envelope',
+            `the ${status} response declares no schema but defaults to application/json.`,
+            'Give it the error envelope, or set an explicit non-JSON `contentType` if it really returns raw bytes.'
+          );
+        }
+        if (!carriesErrorEnvelope(spec.schema)) {
+          fail(
+            contract,
+            'error-envelope',
+            `the ${status} response body does not carry the shared error envelope (a required \`error\` string, ` +
+              'with `request_id` optional if present).',
+            'Extend the envelope with typed members rather than replacing it, or - if the shape genuinely ' +
+              'cannot conform - set `bespokeErrorShape: "<reason>"` on that response.'
+          );
+        }
       }
     }
   }

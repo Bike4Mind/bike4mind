@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { z } from 'zod';
 import { buildOpenApiDocument, toPythonLiteral } from './document';
+import { registerContracts } from './operations';
 import { ApiKeyScope } from '../types/entities/UserApiKeyTypes';
 import { chatContract } from '../api-contract';
 
@@ -216,5 +218,32 @@ describe('buildOpenApiDocument', () => {
       const rest = JSON.stringify({ paths: doc.paths, schemas: others });
       expect(rest, `component ${name} is never referenced`).toContain(`#/components/schemas/${name}`);
     }
+  });
+});
+
+// The guards are called from operations.ts at module scope. Testing them directly
+// proves they WORK; this proves they are actually WIRED - delete either call in
+// registerContracts and these fail, which was not true when they were inlined.
+describe('registerContracts wiring', () => {
+  const conformingContract = {
+    method: 'post' as const,
+    path: '/api/v1/widgets',
+    operationId: 'createWidget',
+    summary: 'Create a widget',
+    auth: 'apiKeyOrJwt' as const,
+    scopes: [ApiKeyScope.AI_GENERATE],
+    responses: { 200: { description: 'Created.', schema: z.object({ id: z.string() }) } },
+  };
+
+  it('runs the conventions guard before registering', () => {
+    expect(() => registerContracts([{ ...conformingContract, path: '/api/widgets' }])).toThrow(/version root/);
+  });
+
+  it('runs the uniqueness guard before registering', () => {
+    expect(() => registerContracts([conformingContract, conformingContract])).toThrow(/Duplicate operationId/);
+  });
+
+  it('accepts a conforming contract, so the guards are not rejecting everything', () => {
+    expect(() => registerContracts([conformingContract])).not.toThrow();
   });
 });

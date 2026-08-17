@@ -178,28 +178,18 @@ const REQUEST_ID_HEADER_SPEC = {
  * `X-RateLimit-Limit` gets `undefined`. Must stay in sync with
  * apps/client/server/middlewares/apiKeyRateLimit.ts.
  */
-const RATE_LIMIT_HEADER_SPEC = Object.fromEntries(
-  (['Minute', 'Day'] as const).flatMap(window => [
-    [
-      `X-RateLimit-Limit-${window}`,
-      { description: `Request quota per ${window.toLowerCase()}.`, schema: { type: 'integer' as const } },
-    ],
-    [
-      `X-RateLimit-Remaining-${window}`,
-      {
-        description: `Requests remaining in the current ${window.toLowerCase()}.`,
-        schema: { type: 'integer' as const },
-      },
-    ],
-    [
-      `X-RateLimit-Reset-${window}`,
-      {
-        description: `Unix epoch (seconds) when the ${window.toLowerCase()} window resets.`,
-        schema: { type: 'integer' as const },
-      },
-    ],
-  ])
-);
+const INTEGER_HEADER = { type: 'integer' as const };
+const RATE_LIMIT_HEADER_SPEC = {
+  'X-RateLimit-Limit-Minute': { description: 'Request quota per minute.', schema: INTEGER_HEADER },
+  'X-RateLimit-Remaining-Minute': { description: 'Requests remaining in the current minute.', schema: INTEGER_HEADER },
+  'X-RateLimit-Reset-Minute': {
+    description: 'Unix epoch (seconds) when the minute window resets.',
+    schema: INTEGER_HEADER,
+  },
+  'X-RateLimit-Limit-Day': { description: 'Request quota per day.', schema: INTEGER_HEADER },
+  'X-RateLimit-Remaining-Day': { description: 'Requests remaining in the current day.', schema: INTEGER_HEADER },
+  'X-RateLimit-Reset-Day': { description: 'Unix epoch (seconds) when the day window resets.', schema: INTEGER_HEADER },
+};
 
 /**
  * Operations whose responses carry those headers, per their contract. Derived
@@ -207,6 +197,14 @@ const RATE_LIMIT_HEADER_SPEC = Object.fromEntries(
  * which is JWT-only and served by the Lambda adapter, so it emits none of them.
  */
 const RATE_LIMIT_HEADER_OPS = new Set(CONTRACTS.filter(c => c.emitsRateLimitHeaders).map(c => c.operationId));
+
+/**
+ * Auth failures never carry rate-limit headers: `apiKeyAuth` throws on an invalid
+ * key (401) or an under-scoped one (403), and `apiKeyRateLimit` is mounted AFTER
+ * it, so it never runs. 429 is fine - the middleware sets the headers before
+ * throwing TooManyRequests.
+ */
+const STATUSES_WITHOUT_RATE_LIMIT_HEADERS = new Set(['401', '403']);
 
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace']);
 
@@ -257,7 +255,9 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       for (const status of Object.keys(op.responses ?? {})) {
         const response = op.responses[status];
         response.headers = { ...REQUEST_ID_HEADER_SPEC, ...(response.headers ?? {}) };
-        if (RATE_LIMIT_HEADER_OPS.has(opId)) response.headers = { ...response.headers, ...RATE_LIMIT_HEADER_SPEC };
+        if (RATE_LIMIT_HEADER_OPS.has(opId) && !STATUSES_WITHOUT_RATE_LIMIT_HEADERS.has(status)) {
+          response.headers = { ...response.headers, ...RATE_LIMIT_HEADER_SPEC };
+        }
       }
     }
   }
