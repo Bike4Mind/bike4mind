@@ -6,6 +6,7 @@ import {
   DATA_LAKE_GROUNDING_MODES,
 } from '../constants/dataLakes';
 import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '../constants/chunking';
+import type { LakeConfigAuditCoversEveryUpdatableField } from '../types/entities/LakeConfigChangeEventTypes';
 
 // Slug validation
 
@@ -119,6 +120,17 @@ export const UpdateDataLakeRequestInput = z.object({
   // recompute, best-effort index removal) always run.
 });
 export type UpdateDataLakeRequestInputType = z.infer<typeof UpdateDataLakeRequestInput>;
+
+/**
+ * COMPILE-TIME PIN: every field this endpoint can write must be audited by the config-change event.
+ * Unused at runtime - its only job is to fail the build if the two drift, because a settable field
+ * missing from LAKE_CONFIG_DOCUMENT_FIELDS would have its edits land silently and never appear in
+ * the owner-facing history. Adding a field above without classifying it in LAKE_CONFIG_FIELD_AUDIT
+ * breaks here, which is the moment to make that decision rather than discover it later.
+ */
+export type UpdatableDataLakeFieldsAreAudited = LakeConfigAuditCoversEveryUpdatableField<
+  keyof UpdateDataLakeRequestInputType
+>;
 
 export const DataLakeListRequestInput = z.object({
   organizationId: z.string().optional(),
