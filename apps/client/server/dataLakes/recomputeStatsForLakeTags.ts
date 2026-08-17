@@ -30,7 +30,19 @@ import { lakeConfigAuditDb } from './lakeConfigAuditDb';
  */
 export const recomputeStatsForLakeTags = async (
   tagNames: readonly unknown[],
-  { logger }: { logger: { error: (msg: string, meta?: Record<string, unknown>) => void } }
+  {
+    logger,
+    actor,
+  }: {
+    logger: { error: (msg: string, meta?: Record<string, unknown>) => void };
+    /**
+     * The signed-in user, when the calling door has one. Optional because the doors differ: the
+     * file DELETE routes act for a request and pass it, while the upload path arrives from an S3
+     * event or storage webhook with no user at all. Omitted, a draft -> active flip records under
+     * a `system` principal, which is the honest answer rather than an invented one.
+     */
+    actor?: { userId: string; isAdmin: boolean };
+  }
 ): Promise<void> => {
   for (const metaTag of dataLakeService.extractDataLakeMetaTags(tagNames)) {
     try {
@@ -39,13 +51,15 @@ export const recomputeStatsForLakeTags = async (
       if (!lake) continue;
       // The lake DOCUMENT, not a narrower shape: recomputeLakeStats derives the two-signal
       // membership scope from it, and a partial one silently counts the meta-tag arm alone.
-      // Audit repos wired but no `actor`: this helper is reached from file doors that know only
-      // which tags moved, so a draft -> active flip here records under a `system` principal. That
-      // is the honest attribution - see recomputeLakeStats, which owns the transition and accepts
-      // an optional actor this helper has none to supply.
-      await dataLakeService.recomputeLakeStats(lake, {
-        db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, ...lakeConfigAuditDb },
-      });
+      // `actor` forwarded when the calling door had one, so a user-driven flip is attributed to
+      // the person rather than to `system`. The rung stays `system` regardless - see
+      // recomputeLakeStats: `activateIfDraft` performs no authorization check, so nothing
+      // authorized this write and naming a rung would be an invention.
+      await dataLakeService.recomputeLakeStats(
+        lake,
+        { db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, ...lakeConfigAuditDb } },
+        actor ? { actor } : undefined
+      );
     } catch (error) {
       logger.error('Error recomputing data lake stats after a file write:', { error, metaTag });
     }
