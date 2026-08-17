@@ -20,6 +20,7 @@ const ctx = (userId: string): AccessContext => ({ userId, isAdmin: false, userTa
 
 const ownerGrant = (principalId: string): LakeGrant => ({ principalType: 'user', principalId, role: 'owner' });
 const curatorGrant = (principalId: string): LakeGrant => ({ principalType: 'user', principalId, role: 'curator' });
+const readerGrant = (principalId: string): LakeGrant => ({ principalType: 'user', principalId, role: 'reader' });
 
 describe('canAccessLake honors access grants at the single read gate (#1668 regression)', () => {
   it('denies a stranger a private lake when no grant is threaded', () => {
@@ -40,5 +41,12 @@ describe('canAccessLake honors access grants at the single read gate (#1668 regr
 
   it('still admits the creator when no owner grant supersedes them', () => {
     expect(canAccessLake(privateLake('creator'), ctx('creator'))).toBe(true);
+  });
+
+  // Invariant for #1673: the LEGACY gate is extended, not replaced. A reader grant is NOT honored
+  // by canAccessLake itself - reader-grant read access lives in resolveLakeReadAccess and only bites
+  // once EnforceLakeReadGrants is on. This pins that canAccessLake stays byte-for-byte legacy.
+  it('does NOT admit a bare reader grant (that path is resolveLakeReadAccess, gated on the cutover flag)', () => {
+    expect(canAccessLake(privateLake('creator'), ctx('rdr'), [readerGrant('rdr')])).toBe(false);
   });
 });
