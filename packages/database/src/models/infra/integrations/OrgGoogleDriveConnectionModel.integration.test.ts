@@ -257,6 +257,32 @@ describe('OrgGoogleDriveConnectionModel - sync claim (per-connection serializati
     expect(due.map(d => d.id)).not.toContain(created.id);
   });
 
+  it('releaseSyncClaim records the failure on lastError so a broken connection is not silently healthy', async () => {
+    // The release heals the status to 'connected' AND stamps a fresh lastPolledAt, so without this a
+    // deterministically-failing connection reads healthy and recently-polled with nothing anywhere to
+    // tell an operator its syncs keep dying.
+    const created = await OrgGoogleDriveConnection.create(base);
+    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+
+    const released = await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id, 'Drive folder unreadable');
+    expect(released?.status).toBe('connected');
+    expect(released?.lastError).toContain('Drive folder unreadable');
+  });
+
+  it('releaseSyncClaim leaves a stored lastError alone when the caller supplies none', async () => {
+    // Only ever WRITTEN when supplied - a caller with nothing to say must not silently clear a real
+    // error, unlike updateHealth, whose contract is to set the field to exactly what it is given.
+    const created = await OrgGoogleDriveConnection.create(base);
+    await orgGoogleDriveConnectionRepository.updateHealth(created.id, {
+      status: 'connected',
+      lastError: 'earlier failure',
+    });
+    await orgGoogleDriveConnectionRepository.claimForSync(created.id);
+
+    const released = await orgGoogleDriveConnectionRepository.releaseSyncClaim(created.id);
+    expect(released?.lastError).toContain('earlier failure');
+  });
+
   it('releaseSyncClaim is guarded: it never clobbers a terminal status set under the claim', async () => {
     const created = await OrgGoogleDriveConnection.create(base);
     await orgGoogleDriveConnectionRepository.claimForSync(created.id);

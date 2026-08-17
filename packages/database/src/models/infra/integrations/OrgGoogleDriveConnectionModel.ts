@@ -271,13 +271,20 @@ class OrgGoogleDriveConnectionRepository
    * unchanged, stay due, and be re-enqueued at every hourly tick - each attempt re-walking the folder
    * before failing again. Stamping keeps the 6h poll cadence on the failure path, matching every
    * non-throwing exit (findDueForPoll's status filter can't help once the release flips it back).
+   *
+   * `lastError` is the operator-visible half of that: without it, such a connection reads `connected`
+   * with a fresh poll time and no signal anywhere that its syncs keep dying. Redacted like
+   * updateHealth's, since the caller's message is a raw provider/driver `err.message`. Only WRITTEN
+   * when supplied - an omitted one leaves whatever is stored, so a caller with nothing to say cannot
+   * silently clear a real error.
    */
-  async releaseSyncClaim(id: string): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
-    return this.model.findOneAndUpdate(
-      { _id: id, status: 'syncing' },
-      { $set: { status: 'connected', lastPolledAt: new Date() } },
-      { new: true }
-    );
+  async releaseSyncClaim(
+    id: string,
+    lastError?: string
+  ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
+    const set: Record<string, unknown> = { status: 'connected', lastPolledAt: new Date() };
+    if (lastError) set.lastError = redactLastError(lastError);
+    return this.model.findOneAndUpdate({ _id: id, status: 'syncing' }, { $set: set }, { new: true });
   }
 
   /**

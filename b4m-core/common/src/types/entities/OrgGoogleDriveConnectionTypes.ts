@@ -224,7 +224,7 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    * and can never clobber a terminal status (e.g. credential_error) set underneath it. The success
    * path releases via `updateHealth({ status: 'connected' })` instead.
    */
-  releaseSyncClaim(id: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
+  releaseSyncClaim(id: string, lastError?: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
   /**
    * Delete a connection (org-scoped), releasing its GLOBAL Drive-folder claim so the folder can be

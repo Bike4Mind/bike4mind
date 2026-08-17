@@ -89,6 +89,41 @@ describe('driveLakeResyncPoll cron', () => {
     expect(limit).toBe(200);
   });
 
+  it('keeps sweeping past a connection whose enqueue fails, and counts it', async () => {
+    // One unroutable id used to reject out of a sequential loop and abandon every connection behind
+    // it, so a single bad row stalled the whole sweep - tick after tick, since nothing else clears it.
+    h.findDueForPoll.mockResolvedValue([{ id: 'conn1' }, { id: 'bad' }, { id: 'conn3' }]);
+    h.sendToQueue.mockImplementation(async (_url: string, body: { connectionId: string }) => {
+      if (body.connectionId === 'bad') throw new Error('queue does not exist');
+    });
+
+    const res = await handler();
+
+    expect(h.sendToQueue).toHaveBeenCalledTimes(3);
+    expect(h.sendToQueue).toHaveBeenCalledWith('ingest-queue-url', { connectionId: 'conn3' });
+    expect(JSON.parse(res.body)).toMatchObject({ enqueued: 2, failed: 1 });
+  });
+
+  it('bounds how many enqueues are in flight at once', async () => {
+    // A full 200-connection run one-at-a-time is a round trip per connection inside the cron's
+    // timeout; unbounded would be a burst against SQS itself.
+    let inFlight = 0;
+    let peak = 0;
+    h.findDueForPoll.mockResolvedValue(Array.from({ length: 25 }, (_, i) => ({ id: `conn${i}` })));
+    h.sendToQueue.mockImplementation(async () => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      inFlight--;
+    });
+
+    const res = await handler();
+
+    expect(JSON.parse(res.body)).toMatchObject({ enqueued: 25 });
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(10);
+  });
+
   it('heartbeats with zero enqueued when nothing is due', async () => {
     const res = await handler();
 

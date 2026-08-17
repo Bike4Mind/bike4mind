@@ -1822,10 +1822,12 @@ FabFileSchema.index({ contentHash: 1, userId: 1 });
 // Google Drive ingest dedup (driveFileId is the stable re-sync key; contentHash changes on edit)
 FabFileSchema.index({ driveFileId: 1 });
 
-// Drive re-sync reconcile: findByDriveConnectionIdInDataLake filters by driveConnectionId on every
-// poll. Without this the planner serves it from the tags.name index and post-filters; the equality
-// prefix keeps it per-connection bounded on the largest collection.
-FabFileSchema.index({ driveConnectionId: 1 });
+// Drive re-sync reconcile: findByDriveConnectionIdInDataLake runs on every poll. Compound rather
+// than a bare { driveConnectionId: 1 }, which is an equality prefix only - that leaves the planner
+// fetching every historical row for a connection and post-filtering the rest of the predicate. The
+// three equality keys the query also carries bound it to the live rows in the index itself
+// (archivedAt and tags.name stay post-filters; a multikey array key here would not help).
+FabFileSchema.index({ driveConnectionId: 1, deletedAt: 1, status: 1 });
 
 // Un-chunked rescue sweep (buildFabFileChunkScanFilter: self-host worker scan + the hosted
 // dataLakeBatchReconcile cron). Equality prefix, createdAt range last; without it the daily

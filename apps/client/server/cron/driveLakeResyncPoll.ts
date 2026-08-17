@@ -31,6 +31,11 @@ const POLL_INTERVAL_MS = 6 * 60 * 60 * 1000;
 // and are picked up on the next tick. findDueForPoll returns oldest-polled-first, so nothing starves.
 const MAX_ENQUEUE_PER_RUN = 200;
 
+// How many sends are in flight at once. MAX_ENQUEUE_PER_RUN of them one-at-a-time is a full round
+// trip per connection inside the cron's timeout; a modest window drains the same list in a fraction
+// of it without becoming a burst against SQS itself.
+const ENQUEUE_CONCURRENCY = 10;
+
 export async function handler() {
   const stage = Resource.App.stage;
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', stage));
@@ -46,14 +51,31 @@ export async function handler() {
   const cutoff = new Date(Date.now() - POLL_INTERVAL_MS);
   const due = await orgGoogleDriveConnectionRepository.findDueForPoll(cutoff, MAX_ENQUEUE_PER_RUN);
 
+  // Bounded-concurrency fan-out with a PER-CONNECTION catch. One unroutable id (a stale queue URL, a
+  // throttle) used to reject out of a sequential loop and abandon every connection behind it, so a
+  // single bad row could stall the whole sweep tick after tick. Now it costs only itself.
   let enqueued = 0;
-  for (const connection of due) {
-    // Enqueue by id only; the handler re-reads the connection + folder and claimForSync guards the
-    // race with an in-flight manual Re-sync or a prior poll's still-running job.
-    await sendToQueue(Resource.driveLakeIngestQueue.url, { connectionId: connection.id });
-    enqueued++;
+  let failed = 0;
+  const enqueueOne = async (connectionId: string) => {
+    try {
+      // Enqueue by id only; the handler re-reads the connection + folder and claimForSync guards the
+      // race with an in-flight manual Re-sync or a prior poll's still-running job.
+      await sendToQueue(Resource.driveLakeIngestQueue.url, { connectionId });
+      enqueued++;
+    } catch (e) {
+      failed++;
+      logger.error('[driveLakeResyncPoll] failed to enqueue connection', {
+        connectionId,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
+  for (let i = 0; i < due.length; i += ENQUEUE_CONCURRENCY) {
+    await Promise.all(due.slice(i, i + ENQUEUE_CONCURRENCY).map(connection => enqueueOne(connection.id)));
   }
 
-  logger.info('[driveLakeResyncPoll] sweep complete', { due: due.length, enqueued });
-  return { statusCode: 200, body: JSON.stringify({ enqueued }) };
+  // A failed send leaves lastPolledAt untouched, so the connection stays due and the next tick
+  // retries it - the count is the operator's signal, not a lost-work marker.
+  logger.info('[driveLakeResyncPoll] sweep complete', { due: due.length, enqueued, failed });
+  return { statusCode: 200, body: JSON.stringify({ enqueued, failed }) };
 }

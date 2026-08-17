@@ -9,13 +9,14 @@ import {
   orgGoogleDriveConnectionRepository,
   sessionRepository,
   userRepository,
+  withTransaction,
 } from '@bike4mind/database';
 import {
   DATALAKE_TAG_STRENGTH,
   KnowledgeType,
   FabFileSourceType,
-  foldTagName,
   isDataLakeTagName,
+  matchesTagPrefixArm,
   type IUserDocument,
 } from '@bike4mind/common';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
@@ -101,26 +102,42 @@ export function hasDriveFileChanged(
  *
  * Retiring an edited file's stale copy is two steps, in this order, and the order is the point. FIRST an
  * unpick from THIS lake (removeFileFromLake), which is per-lake by construction - see the reserved-namespace
- * note in lakeMembership.ts. THEN, only when the copy carries no OTHER lake's membership tag, a full delete
- * through fabFileService.deleteFabFile. A superseded Drive doc must leave the owner's Files entirely (its
- * pre-edit content must not stay retrievable, and one orphan copy per edit must not accumulate with its
- * chunks, embeddings, S3 object and storage quota) - but a copy a human curated into a SECOND lake must not
- * be yanked out of it by a background poll. A blanket soft-delete would do exactly that: `deletedAt` is
+ * note in lakeMembership.ts. THEN, only when NO OTHER LAKE still claims the copy, a full delete through
+ * fabFileService.deleteFabFile. A superseded Drive doc must leave the owner's Files entirely (its pre-edit
+ * content must not stay retrievable, and one orphan copy per edit must not accumulate with its chunks,
+ * embeddings, S3 object and storage quota) - but a copy a human curated into a SECOND lake must not be
+ * yanked out of it by a background poll. A blanket soft-delete would do exactly that: `deletedAt` is
  * filtered by EVERY lake's read path, so a per-lake operation would have become a global one. Keeping the
  * membership unpick and gating the delete preserves the per-lake invariant instead of racing it.
+ *
+ * That gate has to test BOTH arms of the one membership predicate (buildDataLakeMembershipFilter), which is
+ * what dataLakeService.findOtherLakeClaims does: the `datalake:` meta-tag, AND a `fileTagPrefix` match on a
+ * file the other lake's creator owns. A meta-tag-only gate is a trap, because a file curated into a second
+ * lake through that lake's PREFIX carries no meta-tag for it - the gate would read "nobody else wants this"
+ * and delete a full member out of a lake it never looked at.
  *
  * The full delete goes through fabFileService.deleteFabFile rather than a bare `deletedAt` stamp because
  * only that path also reaps the chunks, the per-model search-index docs, the session (notebook) links, the
  * S3 object and the owner's counted storage. A bare stamp leaves all of it billed and orphaned forever -
- * nothing reaps soft-deleted FabFiles outside whole-lake teardown.
+ * nothing reaps soft-deleted FabFiles outside whole-lake teardown. Two of those the user would MISS, so
+ * they are carried onto the fresh copy first (carryForwardToReplacement): the notebook attachments, and the
+ * tags a human applied by hand. Otherwise a one-character edit in Drive silently detaches the doc from
+ * every notebook holding it and drops its tags.
+ *
+ * The delete's actor is the retired ROW'S OWN owner, not `connection.connectedBy` - a reconnect re-stamps
+ * connectedBy (drive-sync.ts), and running as a non-owner would either deny (accumulating one orphan copy
+ * per edit) or take deleteFabFile's self-unshare branch and mutate the file instead of reaping it.
  *
  * A genuine delete (gone from the folder) keeps the membership-only unpick and never deletes - the file left
  * the folder but the owner keeps their copy, which is not superseded by anything.
  *
  * OUT OF SCOPE for E1 (#1589 follow-ups): a rename/move in Drive (md5 unchanged, only modifiedTime
- * moves) is classified unchanged, so the stale fileName/relativePath is not reconciled; and a
+ * moves) is classified unchanged, so the stale fileName/relativePath is not reconciled; a
  * permanently-unsupported file (unsupported type, oversized Editors export) is never a durable member,
- * so it re-appears as a candidate and re-skips on every poll - noise, not harm, but it never converges.
+ * so it re-appears as a candidate and re-skips on every poll - noise, not harm, but it never converges;
+ * and an unpicked file keeps its `driveConnectionId`/`sourceLakeId`, so one that leaves the folder and
+ * later returns is re-ingested as a brand-new FabFile while the unpicked original lingers in the owner's
+ * Files.
  *
  * Ordering is load-bearing. `storage.upload` fires `objectCreated` synchronously, which walks
  * objectCreated -> chunk -> vectorize; each stage advances batch progress by claiming its manifest
@@ -280,47 +297,150 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
         db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
       });
 
-    // Bytes reclaimed by the full deletes below, deducted from the connecting user's counted storage
-    // once at the end rather than per file (one save on the already-loaded document).
-    let reclaimedBytes = 0;
+    // Bytes reclaimed by the full deletes below, accumulated PER OWNER: after a reconnect the copies
+    // one run retires can belong to more than one user (see retireSupersededCopy), and each one's
+    // quota has to be given back to the right document.
+    const reclaimedBytesByUserId = new Map<string, number>();
+
+    // Every lake whose PREFIX arm could reach a file owned by anyone in this connection's stored set,
+    // or by whoever is connected now. Memoized: resolved ONCE for the whole run rather than per retire,
+    // and not at all on a run that retires nothing - the common poll outcome. Membership is still
+    // re-asserted per lake, per owner, inside findOtherLakeClaims.
+    let candidateLakesOnce: ReturnType<typeof dataLakeService.loadPrefixArmCandidateLakes> | undefined;
+    const prefixArmCandidateLakes = () =>
+      (candidateLakesOnce ??= dataLakeService.loadPrefixArmCandidateLakes(
+        [connection.connectedBy, ...existingDocs.map(doc => doc.userId)],
+        { db: { dataLakes: dataLakeRepository } }
+      ));
+
+    // deleteFabFile throws when its actor no longer exists, which would fail the whole reconcile on a
+    // deterministic condition (an owner deleted since ingest) - retried to the DLQ, never converging.
+    // Resolve once per owner and skip that copy instead.
+    const ownerExists = new Map<string, boolean>();
+    const ownerStillExists = async (ownerId: string) => {
+      const cached = ownerExists.get(ownerId);
+      if (cached !== undefined) return cached;
+      const exists = !!(await userRepository.findById(ownerId));
+      ownerExists.set(ownerId, exists);
+      return exists;
+    };
 
     /**
-     * Retire a superseded copy of an edited Drive file: unpick it from THIS lake, then delete it
-     * outright only if no OTHER lake still claims it. See the header for why the two steps cannot
-     * collapse into one soft-delete. Returns what it did, for the log.
+     * Move what the hard delete is about to destroy onto the fresh copy superseding it: the notebook
+     * attachments (deleteFabFile strips the retired id from every session's `knowledgeIds`) and the
+     * tags a human applied by hand (the replacement is minted with this lake's tags only).
+     *
+     * Only ever called on the delete branch. On the unpicked branch the retired copy keeps living
+     * with its links and tags intact, so there is nothing to carry - and attaching the replacement
+     * alongside it would put the same document in a notebook twice.
      */
-    const retireSupersededCopy = async (staleCopy: (typeof existingDocs)[number]) => {
+    const carryForwardToReplacement = async (
+      retiredCopy: (typeof existingDocs)[number],
+      replacementFabFileId: string
+    ) => {
+      // Link the replacement BEFORE the delete unlinks the stale id: deleteFabFile filters only the
+      // retired id out of `knowledgeIds`, so an entry appended here survives that same write.
+      const attached = await sessionRepository.findAllWithKnowledgeId(retiredCopy.id);
+      for (const notebook of attached) {
+        const knowledgeIds = notebook.knowledgeIds ?? [];
+        if (knowledgeIds.includes(replacementFabFileId)) continue;
+        await sessionRepository.update({ id: notebook.id, knowledgeIds: [...knowledgeIds, replacementFabFileId] });
+      }
+
+      // A meta-tag is membership, not content: this lake's was just pulled, the gate proved no other
+      // lake holds one, and a non-canonical leftover names no lake at all. None of them carry over.
+      //
+      // Nor may a carried tag enrol the REPLACEMENT in a lake of its own. The gate cleared the
+      // RETIRED copy's owner, and after a reconnect the replacement's owner differs (it is minted as
+      // connection.connectedBy), so a tag that conferred nothing there can still match a prefix arm
+      // of a lake the new owner created. Dropping those keeps this a pure carry-over, and keeps it
+      // out of the membership doors (reconcileLakeTags) a real join would have to go through.
+      const replacementOwnerLakes = (await prefixArmCandidateLakes()).filter(
+        candidate => candidate.createdByUserId === connection.connectedBy
+      );
+      const carried: { name: string; strength: number }[] = [];
+      for (const tag of retiredCopy.tags ?? []) {
+        const name = tag?.name;
+        if (typeof name !== 'string' || isDataLakeTagName(name)) continue;
+        if (replacementOwnerLakes.some(candidate => matchesTagPrefixArm([name], candidate.fileTagPrefix))) continue;
+        carried.push({ name, strength: typeof tag.strength === 'number' ? tag.strength : 0 });
+      }
+      // Grouped because pushTagsByFabFileId applies ONE strength per call, and a carried tag keeps
+      // the strength a human gave it rather than being flattened to the default.
+      const namesByStrength = new Map<number, string[]>();
+      for (const { name, strength } of carried) {
+        const names = namesByStrength.get(strength);
+        if (names) names.push(name);
+        else namesByStrength.set(strength, [name]);
+      }
+      for (const [strength, names] of namesByStrength) {
+        await fabFileRepository.pushTagsByFabFileId(replacementFabFileId, names, strength);
+      }
+    };
+
+    /**
+     * Retire a superseded copy of a Drive file: unpick it from THIS lake, then delete it outright
+     * only when no OTHER lake still claims it, under either membership arm. `replacementFabFileId`
+     * is the fresh copy that supersedes this one, and inherits its links and tags. The header covers
+     * why the two steps cannot collapse into one soft-delete, why both arms have to be tested, and
+     * why the actor is the row's own owner. Returns what it did, for the log.
+     */
+    const retireSupersededCopy = async (staleCopy: (typeof existingDocs)[number], replacementFabFileId: string) => {
       // Per-lake by construction: clears this lake's meta-tag and prefixed content tags, nothing else.
       await dataLakeService.removeFileFromLake(membershipActor, lake, staleCopy.id, {
         db: { fabFiles: fabFileRepository },
       });
 
-      // Read off the pre-unpick tags: removeFileFromLake only ever pulls THIS lake's signals, so any
-      // other `datalake:` tag present before the pull is still present after it.
-      const otherLakeTags = (staleCopy.tags ?? [])
+      // Re-read AFTER the unpick, so the gate runs against the tags that actually SURVIVE it. The
+      // question a hard delete must answer is "now that this file has left THIS lake, does any other
+      // lake still hold it", and only the stored document answers that without re-deriving which
+      // signals removeFileFromLake chose to pull.
+      const retiredCopy = await fabFileRepository.findById(staleCopy.id);
+      if (!retiredCopy) {
+        logger.warn('[driveLakeIngest] superseded copy vanished before retire; unpicked only', {
+          fabFileId: staleCopy.id,
+        });
+        return 'unpicked' as const;
+      }
+      const tagNames = (retiredCopy.tags ?? [])
         .map(tag => tag?.name)
-        .filter((name): name is string => typeof name === 'string')
-        .filter(name => isDataLakeTagName(name) && foldTagName(name) !== foldTagName(datalakeTag));
-      if (otherLakeTags.length > 0) {
-        // Someone curated this file into another lake by hand. It leaves the Drive lake and keeps
-        // living there; deleting it would evict it from a lake this poll has no business touching.
-        // The consequence, deliberately: that other lake keeps the PRE-EDIT copy, because the fresh
-        // replacement is tagged into this lake only. Propagating an edit into a hand-curated lake is
-        // a decision for whoever curated it, not for a background poll - and holding stale content
-        // is recoverable (re-add the new copy), whereas a silent eviction is not.
+        .filter((name): name is string => typeof name === 'string');
+
+      const claims = await dataLakeService.findOtherLakeClaims({ userId: retiredCopy.userId, tagNames }, lake, {
+        db: { dataLakes: dataLakeRepository },
+        candidateLakes: await prefixArmCandidateLakes(),
+      });
+      if (dataLakeService.hasOtherLakeClaim(claims)) {
+        // Someone curated this file into another lake - by that lake's meta-tag, or by a tag under
+        // its fileTagPrefix. It leaves the Drive lake and keeps living there; deleting it would evict
+        // it from a lake this poll has no business touching. The consequence, deliberately: that lake
+        // keeps the PRE-EDIT copy, because the fresh replacement is tagged into this lake only.
+        // Propagating an edit into a hand-curated lake is a decision for whoever curated it, not for
+        // a background poll - and holding stale content is recoverable (re-add the new copy), whereas
+        // a silent eviction is not.
         logger.info('[driveLakeIngest] superseded copy belongs to another lake; unpicked only', {
           fabFileId: staleCopy.id,
-          otherLakeTags,
+          otherLakeTags: claims.metaTagNames,
+          otherLakeIds: claims.prefixArmLakes.map(other => other.id),
         });
         return 'unpicked' as const;
       }
 
+      const ownerId = retiredCopy.userId;
+      if (!ownerId || !(await ownerStillExists(ownerId))) {
+        logger.warn('[driveLakeIngest] superseded copy has no living owner; left unpicked', {
+          fabFileId: staleCopy.id,
+          ownerId,
+        });
+        return 'unpicked' as const;
+      }
+
+      await carryForwardToReplacement(retiredCopy, replacementFabFileId);
+
       // Sole-lake copy: delete for real, so the chunks, search-index docs, notebook links, S3 object
-      // and storage quota go with it. Actor is the row's creator (createFabFile stamps connectedBy);
-      // a copy owned by anyone else returns a non-'deleted' action and is left alone rather than
-      // half-reaped.
+      // and storage quota go with it.
       const { action } = await fabFilesService.deleteFabFile(
-        connection.connectedBy,
+        ownerId,
         { id: staleCopy.id },
         {
           db: {
@@ -331,7 +451,7 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
           },
           storage: getFilesStorage(),
           onDeleteComplete: async (_fabFile, size) => {
-            reclaimedBytes += size;
+            reclaimedBytesByUserId.set(ownerId, (reclaimedBytesByUserId.get(ownerId) ?? 0) + size);
           },
           searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
         }
@@ -348,18 +468,35 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
     // Best-effort, and deliberately non-fatal: the files are already gone, so a failed quota write
     // must not throw the whole reconcile into an SQS retry that would re-walk and re-ingest.
     const flushReclaimedStorage = async () => {
-      if (reclaimedBytes <= 0) return;
-      try {
-        await changeStorageSize(user, -reclaimedBytes);
-        await user.save();
-      } catch (e) {
-        logger.error('[driveLakeIngest] failed to deduct reclaimed storage', {
-          connectionId,
-          reclaimedBytes,
-          error: e instanceof Error ? e.message : String(e),
-        });
+      if (reclaimedBytesByUserId.size === 0) return;
+      // Drain before deducting: this also runs from a `finally`, and a partial failure must not leave
+      // bytes staged for a later flush to deduct a second time.
+      const pending = [...reclaimedBytesByUserId.entries()];
+      reclaimedBytesByUserId.clear();
+      for (const [ownerId, bytes] of pending) {
+        if (bytes <= 0) continue;
+        try {
+          // Load the owner HERE, never the document read at the top of this handler. changeStorageSize
+          // mutates in memory and save() writes an ABSOLUTE currentStorageSize, so a document read
+          // before the loop would overwrite the increments every storage.upload in it just made
+          // through objectCreated - which loads and saves its own copy of the same user. Same reason
+          // bulk-delete.ts re-reads immediately before deducting; the transaction makes this
+          // read-modify-write conflict-checked rather than merely narrow.
+          await withTransaction(async () => {
+            const owner = await User.findById(ownerId);
+            if (!owner) return;
+            await changeStorageSize(owner, -bytes);
+            await owner.save();
+          });
+        } catch (e) {
+          logger.error('[driveLakeIngest] failed to deduct reclaimed storage', {
+            connectionId,
+            ownerId,
+            bytes,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
       }
-      reclaimedBytes = 0;
     };
 
     // 3) Enforce the single-sync cap FIRST, before any membership write. An over-cap folder would time
@@ -389,84 +526,87 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
       });
     }
 
-    // 4b) Retire pre-existing duplicates: extra copies of a driveFileId that is STILL in the folder,
-    //     left behind by the add-only handler this replaced (a multi-parented file, or an SQS retry
-    //     after a partial run). They hold pre-edit content, stay lake members, and are invisible to
-    //     every future walk because the newest copy shadows them. Safe to retire up front and not
-    //     after an upload: the newest copy stays live either way, so nothing is left without a member.
-    //     A driveFileId gone from the folder is skipped here - all of its copies are already in
-    //     `removed` above.
     let retired = 0;
-    for (const [driveFileId, copies] of existingByDriveId) {
-      if (!walkedIds.has(driveFileId) || copies.length < 2) continue;
-      for (const duplicate of copies.slice(1)) {
-        await retireSupersededCopy(duplicate);
-        retired++;
-      }
-    }
 
-    if (candidates.length === 0) {
-      await flushReclaimedStorage();
-      if (removed.length > 0 || retired > 0) await recomputeStats();
-      logger.info('[driveLakeIngest] reconciled; no files to ingest', {
-        walked: walked.length,
-        existing: existingDocs.length,
-        removed: removed.length,
-        updated: changed.length,
-        retired,
-      });
-      await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
-        status: 'connected',
-        lastPolledAt: new Date(),
-      });
-      return;
-    }
-
-    // 5) Create the batch. totalFiles is the candidate count; a per-file skip is folded into
-    //    skippedFiles as it happens (see the loop below), so the finalize gate is still reached exactly.
-    //    totalSizeBytes is best-effort - Google Editors files carry no size at list time.
-    const batch = await dataLakeBatchRepository.create({
-      dataLakeId: connection.targetDataLakeId,
-      userId: connection.connectedBy,
-      status: 'processing',
-      conflictResolution: 'skip',
-      totalFiles: candidates.length,
-      totalSizeBytes: candidates.reduce((sum, f) => sum + (f.size ?? 0), 0),
-      uploadedFiles: 0,
-      chunkedFiles: 0,
-      vectorizedFiles: 0,
-      failedFiles: 0,
-      processingFailedFiles: 0,
-      skippedFiles: 0,
-      uploadedSizeBytes: 0,
-      files: [],
-      appliedTags: [],
-      startedAt: new Date(),
-      wantsTaxonomy: false,
-      taxonomyStatus: 'none',
-    });
-
-    const applyFallbackTags = dataLakeService.createDataLakeFallbackTagger({
-      db: { dataLakes: dataLakeRepository },
-      logger,
-    });
-    const storage = getFilesStorage();
-    let uploaded = 0;
-    let skipped = 0;
-
-    const skip = async (driveFileId: string, reason: string, extra?: Record<string, unknown>) => {
-      skipped++;
-      await dataLakeBatchRepository.incrementCounter(batch.id, 'skippedFiles');
-      logger.info('[driveLakeIngest] skipping file', { driveFileId, reason, ...extra });
-    };
-
-    // 6) One file at a time: size-gate -> fetch -> create FabFile -> append its manifest entry ->
-    //    upload. Only one file's bytes are ever live, and the manifest entry precedes the upload so
-    //    the objectCreated/chunk/vectorize claims the upload fires can find it (see header).
-    //    `finally` so a mid-loop throw (rethrown for SQS retry) still deducts the storage the
-    //    already-retired copies gave back - those deletes are committed, and the retry re-walks
-    //    without seeing them, so the bytes would otherwise stay counted against the user forever.
+    // Everything that retires a copy runs inside this `try`, step 4b included, so that a throw part
+    // way through EITHER the duplicate sweep or the ingest loop still settles what the committed
+    // deletes changed: the reclaimed bytes (the retry re-walks without seeing those files, so they
+    // would stay counted against their owners forever) and the lake's stats.
     try {
+      // 4b) Retire pre-existing duplicates: extra copies of a driveFileId that is STILL in the folder,
+      //     left behind by the add-only handler this replaced (a multi-parented file, or an SQS retry
+      //     after a partial run). They hold pre-edit content, stay lake members, and are invisible to
+      //     every future walk because the newest copy shadows them. Safe to retire up front and not
+      //     after an upload: the newest copy stays live either way, so nothing is left without a member.
+      //     A driveFileId gone from the folder is skipped here - all of its copies are already in
+      //     `removed` above.
+      for (const [driveFileId, copies] of existingByDriveId) {
+        if (!walkedIds.has(driveFileId) || copies.length < 2) continue;
+        //   The newest copy is what supersedes every duplicate, so it inherits their notebook links
+        //   and tags. If this driveFileId is ALSO an edit, the loop below carries that chain onward
+        //   from the newest copy to the fresh upload.
+        for (const duplicate of copies.slice(1)) {
+          await retireSupersededCopy(duplicate, copies[0].id);
+          retired++;
+        }
+      }
+
+      if (candidates.length === 0) {
+        logger.info('[driveLakeIngest] reconciled; no files to ingest', {
+          walked: walked.length,
+          existing: existingDocs.length,
+          removed: removed.length,
+          updated: changed.length,
+          retired,
+        });
+        await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
+          status: 'connected',
+          lastPolledAt: new Date(),
+        });
+        return;
+      }
+
+      // 5) Create the batch. totalFiles is the candidate count; a per-file skip is folded into
+      //    skippedFiles as it happens (see the loop below), so the finalize gate is still reached exactly.
+      //    totalSizeBytes is best-effort - Google Editors files carry no size at list time.
+      const batch = await dataLakeBatchRepository.create({
+        dataLakeId: connection.targetDataLakeId,
+        userId: connection.connectedBy,
+        status: 'processing',
+        conflictResolution: 'skip',
+        totalFiles: candidates.length,
+        totalSizeBytes: candidates.reduce((sum, f) => sum + (f.size ?? 0), 0),
+        uploadedFiles: 0,
+        chunkedFiles: 0,
+        vectorizedFiles: 0,
+        failedFiles: 0,
+        processingFailedFiles: 0,
+        skippedFiles: 0,
+        uploadedSizeBytes: 0,
+        files: [],
+        appliedTags: [],
+        startedAt: new Date(),
+        wantsTaxonomy: false,
+        taxonomyStatus: 'none',
+      });
+
+      const applyFallbackTags = dataLakeService.createDataLakeFallbackTagger({
+        db: { dataLakes: dataLakeRepository },
+        logger,
+      });
+      const storage = getFilesStorage();
+      let uploaded = 0;
+      let skipped = 0;
+
+      const skip = async (driveFileId: string, reason: string, extra?: Record<string, unknown>) => {
+        skipped++;
+        await dataLakeBatchRepository.incrementCounter(batch.id, 'skippedFiles');
+        logger.info('[driveLakeIngest] skipping file', { driveFileId, reason, ...extra });
+      };
+
+      // 6) One file at a time: size-gate -> fetch -> create FabFile -> append its manifest entry ->
+      //    upload. Only one file's bytes are ever live, and the manifest entry precedes the upload so
+      //    the objectCreated/chunk/vectorize claims the upload fires can find it (see header).
       for (const file of candidates) {
         // Native binaries carry a size, so skip the oversized ones BEFORE spending a Drive download.
         // Editors exports have no size here; they are bounded by Drive's own ~10 MB export cap
@@ -529,56 +669,71 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
         uploaded++;
 
         // Edited file: its fresh replacement is now durably uploaded, so retire the superseded copy
-        // (unpick from this lake, then delete outright unless another lake claims it - see the header).
-        // Done PER-FILE right after the upload, not batched at the end: a later file throwing then
-        // leaves every already-processed edit fully reconciled (old retired, new uploaded) instead of
-        // stranding the old copy as a duplicate lake member the next walk can no longer see (both
-        // share driveFileId). Only the newest copy is left to retire here - any older siblings were
-        // already retired up front in step 4b.
+        // (see retireSupersededCopy, and the header for the invariants it keeps). Done PER-FILE right
+        // after the upload, not batched at the end: a later file throwing then leaves every
+        // already-processed edit fully reconciled (old retired, new uploaded) instead of stranding the
+        // old copy as a duplicate lake member the next walk can no longer see (both share
+        // driveFileId). Only the newest copy is left to retire here - any older siblings went in 4b.
         const staleCopy = newestCopyOf(file.id);
         if (staleCopy) {
-          await retireSupersededCopy(staleCopy);
+          await retireSupersededCopy(staleCopy, fabFile.id);
           retired++;
         }
       }
+
+      logger.info('[driveLakeIngest] uploaded; pipeline will chunk+vectorize', {
+        connectionId,
+        batchId: batch.id,
+        walked: walked.length,
+        existing: existingDocs.length,
+        removed: removed.length,
+        updated: changed.length,
+        uploaded,
+        skipped,
+        retired,
+      });
+
+      // A batch that only skipped (or whose uploads all vectorized before the loop ended) has already
+      // crossed the finalize gate, but nothing re-checks it - our skip increments don't fire the
+      // pipeline's finalize. Nudge it once; a guarded no-op if uploads are still in flight.
+      await finalizeBatchIfComplete(await dataLakeBatchRepository.findById(batch.id), logger);
+
+      // Releases the syncing claim (syncing -> connected).
+      await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
+        status: 'connected',
+        lastPolledAt: new Date(),
+      });
     } finally {
       await flushReclaimedStorage();
+
+      // Recompute for every membership change this run made - the genuine deletes above and every
+      // copy retired since. In the `finally` because a mid-loop throw is rethrown for SQS retry, and
+      // the retry re-walks a folder whose removals and retires are ALREADY applied: it finds nothing
+      // to do and skips the recompute too, leaving fileCount/totalSizeBytes overstated until some
+      // unrelated write happens to fix them. Swallowed like the flush above, and because a throw
+      // raised here would replace the original error on its way to SQS.
+      //
+      // The freshly-uploaded replacements are still 'pending' and excluded from the stats aggregate
+      // until the pipeline vectorizes them and finalizeBatchIfComplete recomputes again, exactly as a
+      // plain add already does.
+      if (removed.length > 0 || retired > 0) {
+        await recomputeStats().catch(e =>
+          logger.error('[driveLakeIngest] failed to recompute lake stats', {
+            connectionId,
+            error: e instanceof Error ? e.message : String(e),
+          })
+        );
+      }
     }
-
-    // Recompute stats once for every membership change this run made - genuine deletes above and the
-    // stale copies retired in the loop. The freshly-uploaded replacements are still 'pending' and
-    // excluded from the stats aggregate until the pipeline vectorizes them and finalizeBatchIfComplete
-    // recomputes again, exactly as a plain add already does.
-    if (removed.length > 0 || retired > 0) await recomputeStats();
-
-    logger.info('[driveLakeIngest] uploaded; pipeline will chunk+vectorize', {
-      connectionId,
-      batchId: batch.id,
-      walked: walked.length,
-      existing: existingDocs.length,
-      removed: removed.length,
-      updated: changed.length,
-      uploaded,
-      skipped,
-      retired,
-    });
-
-    // A batch that only skipped (or whose uploads all vectorized before the loop ended) has already
-    // crossed the finalize gate, but nothing re-checks it - our skip increments don't fire the
-    // pipeline's finalize. Nudge it once; a guarded no-op if uploads are still in flight.
-    await finalizeBatchIfComplete(await dataLakeBatchRepository.findById(batch.id), logger);
-
-    // Releases the syncing claim (syncing -> connected).
-    await orgGoogleDriveConnectionRepository.updateHealth(connectionId, {
-      status: 'connected',
-      lastPolledAt: new Date(),
-    });
   } catch (err) {
     // Release the syncing claim so a retry can re-run - guarded so it can't clobber a
-    // credential_error that getValidConnectionDriveAccessToken set underneath us.
+    // credential_error that getValidConnectionDriveAccessToken set underneath us. Carry the failure
+    // onto `lastError`: the release heals the status back to 'connected' and stamps lastPolledAt, so
+    // without this a deterministically-broken connection reads healthy and freshly-polled with no
+    // operator-visible sign that every sync is dying.
     if (claimed && connectionId) {
       await orgGoogleDriveConnectionRepository
-        .releaseSyncClaim(connectionId)
+        .releaseSyncClaim(connectionId, err instanceof Error ? err.message : String(err))
         .catch(e =>
           logger.error(`[driveLakeIngest] failed to release sync claim: ${e instanceof Error ? e.message : String(e)}`)
         );
