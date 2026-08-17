@@ -608,7 +608,9 @@ export function nextRebuildPoll(
  * Hook: the lake's rebuild status - how many files are still oversized passages (predating the
  * passage-target fix) plus how many gave up (failed re-chunk). Polls itself down while a rebuild
  * drains, backing off as the backlog stays large so a multi-thousand-file lake isn't re-scanned
- * every 5s for the whole drain. Owner/admin only surface, so only enable when the viewer can manage.
+ * every 5s for the whole drain. Rebuild-capable surface, so only enable when the viewer can
+ * REBUILD (`canRebuild`) - narrower than `canManage`, since a fallback (built-in) lake has no
+ * document to manage but can still be rebuilt by a platform admin.
  */
 export function useUnderChunkedCount(dataLakeId: string | null, enabled = true) {
   const pollState = useRef<RebuildPollState>({ ...INITIAL_REBUILD_POLL_STATE });

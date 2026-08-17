@@ -74,7 +74,9 @@ export function nextRouteForContract<C extends EndpointContract>(
       res.json = ((body: unknown) => {
         try {
           const spec = contract.responses[res.statusCode];
-          const result = spec?.schema.safeParse(body);
+          // No schema => the contract declares a raw (non-JSON) body for this
+          // status, so there is nothing to check.
+          const result = spec?.schema?.safeParse(body);
           if (result && !result.success) {
             req.logger?.warn(
               `[contract] ${contract.operationId} response ${res.statusCode} violates schema: ${result.error.message}`

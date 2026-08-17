@@ -1,4 +1,4 @@
-import { CreateFabFileRequestInputType, FileEvents, Permission } from '@bike4mind/common';
+import { CreateFabFileRequestInputType, FabFileSourceType, FileEvents, Permission } from '@bike4mind/common';
 import {
   adminSettingsRepository,
   dataLakeBatchRepository,
@@ -91,6 +91,10 @@ const handler = baseApi()
                   expiresIn: expireInSeconds,
                 }),
             },
+            // Admission provenance (#1679): a direct-API upload is a manual door. Passed as the
+            // server-side `provenance` adapter, never from the request body, so the origin cannot be
+            // forged. Not defaulted inside the service - other callers (e.g. research) are not manual.
+            provenance: { sourceType: FabFileSourceType.MANUAL_UPLOAD },
           }
         );
       });

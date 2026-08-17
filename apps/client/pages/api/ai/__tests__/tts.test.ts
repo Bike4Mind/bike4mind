@@ -21,16 +21,23 @@ const { mocks, InsufficientTtsCreditsError, TtsProviderNotConfiguredError, Unpro
   }
 );
 
-// baseApi mock: unwrap the post handler (same shape as the rotate-token test).
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ post: (fn: unknown) => fn }),
+// Contract-adapter mock: unwrap the post handler and stand in for the prelude by
+// exposing the body as `req.validated`. Passthrough, not a real parse - schema
+// validation is covered by the common package; here the well-formed body is
+// driven straight through to exercise the route logic.
+vi.mock('@server/middlewares/defineNextRoute', () => ({
+  nextRouteForContract: () => ({
+    post:
+      (fn: (req: Record<string, unknown>, res: unknown) => unknown) => (req: Record<string, unknown>, res: unknown) => {
+        req.validated = req.body;
+        return fn(req, res);
+      },
+  }),
 }));
 
 vi.mock('@bike4mind/common', () => ({
   UnprocessableEntityError,
-  // Passthrough parse: schema validation is covered by the common package; here
-  // we drive the well-formed body straight through to exercise the route logic.
-  ttsRequestSchema: { parse: (b: unknown) => b },
+  synthesizeSpeechContract: { method: 'post', path: '/api/ai/tts', auth: 'apiKeyOrJwt', responses: {} },
   TTS_MAX_INPUT_CHARS: { openai: 4096, elevenlabs: 10000 },
   VOICE_VENDOR_SUPPORTED_FORMATS: { openai: ['mp3', 'wav'], elevenlabs: ['mp3', 'pcm', 'opus'] },
 }));

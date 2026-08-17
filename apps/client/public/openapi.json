@@ -772,6 +772,431 @@
           ],
           "max_tokens": 500
         }
+      },
+      "synthesizeSpeechResponse200": {
+        "type": "object",
+        "properties": {
+          "audio": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "mp3",
+              "wav",
+              "opus",
+              "aac",
+              "flac",
+              "pcm"
+            ]
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "saved": {
+            "type": "boolean"
+          },
+          "fabFileId": {
+            "type": "string"
+          },
+          "fileUrl": {
+            "type": "string"
+          },
+          "saveSkippedReason": {
+            "type": "string",
+            "enum": [
+              "storage_limit",
+              "file_too_large",
+              "error"
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
+          },
+          "fallbackFrom": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
+          }
+        },
+        "required": [
+          "audio",
+          "format",
+          "contentType"
+        ],
+        "example": {
+          "audio": "SUQzBAAAAAAA...",
+          "format": "mp3",
+          "contentType": "audio/mpeg",
+          "saved": true,
+          "fabFileId": "664f1c2b9a1e4d0012ab34cd"
+        }
+      },
+      "synthesizeSpeechResponse401": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "provider_not_configured",
+              "provider_rejected"
+            ]
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "synthesizeSpeechResponse402": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "provider_not_configured",
+              "provider_rejected"
+            ]
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "synthesizeSpeechResponse413": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
+          },
+          "saved": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "fabFileId": {
+            "type": "string"
+          },
+          "fileUrl": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "provider"
+        ]
+      },
+      "synthesizeSpeechResponse422": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "provider_not_configured",
+              "provider_rejected"
+            ]
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "synthesizeSpeechResponse429": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "provider_not_configured",
+              "provider_rejected"
+            ]
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "synthesizeSpeechResponse502": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "provider_not_configured",
+              "provider_rejected"
+            ]
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "synthesizeSpeechRequest": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 10000
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "elevenlabs"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "voice": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "mp3",
+              "wav",
+              "opus",
+              "aac",
+              "flac",
+              "pcm"
+            ]
+          },
+          "encoding": {
+            "type": "string",
+            "enum": [
+              "binary",
+              "base64"
+            ]
+          },
+          "stability": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "similarityBoost": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "languageCode": {
+            "type": "string",
+            "pattern": "^[a-z]{2}$"
+          },
+          "preview": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "example": {
+          "text": "Your password has been reset.",
+          "provider": "openai",
+          "voice": "alloy",
+          "format": "mp3"
+        }
+      },
+      "generateMusicResponse422": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits"
+            ]
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "generateMusicRequest": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "elevenlabs"
+            ],
+            "default": "elevenlabs"
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "lengthMs": {
+            "type": "integer",
+            "minimum": 3000,
+            "maximum": 120000,
+            "default": 10000
+          },
+          "forceInstrumental": {
+            "type": "boolean"
+          },
+          "modelId": {
+            "type": "string",
+            "enum": [
+              "music_v1"
+            ],
+            "default": "music_v1"
+          },
+          "format": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "example": {
+          "prompt": "calm lo-fi study beat with soft piano",
+          "lengthMs": 30000,
+          "forceInstrumental": true
+        }
+      },
+      "generateSoundEffectResponse422": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits"
+            ]
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "generateSoundEffectRequest": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "elevenlabs"
+            ],
+            "default": "elevenlabs"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "durationSeconds": {
+            "type": "number",
+            "minimum": 0.5,
+            "maximum": 30
+          },
+          "promptInfluence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "format": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "example": {
+          "text": "heavy wooden door creaking open",
+          "durationSeconds": 3,
+          "promptInfluence": 0.5
+        }
       }
     },
     "parameters": {}
@@ -1300,13 +1725,700 @@
           }
         ]
       }
+    },
+    "/api/ai/tts": {
+      "post": {
+        "operationId": "synthesizeSpeech",
+        "summary": "Synthesize speech from text",
+        "description": "Generates speech from text using OpenAI or ElevenLabs. The default `encoding: \"binary\"` streams raw audio bytes with an `audio/*` Content-Type; `encoding: \"base64\"` returns JSON instead. When the requested provider has no usable key (or the provider rejects it), another configured provider stands in and the substitution is reported via `provider`/`fallbackFrom` and the `X-B4M-Tts-Provider*` headers. Input length is capped per provider (OpenAI 4096 characters, ElevenLabs 10000), and an output `format` the chosen provider cannot produce is rejected with a 422 before any provider cost is incurred. Generated audio is saved to the file browser by default (opt out per-user via the saveGeneratedAudio preference, or per-call with `preview`); the outcome is reported via `saved`/`fabFileId` and the `X-B4M-Audio-*` headers. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "tags": [
+          "Audio"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/synthesizeSpeechRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Speech synthesized. The default `encoding: \"binary\"` returns raw audio bytes whose Content-Type follows the requested `format` (`audio/mpeg` for mp3, else `audio/wav`, `audio/opus`, `audio/aac`, `audio/flac`, `audio/pcm`); `encoding: \"base64\"` returns the JSON body.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Tts-Provider": {
+                "description": "The provider that produced the audio. Present only when a fallback happened.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Tts-Provider-Fallback-From": {
+                "description": "The originally requested provider that could not serve the request. Present only on a fallback.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-Saved": {
+                "description": "Whether a browsable copy was saved to the file browser (\"true\"/\"false\").",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-Fab-File-Id": {
+                "description": "Id of the saved file. Present only when the copy was saved.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse200"
+                }
+              },
+              "audio/mpeg": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "audio/wav": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "audio/opus": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "audio/aac": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "audio/flac": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "audio/pcm": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing/invalid credentials, or no provider has a usable key (`provider_not_configured`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse401"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Not enough credits to cover the synthesis.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse402"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The audio was generated (and billed) but is too large to return over this endpoint. Retrieve it from `fileUrl` when a browsable copy was saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse413"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request body failed validation, the text exceeds the provider character limit, or the provider cannot produce the requested `format`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse422"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The provider rate-limited the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse429"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The provider failed to generate speech.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/synthesizeSpeechResponse502"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/ai/tts\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"text\": \"Your password has been reset.\",\n  \"provider\": \"openai\",\n  \"voice\": \"alloy\",\n  \"encoding\": \"base64\"\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/ai/tts\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"text\": \"Your password has been reset.\",\n  \"provider\": \"openai\",\n  \"voice\": \"alloy\",\n  \"encoding\": \"base64\"\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/ai/tts\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"text\": \"Your password has been reset.\",\n        \"provider\": \"openai\",\n        \"voice\": \"alloy\",\n        \"encoding\": \"base64\"\n    },\n)"
+          }
+        ]
+      }
+    },
+    "/api/ai/music": {
+      "post": {
+        "operationId": "generateMusic",
+        "summary": "Generate background music",
+        "description": "Generates an instrumental or vocal background-music track from a text prompt and returns the raw audio bytes. `lengthMs` (3000-120000, default 10000) is forced on the provider, so the generated track always matches the billed length; credits are reserved before generation and refunded if it fails. Generated audio is saved to the file browser by default (opt out via the saveGeneratedAudio preference); the outcome is reported via the `X-B4M-Audio-Saved` / `X-B4M-Audio-Fab-File-Id` / `X-B4M-Audio-File-Url` response headers - use `X-B4M-Audio-File-Url` to fetch the saved copy, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "tags": [
+          "Audio"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/generateMusicRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Raw audio bytes; the Content-Type follows the requested `format` (mp3 by default).",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-Saved": {
+                "description": "Whether a browsable copy was saved to the file browser (\"true\"/\"false\").",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-Fab-File-Id": {
+                "description": "Id of the saved file. Present only when the copy was saved.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-File-Name": {
+                "description": "File name of the saved copy. Present only when the copy was saved.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-File-Url": {
+                "description": "Signed URL for the saved copy, minted at creation. Use this rather than re-resolving the file via GET /api/files/{id}, which fails closed until the async moderation scan completes.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "audio/mpeg": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "audio/opus": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "audio/L16": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "audio/basic": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The billing user or organization could not be resolved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key does not hold any of the required scopes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request body failed validation, or the caller cannot afford the track - the latter is tagged `errorCode: \"insufficient_credits\"` (the balance is short, or the org member credit cap is exhausted).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/generateMusicResponse422"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The provider failed to generate the track; reserved credits are refunded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No provider API key is configured for this deployment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "ai:generate"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/ai/music\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"prompt\": \"calm lo-fi study beat with soft piano\",\n  \"lengthMs\": 30000,\n  \"forceInstrumental\": true\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/ai/music\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"prompt\": \"calm lo-fi study beat with soft piano\",\n  \"lengthMs\": 30000,\n  \"forceInstrumental\": true\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/ai/music\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"prompt\": \"calm lo-fi study beat with soft piano\",\n        \"lengthMs\": 30000,\n        \"forceInstrumental\": True\n    },\n)"
+          }
+        ]
+      }
+    },
+    "/api/ai/sound-effects": {
+      "post": {
+        "operationId": "generateSoundEffect",
+        "summary": "Generate a sound effect",
+        "description": "Generates a short sound effect from a text description and returns the raw audio bytes. Omitting `durationSeconds` lets the provider pick the length (and bills at its default); `promptInfluence` trades prompt fidelity (1) against variation (0). Credits are reserved before generation and refunded if it fails. Generated audio is saved to the file browser by default (opt out via the saveGeneratedAudio preference); the outcome is reported via the `X-B4M-Audio-Saved` / `X-B4M-Audio-Fab-File-Id` / `X-B4M-Audio-File-Url` response headers - use `X-B4M-Audio-File-Url` to fetch the saved copy, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "tags": [
+          "Audio"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/generateSoundEffectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Raw audio bytes; the Content-Type follows the requested `format` (mp3 by default).",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-Saved": {
+                "description": "Whether a browsable copy was saved to the file browser (\"true\"/\"false\").",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-Fab-File-Id": {
+                "description": "Id of the saved file. Present only when the copy was saved.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-File-Name": {
+                "description": "File name of the saved copy. Present only when the copy was saved.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-File-Url": {
+                "description": "Signed URL for the saved copy, minted at creation. Use this rather than re-resolving the file via GET /api/files/{id}, which fails closed until the async moderation scan completes.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "audio/mpeg": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "audio/opus": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "audio/L16": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "audio/basic": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              },
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The billing user or organization could not be resolved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key does not hold any of the required scopes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request body failed validation, or the caller cannot afford the effect - the latter is tagged `errorCode: \"insufficient_credits\"` (the balance is short, or the org member credit cap is exhausted).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/generateSoundEffectResponse422"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The provider failed to generate the effect; reserved credits are refunded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No provider API key is configured for this deployment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "ai:generate"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/ai/sound-effects\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"text\": \"heavy wooden door creaking open\",\n  \"durationSeconds\": 3,\n  \"promptInfluence\": 0.5\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/ai/sound-effects\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"text\": \"heavy wooden door creaking open\",\n  \"durationSeconds\": 3,\n  \"promptInfluence\": 0.5\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/ai/sound-effects\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"text\": \"heavy wooden door creaking open\",\n        \"durationSeconds\": 3,\n        \"promptInfluence\": 0.5\n    },\n)"
+          }
+        ]
+      }
     }
   },
   "webhooks": {},
   "tags": [
     {
       "name": "AI",
-      "description": "Completions and server-side tool execution."
+      "description": "Chat, completions, and server-side tool execution."
+    },
+    {
+      "name": "Audio",
+      "description": "Speech, music, and sound-effect generation."
     }
   ]
 }

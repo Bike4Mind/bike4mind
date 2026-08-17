@@ -1,5 +1,6 @@
 import type {
   AccessContext,
+  IAdminSettingsRepository,
   IDataLakeAccessGrantRepository,
   IDataLakeDocument,
   IDataLakeRepository,
@@ -9,9 +10,13 @@ import type {
 import { DATA_LAKES, toDataLakeConfig, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
 import { canManageLake, isEffectiveOwner, type LakeGrant } from './manageRule';
 import { redactLakesForActor, type ReaderDataLake } from './redactLakeForActor';
+import { resolveEnforceReadGrants } from './resolveLakeReadAccess';
 
 /** Grant-repo slice the list labels need: batch-read a set of lakes' grants, and one principal's. */
 type GrantLookup = Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes' | 'listByPrincipal'>;
+
+/** Settings slice for the read-time grant cutover flag - governs reader-grant inclusion in the list. */
+type SettingsLookup = Pick<IAdminSettingsRepository, 'getSettingsValue'>;
 
 /**
  * The active grants for a set of lakes, grouped by lake id, so per-lake `canManage`/`isOwn` labels
@@ -38,21 +43,44 @@ const grantsByLakeIdFor = async (
 };
 
 /**
- * Lake ids the caller holds an active MANAGE grant on (owner or curator) - fed to findAccessible so
- * a transferred/delegated lake lists. Role-filtered ON PURPOSE to stay consistent with the single
- * read gate: `canAccessLake` admits a grant only via `canManageLake`, which recognizes owner/curator
- * (not reader). Listing a `reader`-granted lake the gate would then 404 on open would be incoherent;
- * reader-grant read access is #1673's job (read-time grant resolution), so it is excluded here too.
- * Only resolves USER-principal grants - org-principal grants (rung 5) are not surfaced to the list
- * yet (they are manageable by direct id); see the epic's Lane B follow-ups. This PR only ever writes
- * owner/curator user grants, so the filter changes nothing today - it is a guard for when Lane B lands.
+ * Lake ids the caller can reach via an active grant - fed to findAccessible so a transferred,
+ * delegated, or shared lake lists. Stays in lockstep with the single read gate (#1673):
+ *  - USER owner/curator ALWAYS included: the gate admits them via `canManageLake`.
+ *  - USER reader AND any ORG-principal grant (for an org the caller is a MEMBER of) included ONLY
+ *    when `includeReaders` (the enforced read-time grant cutover), matching resolveReadGrant at the
+ *    gate. In report-only the gate returns the legacy decision, so a lake reachable only by these
+ *    would 404 on open - listing it would be incoherent, so it is excluded until enforce.
+ * The org arm keys off MEMBERSHIP (`organizationIds`), distinct from the org-MANAGE rung (admin
+ * rights); org membership never crosses orgs regardless (epic decision 12).
  */
-const grantedLakeIdsFor = async (userId: string, grants?: GrantLookup): Promise<string[]> => {
+const grantedLakeIdsFor = async (
+  userId: string,
+  organizationIds: string[],
+  grants?: GrantLookup,
+  includeReaders = false
+): Promise<string[]> => {
   if (!grants) return [];
-  const rows = await grants.listByPrincipal('user', userId, { activeAsOf: new Date() });
-  return Array.from(
-    new Set(rows.filter(row => row.role === 'owner' || row.role === 'curator').map(row => row.dataLakeId))
-  );
+  const activeAsOf = new Date();
+  const ids = new Set<string>();
+
+  const userRows = await grants.listByPrincipal('user', userId, { activeAsOf });
+  for (const row of userRows) {
+    if (row.role === 'owner' || row.role === 'curator' || (includeReaders && row.role === 'reader')) {
+      ids.add(row.dataLakeId);
+    }
+  }
+
+  // Org-principal grants resolve only under enforce: membership in an org holding ANY grant on a
+  // lake grants read (mirrors the gate's org read arm). One query per membership org - bounded by
+  // how many orgs the caller belongs to.
+  if (includeReaders && organizationIds.length > 0) {
+    const orgRowSets = await Promise.all(
+      organizationIds.map(orgId => grants.listByPrincipal('organization', orgId, { activeAsOf }))
+    );
+    for (const rows of orgRowSets) for (const row of rows) ids.add(row.dataLakeId);
+  }
+
+  return Array.from(ids);
 };
 
 /**
@@ -80,6 +108,12 @@ interface ListDataLakesAdapters {
      * rung + createdByUserId fallback only.
      */
     dataLakeAccessGrants?: GrantLookup;
+    /**
+     * Optional settings repo for the read-time grant cutover flag (#1673). When present and
+     * EnforceLakeReadGrants is on, reader-granted lakes list too (in lockstep with the single gate).
+     * Absent OR a failed read -> report-only, so reader-granted lakes are NOT listed (legacy behavior).
+     */
+    settings?: SettingsLookup;
   };
 }
 
@@ -126,6 +160,9 @@ const toManageableConfig = (
 ): ManageableDataLakeConfig => ({
   ...toConfig(dl),
   canManage: manageable,
+  // A DB lake HAS a document, so rebuild and manage are the same decision - only a fallback
+  // (built-in) lake needs the narrower `canRebuild`; see toFallbackConfig and the field's comment.
+  canRebuild: manageable,
   isOwn,
   // Owner name is a not-own label only: an own lake reads as "you", and it is set only when the
   // projection actually resolved one (name-or-username, never email - see resolveOwnerNames).
@@ -150,10 +187,17 @@ const toManageableConfig = (
  * on this arm too: `PREMIUM_DATA_LAKES` is `JSON.parse`d from env and keeps unknown keys, so an
  * overlay entry carrying a `systemPrompt` would otherwise be served to every caller. Fallbacks have
  * no owner and are read-only for everyone, so `canManage` is always false.
+ *
+ * `canRebuild` DOES take an actor, unlike every other field here: it is `ctx.isAdmin` directly,
+ * not `resolveCanManageLake` - see `assertLakeRebuildAccess`'s comment for why an org-scoped
+ * overlay lake must not let a customer-side org admin pass. This is a deliberate, narrow exception
+ * to "actor-less projection"; it is not a route for a future field to follow without the same
+ * reasoning.
  */
-const toFallbackConfig = (dl: DataLakeConfig): ManageableDataLakeConfig => ({
+const toFallbackConfig = (dl: DataLakeConfig, ctx: Pick<AccessContext, 'isAdmin'>): ManageableDataLakeConfig => ({
   ...toDataLakeConfig(dl),
   canManage: false,
+  canRebuild: ctx.isAdmin,
   // Built-in registry lakes have no creator, so they are never "yours" and carry no owner label.
   isOwn: false,
 });
@@ -174,7 +218,13 @@ export const listDataLakes = async (
   ctx: AccessContext,
   { db }: ListDataLakesAdapters
 ): Promise<ManageableDataLakeConfig[]> => {
-  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants);
+  const includeReaders = await resolveEnforceReadGrants(db.settings);
+  const grantedLakeIds = await grantedLakeIdsFor(
+    ctx.userId,
+    ctx.organizationIds ?? [],
+    db.dataLakeAccessGrants,
+    includeReaders
+  );
   let dynamicLakes: IDataLakeDocument[] = [];
   try {
     dynamicLakes = await db.dataLakes.findAccessible(ctx, { statuses: ['draft', 'active'], grantedLakeIds });
@@ -204,7 +254,7 @@ export const listDataLakes = async (
   const normalizedKeys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
   const accessibleFallbacks = fallbacks
     .filter(dl => lakeMatchesAccess(dl, normalizedUserTags, normalizedKeys))
-    .map(toFallbackConfig);
+    .map(dl => toFallbackConfig(dl, ctx));
 
   return [...dynamicConfigs, ...accessibleFallbacks];
 };
@@ -212,7 +262,8 @@ export const listDataLakes = async (
 /**
  * Lists ALL data lakes (for admin views). No user-tag filtering. Admins may manage every
  * DB lake, so `canManage` is true for those; fallback (built-in) lakes stay read-only for
- * everyone (assertLakeWritable refuses them even for admins), so they are false.
+ * everyone (assertLakeWritable refuses document writes even for admins), so `canManage` is
+ * false. `canRebuild` is a separate, narrower flag - see ManageableDataLakeConfig.
  *
  * Takes `ctx` (not just `db`) so it can mark which of those cross-tenant lakes the admin
  * actually owns (`isOwn`) and, when a `users` lookup is supplied, label the rest with the
@@ -238,7 +289,7 @@ export const listAllDataLakes = async (
     toManageableConfig(dl, true, isEffectiveOwner(dl, ctx, grantsByLake.get(dl.id)), ownerNames.get(dl.createdByUserId))
   );
   const dynamicIds = new Set(dynamicLakes.map(d => d.slug));
-  const fallbacks = DATA_LAKES.filter(dl => !dynamicIds.has(dl.id)).map(toFallbackConfig);
+  const fallbacks = DATA_LAKES.filter(dl => !dynamicIds.has(dl.id)).map(dl => toFallbackConfig(dl, ctx));
 
   return [...dynamicConfigs, ...fallbacks];
 };
@@ -255,7 +306,13 @@ export const listArchivedDataLakes = async (
   ctx: AccessContext,
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
-  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants);
+  const includeReaders = await resolveEnforceReadGrants(db.settings);
+  const grantedLakeIds = await grantedLakeIdsFor(
+    ctx.userId,
+    ctx.organizationIds ?? [],
+    db.dataLakeAccessGrants,
+    includeReaders
+  );
   const lakes = await db.dataLakes.findAccessible(ctx, {
     statuses: ['archived'],
     includePublic: false,
@@ -274,7 +331,13 @@ export const listDeletedDataLakes = async (
   ctx: AccessContext,
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
-  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants);
+  const includeReaders = await resolveEnforceReadGrants(db.settings);
+  const grantedLakeIds = await grantedLakeIdsFor(
+    ctx.userId,
+    ctx.organizationIds ?? [],
+    db.dataLakeAccessGrants,
+    includeReaders
+  );
   const lakes = await db.dataLakes.findAccessible(ctx, { statuses: ['deleted'], includePublic: false, grantedLakeIds });
   const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
   return redactLakesForActor(lakes, ctx, grantsByLake);

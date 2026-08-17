@@ -86,6 +86,73 @@ export const ttsRequestSchema = z.object({
 
 export type TTSRequest = z.infer<typeof ttsRequestSchema>;
 
+/**
+ * Why a browsable copy of generated audio was not kept. Saving is best-effort and
+ * never fatal (the caller was already billed for the bytes it is being handed), so
+ * this is reported alongside a successful response rather than as an error.
+ *
+ * Must stay in sync with `PersistGeneratedAudioResult` in
+ * apps/client/server/utils/persistGeneratedAudio.ts, which derives its `reason`
+ * from this schema.
+ */
+export const audioSaveSkippedReasonSchema = z.enum(['storage_limit', 'file_too_large', 'error']);
+
+export type AudioSaveSkippedReason = z.infer<typeof audioSaveSkippedReasonSchema>;
+
+/**
+ * JSON body of `POST /api/ai/tts` when the caller asks for `encoding: 'base64'`.
+ * The default `binary` encoding returns raw audio bytes instead and has no JSON
+ * shape.
+ *
+ * The save + provider fields are all optional because the handler spreads them in
+ * only when they apply: the save fields are absent when no copy was attempted
+ * (`preview: true`, or the saveGeneratedAudio preference is off), and
+ * `provider`/`fallbackFrom` appear only when the requested provider was
+ * unavailable and another one stood in.
+ */
+export const ttsBase64ResponseSchema = z.object({
+  /** Base64-encoded audio payload. */
+  audio: z.string(),
+  format: voiceOutputFormatSchema,
+  contentType: z.string(),
+  saved: z.boolean().optional(),
+  fabFileId: z.string().optional(),
+  fileUrl: z.string().optional(),
+  saveSkippedReason: audioSaveSkippedReasonSchema.optional(),
+  /** The provider that actually produced the audio, present only on a fallback. */
+  provider: supportedVoiceGenerationVendor.optional(),
+  /** The originally requested provider that could not serve the request. */
+  fallbackFrom: supportedVoiceGenerationVendor.optional(),
+});
+
+export type TtsBase64Response = z.infer<typeof ttsBase64ResponseSchema>;
+
+/**
+ * Error body for `POST /api/ai/tts`. `errorCode` separates the two unrecoverable
+ * provider states a caller has to act on differently: no key is configured for any
+ * provider (`provider_not_configured`) versus a configured key the provider
+ * rejected (`provider_rejected`).
+ */
+export const ttsErrorResponseSchema = z.object({
+  error: z.string(),
+  provider: supportedVoiceGenerationVendor.optional(),
+  errorCode: z.enum(['provider_not_configured', 'provider_rejected']).optional(),
+  request_id: z.string().optional(),
+});
+
+/**
+ * 413 body: the audio was generated and billed but exceeds the serverless
+ * response-size cap. When a browsable copy was saved, `fileUrl` is how the caller
+ * retrieves the audio it paid for.
+ */
+export const ttsResponseTooLargeSchema = z.object({
+  error: z.string(),
+  provider: supportedVoiceGenerationVendor,
+  saved: z.literal(true).optional(),
+  fabFileId: z.string().optional(),
+  fileUrl: z.string().optional(),
+});
+
 export type TtsVoiceOption = {
   value: string;
   label: string;
