@@ -233,7 +233,19 @@ export type ILakeConfigFieldChange = ILakeConfigLiteralChange | ILakeConfigFinge
 export interface ILakeConfigChangeEvent {
   principalKind: LakeConfigChangePrincipalKind;
   principalId: string;
-  /** Set when a system/agent principal acted for a human, so the human stays findable. */
+  /**
+   * Set when a system/agent principal acted for a human, so the human stays findable.
+   *
+   * RESERVED, and never populated today - by anything, on either audit model. The read side
+   * (`ILakeAccessEvent`) declares and persists the identical field and has no producer for it
+   * either; the vocabulary is mirrored deliberately so the two collections cannot drift, and
+   * dropping it here alone would break that parity without fixing the read side. `ManageActor`
+   * carries no on-behalf-of identity to thread, so populating it is a change to the actor
+   * contract, not to this model.
+   *
+   * The consequence to know when PR 3 renders these rows: this field is `undefined` on every
+   * event written today, so a history view must not give it a column of its own yet.
+   */
   onBehalfOfUserId?: string;
   /**
    * The LAKE's org scope at the time of the write, not the actor's - it is what an org-wide
@@ -268,6 +280,7 @@ export interface ILakeConfigChangeEventDocument extends ILakeConfigChangeEvent, 
 export interface RecordLakeConfigChangeInput {
   principalKind: LakeConfigChangePrincipalKind;
   principalId: string;
+  /** Reserved; no producer sets it today - see the note on `ILakeConfigChangeEvent`. */
   onBehalfOfUserId?: string;
   organizationId?: string;
   dataLakeId: string;
