@@ -381,11 +381,12 @@ export function isDagAggregationWake(args: {
  * grant on its next aggregation wake. The real overall ceiling stays the run's
  * original `maxIterations` - each wake just narrows what's left of it to one step.
  *
- * This only bounds the PARENT's own further iterations. A new subagent or DAG
- * fan-out dispatched from within that one grace iteration is a separate fresh
- * execution, gated independently by `processSubagentDispatch`'s own per-member
- * cap check - see that function for why a capped-out member cannot use this
- * grace iteration to launch further uncapped child work.
+ * This only bounds the PARENT's own further iterations. A DAG fan-out, or a
+ * `background: true` subagent, dispatched from within that one grace iteration
+ * is a separate fresh execution gated independently by `processSubagentDispatch`'s
+ * own per-member cap check. A plain (non-background) `delegate_to_agent` call
+ * runs in-process instead and is NOT covered by that gate - a pre-existing gap
+ * (in-process delegation was never capped by anything), tracked in #1824.
  */
 export function clampMaxIterationsForOverCapAggregationWake(args: {
   isAggregationOnlyWake: boolean;

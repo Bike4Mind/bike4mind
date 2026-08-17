@@ -38,6 +38,7 @@ describe('resolveDisplayAnswer', () => {
       finalAnswer: 'a clean answer',
       dagAggregationFallbackSummary: 'unused summary',
       configuredMaxIterations: 25,
+      isOverCapGraceIteration: false,
     });
     expect(out).toBe('a clean answer');
   });
@@ -48,6 +49,7 @@ describe('resolveDisplayAnswer', () => {
       finalAnswer: undefined,
       dagAggregationFallbackSummary: '# DAG result\n\ncoffee, tea, chocolate summaries here',
       configuredMaxIterations: 25,
+      isOverCapGraceIteration: false,
     });
     expect(out).toContain('coffee, tea, chocolate summaries here');
     // Must not be silently dropped - the whole point of the fallback.
@@ -62,6 +64,7 @@ describe('resolveDisplayAnswer', () => {
       finalAnswer: undefined,
       dagAggregationFallbackSummary: 'aggregated report',
       configuredMaxIterations: 25,
+      isOverCapGraceIteration: false,
     });
     expect(out).toContain('25-iteration limit');
     expect(out).not.toContain('8-iteration limit');
@@ -73,6 +76,7 @@ describe('resolveDisplayAnswer', () => {
       finalAnswer: 'the model did answer before hitting the ceiling',
       dagAggregationFallbackSummary: 'aggregated report',
       configuredMaxIterations: 25,
+      isOverCapGraceIteration: false,
     });
     expect(out).toContain('the model did answer before hitting the ceiling');
     expect(out).not.toContain('aggregated report');
@@ -84,7 +88,26 @@ describe('resolveDisplayAnswer', () => {
       finalAnswer: undefined,
       dagAggregationFallbackSummary: undefined,
       configuredMaxIterations: 10,
+      isOverCapGraceIteration: false,
     });
     expect(out).toContain('10-iteration limit');
+  });
+
+  it('uses the honest credit-cap message, not the misleading iteration-limit one, on the over-cap grace path', () => {
+    const out = resolveDisplayAnswer({
+      reachedMaxIterations: true,
+      finalAnswer: undefined,
+      dagAggregationFallbackSummary: 'aggregated report',
+      configuredMaxIterations: 25,
+      isOverCapGraceIteration: true,
+    });
+    expect(out).toContain('aggregated report');
+    expect(out).toContain('credit cap');
+    // Neither the run's ceiling nor the internal clamp size should appear - a
+    // credit-cap stop is not an iteration-count story.
+    expect(out).not.toContain('25-iteration limit');
+    expect(out).not.toContain('8-iteration limit');
+    // The generic advice is a dead end here: a follow-up hits the same cap gate.
+    expect(out).not.toMatch(/send a follow-up to continue/i);
   });
 });

@@ -1897,9 +1897,15 @@ async function processExecution(
     let iterationResult: IterationResult | undefined;
     let iterationIndex = isNewExecution ? 0 : ((execution.checkpoint as AgentCheckpoint)?.iteration ?? 0);
 
+    // Captured once and reused below at `displayAnswer` - the truncation message needs to know
+    // whether a later `reachedMaxIterations` was caused by THIS clamp specifically (where a
+    // "send a follow-up" suggestion is a dead end) rather than the run's own real ceiling.
+    const isOverCapForAggregationClamp = Boolean(
+      organization && creditService.isMemberAtOrOverCap(organization, execution.userId)
+    );
     maxIterations = clampMaxIterationsForOverCapAggregationWake({
       isAggregationOnlyWake,
-      isOverCap: Boolean(organization && creditService.isMemberAtOrOverCap(organization, execution.userId)),
+      isOverCap: isOverCapForAggregationClamp,
       maxIterations,
       iterationIndex,
     });
@@ -2385,6 +2391,7 @@ async function processExecution(
       finalAnswer,
       dagAggregationFallbackSummary,
       configuredMaxIterations,
+      isOverCapGraceIteration: isAggregationOnlyWake && isOverCapForAggregationClamp,
     });
 
     await agentExecutionRepository.markComplete(executionId, {
@@ -2503,8 +2510,9 @@ async function processExecution(
  *
  * Deliberately NOT called from the `!claimed` CAS-loss exit: that means another
  * Lambda already owns this child and will complete it (and fire this hook) through
- * its own normal path. Firing here too would report a false terminal status for a
- * child that may still succeed.
+ * its own normal path. Firing here too would not double-unblock anything - the hook
+ * is idempotent - but it would report a false terminal status for a child that may
+ * still succeed: a CAS loss means someone else has it, not that it failed.
  *
  * The `status` argument is NOT load-bearing for `onDagNodeTerminal` itself - it
  * re-reads every sibling fresh from the DB rather than trusting the passed-in value,

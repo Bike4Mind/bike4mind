@@ -8,20 +8,35 @@
  * a deterministic, honest notice: the run was truncated, here is the partial progress, and the
  * user can continue with a follow-up. Pure + side-effect-free so it is unit-testable. See #674.
  */
-export function buildTruncatedRunReply(maxIterations: number, finalAnswer?: string): string {
+export function buildTruncatedRunReply(
+  maxIterations: number,
+  finalAnswer?: string,
+  reason: 'iteration-limit' | 'credit-cap' = 'iteration-limit'
+): string {
   const partial = finalAnswer?.trim();
-  const header = `This run reached its ${maxIterations}-iteration limit before finishing, so the result below is partial.`;
-  const footer = 'Send a follow-up to continue from where this left off.';
+  // 'credit-cap' omits the iteration count entirely rather than reporting the clamped
+  // grace-grant size (e.g. 8) as if it were the run's real ceiling - see resolveDisplayAnswer.
+  const header =
+    reason === 'credit-cap'
+      ? "This run stopped early because your organization's per-member credit cap was reached, so the result below is partial."
+      : `This run reached its ${maxIterations}-iteration limit before finishing, so the result below is partial.`;
+  const footer =
+    reason === 'credit-cap'
+      ? "A follow-up will hit the same cap, so it won't be able to continue this run."
+      : 'Send a follow-up to continue from where this left off.';
   return partial ? `${header}\n\n${partial}\n\n${footer}` : `${header}\n\n${footer}`;
 }
 
 /**
- * Resolves the user-facing reply for a completed run, including the one case
- * `buildTruncatedRunReply` alone can silently get wrong: a capped-out member's
- * one-iteration DAG-aggregation grace grant that hits its own ceiling without
- * producing a `final_answer` step. Without the `dagAggregationFallbackSummary`
- * fallback, that path would report the truncation notice with nothing behind it,
- * dropping the already-paid-for child work this exemption exists to return.
+ * Resolves the user-facing reply for a completed run, including two cases
+ * `buildTruncatedRunReply` alone can silently get wrong on a capped-out member's
+ * one-iteration DAG-aggregation grace grant:
+ * - If that grace iteration hits its own ceiling without producing a `final_answer` step,
+ *   falling back to `dagAggregationFallbackSummary` is what keeps the already-paid-for
+ *   child work from being silently dropped.
+ * - The generic "send a follow-up" footer is actively wrong here: a follow-up creates a
+ *   new execution that the same per-member cap gate immediately refuses. `isOverCapGraceIteration`
+ *   selects the honest credit-cap message instead of the misleading iteration-limit one.
  * `configuredMaxIterations` must be the run's real ceiling, not a clamped one -
  * see `clampMaxIterationsForOverCapAggregationWake` in `agentExecutorDag.ts`.
  */
@@ -30,7 +45,14 @@ export function resolveDisplayAnswer(args: {
   finalAnswer: string | undefined;
   dagAggregationFallbackSummary: string | undefined;
   configuredMaxIterations: number;
+  isOverCapGraceIteration: boolean;
 }): string | undefined {
   if (!args.reachedMaxIterations) return args.finalAnswer;
-  return buildTruncatedRunReply(args.configuredMaxIterations, args.finalAnswer ?? args.dagAggregationFallbackSummary);
+  // If neither exists, this still falls through to buildTruncatedRunReply's own
+  // no-partial-content form (header + footer, no dropped middle section).
+  return buildTruncatedRunReply(
+    args.configuredMaxIterations,
+    args.finalAnswer ?? args.dagAggregationFallbackSummary,
+    args.isOverCapGraceIteration ? 'credit-cap' : 'iteration-limit'
+  );
 }
