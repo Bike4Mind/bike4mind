@@ -49,6 +49,12 @@ interface TagUpdateAdapters {
     // userId string until that check needed isAdmin.
     users: { findById: (id: string) => Promise<Pick<IUserDocument, 'isAdmin'> | null> };
   };
+  /**
+   * See tagService/remove: forwarded to recomputeLakeStats so an audit failure on the
+   * draft -> active flip reaches the structured logger rather than `console.warn`. Optional for the
+   * same reason the audit repos are.
+   */
+  logger?: LakeConfigAuditAdapters['logger'];
 }
 
 /**
@@ -75,7 +81,7 @@ interface TagUpdateAdapters {
  * lakes' stats.
  */
 export const update = async (userId: string, params: TagUpdateParams, adapters: TagUpdateAdapters) => {
-  const { db } = adapters;
+  const { db, logger } = adapters;
   const { id, ...rest } = secureParameters(params, tagUpdateSchema);
 
   const tag = await db.tags.findByIdAndUserId(id, userId);
@@ -159,7 +165,7 @@ export const update = async (userId: string, params: TagUpdateParams, adapters: 
     );
     // See tagService/remove: the tag owner is the principal, and the rung stays `system`.
     await Promise.all(
-      affectedLakes.map(lake => recomputeLakeStats(lake, { db }, { actor: { userId, isAdmin: false } }))
+      affectedLakes.map(lake => recomputeLakeStats(lake, { db, logger }, { actor: { userId, isAdmin: false } }))
     );
   }
 
