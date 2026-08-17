@@ -203,7 +203,16 @@ function isPrivateIPv6(ip: string): boolean {
   // matched for the same belt-and-braces reason as `2001:db8:`/`2001:0db8:` above. Note how narrow
   // this must be: `2001::/16` at large is ordinary public space (`2001:4860::` is Google), so only the
   // zero second hextet may be refused, never the `2001:` prefix.
-  if (normalized.startsWith('2001:0:') || normalized.startsWith('2001:0000:')) return true;
+  //
+  // `2001::` is the THIRD spelling and matching it is not a widening: RFC 5952 only permits `::` for a
+  // run of two or more zero hextets, so any canonical `2001::x` has a zero second hextet by
+  // construction and is therefore inside `2001:0::/32`. Without it, `2001::`, `2001::1` and
+  // `2001::a:b:c` all read as public - the zero run swallows the very hextet the other two arms match
+  // on, so char 5 is `:` rather than `0`. Both entry paths produce that form: WHATWG URL parsing of a
+  // bracketed literal, and getaddrinfo answers.
+  if (normalized.startsWith('2001:0:') || normalized.startsWith('2001:0000:') || normalized.startsWith('2001::')) {
+    return true;
+  }
 
   // 100::/64 - Discard prefix
   if (normalized.startsWith('100::') || normalized.startsWith('0100::')) return true;
