@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   assertLakeAccess: vi.fn(),
-  assertLakeWriteAccess: vi.fn(),
+  assertLakeRebuildAccess: vi.fn(),
   detectUnderChunkedFiles: vi.fn(),
   countFailedLakeFiles: vi.fn(),
   resetChunkStateByIds: vi.fn(),
@@ -26,7 +26,7 @@ vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () =>
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeAccess: h.assertLakeAccess,
-    assertLakeWriteAccess: h.assertLakeWriteAccess,
+    assertLakeRebuildAccess: h.assertLakeRebuildAccess,
     detectUnderChunkedFiles: h.detectUnderChunkedFiles,
     countFailedLakeFiles: h.countFailedLakeFiles,
     DEFAULT_REBUILD_WAVE: 50,
@@ -66,7 +66,7 @@ const lake = { id: 'lake1', datalakeTag: 'datalake:acme', createdByUserId: 'u1' 
 beforeEach(() => {
   vi.clearAllMocks();
   h.assertLakeAccess.mockResolvedValue(lake);
-  h.assertLakeWriteAccess.mockResolvedValue(lake);
+  h.assertLakeRebuildAccess.mockResolvedValue(lake);
   h.countFailedLakeFiles.mockResolvedValue(0);
   // By default the claim wins every id it's asked for, each with a claim stamp (the token the
   // message carries so the worker can reject a superseded/duplicate delivery).
@@ -118,7 +118,7 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
       { fabFileId: 'f2', userId: 'u2' },
     ]);
     const { json } = await invoke('POST', {});
-    expect(h.assertLakeWriteAccess).toHaveBeenCalled();
+    expect(h.assertLakeRebuildAccess).toHaveBeenCalled();
     expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['f1', 'f2']);
     expect(h.sendToQueue).toHaveBeenCalledTimes(2);
     expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
@@ -178,9 +178,11 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
     expect(json).toHaveBeenCalledWith({ detected: 0, enqueued: 0, remaining: 0 });
   });
 
-  it('gates on write access - a rejected assert never resets or enqueues', async () => {
-    h.assertLakeWriteAccess.mockRejectedValue(new Error('Only the creator can add files to this data lake'));
-    await expect(invoke('POST', {})).rejects.toThrow(/creator/);
+  it('gates on rebuild access - a rejected assert never resets or enqueues', async () => {
+    h.assertLakeRebuildAccess.mockRejectedValue(
+      new Error("You do not have permission to rebuild this data lake's passages")
+    );
+    await expect(invoke('POST', {})).rejects.toThrow(/permission to rebuild/);
     expect(h.detectUnderChunkedFiles).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });

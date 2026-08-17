@@ -308,6 +308,18 @@ export interface IFabFile {
 
   /** SHA-256 hash of file content for deduplication */
   contentHash?: string;
+
+  /**
+   * SHA-256 (hex) over the file's normalized server-extracted text, computed at chunk time by the
+   * admission contract (`computeServerTextHash`). Hashed over the CANONICAL EXTRACTED TEXT, not the
+   * chunk output, so it is stable across chunk-policy/embedding-model changes - the trustworthy dedup
+   * input for #1671, distinct from `contentHash` (client-side raw BYTES, unverified, absent on
+   * connector files). Tri-state: absent = never chunked (treat as UNKNOWN, never "no text"); null =
+   * chunked with no extractable text; hex = fingerprint. Nulled by FAB_FILE_CONTENT_REWRITE_PATCH on
+   * a byte rewrite and by the chunk pass on a text-less re-chunk, so it never outlives its text.
+   */
+  serverTextHash?: string | null;
+
   /** Batch ID linking this file to a data lake upload batch */
   batchId?: string;
   /** Original relative path from folder upload (preserves directory structure) */
@@ -358,9 +370,11 @@ export interface IFabFileDocument extends IFabFile, IShareableDocument {}
  * the stale number in place and only looks correct.
  *
  * Also clears the chunk-derived rollups (`chunkedCharCount`, `maxChunkCharLength`, `embeddedChunkCount`,
- * `embeddedCharCount`): a content rewrite invalidates the chunks they were summed from, and the
- * re-chunk / re-vectorize that follows re-stamps them. Leaving them would grade lake health (#1666)
- * against the PREVIOUS content's chunks - reporting a reachability the current bytes do not have.
+ * `embeddedCharCount`) and `serverTextHash`, the admission contract's fingerprint of the extracted text
+ * (#1679): each is derived from the file's content, so a byte rewrite invalidates them, and the
+ * re-chunk / re-vectorize that follows re-stamps them. Leaving the rollups would grade lake health
+ * (#1666) against the PREVIOUS content's chunks - reporting a reachability the current bytes do not
+ * have; leaving the hash would let a stale fingerprint claim text the file no longer holds.
  */
 export const FAB_FILE_CONTENT_REWRITE_PATCH = {
   extractedCharCount: null,
@@ -368,6 +382,7 @@ export const FAB_FILE_CONTENT_REWRITE_PATCH = {
   maxChunkCharLength: null,
   embeddedChunkCount: null,
   embeddedCharCount: null,
+  serverTextHash: null,
 } as const;
 
 export interface IFabFileListItem {
@@ -725,10 +740,10 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   ): Promise<{ total: number; byPrefix: Record<string, number> }>;
 
   /**
-   * Count unique files per root tag namespace for a user. Takes the SAME optional scope
-   * (including `excludePersonalShares`) as countFilesByTagForUser, which it is served beside -
-   * the two must move in lockstep or a namespace's size disagrees with its tag count. Omitting
-   * the scope counts owned files only.
+   * Count unique files per root tag namespace for a user. GET /api/files/tags/counts calls
+   * countFilesByTagForUser twice with two different scopes; this must move in lockstep with
+   * that route's NARROWED (excludePersonalShares:true) call specifically, or a namespace's size
+   * disagrees with its tag count. Omitting the scope counts owned files only.
    */
   countUniqueFilesByNamespaceForUser(
     userId: string,

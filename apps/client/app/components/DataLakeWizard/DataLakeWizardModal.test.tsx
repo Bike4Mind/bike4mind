@@ -40,6 +40,12 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
 vi.mock('@client/app/components/DataLakeWizard/steps/DriveConnectAction', () => ({
   default: () => null,
 }));
+// ConfigStep's embedding-cost estimate reads admin settings via react-query; stub it so this
+// wizard test needs no QueryClientProvider. Empty values are enough - the estimate renders
+// nothing without a resolved spendEnabled/budget/model, which is not what this file tests.
+vi.mock('@client/app/hooks/data/settings', () => ({
+  useGetSettingsValue: () => undefined,
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (

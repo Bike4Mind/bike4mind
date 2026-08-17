@@ -347,3 +347,55 @@ export function buildDagResumeReport(args: {
 
   return { summary, success, failedNodes };
 }
+
+/**
+ * Whether this invocation is a DAG parent waking ONLY to aggregate children
+ * that have already finished, with no new billable work of its own to start.
+ * Shared by the per-member credit cap gate (skip - an aggregation wake should
+ * not be blocked, it just returns work the org already paid for) and the
+ * resume-trigger check below in `agentExecutor.ts` (fire - inject the
+ * aggregated result and clear `waitingOnDagChildren`), so the two decisions
+ * can never drift apart.
+ */
+export function isDagAggregationWake(args: {
+  isDagResume: boolean;
+  dagSpec: IDagSpec | undefined;
+  waitingOnDagChildren: { toolUseId: string } | undefined;
+}): boolean {
+  return args.isDagResume && args.dagSpec != null && args.waitingOnDagChildren != null;
+}
+
+/**
+ * The aggregation-wake exemption above only excuses the wake's own read-and-splice
+ * work (no new billable work of its own) - it does not license the run to keep
+ * iterating past it. If the member reads as over cap at the moment of the wake
+ * (per whatever the org's `userDetails[].usedCredits` counter reflects at that
+ * point - it does not yet see dispatched-child spend, tracked separately), this
+ * caps the parent's own loop to the one iteration that turns the aggregated
+ * result into an answer for THIS wake. A no-op (returns `maxIterations`
+ * unchanged) outside that exact case.
+ *
+ * This is a per-wake bound, not a lifetime one: `maxIterations` is recomputed
+ * fresh from `iterationIndex` on every invocation, so a run that dispatches a
+ * new `coordinate_task` from within its grace iteration gets another one-iteration
+ * grant on its next aggregation wake. The real overall ceiling stays the run's
+ * original `maxIterations` - each wake just narrows what's left of it to one step.
+ *
+ * This only bounds the PARENT's own further iterations. A DAG fan-out, or a
+ * `background: true` subagent, dispatched from within that one grace iteration
+ * is a separate fresh execution gated independently by `processSubagentDispatch`'s
+ * own per-member cap check. A plain (non-background) `delegate_to_agent` call
+ * runs in-process instead and is NOT covered by that gate - a pre-existing gap
+ * (in-process delegation was never capped by anything), tracked in #1824.
+ */
+export function clampMaxIterationsForOverCapAggregationWake(args: {
+  isAggregationOnlyWake: boolean;
+  isOverCap: boolean;
+  maxIterations: number;
+  iterationIndex: number;
+}): number {
+  if (args.isAggregationOnlyWake && args.isOverCap) {
+    return Math.min(args.maxIterations, args.iterationIndex + 1);
+  }
+  return args.maxIterations;
+}

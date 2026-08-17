@@ -8,6 +8,8 @@ export {
 export * from './utils';
 export * from './ports';
 export * from './assertLakeAccess';
+export * from './classifyLakeAccess';
+export * from './resolveLakeReadAccess';
 export * from './authorizeLakeWrite';
 // canManageLake + ManageActor are already surfaced via authorizeLakeWrite's re-export; export the
 // rest of the pure decision core (owner resolution) by name to avoid a duplicate-export clash.
@@ -33,6 +35,7 @@ export * from './deleteDataLake';
 export * from './lakeMembership';
 export * from './prefixArmMembership';
 export * from './chunkPolicyConflict';
+export * from './admissionContract';
 export * from './removeFileFromDataLake';
 export * from './cleanupDeletedDataLake';
 export * from './recomputeLakeStats';
@@ -48,6 +51,10 @@ export * from './boundedTopK';
 export * from './resolveSearchBudgets';
 export * from './resolveSpendLevers';
 export * from './enforceEmbeddingSpendGate';
+export * from './resolveLakeSpendAddressees';
+export * from './spendNotificationKeys';
+export * from './renderSpendNotificationEmail';
+export * from './sendDataLakeSpendNotification';
 export * from './resolveLakeAuditRetention';
 export * from './openSearchVectorSearch';
 export * from './openSearchChunkAdapter';

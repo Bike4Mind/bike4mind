@@ -47,6 +47,9 @@ vi.mock('@bike4mind/database', () => ({
     removeGrant: vi.fn().mockResolvedValue(true),
     removeAllForLake: vi.fn().mockResolvedValue(0),
   },
+  // The route module imports adminSettingsRepository (GET wires the #1673 cutover flag); the mock
+  // must export it or the whole module fails to load. The PUT path under test never reads it.
+  adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(false) },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 // Real allowlist predicate on purpose - the whole point is which ids pass.

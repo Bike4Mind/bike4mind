@@ -3,11 +3,13 @@ import type {
   DataLakeConfig,
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
+  IDataLakeSpendResponse,
   IFabFileDocument,
   LakeHealthApiResponse,
   ManageableDataLakeConfig,
   TaxonomyTag,
 } from '@bike4mind/common';
+import { isAxiosError } from 'axios';
 import { DATA_LAKES, normalizeTagPrefix, tagPrefixesOverlap } from '@bike4mind/common';
 import type { CreateDataLakeRequestInputType, UpdateDataLakeRequestInputType } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
@@ -606,7 +608,9 @@ export function nextRebuildPoll(
  * Hook: the lake's rebuild status - how many files are still oversized passages (predating the
  * passage-target fix) plus how many gave up (failed re-chunk). Polls itself down while a rebuild
  * drains, backing off as the backlog stays large so a multi-thousand-file lake isn't re-scanned
- * every 5s for the whole drain. Owner/admin only surface, so only enable when the viewer can manage.
+ * every 5s for the whole drain. Rebuild-capable surface, so only enable when the viewer can
+ * REBUILD (`canRebuild`) - narrower than `canManage`, since a fallback (built-in) lake has no
+ * document to manage but can still be rebuilt by a platform admin.
  */
 export function useUnderChunkedCount(dataLakeId: string | null, enabled = true) {
   const pollState = useRef<RebuildPollState>({ ...INITIAL_REBUILD_POLL_STATE });
@@ -775,4 +779,37 @@ export function useGetDataLakeArticles(params?: DataLakeArticlesParams | null, s
     refetchOnWindowFocus: false,
     staleTime: 1000 * 60 * 5,
   });
+}
+
+/**
+ * One lake's spend view: lifetime meter, live budget levers, and the byModel/byFeature/
+ * overTime ledger breakdown. `enabled` is passed by the caller so the modal can fetch lazily -
+ * only once the Spend tab is actually opened, not on every settings-modal mount.
+ *
+ * Any 4xx (not just 403) is treated as "forbidden": a fallback/hardcoded lake has no
+ * `createdByUserId` and no grants, so `canManageLake` fails closed for every non-admin caller
+ * there too (a 403 via the same gate, not a distinct mechanism) - treating any 4xx as
+ * "forbidden" is a deliberately wider net than hardcoding 403, so an unanticipated 4xx also
+ * hides the tab instead of painting a red error.
+ */
+export function useDataLakeSpend(dataLakeId: string | null, days: number, opts?: { enabled?: boolean }) {
+  const query = useQuery({
+    queryKey: dataLakeKeys.spend(dataLakeId, days),
+    queryFn: async () => {
+      const { data } = await api.get<IDataLakeSpendResponse>(`/api/data-lakes/${dataLakeId}/spend`, {
+        params: { days },
+      });
+      return data;
+    },
+    enabled: !!dataLakeId && (opts?.enabled ?? true),
+    // A permission rejection must never be retried - matches useGetDataLakes' own rationale.
+    retry: false,
+    staleTime: 1000 * 60,
+    placeholderData: keepPreviousData,
+  });
+  const isForbidden =
+    isAxiosError(query.error) &&
+    (query.error.response?.status ?? 0) >= 400 &&
+    (query.error.response?.status ?? 0) < 500;
+  return { ...query, isForbidden };
 }

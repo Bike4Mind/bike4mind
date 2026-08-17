@@ -86,6 +86,8 @@ import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
 import { settleToolCallCredits } from './settleToolCredits';
+import { toolsUsedToFunctionCalls } from './toolsUsedToFunctionCalls';
+import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { LATTICE_TOOL_NAMES } from './tools';
 import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
 import {
@@ -2079,13 +2081,17 @@ export class ChatCompletionProcess {
       const previousMessagesResult = await fetchAndProcessPreviousMessages(session, historyCount, {
         db: this.db,
         verbatimTokenBudget,
+        // model here decides whether Priority 2 tool replay is safe for THIS backend (currently
+        // excludes Gemini) - see fetchAndProcessPreviousMessages's own doc comment on the param.
+        model: modelInfo.id,
       });
       const [previousMessages, totalMessageCount, cacheInfo] = previousMessagesResult;
       const oldestIncludedQuestId = cacheInfo.oldestIncludedQuestId ?? null;
       const verbatimExcludedCount = cacheInfo.excludedOlderQuestCount ?? 0;
       // Real tool-usage signal for this window - see fetchAndProcessPreviousMessages's own doc
       // comment on this field for why `previousMessages` itself cannot answer "was this tool used
-      // earlier in the conversation" (neither of its tool_use-replay paths fires in production).
+      // earlier in the conversation" for every backend (Priority 1 never fires; Priority 2 is
+      // skipped for Gemini models, per the `model` param above).
       const priorToolNames = cacheInfo.priorToolNames ?? [];
 
       // blog_publish/blog_edit/blog_draft and `skill` are auto-added HERE rather than at the
@@ -3298,6 +3304,17 @@ export class ChatCompletionProcess {
         : [];
       quest.promptMeta!.context!.projectSystemFileIds = projectFileIds;
 
+      // File-level breakdown of every system-prompt source, by bucket - see
+      // buildSystemPromptSourceFiles for why fileName is absent for project-sourced entries.
+      quest.promptMeta!.context!.systemPromptSources = buildSystemPromptSourceFiles(
+        new Map(convertedFabFiles.map(file => [file.id, file.fileName])),
+        {
+          global: globalSystemFileIds,
+          userEnabled: enabledSystemFileIds,
+          project: projectFileIds,
+        }
+      );
+
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] === CONTEXT RETRIEVAL PHASE COMPLETED in ${
           Date.now() - processStartTime
@@ -3550,7 +3567,11 @@ export class ChatCompletionProcess {
               this.sendStatusUpdate(quest, `Trying alternative model: ${currentModel.id}...`, { statusAt: new Date() });
             }
 
-            let toolsUsed: Array<{ name: string; arguments?: string; id?: string }> = [];
+            // NonNullable<CompletionInfo['toolsUsed']> (Array<RecordableToolUse>, not re-exported
+            // on its own) rather than a hand-rolled {name,arguments,id} shape - the old narrower
+            // annotation compiled fine (the extras are optional) but hid returnValue/success from
+            // TypeScript entirely, defeating toolsUsedToFunctionCalls's whole reason for existing.
+            let toolsUsed: NonNullable<CompletionInfo['toolsUsed']> = [];
 
             // Get idle timeout settings for Anthropic streaming hang detection
             const enableIdleTimeout = getSettingsValue('EnableStreamIdleTimeout', defaultAdminSettings) === true;
@@ -3648,19 +3669,16 @@ export class ChatCompletionProcess {
               async (streamedTexts, completionInfo) => {
                 toolsUsed = completionInfo?.toolsUsed || [];
                 // Include tool ID for Anthropic API tool pairing reconstruction
-                quest.promptMeta!.functionCalls = toolsUsed.map(tool => {
-                  let parameters: Record<string, unknown> = {};
-                  try {
-                    parameters = JSON.parse(tool.arguments || '{}');
-                  } catch (e) {
+                quest.promptMeta!.functionCalls = toolsUsedToFunctionCalls(
+                  toolsUsed,
+                  ({ toolName, argumentsPreview, error }) => {
                     logger.warn('[ChatCompletionProcess] Skipping malformed tool arguments in functionCalls (#9328)', {
-                      toolName: tool.name,
-                      argumentsPreview: (tool.arguments || '').substring(0, 100),
-                      error: e instanceof Error ? e.message : String(e),
+                      toolName,
+                      argumentsPreview,
+                      error,
                     });
                   }
-                  return { name: tool.name, parameters, id: tool.id };
-                });
+                );
                 // Clear the interval on first response and calculate TTFVT
                 if (streamedTexts.some(text => text != null && text.trim().length > 0)) {
                   // Capture TTFVT on first non-empty chunk (regardless of chunk number)
@@ -5674,7 +5692,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     urlMessages: IMessage[];
     remainingUserPrompt: string;
     fabMessages: IMessage[];
-    convertedFabFiles: Array<{ fileName: string; mimeType: string; fileSize?: number }>;
+    convertedFabFiles: Array<{ id: string; fileName: string; mimeType: string; fileSize?: number }>;
     globalSystemFileIds: string[];
     enabledSystemFileIds: string[];
     allFileIdsBeforeDedup: string[];
@@ -5757,7 +5775,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     const dedupedFileIds = Array.from(new Set(allFileIdsBeforeDedup));
 
     let fabMessages: IMessage[] = [];
-    let convertedFabFiles: Array<{ fileName: string; mimeType: string; fileSize?: number }> = [];
+    let convertedFabFiles: Array<{ id: string; fileName: string; mimeType: string; fileSize?: number }> = [];
     let fabResultPromise: Promise<Awaited<ReturnType<typeof this.fabFilesToMessages>> | undefined> =
       Promise.resolve(undefined);
 

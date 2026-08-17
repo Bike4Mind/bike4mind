@@ -1,5 +1,11 @@
 import { FeedbackModel, User } from '@bike4mind/database';
-import { FeedbackEvents, FeedbackStatus, IOrganizationDocument, PromptMetaZodSchema } from '@bike4mind/common';
+import {
+  FeedbackEvents,
+  FeedbackStatus,
+  IOrganizationDocument,
+  PromptMetaZodSchema,
+  redactFunctionCallsForViewer,
+} from '@bike4mind/common';
 import { logEvent } from '@server/utils/analyticsLog';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
@@ -47,8 +53,6 @@ const handler = baseApi()
 
     const { userId, content, tags, username, userEmail, promptMeta, type } = newFeedbackData;
 
-    console.log('newFeedbackData', newFeedbackData);
-
     const existingUser = await User.findOne({ email: userEmail }).populate('organizationId');
 
     const organization = (existingUser?.organizationId as unknown as IOrganizationDocument)?.name || 'Unknown';
@@ -68,6 +72,16 @@ const handler = baseApi()
 
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
 
+    // A bug report leaves the product entirely (third-party Slack workspace, unencrypted email
+    // to a static recipient list). functionCalls[].returnValue can hold verbatim tool output -
+    // private corpus chunks, file contents - that the reporter never chose to disclose to those
+    // destinations just by clicking "report a bug". Redact only for these two egress points; the
+    // FeedbackModel record saved above keeps the full promptMeta, gated by the existing
+    // admin-only read check on this same route.
+    const promptMetaForExternalEgress = promptMeta
+      ? { ...promptMeta, functionCalls: redactFunctionCallsForViewer(promptMeta.functionCalls) }
+      : promptMeta;
+
     if (authenticated)
       await logEvent(
         { userId, type: FeedbackEvents.CREATE_FEEDBACK, metadata: { id: newFeedback.id, content } },
@@ -84,7 +98,7 @@ const handler = baseApi()
         userEmail,
         userId,
         content,
-        promptMeta ? JSON.stringify(promptMeta) : 'No prompt meta'
+        promptMetaForExternalEgress ? JSON.stringify(promptMetaForExternalEgress) : 'No prompt meta'
       );
     }
 
@@ -101,7 +115,9 @@ const handler = baseApi()
       const sanitizedUserEmail = sanitizeHtml(userEmail);
       const sanitizedType = type ? sanitizeHtml(type) : '';
       const sanitizedTags = tags ? tags.map(tag => sanitizeHtml(tag)) : [];
-      const sanitizedPromptMeta = promptMeta ? sanitizeHtml(JSON.stringify(promptMeta, null, 2)) : '';
+      const sanitizedPromptMeta = promptMetaForExternalEgress
+        ? sanitizeHtml(JSON.stringify(promptMetaForExternalEgress, null, 2))
+        : '';
 
       await Promise.all(
         feedbackEmails.map((email: string) =>

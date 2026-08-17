@@ -434,6 +434,20 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       .select('name email username lastActiveAt isOnline photoUrl');
   }
 
+  /**
+   * Emailed users among `ids`, excluding any that carry `deletedAt` (mirrors the same guard
+   * `findBySlackUserId` applies) - narrower than `findByIds` so a notification addressee
+   * resolver never mails an emailless account.
+   */
+  async findActiveEmailsByIds(ids: string[]): Promise<Array<{ id: string; email: string }>> {
+    if (ids.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(ids) }, deletedAt: { $exists: false }, email: { $nin: [null, ''] } })
+      .select('email')
+      .lean({ virtuals: true });
+    return docs.map(d => ({ id: String(d._id), email: String(d.email) }));
+  }
+
   async searchCollections(
     userId: string,
     options: { page: number; limit: number; search: string; type?: CollectionType },

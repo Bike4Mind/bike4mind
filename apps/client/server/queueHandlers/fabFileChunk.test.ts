@@ -56,6 +56,11 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: vi.fn((fn: () => unknown) => fn()),
 }));
 
+// Whole-module mock, NOT importActual: importActual('@bike4mind/services') loads the package barrel
+// (services/dist/index.mjs), whose top-level creditService import throws in this environment - it
+// can't even collect. The two admission helpers below are pure and dependency-free; their real
+// implementations are covered in admissionContract.test.ts, so this mirror only needs to stay
+// behaviorally faithful (deriveAdmissionStatus: conflict->quarantined; admissionDoorLabel: ?? unknown).
 vi.mock('@bike4mind/services', () => ({
   fabFilesService: { chunkFabfile: h.chunkFabfile },
   // Owner-altitude chunk-policy resolution (#1662). The resolver never throws; default it to the
@@ -69,6 +74,8 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     resolveSpendLevers: vi.fn(async () => ({ vectorizeChunkBatchSize: 50 })),
     recomputeFileChunkPolicyConflict: h.recomputeFileChunkPolicyConflict,
+    deriveAdmissionStatus: (conflict: unknown) => (conflict ? 'quarantined' : 'admitted'),
+    admissionDoorLabel: (sourceType: string | undefined) => sourceType ?? 'unknown',
   },
 }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn(() => ({ getContentAsBuffer: vi.fn() })) }));
@@ -386,6 +393,41 @@ describe('fabFileChunk handler - cross-lake chunk-policy conflict (#1662)', () =
     h.chunkFabfile.mockResolvedValue([{ id: 'c1' }]);
     h.recomputeFileChunkPolicyConflict.mockRejectedValue(new Error('lake read failed'));
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+  });
+
+  it('logs a report-only quarantine diagnostic naming the door when the member cannot honor a policy (#1679)', async () => {
+    // The member came through the Drive connector; recompute reports a conflict against one lake.
+    h.findAccessibleById.mockResolvedValue({
+      id: 'ff1',
+      userId: 'u1',
+      tags: [{ name: 'datalake:sales' }],
+      sourceType: 'google_drive',
+    });
+    h.chunkFabfile.mockResolvedValue([{ id: 'c1' }]);
+    h.recomputeFileChunkPolicyConflict.mockResolvedValue({
+      effectiveTarget: 512,
+      embeddingModel: 'text-embedding-3-small',
+      lakes: [{ lakeId: 'l1', name: 'Sales' }],
+      detectedAt: new Date(),
+    });
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    const warned = (mockLogger.warn as unknown as { mock: { calls: unknown[][] } }).mock.calls.map(c => String(c[0]));
+    const admissionLine = warned.find(line => line.includes('[admission]'));
+    expect(admissionLine).toBeDefined();
+    expect(admissionLine).toContain('quarantined');
+    expect(admissionLine).toContain('google_drive');
+  });
+
+  it('does not log an admission quarantine when the member honors every applicable policy (#1679)', async () => {
+    h.chunkFabfile.mockResolvedValue([{ id: 'c1' }]);
+    h.recomputeFileChunkPolicyConflict.mockResolvedValue(null); // no conflict -> admitted
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    const warned = (mockLogger.warn as unknown as { mock: { calls: unknown[][] } }).mock.calls.map(c => String(c[0]));
+    expect(warned.some(line => line.includes('[admission]'))).toBe(false);
   });
 });
 

@@ -278,6 +278,36 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * its EFFECT via the create-time resolver, never the setting itself).
    */
   groundingMode?: DataLakeGroundingMode;
+  /**
+   * Lifetime embedding-spend meter (see IDataLake.embeddingSpendMicroUsd). EDITOR-ONLY, same
+   * gate as the fields above: a reader gets none of a lake's financial telemetry. ALWAYS present
+   * (defaulted to 0, never omitted) when the caller can manage this lake, even with zero spend -
+   * unlike the other editor-only fields above, its mere presence vs. absence is itself the
+   * client's signal to show the spend view, so a manageable-but-unspent lake must not look
+   * identical to a non-manageable one. `GET /api/data-lakes/:id/spend` independently re-checks
+   * manage access as the real security boundary; this field only decides whether to show the tab.
+   */
+  embeddingSpendMicroUsd?: number;
+  /**
+   * Whether the requesting caller may REBUILD this lake's passages (re-chunk files already in
+   * it). Narrower than `canManage` on purpose: a fallback (built-in) lake has no document to
+   * mutate, so `canManage` is always false for it, but rebuild attaches nothing and mutates no
+   * lake document - see `assertLakeRebuildAccess`. For a DB lake the two are identical
+   * (`canRebuild === canManage`); for a fallback lake `canRebuild` is `ctx.isAdmin` while
+   * `canManage` stays `false`. Kept as a SEPARATE flag rather than folded into `canManage` so the
+   * client can gate the Rebuild affordance without also lighting up rename/delete/visibility/
+   * file-removal, which would still fail server-side on a fallback lake.
+   *
+   * REQUIRED, not optional - same reasoning as `isOwn`: both producers (toManageableConfig,
+   * toFallbackConfig) set it unconditionally, so an absent field is a compile error rather than a
+   * silently-reintroduced gap FOR EVERY IN-REPO CALLER. That guarantee has two known exceptions
+   * that TypeScript cannot see: a test fixture built via an `as ManageableDataLakeConfig` cast
+   * (e.g. resolveManageableLake.test.ts), and the actual HTTP response at the wire boundary
+   * (hooks/data/dataLakes.ts's `api.get<{ data: ManageableDataLakeConfig[] }>(...)`), which is
+   * trusted with no runtime validation. Both fail CLOSED (an absent field reads as falsy, hiding
+   * the affordance rather than exposing it), so this is a precision note, not a safety concern.
+   */
+  canRebuild: boolean;
 }
 
 /**

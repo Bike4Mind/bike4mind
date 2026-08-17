@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   resetEmbeddingSpend: vi.fn(),
+  deleteForLake: vi.fn(async () => 0),
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as the lifecycle tests).
@@ -18,6 +19,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { resetEmbeddingSpend: h.resetEmbeddingSpend },
+  dataLakeSpendNotificationRepository: { deleteForLake: h.deleteForLake },
 }));
 
 import handler from '../reset-embedding-spend';
@@ -32,7 +34,7 @@ const makeReq = (isAdmin: boolean) =>
     method: 'POST',
     query: { id: 'lake-1' },
     user: { id: 'admin-1', isAdmin },
-    logger: { log: vi.fn() },
+    logger: { log: vi.fn(), warn: vi.fn() },
   }) as never;
 
 beforeEach(() => vi.clearAllMocks());
@@ -61,5 +63,26 @@ describe('POST /api/data-lakes/[id]/reset-embedding-spend', () => {
     await expect(
       (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(true), makeRes())
     ).rejects.toThrow(/not found/);
+    expect(h.deleteForLake).not.toHaveBeenCalled();
+  });
+
+  it('re-arms the lake-scope spend notice after a successful reset', async () => {
+    h.resetEmbeddingSpend.mockResolvedValue(true);
+    const res = makeRes();
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(true), res);
+
+    // Scoped to 'lake' only - a period/run/switch notice for the same lake must survive a reset.
+    expect(h.deleteForLake).toHaveBeenCalledWith('lake-1', 'lake');
+  });
+
+  it('a re-arm failure is logged, never fails the reset request', async () => {
+    h.resetEmbeddingSpend.mockResolvedValue(true);
+    h.deleteForLake.mockRejectedValueOnce(new Error('mongo down'));
+    const res = makeRes();
+
+    await expect(
+      (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(true), res)
+    ).resolves.toBeUndefined();
+    expect(res.json).toHaveBeenCalledWith({ ok: true });
   });
 });
