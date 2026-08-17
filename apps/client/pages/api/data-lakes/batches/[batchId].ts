@@ -26,7 +26,10 @@ const UpdateBatchInput = z.object({
 const recomputeLakeAfterTerminal = async (
   status: BatchStatus,
   dataLakeId: string,
-  logger: { error: (msg: string) => void }
+  // `warn` too, not just `error`: the audit write inside recomputeLakeStats is best-effort and
+  // reports failures via `warn`. Unthreaded it falls back to `console.warn`, where log-based
+  // alerting cannot see an audit trail going dark.
+  logger: { warn: (msg: string, ...args: unknown[]) => void; error: (msg: string) => void }
 ): Promise<void> => {
   if (!BATCH_TERMINAL_STATUSES.includes(status)) return;
 
@@ -35,6 +38,7 @@ const recomputeLakeAfterTerminal = async (
     if (!lake) return;
     await dataLakeService.recomputeLakeStats(lake, {
       db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, ...lakeConfigAuditDb },
+      logger,
     });
   } catch (error) {
     logger.error(`Error recomputing data lake stats for terminal batch in lake ${dataLakeId}: ${error}`);
