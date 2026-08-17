@@ -22,7 +22,16 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeBatchRepository: { findStuck: h.findStuck, findStuckTaxonomy: h.findStuckTaxonomy },
   dataLakeRepository: {},
   fabFileRepository: {},
-  adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
+  // getSettingsValue for this cron's own flags, plus the retention pair the config-audit
+  // resolver reads - one declaration serving both consumers (see lakeConfigAuditDb).
+  adminSettingsRepository: {
+    getSettingsValue: h.getSettingsValue,
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
+  // Wired by this cron now that it records the auto-activate it can cause. Stubbed rather than
+  // omitted: this mock replaces the whole module, so an unlisted export fails at import time.
+  lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   FabFile: { find: h.fabFileFind },
 }));
 vi.mock('@bike4mind/services', () => ({
