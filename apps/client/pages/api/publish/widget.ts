@@ -58,6 +58,16 @@ const WIDGET_JS = String.raw`(function () {
   // actually needs it: a list request that came back gated, or the panel being opened.
   var token = null;
   var tokenPromise = null;
+  /**
+   * Latched once a request has 401ed with a FRESH token AND the gate-proof cookie attached -
+   * i.e. nothing this page can hold will satisfy it (a passphrase gate the viewer has not
+   * unlocked, a revoked session). Without this the retry ladder restarts on every poll, and
+   * because a token IS held each cycle takes the force branch and mints a NEW one: one exchange
+   * per poll, forever, which is precisely the rate-limit exhaustion the lazy design exists to
+   * prevent. A page reload clears it, which is the right granularity - if the viewer unlocks the
+   * gate in another tab, they reload to see comments anyway.
+   */
+  var authCannotFix = false;
 
   /** Single-flight cookie exchange. Caches the NEGATIVE result too, so an anonymous viewer
    *  makes exactly one attempt per page. The force flag re-arms it after a 401 (expired mid-session). */
@@ -84,25 +94,47 @@ const WIDGET_JS = String.raw`(function () {
   }
 
   /**
-   * Fetch with whatever credential we hold, and on a 401 obtain one ONCE and retry. This is
-   * the single place a gated artifact is discovered: the widget is never told the artifact's
-   * visibility, it simply learns from a 401 that this request needed a credential.
+   * Fetch, escalating only as far as a 401 forces. This is the single place a gated artifact is
+   * discovered: the widget is never told the artifact's visibility, it learns from a 401 that
+   * the request needed something it had not yet presented.
    *
-   * The retried flag bounds it to one re-attempt, so an endpoint that 401s for a reason no token can
-   * fix (a revoked session) settles instead of looping.
+   *   stage 0  Bearer only, credentials omitted
+   *   stage 1  same, after obtaining/refreshing the token (a stale token is the usual 401)
+   *   stage 2  plus credentials: 'same-origin', so a passphrase gate's per-artifact proof
+   *            cookie can ride along (it is HttpOnly + SameSite=Lax + Path=/, and
+   *            requestHasGateProof reads it straight off the request)
+   *
+   * Escalating rather than sending cookies from the start keeps the OPEN-public path - the
+   * overwhelming majority of views, and the only one whose list is shared-cacheable
+   * (s-maxage=5; gated lists are no-store) - byte-for-byte as it was: those requests never
+   * 401, so they never leave stage 0 and stay cookie-free.
+   *
+   * Sending the cookie creates no auth-by-cookie path and no CSRF surface: optionalAuth
+   * authenticates ONLY from X-API-Key or Authorization: Bearer, never from a cookie.
+   *
+   * A 401 that survives stage 2 latches authCannotFix, because at that point no credential this
+   * page can produce will help and retrying is pure cost.
    */
-  function authedFetch(url, init, retried) {
-    var opts = init || {};
+  function authedFetch(url, init, stage) {
+    var s = stage || 0;
+    // Copy rather than mutate: opts IS init when init is truthy, so writing headers/credentials
+    // onto it would scribble on the caller's object and on the retry's own input.
+    var opts = init ? Object.assign({}, init) : {};
     opts.headers = headers(opts.method === 'POST');
-    opts.credentials = 'omit'; // the Bearer header is the only credential; never the ambient cookie
+    opts.credentials = s >= 2 ? 'same-origin' : 'omit';
     return fetch(url, opts).then(function (r) {
-      if (r.status !== 401 || retried) return r;
-      // Force a re-exchange only when we HELD a token that went stale. Holding none means the
-      // cached negative stands, so a signed-out viewer cannot be made to re-attempt the
-      // exchange on every 60s poll.
-      return ensureToken(!!token).then(function (t) {
-        return t ? authedFetch(url, init, true) : r;
-      });
+      if (r.status !== 401 || authCannotFix) return r;
+      if (s === 0) {
+        // Force a re-exchange only when we HELD a token that went stale. Holding none means the
+        // cached negative stands, so a signed-out viewer makes one attempt per page, not one per
+        // poll.
+        return ensureToken(!!token).then(function (t) {
+          return t ? authedFetch(url, init, 1) : r;
+        });
+      }
+      if (s === 1) return authedFetch(url, init, 2);
+      authCannotFix = true;
+      return r;
     });
   }
   // Server clock minus client clock, learned from the initial list response's Date
@@ -306,7 +338,11 @@ const WIDGET_JS = String.raw`(function () {
       actions.appendChild(send);
       compose.appendChild(actions);
       panel.appendChild(compose);
-    } else if (policy !== 'none' && !token) {
+    // Only once capability is KNOWN: openPanel renders synchronously, before the credential
+    // exists, so gating on !token alone painted "Sign in to comment" at a signed-in viewer for
+    // the round trip - the exact string this change exists to stop showing them. A genuinely
+    // signed-out viewer sees a bare footer for that beat instead, the better failure direction.
+    } else if (policy !== 'none' && !token && lastCanComment !== null) {
       var si = el('div'); si.id = 'b4m-signin';
       si.appendChild(document.createTextNode('Want to leave feedback? '));
       var a = el('a', null, 'Sign in to comment'); a.href = origin + '/login'; si.appendChild(a);
@@ -399,8 +435,20 @@ const WIDGET_JS = String.raw`(function () {
     // Needs a credential by definition (an anonymous viewer can never comment), so acquire
     // first. Only ever called once the panel is open - see openPanel.
     return ensureToken()
-      .then(function () { return authedFetch(CAN_API, {}); })
-      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (t) {
+        // No session -> can-comment can only answer false, so skip the round trip. It must still
+        // RECORD that false rather than just returning: render() gates the sign-in prompt on
+        // capability being known, so leaving lastCanComment null would suppress the prompt for
+        // exactly the signed-out viewer it is meant for.
+        if (!t) {
+          state.canComment = false;
+          lastCanComment = false;
+          render();
+          return null;
+        }
+        return authedFetch(CAN_API, {});
+      })
+      .then(function (r) { return r && r.ok ? r.json() : null; })
       .then(function (data) {
         if (!data) return;
         if (data.commentPolicy) policy = data.commentPolicy;

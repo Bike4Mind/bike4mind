@@ -8,9 +8,11 @@ import { apiKeyAuth } from '@server/middlewares/apiKeyAuth';
  * JWT, but NEVER rejects an anonymous request - anonymous viewers must still be
  * able to read a public artifact's comments.
  *
- * The comment overlay widget runs same-origin on the app host, reads the
- * viewer's B4M token from localStorage, and sends it as `Authorization: Bearer`
- * - so a signed-in viewer is recognized here and may write. (This same-origin
+ * The comment overlay widget runs same-origin on the app host, obtains an access
+ * token by exchanging the HttpOnly refresh cookie against /api/auth/refreshToken,
+ * and sends it as `Authorization: Bearer` - so a signed-in viewer is recognized
+ * here and may write. (It used to read the token from localStorage; nothing is
+ * persisted there any more.) (This same-origin
  * token access is exactly the capability denied to author bundle JS, which is
  * stripped at serve time; only B4M's own trusted overlay can use it.)
  *

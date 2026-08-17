@@ -51,16 +51,22 @@ function res(status: number, body: unknown): Response {
 }
 
 /**
- * Route fetches by URL. `listStatus` lets a test describe a gated artifact (401 until a
- * credential is presented) versus a public one.
+ * Route fetches by URL.
+ *  - `gated`      401s the list until a credential is presented (the recoverable case)
+ *  - `neverAdmits` 401s the list NO MATTER WHAT, which is the passphrase-gated artifact viewed
+ *    by a non-owner: the proof is a cookie, so no Bearer can ever satisfy it. This is the shape
+ *    that ran away, re-exchanging once per poll forever.
  */
-function stubFetch(opts: { signedIn: boolean; gated?: boolean }) {
+function stubFetch(opts: { signedIn: boolean; gated?: boolean; neverAdmits?: boolean }) {
   const fetchStub = vi.fn((url: string, init?: RequestInit) => {
     calls.push({ url, init });
     const authed = !!(init?.headers as Record<string, string> | undefined)?.Authorization;
 
     if (url.includes(REFRESH)) {
       return Promise.resolve(opts.signedIn ? res(200, { accessToken: 'fresh.token' }) : res(401, {}));
+    }
+    if (opts.neverAdmits && !url.includes(CAN_COMMENT)) {
+      return Promise.resolve(res(401, { error: 'Passphrase required' }));
     }
     if (url.includes(CAN_COMMENT)) {
       return Promise.resolve(
@@ -188,6 +194,74 @@ describe('publish comment widget - credential path', () => {
     await vi.advanceTimersByTimeAsync(180000); // three poll cycles
 
     expect(refreshCalls()).toHaveLength(1);
+  });
+
+  // REGRESSION GUARD. The retry was bounded within one authedFetch call but not across calls:
+  // every poll started fresh, saw a token was held, took the force branch and minted a new one.
+  // On a passphrase-gated artifact viewed by a non-owner - a 401 no Bearer can ever fix - that
+  // was one exchange per poll cycle, indefinitely, against a 60/min per-IP limit. The earlier
+  // traffic tests pinned the LOWER bound (zero when unused); this pins the upper one.
+  it('stops re-exchanging once a fresh credential still cannot satisfy the gate', async () => {
+    stubFetch({ signedIn: true, neverAdmits: true });
+
+    await runWidget();
+    clickLauncher();
+    await vi.advanceTimersByTimeAsync(0);
+    const afterOpen = refreshCalls().length;
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000); // ten closed-panel poll cycles
+
+    // Flat, not growing. Before the latch this was afterOpen + one per cycle.
+    expect(refreshCalls()).toHaveLength(afterOpen);
+  });
+
+  it('escalates to sending credentials so a passphrase proof cookie can satisfy the gate', async () => {
+    // The proof is an HttpOnly per-artifact cookie, so a request with credentials omitted can
+    // never pass the gate however good its Bearer is. Escalation happens only after a 401, which
+    // is what keeps the cacheable open-public path cookie-free.
+    stubFetch({ signedIn: true, neverAdmits: true });
+
+    await runWidget();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const listCalls = calls.filter(c => !c.url.includes(REFRESH) && !c.url.includes(CAN_COMMENT));
+    expect(listCalls[0]?.init?.credentials).toBe('omit'); // first attempt stays cookie-free
+    expect(listCalls.some(c => c.init?.credentials === 'same-origin')).toBe(true);
+  });
+
+  it('keeps the open-public list request cookie-free, since it never 401s', async () => {
+    stubFetch({ signedIn: true });
+
+    await runWidget();
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    const listCalls = calls.filter(c => !c.url.includes(REFRESH) && !c.url.includes(CAN_COMMENT));
+    expect(listCalls.length).toBeGreaterThan(0);
+    expect(listCalls.every(c => c.init?.credentials === 'omit')).toBe(true);
+  });
+
+  it('does not paint "Sign in to comment" at a signed-in viewer while capability is unknown', async () => {
+    // openPanel renders synchronously, before the credential exists. Gating the prompt on
+    // !token alone showed a signed-in viewer the one string this change exists to remove.
+    stubFetch({ signedIn: true });
+    await runWidget();
+
+    clickLauncher(); // synchronous render, nothing resolved yet
+    expect(document.getElementById('b4m-signin')).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(document.getElementById('b4m-ta')).not.toBeNull();
+  });
+
+  it('skips the can-comment round trip entirely for a signed-out viewer', async () => {
+    stubFetch({ signedIn: false });
+
+    await runWidget();
+    clickLauncher();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(calls.some(c => c.url.includes(CAN_COMMENT))).toBe(false);
+    expect(document.getElementById('b4m-signin')).not.toBeNull();
   });
 
   it('recovers a session that expires while the page is open', async () => {
