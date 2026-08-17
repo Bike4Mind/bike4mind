@@ -308,6 +308,8 @@ export const imageGenerationTool: ToolDefinition = {
           aspect_ratio: aspect_ratio,
           output_format: output_format ?? 'png',
           safety_tolerance: safety_tolerance,
+          prompt_upsampling: prompt_upsampling,
+          seed: seed,
         });
 
         const storedImageUrls = await processAndStoreImages(images, context, model, provider);
