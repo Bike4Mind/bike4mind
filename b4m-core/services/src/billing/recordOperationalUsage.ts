@@ -70,10 +70,18 @@ export interface RecordOperationalUsageAdapters {
  *
  * PER-MEMBER CAP: deliberately EXEMPT (#1651). `maxCreditsPerMember` is enforced at the
  * reservation pre-flight of the paths that trigger this spend, never here - this helper must not
- * throw, so a cap check could only skip the debit (already what an unbilled call does) or break
- * the operational call it measures. The bound is indirect: callers sit downstream of a primary
- * action that is itself gated. The exception is `pages/api/data-lakes/semantic-search`, which has
- * no pre-flight of its own; gating belongs at that endpoint, not here.
+ * throw, so a cap check could only skip the debit (already what an unbilled call does), break the
+ * operational call it measures, or mark the UsageEvent over-cap (observability, not enforcement).
+ *
+ * The bound is uneven, so do not read this as "every caller is gated upstream". The LLM-tool and
+ * knowledge-base callers pass a narrowed db with no billing repos, so they can never reach the
+ * deduct path at all - their safety comes from the adapter shape, not from a gated caller. The two
+ * debit-capable callers are `server/events/recordSessionOperationalUsage` and
+ * `pages/api/data-lakes/semantic-search`, and both are reachable with no pre-flight: session ops
+ * are queued directly by `POST /api/sessions/[id]/tag`, `POST /api/sessions/[id]/summary`, the
+ * project-attach fan-out (`pages/api/projects/[id]/sessions.ts`) and the admin spider, and
+ * semantic-search has no credit check of its own (#1843). Gating belongs at those entry points,
+ * not in a measurement helper.
  */
 export async function recordOperationalUsage(
   params: RecordOperationalUsageParams,
