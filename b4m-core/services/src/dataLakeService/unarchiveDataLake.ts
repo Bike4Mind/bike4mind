@@ -111,7 +111,18 @@ export const unarchiveDataLake = async (
   // then, and this path deliberately does not turn that into a failure - it never did.
   if (updated) {
     await recordLakeConfigChange(
-      { actor, lake: existing, grants, action: 'unarchive', changes: diffLakeConfig(existing, updated) },
+      {
+        actor,
+        lake: existing,
+        grants,
+        action: 'unarchive',
+        // Diffed against THIS write's own fields, never against `updated`: `BaseModel.update` is a
+        // `findOneAndUpdate` returning the merged document, so a concurrent writer's `$set` landing in
+        // the gap would be recorded under this caller's principal and rung. Same reasoning, and the
+        // same fix, as `updateDataLake` - see its note. The field set here is fixed and small, so the
+        // projection is exact rather than reconstructed.
+        changes: diffLakeConfig(existing, { ...existing, status: 'active', filesArchivedAt: null }),
+      },
       { db, logger }
     );
   }
