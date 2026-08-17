@@ -292,7 +292,8 @@
         "type": "object",
         "properties": {
           "name": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           },
           "knowledgeIds": {
             "type": "array",
@@ -329,6 +330,7 @@
               "string",
               "null"
             ],
+            "minLength": 1,
             "description": "Pin a specific model id, or omit/send null to leave the current pin unchanged. Sending null does NOT clear it."
           },
           "forceKnowledgeRetrieval": {
@@ -1021,7 +1023,7 @@
             }
           },
           "422": {
-            "description": "Request body failed validation.",
+            "description": "Request failed validation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1191,7 +1193,7 @@
             }
           },
           "422": {
-            "description": "Request body failed validation.",
+            "description": "Request failed validation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1364,7 +1366,7 @@
             }
           },
           "422": {
-            "description": "Request body failed validation.",
+            "description": "Request failed validation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1587,7 +1589,7 @@
     },
     {
       "name": "Sessions",
-      "description": "Update a session (called a \"notebook\" in the product UI)."
+      "description": "Sessions (called \"notebooks\" in the product UI) and their attached knowledge."
     }
   ]
 }

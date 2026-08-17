@@ -68,6 +68,11 @@ export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
    * so the adapter validates `req.query` against this schema, not `req.params`.
    * Field names must match the `{name}` placeholders in `path`. Must be a plain
    * ZodObject - that is what zod-to-openapi's `request.params` accepts.
+   *
+   * Next-only today: `defineNextRoute.ts`'s adapter is the only one that reads this
+   * field. The Lambda adapter (`server/cli/defineLambdaRoute.ts`) does not validate
+   * path params yet - a `{id}`-style contract served over a Function URL gets no
+   * param validation there until that adapter is taught to read `pathParams` too.
    */
   pathParams?: z.ZodObject<z.ZodRawShape>;
   /**
