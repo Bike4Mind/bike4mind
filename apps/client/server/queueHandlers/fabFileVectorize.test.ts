@@ -126,7 +126,7 @@ vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => new Proxy({}, { get
 
 const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() } as never;
 
-import { fabFileChunkRepository } from '@bike4mind/database';
+import { fabFileChunkRepository, User } from '@bike4mind/database';
 import { sendToClient } from '@server/websocket/utils';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from './sqsDelivery';
 import { dispatch, CONVERGENCE_PAUSED_NOTE } from './fabFileVectorize';
@@ -454,6 +454,23 @@ describe('fabFileVectorize handler - usage ledger', () => {
     h.recordOperationalUsage.mockRejectedValueOnce(new Error('ledger down'));
 
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+  });
+
+  it('an organization lookup failure never fails the vectorize run (the embeddings are already paid for by this point)', async () => {
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
+    // The default user fixture has no organizationId, which skips the lookup branch entirely -
+    // this test needs it set so organizationRepository.findById is actually reached and rejected.
+    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ id: 'u1', organizationId: 'org-1' });
+    h.organizationFindById.mockRejectedValueOnce(new Error('org lookup down'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+    expect(h.organizationFindById).toHaveBeenCalledWith('org-1');
+    // The ledger write still happens (organization just resolves to null), so this is not
+    // silently skipped along with the failure - it degrades gracefully instead.
+    expect(h.recordOperationalUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ organization: null }),
+      expect.anything()
+    );
   });
 });
 

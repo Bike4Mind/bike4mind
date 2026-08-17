@@ -325,7 +325,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // bypassCreditBilling: true because this spend is already governed by the dedicated
       // spend-lever/gate above; debiting credits on top of it would double-charge.
       if (grantedReservation) {
-        const organization = user.organizationId ? await organizationRepository.findById(user.organizationId) : null;
+        // Best-effort like the ledger write below it - by this point the embeddings are
+        // already paid for and the reservation committed, with no release path from here (that
+        // is scoped strictly to the provider try/catch above). An unguarded rejection here would
+        // throw the whole run to failed/redelivered over a org lookup, double-charging the lake
+        // meter and writing a second ledger row for work that already succeeded.
+        const organization = user.organizationId
+          ? await organizationRepository.findById(user.organizationId).catch(() => null)
+          : null;
         // SQS redelivery can double-write this row if the embedding-cache write above has not
         // landed before the container freezes - the same double-count the lake meter already
         // accepts above, so the ledger and meter at least drift together.

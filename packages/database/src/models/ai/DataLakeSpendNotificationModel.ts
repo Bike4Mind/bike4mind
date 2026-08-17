@@ -18,7 +18,7 @@ const ModelName = 'DataLakeSpendNotification';
 interface IDataLakeSpendNotificationModel extends Model<IDataLakeSpendNotificationDocument> {}
 
 /**
- * One row per notice sent about a lake's embedding spend (#1677). The unique compound index
+ * One row per notice sent about a lake's embedding spend. The unique compound index
  * below is the entire dedup mechanism - `claimNotification` is an atomic upsert whose "did I
  * win" signal is that index rejecting a second writer, never a check-then-insert. See
  * DataLakeSpendNotificationTypes.ts for the kind/scope vocabulary.

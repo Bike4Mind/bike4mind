@@ -89,11 +89,15 @@ export function renderSpendNotificationEmail(input: SpendNotificationEmailInput)
   }
 
   if (kind === 'budget_exhausted' && scope === 'lake') {
+    // This event's only producer (enforceEmbeddingSpendGate's denial branch) never supplies
+    // spentMicroUsd - tryAddEmbeddingSpendMetered returns spendMicroUsd: null on denial, since
+    // there is no post-increment total to report when the reservation was refused. The copy
+    // must read correctly with `spent` always absent, not reference it at all.
     return {
       subject: `"${subjectName}" has reached its embedding budget`,
       html: wrap(
         lake,
-        `<p>"${lake}" has spent ${spent ?? 'its'} of the ${budget ?? ''} per-lake embedding budget. ` +
+        `<p>"${lake}" has reached its per-lake embedding budget of ${budget ?? ''}. ` +
           `New files will not be indexed until an admin raises the per-lake budget or resets this lake's meter.</p>`
       ),
     };
@@ -147,6 +151,11 @@ export function renderSpendNotificationEmail(input: SpendNotificationEmailInput)
   }
 
   if (kind === 'approaching_cap' && scope === 'period') {
+    // RESERVED, not dead: enforceEmbeddingSpendGate deliberately never fires this pair (a
+    // single global counter means the crossing test is true for exactly one arbitrary tenant
+    // platform-wide, never a platform admin - see that file's own comment at the end of the
+    // gate function). Kept here rather than removed in case a future version routes this to
+    // platform admins instead, which would reuse this exact rendering.
     // Same disclosure concern as budget_exhausted/period above: no dollar or percentage
     // figures, since this is the platform-wide aggregate, not this lake's own spend.
     return {

@@ -110,9 +110,10 @@ async function sendToAddressees(
  * again, forever. Rendering first means an unhandled pair fails before any claim row exists at
  * all: still logged and retried on redelivery, but never a permanent claim/delete churn loop.
  * From there the dominant hot-path case (a lake already notified this period) short-circuits on
- * ONE indexed claim call, before any grant/org/user read or SMTP attempt. Never throws - every
- * failure resolves to `'failed'` and is logged, so a notification problem can never break the
- * ingestion path it reports on.
+ * the lake read plus ONE indexed claim call (two round trips, not one - the lake read above is
+ * unconditional), before any grant/org/user read or SMTP attempt. Never throws - every failure
+ * resolves to `'failed'` and is logged, so a notification problem can never break the ingestion
+ * path it reports on.
  */
 export async function sendDataLakeSpendNotification(
   event: DataLakeSpendNotificationEvent,
@@ -170,6 +171,18 @@ export async function sendDataLakeSpendNotification(
       // exactly the storm the period-key fix was written to prevent, just from a different
       // angle. Leaving the row standing here means the eventual (possibly late) markDelivered
       // from that still-running send is the one that records the real outcome.
+      //
+      // Residual, accepted window: dispatchedRef is read once, synchronously, right here. If
+      // resolveLakeSpendAddressees resolves a moment AFTER this race already rejected but
+      // BEFORE dispatchedRef.dispatched is set, the delete below still runs, and the abandoned
+      // sendToAddressees can then dispatch against the now-freed slot - a possible second send
+      // on the next denied message. Narrower than the bug this guard fixes (bounded by
+      // resolveLakeSpendAddressees's own latency, not the whole 2.5s send budget), not
+      // eliminated. Also: a DETERMINISTIC resolution failure (not a transient blip - e.g. a
+      // malformed principal id) hits this same delete-and-re-arm path on every denied message
+      // for as long as the condition holds, since null unconditionally re-arms. Both are low-
+      // likelihood, accepted trade-offs against the alternative (a permanently-silenced lake),
+      // not further hardened here.
       await db.spendNotifications
         .delete(claimId)
         .catch(deleteErr =>

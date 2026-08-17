@@ -1,30 +1,67 @@
 import { describe, expect, it } from 'vitest';
 import { renderSpendNotificationEmail, formatMicroUsd } from './renderSpendNotificationEmail';
-import type { DataLakeSpendNotificationKind, DataLakeSpendNotificationScope } from '@bike4mind/common';
+import type {
+  DataLakeSpendNotificationDetail,
+  DataLakeSpendNotificationKind,
+  DataLakeSpendNotificationScope,
+} from '@bike4mind/common';
 
-const cases: Array<{ kind: DataLakeSpendNotificationKind; scope: DataLakeSpendNotificationScope }> = [
-  { kind: 'stopped', scope: 'switch' },
-  { kind: 'stopped', scope: 'rate' },
-  { kind: 'budget_exhausted', scope: 'lake' },
-  { kind: 'budget_exhausted', scope: 'run' },
-  { kind: 'budget_exhausted', scope: 'period' },
-  { kind: 'throttled', scope: 'rate' },
-  { kind: 'approaching_cap', scope: 'lake' },
-  { kind: 'approaching_cap', scope: 'period' },
+/**
+ * Each fixture's `detail` is the EXACT shape the corresponding `fire()` call site in
+ * enforceEmbeddingSpendGate.ts actually constructs - not one maximal fixture shared across
+ * every kind/scope pair. A shared fixture is how B2 (budget_exhausted/lake referencing
+ * `spentMicroUsd`, which its real producer never supplies) survived four review rounds: every
+ * test passed `spentMicroUsd` even for the one pair that never receives it in production.
+ * `approaching_cap`/`period` is deliberately excluded - the gate never fires it (see its own
+ * comment); it stays a renderer-only reserved case, covered separately below.
+ */
+const productionCases: Array<{
+  kind: DataLakeSpendNotificationKind;
+  scope: DataLakeSpendNotificationScope;
+  detail: DataLakeSpendNotificationDetail;
+}> = [
+  { kind: 'stopped', scope: 'switch', detail: { reason: 'the embedding spend switch is off' } },
+  { kind: 'stopped', scope: 'rate', detail: { reason: 'the embedding rate limit is 0 (stopped)' } },
+  {
+    kind: 'throttled',
+    scope: 'rate',
+    detail: { reason: 'the embedding rate limit (120/min) stayed exhausted after waiting 30000ms', retryable: true },
+  },
+  { kind: 'budget_exhausted', scope: 'run', detail: { batchId: 'batch-1', budgetMicroUsd: 5_000_000 } },
+  { kind: 'budget_exhausted', scope: 'lake', detail: { budgetMicroUsd: 5_000_000 } },
+  {
+    kind: 'budget_exhausted',
+    scope: 'period',
+    detail: { budgetMicroUsd: 50_000_000, periodHours: 24, windowEndsAt: new Date('2026-01-01T00:00:00Z') },
+  },
+  { kind: 'approaching_cap', scope: 'lake', detail: { spentMicroUsd: 4_000_000, budgetMicroUsd: 5_000_000 } },
 ];
 
 describe('renderSpendNotificationEmail', () => {
-  it.each(cases)('renders a non-empty subject and html for $kind/$scope', ({ kind, scope }) => {
+  it.each(productionCases)(
+    'renders a sensible, non-empty subject and html for $kind/$scope using its REAL detail shape',
+    ({ kind, scope, detail }) => {
+      const result = renderSpendNotificationEmail({ kind, scope, lakeName: 'My Lake', detail });
+
+      expect(result.subject.length).toBeGreaterThan(0);
+      expect(result.html).toContain('My Lake');
+      expect(result.html).toContain('you own or administer this data lake');
+      // A field genuinely absent from this shape (e.g. spentMicroUsd on budget_exhausted/lake)
+      // must never leak an unguarded `undefined`/`NaN` into the rendered copy.
+      expect(result.html).not.toMatch(/undefined|NaN/);
+    }
+  );
+
+  it('reads correctly for budget_exhausted/lake without ever referencing spentMicroUsd (B2 - its only producer never supplies one)', () => {
     const result = renderSpendNotificationEmail({
-      kind,
-      scope,
+      kind: 'budget_exhausted',
+      scope: 'lake',
       lakeName: 'My Lake',
-      detail: { spentMicroUsd: 4_000_000, budgetMicroUsd: 5_000_000, periodHours: 24, batchId: 'batch-1' },
+      detail: { budgetMicroUsd: 5_000_000 },
     });
 
-    expect(result.subject.length).toBeGreaterThan(0);
-    expect(result.html).toContain('My Lake');
-    expect(result.html).toContain('you own or administer this data lake');
+    expect(result.html).toContain('has reached its per-lake embedding budget of $5.00');
+    expect(result.html).not.toContain('has spent');
   });
 
   it('escapes an HTML-injection attempt in the lake name (subject is plain text, not HTML, and is left raw)', () => {

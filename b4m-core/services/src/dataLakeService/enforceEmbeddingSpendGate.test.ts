@@ -155,7 +155,7 @@ describe('enforceEmbeddingSpendGate', () => {
   });
 });
 
-describe('enforceEmbeddingSpendGate - spend notifications (#1677)', () => {
+describe('enforceEmbeddingSpendGate - spend notifications', () => {
   it('notify is a no-op when omitted - every existing caller/test is unaffected', async () => {
     const db = grantAll();
     await expect(gate(db)).resolves.toBeUndefined();

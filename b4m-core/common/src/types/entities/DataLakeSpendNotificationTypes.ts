@@ -60,6 +60,9 @@ export interface IDataLakeSpendNotification {
   thresholdPct?: number;
   recipientUserIds: string[];
   recipientCount: number;
+  /** `deliveryFailed` is only true when NOTHING delivered (deliveredCount === 0) - a partial
+   * failure (e.g. 1 of 20 recipients) still reads as a successful send. Compare deliveredCount
+   * against recipientCount, not deliveryFailed, to detect a partial SMTP failure. */
   deliveredCount: number;
   deliveryFailed: boolean;
   detail: DataLakeSpendNotificationDetail;

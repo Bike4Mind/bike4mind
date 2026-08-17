@@ -740,11 +740,15 @@ export interface SyncDelta {
 
 /**
  * Wire shape of GET /api/data-lakes/:id/spend. `embeddingSpendMicroUsd` is the lake's
- * lifetime RESERVATION-TIME ESTIMATE meter (reserve-first, admin-reset/release-
- * compensated); `ledger` is the ACTUAL cost rolled up from UsageEvent rows (ingestion
- * embeds only) - the two are expected to diverge, most visibly after an admin reset, and
- * the client must label them distinctly rather than imply they should match. Budgets
- * mirror `resolveSpendLevers()`'s live values so the view never has to re-derive them.
+ * lifetime RESERVATION-TIME meter (reserve-first, admin-reset/release-compensated);
+ * `ledger` is the ATTRIBUTED cost rolled up from UsageEvent rows (ingestion embeds only).
+ * Neither is a provider-reported figure - both derive from the same pre-call, Math.ceil'd
+ * estimate over locally-counted tokens (fabFileVectorize writes the ledger's `costUsd`
+ * from `estimatedMicroUsd`, the exact value the meter reserved). They diverge only via an
+ * admin reset or a release-after-failure, not because one is "actual" and the other isn't -
+ * the client must label them distinctly (lifetime meter vs. attributed/ledgered cost)
+ * without implying either is a true provider-billed number. Budgets mirror
+ * `resolveSpendLevers()`'s live values so the view never has to re-derive them.
  */
 export interface IDataLakeSpendResponse {
   dataLakeId: string;
