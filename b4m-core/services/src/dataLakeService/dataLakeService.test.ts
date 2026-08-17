@@ -15,7 +15,12 @@ import {
   assertLakeGrantable,
   isFallbackLake,
 } from './assertLakeAccess';
-import { canManageLake, assertLakeWriteAccess, assertCanWriteDataLakeTags } from './authorizeLakeWrite';
+import {
+  canManageLake,
+  assertLakeWriteAccess,
+  assertLakeRebuildAccess,
+  assertCanWriteDataLakeTags,
+} from './authorizeLakeWrite';
 import { createDataLake } from './createDataLake';
 import { archiveDataLake } from './archiveDataLake';
 import { deleteDataLake } from './deleteDataLake';
@@ -888,6 +893,102 @@ describe('assertLakeWriteAccess — read-then-manage gate for the upload doors',
       },
     };
     await expect(assertLakeWriteAccess('opti-knowledge', ctx({ isAdmin: true }), { db })).rejects.toThrow(/read-only/i);
+  });
+});
+
+// This gate is the one exception to "fallback lakes are read-only for everyone" - rebuild
+// re-chunks files without touching the lake document, so it gates on ctx.isAdmin directly for a
+// fallback lake instead of assertLakeWritable + resolveCanManageLake.
+describe('assertLakeRebuildAccess - narrower-than-write gate that DOES reach fallback lakes', () => {
+  const fallbackDb = () => ({
+    dataLakes: {
+      findById: vi.fn().mockRejectedValue(new Error('bad id')),
+      findBySlug: vi.fn().mockResolvedValue(null),
+    },
+  });
+
+  it('returns the lake for the creator on a DB lake (same as assertLakeWriteAccess)', async () => {
+    const l = lake({ createdByUserId: 'owner' });
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn() } };
+    await expect(assertLakeRebuildAccess('lake1', ctx({ userId: 'owner' }), { db })).resolves.toBe(l);
+  });
+
+  it('manage-denied for a reader who is not the creator, on a DB lake', async () => {
+    const l = lake({ organizationId: 'orgA', requiredUserTag: 'Opti', createdByUserId: 'owner' });
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn() } };
+    await expect(
+      assertLakeRebuildAccess('lake1', ctx({ userId: 'reader', organizationIds: ['orgA'], userTags: ['opti'] }), {
+        db,
+      })
+    ).rejects.toThrow(/permission to rebuild/i);
+  });
+
+  // The headline behaviour this gate exists for.
+  it('a platform admin CAN rebuild a fallback lake', async () => {
+    const resolved = await assertLakeRebuildAccess('opti-knowledge', ctx({ isAdmin: true }), { db: fallbackDb() });
+    expect(resolved.id).toBe('opti-knowledge');
+  });
+
+  it('a non-admin WITH lake access (tag/entitlement) still CANNOT rebuild a fallback lake', async () => {
+    await expect(
+      assertLakeRebuildAccess('opti-knowledge', ctx({ userTags: ['opti'] }), { db: fallbackDb() })
+    ).rejects.toThrow(/permission to rebuild/i);
+  });
+
+  // Pins the design decision that reversed this gate's first draft: resolveFallbackLake spreads the
+  // config's organizationId onto the synthetic doc, so canManageLake's org-admin rung would grant a
+  // CUSTOMER-side org admin (not a platform admin) if this gate consulted resolveCanManageLake for a
+  // fallback lake. Gating on ctx.isAdmin directly means administeredOrgIds has NO effect here -
+  // proved by setting it and confirming the actor is still refused.
+  it('an org admin (administeredOrgIds set) still CANNOT rebuild a fallback lake - org rung is never consulted', async () => {
+    await expect(
+      assertLakeRebuildAccess('opti-knowledge', ctx({ userTags: ['opti'], administeredOrgIds: ['orgA'] }), {
+        db: fallbackDb(),
+      })
+    ).rejects.toThrow(/permission to rebuild/i);
+  });
+
+  // The regression that matters most: this gate must not have weakened assertLakeWritable itself.
+  it('fallback lake still refuses rename, delete, visibility, and file-removal (assertLakeWritable untouched)', () => {
+    expect(() => assertLakeWritable({ id: 'opti-knowledge' })).toThrow(/read-only/i);
+  });
+});
+
+describe('listDataLakes / listAllDataLakes - canRebuild flag for fallback (built-in) lakes', () => {
+  it('canManage stays false for a fallback lake even for an admin (listAllDataLakes)', async () => {
+    const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) } };
+    const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
+    expect(result.find(l => l.id === 'opti-knowledge')?.canManage).toBe(false);
+  });
+
+  it('canRebuild is true for an admin on a fallback lake (listAllDataLakes)', async () => {
+    const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) } };
+    const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
+    expect(result.find(l => l.id === 'opti-knowledge')?.canRebuild).toBe(true);
+  });
+
+  it('canRebuild is false for a non-admin reader on a fallback lake (listDataLakes)', async () => {
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() } };
+    const result = await listDataLakes(ctx({ userId: 'me', userTags: ['Opti'] }), { db });
+    const fallback = result.find(l => l.id === 'opti-knowledge');
+    expect(fallback?.canManage).toBe(false);
+    expect(fallback?.canRebuild).toBe(false);
+  });
+
+  it('canRebuild === canManage for a DB lake (both true for the owner, both false for a stranger)', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine, theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    const own = result.find(l => l.id === 'mine');
+    expect(own?.canManage).toBe(true);
+    expect(own?.canRebuild).toBe(true);
+
+    const stranger = result.find(l => l.id === 'theirs');
+    expect(stranger?.canManage).toBe(false);
+    expect(stranger?.canRebuild).toBe(false);
   });
 });
 

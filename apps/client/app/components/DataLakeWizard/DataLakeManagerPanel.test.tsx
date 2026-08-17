@@ -32,8 +32,9 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     useGetDataLakes: () => useGetDataLakes(),
     // LakeInfoPanel renders <LakeHealthBadge> unconditionally; the badge renders null on no data.
     useGetDataLakeHealth: () => ({ data: undefined, isLoading: false }),
-    // No rebuild backlog in these fixtures, so the "Rebuild passages" button/chips stay hidden.
-    useUnderChunkedCount: () => ({ data: undefined }),
+    // Default: no rebuild backlog, so the "Rebuild passages" button/chips stay hidden. A test that
+    // needs a backlog overrides via useUnderChunkedCount.mockReturnValue(...).
+    useUnderChunkedCount: (...args: unknown[]) => useUnderChunkedCount(...(args as [string, boolean])),
     useRechunkDataLake: mutation,
     // Per-lake files: only the selected lake queries (id != null).
     useDataLakeFiles: (id: string | null) => ({
@@ -99,6 +100,11 @@ const lakeFiles = [
 ];
 
 const useGetDataLakes = vi.fn(() => ({ data: [] as unknown[], isLoading: false }));
+// Controllable per-test so a canRebuild-gating test can put a backlog on the lake, while the
+// default (below, in beforeEach) keeps every other test's Rebuild button/chip hidden as before.
+const useUnderChunkedCount = vi.fn(() => ({
+  data: undefined as { underChunkedCount: number; failedCount: number } | undefined,
+}));
 
 // Default (flag on) is established per-describe; tests override per-case.
 const isFeatureEnabled = vi.fn();
@@ -140,6 +146,7 @@ const mineLake = {
   datalakeTag: 'datalake:mine',
   description: 'my lake',
   canManage: true,
+  canRebuild: true,
   isOwn: true,
 };
 
@@ -152,8 +159,23 @@ const theirsLake = {
   fileCount: 1,
   isPublic: true,
   canManage: false,
+  canRebuild: false,
   isOwn: false,
   ownerDisplayName: 'Ada Owner',
+};
+
+// A fallback (built-in) lake as an admin would see it: canManage is ALWAYS false for these (no
+// document to manage), but canRebuild can still be true - the structural split this test file
+// pins in the "canRebuild is narrower than canManage" describe block below.
+const fallbackLakeAsAdmin = {
+  id: 'opti-knowledge',
+  name: 'Optimization Knowledge Base',
+  slug: 'opti-knowledge',
+  fileTagPrefix: 'opti:',
+  datalakeTag: 'datalake:opti-knowledge',
+  canManage: false,
+  canRebuild: true,
+  isOwn: false,
 };
 
 const renderPanel = () =>
@@ -175,6 +197,8 @@ beforeEach(() => {
   isFeatureEnabled.mockReturnValue(true);
   useGetDataLakes.mockReset();
   useGetDataLakes.mockReturnValue({ data: [mineLake, theirsLake], isLoading: false });
+  useUnderChunkedCount.mockReset();
+  useUnderChunkedCount.mockReturnValue({ data: undefined });
   archiveMutate.mockClear();
   deleteMutate.mockClear();
   cleanupMutate.mockClear();
@@ -572,6 +596,54 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     expect(screen.getByTestId('datalake-addfiles-btn-adminview')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-settings-btn-adminview')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-archive-btn-adminview')).toBeInTheDocument();
+  });
+});
+
+/**
+ * canRebuild is NARROWER than canManage: a fallback (built-in) lake has no document to manage
+ * (canManage always false) but CAN still be rebuilt by an admin (assertLakeRebuildAccess gates on
+ * ctx.isAdmin directly). The Rebuild button must render off canRebuild - and, since it used to sit
+ * inside the same fragment as Add files/Settings/Archive, this also pins that it was extracted
+ * from that fragment rather than the fragment's gate being flipped (which would light up all four).
+ */
+describe('DataLakeManagerPanel - canRebuild is narrower than canManage (fallback lakes)', () => {
+  it('shows Rebuild passages but NOT Add files/Settings/Archive on a fallback lake as admin', async () => {
+    useGetDataLakes.mockReturnValue({ data: [fallbackLakeAsAdmin], isLoading: false });
+    useUnderChunkedCount.mockReturnValue({ data: { underChunkedCount: 5, failedCount: 0 } });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-opti-knowledge'));
+
+    expect(screen.getByTestId('datalake-rebuild-passages-btn-opti-knowledge')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-manager-rebuild-chip-opti-knowledge')).toHaveTextContent('5 to rebuild');
+    expect(screen.queryByTestId('datalake-addfiles-btn-opti-knowledge')).toBeNull();
+    expect(screen.queryByTestId('datalake-settings-btn-opti-knowledge')).toBeNull();
+    expect(screen.queryByTestId('datalake-archive-btn-opti-knowledge')).toBeNull();
+    expect(screen.queryByTestId('datalake-delete-active-btn-opti-knowledge')).toBeNull();
+  });
+
+  it('hides Rebuild passages on a lake the caller cannot rebuild, even with a backlog', async () => {
+    // theirsLake: canManage false, canRebuild false (a stranger's public lake).
+    useUnderChunkedCount.mockReturnValue({ data: { underChunkedCount: 5, failedCount: 0 } });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-theirs'));
+
+    expect(screen.queryByTestId('datalake-rebuild-passages-btn-theirs')).toBeNull();
+    expect(screen.queryByTestId('datalake-manager-rebuild-chip-theirs')).toBeNull();
+  });
+
+  it('shows Rebuild passages on a DB lake the caller manages (canRebuild === canManage)', async () => {
+    useUnderChunkedCount.mockReturnValue({ data: { underChunkedCount: 3, failedCount: 0 } });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+
+    expect(screen.getByTestId('datalake-rebuild-passages-btn-mine')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-addfiles-btn-mine')).toBeInTheDocument();
   });
 });
 

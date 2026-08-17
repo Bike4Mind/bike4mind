@@ -133,8 +133,10 @@ function resolveFallbackLake(lakeIdOrSlug: string, ctx: AccessContext): IDataLak
     const normalizedKeys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
     if (!lakeMatchesAccess(config, normalizedTags, normalizedKeys)) return null;
   }
-  // Owner-less on purpose: reads key off datalakeTag/fileTagPrefix, and writes are
-  // refused wholesale by assertLakeWritable, so no one is the creator.
+  // Owner-less on purpose: reads key off datalakeTag/fileTagPrefix, and document writes
+  // (rename/delete/visibility/file-removal) are refused wholesale by assertLakeWritable, so no
+  // one is the creator. The one exception is assertLakeRebuildAccess (authorizeLakeWrite.ts),
+  // which re-chunks files without mutating this document and gates on ctx.isAdmin directly.
   return {
     ...config,
     createdByUserId: '',

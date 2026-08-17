@@ -1121,9 +1121,11 @@ function LakeInfoPanel({
   const startChatWithLake = useStartChatWithLake();
   const [startingChat, setStartingChat] = useState(false);
   const visibility = lake.isPublic ? 'Public' : lake.organizationId ? 'Organization' : 'Private';
-  // "Rebuild passages": manager-only, and only surfaced when the lake actually has legacy
-  // oversized-chunk files to repair (the count self-polls down as a rebuild wave drains).
-  const { data: rebuildStatus } = useUnderChunkedCount(lake.id, lake.canManage);
+  // "Rebuild passages": gated on canRebuild, NOT canManage - a fallback (built-in) lake has no
+  // document to manage but can still be rebuilt by an admin (see assertLakeRebuildAccess). Only
+  // surfaced when the lake actually has legacy oversized-chunk files to repair (the count
+  // self-polls down as a rebuild wave drains).
+  const { data: rebuildStatus } = useUnderChunkedCount(lake.id, lake.canRebuild);
   const underChunkedCount = rebuildStatus?.underChunkedCount ?? 0;
   const failedCount = rebuildStatus?.failedCount ?? 0;
   const rechunk = useRechunkDataLake(lake.id);
@@ -1200,25 +1202,6 @@ function LakeInfoPanel({
               >
                 Settings
               </Button>
-              {underChunkedCount > 0 && (
-                <Tooltip
-                  title="Re-chunk files stored as oversized passages into retrieval-sized ones. Runs in bounded waves; safe to repeat until zero."
-                  size="sm"
-                >
-                  <Button
-                    size="sm"
-                    variant="outlined"
-                    color="primary"
-                    startDecorator={<AutoFixHighIcon sx={{ fontSize: 16 }} />}
-                    data-testid={`datalake-rebuild-passages-btn-${lake.id}`}
-                    loading={rechunk.isPending}
-                    onClick={() => rechunk.mutate(undefined)}
-                    sx={{ flexShrink: 0, fontSize: '13px' }}
-                  >
-                    Rebuild passages
-                  </Button>
-                </Tooltip>
-              )}
               <Tooltip title="Archive (restorable from the manager home)" size="sm">
                 <Button
                   size="sm"
@@ -1234,6 +1217,30 @@ function LakeInfoPanel({
                 </Button>
               </Tooltip>
             </>
+          )}
+          {/* Rebuild passages is gated on canRebuild, a NARROWER flag than canManage: a fallback
+              (built-in) lake has no document (canManage is always false for it) but can still be
+              rebuilt by an admin. Deliberately its own condition, not folded into the canManage
+              fragment above - that fragment's other affordances (rename/delete/visibility/file
+              removal) would still 400 on a fallback lake. */}
+          {lake.canRebuild && underChunkedCount > 0 && (
+            <Tooltip
+              title="Re-chunk files stored as oversized passages into retrieval-sized ones. Runs in bounded waves; safe to repeat until zero."
+              size="sm"
+            >
+              <Button
+                size="sm"
+                variant="outlined"
+                color="primary"
+                startDecorator={<AutoFixHighIcon sx={{ fontSize: 16 }} />}
+                data-testid={`datalake-rebuild-passages-btn-${lake.id}`}
+                loading={rechunk.isPending}
+                onClick={() => rechunk.mutate(undefined)}
+                sx={{ flexShrink: 0, fontSize: '13px' }}
+              >
+                Rebuild passages
+              </Button>
+            </Tooltip>
           )}
         </Box>
         <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
@@ -1273,8 +1280,9 @@ function LakeInfoPanel({
               Advisory only. Fetched lazily for the lake in view; renders nothing for an empty lake. */}
           <LakeHealthBadge lakeId={lake.id} failedFileCount={failedCount} />
           {/* Retrievability health: files still stored as oversized (pre-passage-target) chunks.
-              Manager-only, and the count self-polls down as the Rebuild passages wave drains. */}
-          {lake.canManage && underChunkedCount > 0 && (
+              Gated on canRebuild (not canManage), matching the button above - the count self-polls
+              down as the Rebuild passages wave drains. */}
+          {lake.canRebuild && underChunkedCount > 0 && (
             <Tooltip
               title="These files are stored as oversized passages; use Rebuild passages to re-chunk them."
               size="sm"

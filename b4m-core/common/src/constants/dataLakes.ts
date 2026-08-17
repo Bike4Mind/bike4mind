@@ -278,6 +278,21 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * its EFFECT via the create-time resolver, never the setting itself).
    */
   groundingMode?: DataLakeGroundingMode;
+  /**
+   * Whether the requesting caller may REBUILD this lake's passages (re-chunk files already in
+   * it). Narrower than `canManage` on purpose: a fallback (built-in) lake has no document to
+   * mutate, so `canManage` is always false for it, but rebuild attaches nothing and mutates no
+   * lake document - see `assertLakeRebuildAccess`. For a DB lake the two are identical
+   * (`canRebuild === canManage`); for a fallback lake `canRebuild` is `ctx.isAdmin` while
+   * `canManage` stays `false`. Kept as a SEPARATE flag rather than folded into `canManage` so the
+   * client can gate the Rebuild affordance without also lighting up rename/delete/visibility/
+   * file-removal, which would still fail server-side on a fallback lake.
+   *
+   * REQUIRED, not optional - same reasoning as `isOwn`: both producers (toManageableConfig,
+   * toFallbackConfig) set it unconditionally, so an absent field is a compile error rather than a
+   * silently-reintroduced gap.
+   */
+  canRebuild: boolean;
 }
 
 /**

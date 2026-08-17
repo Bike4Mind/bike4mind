@@ -126,6 +126,9 @@ const toManageableConfig = (
 ): ManageableDataLakeConfig => ({
   ...toConfig(dl),
   canManage: manageable,
+  // A DB lake HAS a document, so rebuild and manage are the same decision - only a fallback
+  // (built-in) lake needs the narrower `canRebuild`; see toFallbackConfig and the field's comment.
+  canRebuild: manageable,
   isOwn,
   // Owner name is a not-own label only: an own lake reads as "you", and it is set only when the
   // projection actually resolved one (name-or-username, never email - see resolveOwnerNames).
@@ -146,10 +149,17 @@ const toManageableConfig = (
  * on this arm too: `PREMIUM_DATA_LAKES` is `JSON.parse`d from env and keeps unknown keys, so an
  * overlay entry carrying a `systemPrompt` would otherwise be served to every caller. Fallbacks have
  * no owner and are read-only for everyone, so `canManage` is always false.
+ *
+ * `canRebuild` DOES take an actor, unlike every other field here: it is `ctx.isAdmin` directly,
+ * not `resolveCanManageLake` - see `assertLakeRebuildAccess`'s comment for why an org-scoped
+ * overlay lake must not let a customer-side org admin pass. This is a deliberate, narrow exception
+ * to "actor-less projection"; it is not a route for a future field to follow without the same
+ * reasoning.
  */
-const toFallbackConfig = (dl: DataLakeConfig): ManageableDataLakeConfig => ({
+const toFallbackConfig = (dl: DataLakeConfig, ctx: Pick<AccessContext, 'isAdmin'>): ManageableDataLakeConfig => ({
   ...toDataLakeConfig(dl),
   canManage: false,
+  canRebuild: ctx.isAdmin,
   // Built-in registry lakes have no creator, so they are never "yours" and carry no owner label.
   isOwn: false,
 });
@@ -200,7 +210,7 @@ export const listDataLakes = async (
   const normalizedKeys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
   const accessibleFallbacks = fallbacks
     .filter(dl => lakeMatchesAccess(dl, normalizedUserTags, normalizedKeys))
-    .map(toFallbackConfig);
+    .map(dl => toFallbackConfig(dl, ctx));
 
   return [...dynamicConfigs, ...accessibleFallbacks];
 };
@@ -208,7 +218,8 @@ export const listDataLakes = async (
 /**
  * Lists ALL data lakes (for admin views). No user-tag filtering. Admins may manage every
  * DB lake, so `canManage` is true for those; fallback (built-in) lakes stay read-only for
- * everyone (assertLakeWritable refuses them even for admins), so they are false.
+ * everyone (assertLakeWritable refuses document writes even for admins), so `canManage` is
+ * false. `canRebuild` is a separate, narrower flag - see ManageableDataLakeConfig.
  *
  * Takes `ctx` (not just `db`) so it can mark which of those cross-tenant lakes the admin
  * actually owns (`isOwn`) and, when a `users` lookup is supplied, label the rest with the
@@ -234,7 +245,7 @@ export const listAllDataLakes = async (
     toManageableConfig(dl, true, isEffectiveOwner(dl, ctx, grantsByLake.get(dl.id)), ownerNames.get(dl.createdByUserId))
   );
   const dynamicIds = new Set(dynamicLakes.map(d => d.slug));
-  const fallbacks = DATA_LAKES.filter(dl => !dynamicIds.has(dl.id)).map(toFallbackConfig);
+  const fallbacks = DATA_LAKES.filter(dl => !dynamicIds.has(dl.id)).map(dl => toFallbackConfig(dl, ctx));
 
   return [...dynamicConfigs, ...fallbacks];
 };

@@ -7,7 +7,7 @@ import type {
 } from '@bike4mind/common';
 import { DATA_LAKES, DATALAKE_TAG_PREFIX, normalizeTagPrefix } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
-import { assertLakeAccess, assertLakeWritable } from './assertLakeAccess';
+import { assertLakeAccess, assertLakeWritable, isFallbackLake } from './assertLakeAccess';
 import { type ManageActor } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
 
@@ -19,6 +19,10 @@ export { canManageLake, type ManageActor } from './manageRule';
  * existence leak); a reader who isn't the creator/admin gets a manage-denied error mirroring the
  * remove path. Returns the lake on grant. Used by the batch upload doors, which already hold the
  * lake's id/slug.
+ *
+ * Fallback lakes are read-only for EVERYONE (even admins, who pass canManageLake): there is no
+ * document to attach files to. `assertLakeRebuildAccess` below is the one file-level operation
+ * that does not go through this gate - see its comment for why.
  */
 export const assertLakeWriteAccess = async (
   lakeIdOrSlug: string,
@@ -33,11 +37,45 @@ export const assertLakeWriteAccess = async (
   }
 ): Promise<IDataLakeDocument> => {
   const lake = await assertLakeAccess(lakeIdOrSlug, ctx, { db });
-  // Fallback lakes are read-only for EVERYONE (even admins, who pass canManageLake):
-  // there is no document to attach files to.
   assertLakeWritable(lake);
   if (!(await resolveCanManageLake(lake, ctx, { db }))) {
     throw new BadRequestError('You do not have permission to add files to this data lake');
+  }
+  return lake;
+};
+
+/**
+ * Resolve a lake by id-or-slug and assert the caller may REBUILD its passages (re-chunk files
+ * already in the lake). Deliberately does NOT call `assertLakeWritable`: rebuild re-chunks
+ * FabFiles carrying the lake's meta-tag, attaching nothing and mutating no lake document, so the
+ * "there is no document to mutate" rationale that guards rename/delete/visibility/file-removal
+ * does not apply here. Must stay in sync with `assertCanWriteStaticRegistryTags` /
+ * `assertCanWriteDataLakeTags` below, which enforce the same "static registry lake -> admin only"
+ * rule for the sibling operations of changing which files belong to a static lake.
+ *
+ * Fallback (static registry) lakes gate on `ctx.isAdmin` DIRECTLY, not `resolveCanManageLake`:
+ * `resolveFallbackLake` spreads the lake's config onto its synthetic document, so an org-scoped
+ * overlay lake would carry `organizationId` and let a customer-side org admin (not a platform
+ * admin) pass `canManageLake`'s org-admin rung. Gating on `ctx.isAdmin` directly keeps this
+ * predicate identical to the `canRebuild` flag computed in `listDataLakes.ts`, so the two cannot
+ * drift apart.
+ */
+export const assertLakeRebuildAccess = async (
+  lakeIdOrSlug: string,
+  ctx: AccessContext,
+  {
+    db,
+  }: {
+    db: {
+      dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug'>;
+      dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+    };
+  }
+): Promise<IDataLakeDocument> => {
+  const lake = await assertLakeAccess(lakeIdOrSlug, ctx, { db });
+  const allowed = isFallbackLake(lake) ? ctx.isAdmin : await resolveCanManageLake(lake, ctx, { db });
+  if (!allowed) {
+    throw new BadRequestError("You do not have permission to rebuild this data lake's passages");
   }
   return lake;
 };
