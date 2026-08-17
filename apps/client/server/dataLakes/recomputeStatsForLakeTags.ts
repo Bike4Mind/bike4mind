@@ -1,5 +1,6 @@
 import { dataLakeRepository, fabFileRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
+import { lakeConfigAuditDb } from './lakeConfigAuditDb';
 
 /**
  * Rebuild the persisted stats of every lake named by a `datalake:` meta-tag in `tagNames` - for
@@ -38,8 +39,12 @@ export const recomputeStatsForLakeTags = async (
       if (!lake) continue;
       // The lake DOCUMENT, not a narrower shape: recomputeLakeStats derives the two-signal
       // membership scope from it, and a partial one silently counts the meta-tag arm alone.
+      // Audit repos wired but no `actor`: this helper is reached from file doors that know only
+      // which tags moved, so a draft -> active flip here records under a `system` principal. That
+      // is the honest attribution - see recomputeLakeStats, which owns the transition and accepts
+      // an optional actor this helper has none to supply.
       await dataLakeService.recomputeLakeStats(lake, {
-        db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
+        db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, ...lakeConfigAuditDb },
       });
     } catch (error) {
       logger.error('Error recomputing data lake stats after a file write:', { error, metaTag });
