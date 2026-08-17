@@ -189,15 +189,20 @@ needs the same sunset treatment as any other breaking change.
 
 ## 6. Response headers
 
-Every response carries `X-Request-ID`. API-key-authenticated responses additionally carry
-the six rate-limit headers set by `server/middlewares/apiKeyRateLimit.ts`:
-`X-RateLimit-{Limit,Remaining,Reset}-{Minute,Day}`.
+Every response carries `X-Request-ID`. Responses from an endpoint served by `baseApi`
+additionally carry the six rate-limit headers set by
+`server/middlewares/apiKeyRateLimit.ts` -
+`X-RateLimit-{Limit,Remaining,Reset}-{Minute,Day}` - on API-key-authenticated requests.
+Reset values are Unix epoch **seconds**.
 
-> **Known divergence (not yet fixed).** The spec publishes the unwindowed names
-> (`X-RateLimit-Limit`/`-Remaining`/`-Reset`) and attaches them only to `executeTool`,
-> while the runtime sets the six windowed names on *every* API-key-authenticated
-> response. A client coding against the published names reads `undefined`. See
-> [What is not gated yet](#what-is-not-gated-yet).
+**A contract declares whether it emits them**, via `emitsRateLimitHeaders: true`. This is
+declared, not inferred, because reaching that middleware is a transport fact the contract
+cannot derive: the Lambda adapter sets no rate-limit headers, and the Fargate SSE route
+computes them and then discards them (`sseRoute.ts`). Set the flag if and only if the
+handler mounts `baseApi`.
+
+There is no unwindowed `X-RateLimit-Limit`/`-Remaining`/`-Reset`. A client reading those
+names gets `undefined`.
 
 ---
 
@@ -221,7 +226,7 @@ mistakes "CI passed" for "conventions met":
 
 | Rule | Why it is not gated |
 |---|---|
-| Response headers match the middleware | Contracts do not declare headers yet. The published names are wrong today, so a diff gate would fail on arrival; the spec fix has to land first. |
+| `emitsRateLimitHeaders` matches the handler's middleware chain | The flag is declared on the contract and the published names are now correct, but nothing proves the declaration still matches the chain the handler mounts. Closing this needs the adapters to assert it at runtime in non-prod, the way they already assert response schemas. |
 | Error bodies carry no undocumented keys | `errorHandler.ts` adds `name` to every body, including internal routes. Removing it is a behavioural change well outside the contract layer. |
 | Wire fields are `snake_case` | Requires walking Zod shapes, and today's schemas deliberately accept camelCase aliases, so the check would fail on arrival. Needs the alias metadata to exist first. |
 | One `errorCode` vocabulary | The TTS codes are not in the shared union yet. |

@@ -175,9 +175,28 @@ describe('buildOpenApiDocument', () => {
     expect(doc.info.description).not.toContain('ai.completions:write');
   });
 
-  it('declares X-Request-ID on every response and rate-limit headers on tools', () => {
+  it('declares X-Request-ID on every response', () => {
     expect(completions.responses['200'].headers['X-Request-ID']).toBeDefined();
-    expect(tools.responses['200'].headers['X-RateLimit-Limit']).toBeDefined();
+    expect(tools.responses['200'].headers['X-Request-ID']).toBeDefined();
+    expect(chat.responses['200'].headers['X-Request-ID']).toBeDefined();
+  });
+
+  it('publishes the WINDOWED rate-limit header names the middleware actually sets', () => {
+    // The unwindowed spelling is what the spec used to publish; nothing sets it,
+    // so a client coding against it reads undefined.
+    for (const window of ['Minute', 'Day']) {
+      for (const field of ['Limit', 'Remaining', 'Reset']) {
+        expect(chat.responses['200'].headers[`X-RateLimit-${field}-${window}`]).toBeDefined();
+      }
+    }
+    expect(chat.responses['200'].headers['X-RateLimit-Limit']).toBeUndefined();
+  });
+
+  it('attaches rate-limit headers only where the contract declares them', () => {
+    // tools is JWT-only on the Lambda adapter and completions is the Fargate SSE
+    // route: neither sets a rate-limit header, so neither may publish one.
+    expect(tools.responses['200'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
+    expect(completions.responses['200'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
   });
 
   it('emits no orphaned component schemas (every schema is $ref-ed somewhere)', () => {

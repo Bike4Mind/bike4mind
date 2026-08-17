@@ -172,17 +172,41 @@ const REQUEST_ID_HEADER_SPEC = {
   },
 };
 
-const RATE_LIMIT_HEADER_SPEC = {
-  'X-RateLimit-Limit': { description: 'Request quota for the window.', schema: { type: 'integer' as const } },
-  'X-RateLimit-Remaining': {
-    description: 'Requests remaining in the window.',
-    schema: { type: 'integer' as const },
-  },
-  'X-RateLimit-Reset': {
-    description: 'Unix epoch (seconds) when the window resets.',
-    schema: { type: 'integer' as const },
-  },
-};
+/**
+ * The rate-limit headers `apiKeyRateLimit` actually sets - two windows, six
+ * headers. These names are load-bearing: a client reading the unwindowed
+ * `X-RateLimit-Limit` gets `undefined`. Must stay in sync with
+ * apps/client/server/middlewares/apiKeyRateLimit.ts.
+ */
+const RATE_LIMIT_HEADER_SPEC = Object.fromEntries(
+  (['Minute', 'Day'] as const).flatMap(window => [
+    [
+      `X-RateLimit-Limit-${window}`,
+      { description: `Request quota per ${window.toLowerCase()}.`, schema: { type: 'integer' as const } },
+    ],
+    [
+      `X-RateLimit-Remaining-${window}`,
+      {
+        description: `Requests remaining in the current ${window.toLowerCase()}.`,
+        schema: { type: 'integer' as const },
+      },
+    ],
+    [
+      `X-RateLimit-Reset-${window}`,
+      {
+        description: `Unix epoch (seconds) when the ${window.toLowerCase()} window resets.`,
+        schema: { type: 'integer' as const },
+      },
+    ],
+  ])
+);
+
+/**
+ * Operations whose responses carry those headers, per their contract. Derived
+ * rather than hardcoded: the previous hardcode attached them to `executeTool`,
+ * which is JWT-only and served by the Lambda adapter, so it emits none of them.
+ */
+const RATE_LIMIT_HEADER_OPS = new Set(CONTRACTS.filter(c => c.emitsRateLimitHeaders).map(c => c.operationId));
 
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace']);
 
@@ -233,7 +257,7 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       for (const status of Object.keys(op.responses ?? {})) {
         const response = op.responses[status];
         response.headers = { ...REQUEST_ID_HEADER_SPEC, ...(response.headers ?? {}) };
-        if (opId === 'executeTool') response.headers = { ...response.headers, ...RATE_LIMIT_HEADER_SPEC };
+        if (RATE_LIMIT_HEADER_OPS.has(opId)) response.headers = { ...response.headers, ...RATE_LIMIT_HEADER_SPEC };
       }
     }
   }

@@ -127,6 +127,15 @@ export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
   responses: Record<number, ResponseSpec>;
   /** SSE endpoint: skips JSON response-body docs and gets streaming code samples. */
   streaming?: boolean;
+  /**
+   * This endpoint's responses carry the six `X-RateLimit-*-{Minute,Day}` headers,
+   * i.e. it runs the `apiKeyRateLimit` middleware (via `baseApi`). Declared here
+   * rather than inferred, because whether a route reaches that middleware is a
+   * transport fact the contract cannot derive: the Lambda adapter sets no such
+   * headers, and the Fargate SSE route computes them but discards them.
+   * Must stay in sync with the middleware chain the handler actually mounts.
+   */
+  emitsRateLimitHeaders?: boolean;
   codeSample?: CodeSample;
   /**
    * Conventions this endpoint is exempt from, each mapped to WHY. The only
