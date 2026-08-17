@@ -1715,6 +1715,13 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * Mirrors `resolveEmbeddingModelFallback` above: same try/catch shape, same loud-fallback policy.
    * Resolved ONCE per turn by the caller and closed over, never re-read inside the per-chunk
    * accumulation loop below.
+   *
+   * `positiveIntOr`'s unset/unusable-value branches are defense-in-depth here, not something
+   * normal operation exercises: `getSettingsValue` runs the setting's own schema (`.min(1_000)`,
+   * now also `.max`) via `safeParse` before this ever sees the value, so those branches cannot
+   * fire for any input that reached the DB through the write path OR a direct edit - the schema
+   * check applies to whatever is stored, regardless of how it got there. The only branch that is
+   * genuinely reachable is the outer catch below (a settings-read failure/outage).
    */
   private async resolveForcedRetrievalCharBudget(): Promise<number> {
     try {

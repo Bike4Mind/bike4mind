@@ -486,6 +486,25 @@ describe('forcedRetrievalCharBudget agrees with the forced-retrieval fallback (#
   it('prefaults to the shared constant rather than makeNumberSetting fallback 0', () => {
     expect(settingsMap.forcedRetrievalCharBudget.schema.parse(undefined)).toBe(FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT);
   });
+
+  it('rejects a value below the declared floor at write time', () => {
+    // Same pattern as DefaultChunkSize above: the write path (settings/update.ts) calls
+    // schema.parse and throws on failure, so this is what actually stops an admin from saving an
+    // unusably small budget - positiveIntOr's own floor is defense-in-depth, not the real gate.
+    expect(settingsMap.forcedRetrievalCharBudget.min).toBe(1_000);
+    expect(() => settingsMap.forcedRetrievalCharBudget.schema.parse(999)).toThrow();
+    expect(settingsMap.forcedRetrievalCharBudget.schema.parse(1_000)).toBe(1_000);
+  });
+
+  it('rejects a value above the declared ceiling at write time (#1860 P2-1)', () => {
+    // Without this, a fat-fingered extra zero (24000 -> 240000) passed write-time validation
+    // cleanly and silently shed conversation history via ChatCompletionProcess's overflow-recovery
+    // loop before eventually hard-erroring - the retrieval block itself is never shed, only prior
+    // turns are.
+    expect(settingsMap.forcedRetrievalCharBudget.max).toBe(100_000);
+    expect(() => settingsMap.forcedRetrievalCharBudget.schema.parse(100_001)).toThrow();
+    expect(settingsMap.forcedRetrievalCharBudget.schema.parse(100_000)).toBe(100_000);
+  });
 });
 
 describe('LakeAccessAuditRetentionDays cannot be configured below the floor', () => {

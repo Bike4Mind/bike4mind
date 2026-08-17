@@ -1607,7 +1607,14 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
     expect(bodyLen(larger)).toBe(24_000);
   });
 
-  it('an unusable configured value warns and falls back to the default', async () => {
+  /**
+   * Defense-in-depth, not a production-reachable path: the real `getSettingsValue` runs the
+   * setting's own schema via `safeParse` before this code ever sees a value, so an unusable stored
+   * shape cannot actually reach `positiveIntOr` in production - this mock injects the raw shape
+   * directly to pin `positiveIntOr`'s OWN contract, which is what protects this call if that
+   * upstream sanitization is ever bypassed (a different read path, a schema change, etc).
+   */
+  it('positiveIntOr falls back to the default and warns on an unusable raw value', async () => {
     const ctx = makeCtx({ getSettingsValue: () => 'not-a-number' });
     const content = await run(ctx);
     expect(bodyLen(content)).toBe(FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT);
@@ -1631,7 +1638,8 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
   });
 
   it('reads the budget ONCE per turn, not once per chunk', async () => {
-    // 5 chunks so the accumulation loop iterates 5 times; the read must not scale with it.
+    // 5 chunks so the accumulation loop iterates more than once (it injects 3 and breaks on the
+    // 4th budget check, never reaching a 5th) - the read must not scale with iteration count.
     const ctx = makeCtx({ getSettingsValue: () => 3_000, chunkText: 'y'.repeat(1_000), chunkCount: 5 });
     await run(ctx);
     const calls = (ctx.db.adminSettings.getSettingsValue as ReturnType<typeof vi.fn>).mock.calls.filter(

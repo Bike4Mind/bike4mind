@@ -3146,6 +3146,14 @@ export const settingsMap = {
     name: 'Forced Retrieval Char Budget',
     defaultValue: FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
     min: 1_000,
+    // 100,000 is ~2x the top of the planned validation sweep (12K/24K/48K), not a technical ceiling
+    // this codebase enforces elsewhere (unlike DefaultChunkSize's max, which is tied to the
+    // under-chunked detection threshold). Without SOME max, a fat-fingered extra zero (24000 ->
+    // 240000) passes write-time validation cleanly, then silently sheds conversation history via
+    // ChatCompletionProcess's overflow-recovery loop before eventually hard-erroring - the retrieval
+    // block itself is never shed, only prior turns are, so the failure looks like unrelated context
+    // loss rather than a misconfigured setting.
+    max: 100_000,
     description:
       'Total characters of retrieved chunk text injected into a Data-Lake-mode turn. Measured ' +
       'saturating on every turn against a 47-document lake, so this is the binding constraint on ' +
