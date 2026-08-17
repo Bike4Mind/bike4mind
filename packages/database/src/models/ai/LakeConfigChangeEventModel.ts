@@ -124,10 +124,17 @@ const LakeConfigChangeEventSchema = new Schema<ILakeConfigChangeEventDocument>(
 
 LakeConfigChangeEventSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 // "What changed on this lake, newest first?" - the owner-facing history query, and the reason
-// this collection exists.
+// this collection exists. The only query index carried, because it is the only one with a reader:
+// the repository exposes `record` and `listByLake` and nothing else.
+//
+// Deliberately NOT carried: by-principal and by-organization compounds. Both were speculative -
+// an org-wide admin audit browser is out of scope for this issue by design, and no by-principal
+// reader is planned either - and an index with no reader is pure cost, paid on every insert into
+// a collection whose retention is three years. Add each with the feature that queries it.
+// If a by-principal index is ever wanted, lead it with `dataLakeId`: batch-completion writes a
+// `system`/`system` pair, so `principalKind + principalId` alone would pile a large share of all
+// rows into one low-selectivity slot.
 LakeConfigChangeEventSchema.index({ dataLakeId: 1, createdAt: -1 });
-LakeConfigChangeEventSchema.index({ principalKind: 1, principalId: 1, createdAt: -1 });
-LakeConfigChangeEventSchema.index({ organizationId: 1, createdAt: -1 });
 
 export const LakeConfigChangeEventModel: ILakeConfigChangeEventModel =
   (mongoose.models[ModelName] as ILakeConfigChangeEventModel) ||
