@@ -352,18 +352,31 @@ jobs:
           DEST: ${{ runner.temp }}/review-transcript-redacted.json
         run: |
           set -uo pipefail
+          WAKEUP=false
           if [ -z "$EXECUTION_FILE" ] || [ ! -s "$EXECUTION_FILE" ]; then
             echo "::warning::no execution output file to upload"
             echo "uploadable=false" >> "$GITHUB_OUTPUT"
+            echo "schedule_wakeup_detected=$WAKEUP" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if ! python3 "${GITHUB_WORKSPACE}/.github/scripts/redact-review-transcript.py" \
                  "$EXECUTION_FILE" "$SKILL_FILE" "$DEST"; then
             echo "::warning::transcript redaction failed; not uploading"
             echo "uploadable=false" >> "$GITHUB_OUTPUT"
+            echo "schedule_wakeup_detected=$WAKEUP" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "uploadable=true" >> "$GITHUB_OUTPUT"
+
+          # Flags the async-wait failure mode: the transcript's own tool-call
+          # history still shows it waiting on a background agent, so "Report
+          # incomplete review" can name the likely cause instead of just
+          # "errored or ran out of turns".
+          if jq -e 'any(.[]; (.message.content? // []) | any(.[]?; .type == "tool_use" and .name == "ScheduleWakeup"))' \
+                 "$DEST" >/dev/null 2>&1; then
+            WAKEUP=true
+          fi
+          echo "schedule_wakeup_detected=$WAKEUP" >> "$GITHUB_OUTPUT"
 
       - name: Upload review transcript
         if: always() && steps.transcript.outputs.uploadable == 'true'
@@ -390,10 +403,17 @@ jobs:
         if: always() && (steps.bot_review.outcome == 'failure' || (steps.bot_review.outcome == 'success' && steps.bot_review.outputs.conclusion == 'success')) && steps.review_posted.outputs.posted != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WAKEUP_DETECTED: ${{ steps.transcript.outputs.schedule_wakeup_detected }}
         run: |
+          BODY="🤖 Automated review did not complete — no review from this run was detected on the PR (the run errored, exhausted its turn budget, or ended without posting). See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details; a redacted transcript is attached to it as an artifact when one was captured. Re-apply the \`bot-review\` label to retry, or request a human reviewer."
+          # WAKEUP_DETECTED is set from the uploaded transcript's own tool-call
+          # history, so this note is evidence-based, not a guess.
+          if [ "$WAKEUP_DETECTED" = "true" ]; then
+            BODY="$BODY"$'\n\n'"This run's transcript shows it waiting on a background agent via ScheduleWakeup - a known failure mode where the run ends cleanly, well under its turn budget, because nothing in this single-shot process can ever deliver the completion notification it was waiting for."
+          fi
           gh pr comment ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} \
-            --body "🤖 Automated review did not complete — no review from this run was detected on the PR (the run errored, exhausted its turn budget, or ended without posting). See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details; a redacted transcript is attached to it as an artifact when one was captured. Re-apply the \`bot-review\` label to retry, or request a human reviewer."
+            --body "$BODY"
           # Red the job too. A success-with-no-post used to leave a green check,
           # which reads as "the review happened" - the failure mode this guards.
           exit 1
