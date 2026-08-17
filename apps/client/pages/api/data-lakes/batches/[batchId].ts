@@ -5,6 +5,7 @@ import { dataLakeService } from '@bike4mind/services';
 import { BATCH_TERMINAL_STATUSES, type BatchStatus } from '@bike4mind/common';
 import { Request } from 'express';
 import { z } from 'zod';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
 const UpdateBatchInput = z.object({
   status: z.enum(['preparing', 'uploading', 'processing', 'completed', 'completed_with_errors', 'failed', 'cancelled']),
@@ -33,7 +34,7 @@ const recomputeLakeAfterTerminal = async (
     const lake = await dataLakeRepository.findById(dataLakeId);
     if (!lake) return;
     await dataLakeService.recomputeLakeStats(lake, {
-      db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
+      db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, ...lakeConfigAuditDb },
     });
   } catch (error) {
     logger.error(`Error recomputing data lake stats for terminal batch in lake ${dataLakeId}: ${error}`);
