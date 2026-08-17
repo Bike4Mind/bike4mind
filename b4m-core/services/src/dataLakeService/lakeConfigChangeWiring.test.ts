@@ -434,6 +434,32 @@ describe('lifecycle services', () => {
     }
   );
 
+  // The sibling half of the updateDataLake concurrent-writer case. These services have a LONG gap
+  // between their `findById` and their terminal write (batch cancel, file sweep, index removal),
+  // so a rename landing in it is more likely here, not less. Diffing the `findOneAndUpdate` result
+  // would attribute that rename to whoever ran the lifecycle action, under their rung.
+  it.each([
+    ['archive', archiveDataLake, lake({ status: 'active' })],
+    ['delete', deleteDataLake, lake({ status: 'active' })],
+    ['unarchive', unarchiveDataLake, lake({ status: 'archived' })],
+    ['restore', restoreDeletedDataLake, lake({ status: 'deleted' })],
+  ] as const)(
+    '%s records only its own status change when a concurrent rename lands mid-operation',
+    async (_n, service, existing) => {
+      const audit = auditSpy();
+      const db = { ...lifecycleDb(existing), ...audit.db };
+      db.dataLakes.update = vi
+        .fn()
+        .mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...existing, name: 'Renamed By Admin', ...d }));
+
+      await service(owner, 'lake1', { db });
+
+      const fields = audit.only().changes.map(c => c.field);
+      expect(fields).toContain('status');
+      expect(fields).not.toContain('name');
+    }
+  );
+
   it('records nothing when archive short-circuits on an already-archived lake', async () => {
     const existing = lake({ status: 'archived' });
     const audit = auditSpy();
