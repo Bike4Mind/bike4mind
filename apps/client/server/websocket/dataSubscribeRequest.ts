@@ -58,9 +58,20 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   // are some cases where a Model isn't handled by casl/mongoose, and we handle those
   // cases explicitly.
   let scope: mongoose.FilterQuery<unknown>;
+  // Set only for the quests branch below - whether the single session this subscription's
+  // `query.sessionId` names (the only shape the client actually sends, sessions.ts:598) belongs
+  // to the caller. Determines whether resolveFieldLimits' owner-only exclusion applies.
+  let isOwnQuestSession = false;
   if (collectionName === Quest.collection.collectionName) {
-    const accessibleSessions = await SessionModel.find(accessibleBy(userAbility).ofType(SessionModel), { _id: true });
+    const accessibleSessions = await SessionModel.find(accessibleBy(userAbility).ofType(SessionModel), {
+      _id: true,
+      userId: true,
+    });
     scope = { sessionId: { $in: accessibleSessions.map(s => s._id) } };
+    const requestedSessionId = typeof query.sessionId === 'string' ? query.sessionId : undefined;
+    isOwnQuestSession =
+      !!requestedSessionId &&
+      accessibleSessions.some(s => s._id.toString() === requestedSessionId && s.userId === user.id);
   } else if (collectionName === QuestMasterPlan.collection.collectionName) {
     const accessibleSessions = await SessionModel.find(accessibleBy(userAbility).ofType(SessionModel), { _id: true });
     // Plan access is user-based (owner/shared/public) with a session-based
@@ -109,7 +120,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   // as `fields`, which is what the separate subscriber-fanout service reads to build its own
   // change-stream projection - so this exclusion applies to live update/insert events fanout
   // relays, not just the one-time fetchInitialData query above.
-  const fieldLimits = resolveFieldLimits(collectionName, Quest.collection.collectionName);
+  const fieldLimits = resolveFieldLimits(collectionName, Quest.collection.collectionName, isOwnQuestSession);
 
   let scopedFields: undefined | Record<string, boolean | number> =
     (fields || fieldLimits) &&

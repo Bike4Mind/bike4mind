@@ -78,8 +78,8 @@ const PromptMetaInspector = () => {
   const totalActualTokens =
     (promptMeta?.tokenUsage?.actualInputTokens || 0) + (promptMeta?.tokenUsage?.actualOutputTokens || 0);
   const offeredTools = promptMeta ? readOfferedTools(promptMeta) : undefined;
-  const questTimestamps = promptMeta as PromptMetaWithQuestTimestamps | null;
-  const generatedAt = promptMeta?.generatedAt || questTimestamps?.createdAt;
+  const promptMetaWithTimestamps = promptMeta as PromptMetaWithQuestTimestamps | null;
+  const generatedAt = promptMeta?.generatedAt || promptMetaWithTimestamps?.createdAt;
 
   const [activeTab, setActiveTab] = useState<string>('details');
 
@@ -357,8 +357,8 @@ ${promptMeta.promptErrors?.length ? promptMeta.promptErrors.map((e: string) => `
                       </Chip>
                       <Chip variant="soft" color="neutral" startDecorator={<Timer />}>
                         Updated:{' '}
-                        {questTimestamps?.updatedAt
-                          ? dayjs(questTimestamps.updatedAt).format('YYYY-MM-DD HH:mm:ss')
+                        {promptMetaWithTimestamps?.updatedAt
+                          ? dayjs(promptMetaWithTimestamps.updatedAt).format('YYYY-MM-DD HH:mm:ss')
                           : 'N/A'}
                       </Chip>
                     </Stack>

@@ -111,6 +111,23 @@ describe('GET /api/admin/model-logs', () => {
         prompt: 'what breed makes a good golden retriever companion?',
       },
     });
+
+    // This route spreads promptMeta across ALL users to any admin - functionCalls[].returnValue
+    // is verbatim tool output (private corpus chunks, file contents), the same class of content
+    // every other cross-user promptMeta read redacts.
+    await Quest.create({
+      sessionId: 'session-6',
+      type: 'message',
+      timestamp: new Date(),
+      prompt: 'yeah',
+      promptMeta: {
+        session: { id: 'session-6', userId: 'user-2' },
+        model: { name: 'claude-sonnet-5' },
+        functionCalls: [
+          { id: 'call-1', name: 'web_search', parameters: {}, returnValue: 'private tool output', success: true },
+        ],
+      },
+    });
   });
 
   afterEach(async () => {
@@ -150,5 +167,15 @@ describe('GET /api/admin/model-logs', () => {
     const body = res._getJSONData();
     expect(body.total).toBe(0);
     expect(JSON.stringify(body.logs)).not.toContain('grok-3');
+  });
+
+  it('redacts functionCalls[].returnValue - this route serves every user, not just the caller', async () => {
+    const { req, res } = run({ search: 'claude-sonnet-5' });
+    await handler(req, res);
+    const body = res._getJSONData();
+    expect(body.total).toBe(1);
+    const serialized = JSON.stringify(body.logs);
+    expect(serialized).not.toContain('private tool output');
+    expect(serialized).toContain('web_search');
   });
 });

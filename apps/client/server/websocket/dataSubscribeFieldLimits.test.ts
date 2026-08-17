@@ -24,4 +24,19 @@ describe('resolveFieldLimits', () => {
     const limits = resolveFieldLimits('chathistoryitems', 'chathistoryitems');
     expect(limits).toBeDefined();
   });
+
+  it('does not exclude functionCalls.returnValue/error for the quests collection when the caller owns the session', () => {
+    // A caller-owned quest subscription must not lose returnValue - the client cache merges a WS
+    // update as a top-level spread, so ANY exclusion here replaces the owner's own cached tool
+    // output the moment a live update lands, not just a sharee's.
+    expect(resolveFieldLimits('quests', 'quests', true)).toBeUndefined();
+  });
+
+  it('still excludes functionCalls.returnValue/error for the quests collection when the caller is a sharee', () => {
+    const limits = resolveFieldLimits('quests', 'quests', false);
+    expect(limits).toEqual({
+      'promptMeta.functionCalls.returnValue': false,
+      'promptMeta.functionCalls.error': false,
+    });
+  });
 });

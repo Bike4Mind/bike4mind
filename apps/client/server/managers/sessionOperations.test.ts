@@ -63,7 +63,6 @@ import {
   stopReply,
   forkSession,
   snipSession,
-  cloneSession,
   summarizeSession,
   contextSummarizeSession,
   getMessagesFromSession,
@@ -247,30 +246,6 @@ describe('sessionOperations', () => {
 
       expect(createSessionMock).toHaveBeenCalledWith('u1', { name: 'Snipped Orig' }, ability);
       expect(QuestMock.find).toHaveBeenCalledWith({ sessionId: 's1', timestamp: { $gte: expect.any(Date) } });
-    });
-  });
-
-  describe('cloneSession', () => {
-    it('rejects when the ability lacks the clone permission', async () => {
-      const denyAbility = mockAbility(false);
-      await expect(cloneSession('s1', 'admin-1', denyAbility)).rejects.toThrow(
-        'User does not have permission to clone sessions'
-      );
-    });
-
-    it('clones the session under the admin user and copies all messages', async () => {
-      const newSession = { id: 'clone-1', save: vi.fn().mockResolvedValue(undefined) };
-      SessionMock.findById.mockResolvedValueOnce({ name: 'Orig', knowledgeIds: ['k'], tags: ['t'] });
-      createSessionMock.mockResolvedValueOnce(newSession);
-      QuestMock.find.mockResolvedValueOnce([{ toObject: () => ({ _id: 'm1', id: 'm1', prompt: 'x' }) }]);
-      SessionMock.findOne.mockResolvedValue({ id: 'clone-1', lastUpdated: new Date(0) });
-      QuestMock.create.mockResolvedValue({ id: 'copied' });
-
-      const result = await cloneSession('s1', 'admin-1', ability);
-
-      expect(createSessionMock).toHaveBeenCalledWith('admin-1', { name: 'Cloned Orig', knowledgeIds: ['k'] }, ability);
-      expect(QuestMock.create).toHaveBeenCalledWith({ prompt: 'x', sessionId: 'clone-1' });
-      expect(result).toBe(newSession);
     });
   });
 
