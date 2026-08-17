@@ -174,6 +174,21 @@ describe('SSRF - IPv6 families that bypassed the guard (site-local, 6to4, Teredo
     expect(isPrivateIP('2001:4860:ffff::8888')).toBe(false);
   });
 
+  it('catches Teredo when the zero run is compressed away', () => {
+    // The `2001:0:` and `2001:0000:` arms both read char 5 expecting a `0`, but RFC 5952 compresses a
+    // zero run starting at the second hextet into `::` - so the very hextet those arms match on
+    // disappears from the string and these read as public. Both entry paths produce the compressed
+    // form: WHATWG URL parsing of a bracketed literal, and getaddrinfo answers.
+    expect(isPrivateIP('2001::')).toBe(true);
+    expect(isPrivateIP('2001::1')).toBe(true);
+    expect(isPrivateIP('2001::a:b:c')).toBe(true);
+    // Not a widening: `::` is only legal for a run of 2+ zero hextets, so a canonical `2001::x` always
+    // has a zero second hextet and is inside 2001:0::/32. Public 2001: space keeps a non-zero second
+    // hextet and so can never compress to this shape - these are the guards on that claim.
+    expect(isPrivateIP('2001:4860::8888')).toBe(false);
+    expect(isPrivateIP('2001:db9::1')).toBe(false);
+  });
+
   it('leaves public addresses alone, including the neighbours of each new range', () => {
     // Regression pins. `2003::` and `2001:5::` sit immediately outside the two new prefixes, and the
     // Cloudflare pair is the same over-block guard the mapped-form fix needed.
