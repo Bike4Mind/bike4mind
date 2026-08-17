@@ -1,5 +1,12 @@
+import { z } from 'zod';
 import { organizationService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
+
+const addMemberBodySchema = z.object({
+  userId: z.string().optional(),
+  email: z.string().optional(),
+  force: z.boolean().optional(),
+});
 import { withTransaction } from '@bike4mind/database';
 import { BadRequestError } from '@server/utils/errors';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -37,10 +44,11 @@ const handler = baseApi()
       throw new BadRequestError('Organization ID is required');
     }
 
+    const body = addMemberBodySchema.parse(req.body);
     const { user: newMember } = await withTransaction(async () =>
       organizationService.addMember(
         req.user,
-        { organizationId, ...(req.body as any) },
+        { organizationId, ...body },
         {
           db: {
             organizations: organizationRepository,

@@ -1,12 +1,19 @@
+import { z } from 'zod';
 import { Permission, ProjectEvents } from '@bike4mind/common';
 import { Project, projectRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
-
 import { baseApi } from '@server/middlewares/baseApi';
 import qs from 'qs';
 import { accessibleBy } from '@casl/mongoose';
 import { InternalServerError, UnprocessableEntityError } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
+
+const createProjectBodySchema = z.object({
+  name: z.string().min(1),
+  description: z.string().min(1),
+  sessionIds: z.array(z.string()).optional(),
+  fileIds: z.array(z.string()).optional(),
+});
 
 const handler = baseApi()
   .get(async (req, res) => {
@@ -27,7 +34,8 @@ const handler = baseApi()
   })
   .post(async (req, res) => {
     try {
-      const project = await projectService.createProject(req.user.id, req.body as any, {
+      const body = createProjectBodySchema.parse(req.body);
+      const project = await projectService.createProject(req.user.id, body, {
         db: {
           projects: projectRepository,
         },
@@ -45,9 +53,9 @@ const handler = baseApi()
         { ability: req.ability }
       );
 
-      if (req.body.sessionIds?.length) {
+      if (body.sessionIds?.length) {
         await Promise.all(
-          req.body.sessionIds.map((sessionId: string) =>
+          body.sessionIds.map((sessionId: string) =>
             logEvent(
               {
                 userId: req.user.id,
@@ -65,9 +73,9 @@ const handler = baseApi()
         );
       }
 
-      if (req.body.fileIds?.length) {
+      if (body.fileIds?.length) {
         await Promise.all(
-          req.body.fileIds.map((fileId: string) =>
+          body.fileIds.map((fileId: string) =>
             logEvent(
               {
                 userId: req.user.id,
