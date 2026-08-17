@@ -268,6 +268,10 @@ jobs:
           claude_args: |
             --model ${{ steps.size_check.outputs.model }}
             --allowedTools Bash(gh:*),Bash(git:*),Read,Grep,Glob,Agent,Task
+            # ScheduleWakeup makes sense only in an interactive session; this
+            # process is single-shot, so hard-block the tool call itself
+            # rather than relying on the prompt bullet above alone.
+            --disallowedTools ScheduleWakeup
             # 40 was too tight: a normal feature PR (~25 files / ~2k additions)
             # spawns ~8 parallel review agents, and the orchestration overhead
             # (read skill, gh pr view/diff, linked issues, fan-out, classify,
@@ -371,8 +375,12 @@ jobs:
           # Flags the async-wait failure mode: the transcript's own tool-call
           # history still shows it waiting on a background agent, so "Report
           # incomplete review" can name the likely cause instead of just
-          # "errored or ran out of turns".
-          if jq -e 'any(.[]; (.message.content? // []) | any(.[]?; .type == "tool_use" and .name == "ScheduleWakeup"))' \
+          # "errored or ran out of turns". redact-review-transcript.py passes
+          # through whichever shape the action gave it (a JSON array, or
+          # JSONL) - slurp first and flatten any array-typed element so both
+          # shapes land on the same flat list of entries.
+          if jq -s -e 'map(if type == "array" then .[] else . end)
+                       | any(.[]; (.message.content? // []) | any(.[]?; .type == "tool_use" and .name == "ScheduleWakeup"))' \
                  "$DEST" >/dev/null 2>&1; then
             WAKEUP=true
           fi
@@ -409,7 +417,7 @@ jobs:
           # WAKEUP_DETECTED is set from the uploaded transcript's own tool-call
           # history, so this note is evidence-based, not a guess.
           if [ "$WAKEUP_DETECTED" = "true" ]; then
-            BODY="$BODY"$'\n\n'"This run's transcript shows it waiting on a background agent via ScheduleWakeup - a known failure mode where the run ends cleanly, well under its turn budget, because nothing in this single-shot process can ever deliver the completion notification it was waiting for."
+            BODY="$BODY"$'\n\n'"This run's transcript shows it waiting on a background agent via ScheduleWakeup, which nothing in this single-shot process can ever deliver."
           fi
           gh pr comment ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} \
