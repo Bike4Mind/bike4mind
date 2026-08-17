@@ -77,6 +77,37 @@ describe('updateDataLake', () => {
     });
   });
 
+  // A concurrent writer's change must never be attributed to THIS caller. `BaseModel.update` is a
+  // `findOneAndUpdate` with `new: true`, so its result carries whatever else landed on the document
+  // between our read and our write. Diffing that result would put another principal's field change
+  // in our audit row, under our rung - an audit naming the wrong person, which is worse than a
+  // missing one. The diff is therefore taken over the keys THIS caller supplied.
+  it("records only the caller's own fields when a concurrent writer lands between read and write", async () => {
+    const existing = lake({ description: 'old', name: 'Lake' });
+    const audit = auditSpy();
+    // Someone else renamed the lake in the gap; the driver returns their change too.
+    const raced = vi
+      .fn()
+      .mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...existing, name: 'Renamed By Admin', ...d }));
+
+    await updateDataLake(
+      owner,
+      'lake1',
+      { description: 'new' },
+      {
+        db: {
+          dataLakes: { findById: vi.fn().mockResolvedValue(existing), update: raced },
+          dataLakeAccessGrants: noGrants,
+          ...audit.db,
+        },
+      }
+    );
+
+    const changes = audit.only().changes;
+    expect(changes).toEqual([{ field: 'description', kind: 'literal', before: 'old', after: 'new' }]);
+    expect(changes.some(c => c.field === 'name')).toBe(false);
+  });
+
   // The carried-over finding from PR 1's review: setLakeVisibility has always early-returned on a
   // no-op, updateDataLake never did. Harmless for a stamp; wrong for an event, which would log a
   // change that did not happen.
@@ -89,6 +120,32 @@ describe('updateDataLake', () => {
         owner,
         'lake1',
         { name: 'Lake', description: 'same' },
+        {
+          db: {
+            dataLakes: { findById: vi.fn().mockResolvedValue(existing), update },
+            dataLakeAccessGrants: noGrants,
+            ...audit.db,
+          },
+        }
+      );
+
+      expect(update).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+      expect(result).toBe(existing);
+    });
+
+    // The no-op gate compares the NORMALIZED write, not the raw request: `requiredEntitlement` is
+    // lowercased at write time because Mongo `$in` is case-sensitive, so `PRODUCT:PRO` onto a
+    // stored `product:pro` is the same value and must not write. Comparing before normalizing
+    // would write, move the actor stamp, and record a change that altered no access decision.
+    it('treats a differently-cased entitlement as a no-op, since it normalizes to the stored value', async () => {
+      const existing = lake({ requiredEntitlement: 'product:pro' });
+      const update = echoUpdate(existing);
+      const audit = auditSpy();
+      const result = await updateDataLake(
+        owner,
+        'lake1',
+        { requiredEntitlement: 'PRODUCT:PRO' },
         {
           db: {
             dataLakes: { findById: vi.fn().mockResolvedValue(existing), update },
@@ -396,6 +453,24 @@ describe('lifecycle services', () => {
     await expect(archiveDataLake(owner, 'lake1', { db })).rejects.toThrow(/stats down/);
     expect(audit.only()).toMatchObject({ action: 'archive' });
   });
+
+  // The same ordering invariant on the OTHER lifecycle services. Previously only archive was
+  // pinned, so a reorder in unarchive or restore would have gone unnoticed - the transition has
+  // already landed at that point, so a recompute failure must never also cost the audit row.
+  it.each([
+    ['unarchive', unarchiveDataLake, lake({ status: 'archived' }), 'unarchive'],
+    ['restore', restoreDeletedDataLake, lake({ status: 'deleted' }), 'restore'],
+  ] as const)(
+    'still records the %s when the stats recompute throws afterwards',
+    async (_n, service, existing, action) => {
+      const audit = auditSpy();
+      const db = { ...lifecycleDb(existing), ...audit.db };
+      db.fabFiles.computeDataLakeStats = vi.fn().mockRejectedValue(new Error('stats down'));
+
+      await expect(service(owner, 'lake1', { db })).rejects.toThrow(/stats down/);
+      expect(audit.only()).toMatchObject({ action });
+    }
+  );
 
   // BaseModel.update is a findOneAndUpdate that RESOLVES null when the lake vanished mid-operation.
   // Without the guard, diffLakeConfig(existing, null) throws and turns a previously-succeeding
