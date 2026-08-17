@@ -112,6 +112,10 @@ which can be set for the whole platform, one organization, one owner, or a singl
 can enforce while the rest stay in reporting mode. Check the health report first to see how many
 members a lake would have refused.
 
+Turning it on is not instantaneous. The settings cache is per-instance, so the change applies at once
+on the instance that served it and within about five minutes everywhere else. An upload that still
+succeeds immediately after you enable enforcement is a stale cache, not a broken setting.
+
 Two limits are deliberate:
 
 - **Admission only, never eviction.** Enforcement refuses *new* members. Files already in a lake keep

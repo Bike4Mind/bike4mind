@@ -1987,7 +1987,10 @@ export const settingsMap = {
       'files already in a lake are never evicted, and no query is ever blocked on lake health, which is ' +
       'advisory permanently. Turn this on only after the lake health report shows how many members would ' +
       'be refused. The lake rung is the one that matters (a lake enforces its own contract); the org and ' +
-      'owner rungs enforce across every lake in that scope at once.',
+      'owner rungs enforce across every lake in that scope at once. A flip is not instantaneous: the ' +
+      'settings cache is per-instance, so it applies immediately on the instance that served the change ' +
+      'and within ~5 min (one cache TTL) everywhere else - an upload that still succeeds right after ' +
+      'turning this on is stale cache, not a broken lever.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 96,
