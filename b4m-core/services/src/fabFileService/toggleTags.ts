@@ -1,11 +1,13 @@
 import { z } from 'zod';
 import { DATALAKE_TAG_PREFIX } from '@bike4mind/common';
 import {
+  IAdminSettingsRepository,
   IDataLakeAccessGrantRepository,
   IDataLakeRepository,
   IFabFileDocument,
   IFabFileRepository,
   IFileTagRepository,
+  IScopedSettingsRepository,
   IUserDocument,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
@@ -15,6 +17,7 @@ import { canManageLake } from '../dataLakeService/manageRule';
 import { makeLakeGrantResolver } from '../dataLakeService/authorizeLakeManage';
 import { createDataLakeFallbackTagger } from '../dataLakeService/fallbackLakeTags';
 import { addFileToLake, removeFileFromLake, type MembershipLake } from '../dataLakeService/lakeMembership';
+import { assertLakeAdmission } from '../dataLakeService/lakeAdmissionGate';
 import {
   findPrefixArmChanges,
   loadPrefixArmCandidateLakes,
@@ -39,6 +42,12 @@ interface FabFileToggleTagsAdapters extends LakeConfigAuditAdapters {
     // Optional: absent -> manage falls back to createdByUserId + org rung (see loadActiveLakeGrants).
     dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listActiveByLakes'>;
     users: { findById: (id: string) => Promise<IUserDocument | null> };
+    // The admission contract's lever (#1680) resolves from these. `adminSettings` is REQUIRED so a
+    // door cannot quietly opt out of the contract by omitting it; the gate itself still reads
+    // nothing unless a lake being JOINED declares a required passage size. `scopedSettings` is
+    // optional - without it the lever resolves to its platform value rather than failing.
+    adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
+    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
   };
   /** Forwarded to the fallback tagger's skip-path diagnostics; never fails the write on its own. */
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };
@@ -173,6 +182,22 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
         assertLakeWritable(lake);
       }
     }
+
+    // The admission contract (#1680) for the OTHER membership signal. A prefix-arm join makes a
+    // file a member with no `datalake:*` meta-tag involved, so gating only the meta-tag path would
+    // leave half the door open. Run in this same all-or-nothing pre-write pass as the leave gate
+    // above: the writes below are concurrent, so refusing mid-batch would leave some files written.
+    // Only JOINS are graded - a leave is never refused for a contract the file is exiting.
+    const filesById = new Map(fabFiles.map(file => [file.id, file]));
+    for (const [fileId, joins] of prefixJoinsByFile) {
+      const file = filesById.get(fileId);
+      if (!file) continue;
+      await assertLakeAdmission(
+        joins.map(({ lake }) => lake),
+        [{ id: file.id, userId: file.userId, chunkedPassageTokenTarget: file.chunkedPassageTokenTarget }],
+        { db, logger }
+      );
+    }
   }
 
   const touchedTags = new Set<string>();
@@ -221,6 +246,15 @@ export const toggleTags = async (userId: string, params: unknown, { db, logger }
     // stamped.
     const isMember = storedTagNames(file).includes(lake.datalakeTag);
     if (!isMember) {
+      // The precise admission point (#1680): this branch, and only this branch, makes the file a
+      // MEMBER. Gating here rather than at the route means a LEAVE is never refused for a contract
+      // the file is on its way out of - the route-level gate cannot tell the two apart, because it
+      // sees a tag payload rather than a direction.
+      await assertLakeAdmission(
+        [lake],
+        [{ id: file.id, userId: file.userId, chunkedPassageTokenTarget: file.chunkedPassageTokenTarget }],
+        { db, logger }
+      );
       await addFileToLake(actor, lake, file.id, { db });
     } else {
       try {

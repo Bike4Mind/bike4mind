@@ -1,5 +1,11 @@
 import { DATALAKE_TAG_PREFIX, DATALAKE_TAG_STRENGTH, prefixArmTagNames } from '@bike4mind/common';
-import type { IDataLakeAccessGrantRepository, IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
+import type {
+  IAdminSettingsRepository,
+  IDataLakeAccessGrantRepository,
+  IDataLakeRepository,
+  IFabFileRepository,
+  IScopedSettingsRepository,
+} from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { assertLakeWritable } from '../dataLakeService/assertLakeAccess';
 import {
@@ -15,6 +21,7 @@ import type { MembershipActor, MembershipLake } from '../dataLakeService/lakeMem
 import { findPrefixArmChanges, loadPrefixArmCandidateLakes } from '../dataLakeService/prefixArmMembership';
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
 import type { LakeConfigAuditAdapters } from '../dataLakeService/recordLakeConfigChange';
+import { assertLakeAdmission } from '../dataLakeService/lakeAdmissionGate';
 
 interface ReconcileLakeTagsAdapters extends LakeConfigAuditAdapters {
   db: LakeConfigAuditAdapters['db'] & {
@@ -25,6 +32,11 @@ interface ReconcileLakeTagsAdapters extends LakeConfigAuditAdapters {
     // to createdByUserId + org rung (grant supersession not honored on this door then). Batched via
     // makeLakeGrantResolver so the many per-lake gates below cost one query.
     dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes'>;
+    // The admission contract's lever (#1680) resolves from these. `adminSettings` is REQUIRED so a
+    // caller cannot quietly opt this door out of the contract; `scopedSettings` is optional and its
+    // absence just resolves the lever at its platform value.
+    adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
+    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
   };
   /** Forwarded to the fallback tagger's skip-path diagnostics; never fails the write on its own. */
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };
@@ -35,6 +47,13 @@ interface ReconcileLakeTagsAdapters extends LakeConfigAuditAdapters {
    * lose the check.
    */
   fileOwnerUserId?: string;
+  /**
+   * The effective target the file's EXISTING chunks were built with, for the admission contract.
+   * Supplied by a caller that already holds the file (as `fileOwnerUserId` is); omitted, it falls
+   * back to the document this function fetches, and absent entirely the contract PREDICTS from the
+   * owner's chunk policy instead.
+   */
+  fileChunkedPassageTokenTarget?: number | null;
 }
 
 export interface LakeTagReconciliation {
@@ -117,7 +136,7 @@ export const reconcileLakeTags = async (
   fabFileId: string,
   currentTagNames: string[],
   desiredTags: { name: string; strength: number }[],
-  { db, logger, fileOwnerUserId }: ReconcileLakeTagsAdapters
+  { db, logger, fileOwnerUserId, fileChunkedPassageTokenTarget }: ReconcileLakeTagsAdapters
 ): Promise<LakeTagReconciliation> => {
   // `primaryTag` (a separate string field on the route, gated there against `datalake:*` meta-tags
   // alongside `tags`) is deliberately absent from `ordinaryTags`: no lake read arm consults
@@ -255,6 +274,25 @@ export const reconcileLakeTags = async (
   for (const j of prefixArmJoins) {
     if (canManage(j.lake)) joins.push(j.lake);
     else statsOnlyJoins.push(j.lake);
+  }
+
+  // The admission contract (#1680) over EVERY lake this write joins - meta-tag and prefix-arm,
+  // managed and unmanaged alike. All four are real membership, so grading only some of them would
+  // leave a door through which unretrievable content still lands in a lake. Runs before `commit()`,
+  // so a refusal happens before any join is applied. Leaves and preserved memberships are
+  // deliberately absent: the contract governs admission, never eviction.
+  if (owner !== undefined) {
+    await assertLakeAdmission(
+      [...joins, ...statsOnlyJoins],
+      [
+        {
+          id: fabFileId,
+          userId: owner,
+          chunkedPassageTokenTarget: fileChunkedPassageTokenTarget ?? cachedFile?.chunkedPassageTokenTarget,
+        },
+      ],
+      { db, logger }
+    );
   }
 
   // A DYNAMIC lake this actor cannot manage, reachable ONLY via a prefix content tag (no

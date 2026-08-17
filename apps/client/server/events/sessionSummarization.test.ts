@@ -50,6 +50,8 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: { findOne: h.findOne },
   dataLakeRepository: { find: vi.fn(), findByDatalakeTag: h.findByDatalakeTag },
   adminSettingsRepository: {},
+  // Scoped-override store the admission contract's lever (#1680) resolves through.
+  scopedSettingsRepository: { findOverrides: vi.fn().mockResolvedValue([]) },
   userRepository: {},
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));

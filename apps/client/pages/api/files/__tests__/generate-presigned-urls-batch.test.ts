@@ -48,6 +48,8 @@ vi.mock('@server/dataLakes/toAccessContext', () => ({
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
+  // Scoped-override store the admission contract's lever (#1680) resolves through.
+  scopedSettingsRepository: { findOverrides: vi.fn().mockResolvedValue([]) },
   dataLakeBatchRepository: { findById: h.batchFindById, appendFiles: h.appendFiles },
   dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag, find: h.lakeFind },
   dataLakeAccessGrantRepository: {

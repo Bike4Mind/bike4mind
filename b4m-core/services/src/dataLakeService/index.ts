@@ -36,6 +36,7 @@ export * from './lakeMembership';
 export * from './prefixArmMembership';
 export * from './chunkPolicyConflict';
 export * from './admissionContract';
+export * from './lakeAdmissionGate';
 export * from './removeFileFromDataLake';
 export * from './cleanupDeletedDataLake';
 export * from './recomputeLakeStats';

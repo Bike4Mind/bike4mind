@@ -7,9 +7,12 @@ import type {
 } from '@bike4mind/common';
 import { DATA_LAKES, DATALAKE_TAG_PREFIX, normalizeTagPrefix } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
+import { Logger } from '@bike4mind/observability';
 import { assertLakeAccess, assertLakeWritable, isFallbackLake } from './assertLakeAccess';
 import { type ManageActor } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
+import { assertLakeAdmission, type AdmissionMember } from './lakeAdmissionGate';
+import { type ScopedSettingsDb } from '../settings/resolveScopedSetting';
 
 export { canManageLake, type ManageActor } from './manageRule';
 
@@ -141,6 +144,8 @@ export const assertCanWriteDataLakeTags = async (
   tagNames: readonly unknown[],
   {
     db,
+    members,
+    logger,
   }: {
     db: {
       dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag'>;
@@ -148,10 +153,25 @@ export const assertCanWriteDataLakeTags = async (
       // The file-create fan-in (email/url/generated/research) applies only its own/hardcoded tags,
       // so it need not wire the grant repo; user-facing tag doors that do, get full grant-awareness.
       dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
-    };
+    } & ScopedSettingsDb;
+    /**
+     * The files this write ADMITS into the named lakes, for the admission contract (#1680). Pass
+     * resolved files (with `chunkedPassageTokenTarget`) where they are known, so an already-chunked
+     * file is graded on what its chunks ARE rather than on what policy predicts they would be; at a
+     * pre-upload door, where no FabFile exists yet, pass `[{ userId: <owner-to-be> }]` so the gate
+     * predicts against the right owner's chunk policy.
+     *
+     * OMITTED means "nothing is being admitted" and the contract is skipped. That is the correct
+     * default for this direction-NEUTRAL gate: it also sees tag REMOVALS, and a removal must never
+     * be refused for a contract the file is leaving. A door that admits files opts IN by naming
+     * them - never inferred from the actor, which would refuse removals at every toggle door.
+     */
+    members?: readonly AdmissionMember[];
+    logger?: Logger;
   }
 ): Promise<void> => {
   const metaTags = extractDataLakeMetaTags(tagNames);
+  const targetLakes: IDataLakeDocument[] = [];
   for (const tag of metaTags) {
     if (STATIC_REGISTRY_DATALAKE_TAGS.has(tag)) {
       if (!actor.isAdmin) {
@@ -166,6 +186,17 @@ export const assertCanWriteDataLakeTags = async (
       // told a caller their removal was refused for the wrong reason.
       throw new BadRequestError("You do not have permission to change this data lake's files");
     }
+    targetLakes.push(lake);
+  }
+
+  // Authorization answered "may you write here"; the admission contract answers "will this content
+  // be findable once it is here" (#1680). Same chokepoint on purpose: every meta-tag write door
+  // already passes through this function, so the contract cannot be skipped by adding a door.
+  //
+  // The gate itself short-circuits (no settings read) when nothing is being admitted or no target
+  // lake declares a passage policy - the common case - so this costs nothing on the ordinary path.
+  if (members?.length) {
+    await assertLakeAdmission(targetLakes, members, { db, logger });
   }
 };
 
