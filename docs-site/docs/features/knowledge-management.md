@@ -112,6 +112,11 @@ which can be set for the whole platform, one organization, one owner, or a singl
 can enforce while the rest stay in reporting mode. Check the health report first to see how many
 members a lake would have refused.
 
+One exception to that per-lake independence: a single action that adds a file to *several* lakes at
+once is refused as a whole if **any** of those lakes is enforcing and would reject it. The file joins
+none of them, so a retry after fixing the passage sizes leaves nothing half-applied. The error names
+only the lake that caused the refusal.
+
 Turning it on is not instantaneous. The settings cache is per-instance, so the change applies at once
 on the instance that served it and within about five minutes everywhere else. An upload that still
 succeeds immediately after you enable enforcement is a stale cache, not a broken setting.

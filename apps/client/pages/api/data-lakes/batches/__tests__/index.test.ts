@@ -1,15 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Deliberately does NOT mock @bike4mind/services - reconcileStuckTaxonomy/reconcileStuckBatches
-// run for real, so this test actually exercises the guarded-transition decision, not just
-// which mock got called. Only the repository layer (@bike4mind/database) and AWS-touching
-// modules are mocked.
+// reconcileStuckTaxonomy/reconcileStuckBatches deliberately run for REAL, so the GET tests
+// exercise the guarded-transition decision rather than which mock got called. Only the POST
+// path's two lake gates are stubbed (below), plus the repository layer (@bike4mind/database)
+// and AWS-touching modules.
 const h = vi.hoisted(() => ({
   findActiveByUserId: vi.fn(),
   findActiveTaxonomyByUserId: vi.fn(),
   findTaxonomyAttentionByUserId: vi.fn(),
   forceFailStuckTaxonomy: vi.fn(),
   markTerminalIfActive: vi.fn(),
+  batchCreate: vi.fn(),
   dlFindById: vi.fn(),
   dlSetStats: vi.fn(),
   computeDataLakeStats: vi.fn(),
@@ -20,6 +21,8 @@ const h = vi.hoisted(() => ({
   recordConfigChange: vi.fn().mockResolvedValue({}),
   findBySettingNames: vi.fn().mockResolvedValue([]),
   findAll: vi.fn().mockResolvedValue([]),
+  assertLakeWriteAccess: vi.fn(),
+  assertLakeAdmission: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -49,6 +52,7 @@ vi.mock('@bike4mind/database', async importOriginal => {
       findTaxonomyAttentionByUserId: h.findTaxonomyAttentionByUserId,
       forceFailStuckTaxonomy: h.forceFailStuckTaxonomy,
       markTerminalIfActive: h.markTerminalIfActive,
+      create: h.batchCreate,
     },
     dataLakeRepository: {
       ...actual.dataLakeRepository,
@@ -65,6 +69,22 @@ vi.mock('@bike4mind/database', async importOriginal => {
     },
   };
 });
+
+// Partial: only the POST path's two lake gates. The reconcilers the GET tests exercise stay real.
+vi.mock('@bike4mind/services', async importOriginal => {
+  const actual = await importOriginal<{ dataLakeService: Record<string, unknown> }>();
+  return {
+    ...actual,
+    dataLakeService: {
+      ...actual.dataLakeService,
+      assertLakeWriteAccess: h.assertLakeWriteAccess,
+      assertLakeAdmission: h.assertLakeAdmission,
+    },
+  };
+});
+vi.mock('@server/dataLakes/toAccessContext', () => ({
+  toAccessContext: vi.fn(async (r: { user: { id: string } }) => ({ userId: r.user.id, isAdmin: false })),
+}));
 
 import handler from '../index';
 
@@ -169,5 +189,43 @@ describe('GET /api/data-lakes/batches - reconciler wiring', () => {
     await run(res);
 
     expect(h.forceFailStuckTaxonomy).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/data-lakes/batches - admission contract wiring', () => {
+  const LAKE = { id: 'lake1', status: 'active', datalakeTag: 'datalake:lake', createdByUserId: 'u1' };
+  const postReq = () =>
+    ({
+      method: 'POST',
+      user: { id: 'u1' },
+      logger: console,
+      body: { dataLakeId: 'lake1', totalFiles: 2, totalSizeBytes: 10 },
+    }) as never;
+  const runPost = (res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(postReq(), res);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.assertLakeWriteAccess.mockResolvedValue(LAKE);
+    h.batchCreate.mockResolvedValue({ id: 'b1' });
+  });
+
+  it('grades the lake against the uploader as owner-to-be before creating the batch', async () => {
+    // `members` is the contract's only opt-in signal, so an unasserted argument is an unprotected
+    // gate: delete it and enforcement silently switches off at this door with nothing else changing.
+    const { res } = makeRes();
+    await runPost(res);
+
+    expect(h.assertLakeAdmission).toHaveBeenCalledWith([LAKE], [{ userId: 'u1' }], expect.anything());
+    expect(h.assertLakeAdmission.mock.invocationCallOrder[0]).toBeLessThan(h.batchCreate.mock.invocationCallOrder[0]);
+  });
+
+  it('creates no batch when the contract refuses', async () => {
+    // Refusing the BATCH is what makes the refusal legible in the upload UI instead of failing
+    // later at presign, so no batch may exist afterwards.
+    h.assertLakeAdmission.mockRejectedValue(new Error('refused'));
+    const { res } = makeRes();
+
+    await expect(runPost(res)).rejects.toThrow('refused');
+    expect(h.batchCreate).not.toHaveBeenCalled();
   });
 });

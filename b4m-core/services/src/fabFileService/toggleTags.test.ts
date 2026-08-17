@@ -728,6 +728,20 @@ describe('toggleTags - admission contract', () => {
     expect(adapters.db.fabFiles.pushTagsByFabFileId).toHaveBeenCalled();
   });
 
+  it('refuses a multi-file batch WHOLE - a conforming file must not be joined before the refusal', async () => {
+    // Files are toggled concurrently, so grading next to the write would let f1's join land and then
+    // throw for f2, leaving the caller an error that reads as "nothing happened" over a partly
+    // applied request. f1's chunks were built at 1000 so it conforms; f2 is unchunked and predicts
+    // 512 against the lake's required 1000.
+    const conforming = { ...file('f1'), chunkedPassageTokenTarget: 1000 };
+    const adapters = withPolicy([conforming as never, file('f2')]);
+
+    await expect(run(adapters as never, { ids: ['f1', 'f2'], tags: ['datalake:lake'] })).rejects.toThrow(
+      /requires passages of 1000/
+    );
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
   it('grades a chunked file on its recorded target rather than the owner chunk policy', async () => {
     // Owner policy is 512 and the lake requires 1000; this file's chunks were built at 1000, so it
     // conforms even though a prediction from policy would have refused it.

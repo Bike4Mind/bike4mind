@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { KnowledgeType } from '@bike4mind/common';
+import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
 
 const h = vi.hoisted(() => ({
   fabFileCreate: vi.fn(),
@@ -7,6 +8,7 @@ const h = vi.hoisted(() => ({
   findByDatalakeTag: vi.fn(),
   batchFindById: vi.fn(),
   getSettingsValue: vi.fn(),
+  findOverrides: vi.fn(),
 }));
 
 // Single-method chain: the route only calls `.use(...).post(...)`, and the ability check in
@@ -24,7 +26,7 @@ vi.mock('@server/utils/storage', () => ({
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   // Scoped-override store the admission contract's lever (#1680) resolves through.
-  scopedSettingsRepository: { findOverrides: vi.fn().mockResolvedValue([]) },
+  scopedSettingsRepository: { findOverrides: h.findOverrides },
   dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag },
   dataLakeBatchRepository: { findById: h.batchFindById },
   dataLakeAccessGrantRepository: { listByLake: vi.fn().mockResolvedValue([]) },
@@ -131,6 +133,47 @@ describe('POST /api/files/createFabFile - data-lake tags', () => {
 
     expect(h.fabFileCreate.mock.calls[0][0]).not.toHaveProperty('tags');
     expect(h.findByDatalakeTag).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The admission contract (#1680) at this door. It reaches it through
+ * `assertCanWriteDataLakeTags`' `members` option - the contract's ONLY opt-in signal - and the real
+ * service runs here, so deleting that option makes this refusal disappear.
+ */
+describe('POST /api/files/createFabFile - admission contract', () => {
+  // Deliberately not a round number: the owner's chunk policy resolves to a coded default here, and
+  // a required target that happened to match it would satisfy the contract instead of violating it.
+  const ENFORCING_LAKE = { ...LAKE, requiredPassageTokenTarget: 4321 };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    invalidateSettingsCache();
+    invalidateScopedSettingsCache();
+    h.findByDatalakeTag.mockResolvedValue(ENFORCING_LAKE);
+    h.userFindById.mockResolvedValue({ id: 'u1', storageLimit: 1000, currentStorageSize: 0 });
+    h.fabFileCreate.mockImplementation(async data => ({ id: 'f1', ...data }));
+    h.findOverrides.mockResolvedValue([
+      { scopeLevel: 'lake', scopeId: 'lake-1', settingName: 'EnforceLakeAdmission', settingValue: 'true' },
+    ]);
+  });
+
+  it('refuses the create when the lake enforces and the chunk policy disagrees', async () => {
+    const { res } = makeRes();
+
+    await expect(run(body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] }), res)).rejects.toThrow(
+      /requires passages of 4321/
+    );
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
+  it('allows it when no scoped override turns the lever on - report-only is the default', async () => {
+    h.findOverrides.mockResolvedValue([]);
+    const { res } = makeRes();
+
+    await run(body({ tags: [{ name: 'datalake:orga:acme-2026', strength: 1 }] }), res);
+
+    expect(h.fabFileCreate).toHaveBeenCalledTimes(1);
   });
 });
 

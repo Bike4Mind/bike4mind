@@ -190,8 +190,13 @@ export const assertCanWriteDataLakeTags = async (
   }
 
   // Authorization answered "may you write here"; the admission contract answers "will this content
-  // be findable once it is here" (#1680). Same chokepoint on purpose: every meta-tag write door
-  // already passes through this function, so the contract cannot be skipped by adding a door.
+  // be findable once it is here" (#1680). Same chokepoint on purpose: every door that writes a
+  // CLIENT-SUPPLIED meta-tag already passes through here, so those cannot skip the contract.
+  //
+  // It is NOT a chokepoint for the whole contract. A door that resolves its lake server-side and
+  // stamps the meta-tag itself has no client meta-tag for this function to see, so it must call
+  // `assertLakeAdmission` explicitly - `generate-presigned-urls-batch`, `data-lakes/batches` and the
+  // Drive folder sync (`driveLakeIngest`) each do. A new door of that shape needs its own call.
   //
   // The gate itself short-circuits (no settings read) when nothing is being admitted or no target
   // lake declares a passage policy - the common case - so this costs nothing on the ordinary path.

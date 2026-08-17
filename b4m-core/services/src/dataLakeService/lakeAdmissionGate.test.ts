@@ -133,9 +133,27 @@ describe('decideLakeAdmission (pure admission decision)', () => {
     expect(verdict.status === 'quarantined' && verdict.message).toMatch(/^This content cannot be added/);
   });
 
-  it('counts real files in the plural arm, which only ever runs where files were named', () => {
+  it('counts DISTINCT files in the plural arm', () => {
     const verdict = decideLakeAdmission([subject('u1', 512), subject('u2', 512)], [req('a', 1000)], new Set());
     expect(verdict.status === 'quarantined' && verdict.message).toMatch(/^2 files cannot be added/);
+  });
+
+  it('stays singular for ONE file violating two lakes - violations are (member, lake) pairs, not files', () => {
+    // Reachable from every door that hands the gate one member with all of its lakes at once
+    // (reconcileLakeTags, toggleTags' join passes). Counting the pairs read "2 files cannot be
+    // added" for a single file.
+    const verdict = decideLakeAdmission(
+      [{ member: { id: 'f1', userId: 'u1' }, effectiveTarget: 512 }],
+      [req('a', 1000), req('b', 1500)],
+      new Set()
+    );
+    expect(verdict.status === 'quarantined' && verdict.violations).toHaveLength(2);
+    expect(verdict.status === 'quarantined' && verdict.message).toMatch(/^This content cannot be added/);
+  });
+
+  it('counts the id-less pre-upload member as one subject rather than none', () => {
+    const verdict = decideLakeAdmission([subject('u1', 512)], [req('a', 1000), req('b', 1500)], new Set());
+    expect(verdict.status === 'quarantined' && verdict.message).toMatch(/^This content cannot be added/);
   });
 
   it('describes only the BLOCKING lake when some violated lakes merely report', () => {

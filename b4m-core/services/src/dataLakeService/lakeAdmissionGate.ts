@@ -89,6 +89,12 @@ export function decideLakeAdmission(
   }
   if (violations.length === 0) return { status: 'admitted' };
 
+  // ONE verdict for the whole call, not one per lake: `assertLakeAdmission` refuses the WRITE, and a
+  // write that joins an enforcing-and-violated lake alongside a satisfied or report-only one is
+  // refused whole. Letting the satisfied join land and then throwing would be the partial-batch
+  // outcome every gate in this area is arranged to avoid - the caller sees one error and has no way
+  // to learn which half of its request took effect. `describeViolations` names only the blocking
+  // lakes, so the refusal still points at the lake that actually caused it.
   const enforced = violations.some(v => isEnforced(v.lake, enforcedLakeIds));
   return { status: 'quarantined', enforced, violations, message: describeViolations(violations, enforcedLakeIds) };
 }
@@ -124,11 +130,19 @@ function describeViolations(violations: readonly InadmissibleMember[], enforcedL
       `"${v.lake.name}" requires passages of ${v.lake.effectiveRequiredTarget} tokens, but this content ` +
       `chunks at ${v.effectiveTarget}`
   );
-  // "This content", not "This file", in the singular: the pre-upload doors (batch create, presign)
+  // Counted over distinct MEMBERS, not over `reported`: that array holds one entry per
+  // (member, lake) pair, so spending its length as a file count reads "2 files cannot be added" for
+  // a single file joining two violated lakes. Reachable from every door that passes one member with
+  // all of its lakes at once (`reconcileLakeTags`, `toggleTags`' join passes).
+  //
+  // Keyed on `id ?? userId` so the pre-upload doors, whose member has no `id` yet, still count as
+  // one subject rather than collapsing to zero.
+  //
+  // "This content", not "This file", in the singular: those same doors (batch create, presign)
   // refuse before any FabFile exists, so naming a file there describes something the caller never
-  // sent. Verified live on a preview - the batch door really does surface this string. The plural
-  // arm only ever runs where real files were named, so a count is accurate there.
-  const subject = reported.length === 1 ? 'This content cannot' : `${reported.length} files cannot`;
+  // sent. Verified live on a preview - the batch door really does surface this string.
+  const subjectCount = new Set(reported.map(v => v.member.id ?? v.member.userId)).size;
+  const subject = subjectCount === 1 ? 'This content cannot' : `${subjectCount} files cannot`;
   return (
     `${subject} be added: ${parts.join('; ')}. Content that does not match a lake's passage policy is ` +
     `not retrievable from it. Change the lake's required passage size or the file owner's default ` +

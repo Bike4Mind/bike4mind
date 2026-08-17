@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { BadRequestError } from '@bike4mind/utils';
 
 const h = vi.hoisted(() => ({
   fabFileStore: [] as Record<string, unknown>[],
@@ -22,6 +23,7 @@ const h = vi.hoisted(() => ({
   ),
   findByDatalakeTag: vi.fn(async () => null as { createdByUserId: string } | null),
   canManageLake: vi.fn(() => false),
+  assertLakeAdmission: vi.fn(),
   userFindById: vi.fn(async (id: string) => ({ id, isAdmin: false })),
   session: {} as Record<string, unknown>,
 }));
@@ -72,6 +74,7 @@ vi.mock('@bike4mind/services', () => ({
         )
       ),
     canManageLake: h.canManageLake,
+    assertLakeAdmission: h.assertLakeAdmission,
     // Real (not faked): a fixed test-only prefix, mirroring the shape of DATA_LAKES' opti: entry.
     extractStaticRegistryPrefixedTags: (names: unknown[]) =>
       names.filter((n): n is string => typeof n === 'string' && n.startsWith('opti:')),
@@ -126,6 +129,9 @@ const run = () =>
 describe('sessionSummarization summary-file lookup', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // clearAllMocks does not drop a mockRejectedValue, so an admission-refusal case would otherwise
+    // leak its rejection into every later test.
+    h.assertLakeAdmission.mockReset();
     h.fabFileStore.length = 0;
     h.session = { id: SESSION_ID, _id: SESSION_ID, userId: OWNER, name: 'Notebook', tags: [] };
     h.findOne.mockImplementation(
@@ -265,6 +271,47 @@ describe('sessionSummarization summary-file lookup', () => {
 
       const [, data] = h.createFabFile.mock.calls[0] as [string, { tags: { name: string }[] }];
       expect(data.tags.map(t => t.name)).toEqual(['datalake:someone-elses-lake', 'plain']);
+    });
+  });
+
+  // The admission contract (#1680) is a SECOND refusal class on the same createFabFile call, so it
+  // needs the same drop-and-warn treatment: the summary is the primary value this handler exists to
+  // preserve, and a refusal here is deterministic - rethrowing would fail the event on every retry.
+  describe('a datalake: tag the admission contract would refuse', () => {
+    beforeEach(() => {
+      h.session = {
+        id: SESSION_ID,
+        _id: SESSION_ID,
+        userId: OWNER,
+        name: 'Notebook',
+        tags: [{ name: 'datalake:enforcing-lake' }, { name: 'plain' }],
+      };
+      // Manageable - it is the admission verdict, not authorization, that refuses this one.
+      h.findByDatalakeTag.mockResolvedValue({ id: 'lake1', createdByUserId: OWNER });
+      h.canManageLake.mockReturnValue(true);
+      h.assertLakeAdmission.mockRejectedValue(new BadRequestError('"Lake" requires passages of 1000 tokens'));
+    });
+
+    it('drops the refused tag and still creates the RAG-indexed summary', async () => {
+      await run();
+
+      expect(h.createFabFile).toHaveBeenCalledTimes(1);
+      const [, data] = h.createFabFile.mock.calls[0] as [string, { tags: { name: string }[] }];
+      expect(data.tags.map(t => t.name)).toEqual(['plain']);
+    });
+
+    it('says the tag was refused at admission, not merely unmanageable', async () => {
+      await run();
+
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('refused at admission'));
+    });
+
+    it('lets a non-admission failure from the gate propagate', async () => {
+      // Only a BadRequestError is a verdict; a settings-store outage must not be read as "refused".
+      h.assertLakeAdmission.mockRejectedValue(new Error('settings store unreachable'));
+
+      await expect(run()).rejects.toThrow('settings store unreachable');
+      expect(h.createFabFile).not.toHaveBeenCalled();
     });
   });
 

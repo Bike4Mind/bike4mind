@@ -14,6 +14,7 @@ import {
 } from '@bike4mind/database';
 import { OperationsModelService } from '@client/services/operationsModelService';
 import { AiEvents, ChatModelName, IMessage, KnowledgeType, SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { BadRequestError } from '@bike4mind/utils';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { getFilesStorage } from '@server/utils/storage';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -243,6 +244,14 @@ export const handler = withEventContext(async (event, logger) => {
           dataLakeService.extractDataLakeMetaTags((fabFileData.tags ?? []).map(t => t.name))
         );
         const unmanageableMetaTags: string[] = [];
+        // The admission contract (#1680) is a SECOND refusal class on the same `createFabFile` call,
+        // and the drop-and-warn pass above does not cover it: an enforcing lake whose passage policy
+        // this summary cannot honor makes that call throw a BadRequestError the catch below rethrows,
+        // failing the summarization event on every retry (the refusal is deterministic) and losing the
+        // RAG-indexed summary over one misconfigured lake. Same call as the real gate, so the two
+        // cannot disagree about who would be refused - just asked here where a refusal costs a tag
+        // instead of the whole summary.
+        const inadmissibleMetaTags: string[] = [];
         for (const tag of sessionMetaTagNames) {
           // Mirror assertCanWriteDataLakeTags' own static-registry arm rather than re-deriving it:
           // a static-registry lake (e.g. datalake:opti-knowledge) has no DB document at all, so
@@ -255,6 +264,18 @@ export const handler = withEventContext(async (event, logger) => {
           const lake = await dataLakeRepository.findByDatalakeTag(tag);
           if (!lake || !dataLakeService.canManageLake(lake, { userId: session.userId, isAdmin: !!user?.isAdmin })) {
             unmanageableMetaTags.push(tag);
+            continue;
+          }
+          try {
+            // The summary does not exist yet, so the subject is its owner-to-be and the gate predicts
+            // from THEIR chunk policy - the same shape and the same owner createFabFile itself passes.
+            await dataLakeService.assertLakeAdmission([lake], [{ userId: session.userId }], {
+              db: { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository },
+              logger,
+            });
+          } catch (admissionError) {
+            if (!(admissionError instanceof BadRequestError)) throw admissionError;
+            inadmissibleMetaTags.push(tag);
           }
         }
         // A legacy static-registry content tag (e.g. opti:foo) predating this fix can also be
@@ -264,19 +285,25 @@ export const handler = withEventContext(async (event, logger) => {
         const unmanageablePrefixTags = user?.isAdmin
           ? []
           : dataLakeService.extractStaticRegistryPrefixedTags((fabFileData.tags ?? []).map(t => t.name));
-        const droppedTagNames = [...unmanageableMetaTags, ...unmanageablePrefixTags];
+        const droppedMetaTags = [...unmanageableMetaTags, ...inadmissibleMetaTags];
+        const droppedTagNames = [...droppedMetaTags, ...unmanageablePrefixTags];
         if (droppedTagNames.length > 0) {
           logger.warn(
-            `Dropping unmanageable data-lake tag(s) from session ${session.id} summary: ${droppedTagNames.join(', ')}`
+            `Dropping unwritable data-lake tag(s) from session ${session.id} summary: ${droppedTagNames.join(', ')}` +
+              (inadmissibleMetaTags.length > 0 ? ` (refused at admission: ${inadmissibleMetaTags.join(', ')})` : '')
           );
           fabFileData.tags = (fabFileData.tags ?? []).filter(
-            t => !unmanageableMetaTags.includes(t.name.toLowerCase()) && !unmanageablePrefixTags.includes(t.name)
+            t => !droppedMetaTags.includes(t.name.toLowerCase()) && !unmanageablePrefixTags.includes(t.name)
           );
         }
         const newFabFile = await fabFilesService.createFabFile(session.userId, fabFileData, {
           db: {
             fabFiles: fabFileRepository,
             adminSettings: adminSettingsRepository,
+            // Without this the admission lever resolves platform-only here, so a per-org, per-owner
+            // or per-lake enforcement override silently does nothing on this door - the no-op lever
+            // #1658 forbids. Same store the updateFabFile adapter above wires.
+            scopedSettings: scopedSettingsRepository,
             users: userRepository,
             dataLakes: dataLakeRepository,
           },
