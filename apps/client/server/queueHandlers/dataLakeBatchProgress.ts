@@ -23,6 +23,7 @@ import {
 import { isFinalDeliveryAttempt, getDeliveryAttempt } from '@server/queueHandlers/sqsDelivery';
 import type { SQSEvent } from 'aws-lambda';
 import { Resource } from 'sst';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
 /**
  * Non-final-attempt guard shared by fabFileChunk.ts/fabFileVectorize.ts's catch blocks: on any
@@ -87,8 +88,11 @@ export async function finalizeBatchIfComplete(
   try {
     const lake = await dataLakeRepository.findById(batch.dataLakeId);
     if (lake) {
+      // Batch completion is the canonical way a draft lake first holds files and flips to active,
+      // so this is the dominant producer of the `auto-activate` config-change event. Unwired, the
+      // status change most likely to happen is the one the history would not contain.
       await dataLakeService.recomputeLakeStats(lake, {
-        db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
+        db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, ...lakeConfigAuditDb },
       });
     }
   } catch (error) {
