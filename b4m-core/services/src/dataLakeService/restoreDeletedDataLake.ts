@@ -105,7 +105,23 @@ export const restoreDeletedDataLake = async (
   // never treated as a failure and which leaves nothing to diff.
   if (updated) {
     await recordLakeConfigChange(
-      { actor, lake: existing, grants, action: 'restore', changes: diffLakeConfig(existing, updated) },
+      {
+        actor,
+        lake: existing,
+        grants,
+        action: 'restore',
+        // Diffed against THIS write's own fields, never against `updated`: `BaseModel.update` is a
+        // `findOneAndUpdate` returning the merged document, so a concurrent writer's `$set` landing in
+        // the gap would be recorded under this caller's principal and rung. Same reasoning, and the
+        // same fix, as `updateDataLake` - see its note. The field set here is fixed and small, so the
+        // projection is exact rather than reconstructed.
+        changes: diffLakeConfig(existing, {
+          ...existing,
+          status: 'active',
+          filesDeletedAt: null,
+          filesArchivedAt: null,
+        }),
+      },
       { db, logger }
     );
   }
