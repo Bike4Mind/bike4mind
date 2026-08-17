@@ -240,7 +240,10 @@ const handler = baseApi()
     if (deleteAction === 'deleted') {
       await recomputeStatsForLakeTags(
         (fabFile?.tags ?? []).map(tag => tag?.name),
-        { logger: req.logger }
+        {
+          logger: req.logger,
+          actor: { userId: req.user.id, isAdmin: !!req.user.isAdmin },
+        }
       );
     }
 
