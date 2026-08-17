@@ -740,10 +740,10 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   ): Promise<{ total: number; byPrefix: Record<string, number> }>;
 
   /**
-   * Count unique files per root tag namespace for a user. Takes the SAME optional scope
-   * (including `excludePersonalShares`) as countFilesByTagForUser, which it is served beside -
-   * the two must move in lockstep or a namespace's size disagrees with its tag count. Omitting
-   * the scope counts owned files only.
+   * Count unique files per root tag namespace for a user. GET /api/files/tags/counts calls
+   * countFilesByTagForUser twice with two different scopes; this must move in lockstep with
+   * that route's NARROWED (excludePersonalShares:true) call specifically, or a namespace's size
+   * disagrees with its tag count. Omitting the scope counts owned files only.
    */
   countUniqueFilesByNamespaceForUser(
     userId: string,

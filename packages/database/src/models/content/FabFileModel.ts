@@ -808,9 +808,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
 
   /**
    * Per-namespace unique file counts, served alongside countFilesByTagForUser by
-   * GET /api/files/tags/counts. Takes the SAME optional scope as that sibling and must keep
-   * being called with it: the workspace rows are keyed off the tag counts but sized by these
-   * ones, so an owner-only namespace count renders a shared or data-lake workspace as zero.
+   * GET /api/files/tags/counts. That route calls the sibling twice with two different scopes
+   * (unnarrowed for tagCounts, excludePersonalShares:true for workspaceTagCounts); this must be
+   * called with the SAME (narrowed) scope as the workspaceTagCounts call specifically, since the
+   * workspace rows are keyed off that count but sized by this one - an owner-only namespace
+   * count renders a shared or data-lake workspace as zero.
    */
   async countUniqueFilesByNamespaceForUser(
     userId: string,
