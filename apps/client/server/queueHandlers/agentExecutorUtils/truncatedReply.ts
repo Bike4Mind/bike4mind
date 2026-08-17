@@ -28,31 +28,49 @@ export function buildTruncatedRunReply(
 }
 
 /**
- * Resolves the user-facing reply for a completed run, including two cases
+ * Resolves the user-facing reply for a completed run, including cases
  * `buildTruncatedRunReply` alone can silently get wrong on a capped-out member's
  * one-iteration DAG-aggregation grace grant:
- * - If that grace iteration hits its own ceiling without producing a `final_answer` step,
- *   falling back to `dagAggregationFallbackSummary` is what keeps the already-paid-for
- *   child work from being silently dropped.
- * - The generic "send a follow-up" footer is actively wrong here: a follow-up creates a
- *   new execution that the same per-member cap gate immediately refuses. `isOverCapGraceIteration`
- *   selects the honest credit-cap message instead of the misleading iteration-limit one.
+ * - `ReActAgent` always synthesizes a `final_answer` step before returning
+ *   `reachedMaxIterations: true` (its own "I reached the maximum number of
+ *   iterations..." notice, or genuine trailing content) - `finalAnswer` is
+ *   therefore NEVER actually undefined on that path, so a plain `finalAnswer ??
+ *   dagAggregationFallbackSummary` never reaches the fallback. On the credit-cap
+ *   grace path specifically, `isOverCapGraceIteration` inverts that precedence:
+ *   the summary is preferred, since the synthesized notice would also leak the
+ *   clamped grant size (e.g. "8/8") as if it were the run's real ceiling.
+ * - If the wake lands with the iteration loop unable to run at all (e.g.
+ *   `iterationIndex` was already at or past `configuredMaxIterations`),
+ *   `ranAnyIteration` is false and `finalAnswer` (if set) is read from an
+ *   EARLIER iteration's checkpoint, not this wake's result - the just-built
+ *   summary is the only fresh content this invocation actually produced.
+ * - The generic "send a follow-up" footer is actively wrong on the credit-cap
+ *   path: a follow-up creates a new execution that the same per-member cap gate
+ *   immediately refuses. `isOverCapGraceIteration` selects the honest
+ *   credit-cap message instead.
  * `configuredMaxIterations` must be the run's real ceiling, not a clamped one -
  * see `clampMaxIterationsForOverCapAggregationWake` in `agentExecutorDag.ts`.
  */
 export function resolveDisplayAnswer(args: {
   reachedMaxIterations: boolean;
+  ranAnyIteration: boolean;
   finalAnswer: string | undefined;
   dagAggregationFallbackSummary: string | undefined;
   configuredMaxIterations: number;
   isOverCapGraceIteration: boolean;
 }): string | undefined {
+  if (!args.ranAnyIteration && args.dagAggregationFallbackSummary !== undefined) {
+    return args.dagAggregationFallbackSummary;
+  }
   if (!args.reachedMaxIterations) return args.finalAnswer;
   // If neither exists, this still falls through to buildTruncatedRunReply's own
   // no-partial-content form (header + footer, no dropped middle section).
+  const answer = args.isOverCapGraceIteration
+    ? (args.dagAggregationFallbackSummary ?? args.finalAnswer)
+    : (args.finalAnswer ?? args.dagAggregationFallbackSummary);
   return buildTruncatedRunReply(
     args.configuredMaxIterations,
-    args.finalAnswer ?? args.dagAggregationFallbackSummary,
+    answer,
     args.isOverCapGraceIteration ? 'credit-cap' : 'iteration-limit'
   );
 }

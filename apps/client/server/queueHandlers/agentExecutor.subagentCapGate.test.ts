@@ -134,4 +134,24 @@ describe('agentExecutor DAG-node refusal paths fire onDagNodeTerminal', () => {
     expect(mockMarkFailed).not.toHaveBeenCalled();
     expect(onDagNodeTerminalMock).not.toHaveBeenCalled();
   });
+
+  it('fires the hook from the outer catch when an unexpected downstream error escapes every other handler', async () => {
+    // dagNodeId is hoisted right after the child doc loads, well before this call, so the
+    // outer catch - which has no access to `child` - should still have it available. This is
+    // the exit with the least direct test coverage and the most machinery between it and the
+    // hook call, per three review rounds each catching a different missed exit in this file.
+    const { sessionRepository } = await import('@bike4mind/database');
+    vi.mocked(sessionRepository.findById).mockRejectedValueOnce(new Error('Mongo blip'));
+
+    const { handler } = await import('./agentExecutor');
+    await handler(dagNodeDispatchEvent(), {} as never);
+
+    expect(mockMarkFailed).toHaveBeenCalledWith('child-1', { message: 'Mongo blip', timedOut: false });
+    expect(onDagNodeTerminalMock).toHaveBeenCalledTimes(1);
+    expect(onDagNodeTerminalMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        child: expect.objectContaining({ id: 'child-1', dagNodeId: 'node-b', status: 'failed' }),
+      })
+    );
+  });
 });

@@ -794,6 +794,11 @@ async function processExecution(
     // so it doesn't strand already-paid-for child work. See `isDagAggregationWake` and
     // `clampMaxIterationsForOverCapAggregationWake` in `agentExecutorDag.ts` for the full
     // rationale and the bound on what this exception actually grants.
+    //
+    // Scope note: an `awaiting_subagent` resume splices in an already-billed child result the
+    // same way (see the `isSubagentResume` branch below) but is NOT exempted here - that wake
+    // continues with a full iteration budget rather than a single wrap-up step, so it is not a
+    // pure aggregation and the same one-iteration bound would not apply cleanly.
     if (organization && !isAggregationOnlyWake && creditService.isMemberAtOrOverCap(organization, execution.userId)) {
       logger.warn('[Credits] Member credit cap reached; refusing to start execution', {
         used: creditService.getMemberUsedCredits(organization, execution.userId),
@@ -2388,6 +2393,7 @@ async function processExecution(
     const reachedMaxIterations = iterationResult?.reachedMaxIterations ?? false;
     const displayAnswer = resolveDisplayAnswer({
       reachedMaxIterations,
+      ranAnyIteration: iterationResult !== undefined,
       finalAnswer,
       dagAggregationFallbackSummary,
       configuredMaxIterations,
@@ -2498,27 +2504,23 @@ async function processExecution(
 // ---------------------------------------------------------------------------
 
 /**
- * Fires the DAG completion hook on a refused/failed dispatched child, guarded on
- * `dagNodeId` (a no-op for a plain delegated subagent, which has no siblings to
- * unblock). `onDagNodeTerminal` is the ONLY thing that unblocks siblings or wakes
- * a DAG parent - every early exit in `processSubagentDispatch` that skips it can
- * wedge the parent in `awaiting_dag_children` forever (`cleanupStaleActive`
- * deliberately excludes that status, so there is no reaper), and the wake only
- * needs the LAST sibling to reach a terminal state to take a hook-less exit, not
- * every sibling. Recovery mirrors the hook's other call sites: if the hook itself
+ * Fires the DAG completion hook for a dispatched child on every terminal outcome
+ * (success, refusal, failure, or abort), guarded on `dagNodeId` (a no-op for a
+ * plain delegated subagent, which has no siblings to unblock). `onDagNodeTerminal`
+ * is the ONLY thing that unblocks siblings or wakes a DAG parent - every terminal
+ * exit in `processSubagentDispatch` that skips it can wedge the parent in
+ * `awaiting_dag_children` forever (`cleanupStaleActive` deliberately excludes that
+ * status, so there is no reaper), and the wake only needs the LAST sibling to reach
+ * a terminal state to take a hook-less exit, not every sibling. If the hook itself
  * throws, mark the parent failed so the session unwedges instead of hanging.
  *
  * Deliberately NOT called from the `!claimed` CAS-loss exit: that means another
  * Lambda already owns this child and will complete it (and fire this hook) through
  * its own normal path. Firing here too would not double-unblock anything - the hook
  * is idempotent - but it would report a false terminal status for a child that may
- * still succeed: a CAS loss means someone else has it, not that it failed.
- *
- * The `status` argument is NOT load-bearing for `onDagNodeTerminal` itself - it
- * re-reads every sibling fresh from the DB rather than trusting the passed-in value,
- * so passing 'failed' vs 'aborted' only affects logging. What actually matters is
- * that `markFailed`/`markAborted` already landed before this call, which every
- * caller here does.
+ * still succeed: a CAS loss means someone else has it, not that it failed. `status`
+ * itself is not load-bearing for `onDagNodeTerminal` (it re-reads every sibling
+ * fresh from the DB), only for logging.
  *
  * Narrow gap this does NOT close: if `agentExecutionRepository.findById` throws or
  * returns null, or `child.subagentConfig` is missing, the function throws before
@@ -2536,7 +2538,7 @@ async function fireDagNodeTerminalOnRefusal(args: {
   connectionId: string;
   logger: Logger;
   sendWs: ReturnType<typeof createWsSender>;
-  status?: 'failed' | 'aborted';
+  status?: 'completed' | 'failed' | 'aborted';
 }): Promise<void> {
   const { dagNodeId, parentExecutionId, childExecutionId, connectionId, logger, sendWs, status = 'failed' } = args;
   if (!dagNodeId) return;
@@ -3097,10 +3099,9 @@ async function processSubagentDispatch(
             partialAnswer: result.finalAnswer,
           });
         }
-        // This return was found to bypass the DAG completion hook entirely (a
-        // human review caught it - neither the success path below nor the catch
-        // block's own hook-fire cover this branch). Fire it here too, same as
-        // every other terminal exit in this function.
+        // Terminal exit: this branch returns before the success-path and catch-path
+        // hook fires below, so fire it here - every terminal exit must reach
+        // `onDagNodeTerminal` or the parent wedges.
         await fireDagNodeTerminalOnRefusal({
           dagNodeId,
           parentExecutionId: dagParentExecutionId,
@@ -3149,47 +3150,15 @@ async function processSubagentDispatch(
       // Phase 4a - if this child was a DAG node, fire the completion hook
       // so any newly-unblocked siblings get dispatched, or the parent gets
       // woken if the whole DAG is done.
-      //
-      // Recovery: if the hook itself throws (SQS error, mongo error during
-      // sibling scan) the parent would otherwise sit in `awaiting_dag_children`
-      // forever - `cleanupStaleActive` deliberately excludes that status.
-      // Catch here, mark the parent failed, and surface a WS event so the
-      // session unwedges instead of hanging.
-      if (child.dagNodeId) {
-        try {
-          await onDagNodeTerminal({
-            child: {
-              id: childExecutionId,
-              parentExecutionId: child.parentExecutionId,
-              dagNodeId: child.dagNodeId,
-              status: 'completed',
-            },
-            connectionId,
-            logger,
-          });
-        } catch (hookErr) {
-          const msg = hookErr instanceof Error ? hookErr.message : String(hookErr);
-          logger.error('[DAG] onDagNodeTerminal failed — marking parent failed', {
-            parentId: child.parentExecutionId,
-            childExecutionId,
-            error: msg,
-          });
-          if (child.parentExecutionId) {
-            await agentExecutionRepository
-              .markFailed(child.parentExecutionId, { message: `DAG completion hook failed: ${msg}` })
-              .catch(markErr => {
-                logger.error('[DAG] markFailed on parent also failed', {
-                  parentId: child.parentExecutionId,
-                  error: markErr instanceof Error ? markErr.message : String(markErr),
-                });
-              });
-            await sendWs('failed', {
-              executionId: child.parentExecutionId,
-              reason: 'dag_hook_error',
-            });
-          }
-        }
-      }
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId: child.dagNodeId,
+        parentExecutionId: child.parentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
+        status: 'completed',
+      });
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       // Three failure shapes can reach this catch:
@@ -3237,45 +3206,15 @@ async function processSubagentDispatch(
       // Phase 4a - DAG node terminal even on failure/abort. Same hook fires;
       // it'll detect the failed dep and dispatch only nodes that don't
       // depend on this one (or none if everything cascades).
-      //
-      // Recovery: same gap as the success path - if the hook throws, the
-      // parent would otherwise sit in `awaiting_dag_children` indefinitely.
-      // Catch and mark the parent failed so the session unwedges.
-      if (child.dagNodeId) {
-        try {
-          await onDagNodeTerminal({
-            child: {
-              id: childExecutionId,
-              parentExecutionId: child.parentExecutionId,
-              dagNodeId: child.dagNodeId,
-              status: wasAborted ? 'aborted' : 'failed',
-            },
-            connectionId,
-            logger,
-          });
-        } catch (hookErr) {
-          const msg = hookErr instanceof Error ? hookErr.message : String(hookErr);
-          logger.error('[DAG] onDagNodeTerminal failed — marking parent failed', {
-            parentId: child.parentExecutionId,
-            childExecutionId,
-            error: msg,
-          });
-          if (child.parentExecutionId) {
-            await agentExecutionRepository
-              .markFailed(child.parentExecutionId, { message: `DAG completion hook failed: ${msg}` })
-              .catch(markErr => {
-                logger.error('[DAG] markFailed on parent also failed', {
-                  parentId: child.parentExecutionId,
-                  error: markErr instanceof Error ? markErr.message : String(markErr),
-                });
-              });
-            await sendWs('failed', {
-              executionId: child.parentExecutionId,
-              reason: 'dag_hook_error',
-            });
-          }
-        }
-      }
+      await fireDagNodeTerminalOnRefusal({
+        dagNodeId: child.dagNodeId,
+        parentExecutionId: child.parentExecutionId,
+        childExecutionId,
+        connectionId,
+        logger,
+        sendWs,
+        status: wasAborted ? 'aborted' : 'failed',
+      });
     } finally {
       clearInterval(abortPoller);
     }
