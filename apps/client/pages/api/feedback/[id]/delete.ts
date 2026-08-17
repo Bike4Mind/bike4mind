@@ -2,7 +2,7 @@ import { FeedbackModel } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { FeedbackEvents } from '@bike4mind/common';
+import { FeedbackEvents, redactPromptMetaForViewer } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 
 const handler = baseApi().delete(
@@ -25,7 +25,12 @@ const handler = baseApi().delete(
 
     await logEvent({ userId, type: FeedbackEvents.DELETE_FEEDBACK, metadata: { id } }, { ability: req.ability });
 
-    return res.status(200).json(deletedFeedbackItem);
+    // Same cross-user exposure as GET/PUT on this collection: an admin deleting another
+    // reporter's feedback still sees the response body, so functionCalls[].returnValue must be
+    // stripped here too. .toJSON() first - spreading a hydrated Mongoose subdocument leaks the
+    // unredacted value back in through its _doc/$__ internals.
+    const plain = deletedFeedbackItem.toJSON();
+    return res.status(200).json({ ...plain, promptMeta: redactPromptMetaForViewer(plain.promptMeta, false) });
   })
 );
 
