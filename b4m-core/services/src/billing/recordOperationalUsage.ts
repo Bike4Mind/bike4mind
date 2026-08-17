@@ -67,6 +67,13 @@ export interface RecordOperationalUsageAdapters {
  * is measuring. The billing (deduct) path reuses the `text_generation_usage` ledger machinery
  * for both features - the precise feature ('operations' | 'embedding') lives on the UsageEvent;
  * the ledger row (opt-in, off by default) does not distinguish embeddings from operational text.
+ *
+ * PER-MEMBER CAP: deliberately EXEMPT (#1651). `maxCreditsPerMember` is enforced at the
+ * reservation pre-flight of the paths that trigger this spend, never here - this helper must not
+ * throw, so a cap check could only skip the debit (already what an unbilled call does) or break
+ * the operational call it measures. The bound is indirect: callers sit downstream of a primary
+ * action that is itself gated. The exception is `pages/api/data-lakes/semantic-search`, which has
+ * no pre-flight of its own; gating belongs at that endpoint, not here.
  */
 export async function recordOperationalUsage(
   params: RecordOperationalUsageParams,
