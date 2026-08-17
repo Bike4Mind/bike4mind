@@ -60,6 +60,7 @@ describe('QuestMasterFeature - history fetch token budget', () => {
       startParams: {} as any,
       llm: {} as any,
       model: 'test-model',
+      modelInfo: { id: 'test-model', contextWindow: 200_000, max_tokens: 16384, type: 'text' } as any,
       message: 'plan my week',
       historyCount: 10,
       fabFileIds: [],
@@ -72,5 +73,55 @@ describe('QuestMasterFeature - history fetch token budget', () => {
     expect(options.verbatimTokenBudget).toEqual(expect.any(Number));
     expect(options.verbatimTokenBudget).toBeGreaterThan(0);
     expect(Number.isFinite(options.verbatimTokenBudget)).toBe(true);
+  });
+
+  it('sizes the budget against the REAL model context window, not an unknown-model floor', async () => {
+    // A small-context model (e.g. an 8k-window row) must get a budget well under 8192 - the
+    // regression this guards is a budget computed against a 200k floor regardless of the actual
+    // model, which for a small-window model exceeds the real window entirely and disables trimming.
+    const SMALL_CONTEXT_WINDOW = 8192;
+    await feature.beforeDataGathering({
+      quest: { id: 'quest1', status: 'running' } as any,
+      session: { id: 'session1' } as any,
+      startParams: {} as any,
+      llm: {} as any,
+      model: 'small-window-model',
+      modelInfo: {
+        id: 'small-window-model',
+        contextWindow: SMALL_CONTEXT_WINDOW,
+        max_tokens: 2048,
+        type: 'text',
+      } as any,
+      message: 'plan my week',
+      historyCount: 10,
+      fabFileIds: [],
+      questId: 'quest1',
+      questMaster: undefined,
+    });
+
+    const [, , options] = mocks.fetchAndProcessPreviousMessages.mock.calls[0];
+    expect(options.verbatimTokenBudget).toBeLessThan(SMALL_CONTEXT_WINDOW);
+  });
+
+  it('never collapses to a falsy 0 budget, even for a very long message on a small window', async () => {
+    // fetchAndProcessPreviousMessages treats a falsy budget as "no budget given" and skips
+    // trimming entirely - the exact unbounded-history bug this fix exists to prevent. A message
+    // long enough to exhaust the whole window must still floor at 1, not 0.
+    await feature.beforeDataGathering({
+      quest: { id: 'quest1', status: 'running' } as any,
+      session: { id: 'session1' } as any,
+      startParams: {} as any,
+      llm: {} as any,
+      model: 'small-window-model',
+      modelInfo: { id: 'small-window-model', contextWindow: 8192, max_tokens: 2048, type: 'text' } as any,
+      message: 'x'.repeat(100_000),
+      historyCount: 10,
+      fabFileIds: [],
+      questId: 'quest1',
+      questMaster: undefined,
+    });
+
+    const [, , options] = mocks.fetchAndProcessPreviousMessages.mock.calls[0];
+    expect(options.verbatimTokenBudget).toBeGreaterThanOrEqual(1);
   });
 });

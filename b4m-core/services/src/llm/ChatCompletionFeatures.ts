@@ -2,10 +2,8 @@ import {
   ChatCompletionCreateInput,
   ChatCompletionCreateInputSchema,
   ChatModels,
-  CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
   ContextTelemetry,
   ContextTelemetryAlerts,
-  DEFAULT_UNKNOWN_CONTEXT_WINDOW,
   IConnection,
   IChatHistoryItemDocument,
   IMessage,
@@ -71,6 +69,7 @@ import { getRelevantMementos } from '../mementoService';
 import {
   BaseStorage,
   computeCosineSimilarity,
+  computeVerbatimTokenBudget,
   EmbeddingFactory,
   fetchAndProcessPreviousMessages,
   IQueueService,
@@ -462,6 +461,8 @@ export interface ChatCompletionFeature {
     startParams: z.infer<typeof ChatCompletionCreateInputSchema>;
     llm: ICompletionBackend;
     model: string;
+    /** Resolved once per turn in ChatCompletionProcess.ts; sizes any history/token budget a feature needs. */
+    modelInfo: ModelInfo;
     message: string;
     historyCount: number;
     fabFileIds: string[];
@@ -828,6 +829,7 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     startParams,
     llm,
     model,
+    modelInfo,
     message,
     historyCount,
     fabFileIds,
@@ -839,6 +841,7 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     startParams: z.infer<typeof ChatCompletionCreateInputSchema>;
     llm: ICompletionBackend;
     model: string;
+    modelInfo: ModelInfo;
     message: string;
     historyCount: number;
     fabFileIds: string[];
@@ -889,20 +892,16 @@ export class QuestMasterFeature implements ChatCompletionFeature {
       // ChatCompletionProcess.ts), so the flag is derived from the model id, not opt-in per caller.
       //
       // verbatimTokenBudget bounds the history that createQuestPlan later splices in whole
-      // (QuestMaster has no downstream trim of its own). Unlike ChatCompletionProcess.ts's own
-      // budget, this can't size against the real model's context window - resolving ModelInfo here
-      // would mean threading the async model catalog into a code path that doesn't otherwise need
-      // it - so it reasons against the conservative unknown-model floor instead. That is smaller
-      // than most real windows, so this trims somewhat earlier than necessary, never later.
-      const verbatimTokenBudget = Math.floor(
-        Math.max(
-          0,
-          DEFAULT_UNKNOWN_CONTEXT_WINDOW -
-            CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS -
-            SYSTEM_PROMPT_RESERVE_TOKENS -
-            Math.ceil(message.length / 4)
-        ) * DEFAULT_VERBATIM_WINDOW_FRACTION
-      );
+      // (QuestMaster has no downstream trim of its own), sized against the REAL model's context
+      // window via the same helper ChatCompletionProcess.ts's own call site uses, so the two
+      // cannot drift the way an unknown-model floor would for a model with a small real window.
+      // Unlike that call site, this one does not read the ContextVerbatimWindowFraction admin
+      // override (no admin-settings map is threaded into QuestMasterFeature) - it always uses the
+      // compiled-in default fraction.
+      const verbatimTokenBudget = computeVerbatimTokenBudget(modelInfo, startParams.max_tokens, {
+        verbatimWindowFraction: DEFAULT_VERBATIM_WINDOW_FRACTION,
+        nonHistoryOverheadTokens: SYSTEM_PROMPT_RESERVE_TOKENS + Math.ceil(message.length / 4),
+      });
       const [conversationHistory] = await fetchAndProcessPreviousMessages(session, historyCount, {
         db: this.chatCompletion.db,
         model,

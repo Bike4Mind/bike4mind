@@ -2,7 +2,7 @@ import { FeedbackModel } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { FeedbackEvents } from '@bike4mind/common';
+import { FeedbackEvents, redactPromptMetaForViewer } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { z } from 'zod';
 
@@ -55,7 +55,15 @@ const handler = baseApi().put(
       { ability: req.ability }
     );
 
-    return res.json(updatedFeedback);
+    // Same cross-user exposure as GET /api/feedback: this route serves any admin, not just the
+    // reporter, so functionCalls[].returnValue must be stripped here too. .toJSON() first -
+    // spreading a hydrated Mongoose subdocument leaks the unredacted value back in through its
+    // _doc/$__ internals.
+    if (!updatedFeedback) {
+      return res.json(updatedFeedback);
+    }
+    const plain = updatedFeedback.toJSON();
+    return res.json({ ...plain, promptMeta: redactPromptMetaForViewer(plain.promptMeta, false) });
   })
 );
 

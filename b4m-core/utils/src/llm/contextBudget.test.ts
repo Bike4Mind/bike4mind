@@ -5,6 +5,7 @@ import {
   attachedContentAssemblyFloor,
   attachedContentBudgetsAgree,
   attachedContentExtractionBudget,
+  computeVerbatimTokenBudget,
   effectiveContextWindow,
   EXTRACTION_SYSTEM_RESERVE_MAX_SHARE,
   MIN_ATTACHED_CONTENT_EXTRACTION_SHARE,
@@ -73,6 +74,44 @@ describe('safeInputWindow', () => {
   // here would turn a loud failure into a silently empty prompt.
   it('goes negative rather than clamping on a model that reserves its whole window', () => {
     expect(safeInputWindow({ contextWindow: 8192, max_tokens: 8192, type: 'text' }, 8192)).toBeLessThan(0);
+  });
+});
+
+describe('computeVerbatimTokenBudget', () => {
+  it('sizes against the REAL model window, not a fixed unknown-model floor', () => {
+    // A caller that guessed a 200k floor regardless of model would compute a budget bigger than
+    // this model's whole window, so nothing would ever get trimmed.
+    const budget = computeVerbatimTokenBudget({ ...GPT4_8K, id: 'gpt4-8k-test' }, undefined, {
+      verbatimWindowFraction: 0.55,
+      nonHistoryOverheadTokens: SYSTEM_PROMPT_RESERVE,
+    });
+    expect(budget).toBeLessThan(GPT4_8K.contextWindow);
+  });
+
+  it('scales up for a larger real window, all else equal', () => {
+    const opts = { verbatimWindowFraction: 0.55, nonHistoryOverheadTokens: SYSTEM_PROMPT_RESERVE };
+    const small = computeVerbatimTokenBudget({ ...LLAMA_8K, id: 'small' }, undefined, opts);
+    const large = computeVerbatimTokenBudget({ ...CLAUDE_200K, id: 'large' }, undefined, opts);
+    expect(large).toBeGreaterThan(small);
+  });
+
+  it('never returns a falsy 0, even when the overhead consumes the whole window', () => {
+    // Callers gate trimming on `budget && budget > 0`; a falsy budget is read as "no budget
+    // given" and disables trimming entirely - the exact unbounded-history failure this function
+    // exists to prevent. A huge overhead (e.g. a very long message) must still floor at 1.
+    const budget = computeVerbatimTokenBudget({ ...LLAMA_8K, id: 'tiny' }, undefined, {
+      verbatimWindowFraction: 0.55,
+      nonHistoryOverheadTokens: 1_000_000,
+    });
+    expect(budget).toBe(1);
+  });
+
+  it('respects an explicit requestedMaxTokens rather than always using the fallback output reserve', () => {
+    const opts = { verbatimWindowFraction: 1, nonHistoryOverheadTokens: 0 };
+    const withSmallOutput = computeVerbatimTokenBudget({ ...CLAUDE_200K, id: 'x' }, 500, opts);
+    const withLargeOutput = computeVerbatimTokenBudget({ ...CLAUDE_200K, id: 'x' }, 8000, opts);
+    // Reserving less output leaves more safe input for the verbatim window.
+    expect(withSmallOutput).toBeGreaterThan(withLargeOutput);
   });
 });
 
