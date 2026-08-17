@@ -50,7 +50,12 @@ const handler = baseApi({ auth: false })
       // Only revoke a session this admin actually created by impersonating. The sid is read
       // straight out of a caller-supplied cookie, so without this check a holder of any valid
       // parked return cookie could revoke an arbitrary session by naming its sid.
-      const impersonated = await authSessionRepository.findBySid(impersonatedSid).catch(() => null);
+      // Log a failed lookup rather than skipping silently: this gate stands in front of a
+      // security-relevant revoke, so "we could not check, so we did nothing" needs to be visible.
+      const impersonated = await authSessionRepository.findBySid(impersonatedSid).catch(err => {
+        req.logger.error('Failed to load impersonation session on return to admin; skipping revoke', err);
+        return null;
+      });
       if (impersonated && impersonated.impersonatedBy === restored.userId) {
         await authSessionRepository
           .revokeBySid(impersonatedSid)

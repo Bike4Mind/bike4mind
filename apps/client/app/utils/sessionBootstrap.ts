@@ -67,9 +67,17 @@ async function exchangeRefreshCookie(): Promise<void> {
   }
 }
 
-/** Idempotent; safe to await from every guard and from concurrent navigations. */
+/**
+ * Idempotent; safe to await from every guard and from concurrent navigations.
+ *
+ * The short-circuit requires BOTH halves of a usable session, not just the token. The route guard
+ * gates on currentUser, so "token present, identity missing" is not a state worth skipping the
+ * bootstrap for - and it is reachable: the coordinator writes a token before every return, so an
+ * identity fetch that failed above would otherwise be latched behind a token-only check and the tab
+ * would sit on /login for its whole lifetime holding a perfectly valid cookie.
+ */
 export function bootstrapSession(): Promise<void> {
-  if (useAccessToken.getState().accessToken) {
+  if (useAccessToken.getState().accessToken && useUser.getState().currentUser) {
     return Promise.resolve();
   }
   bootstrapPromise ??= exchangeRefreshCookie();

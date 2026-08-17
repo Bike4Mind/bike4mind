@@ -165,11 +165,15 @@ describe('refreshCoordinator', () => {
       ['already torn down', { mfaPending: false, expired: true }],
     ])('ignores a broadcast while %s, so a shed session is never resurrected', async (_label, state) => {
       const stop = listenForSiblingRefresh();
-      useAccessToken.setState({ accessToken: null, ...state });
+      // Deliberately keeps a real held token for the SAME session. With accessToken: null the sid
+      // check short-circuits first and this case passes even with the mfaPending/expired guard
+      // deleted - so the property it exists to pin would not actually be pinned.
+      const held = token(SID, 'held');
+      useAccessToken.setState({ accessToken: held, ...state });
 
       await broadcastFromSibling({ type: 'refreshed', sid: SID, accessToken: fromSibling, impersonating: false });
 
-      expect(useAccessToken.getState().accessToken).toBeNull();
+      expect(useAccessToken.getState().accessToken).toBe(held);
       stop();
     });
 

@@ -4,7 +4,7 @@ import { isTokenVersionCurrent, authSessionService } from '@bike4mind/services';
 import { User, userRepository, authSessionRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { UnauthorizedError } from '@bike4mind/utils';
+import { HTTPError, UnauthorizedError } from '@bike4mind/utils';
 import { z } from 'zod';
 
 const RefreshRequestSchema = z.object({
@@ -79,6 +79,19 @@ const handler = baseApi({ auth: false })
       });
     } catch (error) {
       console.error('Token refresh error:', error);
+
+      // Let a typed HTTP error keep its own status. The blanket 401 below exists to turn any
+      // rotation failure into invalid_grant, but not every failure means "your credential is
+      // dead": rotateSession raises 429 when a session's replay allowance is spent, deliberately
+      // so that an overrun burst is retryable rather than terminal. Flattening it to 401 hands the
+      // CLI an invalid_grant, which it treats as revocation and clears the stored tokens - the
+      // exact logout that choosing 429 was meant to avoid.
+      if (error instanceof HTTPError && error.statusCode !== 401) {
+        return res.status(error.statusCode).json({
+          error: error.statusCode === 429 ? 'slow_down' : 'invalid_request',
+          error_description: error.message,
+        });
+      }
 
       return res.status(401).json({
         error: 'invalid_grant',
