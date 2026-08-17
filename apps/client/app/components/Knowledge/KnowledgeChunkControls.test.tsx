@@ -78,7 +78,7 @@ describe('KnowledgeChunkControls - chunk-size ceiling', () => {
     await waitFor(() => expect(chunkFileUtility).toHaveBeenCalledWith('f1', 800));
   });
 
-  it('falls back to the last valid size on a blank blur instead of committing NaN', async () => {
+  it('falls back to the last valid size on a blank blur instead of submitting 0', async () => {
     render(
       <TestWrapper>
         <KnowledgeChunkControls fabFile={FAB_FILE} />
@@ -90,12 +90,29 @@ describe('KnowledgeChunkControls - chunk-size ceiling', () => {
     fireEvent.change(input, { target: { value: '' } });
     fireEvent.blur(input);
 
-    expect(input).not.toHaveValue('NaN tokens');
+    expect(input).toHaveValue('512 tokens');
 
     fireEvent.click(screen.getByTestId('knowledge-chunk-controls-chunk-btn'));
 
-    await waitFor(() => expect(chunkFileUtility).toHaveBeenCalled());
-    const [, sentChunkSize] = chunkFileUtility.mock.calls[0];
-    expect(Number.isNaN(sentChunkSize)).toBe(false);
+    await waitFor(() => expect(chunkFileUtility).toHaveBeenCalledWith('f1', 512));
+  });
+
+  it('falls back to the last valid size on a negative blur', async () => {
+    render(
+      <TestWrapper>
+        <KnowledgeChunkControls fabFile={FAB_FILE} />
+      </TestWrapper>
+    );
+
+    const input = screen.getByTestId('knowledge-chunk-controls-size-input').querySelector('input')!;
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '-5' } });
+    fireEvent.blur(input);
+
+    expect(input).toHaveValue('512 tokens');
+
+    fireEvent.click(screen.getByTestId('knowledge-chunk-controls-chunk-btn'));
+
+    await waitFor(() => expect(chunkFileUtility).toHaveBeenCalledWith('f1', 512));
   });
 });
