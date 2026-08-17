@@ -8,7 +8,7 @@ import {
   SUMMARIZATION_CONFIG,
 } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
-import { UNLIMITED_HISTORY_COUNT } from '@bike4mind/common';
+import { UNLIMITED_HISTORY_COUNT, FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '@bike4mind/common';
 import type { ISessionDocument, IChatHistoryItemDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
@@ -1520,6 +1520,124 @@ describe('KnowledgeRetrievalFeature untrusted-content delimiter (#1659)', () => 
     const content = await run(HOSTILE, 'Leave Policy.pdf', 'indexed');
     expect(content).toContain('### [1] Leave Policy.pdf (ID: fileA)');
     expect(content).toContain('cite ONLY by bracketed index');
+  });
+});
+
+/**
+ * The forced-retrieval char budget became a lever (bike4mind#1831, resolveForcedRetrievalCharBudget)
+ * rather than a module constant. This locks the settings-read contract - unset/unusable/outage all
+ * fall back to FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT exactly the way resolveEmbeddingModelFallback
+ * does above - and that a configured value actually changes injection, not just that it parses.
+ */
+describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
+  const END = '[Untrusted Retrieved Content - END]';
+  const embeddingFactory = {
+    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+  };
+
+  /** Every chunk shares the query's vector, so every one of `chunkCount` chunks clears the
+   * similarity floor - the loop that reads the budget runs multiple iterations per turn. */
+  const makeCtx = (opts: { getSettingsValue: (key: string) => unknown; chunkText?: string; chunkCount?: number }) => {
+    const chunkText = opts.chunkText ?? 'z'.repeat(20_000);
+    const chunkCount = opts.chunkCount ?? 1;
+    const rows = Array.from({ length: chunkCount }, (_, i) => ({
+      id: `ch${i}`,
+      fabFileId: 'fileA',
+      text: chunkText,
+      vector: [1, 0],
+    }));
+    const getSettingsValue = vi.fn((key: string) => Promise.resolve(opts.getSettingsValue(key)));
+    return {
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+      user: { id: 'u1', tags: [], groups: [] },
+      db: {
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        fabfiles: {
+          search: vi
+            .fn()
+            .mockResolvedValue({ data: [{ id: 'fileA', fileName: 'Budget.pdf', tags: [] }], hasMore: false, total: 1 }),
+        },
+        fabfilechunks: { findByFabFileId: vi.fn(), findVectorsByFabFileIds: vi.fn(() => Promise.resolve(rows)) },
+        adminSettings: { getSettingsValue },
+      },
+      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+  };
+
+  const run = async (ctx: ReturnType<typeof makeCtx>) => {
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    const messages = await feature.getContextMessages(
+      makeQuest(),
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'stage III NSCLC treatment'
+    );
+    return messages[0]?.content ?? '';
+  };
+
+  /**
+   * Injected text length, isolating it from surrounding structure: renderRetrievedContentBlock
+   * joins [HEADER, section, FOOTER] with '\n\n' and FOOTER starts with the END marker verbatim, and
+   * each section is `${heading}\n${text}` - so exactly one '\n' separates the heading from the text,
+   * and exactly '\n\n' separates the text from END. Single-section only (as used below); the wider
+   * `bodyLen` in the delimiter-defang describe block above is fine with the +3 slop since it only
+   * compares two runs against each other, but these tests assert exact budget values.
+   */
+  const bodyLen = (content: string) => {
+    const textStart = content.indexOf('(ID: fileA)') + '(ID: fileA)'.length + 1;
+    const textEnd = content.indexOf(END) - 2;
+    return textEnd - textStart;
+  };
+
+  it('unset setting falls back to FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT', async () => {
+    const content = await run(makeCtx({ getSettingsValue: () => undefined }));
+    expect(bodyLen(content)).toBe(FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT);
+  });
+
+  it('a configured value changes how much text is injected', async () => {
+    // Chunk text must exceed both budgets, or the smaller-than-chunk case just injects the whole
+    // chunk and proves nothing about the budget.
+    const bigChunk = 'z'.repeat(30_000);
+    const smaller = await run(makeCtx({ getSettingsValue: () => 2_000, chunkText: bigChunk }));
+    const larger = await run(makeCtx({ getSettingsValue: () => 24_000, chunkText: bigChunk }));
+    expect(bodyLen(smaller)).toBe(2_000);
+    expect(bodyLen(larger)).toBe(24_000);
+  });
+
+  it('an unusable configured value warns and falls back to the default', async () => {
+    const ctx = makeCtx({ getSettingsValue: () => 'not-a-number' });
+    const content = await run(ctx);
+    expect(bodyLen(content)).toBe(FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT);
+    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
+      expect.stringContaining('forcedRetrievalCharBudget')
+    );
+  });
+
+  it('a settings-read failure (outage) falls back to the default rather than throwing', async () => {
+    const ctx = makeCtx({
+      getSettingsValue: () => {
+        throw new Error('settings store unavailable');
+      },
+    });
+    const content = await run(ctx);
+    expect(bodyLen(content)).toBe(FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT);
+    expect((ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
+      expect.stringContaining('forcedRetrievalCharBudget'),
+      expect.any(Error)
+    );
+  });
+
+  it('reads the budget ONCE per turn, not once per chunk', async () => {
+    // 5 chunks so the accumulation loop iterates 5 times; the read must not scale with it.
+    const ctx = makeCtx({ getSettingsValue: () => 3_000, chunkText: 'y'.repeat(1_000), chunkCount: 5 });
+    await run(ctx);
+    const calls = (ctx.db.adminSettings.getSettingsValue as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([key]) => key === 'forcedRetrievalCharBudget'
+    );
+    expect(calls).toHaveLength(1);
   });
 });
 
