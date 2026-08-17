@@ -422,6 +422,10 @@ export const ssrfSafeLookup: LookupFunction = (hostname, options, callback) => {
       return;
     }
 
+    // Which address wins is deliberately left as `addresses[0]` rather than re-deriving the caller's
+    // `family`/`hints`/`verbatim` preference here: every address in this list already survived the
+    // private-address filter, and `dns.lookup` applied those options upstream, so the order it handed
+    // back is the order to honour. This hook judges addresses; it does not re-rank them.
     callback(null, addresses[0].address, addresses[0].family);
   });
 };
