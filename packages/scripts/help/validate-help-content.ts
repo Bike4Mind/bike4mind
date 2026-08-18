@@ -422,7 +422,7 @@ async function main(): Promise<void> {
   const findings = validateArticles(articles);
 
   if (findings.length === 0) {
-    console.log('✅ Help content validation passed — no broken links, anchors, media, or frontmatter issues.');
+    console.log('✅ Help content validation passed - no broken links, anchors, media, or frontmatter issues.');
     return;
   }
 

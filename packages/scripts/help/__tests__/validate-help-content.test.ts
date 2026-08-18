@@ -204,7 +204,7 @@ describe('resolveAssetPath', () => {
   });
 });
 
-describe('validateArticles — media guards', () => {
+describe('validateArticles - media guards', () => {
   const exists = (existing: string[]) => (p: string) => existing.map(e => path.join(DOCS_ROOT, e)).includes(p);
 
   it('accepts an existing small demo video referenced with image syntax', () => {
