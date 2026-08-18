@@ -34,7 +34,12 @@ import { handleToolResultStreaming } from './toolStreamingHelper';
 import { ensureToolPairingIntegrity, stripAllToolBlocks, stripToolDependentMessages } from './toolPairingUtils';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { withRetry, isUserInitiatedAbort, isRetryableError } from '@bike4mind/common';
-import { buildThinkingParams, THINKING_ANSWER_HEADROOM_TOKENS, type ThinkingConfig } from './thinkingParams';
+import {
+  buildThinkingParams,
+  resolveOutputMaxTokens,
+  THINKING_ANSWER_HEADROOM_TOKENS,
+  type ThinkingConfig,
+} from './thinkingParams';
 import { DispatchModel } from './dispatchModel';
 import { acquireSlot, releaseSlot } from './_anthropicSemaphore';
 import {
@@ -78,6 +83,13 @@ const SLOW_MODEL_REQUEST_TIMEOUT_MS = 120000; // 120s for slow/opus-class models
  * Floored to a round number for headroom against that formula being retuned.
  */
 const ANTHROPIC_NONSTREAMING_MAX_TOKENS = 21_000;
+
+/**
+ * Output budget used when the caller names none. Only applies to models that do NOT spend
+ * reasoning inside the output budget - resolveOutputMaxTokens sizes the rest for the model,
+ * so this value stays the historical one and non-reasoning behavior is unchanged.
+ */
+const DEFAULT_ANTHROPIC_MAX_TOKENS = 4096;
 
 /**
  * Accumulated multi-turn cache token total. Undefined when zero so turns
@@ -890,9 +902,26 @@ export class AnthropicBackend implements ICompletionBackend {
       }
     }
 
+    // Resolved here rather than at the thinking block below, because max_tokens needs it:
+    // an adaptive model reasons inside max_tokens on EVERY turn, not only when a caller
+    // explicitly enables thinking, so a flat fallback starved every in-process caller that
+    // names no budget (agent mode, subagents) and truncated the visible answer.
+    const currentModelInfo = this.modelRecordFor(model);
+
     const apiParams: ExtendedMessageCreateParams = {
       model,
-      max_tokens: options.maxTokens ?? 4096,
+      // Non-reasoning models keep the historical 4096 exactly; only models that spend
+      // reasoning inside the output budget are sized up. Safe against the SDK's
+      // non-streaming duration limit because the ANTHROPIC_NONSTREAMING_MAX_TOKENS clamp
+      // below still applies to the resolved value.
+      max_tokens: currentModelInfo
+        ? resolveOutputMaxTokens({
+            requested: options.maxTokens,
+            fallback: DEFAULT_ANTHROPIC_MAX_TOKENS,
+            modelInfo: currentModelInfo,
+            modelMaxOutputTokens: currentModelInfo.max_tokens ?? DEFAULT_ANTHROPIC_MAX_TOKENS,
+          })
+        : (options.maxTokens ?? DEFAULT_ANTHROPIC_MAX_TOKENS),
       messages: filteredMessages.map(m => ({
         role: m.role === 'user' ? 'user' : 'assistant',
         // Preserve the content structure - it can be string or MessageContentObject[].
@@ -972,8 +1001,7 @@ export class AnthropicBackend implements ICompletionBackend {
     // Add thinking parameters for models that support it. A catalog-only model
     // brings its own record, so a new Claude gets the right thinking shape
     // (buildThinkingParams reads thinkingStyle) instead of none at all.
-    const currentModelInfo = this.modelRecordFor(model);
-
+    // `currentModelInfo` is resolved above, where max_tokens needs it too.
     if (currentModelInfo?.can_think) {
       // questMaster / thinking are Anthropic-specific extras layered onto the generic
       // completion options; view them through a typed lens rather than `any`.
