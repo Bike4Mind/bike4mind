@@ -5,9 +5,10 @@ import type {
   IUserRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, normalizeId } from '@bike4mind/utils';
-import { isEffectiveOwner, resolveEffectiveOwnerIds, type ManageActor } from './manageRule';
+import { resolveEffectiveOwnerIds, type ManageActor } from './manageRule';
 import { assertLakeGrantable } from './assertLakeAccess';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
+import { isOrgOwnershipCandidate, resolveLakeTransferAuthority } from './lakeOwnershipCandidates';
 import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 import { ownershipChange } from './diffLakeConfig';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
@@ -73,15 +74,16 @@ export const transferLakeOwnership = async (
 
   const grants = await loadActiveLakeGrants(lake, { db });
   const lakeOrg = normalizeId(lake.organizationId);
-  const isOwner = isEffectiveOwner(lake, actor, grants);
-  const isOrgAdminOfLake = !!lakeOrg && (actor.administeredOrgIds ?? []).includes(lakeOrg);
-  if (!(actor.isAdmin || isOwner || isOrgAdminOfLake)) {
+  // Shared with the candidate listing behind the transfer picker, so the option set a manager is
+  // offered and the gate this write applies can never drift apart.
+  const authority = resolveLakeTransferAuthority(lake, actor, grants);
+  if (!authority.allowed) {
     throw new BadRequestError('You do not have permission to transfer ownership of this data lake');
   }
   // Consent guard (see doc above): an org admin acting purely by the org-admin rung may reassign the
   // lake to another member, but may not grab ownership for themselves and then expose it around the
   // owner-only expose gate. A platform admin or the current owner is exempt.
-  if (!actor.isAdmin && !isOwner && newOwnerUserId === actor.userId) {
+  if (authority.viaOrgAdminOnly && newOwnerUserId === actor.userId) {
     throw new BadRequestError('An organization admin cannot transfer a data lake to themselves; name another member.');
   }
 
@@ -95,12 +97,9 @@ export const transferLakeOwnership = async (
   // is refused rather than silently granted.
   if (lakeOrg) {
     const org = await db.organizations.findById(lakeOrg);
-    const isMember =
-      !!org &&
-      (org.userId === newOwnerUserId ||
-        (org.adminUserIds ?? []).includes(newOwnerUserId) ||
-        (org.users ?? []).some(member => member.userId === newOwnerUserId));
-    if (!isMember) {
+    // Same predicate the picker enumerates from (`listOrgOwnershipCandidateIds`), so this can never
+    // reject a teammate the UI offered.
+    if (!org || !isOrgOwnershipCandidate(org, newOwnerUserId)) {
       throw new BadRequestError('The new owner must belong to the organization that owns this data lake');
     }
   }

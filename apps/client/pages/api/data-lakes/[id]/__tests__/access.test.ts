@@ -3,7 +3,9 @@ import type { LakeAccessView } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   assertLakeAccess: vi.fn(),
-  resolveCanManageLake: vi.fn(),
+  loadActiveLakeGrants: vi.fn(),
+  canManageLake: vi.fn(),
+  resolveLakeTransferAuthority: vi.fn(),
   assembleLakeAccessView: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false, administeredOrgIds: [] })),
 }));
@@ -22,7 +24,9 @@ vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () =>
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeAccess: h.assertLakeAccess,
-    resolveCanManageLake: h.resolveCanManageLake,
+    loadActiveLakeGrants: h.loadActiveLakeGrants,
+    canManageLake: h.canManageLake,
+    resolveLakeTransferAuthority: h.resolveLakeTransferAuthority,
     assembleLakeAccessView: h.assembleLakeAccessView,
   },
 }));
@@ -59,6 +63,9 @@ const view: LakeAccessView = {
   generatedAt: new Date('2026-08-14T12:00:00.000Z'),
 };
 
+/** Stands in for the lake's active grants, so a test can assert BOTH decisions saw the same read. */
+const GRANTS = [{ principalType: 'user', principalId: 'u1', role: 'owner' }];
+
 const makeRes = () => {
   const json = vi.fn();
   const send = vi.fn();
@@ -73,7 +80,9 @@ describe('GET /api/data-lakes/[id]/access', () => {
     vi.clearAllMocks();
     h.toAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false, administeredOrgIds: [] });
     h.assertLakeAccess.mockResolvedValue({ id: 'lake-oid-1', name: 'Sales Intelligence' });
-    h.resolveCanManageLake.mockResolvedValue(true);
+    h.loadActiveLakeGrants.mockResolvedValue(GRANTS);
+    h.canManageLake.mockReturnValue(true);
+    h.resolveLakeTransferAuthority.mockReturnValue({ allowed: false, viaOrgAdminOnly: false });
     h.assembleLakeAccessView.mockResolvedValue(view);
   });
 
@@ -85,11 +94,11 @@ describe('GET /api/data-lakes/[id]/access', () => {
       expect.objectContaining({ id: 'lake-oid-1' }),
       expect.anything()
     );
-    expect(json).toHaveBeenCalledWith({ data: view });
+    expect(json).toHaveBeenCalledWith({ data: view, meta: { canTransferOwnership: false } });
   });
 
   it('refuses a caller who can read but not manage the lake (403), without assembling', async () => {
-    h.resolveCanManageLake.mockResolvedValue(false);
+    h.canManageLake.mockReturnValue(false);
     const { res } = makeRes();
     await expect(call(req({ id: 'lake1' }), res)).rejects.toThrow(/manage/i);
     expect(h.assembleLakeAccessView).not.toHaveBeenCalled();
@@ -99,7 +108,7 @@ describe('GET /api/data-lakes/[id]/access', () => {
     h.assertLakeAccess.mockRejectedValue(new Error('Data lake not found'));
     const { res } = makeRes();
     await expect(call(req({ id: 'lake1' }), res)).rejects.toThrow(/not found/i);
-    expect(h.resolveCanManageLake).not.toHaveBeenCalled();
+    expect(h.canManageLake).not.toHaveBeenCalled();
   });
 
   it('streams a CSV attachment when format=csv', async () => {
@@ -113,11 +122,37 @@ describe('GET /api/data-lakes/[id]/access', () => {
   });
 
   it('applies the identical manage gate to the CSV path (403 before assembling, no attachment)', async () => {
-    h.resolveCanManageLake.mockResolvedValue(false);
+    h.canManageLake.mockReturnValue(false);
     const { res, send, setHeader } = makeRes();
     await expect(call(req({ id: 'lake1', format: 'csv' }), res)).rejects.toThrow(/manage/i);
     expect(h.assembleLakeAccessView).not.toHaveBeenCalled();
     expect(setHeader).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("reports the viewer's transfer capability in meta, leaving the exported view untouched", async () => {
+    h.resolveLakeTransferAuthority.mockReturnValue({ allowed: true, viaOrgAdminOnly: false });
+    const { res, json } = makeRes();
+    await call(req({ id: 'lake1' }), res);
+    expect(json).toHaveBeenCalledWith({ data: view, meta: { canTransferOwnership: true } });
+    // The capability is per-VIEWER; the artifact must not absorb it, or the CSV would claim it too.
+    expect(json.mock.calls[0][0].data).not.toHaveProperty('canTransferOwnership');
+  });
+
+  it('decides the manage gate and the transfer capability from ONE grants read', async () => {
+    const { res } = makeRes();
+    await call(req({ id: 'lake1' }), res);
+    expect(h.loadActiveLakeGrants).toHaveBeenCalledTimes(1);
+    // Both rules must see the SAME grant set: re-reading could decide the two against different
+    // snapshots, and offering a transfer control the write path then refuses is the drift to avoid.
+    expect(h.canManageLake).toHaveBeenCalledWith(expect.anything(), expect.anything(), GRANTS);
+    expect(h.resolveLakeTransferAuthority).toHaveBeenCalledWith(expect.anything(), expect.anything(), GRANTS);
+  });
+
+  it('keeps the per-viewer capability out of the CSV artifact', async () => {
+    h.resolveLakeTransferAuthority.mockReturnValue({ allowed: true, viaOrgAdminOnly: false });
+    const { res, send } = makeRes();
+    await call(req({ id: 'lake1', format: 'csv' }), res);
+    expect(send.mock.calls[0][0] as string).not.toContain('canTransferOwnership');
   });
 });

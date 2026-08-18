@@ -6,6 +6,7 @@ import type {
   IDataLakeSpendResponse,
   IFabFileDocument,
   LakeAccessView,
+  LakeOwnershipCandidateList,
   LakeHealthApiResponse,
   ManageableDataLakeConfig,
   TaxonomyTag,
@@ -101,7 +102,39 @@ export function useLakeAccessView(dataLakeId: string | null, enabled = true) {
     enabled: enabled && !!dataLakeId,
     retry: false,
     queryFn: async () => {
-      const response = await api.get<{ data: LakeAccessView }>(`/api/data-lakes/${dataLakeId}/access`);
+      const response = await api.get<{ data: LakeAccessView; meta?: { canTransferOwnership?: boolean } }>(
+        `/api/data-lakes/${dataLakeId}/access`
+      );
+      // The capability is kept OUT of the view object it sits beside: the view is the artifact the CSV
+      // export mirrors, and a per-viewer permission is not a fact about the lake's access.
+      // Fails closed - an older server that omits `meta` hides the control rather than showing one
+      // whose action would 400.
+      return {
+        view: response.data.data,
+        canTransferOwnership: response.data.meta?.canTransferOwnership === true,
+      };
+    },
+    staleTime: 1000 * 30,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/**
+ * Who the current user may transfer one lake to (the transfer picker's options). Server-resolved from
+ * the owning org's membership using the same rule the transfer itself validates, so the list can never
+ * offer a teammate the action would reject; a caller who may read but not transfer simply gets an
+ * empty list. Enabled only while the transfer dialog is open - this is a picker's option set, not a
+ * display hint, so it is fetched on demand and not cached long.
+ */
+export function useLakeOwnershipCandidates(dataLakeId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: dataLakeKeys.ownershipCandidates(dataLakeId ?? ''),
+    enabled: enabled && !!dataLakeId,
+    retry: false,
+    queryFn: async () => {
+      const response = await api.get<{ data: LakeOwnershipCandidateList }>(
+        `/api/data-lakes/${dataLakeId}/transfer-ownership`
+      );
       return response.data.data;
     },
     staleTime: 1000 * 30,
@@ -110,9 +143,46 @@ export function useLakeAccessView(dataLakeId: string | null, enabled = true) {
 }
 
 /**
- * Download the same access view as a CSV compliance artifact. Fetched through the authenticated
- * axios instance (Bearer token in localStorage, not a cookie) as a blob, so a plain link/window.open
- * would not carry auth - hence the object-URL + anchor click, with the URL revoked afterward.
+ * Hand a lake's ownership to another user. The prior owner is demoted to curator rather than removed,
+ * so they keep management access and the transfer is reversible by the new owner.
+ *
+ * Invalidates the lake list as well as the access view: ownership decides `canManage`, so the panel's
+ * own controls (Access included) may legitimately disappear for the actor once they are no longer the
+ * owner - refetching is what keeps the UI honest about what the actor can still do.
+ */
+export function useTransferLakeOwnership() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ id, newOwnerUserId }: { id: string; newOwnerUserId: string }) => {
+      const response = await api.post<{ newOwnerUserId: string; demotedUserIds: string[] }>(
+        `/api/data-lakes/${id}/transfer-ownership`,
+        { newOwnerUserId }
+      );
+      return response.data;
+    },
+    onSuccess: (_data, { id }) => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipCandidates(id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      toast.success('Data lake ownership transferred');
+    },
+    onError: (error: Error) => {
+      // Surface the server's own refusal text. This endpoint's rejections are the actionable kind
+      // ("name another member", "must belong to the organization that owns this data lake"), and
+      // axios would otherwise replace them with "Request failed with status code 400". The body key
+      // is `error`, per the API error handler (server/middlewares/errorHandler.ts).
+      const refusal = isAxiosError(error) ? (error.response?.data as { error?: string } | undefined)?.error : undefined;
+      toast.error(refusal || error.message || 'Failed to transfer ownership');
+    },
+  });
+}
+
+/**
+ * Download the same access view as a CSV compliance artifact. Must go through the authenticated axios
+ * instance: the access token is held in memory and attached as an `Authorization` header, so a plain
+ * link or `window.open` would carry no credentials at all. Hence the blob + object-URL + anchor click,
+ * with the URL revoked afterward.
  */
 export async function downloadLakeAccessCsv(dataLakeId: string): Promise<void> {
   const response = await api.get(`/api/data-lakes/${dataLakeId}/access`, {

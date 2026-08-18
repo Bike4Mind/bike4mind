@@ -74,6 +74,40 @@ export type IDataLakeAccessGrant = z.infer<typeof DataLakeAccessGrant>;
 
 export interface IDataLakeAccessGrantDocument extends IDataLakeAccessGrant, IMongoDocument {}
 
+/**
+ * One user a lake's ownership may be transferred TO - the option set behind the transfer picker.
+ * Resolved live from the owning organization's membership; never stored.
+ */
+export interface LakeOwnershipCandidate {
+  userId: string;
+  /** Display name, best-effort (name, else username). Absent when the user record carries neither. */
+  name?: string;
+  /**
+   * The candidate's email. Present here - unlike in the access view, which deliberately withholds it -
+   * because every candidate is a member of the lake's OWN organization rather than an arbitrary
+   * cross-tenant principal, and it is what tells two teammates with the same display name apart in a
+   * picker that hands over ownership.
+   */
+  email?: string;
+}
+
+/**
+ * The transfer-ownership option set for one lake, as resolved for one asking actor.
+ *
+ * `scope` is what a caller must branch on to explain an EMPTY list, which has two very different
+ * causes that a bare count cannot distinguish:
+ *  - `'personal'` - the lake belongs to no organization, so there is no membership relation to
+ *    enumerate and none is invented (a global user search is a user-enumeration surface, not a
+ *    picker). The path is to move the lake into an organization first.
+ *  - `'organization'` with no candidates - the org genuinely has nobody else eligible to receive it.
+ */
+export interface LakeOwnershipCandidateList {
+  scope: 'organization' | 'personal';
+  candidates: LakeOwnershipCandidate[];
+  /** The owning organization's name, for the UI's explanatory copy. Absent for a personal lake. */
+  organizationName?: string;
+}
+
 export interface IDataLakeAccessGrantRepository extends IBaseRepository<IDataLakeAccessGrantDocument> {
   /**
    * Every grant on a lake - the "who can reach this lake" answer that motivates the relation.

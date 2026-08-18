@@ -4,14 +4,23 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { LakeAccessView } from '@bike4mind/common';
+import type { LakeAccessView, LakeOwnershipCandidateList } from '@bike4mind/common';
 import { DataLakeAccessModal } from './DataLakeAccessModal';
 
 const downloadCsv = vi.fn();
-let viewState: { data?: LakeAccessView; isLoading: boolean; isError: boolean; error?: unknown };
+let viewState: {
+  data?: { view: LakeAccessView; canTransferOwnership: boolean };
+  isLoading: boolean;
+  isError: boolean;
+  error?: unknown;
+};
+let candidatesState: { data?: LakeOwnershipCandidateList; isLoading: boolean };
+const transferMutate = vi.fn();
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useLakeAccessView: () => viewState,
+  useLakeOwnershipCandidates: () => candidatesState,
+  useTransferLakeOwnership: () => ({ mutateAsync: transferMutate, isPending: false }),
   downloadLakeAccessCsv: (...args: unknown[]) => downloadCsv(...args),
 }));
 
@@ -61,9 +70,17 @@ const fullView: LakeAccessView = {
 
 const lake = { id: 'lake1', name: 'Sales Intelligence' };
 
+/** A loaded access view. `canTransferOwnership` defaults off - the server decides it, not the client. */
+const loaded = (view: LakeAccessView, canTransferOwnership = false) => ({
+  data: { view, canTransferOwnership },
+  isLoading: false,
+  isError: false,
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
-  viewState = { data: fullView, isLoading: false, isError: false };
+  viewState = loaded(fullView);
+  candidatesState = { data: { scope: 'organization', candidates: [], organizationName: 'Acme' }, isLoading: false };
 });
 
 describe('DataLakeAccessModal', () => {
@@ -88,7 +105,7 @@ describe('DataLakeAccessModal', () => {
     // Present alongside real rows: a populated table must not read as the complete record either.
     expect(screen.getByTestId('datalake-access-history-caveat')).toHaveTextContent(/lower bound/i);
 
-    viewState = { data: { ...fullView, history: [], historyTruncated: false }, isLoading: false, isError: false };
+    viewState = loaded({ ...fullView, history: [], historyTruncated: false });
     rerender(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />);
     expect(screen.getByTestId('datalake-access-history-caveat')).toHaveTextContent(
       /not proof that no one has read this lake/i
@@ -111,11 +128,7 @@ describe('DataLakeAccessModal', () => {
   });
 
   it('omits the composition note when a single channel is a standalone path', () => {
-    viewState = {
-      isLoading: false,
-      isError: false,
-      data: { ...fullView, channels: [{ kind: 'public' }] },
-    };
+    viewState = loaded({ ...fullView, channels: [{ kind: 'public' }] });
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
     expect(screen.queryByTestId('datalake-access-channels-compose-note')).not.toBeInTheDocument();
   });
@@ -141,14 +154,75 @@ describe('DataLakeAccessModal', () => {
   });
 
   it('renders empty states when there are no grants, channels, or reads', () => {
-    viewState = {
-      isLoading: false,
-      isError: false,
-      data: { ...fullView, grants: [], channels: [], history: [], historyTruncated: false },
-    };
+    viewState = loaded({ ...fullView, grants: [], channels: [], history: [], historyTruncated: false });
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
     expect(screen.getByTestId('datalake-access-grants-empty')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-access-channels-empty')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-access-history-empty')).toBeInTheDocument();
+  });
+
+  describe('transfer ownership', () => {
+    const withCandidates = () => {
+      viewState = loaded(fullView, true);
+      candidatesState = {
+        isLoading: false,
+        data: {
+          scope: 'organization',
+          organizationName: 'Acme',
+          candidates: [{ userId: 'u9', name: 'Carol', email: 'carol@example.com' }],
+        },
+      };
+    };
+
+    it('hides the control unless the SERVER says this viewer may transfer', () => {
+      // A curator can open this modal but must not be offered a transfer: the manage gate that opens
+      // the view is wider than the transfer rule, and only the server resolves the narrower one.
+      render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+      expect(screen.queryByTestId('datalake-access-transfer-btn')).not.toBeInTheDocument();
+    });
+
+    it('transfers to the chosen member', async () => {
+      withCandidates();
+      transferMutate.mockResolvedValue({ newOwnerUserId: 'u9', demotedUserIds: ['u1'] });
+      render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+
+      await userEvent.click(screen.getByTestId('datalake-access-transfer-btn'));
+      await userEvent.click(screen.getByTestId('datalake-transfer-owner-select'));
+      await userEvent.click(screen.getByTestId('datalake-transfer-option-u9'));
+      await userEvent.click(screen.getByTestId('datalake-transfer-confirm-btn'));
+
+      expect(transferMutate).toHaveBeenCalledWith({ id: 'lake1', newOwnerUserId: 'u9' });
+    });
+
+    it('cannot confirm before a new owner is chosen', async () => {
+      withCandidates();
+      render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+      await userEvent.click(screen.getByTestId('datalake-access-transfer-btn'));
+      expect(screen.getByTestId('datalake-transfer-confirm-btn')).toBeDisabled();
+    });
+
+    it('says the outgoing owner stays on as a curator, so the demotion is not a surprise', async () => {
+      withCandidates();
+      render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+      await userEvent.click(screen.getByTestId('datalake-access-transfer-btn'));
+      expect(screen.getByTestId('datalake-transfer-modal')).toHaveTextContent(/curator/i);
+    });
+
+    it('explains the path for a personal lake instead of showing an empty picker', async () => {
+      viewState = loaded(fullView, true);
+      candidatesState = { data: { scope: 'personal', candidates: [] }, isLoading: false };
+      render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+      await userEvent.click(screen.getByTestId('datalake-access-transfer-btn'));
+      // An empty list has two very different causes; a personal lake must not read as "nobody here".
+      expect(screen.getByTestId('datalake-transfer-personal')).toHaveTextContent(/organization/i);
+      expect(screen.queryByTestId('datalake-transfer-owner-select')).not.toBeInTheDocument();
+    });
+
+    it('names the organization when it has nobody else eligible', async () => {
+      viewState = loaded(fullView, true);
+      render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+      await userEvent.click(screen.getByTestId('datalake-access-transfer-btn'));
+      expect(screen.getByTestId('datalake-transfer-no-candidates')).toHaveTextContent(/Acme/);
+    });
   });
 });

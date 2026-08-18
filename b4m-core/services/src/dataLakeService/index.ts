@@ -17,6 +17,7 @@ export * from './authorizeLakeWrite';
 export { isEffectiveOwner, isLakeCreator, resolveEffectiveOwnerIds, type LakeGrant } from './manageRule';
 export * from './authorizeLakeManage';
 export * from './transferLakeOwnership';
+export * from './lakeOwnershipCandidates';
 export * from './authorizeBatchAccess';
 export * from './fallbackLakeTags';
 export * from './lakeMembershipScope';

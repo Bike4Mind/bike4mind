@@ -5,11 +5,14 @@ import {
   Button,
   Chip,
   CircularProgress,
+  DialogActions,
   DialogContent,
   DialogTitle,
   Modal,
   ModalClose,
   ModalDialog,
+  Option,
+  Select,
   Sheet,
   Stack,
   Table,
@@ -24,7 +27,12 @@ import type {
 } from '@bike4mind/common';
 import { describeLakeAccessChannel, lakeAccessChannelsComposeConjunctively } from '@bike4mind/common';
 import type { ColorPaletteProp } from '@mui/joy';
-import { useLakeAccessView, downloadLakeAccessCsv } from '@client/app/hooks/data/dataLakes';
+import {
+  useLakeAccessView,
+  useLakeOwnershipCandidates,
+  useTransferLakeOwnership,
+  downloadLakeAccessCsv,
+} from '@client/app/hooks/data/dataLakes';
 import { toast } from 'sonner';
 
 /** A lake this modal can show access for - just what the entry point already holds. */
@@ -117,14 +125,129 @@ function HistoryRow({ entry }: { entry: LakeAccessHistoryEntry }) {
   );
 }
 
-function AccessViewBody({ view }: { view: LakeAccessView }) {
+/**
+ * Hand this lake to another member of its organization.
+ *
+ * Confirm-gated because the actor demotes THEMSELVES: the outgoing owner stays on as a curator, so
+ * they keep routine management, but the owner-only powers (transferring again, and the visibility
+ * expose gate) move to the recipient. That is reversible only by the new owner, which is exactly why
+ * it is worth one deliberate click.
+ *
+ * The options come from the server, resolved from the owning org's membership by the same rule the
+ * transfer itself validates, so this can never offer a teammate the action would then reject. A
+ * personal lake has no membership to enumerate, so it explains the path rather than showing an empty
+ * picker (see `listLakeOwnershipCandidates`).
+ */
+function TransferOwnershipDialog({ lakeId, onClose }: { lakeId: string; onClose: () => void }) {
+  const { data: candidateList, isLoading } = useLakeOwnershipCandidates(lakeId);
+  const transfer = useTransferLakeOwnership();
+  const [newOwnerUserId, setNewOwnerUserId] = useState<string | null>(null);
+
+  const candidates = candidateList?.candidates ?? [];
+  const orgName = candidateList?.organizationName;
+
+  const handleConfirm = async () => {
+    if (!newOwnerUserId) return;
+    try {
+      await transfer.mutateAsync({ id: lakeId, newOwnerUserId });
+      onClose();
+    } catch {
+      // The mutation's onError already surfaced the server's refusal; keep the dialog open so the
+      // manager can pick someone else rather than losing their place.
+    }
+  };
+
+  return (
+    <Modal open onClose={onClose}>
+      <ModalDialog data-testid="datalake-transfer-modal" sx={{ width: { xs: '95%', sm: '28rem' } }}>
+        <ModalClose data-testid="datalake-transfer-close" />
+        <DialogTitle>Transfer ownership</DialogTitle>
+        <DialogContent>
+          <Stack gap={2} sx={{ pt: 1 }}>
+            {isLoading ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }} data-testid="datalake-transfer-loading">
+                <CircularProgress size="sm" />
+              </Box>
+            ) : candidateList?.scope === 'personal' ? (
+              <Alert color="neutral" variant="soft" data-testid="datalake-transfer-personal">
+                This lake is personal, so there is no team to transfer it within. Move it into an organization first
+                (Settings -&gt; Visibility -&gt; Organization), then transfer it to a member.
+              </Alert>
+            ) : candidates.length === 0 ? (
+              <Alert color="neutral" variant="soft" data-testid="datalake-transfer-no-candidates">
+                {orgName
+                  ? `No other member of ${orgName} can receive this lake yet. Add them to the organization first.`
+                  : 'No other member can receive this lake yet.'}
+              </Alert>
+            ) : (
+              <>
+                <Typography level="body-sm">
+                  The new owner takes over this lake. You stay on as a curator - you keep managing it, but only the
+                  owner can transfer it again or change how it is shared.
+                </Typography>
+                <Select
+                  placeholder="Choose a new owner"
+                  value={newOwnerUserId}
+                  onChange={(_event, value) => setNewOwnerUserId(value)}
+                  slotProps={{ button: { 'data-testid': 'datalake-transfer-owner-select' } }}
+                >
+                  {candidates.map(candidate => (
+                    <Option
+                      key={candidate.userId}
+                      value={candidate.userId}
+                      data-testid={`datalake-transfer-option-${candidate.userId}`}
+                    >
+                      {candidate.name ?? candidate.email ?? candidate.userId}
+                      {candidate.name && candidate.email ? ` (${candidate.email})` : ''}
+                    </Option>
+                  ))}
+                </Select>
+              </>
+            )}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            color="primary"
+            disabled={!newOwnerUserId}
+            loading={transfer.isPending}
+            onClick={handleConfirm}
+            data-testid="datalake-transfer-confirm-btn"
+          >
+            Transfer
+          </Button>
+          <Button variant="plain" color="neutral" onClick={onClose} data-testid="datalake-transfer-cancel-btn">
+            Cancel
+          </Button>
+        </DialogActions>
+      </ModalDialog>
+    </Modal>
+  );
+}
+
+function AccessViewBody({ view, canTransferOwnership }: { view: LakeAccessView; canTransferOwnership: boolean }) {
+  const [transferring, setTransferring] = useState(false);
   return (
     <Stack gap={3} data-testid="datalake-access-body">
       {/* Who can see this: explicit grants */}
       <Box>
-        <Typography level="title-sm" sx={{ mb: 1 }}>
-          Members and grants
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mb: 1 }}>
+          <Typography level="title-sm">Members and grants</Typography>
+          {/* Shown on the server's say-so, never re-derived here: transferring is NARROWER than the
+              manage gate that opened this modal, so a curator sees the table without this control. */}
+          {canTransferOwnership && (
+            <Button
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              onClick={() => setTransferring(true)}
+              data-testid="datalake-access-transfer-btn"
+            >
+              Transfer ownership
+            </Button>
+          )}
+        </Box>
+        {transferring && <TransferOwnershipDialog lakeId={view.lakeId} onClose={() => setTransferring(false)} />}
         {view.grants.length === 0 ? (
           <Typography level="body-sm" textColor="text.tertiary" data-testid="datalake-access-grants-empty">
             No explicit grants. Access follows the channels below.
@@ -244,13 +367,18 @@ function AccessViewBody({ view }: { view: LakeAccessView }) {
 }
 
 /**
- * Owner-facing access & membership view (#1672): a manager-only, read-only compliance surface
- * answering "who can see this lake" (grants + gate channels) and "who actually read it" (the audit
- * trail), with a CSV export for compliance review. Entry points gate opening this on `canManage`;
- * the server enforces the same, so a non-manager who reached it anyway sees the forbidden state.
+ * Owner-facing access & membership view (#1672): a manager-only compliance surface answering "who can
+ * see this lake" (grants + gate channels) and "who actually read it" (the audit trail), with a CSV
+ * export for compliance review. Entry points gate opening this on `canManage`; the server enforces the
+ * same, so a non-manager who reached it anyway sees the forbidden state.
+ *
+ * The VIEW is read-only. Its one write is transferring ownership, which lives here because ownership is
+ * the first row of the grants table this shows - and it is gated on the server's own
+ * `canTransferOwnership`, which is narrower than the manage gate that opens the modal. The CSV export
+ * carries the artifact only, never that per-viewer capability.
  */
 export function DataLakeAccessModal({ lake, onClose }: { lake: AccessViewLake | null; onClose: () => void }) {
-  const { data: view, isLoading, isError, error } = useLakeAccessView(lake?.id ?? null, !!lake);
+  const { data, isLoading, isError, error } = useLakeAccessView(lake?.id ?? null, !!lake);
   const [exporting, setExporting] = useState(false);
 
   const handleExport = async () => {
@@ -285,11 +413,11 @@ export function DataLakeAccessModal({ lake, onClose }: { lake: AccessViewLake | 
                 ? 'You must be able to manage this data lake to view its access.'
                 : "Couldn't load the access view. Please try again."}
             </Alert>
-          ) : view ? (
+          ) : data ? (
             <Stack gap={2}>
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
                 <Typography level="body-xs" textColor="text.tertiary">
-                  Generated {fmtDateTime(view.generatedAt)}
+                  Generated {fmtDateTime(data.view.generatedAt)}
                 </Typography>
                 <Button
                   size="sm"
@@ -302,7 +430,7 @@ export function DataLakeAccessModal({ lake, onClose }: { lake: AccessViewLake | 
                   Export CSV
                 </Button>
               </Box>
-              <AccessViewBody view={view} />
+              <AccessViewBody view={data.view} canTransferOwnership={data.canTransferOwnership} />
             </Stack>
           ) : null}
         </DialogContent>

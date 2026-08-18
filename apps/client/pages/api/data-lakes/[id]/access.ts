@@ -28,6 +28,11 @@ import { lakeAccessViewToCsv, lakeAccessViewCsvFilename } from '@server/dataLake
  *     them from gate 1, so hiding it as not-found would be pointless).
  *
  * `?format=csv` streams the same view as a sectioned CSV compliance artifact; default is JSON.
+ *
+ * The JSON response carries `meta.canTransferOwnership` - whether THIS caller may hand the lake on,
+ * which is narrower than managing it (see `resolveLakeTransferAuthority`). It rides in `meta`, not in
+ * the view, because the view is the exported compliance artifact: a per-viewer capability is not a
+ * fact about the lake's access and must not appear in the CSV.
  */
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableDataLakes'))
@@ -40,10 +45,12 @@ const handler = baseApi()
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
-    const canManage = await dataLakeService.resolveCanManageLake(lake, ctx, {
+    // Grants read ONCE and applied to both decisions: the manage gate below and the transfer
+    // capability further down. `resolveCanManageLake` would re-query them for the same answer.
+    const grants = await dataLakeService.loadActiveLakeGrants(lake, {
       db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
-    if (!canManage) {
+    if (!dataLakeService.canManageLake(lake, ctx, grants)) {
       throw new ForbiddenError('You must be able to manage this data lake to view its access.');
     }
 
@@ -62,7 +69,10 @@ const handler = baseApi()
       return res.send(lakeAccessViewToCsv(view));
     }
 
-    return res.json({ data: view });
+    return res.json({
+      data: view,
+      meta: { canTransferOwnership: dataLakeService.resolveLakeTransferAuthority(lake, ctx, grants).allowed },
+    });
   });
 
 export const config = {

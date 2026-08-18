@@ -6303,6 +6303,11 @@
         },
         {
           "level": 3,
+          "text": "Transferring a data lake to someone else",
+          "anchor": "transferring-a-data-lake-to-someone-else"
+        },
+        {
+          "level": 3,
           "text": "Troubleshooting the access view",
           "anchor": "troubleshooting-the-access-view"
         },
