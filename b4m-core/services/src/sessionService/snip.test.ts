@@ -33,34 +33,30 @@ describe('snipSession', () => {
   };
 
   it('snips messages from the snip point forward when the message belongs to the session', async () => {
-    const { db } = makeAdapters();
+    const { db, created } = makeAdapters();
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+    db.chatHistories.findAllBySessionIdAndGreaterThanOrEqualToTimestamp.mockResolvedValueOnce([
+      { id: 'm2', sessionId: 'session-1', prompt: 'later' },
+    ]);
 
     const newSession = await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
 
     expect(db.chatHistories.findBySessionIdAndId).toHaveBeenCalledWith('session-1', 'm1');
     expect(newSession).toEqual({ id: 'snip-1' });
+    // the copied message drops its old id and is rebound to the new session
+    expect(created).toEqual([{ sessionId: 'snip-1', prompt: 'later' }]);
   });
 
-  it('throws NotFoundError when the message does not exist', async () => {
+  // findBySessionIdAndId returning null covers both "no such message" and "message belongs to a
+  // different session" - the two are indistinguishable at this mocked layer (a real cross-session
+  // pair is exercised at the repository level in QuestModel.findBySessionIdAndId.test.ts).
+  it('throws NotFoundError when the message does not exist or belongs to a different session', async () => {
     const { db } = makeAdapters();
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce(null);
 
     await expect(snipSession('caller-1', { sessionId: 'session-1', messageId: 'missing' }, { db })).rejects.toThrow(
       'Message not found'
     );
-  });
-
-  // Regression for the same unbound-lookup shape #1755 fixed elsewhere: a bare findById(messageId)
-  // would fetch a message from ANY session and use its timestamp to bound the snip's range query.
-  // findBySessionIdAndId must reject a real message that belongs to a different session.
-  it('throws NotFoundError when the message belongs to a different session', async () => {
-    const { db } = makeAdapters();
-    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce(null);
-
-    await expect(
-      snipSession('caller-1', { sessionId: 'session-1', messageId: 'other-session-msg' }, { db })
-    ).rejects.toThrow('Message not found');
-    expect(db.chatHistories.findBySessionIdAndId).toHaveBeenCalledWith('session-1', 'other-session-msg');
+    expect(db.chatHistories.findBySessionIdAndId).toHaveBeenCalledWith('session-1', 'missing');
   });
 });
