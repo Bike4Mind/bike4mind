@@ -1,9 +1,11 @@
 import type {
   AccessContext,
+  DataLakeGroundingMode,
   IAdminSettingsRepository,
   IDataLakeAccessGrantRepository,
   IDataLakeDocument,
   IDataLakeRepository,
+  IFallbackLakeSettingsRepository,
   DataLakeConfig,
   ManageableDataLakeConfig,
 } from '@bike4mind/common';
@@ -114,6 +116,12 @@ interface ListDataLakesAdapters {
      * Absent OR a failed read -> report-only, so reader-granted lakes are NOT listed (legacy behavior).
      */
     settings?: SettingsLookup;
+    /**
+     * Optional overlay lookup for a static (registry) lake's admin-settable session defaults
+     * (currently `groundingMode` only - see IFallbackLakeSetting). Absent -> a fallback lake lists
+     * with no overlay merge, matching resolveFallbackLake's own graceful degrade.
+     */
+    fallbackLakeSettings?: Pick<IFallbackLakeSettingsRepository, 'findByLakeIds'>;
   };
 }
 
@@ -145,6 +153,24 @@ const resolveOwnerNames = async (
 };
 
 /**
+ * Batch-resolve the overlay's `groundingMode` for a set of fallback lake ids, in one round-trip.
+ * Empty map when no overlay repo was supplied (the content-scope resolver / Slack never render
+ * this field) - mirrors `resolveOwnerNames`'s "pay nothing when nobody reads it" shape.
+ */
+const resolveFallbackSettings = async (
+  lakeIds: string[],
+  fallbackLakeSettings?: Pick<IFallbackLakeSettingsRepository, 'findByLakeIds'>
+): Promise<Map<string, DataLakeGroundingMode>> => {
+  const byLakeId = new Map<string, DataLakeGroundingMode>();
+  if (!fallbackLakeSettings || lakeIds.length === 0) return byLakeId;
+  const rows = await fallbackLakeSettings.findByLakeIds(lakeIds);
+  for (const row of rows) {
+    if (row.groundingMode) byLakeId.set(row.lakeId, row.groundingMode);
+  }
+  return byLakeId;
+};
+
+/**
  * The one place a list response may carry an editor-only field: the shared config, the caller's
  * manage flag, and `systemPrompt` ONLY when that flag holds. `toDataLakeConfig` has no actor and
  * so cannot carry it (see ManageableDataLakeConfig); the raw-document exits use the sibling
@@ -163,6 +189,9 @@ const toManageableConfig = (
   // A DB lake HAS a document, so rebuild and manage are the same decision - only a fallback
   // (built-in) lake needs the narrower `canRebuild`; see toFallbackConfig and the field's comment.
   canRebuild: manageable,
+  // Same reasoning as canRebuild: a DB lake's settings live on its document, so this is identical
+  // to canManage here - only a fallback lake needs the narrower ctx.isAdmin gate.
+  canManageSettings: manageable,
   isOwn,
   // Owner name is a not-own label only: an own lake reads as "you", and it is set only when the
   // projection actually resolved one (name-or-username, never email - see resolveOwnerNames).
@@ -193,18 +222,31 @@ const toManageableConfig = (
  * overlay entry carrying a `systemPrompt` would otherwise be served to every caller. Fallbacks have
  * no owner and are read-only for everyone, so `canManage` is always false.
  *
- * `canRebuild` DOES take an actor, unlike every other field here: it is `ctx.isAdmin` directly,
- * not `resolveCanManageLake` - see `assertLakeRebuildAccess`'s comment for why an org-scoped
- * overlay lake must not let a customer-side org admin pass. This is a deliberate, narrow exception
- * to "actor-less projection"; it is not a route for a future field to follow without the same
- * reasoning.
+ * `canRebuild` and `canManageSettings` DO take an actor, unlike every other field here: both are
+ * `ctx.isAdmin` directly, not `resolveCanManageLake` - see `assertLakeRebuildAccess`'s comment for
+ * why an org-scoped overlay lake must not let a customer-side org admin pass. This is a
+ * deliberate, narrow exception to "actor-less projection"; it is not a route for a future field
+ * (e.g. `systemPrompt`) to follow without the same reasoning - see `getDataLakePrompts`'s trust
+ * rule, which is the reason `systemPrompt` is not surfaced here at all.
+ *
+ * `groundingMode` is the one exception to "no editor-only field for a fallback lake": it is merged
+ * in from the overlay (`fallbackSettingsByLakeId`) and gated on `canManageSettings`, mirroring how
+ * `toManageableConfig` gates it on `manageable` - it needs to round-trip into the settings modal the
+ * same way a DB lake's does. It is NOT the effective value a session actually resolves (that is
+ * `resolveFallbackLake`'s job); this is purely what the editor UI seeds its picker from.
  */
-const toFallbackConfig = (dl: DataLakeConfig, ctx: Pick<AccessContext, 'isAdmin'>): ManageableDataLakeConfig => ({
+const toFallbackConfig = (
+  dl: DataLakeConfig,
+  ctx: Pick<AccessContext, 'isAdmin'>,
+  groundingModeOverride?: DataLakeGroundingMode
+): ManageableDataLakeConfig => ({
   ...toDataLakeConfig(dl),
   canManage: false,
   canRebuild: ctx.isAdmin,
+  canManageSettings: ctx.isAdmin,
   // Built-in registry lakes have no creator, so they are never "yours" and carry no owner label.
   isOwn: false,
+  ...(ctx.isAdmin && groundingModeOverride ? { groundingMode: groundingModeOverride } : {}),
 });
 
 /**
@@ -294,7 +336,15 @@ export const listAllDataLakes = async (
     toManageableConfig(dl, true, isEffectiveOwner(dl, ctx, grantsByLake.get(dl.id)), ownerNames.get(dl.createdByUserId))
   );
   const dynamicIds = new Set(dynamicLakes.map(d => d.slug));
-  const fallbacks = DATA_LAKES.filter(dl => !dynamicIds.has(dl.id)).map(dl => toFallbackConfig(dl, ctx));
+  const hardcodedFallbacks = DATA_LAKES.filter(dl => !dynamicIds.has(dl.id));
+  // This is the only list an admin (the only actor toFallbackConfig ever surfaces groundingMode
+  // to) ever sees, so the overlay batch is fetched only here - listDataLakes' non-admin callers
+  // would never use it.
+  const fallbackSettingsByLakeId = await resolveFallbackSettings(
+    hardcodedFallbacks.map(dl => dl.id),
+    db.fallbackLakeSettings
+  );
+  const fallbacks = hardcodedFallbacks.map(dl => toFallbackConfig(dl, ctx, fallbackSettingsByLakeId.get(dl.id)));
 
   return [...dynamicConfigs, ...fallbacks];
 };

@@ -85,6 +85,42 @@ export const assertLakeRebuildAccess = async (
 };
 
 /**
+ * Resolve a lake by id-or-slug and assert the caller may edit its FALLBACK SETTINGS OVERLAY (see
+ * IFallbackLakeSetting) - currently `groundingMode` only. Exists only for a static registry lake: a
+ * DB lake's settings live on its document and go through the ordinary `updateDataLake` write path
+ * (PUT /api/data-lakes/:id), which this gate deliberately refuses so the two paths cannot both
+ * claim to own a persisted lake's settings.
+ *
+ * Gates on `ctx.isAdmin` DIRECTLY, not `resolveCanManageLake` - same reasoning as
+ * `assertLakeRebuildAccess`: a fallback lake's synthetic document (`resolveFallbackLake`) spreads
+ * the registry config's `organizationId` onto it, so an org-scoped lake would let a customer-side
+ * org admin (not a platform admin) pass `canManageLake`'s org-admin rung if this used it. Must stay
+ * in sync with `canManageSettings` in `listDataLakes.ts`, which computes the identical predicate for
+ * the UI affordance this gate enforces server-side.
+ */
+export const assertFallbackLakeSettingsWriteAccess = async (
+  lakeIdOrSlug: string,
+  ctx: AccessContext,
+  {
+    db,
+  }: {
+    db: {
+      dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug'>;
+      dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+    };
+  }
+): Promise<IDataLakeDocument> => {
+  const lake = await assertLakeAccess(lakeIdOrSlug, ctx, { db });
+  if (!isFallbackLake(lake)) {
+    throw new BadRequestError('This data lake has its own settings editor; use the standard update endpoint');
+  }
+  if (!ctx.isAdmin) {
+    throw new BadRequestError("You do not have permission to change this data lake's settings");
+  }
+  return lake;
+};
+
+/**
  * The distinct `datalake:*` meta-tags in a raw tag-name list, lowercased for lookup
  * (`datalakeTag` values are canonically lowercase, so a mixed-case meta-tag still resolves to
  * its real lake).

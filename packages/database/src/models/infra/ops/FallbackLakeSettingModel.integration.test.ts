@@ -1,0 +1,81 @@
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import mongoose from 'mongoose';
+import { createMongoServer } from '../../../__test__/createMongoServer';
+import { FallbackLakeSetting, fallbackLakeSettingsRepository } from './FallbackLakeSettingModel';
+
+/**
+ * Real-Mongo guard for the fallback-lake settings overlay: a hand-mocked repo cannot exercise the
+ * unique index on `lakeId`, and the upsert-by-lakeId semantics `setGroundingMode` depends on are
+ * exactly what only a real index/query catches.
+ */
+let server: Awaited<ReturnType<typeof createMongoServer>>;
+
+beforeAll(async () => {
+  server = await createMongoServer();
+  await mongoose.connect(server.getUri());
+  await FallbackLakeSetting.init();
+}, 60000);
+
+afterAll(async () => {
+  await mongoose.disconnect();
+  await server?.stop();
+}, 60000);
+
+afterEach(async () => {
+  await FallbackLakeSetting.deleteMany({});
+});
+
+describe('FallbackLakeSettingModel - unique index on lakeId', () => {
+  it('rejects a second row at the same lakeId created directly (bypassing the repository)', async () => {
+    await FallbackLakeSetting.create({ lakeId: 'opti-knowledge', groundingMode: 'retrieve' });
+    await expect(
+      FallbackLakeSetting.create({ lakeId: 'opti-knowledge', groundingMode: 'inline' })
+    ).rejects.toMatchObject({
+      code: 11000,
+    });
+  });
+
+  it('a different lakeId is a separate row', async () => {
+    await FallbackLakeSetting.create({ lakeId: 'opti-knowledge', groundingMode: 'retrieve' });
+    await expect(FallbackLakeSetting.create({ lakeId: 'other-lake', groundingMode: 'inline' })).resolves.toBeTruthy();
+  });
+});
+
+describe('fallbackLakeSettingsRepository.setGroundingMode - upsert by lakeId', () => {
+  it('creates a row on first call', async () => {
+    const result = await fallbackLakeSettingsRepository.setGroundingMode('opti-knowledge', 'inline');
+    expect(result.lakeId).toBe('opti-knowledge');
+    expect(result.groundingMode).toBe('inline');
+
+    const rows = await FallbackLakeSetting.find({ lakeId: 'opti-knowledge' });
+    expect(rows).toHaveLength(1);
+  });
+
+  it('updates the SAME row on a second call, never creating a duplicate', async () => {
+    await fallbackLakeSettingsRepository.setGroundingMode('opti-knowledge', 'inline');
+    await fallbackLakeSettingsRepository.setGroundingMode('opti-knowledge', 'auto-by-size');
+
+    const rows = await FallbackLakeSetting.find({ lakeId: 'opti-knowledge' });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].groundingMode).toBe('auto-by-size');
+  });
+});
+
+describe('fallbackLakeSettingsRepository.findByLakeId / findByLakeIds', () => {
+  it('findByLakeId returns null for a lake with no row', async () => {
+    expect(await fallbackLakeSettingsRepository.findByLakeId('never-configured')).toBeNull();
+  });
+
+  it('findByLakeIds batches multiple lakes in one query and skips unconfigured ones', async () => {
+    await fallbackLakeSettingsRepository.setGroundingMode('lake-a', 'inline');
+    await fallbackLakeSettingsRepository.setGroundingMode('lake-b', 'retrieve');
+
+    const rows = await fallbackLakeSettingsRepository.findByLakeIds(['lake-a', 'lake-b', 'lake-c-never-configured']);
+    expect(rows.map(r => r.lakeId).sort()).toEqual(['lake-a', 'lake-b']);
+  });
+
+  it('findByLakeIds returns nothing for an empty id list', async () => {
+    await fallbackLakeSettingsRepository.setGroundingMode('lake-a', 'inline');
+    expect(await fallbackLakeSettingsRepository.findByLakeIds([])).toEqual([]);
+  });
+});

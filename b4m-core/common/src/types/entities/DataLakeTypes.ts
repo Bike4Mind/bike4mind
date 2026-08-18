@@ -825,3 +825,31 @@ export interface IDataLakeSpendResponse {
   /** Actual COGS from the UsageEvent ledger (ingestion embeds attributed to this lake). */
   ledger: ILakeUsageSummary;
 }
+
+/**
+ * Overlay store for a STATIC (registry) data lake's admin-settable session defaults. A fallback
+ * lake has no backing document (see `isFallbackLake`), so it has nowhere to persist an override -
+ * this collection is that home, keyed by the registry lake's `id` rather than a Mongo `_id`
+ * relationship. Deliberately NOT a `ScopedSetting` row: these are lake CONTENT (the same fields a
+ * DB lake stores directly on its document), not a resolved operational lever, and every consumer
+ * reads them off a lake object rather than through the scoped-settings resolver.
+ *
+ * Starts with `groundingMode` only. `systemPrompt` and `preferredSystemPromptId` are intentionally
+ * NOT here yet - surfacing them for a static lake requires widening `getDataLakePrompts`' trust
+ * rule (a static lake has no creator/org, so it is never "trusted" for prompt injection today),
+ * which is a security decision to make on its own terms, not a storage change.
+ */
+export interface IFallbackLakeSetting extends IMongoDocument {
+  /** The registry lake's `id` (a human slug, never an ObjectId hex string - see `isFallbackLake`). */
+  lakeId: string;
+  /** Absent means "use the coded default" - mirrors how a DB lake treats an unset groundingMode. */
+  groundingMode?: DataLakeGroundingMode;
+}
+
+export interface IFallbackLakeSettingsRepository extends IBaseRepository<IFallbackLakeSetting> {
+  findByLakeId: (lakeId: string) => Promise<IFallbackLakeSetting | null>;
+  /** Batch read for the manager list, which renders every accessible fallback lake in one response. */
+  findByLakeIds: (lakeIds: string[]) => Promise<IFallbackLakeSetting[]>;
+  /** Upsert-by-lakeId: a fallback lake has no document to attach this row to via the base `create`. */
+  setGroundingMode: (lakeId: string, groundingMode: DataLakeGroundingMode) => Promise<IFallbackLakeSetting>;
+}

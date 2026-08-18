@@ -93,6 +93,8 @@ import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
 import { DataLakeSettingsModal } from './DataLakeSettingsModal';
 import { DataLakeAccessModal } from './DataLakeAccessModal';
 import type { EditableLake } from './DataLakeSettingsModal';
+import { FallbackLakeSettingsModal } from './FallbackLakeSettingsModal';
+import type { EditableFallbackLake } from './FallbackLakeSettingsModal';
 import TaxonomyReviewPanel from './TaxonomyReviewPanel';
 import FieldTooltip from '@client/app/components/help/FieldTooltip';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
@@ -183,6 +185,7 @@ export default function DataLakeManagerPanel() {
   const [selectedFile, setSelectedFile] = useState<IFabFileDocument | null>(null);
   const [editingLakeId, setEditingLakeId] = useState<string | null>(null);
   const [accessLakeId, setAccessLakeId] = useState<string | null>(null);
+  const [editingFallbackLakeId, setEditingFallbackLakeId] = useState<string | null>(null);
 
   // Deep-link: a per-lake action elsewhere (the page rail's header) opens the manager already
   // pointed at that lake. Only a non-null id steers; null is the plain "open at root" case and
@@ -236,6 +239,13 @@ export default function DataLakeManagerPanel() {
     const l = dataLakes?.find(d => d.id === accessLakeId);
     return l ? { id: l.id, name: l.name } : null;
   }, [dataLakes, accessLakeId]);
+  // Same live-list derivation as editingLake, for a fallback (built-in) lake's narrower settings
+  // editor. Separate state/derivation because a fallback lake can never populate EditableLake's
+  // required fields (name is its only real one; description/tags/visibility don't apply to it).
+  const editingFallbackLake = useMemo<EditableFallbackLake | null>(() => {
+    const l = dataLakes?.find(d => d.id === editingFallbackLakeId);
+    return l ? { id: l.id, name: l.name, groundingMode: l.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE } : null;
+  }, [dataLakes, editingFallbackLakeId]);
 
   const selectLake = (lake: ManagerLake) => {
     setLakeId(lake.id);
@@ -311,6 +321,7 @@ export default function DataLakeManagerPanel() {
             taxonomyBatch={taxonomyBatchByLakeId.get(activeLake.id)}
             onOpenSettings={() => setEditingLakeId(activeLake.id)}
             onOpenAccess={() => setAccessLakeId(activeLake.id)}
+            onOpenFallbackSettings={() => setEditingFallbackLakeId(activeLake.id)}
             onReviewTaxonomy={setReviewingBatchId}
             onArchived={() => {
               setLakeId(null);
@@ -334,6 +345,7 @@ export default function DataLakeManagerPanel() {
       )}
 
       <DataLakeSettingsModal lake={editingLake} onClose={() => setEditingLakeId(null)} />
+      <FallbackLakeSettingsModal lake={editingFallbackLake} onClose={() => setEditingFallbackLakeId(null)} />
 
       <DataLakeAccessModal lake={accessLake} onClose={() => setAccessLakeId(null)} />
 
@@ -1180,6 +1192,7 @@ function LakeInfoPanel({
   taxonomyBatch,
   onOpenSettings,
   onOpenAccess,
+  onOpenFallbackSettings,
   onReviewTaxonomy,
   onArchived,
   onDeleted,
@@ -1191,6 +1204,8 @@ function LakeInfoPanel({
   onOpenSettings: () => void;
   /** Opens the owner-facing access & membership view (#1672) - manager-only, like settings. */
   onOpenAccess: () => void;
+  /** Opens the narrower settings editor for a fallback (built-in) lake - see canManageSettings. */
+  onOpenFallbackSettings: () => void;
   /** Opens the review/apply panel for a batch whose taxonomy suggestions are ready or failed. */
   onReviewTaxonomy: (batchId: string) => void;
   /** Called after the active lake is archived, so the panel exits to root instead of the
@@ -1342,6 +1357,24 @@ function LakeInfoPanel({
                 </Button>
               </Tooltip>
             </>
+          )}
+          {/* A fallback lake's narrower settings editor (currently grounding mode only), same shape
+              as the Rebuild gate below: canManageSettings is a NARROWER flag than canManage, so a
+              fallback lake (canManage always false) can still get here. `!lake.canManage` excludes
+              a DB lake, which already has this affordance inside the canManage fragment above via
+              the full DataLakeSettingsModal. */}
+          {lake.canManageSettings && !lake.canManage && (
+            <Button
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              startDecorator={<SettingsOutlinedIcon sx={{ fontSize: 16 }} />}
+              data-testid={`datalake-fallback-settings-btn-${lake.id}`}
+              onClick={onOpenFallbackSettings}
+              sx={{ flexShrink: 0, fontSize: '13px' }}
+            >
+              Settings
+            </Button>
           )}
           {/* Rebuild passages is gated on canRebuild, a NARROWER flag than canManage: a fallback
               (built-in) lake has no document (canManage is always false for it) but can still be

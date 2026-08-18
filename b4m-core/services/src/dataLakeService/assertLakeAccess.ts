@@ -4,6 +4,7 @@ import type {
   IDataLakeAccessGrantRepository,
   IDataLakeDocument,
   IDataLakeRepository,
+  IFallbackLakeSettingsRepository,
 } from '@bike4mind/common';
 import { DATA_LAKES, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, normalizeId } from '@bike4mind/utils';
@@ -23,6 +24,10 @@ interface AssertLakeAccessAdapters {
     // resolution is ENFORCED or merely reported (report-only). Absent -> report-only (legacy), so
     // a caller that has not threaded settings keeps exact pre-cutover behavior.
     settings?: Pick<IAdminSettingsRepository, 'getSettingsValue'>;
+    // Optional: a static (registry) lake's admin-settable overlay (currently `groundingMode` only -
+    // see IFallbackLakeSetting). Absent -> a fallback lake resolves exactly as it did before this
+    // adapter existed (its coded default), so every caller that has not threaded it is unaffected.
+    fallbackLakeSettings?: Pick<IFallbackLakeSettingsRepository, 'findByLakeId'>;
   };
   // Optional diagnostic sink for the report-only divergence line (the expected-grant-set diff).
   logger?: LakeAccessLogger;
@@ -103,8 +108,19 @@ export function assertLakeGrantable(lake: Pick<IDataLakeDocument, 'id'>): void {
  * any-of via lakeMatchesAccess) plus the hard org prerequisite from canAccessLake.
  * Unlike DB lakes, a gateless fallback is deliberately public: fallbacks are curated
  * config, not user-created, and the list path already shows them to everyone.
+ *
+ * `fallbackLakeSettings` merges in the registry lake's admin-settable overlay (currently
+ * `groundingMode` only), when the caller has wired one. This is the ONE place a synthetic fallback
+ * document is constructed, so it is the one seam an overlay value must reach for every downstream
+ * consumer - sessions/create.ts reads `lake.groundingMode` straight off this return value via
+ * resolveLakeSessionDefaults - to see it, with no per-consumer change. A read failure degrades to
+ * the coded default rather than failing the request, matching every other optional adapter here.
  */
-function resolveFallbackLake(lakeIdOrSlug: string, ctx: AccessContext): IDataLakeDocument | null {
+async function resolveFallbackLake(
+  lakeIdOrSlug: string,
+  ctx: AccessContext,
+  fallbackLakeSettings?: Pick<IFallbackLakeSettingsRepository, 'findByLakeId'>
+): Promise<IDataLakeDocument | null> {
   const config = DATA_LAKES.find(dl => dl.id === lakeIdOrSlug || dl.slug === lakeIdOrSlug);
   if (!config) return null;
   const configOrgId = normalizeId(config.organizationId);
@@ -115,6 +131,7 @@ function resolveFallbackLake(lakeIdOrSlug: string, ctx: AccessContext): IDataLak
     const normalizedKeys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
     if (!lakeMatchesAccess(config, normalizedTags, normalizedKeys)) return null;
   }
+  const overlay = fallbackLakeSettings ? await fallbackLakeSettings.findByLakeId(config.id).catch(() => null) : null;
   // Owner-less on purpose: reads key off datalakeTag/fileTagPrefix, and document writes
   // (rename/delete/visibility/file-removal) are refused wholesale by assertLakeWritable, so no
   // one is the creator. The one exception is assertLakeRebuildAccess (authorizeLakeWrite.ts),
@@ -125,6 +142,7 @@ function resolveFallbackLake(lakeIdOrSlug: string, ctx: AccessContext): IDataLak
     status: 'active',
     createdAt: new Date(0),
     updatedAt: new Date(0),
+    ...(overlay?.groundingMode ? { groundingMode: overlay.groundingMode } : {}),
   };
 }
 
@@ -179,7 +197,7 @@ export const assertLakeAccess = async (
     if (!decision.allowed) throw new NotFoundError('Data lake not found');
     return lake;
   }
-  const fallback = resolveFallbackLake(lakeIdOrSlug, ctx);
+  const fallback = await resolveFallbackLake(lakeIdOrSlug, ctx, db.fallbackLakeSettings);
   if (!fallback) throw new NotFoundError('Data lake not found');
   return fallback;
 };

@@ -27,6 +27,7 @@ export * from './rebuildLakePassages';
 export * from './tagPrefixCollision';
 export * from './createDataLake';
 export * from './updateDataLake';
+export * from './updateFallbackLakeSettings';
 export * from './setLakeVisibility';
 export * from './listDataLakes';
 export * from './redactLakeForActor';

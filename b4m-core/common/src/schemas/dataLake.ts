@@ -136,6 +136,14 @@ export type UpdatableDataLakeFieldsAreAudited = LakeConfigAuditCoversEveryUpdata
   keyof UpdateDataLakeRequestInputType
 >;
 
+// A STATIC (registry) lake has no document, so it cannot go through UpdateDataLakeRequestInput /
+// updateDataLake - only its admin-settable overlay (see IFallbackLakeSetting) is writable, and only
+// the fields that overlay actually stores. Deliberately narrower than the DB-lake schema: no name,
+// description, or gate fields, since a fallback lake's identity is config, not editable metadata.
+export const UpdateFallbackLakeSettingsRequestInput = z.object({
+  groundingMode: z.enum(DATA_LAKE_GROUNDING_MODES).optional(),
+});
+export type UpdateFallbackLakeSettingsRequestInputType = z.infer<typeof UpdateFallbackLakeSettingsRequestInput>;
 /**
  * `purging` is deliberately absent from `status`. It is transitional and past the point of no
  * return, so a lake in it is on its way out and is never something a caller should filter for.
