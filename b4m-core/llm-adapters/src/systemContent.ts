@@ -17,9 +17,14 @@ export function systemContentToText(content: MessageContent | undefined): string
   if (content === undefined || content === null) return '';
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
-  return content
-    .filter((block): block is Extract<typeof block, { type: 'text' }> => block?.type === 'text')
-    .map(block => block.text ?? '')
-    .filter(text => text !== '')
-    .join('\n');
+  return (
+    content
+      .filter((block): block is Extract<typeof block, { type: 'text' }> => block?.type === 'text')
+      .map(block => block.text ?? '')
+      // Trim-checked, not just `!== ''`: Anthropic rejects a text block that
+      // contains no non-whitespace text, and system content reaches neither
+      // backend's sanitizeMessageContent (both exclude the system role first).
+      .filter(text => text.trim() !== '')
+      .join('\n')
+  );
 }

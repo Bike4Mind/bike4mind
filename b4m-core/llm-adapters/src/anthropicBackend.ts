@@ -818,6 +818,10 @@ export class AnthropicBackend implements ICompletionBackend {
       const blocks: Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> = [];
       for (const sm of systemMessages) {
         const text = systemContentToText(sm.content);
+        // Anthropic rejects a text block with no non-whitespace content, and the public
+        // completions API accepts an unvalidated `content` array alongside `cache: true`
+        // (CompletionMessageSchema), so an empty one is reachable rather than theoretical.
+        if (text.trim() === '') continue;
         if (sm.cache === true) {
           blocks.push({ type: 'text', text, cache_control: { type: 'ephemeral' } });
         } else {
@@ -2594,7 +2598,7 @@ export class AnthropicBackend implements ICompletionBackend {
     // each block with String(), producing "[object Object]" in the prompt.
     return systemMessages
       .map(m => systemContentToText(m.content))
-      .filter(text => text !== '')
+      .filter(text => text.trim() !== '')
       .join('\n');
   }
 

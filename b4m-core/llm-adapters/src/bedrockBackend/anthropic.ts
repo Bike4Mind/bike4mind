@@ -666,8 +666,10 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       .filter(m => m.role === 'system' && m.content)
       .map(m => systemContentToText(m.content))
       // A block array carrying no text flattens to '', which would otherwise
-      // contribute a blank line to the joined prompt.
-      .filter(text => text !== '')
+      // contribute a blank line to the joined prompt. Trim-checked because
+      // Bedrock rejects a text block with no non-whitespace content (see the
+      // user/assistant sanitizer above, which system messages never reach).
+      .filter(text => text.trim() !== '')
       .join('\n');
 
     // Append model identity so the model correctly identifies itself when asked.

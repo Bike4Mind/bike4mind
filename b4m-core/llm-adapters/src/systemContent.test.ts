@@ -40,4 +40,26 @@ describe('systemContentToText', () => {
     expect(systemContentToText([])).toBe('');
     expect(systemContentToText([{ type: 'text' as const, text: '' }])).toBe('');
   });
+
+  // Anthropic rejects a text block containing no non-whitespace text, and system
+  // content reaches neither backend's sanitizeMessageContent - both exclude the
+  // system role before sanitizing - so this helper is the only place it is caught.
+  it('drops whitespace-only blocks rather than passing them to the API', () => {
+    expect(systemContentToText([{ type: 'text' as const, text: '   ' }])).toBe('');
+    expect(systemContentToText([{ type: 'text' as const, text: '\n\t  \n' }])).toBe('');
+  });
+
+  it('keeps real text when a whitespace-only block sits alongside it', () => {
+    const content = [
+      { type: 'text' as const, text: '   ' },
+      { type: 'text' as const, text: 'Be concise.' },
+      { type: 'text' as const, text: '\n' },
+    ];
+    expect(systemContentToText(content)).toBe('Be concise.');
+  });
+
+  it('preserves whitespace inside a block, trimming only the emptiness check', () => {
+    const content = [{ type: 'text' as const, text: '  Indented guidance.  ' }];
+    expect(systemContentToText(content)).toBe('  Indented guidance.  ');
+  });
 });
