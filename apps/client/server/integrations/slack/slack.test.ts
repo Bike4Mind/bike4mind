@@ -3,16 +3,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const SECRET_FALLBACK = 'https://hooks.slack.com/services/secret-fallback';
 
 // Mutable holder so individual tests can vary the SST-backed secret fallback
-// (including the defensive case where SST never injected a value).
-const mocks = vi.hoisted(() => ({ config: { SLACK_WEBHOOK_URL: '' as string | undefined } }));
+// (including the defensive case where SST never injected a value) and the deploy stage.
+const mocks = vi.hoisted(() => ({
+  config: { SLACK_WEBHOOK_URL: '' as string | undefined, STAGE: 'production' as string | undefined },
+  post: vi.fn(),
+  getSettingsMap: vi.fn(),
+}));
 
 // Mock the SST-backed Config so the test never touches `Resource`.
 vi.mock('@server/utils/config', () => ({ Config: mocks.config }));
 
+vi.mock('axios', () => ({ default: { post: mocks.post } }));
+
 // Mirror the real settings parsing: return the stored value or '' (the default for these string settings).
 // slack.ts imports only getSettingsMap/getSettingsValue from @bike4mind/utils.
 vi.mock('@bike4mind/utils', () => ({
-  getSettingsMap: vi.fn(),
+  getSettingsMap: mocks.getSettingsMap,
   getSettingsValue: (key: string, settings: Record<string, string>) => settings[key] ?? '',
 }));
 
@@ -35,7 +41,8 @@ vi.mock('@bike4mind/observability', () => ({
   Logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }));
 
-import { resolveSlackWebhookUrl } from './slack';
+import { resolveSlackWebhookUrl, resolveFeedbackSlackRoute, postFeedbackToSlack } from './slack';
+import { Logger } from '@bike4mind/observability';
 
 describe('resolveSlackWebhookUrl', () => {
   const channelUrl = 'https://hooks.slack.com/services/channel';
@@ -80,5 +87,145 @@ describe('resolveSlackWebhookUrl', () => {
   it('returns an empty string without throwing when the secret was never injected', () => {
     mocks.config.SLACK_WEBHOOK_URL = undefined;
     expect(resolveSlackWebhookUrl('SlackLiveopsWebhookUrl', {})).toBe('');
+  });
+});
+
+describe('resolveFeedbackSlackRoute', () => {
+  const feedbackUrl = 'https://hooks.slack.com/services/feedback';
+  const defaultUrl = 'https://hooks.slack.com/services/default';
+  const nonProdUrl = 'https://hooks.slack.com/services/nonprod-feedback';
+
+  it('production stage with SlackFeedbackWebhookUrl set posts to the feedback channel', () => {
+    expect(resolveFeedbackSlackRoute('production', { SlackFeedbackWebhookUrl: feedbackUrl })).toEqual({
+      kind: 'post',
+      webhookUrl: feedbackUrl,
+      stageClass: 'production',
+    });
+  });
+
+  it('production stage with only SlackDefaultWebhookUrl set still posts (fallback preserved)', () => {
+    expect(resolveFeedbackSlackRoute('production', { SlackDefaultWebhookUrl: defaultUrl })).toEqual({
+      kind: 'post',
+      webhookUrl: defaultUrl,
+      stageClass: 'production',
+    });
+  });
+
+  it('production stage with nothing configured skips with unconfigured_webhook', () => {
+    expect(resolveFeedbackSlackRoute('production', {})).toEqual({
+      kind: 'skip',
+      stageClass: 'production',
+      reason: 'unconfigured_webhook',
+    });
+  });
+
+  it.each(['staging', 'dev', 'pr-1234'])(
+    '%s stage with a non-prod webhook configured posts to that webhook, not the prod channel',
+    stage => {
+      expect(
+        resolveFeedbackSlackRoute(stage, {
+          SlackNonProdFeedbackWebhookUrl: nonProdUrl,
+          SlackFeedbackWebhookUrl: feedbackUrl,
+          SlackDefaultWebhookUrl: defaultUrl,
+        })
+      ).toEqual({ kind: 'post', webhookUrl: nonProdUrl, stageClass: 'nonprod' });
+    }
+  );
+
+  it('non-prod stage with the non-prod webhook unset never falls back to the prod channel', () => {
+    const result = resolveFeedbackSlackRoute('pr-1234', {
+      SlackFeedbackWebhookUrl: feedbackUrl,
+      SlackDefaultWebhookUrl: defaultUrl,
+    });
+    expect(result).toEqual({ kind: 'skip', stageClass: 'nonprod', reason: 'nonprod_unconfigured' });
+    expect(result).not.toHaveProperty('webhookUrl');
+  });
+
+  it('non-prod stage with a whitespace-only non-prod webhook skips the same way', () => {
+    expect(resolveFeedbackSlackRoute('pr-1234', { SlackNonProdFeedbackWebhookUrl: '   ' })).toEqual({
+      kind: 'skip',
+      stageClass: 'nonprod',
+      reason: 'nonprod_unconfigured',
+    });
+  });
+
+  it('an undefined stage classifies as nonprod (fail-safe: never assume production)', () => {
+    expect(resolveFeedbackSlackRoute(undefined, {})).toEqual({
+      kind: 'skip',
+      stageClass: 'nonprod',
+      reason: 'nonprod_unconfigured',
+    });
+  });
+});
+
+describe('postFeedbackToSlack', () => {
+  const args = ['Bug', 'Acme', 'jdoe', 'jdoe@example.com', 'user-1', 'it broke', 'No prompt meta'] as const;
+
+  beforeEach(() => {
+    mocks.config.STAGE = 'production';
+    mocks.post.mockReset();
+    mocks.post.mockResolvedValue({ status: 200 });
+    vi.mocked(Logger.error).mockClear();
+    vi.mocked(Logger.warn).mockClear();
+  });
+
+  it('posts to the feedback channel on production with a configured webhook', async () => {
+    mocks.getSettingsMap.mockResolvedValue({ SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback' });
+    await postFeedbackToSlack(...args);
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    const [url, body] = mocks.post.mock.calls[0];
+    expect(url).toBe('https://hooks.slack.com/services/feedback');
+    expect(body.text).toContain('*Type:* Bug');
+  });
+
+  it('posts to the non-prod webhook (never the prod one) on a non-prod stage, with a stage marker', async () => {
+    mocks.config.STAGE = 'pr-1234';
+    mocks.getSettingsMap.mockResolvedValue({
+      SlackNonProdFeedbackWebhookUrl: 'https://hooks.slack.com/services/nonprod',
+      SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback',
+    });
+    await postFeedbackToSlack(...args);
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    const [url, body] = mocks.post.mock.calls[0];
+    expect(url).toBe('https://hooks.slack.com/services/nonprod');
+    expect(body.text).toContain('*[pr-1234]*');
+  });
+
+  it('does not post when the non-prod stage has no non-prod webhook configured', async () => {
+    mocks.config.STAGE = 'pr-1234';
+    mocks.getSettingsMap.mockResolvedValue({ SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback' });
+    await postFeedbackToSlack(...args);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('still posts on production even when NODE_ENV is not "production" (the removed early-return regression check)', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'test';
+    try {
+      mocks.getSettingsMap.mockResolvedValue({ SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback' });
+      await postFeedbackToSlack(...args);
+      expect(mocks.post).toHaveBeenCalledTimes(1);
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+  });
+
+  it('resolves without throwing when the post rejects, and logs the error', async () => {
+    mocks.getSettingsMap.mockResolvedValue({ SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback' });
+    mocks.post.mockRejectedValue(new Error('network down'));
+    await expect(postFeedbackToSlack(...args)).resolves.toBeUndefined();
+    expect(Logger.error).toHaveBeenCalled();
+  });
+
+  it('the non-prod stage marker never touches the redacted Prompt Meta section', async () => {
+    mocks.config.STAGE = 'pr-1234';
+    mocks.getSettingsMap.mockResolvedValue({
+      SlackNonProdFeedbackWebhookUrl: 'https://hooks.slack.com/services/nonprod',
+    });
+    await postFeedbackToSlack('Bug', 'Acme', 'jdoe', 'jdoe@example.com', 'user-1', 'it broke', 'REDACTED_BLOB');
+    const [, body] = mocks.post.mock.calls[0];
+    const promptMetaSection = body.text.split('*Prompt Meta:*')[1];
+    expect(promptMetaSection).toContain('REDACTED_BLOB');
+    expect(promptMetaSection).not.toContain('[pr-1234]');
   });
 });

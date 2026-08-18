@@ -2,6 +2,7 @@ import axios from 'axios';
 import { Config } from '@server/utils/config';
 import { Logger } from '@bike4mind/observability';
 import { isPlaceholderValue } from '@bike4mind/common';
+import type { FeedbackDeliveryStageClass, FeedbackDeliverySkipReason } from '@bike4mind/common';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { buildEmailMirrorMessage, type EmailMirrorPayload } from './emailMirror';
@@ -13,6 +14,13 @@ type SlackChannelSettingKey =
   | 'SlackUserActivityWebhookUrl'
   | 'SlackFeedbackWebhookUrl'
   | 'SlackEmailAuditWebhookUrl';
+
+// Trim a raw setting value and normalize an SST placeholder (e.g. 'not-configured', which is
+// truthy) to '' so callers' `if (!url)` guards detect the unconfigured state.
+function normalizeWebhookUrl(raw: string | undefined): string {
+  const trimmed = raw?.trim() || '';
+  return isPlaceholderValue(trimmed) ? '' : trimmed;
+}
 
 /**
  * Resolves the Slack incoming-webhook URL for a channel, falling back to the
@@ -27,9 +35,39 @@ export function resolveSlackWebhookUrl(channel: SlackChannelSettingKey, settings
     getSettingsValue('SlackDefaultWebhookUrl', settings)?.trim() ||
     Config.SLACK_WEBHOOK_URL?.trim() ||
     '';
-  // SST secrets fall back to a placeholder (e.g. 'not-configured') when unset, which is truthy.
-  // Normalize placeholders to '' so callers' `if (!slackWebhookUrl)` guards detect the unconfigured state.
-  return isPlaceholderValue(resolved) ? '' : resolved;
+  return normalizeWebhookUrl(resolved);
+}
+
+type FeedbackSlackRoute =
+  | { kind: 'post'; webhookUrl: string; stageClass: FeedbackDeliveryStageClass }
+  | { kind: 'skip'; stageClass: FeedbackDeliveryStageClass; reason: FeedbackDeliverySkipReason };
+
+/**
+ * Decides where feedback-to-Slack posts go for a given deploy stage. `stage === 'production'` is
+ * the same comparison `isProduction()` (@server/utils/config) performs - keep the two in sync.
+ *
+ * Non-production stages deliberately do NOT fall through resolveSlackWebhookUrl's chain: doing so
+ * would leak into SlackDefaultWebhookUrl / the production feedback channel, which is exactly the
+ * stage-leak bug this resolver exists to close (every deployed Lambda's NODE_ENV is 'production'
+ * regardless of actual stage, so the old check never separated stages at all).
+ */
+export function resolveFeedbackSlackRoute(
+  stage: string | undefined,
+  settings: Record<string, string>
+): FeedbackSlackRoute {
+  const stageClass: FeedbackDeliveryStageClass = stage === 'production' ? 'production' : 'nonprod';
+
+  if (stageClass === 'production') {
+    const webhookUrl = resolveSlackWebhookUrl('SlackFeedbackWebhookUrl', settings);
+    return webhookUrl
+      ? { kind: 'post', webhookUrl, stageClass }
+      : { kind: 'skip', stageClass, reason: 'unconfigured_webhook' };
+  }
+
+  const webhookUrl = normalizeWebhookUrl(getSettingsValue('SlackNonProdFeedbackWebhookUrl', settings));
+  return webhookUrl
+    ? { kind: 'post', webhookUrl, stageClass }
+    : { kind: 'skip', stageClass, reason: 'nonprod_unconfigured' };
 }
 
 export async function postMessageToSlack(message: string): Promise<void> {
@@ -67,25 +105,31 @@ export async function postFeedbackToSlack(
   promptMeta: string
 ): Promise<void> {
   try {
-    // only production feedbacks is sent to Slack
-    if (process.env.NODE_ENV !== 'production') return;
-
-    // Feedback routes to the feedback channel.
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-    const slackWebhookUrl = resolveSlackWebhookUrl('SlackFeedbackWebhookUrl', settings);
+    const route = resolveFeedbackSlackRoute(Config.STAGE, settings);
 
-    if (!slackWebhookUrl) {
-      Logger.error(
-        'Error posting feedback to Slack: no SlackFeedbackWebhookUrl / SlackDefaultWebhookUrl set in admin settings or config'
+    if (route.kind === 'skip') {
+      // 'nonprod_unconfigured' is the expected default until an operator opts a stage in - warn,
+      // not error. 'unconfigured_webhook' means the production feedback channel itself is
+      // unconfigured, which is a real operational gap.
+      const log = route.reason === 'unconfigured_webhook' ? Logger.error : Logger.warn;
+      log(
+        `Skipping feedback-to-Slack post (stage=${route.stageClass}, reason=${route.reason}): ` +
+          (route.reason === 'unconfigured_webhook'
+            ? 'no SlackFeedbackWebhookUrl / SlackDefaultWebhookUrl set in admin settings or config'
+            : 'no SlackNonProdFeedbackWebhookUrl configured for this non-production stage')
       );
       return;
     }
 
-    const message = `*Type:* ${type}\n*User Details:* ${organization} - ${username} (ID: ${userId})\n*User Email:* ${userEmail}\n*Feedback:* ${content}
+    // Prefix non-prod posts with the stage name so a mis-pointed non-prod webhook is self-evident
+    // in the receiving channel.
+    const stagePrefix = route.stageClass === 'nonprod' ? `*[${Config.STAGE}]*\n` : '';
+    const message = `${stagePrefix}*Type:* ${type}\n*User Details:* ${organization} - ${username} (ID: ${userId})\n*User Email:* ${userEmail}\n*Feedback:* ${content}
     \n*Prompt Meta:* ${promptMeta}`;
 
     await axios.post(
-      slackWebhookUrl,
+      route.webhookUrl,
       { text: message },
       {
         headers: { 'Content-Type': 'application/json' },

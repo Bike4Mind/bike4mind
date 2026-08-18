@@ -41,3 +41,8 @@ apps/client/server/scripts/setupTestEmailUser\.ts
 #    Path updated for the M1 carve — HomePage.tsx moved from apps/client into
 #    packages/premium/libreoncology/src/components/marketing/.
 premium/libreoncology/src/components/marketing/HomePage\.tsx.*mailto
+
+# False positive: the feedback delivery skip-reason literal 'nonprod_unconfigured' contains
+# "prod_" followed by 10+ alphanumeric characters, which coincidentally matches the Stripe
+# prod_ID pattern. It is a status string, not a Stripe product identifier.
+nonprod_unconfigured
