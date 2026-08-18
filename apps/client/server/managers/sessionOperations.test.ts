@@ -9,7 +9,6 @@ const { createSessionMock, sideEffects, QuestMock, SessionMock, findAccessibleBy
   },
   QuestMock: {
     find: vi.fn(),
-    findById: vi.fn(),
     findOne: vi.fn(),
     create: vi.fn(),
     findOneAndUpdate: vi.fn(),
@@ -211,7 +210,7 @@ describe('sessionOperations', () => {
     it('creates a "Forked" session and copies messages up to the fork point', async () => {
       const newSession = { id: 'fork-1', save: vi.fn().mockResolvedValue(undefined) };
       SessionMock.findById.mockResolvedValueOnce({ userId: 'u1', name: 'Orig', knowledgeIds: ['k'], tags: ['t'] });
-      QuestMock.findById.mockResolvedValueOnce({ timestamp: new Date(10) });
+      QuestMock.findOne.mockResolvedValueOnce({ timestamp: new Date(10) });
       createSessionMock.mockResolvedValueOnce(newSession);
       QuestMock.find.mockResolvedValueOnce([{ toObject: () => ({ _id: 'm1', id: 'm1', prompt: 'one' }) }]);
       // addMessageToSession internals
@@ -220,6 +219,7 @@ describe('sessionOperations', () => {
 
       const result = await forkSession('s1', 'm1', ability);
 
+      expect(QuestMock.findOne).toHaveBeenCalledWith({ _id: 'm1', sessionId: 's1' });
       expect(createSessionMock).toHaveBeenCalledWith('u1', { name: 'Forked Orig' }, ability);
       expect(QuestMock.find).toHaveBeenCalledWith({ sessionId: 's1', timestamp: { $lte: expect.any(Date) } });
       // the single source message is re-created on the new session, without _id/id
@@ -229,8 +229,17 @@ describe('sessionOperations', () => {
 
     it('throws when the source message is missing', async () => {
       SessionMock.findById.mockResolvedValueOnce({ userId: 'u1', name: 'Orig' });
-      QuestMock.findById.mockResolvedValueOnce(null);
+      QuestMock.findOne.mockResolvedValueOnce(null);
       await expect(forkSession('s1', 'missing', ability)).rejects.toThrow('Message not found');
+    });
+
+    it('throws when the message belongs to a different session', async () => {
+      SessionMock.findById.mockResolvedValueOnce({ userId: 'u1', name: 'Orig' });
+      // A cross-session messageId can't match the { _id, sessionId } filter, so the real
+      // query would resolve null - assert forkSession treats that the same as "missing".
+      QuestMock.findOne.mockResolvedValueOnce(null);
+      await expect(forkSession('s1', 'other-session-msg', ability)).rejects.toThrow('Message not found');
+      expect(QuestMock.findOne).toHaveBeenCalledWith({ _id: 'other-session-msg', sessionId: 's1' });
     });
   });
 
@@ -238,14 +247,22 @@ describe('sessionOperations', () => {
     it('copies messages from the snip point forward', async () => {
       const newSession = { id: 'snip-1', save: vi.fn().mockResolvedValue(undefined) };
       SessionMock.findById.mockResolvedValueOnce({ userId: 'u1', name: 'Orig' });
-      QuestMock.findById.mockResolvedValueOnce({ timestamp: new Date(10) });
+      QuestMock.findOne.mockResolvedValueOnce({ timestamp: new Date(10) });
       createSessionMock.mockResolvedValueOnce(newSession);
       QuestMock.find.mockResolvedValueOnce([]);
 
       await snipSession('s1', 'm1', ability);
 
+      expect(QuestMock.findOne).toHaveBeenCalledWith({ _id: 'm1', sessionId: 's1' });
       expect(createSessionMock).toHaveBeenCalledWith('u1', { name: 'Snipped Orig' }, ability);
       expect(QuestMock.find).toHaveBeenCalledWith({ sessionId: 's1', timestamp: { $gte: expect.any(Date) } });
+    });
+
+    it('throws when the message belongs to a different session', async () => {
+      SessionMock.findById.mockResolvedValueOnce({ userId: 'u1', name: 'Orig' });
+      QuestMock.findOne.mockResolvedValueOnce(null);
+      await expect(snipSession('s1', 'other-session-msg', ability)).rejects.toThrow('Message not found');
+      expect(QuestMock.findOne).toHaveBeenCalledWith({ _id: 'other-session-msg', sessionId: 's1' });
     });
   });
 

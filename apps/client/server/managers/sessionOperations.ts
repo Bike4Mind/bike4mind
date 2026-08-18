@@ -172,7 +172,7 @@ export const forkSession = async (sessionId: string, messageId: string, ability:
   const session = await Session.findById(sessionId);
   if (!session) throw new NotFoundError('Session not found');
 
-  const message = await Quest.findById(messageId);
+  const message = await Quest.findOne({ _id: messageId, sessionId });
   if (!message) throw new NotFoundError('Message not found');
   const newSession = await createSession(session.userId, { name: `Forked ${session.name}` }, ability);
 
@@ -197,7 +197,7 @@ export const snipSession = async (sessionId: string, messageId: string, ability:
   const session = await Session.findById(sessionId);
   if (!session) throw new NotFoundError('Session not found');
 
-  const message = await Quest.findById(messageId);
+  const message = await Quest.findOne({ _id: messageId, sessionId });
   if (!message) throw new NotFoundError('Message not found');
   const newSession = await createSession(session.userId, { name: `Snipped ${session.name}` }, ability);
 
