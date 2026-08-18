@@ -2640,7 +2640,6 @@ async function fireDagNodeTerminalOnRefusal(args: {
  * TODO (Phase 2 follow-up): port the top-level iteration loop here so dispatched
  * children also checkpoint + self-dispatch.
  */
-
 async function processSubagentDispatch(
   childExecutionId: string,
   connectionId: string,

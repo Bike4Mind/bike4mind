@@ -273,6 +273,14 @@ export function createDelegateToAgentTool(deps: DelegateToAgentToolDeps): ICompl
       // Guard: background dispatch requires a tracker with onStart + onLambdaDispatch.
       // When running inside ChatCompletionProcess (no tracker), fall back to synchronous
       // foreground execution so the LLM still gets a result instead of an error.
+      //
+      // Deliberately NOT checking `checkMemberCreditCap` here before dispatching: a capped
+      // member's dispatched child still gets refused, by the child's own entry gate in
+      // `processSubagentDispatch` (a separate fresh execution with its own credit check).
+      // Duplicating the check here would only save one SQS message + cold start on an
+      // already-rare refusal path, and this dispatch call is intentionally left untouched
+      // to keep the responsibility boundary clean: the parent Lambda dispatches, the child
+      // Lambda decides whether it may run.
       if (params.background && deps.tracker?.onStart && deps.tracker?.onLambdaDispatch) {
         try {
           const dispatch = await orchestrator.dispatchBackgroundAgent({
