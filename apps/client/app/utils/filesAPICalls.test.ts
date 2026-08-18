@@ -15,7 +15,7 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 vi.mock('axios', () => ({ default: { put: axiosPut, isCancel: () => false } }));
 vi.mock('./imageResizer', () => ({ resizeImageFile: vi.fn(), isImageFile: () => false }));
 
-const { createFabFileOnServerWithUpload } = await import('./filesAPICalls');
+const { createFabFileOnServerWithUpload, chunkFileUtility } = await import('./filesAPICalls');
 
 const formData = {} as unknown as CreateFabFileRequestInputType;
 const fakeFile = { type: 'text/plain', size: 11 } as unknown as File;
@@ -48,5 +48,24 @@ describe('createFabFileOnServerWithUpload PUT routing', () => {
 
     expect(axiosPut).toHaveBeenCalledWith('https://s3.amazonaws.com/b/x?X-Amz=1', fakeFile, expect.anything());
     expect(apiPut).not.toHaveBeenCalled();
+  });
+});
+
+describe('chunkFileUtility', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('rejects when the chunk request fails so the mutation onError can fire', async () => {
+    apiPost.mockRejectedValue(new Error('Request failed with status code 400'));
+
+    await expect(chunkFileUtility('ff1', 999999)).rejects.toThrow('status code 400');
+  });
+
+  it('resolves with the server payload on success', async () => {
+    apiPost.mockResolvedValue({ data: { queued: true } });
+
+    await expect(chunkFileUtility('ff1', 1000)).resolves.toEqual({ queued: true });
+    expect(apiPost).toHaveBeenCalledWith('/api/files/chunk', { fabFileId: 'ff1', chunkSize: 1000 });
   });
 });

@@ -245,11 +245,9 @@ export const deleteFileUtility = async (fileId: string): Promise<boolean> => {
 };
 
 export const chunkFileUtility = async (fabFileId: string, chunkSize: number) => {
-  try {
-    await chunkFabFileFromServer(fabFileId, chunkSize);
-  } catch (err: any) {
-    console.error('Failed to chunk the file:', err);
-  }
+  // Do not swallow: a rejected request (e.g. an over-ceiling chunkSize 400) must
+  // reject the mutation so useChunkFile's onError fires instead of a false success toast.
+  return await chunkFabFileFromServer(fabFileId, chunkSize);
 };
 
 export const getFabFileByIdFromServer = async (fabFileId: string): Promise<IFabFileDocument> => {
