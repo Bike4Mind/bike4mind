@@ -202,6 +202,22 @@ describe('resolveSpendLevers cost tiers', () => {
     const levers = await resolveSpendLevers(db, logger as any, CreditHolderType.Organization);
     expect(levers.perRunBudgetMicroUsd).toBe(DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_MAX * MICRO_USD_PER_USD);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('exceeds the hard rail'));
+    // The clamped figure is a product, so the warning has to name the multiplier that produced it -
+    // otherwise it reports $1000 against a lever the operator set to $20 and points at the wrong knob.
+    const warning = logger.warn.mock.calls[0][0] as string;
+    expect(warning).toContain('dataLakeEmbeddingBudgetPerRunUsd(20)');
+    expect(warning).toContain('tier(50)');
+  });
+
+  it('names only the lever itself in a rail warning when no tier is in play', async () => {
+    const logger = { warn: vi.fn() };
+    mockedGetSettings.mockResolvedValue({
+      ...tiered('1', '1'),
+      dataLakeEmbeddingBudgetPerRunUsd: '99999',
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await resolveSpendLevers(db, logger as any, CreditHolderType.User);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('dataLakeEmbeddingBudgetPerRunUsd='));
   });
 
   it('clamps the multiplier itself to its own rail', async () => {

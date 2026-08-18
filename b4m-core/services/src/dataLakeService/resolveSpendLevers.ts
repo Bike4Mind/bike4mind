@@ -243,9 +243,14 @@ function usdLeverToMicroUsd(
 ): number {
   const baseUsd = isAbsent(raw) ? fallbackUsd : Number(String(raw));
   if (!Number.isFinite(baseUsd) || baseUsd < 0) halt(label, raw);
+  // Name BOTH inputs when a tier is in play: the clamped figure is a PRODUCT, so a warning carrying
+  // only the budget lever's key reports a value the operator never set and never mentions the
+  // multiplier that caused it - which is also the lever they would have to change. The rail is
+  // otherwise silent (no admin surface shows a tier being truncated), so the log is the only tell.
+  const railLabel = tierMultiplier === 1 ? label : `${label}(${baseUsd}) x tier(${tierMultiplier})`;
   // Round, not floor: 0.29 * 1e6 is 289999.99999999994 in binary floating point, and a spend
   // budget must not silently lose a micro-USD to that.
-  return Math.round(clamp(baseUsd * tierMultiplier, maxUsd, label, logger) * MICRO_USD_PER_USD);
+  return Math.round(clamp(baseUsd * tierMultiplier, maxUsd, railLabel, logger) * MICRO_USD_PER_USD);
 }
 
 /** Ratio lever (a cost-tier multiplier): fractional values are legal, 0 is a valid "stop". */
