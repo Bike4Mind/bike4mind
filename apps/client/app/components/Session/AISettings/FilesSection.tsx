@@ -164,7 +164,8 @@ const FilesSection: React.FC<FilesSectionProps> = ({ model, onEmbeddingMismatchC
   const currentEmbeddingModel = useGetSettingsValue('defaultEmbeddingModel');
   // Fall back to the canonical chunker default, not a third hand-copied number. Clamped: a legacy
   // stored value above the ceiling reaches this raw (the settings-fetch route applies no clamp of
-  // its own), and submitting it unclamped now hard-400s at the route.
+  // its own), and submitting it unclamped would resolve as a silent false "success" here
+  // (chunkFileUtility swallows the route's rejection) rather than a visible error.
   const defaultChunkSize = clampChunkSize(
     Number(useGetSettingsValue('DefaultChunkSize')) || DEFAULT_PASSAGE_TOKEN_TARGET
   );
