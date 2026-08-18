@@ -21,12 +21,22 @@ import {
   Tabs,
   Textarea,
 } from '@mui/joy';
-import { useDataLakeSpend, useSetLakeVisibility, useUpdateDataLake } from '@client/app/hooks/data/dataLakes';
+import {
+  useDataLakeSpend,
+  useLakeConfigHistory,
+  useSetLakeVisibility,
+  useUpdateDataLake,
+} from '@client/app/hooks/data/dataLakes';
 import { useActivatablePrompts } from '@client/app/hooks/data/useActivatablePrompts';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
 import { DATA_LAKE_GROUNDING_MODES, DEFAULT_DATA_LAKE_GROUNDING_MODE } from '@bike4mind/common';
 import type { DataLakeGroundingMode } from '@bike4mind/common';
 import { DataLakeSpendPanel } from './DataLakeSpendPanel';
+import { LakeConfigHistorySection } from './LakeConfigHistorySection';
+
+/** The modal's tabs. 'spend' and 'history' are both read-only and both permission-gated, so each
+ *  can be absent for a given lake - see showSpendTab / showHistoryTab. */
+type DataLakeSettingsTab = 'settings' | 'spend' | 'history';
 
 /** Human-facing labels + helper copy for the grounding-mode picker, keyed by the shared enum. */
 const GROUNDING_MODE_LABELS: Record<DataLakeGroundingMode, string> = {
@@ -83,7 +93,7 @@ export interface EditableLake {
 export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | null; onClose: () => void }) {
   const updateLake = useUpdateDataLake();
   const setVisibility = useSetLakeVisibility();
-  const [tab, setTab] = useState<'settings' | 'spend'>('settings');
+  const [tab, setTab] = useState<DataLakeSettingsTab>('settings');
   const [spendDays, setSpendDays] = useState<30 | 60 | 90>(30);
   // Presence (not value) of embeddingSpendMicroUsd is the manage-access signal (see
   // ManageableDataLakeConfig's doc comment) - a zero-spend manageable lake must show the tab too.
@@ -92,7 +102,16 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   // Derived at render, not effect-synced: a 403 removes the tab retroactively and the panel
   // snaps back to Settings with no error paint, matching DataLakeManagerPanel's activeLake pattern.
   const showSpendTab = canViewSpend && !spend.isForbidden;
-  const activeTab = showSpendTab ? tab : 'settings';
+  // The config history is manage-gated server-side, so the tab follows `canManage` and retracts on a
+  // rejection - same derive-at-render shape as the spend tab, for the same reason (no error paint).
+  const history = useLakeConfigHistory(lake?.id ?? null, !!lake?.canManage && tab === 'history');
+  const showHistoryTab = !!lake?.canManage && !history.isForbidden;
+  // A tab that has just been retracted must not stay selected, or the panel renders blank.
+  const activeTab: DataLakeSettingsTab =
+    (tab === 'spend' && !showSpendTab) || (tab === 'history' && !showHistoryTab) ? 'settings' : tab;
+  const showTabs = showSpendTab || showHistoryTab;
+  // Both non-settings panels are tabular and need the room; the settings form does not.
+  const isWideTab = activeTab === 'spend' || activeTab === 'history';
   const { accounts, selectedAccount } = useAccounts();
   // Promotion targets the active account-switcher org, so the toggle is enabled only in a
   // Team context (a non-personal account selected) - matching what the create/visibility
@@ -397,25 +416,32 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         <ModalDialog
           data-testid="datalake-settings-modal"
           sx={{
-            width: { xs: '95%', sm: activeTab === 'spend' ? '44rem' : '28rem' },
-            maxWidth: activeTab === 'spend' ? '44rem' : '28rem',
+            width: { xs: '95%', sm: isWideTab ? '44rem' : '28rem' },
+            maxWidth: isWideTab ? '44rem' : '28rem',
           }}
         >
           <DialogTitle>Data lake settings</DialogTitle>
           <DialogContent>
-            {showSpendTab ? (
+            {showTabs ? (
               <Tabs
                 value={activeTab}
-                onChange={(_e, value) => setTab(value as 'settings' | 'spend')}
+                onChange={(_e, value) => setTab(value as DataLakeSettingsTab)}
                 sx={{ mt: 1, background: 'transparent' }}
               >
                 <TabList sx={{ mb: 2 }}>
                   <Tab value="settings" data-testid="datalake-settings-tab-settings">
                     Settings
                   </Tab>
-                  <Tab value="spend" data-testid="datalake-settings-tab-spend">
-                    Spend
-                  </Tab>
+                  {showSpendTab && (
+                    <Tab value="spend" data-testid="datalake-settings-tab-spend">
+                      Spend
+                    </Tab>
+                  )}
+                  {showHistoryTab && (
+                    <Tab value="history" data-testid="datalake-settings-tab-history">
+                      History
+                    </Tab>
+                  )}
                 </TabList>
                 <TabPanel value="settings" sx={{ p: 0 }}>
                   {settingsFields}
@@ -431,14 +457,23 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                     onRefetch={() => spend.refetch()}
                   />
                 </TabPanel>
+                <TabPanel value="history" sx={{ p: 0 }}>
+                  {/* The one mount point for the config history (#1769). Relocating it into the owner
+                      access panel (#1672) means moving these few lines, not rewriting the section. */}
+                  <LakeConfigHistorySection
+                    view={history.data}
+                    isLoading={history.isLoading}
+                    error={history.isForbidden ? null : history.error}
+                  />
+                </TabPanel>
               </Tabs>
             ) : (
               settingsFields
             )}
           </DialogContent>
-          {/* Save/Cancel apply to the Settings form only - the Spend tab has nothing to
-              save, so these belong to that tab, not the modal as a whole. */}
-          {activeTab !== 'spend' && (
+          {/* Save/Cancel apply to the Settings form only - the read-only Spend and History tabs
+              have nothing to save, so these belong to that tab, not the modal as a whole. */}
+          {!isWideTab && (
             <DialogActions>
               <Button
                 variant="solid"
