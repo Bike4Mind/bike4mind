@@ -83,9 +83,12 @@ const handler = baseApi()
       ? { ...promptMeta, functionCalls: redactFunctionCallsForViewer(promptMeta.functionCalls) }
       : promptMeta;
 
+    // Use the same resolved id already computed for the saved document, not the raw request-body
+    // userId: an untrusted body value that isn't a valid ObjectId throws a Mongoose CastError deep
+    // in the analytics side-effect, which errorHandler maps to a 404 -- masking a save that already succeeded.
     if (authenticated)
       await logEvent(
-        { userId, type: FeedbackEvents.CREATE_FEEDBACK, metadata: { id: newFeedback.id, content } },
+        { userId: newFeedback.userId, type: FeedbackEvents.CREATE_FEEDBACK, metadata: { id: newFeedback.id, content } },
         { ability: req.ability }
       );
 
