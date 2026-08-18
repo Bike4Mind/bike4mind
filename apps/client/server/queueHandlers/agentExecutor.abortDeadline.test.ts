@@ -61,10 +61,10 @@ vi.mock('@bike4mind/llm-adapters', async () => {
 
 // Reaching `orchestrator.delegateToAgent` for real would mean standing up model
 // resolution, MCP tool wiring, and a real `ServerSubagentOrchestrator` run - the exact
-// scaffolding cost the issue calls out. Only the orchestrator constructor is faked; every
-// tool-building call ahead of it (`buildSharedTools`, `resolveToolAvailability`) runs for
-// real against an empty/disabled config so the seam under test - the abort disambiguation
-// after `delegateToAgent` returns - is exercised on the real code path.
+// scaffolding cost the issue calls out. Model resolution and `resolveToolAvailability` are
+// stubbed below; `buildSharedTools` and `ServerAgentStore` run for real against an
+// empty/disabled config so the seam under test - the abort disambiguation after
+// `delegateToAgent` returns - is exercised on the real code path up to the orchestrator.
 const delegateToAgentMock = vi.fn();
 vi.mock('@bike4mind/services', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
