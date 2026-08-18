@@ -36,10 +36,21 @@ Research Mode lets you compare responses from multiple AI models side-by-side. A
 
 ### Enabling the Feature
 
+Research Mode is a beta feature, so you turn it on in two places.
+
+**First, enable it in your profile (one time):**
+
+1. Open your **Profile** and go to the **Settings** tab
+2. In the **General** section, find **Beta Features** and toggle **Research Mode** on
+
+**Then enable it in a notebook:**
+
 1. Open **AI Settings** in your notebook
-2. Find the **Tools** section
-3. Toggle **Research Mode** on
-4. Configure your model selections
+2. Switch to the **Research Mode** tab
+3. Toggle **Enable** on
+4. Configure your model slots (below)
+
+![Enabling Research Mode](./media/research-mode-enabling.mp4)
 
 ### Configuring Models
 
@@ -50,6 +61,8 @@ For each of the 4 slots, you can set:
 | **Model** | Choose any available AI model |
 | **Temperature** | Control response creativity (0.0 - 1.0+) |
 | **Max Tokens** | Limit response length |
+
+![Configuring Research Mode models](./media/research-mode-setup.mp4)
 
 ### Example Configurations
 
@@ -83,6 +96,8 @@ Results appear in a grid layout:
 - **Desktop**: 2x2 grid showing all 4 responses
 - **Mobile**: Stacked cards you can scroll through
 - Each response shows the model name and settings
+
+![Viewing Research Mode results](./media/research-mode-results.mp4)
 
 ### Comparing Responses
 
