@@ -5,6 +5,7 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer } from '../../../../../../packages/database/src/__test__/createMongoServer';
 import { FeedbackModel, User } from '@bike4mind/database';
+import errorHandler from '@server/middlewares/errorHandler';
 
 /**
  * End-to-end regression test for the real chain: POST handler -> logEvent -> incrementUserCounter
@@ -69,6 +70,23 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
+const stubLogger = () => {
+  const logger: Record<string, unknown> = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  logger.withMetadata = vi.fn(() => logger);
+  return logger;
+};
+
+// Mirrors the real onError wiring in baseApi's next-connect router (errorHandler is the router's
+// onError), so a thrown CastError is asserted as the actual 404 HTTP response the app would send,
+// not just an uncaught rejection -- this test bypasses baseApi's real router entirely.
+const runHandler = async (req: unknown, res: unknown) => {
+  try {
+    await mockRefs.postHandler!(req, res);
+  } catch (error) {
+    errorHandler(error, req as Parameters<typeof errorHandler>[1], res as Parameters<typeof errorHandler>[2]);
+  }
+};
+
 describe('POST /api/feedback - authenticated caller with a mismatched body userId', () => {
   it('saves the feedback and returns 201, not a 404 from the analytics side-effect', async () => {
     const realUser = await User.create({
@@ -96,8 +114,10 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
       email: realUser.email,
     };
     (req as unknown as { ability: { can: () => boolean } }).ability = { can: () => true };
+    (req as unknown as { logger: unknown }).logger = stubLogger();
+    (req as unknown as { requestId: string }).requestId = 'test-request-id';
 
-    await mockRefs.postHandler!(req, res);
+    await runHandler(req, res);
 
     expect(res._getStatusCode()).toBe(201);
 
