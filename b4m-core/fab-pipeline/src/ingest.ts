@@ -146,6 +146,15 @@ async function fetchWithoutRedirects(url: string, timeoutMs: number) {
     // axios picks the agent per request from the scheme it is currently on.
     httpAgent: ssrfSafeHttpAgent,
     httpsAgent: ssrfSafeHttpsAgent,
+    // MUST accompany the agents, or they silently stop protecting anything. axios reads
+    // `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` from the environment by default: for an https target its
+    // `setProxy` installs a CONNECT-tunnelling agent and assigns `options.agent` BEFORE the fallback
+    // that would have used ours, and for an http target the forward-proxy branch rewrites host and
+    // port so our lookup would validate the PROXY's address rather than the target's. Either way the
+    // connect-time pin is gone while every URL-level check still passes - i.e. the exact bypass the
+    // pin exists to prevent, reintroduced by an env var. No proxy is configured in the server runtime
+    // today; this makes the guarantee unconditional rather than environment-dependent.
+    proxy: false,
     // ALWAYS bytes. The response type cannot be chosen from the caller's URL, because a redirect can
     // land on a different content type entirely - a `.pdf` URL that 302s to an HTML gateway page, or
     // an extensionless URL that 302s to a PDF. Fetching bytes and deciding how to parse AFTERWARDS,
