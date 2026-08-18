@@ -751,7 +751,8 @@ export interface SyncDelta {
  * admin reset or a release-after-failure, not because one is "actual" and the other isn't -
  * the client must label them distinctly (lifetime meter vs. attributed/ledgered cost)
  * without implying either is a true provider-billed number. Budgets mirror
- * `resolveSpendLevers()`'s live values so the view never has to re-derive them.
+ * `resolveSpendLevers()`'s live values so the view never has to re-derive them - resolved at the
+ * lake's OWN cost tier, so they are the same ceilings the ingestion gate enforces on it.
  */
 export interface IDataLakeSpendResponse {
   dataLakeId: string;
@@ -764,6 +765,11 @@ export interface IDataLakeSpendResponse {
   perLakeBudgetMicroUsd: number;
   perPeriodBudgetMicroUsd: number;
   periodHours: number;
+  /**
+   * Cost-tier factor the two per-resource budgets above were scaled by, from the lake's ownership
+   * (individual vs organization). Returned so the view can explain a ceiling rather than just state it.
+   */
+  tierMultiplier: number;
   /** Actual COGS from the UsageEvent ledger (ingestion embeds attributed to this lake). */
   ledger: ILakeUsageSummary;
 }
