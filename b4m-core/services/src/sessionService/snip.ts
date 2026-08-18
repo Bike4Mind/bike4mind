@@ -1,4 +1,4 @@
-import { IChatHistoryItemDocument, IFabFileRepository, ISessionRepository, IUserRepository } from '@bike4mind/common';
+import { IChatHistoryItemRepository, IFabFileRepository, ISessionRepository, IUserRepository } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { createSession, CreateSessionAdapters } from './create';
@@ -15,14 +15,10 @@ type SnipSessionAdapters = {
     users: Pick<IUserRepository, 'findById'>;
     sessions: Pick<ISessionRepository, 'findByIdAndUserId'>;
     fabFiles: IFabFileRepository;
-    chatHistories: {
-      findAllBySessionIdAndGreaterThanOrEqualToTimestamp: (
-        sessionId: string,
-        timestamp: Date
-      ) => Promise<IChatHistoryItemDocument[]>;
-      findBySessionIdAndId: (sessionId: string, id: string) => Promise<IChatHistoryItemDocument | null>;
-      create: (chat: Omit<IChatHistoryItemDocument, 'id'>) => Promise<IChatHistoryItemDocument>;
-    };
+    chatHistories: Pick<
+      IChatHistoryItemRepository,
+      'findBySessionIdAndId' | 'findAllBySessionIdAndGreaterThanOrEqualToTimestamp' | 'create'
+    >;
   };
 } & CreateSessionAdapters;
 

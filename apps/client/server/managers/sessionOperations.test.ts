@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock state via vi.hoisted so it is initialized before the hoisted vi.mock factories run.
-const { createSessionMock, sideEffects, QuestMock, SessionMock, findAccessibleById } = vi.hoisted(() => ({
-  createSessionMock: vi.fn(),
+const { sideEffects, QuestMock, SessionMock, findAccessibleById } = vi.hoisted(() => ({
   sideEffects: {
     publishSummarizeSession: vi.fn().mockResolvedValue(undefined),
     publishContextSummarizeSession: vi.fn().mockResolvedValue(undefined),
@@ -14,7 +13,6 @@ const { createSessionMock, sideEffects, QuestMock, SessionMock, findAccessibleBy
     findOneAndUpdate: vi.fn(),
   },
   SessionMock: {
-    findById: vi.fn(),
     findOne: vi.fn(),
     updateOne: vi.fn().mockResolvedValue(undefined),
     where: vi.fn(),
@@ -23,7 +21,6 @@ const { createSessionMock, sideEffects, QuestMock, SessionMock, findAccessibleBy
 }));
 
 // ---- cross-module + side-effect boundaries ----
-vi.mock('./sessionCrud', () => ({ createSession: createSessionMock }));
 vi.mock('./sessionSideEffects', () => sideEffects);
 
 vi.mock('@bike4mind/database', () => ({
@@ -60,8 +57,6 @@ import {
   addMessageToSession,
   deleteMessageFromSession,
   stopReply,
-  forkSession,
-  snipSession,
   summarizeSession,
   contextSummarizeSession,
   getMessagesFromSession,
@@ -203,66 +198,6 @@ describe('sessionOperations', () => {
       QuestMock.findOne.mockReturnValueOnce({ sort: vi.fn().mockResolvedValue(null) });
       SessionMock.findOne.mockResolvedValueOnce({ id: 's1' });
       await expect(stopReply('s1', ability)).rejects.toThrow('No active quest found');
-    });
-  });
-
-  describe('forkSession', () => {
-    it('creates a "Forked" session and copies messages up to the fork point', async () => {
-      const newSession = { id: 'fork-1', save: vi.fn().mockResolvedValue(undefined) };
-      SessionMock.findById.mockResolvedValueOnce({ userId: 'u1', name: 'Orig', knowledgeIds: ['k'], tags: ['t'] });
-      QuestMock.findOne.mockResolvedValueOnce({ timestamp: new Date(10) });
-      createSessionMock.mockResolvedValueOnce(newSession);
-      QuestMock.find.mockResolvedValueOnce([{ toObject: () => ({ _id: 'm1', id: 'm1', prompt: 'one' }) }]);
-      // addMessageToSession internals
-      SessionMock.findOne.mockResolvedValue({ id: 'fork-1', lastUpdated: new Date(0) });
-      QuestMock.create.mockResolvedValue({ id: 'copied' });
-
-      const result = await forkSession('s1', 'm1', ability);
-
-      expect(QuestMock.findOne).toHaveBeenCalledWith({ _id: 'm1', sessionId: 's1' });
-      expect(createSessionMock).toHaveBeenCalledWith('u1', { name: 'Forked Orig' }, ability);
-      expect(QuestMock.find).toHaveBeenCalledWith({ sessionId: 's1', timestamp: { $lte: expect.any(Date) } });
-      // the single source message is re-created on the new session, without _id/id
-      expect(QuestMock.create).toHaveBeenCalledWith({ prompt: 'one', sessionId: 'fork-1' });
-      expect(result).toBe(newSession);
-    });
-
-    it('throws when the source message is missing', async () => {
-      SessionMock.findById.mockResolvedValueOnce({ userId: 'u1', name: 'Orig' });
-      QuestMock.findOne.mockResolvedValueOnce(null);
-      await expect(forkSession('s1', 'missing', ability)).rejects.toThrow('Message not found');
-    });
-
-    it('throws when the message belongs to a different session', async () => {
-      SessionMock.findById.mockResolvedValueOnce({ userId: 'u1', name: 'Orig' });
-      // A cross-session messageId can't match the { _id, sessionId } filter, so the real
-      // query would resolve null - assert forkSession treats that the same as "missing".
-      QuestMock.findOne.mockResolvedValueOnce(null);
-      await expect(forkSession('s1', 'other-session-msg', ability)).rejects.toThrow('Message not found');
-      expect(QuestMock.findOne).toHaveBeenCalledWith({ _id: 'other-session-msg', sessionId: 's1' });
-    });
-  });
-
-  describe('snipSession', () => {
-    it('copies messages from the snip point forward', async () => {
-      const newSession = { id: 'snip-1', save: vi.fn().mockResolvedValue(undefined) };
-      SessionMock.findById.mockResolvedValueOnce({ userId: 'u1', name: 'Orig' });
-      QuestMock.findOne.mockResolvedValueOnce({ timestamp: new Date(10) });
-      createSessionMock.mockResolvedValueOnce(newSession);
-      QuestMock.find.mockResolvedValueOnce([]);
-
-      await snipSession('s1', 'm1', ability);
-
-      expect(QuestMock.findOne).toHaveBeenCalledWith({ _id: 'm1', sessionId: 's1' });
-      expect(createSessionMock).toHaveBeenCalledWith('u1', { name: 'Snipped Orig' }, ability);
-      expect(QuestMock.find).toHaveBeenCalledWith({ sessionId: 's1', timestamp: { $gte: expect.any(Date) } });
-    });
-
-    it('throws when the message belongs to a different session', async () => {
-      SessionMock.findById.mockResolvedValueOnce({ userId: 'u1', name: 'Orig' });
-      QuestMock.findOne.mockResolvedValueOnce(null);
-      await expect(snipSession('s1', 'other-session-msg', ability)).rejects.toThrow('Message not found');
-      expect(QuestMock.findOne).toHaveBeenCalledWith({ _id: 'other-session-msg', sessionId: 's1' });
     });
   });
 
