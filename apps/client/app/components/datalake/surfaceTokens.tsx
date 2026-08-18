@@ -53,10 +53,11 @@ export interface DataLakeSurfaceCopy {
   zeroTitle: string;
   zeroHint: string;
   /**
-   * Lake selected, but it holds no files yet. The hint must stay source-agnostic: connecting a
-   * Drive folder is an ORG-lake, owner/manager capability, and this copy is chosen surface-wide
-   * with no knowledge of the selected lake's scope - so naming it here would promise a control a
-   * personal lake never shows. The lake header advertises Drive where it genuinely applies.
+   * Lake selected, but it holds no files yet. The hint must promise NO action: this copy is chosen
+   * surface-wide with no knowledge of the selected lake, and the lake may be one the viewer cannot
+   * write to at all (a built-in/registry lake, or someone else's public lake), where neither
+   * "add files" nor "connect a folder" is offered. The Add-files button beside it appears only when
+   * the viewer can manage the lake, and that button - not this sentence - is the call to action.
    */
   lakeEmptyTitle: string;
   lakeEmptyHint: string;
@@ -144,7 +145,7 @@ export const DEFAULT_DATA_LAKE_SURFACE_TOKENS: DataLakeSurfaceTokens = {
     zeroTitle: 'Nothing here yet',
     zeroHint: `Create your first ${DATA_LAKE.toLowerCase()} to turn your files into searchable knowledge.`,
     lakeEmptyTitle: 'This lake has no files yet',
-    lakeEmptyHint: 'Add files to make them searchable in chat.',
+    lakeEmptyHint: 'Nothing has been added to this lake yet.',
     allLakesEmptyTitle: 'No files yet',
     allLakesEmptyHint: `Pick a ${DATA_LAKE.toLowerCase()} on the left and add files to make them searchable.`,
     lakesErrorTitle: `Couldn't load your ${DATA_LAKES.toLowerCase()}`,
