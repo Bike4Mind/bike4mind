@@ -311,6 +311,86 @@ describe('createDelegateToAgentTool — depth cap enforcement (#8577)', () => {
   });
 });
 
+describe('createDelegateToAgentTool \u2014 per-member credit cap gate', () => {
+  it('rejects the foreground delegation and reports failure telemetry without spending any LLM tokens', async () => {
+    const llm = makeLlm();
+    const onTelemetry = vi.fn();
+
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm,
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+      onTelemetry,
+      checkMemberCreditCap: () => true,
+    });
+
+    await expect(tool.toolFn({ task: 't', agent: 'researcher' })).rejects.toThrow(/credit limit reached/);
+
+    expect(llm.complete).not.toHaveBeenCalled();
+    expect(onTelemetry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentName: 'researcher',
+        success: false,
+        error: expect.stringContaining('credit limit reached'),
+      })
+    );
+  });
+
+  it('rejects the background-without-tracker fallback the same way as the foreground path', async () => {
+    // No tracker -> falls back to synchronous foreground execution (see the
+    // "background dispatch requires a tracker" guard in delegateToAgent.ts).
+    const llm = makeLlm();
+
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm,
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+      checkMemberCreditCap: () => true,
+    });
+
+    await expect(tool.toolFn({ task: 't', agent: 'researcher', background: true })).rejects.toThrow(
+      /credit limit reached/
+    );
+    expect(llm.complete).not.toHaveBeenCalled();
+  });
+
+  it('does not affect delegation when checkMemberCreditCap is absent or returns false', async () => {
+    // Drives the REAL (un-mocked) ServerSubagentOrchestrator.delegateToAgent via the
+    // sync dispatch-and-poll path (same recipe as the depth-cap test below), rather
+    // than mocking the method away - a mocked method never reaches the gate check at
+    // all, so it can't prove checkMemberCreditCap: () => false actually lets the real
+    // path through.
+    const remainingMs = PARENT_DEADLINE_BUFFER_MS + 1;
+    const completedStatus: ChildExecutionStatus = {
+      status: 'completed',
+      result: { answer: 'done', iterations: 1, totalCredits: 0 },
+    };
+    const tracker: ServerSubagentTracker = {
+      ...makeTracker(),
+      pollChildStatus: vi.fn().mockResolvedValue(completedStatus),
+    };
+
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+      tracker,
+      getRemainingTimeMs: () => remainingMs,
+      checkMemberCreditCap: () => false,
+    });
+
+    const result = await tool.toolFn({ task: 't', agent: 'researcher' });
+    expect(result).toContain('done');
+    expect(tracker.onStart).toHaveBeenCalled();
+  });
+});
+
 describe('createDelegateToAgentTool — usage-event cost basis (#151)', () => {
   const MODEL_ID = 'claude-sonnet-4-6';
   // Numeric-keyed tier: inputTokens <= threshold selects this pricing. No explicit
