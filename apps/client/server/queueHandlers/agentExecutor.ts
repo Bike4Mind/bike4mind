@@ -295,7 +295,7 @@ const POLL_MAX_MS = 30_000;
  * has a bounded latency. Setting too low is wasteful (DB reads); too high
  * widens the window where an aborted child keeps running.
  */
-const SUBAGENT_ABORT_POLL_MS = 5_000;
+export const SUBAGENT_ABORT_POLL_MS = 5_000;
 
 // ---------------------------------------------------------------------------
 // Subagent handoff helpers

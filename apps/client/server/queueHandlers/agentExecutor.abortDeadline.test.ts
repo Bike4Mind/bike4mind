@@ -139,13 +139,11 @@ function dagNodeDispatchEvent() {
   ]);
 }
 
-const SUBAGENT_ABORT_POLL_MS = 5_000;
-
 // Delegate resolves like the orchestrator's own timeout-handling path: partial results on
 // an AbortError instead of a throw, after the abort poller has had a chance to tick at
 // least once. Fake timers make the race between the poll interval and this resolution
 // deterministic instead of a real 5s wait.
-function delegateResolvesAfterOnePoll() {
+function delegateResolvesAfterOnePoll(pollMs: number) {
   return new Promise(resolve => {
     setTimeout(
       () =>
@@ -154,7 +152,7 @@ function delegateResolvesAfterOnePoll() {
           steps: [{ role: 'assistant', content: 'partial step' }],
           completionInfo: { totalCredits: 3, totalTokens: 100, iterations: 2, reachedMaxIterations: false },
         }),
-      SUBAGENT_ABORT_POLL_MS * 2
+      pollMs * 2
     );
   });
 }
@@ -173,9 +171,9 @@ describe('agentExecutor: processSubagentDispatch abort/deadline disambiguation',
   it('marks the child failed (isTimeout) when the Lambda deadline watchdog trips, not the abort flag', async () => {
     const { agentExecutionRepository } = await import('@bike4mind/database');
     vi.mocked(agentExecutionRepository.checkAbortFlag).mockResolvedValue(false);
-    delegateToAgentMock.mockImplementation(delegateResolvesAfterOnePoll);
 
-    const { handler } = await import('./agentExecutor');
+    const { handler, SUBAGENT_ABORT_POLL_MS } = await import('./agentExecutor');
+    delegateToAgentMock.mockImplementation(() => delegateResolvesAfterOnePoll(SUBAGENT_ABORT_POLL_MS));
     const context = { getRemainingTimeInMillis: () => 5_000 } as unknown as Context;
 
     const resultPromise = handler(dagNodeDispatchEvent(), context);
@@ -198,9 +196,9 @@ describe('agentExecutor: processSubagentDispatch abort/deadline disambiguation',
   it('marks the child aborted (not failed) when the abort flag is set, even though the signal also fired', async () => {
     const { agentExecutionRepository } = await import('@bike4mind/database');
     vi.mocked(agentExecutionRepository.checkAbortFlag).mockResolvedValue(true);
-    delegateToAgentMock.mockImplementation(delegateResolvesAfterOnePoll);
 
-    const { handler } = await import('./agentExecutor');
+    const { handler, SUBAGENT_ABORT_POLL_MS } = await import('./agentExecutor');
+    delegateToAgentMock.mockImplementation(() => delegateResolvesAfterOnePoll(SUBAGENT_ABORT_POLL_MS));
     // Plenty of remaining time - the deadline watchdog must NOT be what trips the signal here.
     const context = { getRemainingTimeInMillis: () => 300_000 } as unknown as Context;
 
