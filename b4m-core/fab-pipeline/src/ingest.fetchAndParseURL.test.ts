@@ -95,6 +95,10 @@ describe('fetchAndParseURL redirect handling', () => {
       httpAgent: ssrfSafeHttpAgent,
       httpsAgent: ssrfSafeHttpsAgent,
     });
+    // `proxy: false` is part of the same defence, not a separate nicety: axios honours
+    // HTTPS_PROXY/HTTP_PROXY from the environment by default and installs its own agent, which
+    // displaces ours - so the pin above would silently stop applying wherever a proxy env var is set.
+    expect(axiosGet.mock.calls[0][1]).toMatchObject({ proxy: false });
   });
 
   it('gives up after too many redirects instead of looping', async () => {
