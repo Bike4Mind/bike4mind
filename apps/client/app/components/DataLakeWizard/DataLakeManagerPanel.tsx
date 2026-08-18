@@ -74,6 +74,8 @@ import {
   useUnarchiveDataLake,
   useUnderChunkedCount,
   useRechunkDataLake,
+  useLakeConvergencePlan,
+  useConvergeDataLake,
 } from '@client/app/hooks/data/dataLakes';
 import { toast } from 'sonner';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
@@ -1200,6 +1202,19 @@ function LakeInfoPanel({
   const failedCount = rebuildStatus?.failedCount ?? 0;
   const rechunk = useRechunkDataLake(lake.id);
 
+  // Convergence toward the lake's OWN declared chunk policy (#1681). Distinct from "Rebuild
+  // passages", which repairs a fixed legacy defect (oversized whole-document blobs) against a
+  // universal threshold: this repairs drift from a policy THIS lake declares, so it only exists for
+  // a lake with an explicit one. Same `canRebuild` gate as the sibling action - the server enforces
+  // it again (assertLakeRebuildAccess) and the plan read is safe for any reader.
+  const { data: convergencePlan } = useLakeConvergencePlan(lake.id, !!lake.canRebuild);
+  const converge = useConvergeDataLake(lake.id);
+  // Confirm dialog state: the bulk-change guard's whole point is that the share is SEEN before it
+  // is accepted, so `confirm: true` is only ever sent from this dialog.
+  const [convergeConfirmOpen, setConvergeConfirmOpen] = useState(false);
+  const convergeableCount = convergencePlan?.convergeableCount ?? 0;
+  const canConverge = !!lake.canRebuild && convergencePlan?.refusal === null && convergeableCount > 0;
+
   return (
     <Box
       data-testid="datalake-manager-lakeinfo"
@@ -1312,6 +1327,77 @@ function LakeInfoPanel({
               </Button>
             </Tooltip>
           )}
+          {/* Converge to policy (#1681). Only shown for a lake with an EXPLICIT chunk policy and
+              something measurably off it - an `inherited` lake is measured and reported by health
+              but never repaired (epic decision 5), so there is nothing to offer. */}
+          {canConverge && (
+            <Tooltip
+              title={
+                `Re-chunk ${convergeableCount} file(s) to this lake's declared passage target of ` +
+                `${convergencePlan?.policy.requiredTarget} tokens. They are unsearchable until re-indexing ` +
+                'completes. Runs in bounded waves; safe to repeat.'
+              }
+              size="sm"
+            >
+              <Button
+                size="sm"
+                variant="outlined"
+                color="primary"
+                startDecorator={<AutoFixHighIcon sx={{ fontSize: 16 }} />}
+                data-testid={`datalake-converge-policy-btn-${lake.id}`}
+                loading={converge.isPending}
+                onClick={() =>
+                  convergencePlan?.requiresConfirmation
+                    ? setConvergeConfirmOpen(true)
+                    : converge.mutate({})
+                }
+                sx={{ flexShrink: 0, fontSize: '13px' }}
+              >
+                Converge to policy ({convergeableCount})
+              </Button>
+            </Tooltip>
+          )}
+          {/* Bulk-change guard (#1681 constraint 4). A mass rewrite is the signature of a
+              MISCONFIGURED policy, and every individual change inside one looks locally reasonable -
+              the share is the only place the mistake is visible, so it is stated before the button
+              that accepts it, and `confirm: true` is sent from nowhere else. */}
+          <Modal open={convergeConfirmOpen} onClose={() => setConvergeConfirmOpen(false)}>
+            <ModalDialog data-testid="datalake-converge-confirm" role="alertdialog">
+              <DialogTitle>Re-chunk {Math.round((convergencePlan?.changeShare ?? 0) * 100)}% of this lake?</DialogTitle>
+              <DialogContent>
+                <Typography level="body-sm">
+                  This rewrites {convergeableCount} of {convergencePlan?.membersConsidered ?? 0} files to this lake{"'"}s
+                  passage target of {convergencePlan?.policy.requiredTarget} tokens. Rewriting this much of a lake at
+                  once usually means the policy itself is wrong - check the target before continuing.
+                </Typography>
+                <Typography level="body-sm" sx={{ mt: 1 }}>
+                  Each file stops being findable by search from the moment it is rewritten until its re-indexing
+                  finishes. Its old passages are deleted first, so there is nothing to serve in the meantime.
+                </Typography>
+                {(convergencePlan?.crossLakeConflictCount ?? 0) > 0 && (
+                  <Typography level="body-sm" sx={{ mt: 1 }}>
+                    {convergencePlan?.crossLakeConflictCount} file(s) are excluded because another data lake requires a
+                    different passage target for them; repairing those would make the two lakes take turns rewriting
+                    them.
+                  </Typography>
+                )}
+              </DialogContent>
+              <DialogActions>
+                <Button
+                  variant="solid"
+                  color="warning"
+                  data-testid="datalake-converge-confirm-btn"
+                  loading={converge.isPending}
+                  onClick={() => converge.mutate({ confirm: true }, { onSuccess: () => setConvergeConfirmOpen(false) })}
+                >
+                  Re-chunk anyway
+                </Button>
+                <Button variant="plain" color="neutral" onClick={() => setConvergeConfirmOpen(false)}>
+                  Cancel
+                </Button>
+              </DialogActions>
+            </ModalDialog>
+          </Modal>
         </Box>
         <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
           {/* Not-your-lake marker: the sidebar lists lakes the caller can REACH, not only ones

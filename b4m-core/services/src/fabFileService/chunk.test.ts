@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, Mock } from 'vitest';
-import { chunkFabfile } from './chunk';
+import { chunkFabfile, commitFabFileChunks, prepareFabFileChunks } from './chunk';
 import { ChunkClaimLostError } from '@bike4mind/common';
 import { computeServerTextHash } from '../dataLakeService/admissionContract';
 import type { IUserDocument } from '@bike4mind/common';
@@ -307,5 +307,83 @@ describe('chunkFabfile', () => {
     };
     expect(updatedFile.serverTextHash).toBeNull();
     expect(updatedFile.serverTextHash).not.toBe(stale);
+  });
+});
+
+// #1681 constraint 3: the phase split is only worth anything if `prepareFabFileChunks` really is
+// write-free - a single stray write in it would be a write outside the caller's transaction, which
+// is strictly worse than the problem the split solves.
+describe('prepareFabFileChunks / commitFabFileChunks (#1681)', () => {
+  const mockUser = { id: 'user-1' } as IUserDocument;
+  const mockFabFile = { id: 'file-1', embeddingModel: 'text-embedding-ada-002', mimeType: 'text/plain' };
+  const embeddingModel = 'text-embedding-ada-002';
+
+  const makeAdapter = () => ({
+    db: {
+      fabFiles: {
+        shareable: { findAccessibleById: vi.fn().mockResolvedValue({ ...mockFabFile }) },
+        update: vi.fn(),
+        confirmChunkClaim: vi.fn().mockResolvedValue(true),
+      },
+      fabFileChunks: {
+        deleteManyByFabFileId: vi.fn(),
+        bulkInsert: vi.fn().mockResolvedValue([{ id: 'c1' }]),
+        update: vi.fn(),
+        distinctEmbeddingModelsByFabFileIds: vi.fn().mockResolvedValue([]),
+      },
+      users: { findById: vi.fn() },
+    },
+    storage: { getContentAsBuffer: vi.fn() },
+    logger: { updateMetadata: vi.fn(), log: vi.fn(), warn: vi.fn() },
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (SmartChunker as unknown as Mock).mockImplementation(function MockSmartChunker(this: unknown) {
+      return {
+        chunkFile: vi.fn().mockResolvedValue([{ text: 'chunk one', tokenCount: 2 }]),
+        getExtractedText: vi.fn().mockReturnValue('chunk one'),
+        freeEncoder: vi.fn(),
+      };
+    });
+  });
+
+  it('performs no writes while fetching and tokenizing', async () => {
+    const adapter = makeAdapter();
+
+    const prepared = await prepareFabFileChunks(mockUser, { fabFileId: 'file-1', embeddingModel }, adapter as never);
+
+    expect(prepared.chunks).toHaveLength(1);
+    expect(adapter.db.fabFiles.update).not.toHaveBeenCalled();
+    expect(adapter.db.fabFiles.confirmChunkClaim).not.toHaveBeenCalled();
+    expect(adapter.db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
+    expect(adapter.db.fabFileChunks.bulkInsert).not.toHaveBeenCalled();
+  });
+
+  it('re-chunks nothing on commit, so a retried transaction never re-downloads or re-tokenizes', async () => {
+    const adapter = makeAdapter();
+    const prepared = await prepareFabFileChunks(mockUser, { fabFileId: 'file-1', embeddingModel }, adapter as never);
+    (SmartChunker as unknown as Mock).mockClear();
+
+    await commitFabFileChunks(prepared, adapter as never);
+    await commitFabFileChunks(prepared, adapter as never);
+
+    expect(SmartChunker).not.toHaveBeenCalled();
+    expect(adapter.db.fabFileChunks.bulkInsert).toHaveBeenCalledTimes(2);
+  });
+
+  it('still throws ChunkClaimLostError from the commit phase when the claim was superseded', async () => {
+    const adapter = makeAdapter();
+    const claimedAt = new Date('2026-01-01T00:00:00.000Z');
+    const prepared = await prepareFabFileChunks(
+      mockUser,
+      { fabFileId: 'file-1', embeddingModel, chunkClaimedAt: claimedAt },
+      adapter as never
+    );
+    adapter.db.fabFiles.confirmChunkClaim.mockResolvedValue(false);
+
+    await expect(commitFabFileChunks(prepared, adapter as never)).rejects.toThrow(ChunkClaimLostError);
+    expect(adapter.db.fabFiles.update).not.toHaveBeenCalled();
+    expect(adapter.db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
   });
 });

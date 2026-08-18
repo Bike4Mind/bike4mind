@@ -56,6 +56,56 @@ constant:
   disagree) is flagged with a **chunk-policy conflict** instead of being silently re-chunked. Resolve
   a conflict by aligning the owner's chunk policy, or by removing the file from the conflicting lake.
 
+### Converging a lake to its chunk policy
+A lake that declares a **required passage target** can be repaired toward it. "Converge to policy"
+appears on the lake in the manager panel when the lake has files that measurably do not satisfy it,
+and re-chunks those files at the lake's target in bounded waves - safe to repeat until the count
+reaches zero.
+
+Convergence is **owner-triggered and system-performed**: you ask for the repair, and the platform
+carries it out, so no one needs write access to a lake for its contents to be fixed. It never runs on
+its own.
+
+What it deliberately refuses to do:
+- **A lake with no declared policy is never repaired.** Its health is measured and reported like any
+  other lake, but nothing is re-chunked until an owner adopts an explicit passage target - so
+  changing a platform default can never silently re-embed every lake.
+- **A file that another lake requires a different passage target for is excluded**, and named in the
+  plan. Chunks are shared by every consumer of a file, so repairing it for one lake would break it
+  for the other, and the two lakes would take turns rewriting it forever. Align the two lakes'
+  required targets, or remove the file from one of them.
+- **A file nothing has measured is left alone.** "We could not tell" is reported as its own count,
+  never treated as either healthy or broken.
+- **A file that is already being indexed, or whose processing failed outright, is skipped** - the
+  first because its current pass would be discarded, the second because re-running it would only
+  repeat the same failure. Both are counted in the plan.
+
+:::note Convergence ran but nothing changed
+Check these in order, all of them visible in the plan the button reads:
+- **The lake has no declared passage target.** The action does not appear at all in this case; set a
+  required target on the lake first.
+- **Every file is already conformant.** The plan's counts say so explicitly - this is the steady state.
+- **The files are excluded**, as cross-lake conflicts, unmeasured, already indexing, or previously
+  failed. Each has its own count in the plan, so "nothing happened" is always attributable.
+- **Background lake work is paused.** An administrator can pause convergence platform-wide or for a
+  single lake; a wave enqueued while it is paused is dropped and re-runs once it is turned back on.
+  Files stalled this way are flagged as paused in lake health.
+:::
+
+Before it rewrites a large share of a lake, convergence **asks**. Rewriting most of a lake at once is
+almost always a sign that the declared target itself is wrong, and every individual change inside such
+a run looks reasonable on its own - so the share is shown, and the run does not proceed until it is
+confirmed. Administrators can tune where that threshold sits.
+
+:::warning A converging file is not searchable until it finishes
+Re-chunking replaces a file's passages, and the replacements carry no vectors until re-indexing
+completes. The previous passages are deleted first, so there is nothing to fall back on in between.
+Search does not hide this: while any in-scope file is being re-indexed, results are explicitly marked
+**partial** and the affected files are named, rather than quietly answering from the rest of the lake.
+The files return on their own once indexing completes - re-run the search then. Prefer to converge a
+lake outside the hours people are querying it.
+:::
+
 ### Vector Embeddings
 Every chunk is:
 - **Semantically Indexed** - Meaning-based search

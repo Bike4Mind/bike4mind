@@ -1189,6 +1189,66 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   /**
+   * Per-member facts for owner-triggered convergence (#1681). See the interface doc for why this is
+   * a separate read from findDataLakeHealthMembers rather than an extension of it.
+   */
+  async findLakeConvergenceMembers(
+    scope: DataLakeMembershipScope,
+    limit = 25_000
+  ): Promise<
+    Array<{
+      fabFileId: string;
+      userId: string;
+      fileName?: string;
+      tags: { name: string }[];
+      chunkCount: number;
+      vectorizedChunkCount: number | null;
+      error: string | null;
+      notes: string | null;
+      maxChunkCharLength: number | null;
+      chunkedPassageTokenTarget: number | null;
+    }>
+  > {
+    return this.fabFileModel.aggregate([
+      {
+        $match: {
+          ...buildDataLakeMembershipFilter(scope),
+          deletedAt: null,
+          archivedAt: null,
+          status: { $ne: 'pending' },
+          chunkCount: { $gt: 0 },
+          // A file a chunk worker is mid-run on is excluded, not refused later: its rollups describe
+          // chunks that are already being replaced, so grading them would decide on stale facts.
+          isChunking: { $ne: true },
+        },
+      },
+      // Deterministic order before the truncation bound, so a truncated plan is reproducible.
+      { $sort: { _id: 1 } },
+      { $limit: limit + 1 },
+      {
+        $project: {
+          _id: 0,
+          fabFileId: { $toString: '$_id' },
+          userId: { $toString: '$userId' },
+          fileName: 1,
+          // Only the tag NAME is projected - findMemberLakesForFile is the sole consumer and reads
+          // nothing else, and a lake can carry thousands of members.
+          tags: { $map: { input: { $ifNull: ['$tags', []] }, as: 't', in: { name: '$$t.name' } } },
+          chunkCount: { $ifNull: ['$chunkCount', 0] },
+          // Preserve null (UNMEASURED) rather than coalescing to 0: the decision must tell "not yet
+          // measured" from "measured as zero", and collapsing them would rewrite a whole lake whose
+          // #1665 backfill has not run.
+          vectorizedChunkCount: { $ifNull: ['$vectorizedChunkCount', null] },
+          error: { $ifNull: ['$error', null] },
+          notes: { $ifNull: ['$notes', null] },
+          maxChunkCharLength: { $ifNull: ['$maxChunkCharLength', null] },
+          chunkedPassageTokenTarget: { $ifNull: ['$chunkedPassageTokenTarget', null] },
+        },
+      },
+    ]);
+  }
+
+  /**
    * One page of file ids that have chunks but no `chunkedCharCount` (missing or nulled by a
    * content rewrite), ascending by `_id` - the char-length backfill's phase-2 cursor.
    */

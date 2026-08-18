@@ -187,8 +187,29 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // from the batch). dataLakeId isn't on the FabFile and isn't worth an extra read here.
     if (fabFile.batchId) logger.updateMetadata({ batchId: fabFile.batchId });
 
-    const fabFileChunks = await withTransaction(async () =>
-      fabFilesService.chunkFabfile(
+    const chunkAdapters = {
+      db: {
+        fabFiles: fabFileRepository,
+        fabFileChunks: fabFileChunkRepository,
+        users: User,
+      },
+      storage: {
+        getContentAsBuffer: (filePath: string) => {
+          return getFilesStorage().getContentAsBuffer(filePath);
+        },
+      },
+      logger,
+      searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
+    };
+
+    // Two phases, and only the second one is transactional (#1681 constraint 3). The S3 fetch and
+    // full tokenization used to run INSIDE `withTransaction`, which put them under the transaction
+    // lifetime: a member too large to finish aborts with a code `withTransaction` classifies as
+    // transient, so it redid the fetch and the tokenization up to `maxRetries` more times before
+    // failing deterministically. Convergence sweeps the LARGEST documents first, which is exactly
+    // that population. Now a transient write conflict retries the writes alone.
+    const fabFileChunks = await (async () => {
+      const prepared = await fabFilesService.prepareFabFileChunks(
         user,
         {
           fabFileId,
@@ -196,22 +217,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           passageTokenTarget: requestedPassageTokenTarget,
           chunkClaimedAt: claimedAt,
         },
-        {
-          db: {
-            fabFiles: fabFileRepository,
-            fabFileChunks: fabFileChunkRepository,
-            users: User,
-          },
-          storage: {
-            getContentAsBuffer: (filePath: string) => {
-              return getFilesStorage().getContentAsBuffer(filePath);
-            },
-          },
-          logger,
-          searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
-        }
-      )
-    ).catch(async (err: unknown) => {
+        chunkAdapters
+      );
+      return withTransaction(async () => fabFilesService.commitFabFileChunks(prepared, chunkAdapters));
+    })().catch(async (err: unknown) => {
       // A stale-claim takeover already reassigned this file to a successor mid-run (#1802 Phase
       // 2) - not a failure, so this delivery must NOT count toward batch failure accounting or
       // reach the DLQ. Returning null (rather than throwing) lets SQS delete the message as
@@ -382,9 +391,17 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // Cross-lake chunk-policy conflict (#1662): record the effective target these chunks were built
     // with and report any member lake whose REQUIRED policy they do not satisfy. A report, not a
     // failure - the file stays chunked at its owner-altitude policy; a lake is only a constraint, so
-    // we never re-chunk to satisfy one lake (which would rewrite shared chunks for non-members and
-    // oscillate a file in two disagreeing lakes). Best-effort: a detection failure must not fail an
-    // otherwise-successful chunk and force a wasted re-chunk on redelivery.
+    // THIS path never re-chunks to satisfy one lake (which would rewrite shared chunks for
+    // non-members and oscillate a file in two disagreeing lakes).
+    //
+    // Owner-triggered convergence (#1681) is the one door that does re-chunk at a lake's required
+    // target, and it is allowed to only because it first proves the disagreement does not exist:
+    // it refuses any member whose OTHER member lakes declare a different effective target. Nothing
+    // here changes - it still just records what the chunks were built with, and the target it
+    // records is the one the convergence message asked for, so the conflict clears on that pass.
+    //
+    // Best-effort: a detection failure must not fail an otherwise-successful chunk and force a
+    // wasted re-chunk on redelivery.
     try {
       const conflict = await dataLakeService.recomputeFileChunkPolicyConflict(
         { id: fabFileId, userId: fabFile.userId, tags: fabFile.tags },

@@ -9,28 +9,54 @@ vi.mock('@server/queueHandlers/utils', () => ({
   dispatchWithLogger: (fn: (...args: unknown[]) => unknown) => fn,
 }));
 
-const h = vi.hoisted(() => ({
-  chunkFabfile: vi.fn(),
-  findAccessibleById: vi.fn(),
-  markFailedIfNotAlready: vi.fn(),
-  updateFileStatus: vi.fn(),
-  incrementCounter: vi.fn(),
-  incrementCounters: vi.fn(),
-  claimFileStatus: vi.fn(),
-  getSettingsValue: vi.fn(),
-  sendToClient: vi.fn(async () => undefined),
-  finalizeBatchIfComplete: vi.fn(),
-  isBatchComplete: vi.fn(),
-  deferFailureIfRetryable: vi.fn(),
-  fabFileUpdateOne: vi.fn(() => ({ catch: vi.fn() })),
-  // The lease acquire: truthy doc = claim won (acquired). Default wins; a test overrides it to null
-  // to exercise a superseded/duplicate delivery bailing out.
-  fabFileFindOneAndUpdate: vi.fn(async () => ({ _id: 'ff1' })),
-  selfHostOpenSearchEnabled: vi.fn(() => false),
-  recomputeFileChunkPolicyConflict: vi.fn(async () => null),
-  resolveScopedSetting: vi.fn(async () => ({ value: 512, source: 'platform' })),
-  sendToQueue: vi.fn(),
-}));
+type PreparedStub = { args: unknown[] };
+
+const h = vi.hoisted(() => {
+  const chunkFabfile = vi.fn();
+  // Live transaction nesting depth, so a test can observe WHICH phase runs inside withTransaction
+  // (#1681 constraint 3). Tracked by the passthrough itself rather than a per-test
+  // mockImplementation, so every other test keeps the exact same behaviour it had before.
+  const transactionDepth = { current: 0 };
+  return {
+    chunkFabfile,
+    transactionDepth,
+    withTransaction: vi.fn(async (fn: () => unknown) => {
+      transactionDepth.current += 1;
+      try {
+        return await fn();
+      } finally {
+        transactionDepth.current -= 1;
+      }
+    }),
+    // Prepare is a pure carrier here; commit replays the captured call into `chunkFabfile`, which
+    // remains the one seam the assertions below inspect. Deliberately NOT two independent mocks:
+    // the split is an execution-context change, not a behavior change, and the tests should keep
+    // asserting the single "what did we ask the chunker to do" question.
+    prepareFabFileChunks: vi.fn(async (...args: unknown[]) => ({ args })),
+    commitFabFileChunks: vi.fn(async (prepared: unknown) =>
+      chunkFabfile(...((prepared as PreparedStub | undefined)?.args ?? []))
+      ),
+    findAccessibleById: vi.fn(),
+    markFailedIfNotAlready: vi.fn(),
+    updateFileStatus: vi.fn(),
+    incrementCounter: vi.fn(),
+    incrementCounters: vi.fn(),
+    claimFileStatus: vi.fn(),
+    getSettingsValue: vi.fn(),
+    sendToClient: vi.fn(async () => undefined),
+    finalizeBatchIfComplete: vi.fn(),
+    isBatchComplete: vi.fn(),
+    deferFailureIfRetryable: vi.fn(),
+    fabFileUpdateOne: vi.fn(() => ({ catch: vi.fn() })),
+    // The lease acquire: truthy doc = claim won (acquired). Default wins; a test overrides it to null
+    // to exercise a superseded/duplicate delivery bailing out.
+    fabFileFindOneAndUpdate: vi.fn(async () => ({ _id: 'ff1' })),
+    selfHostOpenSearchEnabled: vi.fn(() => false),
+    recomputeFileChunkPolicyConflict: vi.fn(async () => null),
+    resolveScopedSetting: vi.fn(async () => ({ value: 512, source: 'platform' })),
+    sendToQueue: vi.fn(),
+  };
+});
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
@@ -52,8 +78,8 @@ vi.mock('@bike4mind/database', () => ({
   scopedSettingsRepository: { findOverrides: vi.fn() },
   FabFile: { updateOne: h.fabFileUpdateOne, findOneAndUpdate: h.fabFileFindOneAndUpdate },
   User: { findById: vi.fn(async () => ({ id: 'u1' })) },
-  // Run the callback so chunkFabfile actually executes (and rejects) under test.
-  withTransaction: vi.fn((fn: () => unknown) => fn()),
+  // Run the callback so the commit phase actually executes (and rejects) under test.
+  withTransaction: h.withTransaction,
 }));
 
 // Whole-module mock, NOT importActual: importActual('@bike4mind/services') loads the package barrel
@@ -62,7 +88,15 @@ vi.mock('@bike4mind/database', () => ({
 // implementations are covered in admissionContract.test.ts, so this mirror only needs to stay
 // behaviorally faithful (deriveAdmissionStatus: conflict->quarantined; admissionDoorLabel: ?? unknown).
 vi.mock('@bike4mind/services', () => ({
-  fabFilesService: { chunkFabfile: h.chunkFabfile },
+  // The handler runs chunking in two phases (#1681 constraint 3): prepare (S3 + tokenize) outside
+  // the transaction, commit (the writes) inside it. `h.chunkFabfile` stays the SINGLE behavioral
+  // seam these tests drive - prepare just carries its arguments forward and commit replays them -
+  // so every existing `toHaveBeenCalledWith(user, params, adapters)` assertion still describes what
+  // the handler asked for, and a rejection still surfaces from inside `withTransaction`.
+  fabFilesService: {
+    prepareFabFileChunks: h.prepareFabFileChunks,
+    commitFabFileChunks: h.commitFabFileChunks,
+  },
   // Owner-altitude chunk-policy resolution (#1662). The resolver never throws; default it to the
   // platform value so the handler proceeds exactly as before these seams existed. scopeForLake
   // (#1676) is only reached for background lake work; stubbed so the deps object can be constructed.
@@ -636,6 +670,61 @@ describe('fabFileChunk handler - stale-claim takeover mid-run (#1802 Phase 2)', 
   // resolved as two distinct module realms in production. An instanceof-only check fails this.
   it('still treats a same-named-but-different-realm error as the benign no-op', async () => {
     h.chunkFabfile.mockRejectedValue(Object.assign(new Error('cross-realm'), { name: 'ChunkClaimLostError' }));
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+    expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+    expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+  });
+});
+
+// #1681 constraint 3: the S3 fetch and the tokenization must NOT run inside the Mongo transaction.
+// Under the old shape a member too large to finish inside the transaction lifetime aborted with a
+// code `withTransaction` classifies as transient, so the download and tokenization were redone up
+// to `maxRetries` more times before failing deterministically - and convergence sweeps the largest
+// documents FIRST. The invariant is about execution CONTEXT, which no assertion on the chunker's
+// arguments can see, so this observes the transaction boundary directly.
+describe('fabFileChunk handler - chunk computation runs outside the transaction (#1681)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', chunked: false });
+    h.chunkFabfile.mockResolvedValue([{ id: 'c1' }]);
+  });
+
+  it('prepares (fetch + tokenize) outside the transaction and commits (writes) inside it', async () => {
+    const contexts: { phase: string; insideTransaction: boolean }[] = [];
+    h.prepareFabFileChunks.mockImplementation(async (...args: unknown[]) => {
+      contexts.push({ phase: 'prepare', insideTransaction: h.transactionDepth.current > 0 });
+      return { args };
+    });
+    h.commitFabFileChunks.mockImplementation(async () => {
+      contexts.push({ phase: 'commit', insideTransaction: h.transactionDepth.current > 0 });
+      return [{ id: 'c1' }];
+    });
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(contexts).toEqual([
+      { phase: 'prepare', insideTransaction: false },
+      { phase: 'commit', insideTransaction: true },
+    ]);
+  });
+
+  // A prepare-phase throw is no longer wrapped by withTransaction, so it reaches a DIFFERENT catch
+  // site than it used to. It must still land on the same failure accounting - otherwise a corrupt
+  // PDF would stop being marked failed and would sit at chunkCount:0 with no error, the exact
+  // silently-stuck state that accounting exists to prevent.
+  it('routes a prepare-phase failure through the same failure accounting', async () => {
+    h.deferFailureIfRetryable.mockResolvedValue(false);
+    h.prepareFabFileChunks.mockRejectedValue(new Error('corrupt pdf'));
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow('corrupt pdf');
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', 'corrupt pdf');
+  });
+
+  // Same reasoning for the benign arm: a claim lost during prepare must stay a no-op.
+  it('still treats a prepare-phase lost claim as the benign no-op', async () => {
+    h.prepareFabFileChunks.mockRejectedValue(new ChunkClaimLostError('ff1'));
+
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
     expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
     expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();

@@ -931,6 +931,38 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     }>
   >;
   /**
+   * Per-member facts owner-triggered convergence (#1681) decides on. Deliberately NOT
+   * `findDataLakeHealthMembers`: convergence asks a different question and needs three fields health
+   * does not (the owner `userId` to re-enqueue under, the #1662 stamped chunk target, and the file's
+   * lake meta-tags for the cross-lake oscillation check), while needing none of health's char sums.
+   * Same membership + liveness filter, and the same `isChunking: {$ne: true}` exclusion
+   * `findChunkedFilesByScope` uses so a wave cannot select a file a worker is already mid-run on.
+   *
+   * `limit` fetches one extra row so the caller can report the scan as partial rather than silently
+   * planning against a truncated lake - a truncated denominator would understate `changeShare` and
+   * could slip a mass rewrite past the bulk-change guard.
+   */
+  findLakeConvergenceMembers(
+    scope: DataLakeMembershipScope,
+    limit?: number
+  ): Promise<
+    Array<{
+      fabFileId: string;
+      userId: string;
+      fileName?: string;
+      tags: { name: string }[];
+      chunkCount: number;
+      // Same keep-in-sync rule as findDataLakeHealthMembers: vectorizedChunkCount, error and notes
+      // together decide settled vs in-flight, and a row arriving without one silently disables that
+      // arm of the decision rather than failing.
+      vectorizedChunkCount: number | null;
+      error: string | null;
+      notes: string | null;
+      maxChunkCharLength: number | null;
+      chunkedPassageTokenTarget: number | null;
+    }>
+  >;
+  /**
    * One page of file ids that have chunks but no `chunkedCharCount` (missing or nulled by a
    * content rewrite), ascending by `_id` - the char-length backfill's phase-2 cursor.
    */

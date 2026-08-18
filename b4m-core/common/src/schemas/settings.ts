@@ -19,6 +19,7 @@ import {
   LAKE_CONFIG_AUDIT_RETENTION_MAX_DAYS,
 } from '../constants/lakeConfigAudit';
 import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '../constants/forcedRetrieval';
+import { BULK_CHANGE_SHARE_PCT_DEFAULT } from '../constants/lakeConvergence';
 import { CHAT_MODELS, ChatModels } from '../models';
 import {
   BedrockEmbeddingModel,
@@ -195,6 +196,7 @@ export const SettingKeySchema = z.enum([
   'EnableLakeMemory',
   'EnableDataLakeVectorSearch',
   'PauseLakeConvergence',
+  'LakeConvergenceBulkChangeSharePct',
   'EnforceLakeReadGrants',
   'EnableDataLakeDrivePoll',
   'EnableBriefcase',
@@ -1949,6 +1951,29 @@ export const settingsMap = {
     // pauses just that scope. Org/Owner rungs ride along (the resolver derives them from the lake
     // via scopeForLake, and the scheme requires Owner wherever Lake is settable) so an operator can
     // also pause all of an org's/owner's lake convergence, not only one lake at a time.
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
+  }),
+  LakeConvergenceBulkChangeSharePct: makeNumberSetting({
+    key: 'LakeConvergenceBulkChangeSharePct',
+    name: 'Data Lakes: Convergence bulk-change confirmation threshold (%)',
+    // Shared with the resolver's own fallback (see BULK_CHANGE_SHARE_PCT_DEFAULT for the rationale
+    // and for why this is one constant rather than two literals).
+    defaultValue: BULK_CHANGE_SHARE_PCT_DEFAULT,
+    min: 1,
+    max: 100,
+    description:
+      'Share of a data lake, as a percentage of its gradable members, above which owner-triggered ' +
+      'convergence (#1681) requires an explicit confirmation before it rewrites anything. A mass ' +
+      'rewrite is the signature of a misconfigured chunk policy, and every individual change inside ' +
+      'one looks locally reasonable, so the share is the only place the mistake is visible. The ' +
+      'guard is suppressed on lakes with fewer gradable members than the plan needs for a ' +
+      'percentage to mean anything. Lower it to make convergence ask more often; it never blocks a ' +
+      'confirmed run.',
+    category: 'AI',
+    order: 4,
+    dependsOn: 'EnableDataLakes',
+    // Same rungs as the kill switch it sits beside: an operator tightening or relaxing the guard
+    // usually wants it per lake, and the scheme requires Owner wherever Lake is settable.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
   }),
   EnforceLakeReadGrants: makeBooleanSetting({

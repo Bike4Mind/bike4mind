@@ -90,6 +90,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   setChunkPolicyConflict: vi.fn(),
   computeDataLakeStats: vi.fn(),
   findDataLakeHealthMembers: vi.fn(),
+  findLakeConvergenceMembers: vi.fn(),
   findFileIdsMissingChunkedCharCount: vi.fn(),
   setChunkedCharCount: vi.fn(),
   findFileIdsMissingChunkRollups: vi.fn(),
