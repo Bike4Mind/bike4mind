@@ -182,6 +182,72 @@ describe('DataLakeWizardModal — handleStartUpload offline pre-check', () => {
     expect(btn).not.toBeDisabled();
   });
 
+  // The reported failure (#1817): a hand-typed prefix past the server's 30-char cap used to
+  // leave Start Upload enabled, so the whole upload died on a 422 at the last step.
+  it('disables Start Upload when the tag prefix exceeds the server maximum', () => {
+    useDataLakeWizardStore.setState(state => ({
+      config: { ...state.config, tagPrefix: 'triage-router-dry-run-test-ken-delete-after:' },
+    }));
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    const btn = screen.getByTestId('wizard-start-upload-btn') as HTMLButtonElement;
+    expect(btn).toBeDisabled();
+    btn.click();
+    expect(batchUploadMutate).not.toHaveBeenCalled();
+  });
+
+  // Same inverse as the blank-segment gate: a stored prefix the Config step cannot edit must
+  // not lock its own lake out of uploads.
+  it('leaves Start Upload enabled in append mode even when the inherited prefix is too long', () => {
+    useDataLakeWizardStore.setState(state => ({
+      targetLake: { id: 'lake-1', name: 'Legacy Lake', fileTagPrefix: 'a'.repeat(40) + ':' } as never,
+      config: { ...state.config, tagPrefix: 'a'.repeat(40) + ':' },
+    }));
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('wizard-start-upload-btn')).not.toBeDisabled();
+  });
+
+  // The gate has to size the value the request CARRIES: useBatchUpload closes it with ":",
+  // so 30 colon-less characters arrive as 31 and are refused - the same 422 this fix exists
+  // to prevent, reached by a hand-typed prefix instead of a derived one.
+  it('disables Start Upload when the prefix is at the max but has no trailing colon', () => {
+    useDataLakeWizardStore.setState(state => ({
+      config: { ...state.config, tagPrefix: 'a'.repeat(30) },
+    }));
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    const btn = screen.getByTestId('wizard-start-upload-btn') as HTMLButtonElement;
+    expect(btn).toBeDisabled();
+    btn.click();
+    expect(batchUploadMutate).not.toHaveBeenCalled();
+  });
+
+  // The same rule in the other direction: a bare "a" is submitted as the perfectly legal
+  // "a:", so gating on the field's own length blocked a prefix the server accepts.
+  it('leaves Start Upload enabled for a one-character prefix, which submits as a legal two', () => {
+    useDataLakeWizardStore.setState(state => ({ config: { ...state.config, tagPrefix: 'a' } }));
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('wizard-start-upload-btn')).not.toBeDisabled();
+  });
+
   it('leaves Start Upload enabled when the prefix is free', () => {
     render(
       <TestWrapper>
