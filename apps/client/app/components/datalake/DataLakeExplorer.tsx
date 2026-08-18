@@ -19,6 +19,7 @@ import DataLakeTree from './DataLakeTree';
 import DataLakeChatTree from './DataLakeChatTree';
 import DataLakeArticle from './DataLakeArticle';
 import { resolveEmptyVariant } from './resolveEmptyVariant';
+import { scopeTagCountsToLake } from './scopeTagCountsToLake';
 import DataLakeRail from './DataLakeRail';
 import SelectedLakeHeader from './SelectedLakeHeader';
 import DataLakeRailViewer from './DataLakeRailViewer';
@@ -328,14 +329,12 @@ export default function DataLakeExplorer({
     [lakes, selectedLakeId]
   );
 
-  // Lake scoping is a client-side filter on the SAME tag-counts payload the unscoped tree uses -
-  // every taxonomy tag in a lake is namespaced under its fileTagPrefix, so no extra request is
-  // needed and switching lakes costs nothing.
-  const scopedTagCounts = useMemo(() => {
-    const all = tagCountsData?.tagCounts ?? [];
-    if (!selectedLake) return all;
-    return all.filter(tc => tc.tag.startsWith(selectedLake.fileTagPrefix));
-  }, [tagCountsData, selectedLake]);
+  // Scoping lives in scopeTagCountsToLake (pure + unit-tested, including the prefix-containment
+  // assumption it rests on) rather than inline here.
+  const scopedTagCounts = useMemo(
+    () => scopeTagCountsToLake(tagCountsData?.tagCounts ?? [], selectedLake),
+    [tagCountsData, selectedLake]
+  );
   const tree = useMemo(() => buildTagTree(scopedTagCounts), [scopedTagCounts]);
 
   // Derive the current leaf tag from breadcrumb + tree state. A branch node (has children) can
