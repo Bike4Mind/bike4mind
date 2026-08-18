@@ -186,10 +186,11 @@ export const transferLakeOwnership = async (
   // `grant-curator` - naming an authority this function explicitly forbids from transferring. That
   // is reachable through this very function: a prior transfer DEMOTES each former owner to curator,
   // so a creator who is also an org admin ends up holding exactly that grant. `manageRung` is an
-  // authorization fact, so it must come from the branch that actually authorized the call.
+  // authorization fact, so it must come from the branch that actually authorized the call - which is
+  // `resolveLakeTransferAuthority` above, the one rule this gate and the transfer picker share.
   const manageRung = actor.isAdmin
     ? 'platform-admin'
-    : isOwner
+    : authority.isOwner
       ? grants.some(g => g.principalType === 'user' && g.principalId === actor.userId && g.role === 'owner')
         ? 'grant-owner'
         : 'creator'

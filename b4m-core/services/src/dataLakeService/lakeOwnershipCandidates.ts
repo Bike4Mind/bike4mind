@@ -45,6 +45,13 @@ export function isOrgOwnershipCandidate(
 export interface LakeTransferAuthority {
   allowed: boolean;
   /**
+   * Whether the actor is an effective owner (grant-superseded creator). Exposed rather than kept
+   * internal because it is an AUTHORIZATION fact callers must not re-derive: the audit trail records
+   * which rung authorized a transfer, and re-deciding that separately from the gate that allowed it
+   * is how a record ends up naming an authority the gate never used.
+   */
+  isOwner: boolean;
+  /**
    * True when the ONLY thing authorizing the actor is the org-admin rung - not ownership, not
    * platform admin. Such an actor may reassign the lake to another member but not to themselves;
    * see the consent guard in `transferLakeOwnership`.
@@ -67,12 +74,13 @@ export function resolveLakeTransferAuthority(
   actor: ManageActor,
   grants: readonly LakeGrant[] = []
 ): LakeTransferAuthority {
-  if (isFallbackLake(lake)) return { allowed: false, viaOrgAdminOnly: false };
+  if (isFallbackLake(lake)) return { allowed: false, isOwner: false, viaOrgAdminOnly: false };
   const isOwner = isEffectiveOwner(lake, actor, grants);
   const lakeOrg = normalizeId(lake.organizationId);
   const isOrgAdminOfLake = !!lakeOrg && (actor.administeredOrgIds ?? []).includes(lakeOrg);
   return {
     allowed: !!actor.isAdmin || isOwner || isOrgAdminOfLake,
+    isOwner,
     viaOrgAdminOnly: !actor.isAdmin && !isOwner && isOrgAdminOfLake,
   };
 }

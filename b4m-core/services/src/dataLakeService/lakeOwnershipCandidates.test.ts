@@ -106,6 +106,17 @@ describe('resolveLakeTransferAuthority', () => {
     );
   });
 
+  it('reports isOwner, which the audit trail records the transfer rung from', () => {
+    // Must come from the same call that authorized the transfer: re-deriving it separately is how a
+    // config-change record ends up naming a rung the gate never used.
+    expect(resolveLakeTransferAuthority(lake(), creator).isOwner).toBe(true);
+    expect(resolveLakeTransferAuthority(lake(), { userId: 'root', isAdmin: true }).isOwner).toBe(false);
+    expect(
+      resolveLakeTransferAuthority(lake({ id: DATA_LAKES[0].id }), creator).isOwner,
+      'a fallback lake authorizes nobody, so it must not report ownership either'
+    ).toBe(false);
+  });
+
   it('flags the org-admin-only rung, which the consent guard keys off', () => {
     const orgAdmin: ManageActor = { userId: 'orgAdmin', isAdmin: false, administeredOrgIds: ['orgA'] };
     expect(resolveLakeTransferAuthority(lake(), orgAdmin).viaOrgAdminOnly).toBe(true);
