@@ -14,6 +14,7 @@ import { Logger } from '@bike4mind/observability';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { isSessionActivatablePromptId } from '@server/utils/sessionActivatablePrompts';
 
 // The canonical single READ gate observes the read-time grant cutover (#1673): its assertLakeAccess
@@ -68,7 +69,9 @@ const handler = baseApi()
     });
     dataLakeService.assertLakeWritable(lake);
 
-    const updated = await dataLakeService.updateDataLake(ctx, lake.id, params, {
+    // An API-key PUT is attributed to the KEY, with its owner kept findable in the audit row.
+    const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
+    const updated = await dataLakeService.updateDataLake(actor, lake.id, params, {
       db: {
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
@@ -88,7 +91,8 @@ const handler = baseApi()
     });
     dataLakeService.assertLakeWritable(lake);
 
-    const archived = await dataLakeService.archiveDataLake(ctx, lake.id, {
+    const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
+    const archived = await dataLakeService.archiveDataLake(actor, lake.id, {
       db: {
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
