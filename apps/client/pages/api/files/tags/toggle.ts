@@ -9,6 +9,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { fileTagRepository } from '@bike4mind/database';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, unknown>(async (req, res) => {
@@ -43,6 +44,7 @@ const handler = baseApi().post(
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
         users: userRepository,
+        ...lakeConfigAuditDb,
       },
       logger: req.logger,
     });

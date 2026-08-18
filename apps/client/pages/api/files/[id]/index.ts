@@ -26,6 +26,7 @@ import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import { Request } from 'express';
 import { Types } from 'mongoose';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
 const handler = baseApi()
   .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
@@ -150,6 +151,7 @@ const handler = baseApi()
               fabFiles: fabFileRepository,
               dataLakes: dataLakeRepository,
               dataLakeAccessGrants: dataLakeAccessGrantRepository,
+              ...lakeConfigAuditDb,
             },
             logger: req.logger,
             storage: {
@@ -269,7 +271,10 @@ const handler = baseApi()
     if (deleteAction === 'deleted') {
       await recomputeStatsForLakeTags(
         (fabFile?.tags ?? []).map(tag => tag?.name),
-        { logger: req.logger }
+        {
+          logger: req.logger,
+          actor: { userId: req.user.id, isAdmin: !!req.user.isAdmin },
+        }
       );
     }
 

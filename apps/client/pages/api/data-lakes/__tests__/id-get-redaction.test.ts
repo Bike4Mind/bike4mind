@@ -29,6 +29,14 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
+  // The config-audit repos this route wires (see lakeConfigAuditDb). Stubbed rather than
+  // omitted because the mock replaces the whole module: a missing export is an import-time
+  // failure, not a silent undefined.
+  lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
+  adminSettingsRepository: {
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
   dataLakeBatchRepository: {},
   fabFileRepository: {},
   dataLakeAccessGrantRepository: {

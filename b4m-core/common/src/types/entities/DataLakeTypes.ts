@@ -158,7 +158,8 @@ export interface IDataLake {
    * membership (addFileToLake/removeFileFromDataLake) changes the lake's CONTENT rather than its
    * configuration and is attributed per file; recomputeLakeStats is UNATTRIBUTED BY DESIGN rather
    * than operator-free (a tag edit, a file toggle or a batch completion drives it, and it can flip
-   * status via activateIfDraft - it simply has no actor parameter to stamp with); the lake-memory
+   * status via activateIfDraft - it takes an optional actor only to attribute the config-change
+   * event that flip emits, and deliberately never writes this stamp); the lake-memory
    * lease is genuine headless bookkeeping; and resetEmbeddingSpend moves a cost meter, not an
    * answering behavior. So this reads as "who last changed how this lake is configured", never
    * "who last touched this lake in any way".

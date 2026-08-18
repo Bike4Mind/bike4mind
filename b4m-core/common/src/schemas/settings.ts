@@ -13,6 +13,11 @@ import {
   LAKE_ACCESS_QUERY_TEXT_RETENTION_MAX_DAYS,
   LAKE_ACCESS_QUERY_TEXT_RETENTION_MIN_DAYS,
 } from '../constants/lakeAccessAudit';
+import {
+  LAKE_CONFIG_AUDIT_RETENTION_DEFAULT_DAYS,
+  LAKE_CONFIG_AUDIT_RETENTION_FLOOR_DAYS,
+  LAKE_CONFIG_AUDIT_RETENTION_MAX_DAYS,
+} from '../constants/lakeConfigAudit';
 import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '../constants/forcedRetrieval';
 import { CHAT_MODELS, ChatModels } from '../models';
 import {
@@ -305,6 +310,7 @@ export const SettingKeySchema = z.enum([
   // LAKE ACCESS AUDIT SETTINGS
   'LakeAccessAuditRetentionDays',
   'LakeAccessQueryTextRetentionDays',
+  'LakeConfigAuditRetentionDays',
 
   // New MaxContentLength setting
   'MaxContentLength',
@@ -1727,12 +1733,14 @@ export const API_SERVICE_GROUPS = {
   },
   DATA_LAKE_AUDIT: {
     id: 'dataLakeAuditService',
-    name: 'Data Lake Access Audit',
-    description: 'Retention for the lake access audit trail and its opt-in query-text log',
+    name: 'Data Lake Audit',
+    description:
+      'Retention for the lake audit trail: who READ a lake (plus the opt-in query-text log) and who CHANGED its configuration',
     icon: 'Security',
     settings: [
       { key: 'LakeAccessAuditRetentionDays', order: 1 },
       { key: 'LakeAccessQueryTextRetentionDays', order: 2 },
+      { key: 'LakeConfigAuditRetentionDays', order: 3 },
     ],
   },
   // Note: CONTEXT_TELEMETRY settings are managed in the Context Inspector tab (Admin UI)
@@ -3200,6 +3208,25 @@ export const settingsMap = {
     category: 'SecOps',
     group: API_SERVICE_GROUPS.DATA_LAKE_AUDIT.id,
     order: 2,
+  }),
+  LakeConfigAuditRetentionDays: makeNumberSetting({
+    key: 'LakeConfigAuditRetentionDays',
+    name: 'Lake Config Change Audit Retention (days)',
+    defaultValue: LAKE_CONFIG_AUDIT_RETENTION_DEFAULT_DAYS,
+    // Same enforcement shape as the access retention above: the admin API rejects a save below
+    // this, and the write path (lakeConfigChangeEventRepository.record) clamps to it
+    // unconditionally regardless of what is stored.
+    min: LAKE_CONFIG_AUDIT_RETENTION_FLOOR_DAYS,
+    max: LAKE_CONFIG_AUDIT_RETENTION_MAX_DAYS,
+    description:
+      'How long a lake CONFIG-change event (who changed a lake, what they changed, and which ' +
+      'manage rung authorized it) is retained, in days. Floored at 1095 days - deliberately ' +
+      'longer than the access-audit retention above, because a config change is rare and alters ' +
+      'every future answer the lake gives, where a read is one turn. Platform-wide, not ' +
+      'per-organization, until a scoped settings resolver exists.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.DATA_LAKE_AUDIT.id,
+    order: 3,
   }),
   // Data-lake cost governance. These are SPEND levers, not scan budgets: 0 is a valid value
   // meaning "stop spending" (min: 0, unlike the search budgets above), the defaults apply only

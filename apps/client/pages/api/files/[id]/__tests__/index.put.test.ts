@@ -13,6 +13,11 @@ const h = vi.hoisted(() => ({
   find: vi.fn(),
   setStats: vi.fn(),
   activateIfDraft: vi.fn(),
+  // The config-audit half. Stubbed because this spec spreads the REAL @bike4mind/database, so an
+  // un-overridden repository here is a Mongo-backed call with no connection behind it.
+  recordConfigChange: vi.fn().mockResolvedValue({}),
+  findBySettingNames: vi.fn().mockResolvedValue([]),
+  findAll: vi.fn().mockResolvedValue([]),
 }));
 
 // Callable chain routed by req.method, same shape as the batch/generate-presigned-urls-batch
@@ -46,7 +51,14 @@ vi.mock('@server/utils/storage', () => ({
 vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/database')>()),
   changeStorageSize: vi.fn(),
-  dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag, find: h.find, setStats: h.setStats },
+  dataLakeRepository: {
+    findByDatalakeTag: h.findByDatalakeTag,
+    find: h.find,
+    setStats: h.setStats,
+    // Wired so the draft -> active flip is reachable at all; the hoisted spy existed but nothing
+    // routed to it, so no test could drive an activation.
+    activateIfDraft: h.activateIfDraft,
+  },
   // Stubbed (not the real, Mongo-backed repository): the real assertCanWriteDataLakeTags gate
   // reaches this for its grant-supersession check, and a real repository call here has no DB
   // connection to answer against and hangs the suite on a buffering timeout.
@@ -69,7 +81,10 @@ vi.mock('@bike4mind/database', async importOriginal => ({
     computeDataLakeStats: h.computeDataLakeStats,
   },
   fileTagRepository: {},
-  adminSettingsRepository: {},
+  // Retention lookup for the config-audit event. Present as real stubs rather than `{}` so the
+  // resolver reads its own no-rows answer instead of failing into the floor default by accident.
+  adminSettingsRepository: { findBySettingNames: h.findBySettingNames, findAll: h.findAll },
+  lakeConfigChangeEventRepository: { record: h.recordConfigChange },
   sessionRepository: {},
   userRepository: {},
   withTransaction: (fn: () => Promise<unknown>) => fn(),
@@ -204,6 +219,36 @@ describe('PUT /api/files/[id] - data-lake tags', () => {
       'acme:uncategorized',
       META,
     ]);
+  });
+
+  // The wiring pin for this route's ...lakeConfigAuditDb spread, written as BEHAVIOUR: this spec runs
+  // the real updateFabFile (no @bike4mind/services mock), so there is no call whose adapters could be
+  // inspected. Driving the join instead pins the whole chain - route spread, service forwarding, and
+  // the activation branch that emits the row.
+  it('records the auto-activate when a joining file publishes a draft lake', async () => {
+    h.findByDatalakeTag.mockResolvedValue({ ...LAKE, status: 'draft' });
+    h.findAccessibleById.mockResolvedValue(fabFile({ tags: [] }));
+    makeStatefulFabFile({ id: FILE_ID, userId: 'u1', tags: [] });
+    // A lake with a member is by definition no longer a draft - fileCount > 0 is what makes the
+    // flip eligible, which is why the suite default of 0 leaves every other case unaffected.
+    h.computeDataLakeStats.mockResolvedValue({ fileCount: 1, totalSizeBytes: 12, totalChunkedChars: 0 });
+    h.activateIfDraft.mockResolvedValue(true);
+    const { res } = makeRes();
+
+    await run({ tags: [{ name: META, strength: 1 }] }, res);
+
+    expect(h.recordConfigChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dataLakeId: 'lake-1',
+        action: 'auto-activate',
+        principalKind: 'user',
+        principalId: 'u1',
+        // `system` even though a real user drove it: the rung records what AUTHORIZED the write, and
+        // activateIfDraft checks nothing (see recomputeLakeStats).
+        manageRung: 'system',
+        changes: [expect.objectContaining({ field: 'status', before: 'draft', after: 'active' })],
+      })
+    );
   });
 
   it('does not change tags and never looks a lake up when tags is omitted (a rename)', async () => {
