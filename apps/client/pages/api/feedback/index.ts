@@ -97,18 +97,24 @@ const handler = baseApi()
         { ability: req.ability }
       );
 
-    // Send feedback to Slack if enabled
+    // Send feedback to Slack if enabled. This is a notification side-effect on an already-saved
+    // record -- a Slack outage must not turn a successful save into a 5xx that prompts a duplicate
+    // retry, so log and continue rather than let a rejection propagate.
     if (getSettingsValue('EnableFeedBackToSlack', settings)) {
       console.log('Sending feedback to Slack is enabled');
-      await postFeedbackToSlack(
-        type || 'CS',
-        organization,
-        newFeedback.username,
-        newFeedback.userEmail ?? '',
-        newFeedback.userId,
-        content,
-        promptMetaForExternalEgress ? JSON.stringify(promptMetaForExternalEgress) : 'No prompt meta'
-      );
+      try {
+        await postFeedbackToSlack(
+          type || 'CS',
+          organization,
+          newFeedback.username,
+          newFeedback.userEmail ?? '',
+          newFeedback.userId,
+          content,
+          promptMetaForExternalEgress ? JSON.stringify(promptMetaForExternalEgress) : 'No prompt meta'
+        );
+      } catch (error) {
+        req.logger.error('Failed to post feedback to Slack', error);
+      }
     }
 
     // Find all of the settings that have a tag 'feedbackEmail'
@@ -116,7 +122,8 @@ const handler = baseApi()
 
     console.log(`Sending feedback to all of these folks: ${feedbackEmails}`);
 
-    // Send Feedback to Email
+    // Send Feedback to Email. Same reasoning as the Slack block above: a rejected publish must not
+    // turn a successful save into a 5xx.
     if (getSettingsValue('EnableFeedBackToEmail', settings) && feedbackEmails.length > 0) {
       console.log('Sending feedback to email is enabled');
       const sanitizedContent = sanitizeHtml(content);
@@ -128,12 +135,13 @@ const handler = baseApi()
         ? sanitizeHtml(JSON.stringify(promptMetaForExternalEgress, null, 2))
         : '';
 
-      await Promise.all(
-        feedbackEmails.map((email: string) =>
-          EmailEvents.Send.publish({
-            to: email,
-            subject: 'New Feedback Received',
-            body: `
+      try {
+        await Promise.all(
+          feedbackEmails.map((email: string) =>
+            EmailEvents.Send.publish({
+              to: email,
+              subject: 'New Feedback Received',
+              body: `
               <!DOCTYPE html>
               <html lang="en" xmlns="http://www.w3.org/1999/xhtml">
               <head>
@@ -256,9 +264,12 @@ const handler = baseApi()
               </body>
               </html>
               `,
-          })
-        )
-      );
+            })
+          )
+        );
+      } catch (error) {
+        req.logger.error('Failed to send feedback notification email', error);
+      }
     }
 
     return res.status(201).send(newFeedback);
