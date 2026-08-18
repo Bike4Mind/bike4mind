@@ -22,10 +22,11 @@ vi.mock('@server/middlewares/requireStripeWebhook', () => ({
   requireStripeWebhook: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 
-vi.mock('@bike4mind/utils', () => ({
-  BadRequestError: class BadRequestError extends Error {},
-  NotFoundError: class NotFoundError extends Error {},
-}));
+// Deliberately NOT mocking @bike4mind/utils: the real BadRequestError carries
+// statusCode 400, which lets the rejection test assert the status the client would
+// actually receive rather than only the message.
+import { BadRequestError } from '@bike4mind/utils';
+import { HttpStatus } from '@bike4mind/common';
 
 const mockOrgFindById = vi.fn();
 const mockOrgUpdate = vi.fn();
@@ -104,6 +105,12 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
     await expect((handler as HandlerFn)(req, res)).rejects.toThrow(
       'callbackUrl must point to the deployed application origin'
     );
+    // Assert the status the caller actually gets, not just the message: a regression in
+    // which error class is thrown would keep the message and silently change the response.
+    await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
+      constructor: BadRequestError,
+      statusCode: HttpStatus.BadRequest,
+    });
 
     expect(mockIsAllowedCallbackOrigin).toHaveBeenCalledWith('https://attacker.example.net/phish');
   });
