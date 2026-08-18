@@ -19,6 +19,11 @@ import { setupMongoTest } from '../../__test__/utils';
  *
  * So this file composes the real repositories the way the request path does rather than asserting
  * on either predicate alone: the bug lived in the seam between them, not inside either one.
+ *
+ * The org half of the invariant - that the two predicates return the SAME set, so a selectable org
+ * is never an unlistable one - is pinned next to those predicates in
+ * `OrganizationModel.membershipOrgIds.test.ts`. Keep the two in mind together: this file proves the
+ * lake read path honors the membership set, that one proves the set matches what the switcher offers.
  */
 
 const orgLake = (slug: string, organizationId: string, createdByUserId: string): Omit<IDataLake, 'id'> =>
@@ -84,40 +89,5 @@ describe('data-lake org scope: switcher selection agrees with the manager list (
     await dataLakeRepository.create(orgLake('a-lake', String(orgA._id), 'creator'));
 
     expect(await listableSlugs('stranger')).toEqual([]);
-  });
-
-  it('admits every org the switcher offers, so a selectable org is never an unlistable one', async () => {
-    // The invariant that makes the two predicates safe to keep separate. Fixture spans all four
-    // membership shapes so a new arm added to one predicate and not the other fails here.
-    const owned = await Organization.create({ name: 'owned', userId: 'u1', users: [], groups: [] });
-    const viaAcl = await orgWithMember('via-acl', 'u1');
-    await Organization.create({ name: 'unrelated', userId: 'someone-else', users: [], groups: [] });
-    // Group-mediated only: absent from BOTH predicates today. Pinned so that widening the
-    // switcher to group membership without widening the read set (or vice versa) fails loudly -
-    // that is precisely the drift that produced #1648.
-    await Organization.create({
-      name: 'via-group',
-      userId: 'someone-else',
-      users: [],
-      groups: [{ groupId: 'g1', permissions: ['read'] }],
-    });
-
-    const switcherOrgIds = (
-      await organizationRepository.search(
-        '',
-        { userId: 'u1' },
-        { page: 1, limit: 100 },
-        {
-          field: 'name',
-          direction: 'asc',
-        }
-      )
-    ).data
-      .map(o => String(o.id ?? o._id))
-      .sort();
-    const readableOrgIds = (await organizationRepository.findMembershipOrgIds('u1')).sort();
-
-    expect(switcherOrgIds).toEqual([String(owned._id), String(viaAcl._id)].sort());
-    expect(readableOrgIds).toEqual(switcherOrgIds);
   });
 });
