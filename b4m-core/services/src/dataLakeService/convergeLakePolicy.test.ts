@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { DEFAULT_CONVERGENCE_WAVE, planLakeConvergenceRun, type ConvergenceLake } from './convergeLakePolicy';
+import {
+  DEFAULT_CONVERGENCE_WAVE,
+  planLakeConvergenceRun,
+  redactCrossLakeIdentities,
+  type ConvergenceLake,
+  type LakeConvergencePlanReport,
+} from './convergeLakePolicy';
 
 const lake: ConvergenceLake = {
   id: 'lake-1',
@@ -222,5 +228,68 @@ describe('planLakeConvergenceRun', () => {
     const { wave } = await planLakeConvergenceRun(lake, makeAdapters(members));
 
     expect(wave).toHaveLength(DEFAULT_CONVERGENCE_WAVE);
+  });
+
+  // The cross-lake check is per-member and DB-backed, on an endpoint the manager panel opens with.
+  // Members of one lake share an owner and a tag set, so the reads must collapse - uncached this is
+  // one findByDatalakeTag per meta-tag per member plus an owner query each, up to the wave bound.
+  it('reads each lake once per run rather than once per member', async () => {
+    const members = Array.from({ length: 20 }, (_, i) => member(`f${i}`, 2100));
+    const adapters = makeAdapters(members);
+
+    const { wave } = await planLakeConvergenceRun(lake, adapters, 20);
+
+    expect(wave).toHaveLength(20);
+    expect(adapters.db.dataLakes.findByDatalakeTag).toHaveBeenCalledTimes(1);
+    expect(adapters.db.dataLakes.find).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The read gate is deliberately wider than manage - assertLakeAccess has a public arm that crosses
+// orgs - while the conflicting lakes named here are resolved by membership with no access filter at
+// all. So a member tagged into both a public lake and a stranger's private one would otherwise hand
+// every reader of the public lake the private lake's id, name and policy.
+describe('redactCrossLakeIdentities', () => {
+  const planWithConflict = (): LakeConvergencePlanReport =>
+    ({
+      refusal: null,
+      policy: { requiredTarget: 512, effectiveRequiredTarget: 512, policyChars: 3072 },
+      membersConsidered: 3,
+      convergeableCount: 1,
+      waveSize: 0,
+      changeShare: 0.33,
+      requiresConfirmation: false,
+      bulkChangeShareThreshold: 0.25,
+      skipped: { conformant: 2, unmeasured: 0, indexingInFlight: 0, previouslyFailed: 0, irreducibleOvershoot: 0 },
+      crossLakeConflicts: [
+        {
+          fabFileId: 'shared',
+          fileName: 'shared.pdf',
+          conflictingLakes: [{ lakeId: 'lake-2', name: 'Acme Q3 Diligence', effectiveRequiredTarget: 1024 }],
+        },
+      ],
+      crossLakeConflictCount: 1,
+      scanTruncated: false,
+    }) as LakeConvergencePlanReport;
+
+  it('strips the conflicting lake id and name, keeping the target that explains the refusal', () => {
+    const redacted = redactCrossLakeIdentities(planWithConflict());
+
+    expect(redacted.crossLakeConflicts[0].conflictingLakes).toEqual([{ effectiveRequiredTarget: 1024 }]);
+  });
+
+  it('leaves the counts and the caller-visible file identity intact', () => {
+    const redacted = redactCrossLakeIdentities(planWithConflict());
+
+    expect(redacted.crossLakeConflictCount).toBe(1);
+    expect(redacted.convergeableCount).toBe(1);
+    expect(redacted.crossLakeConflicts[0]).toMatchObject({ fabFileId: 'shared', fileName: 'shared.pdf' });
+  });
+
+  it('does not mutate the report it was given, so the manage path still has the identities', () => {
+    const plan = planWithConflict();
+    redactCrossLakeIdentities(plan);
+
+    expect(plan.crossLakeConflicts[0].conflictingLakes[0]).toMatchObject({ lakeId: 'lake-2' });
   });
 });

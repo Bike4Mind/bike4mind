@@ -55,6 +55,7 @@ const h = vi.hoisted(() => {
     recomputeFileChunkPolicyConflict: vi.fn(async () => null),
     resolveScopedSetting: vi.fn(async () => ({ value: 512, source: 'platform' })),
     sendToQueue: vi.fn(),
+    fabFileUpdate: vi.fn(async () => null),
   };
 });
 
@@ -70,6 +71,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {
     shareable: { findAccessibleById: h.findAccessibleById },
     markFailedIfNotAlready: h.markFailedIfNotAlready,
+    update: h.fabFileUpdate,
   },
   // Deps for the convergence kill switch (#1676), built eagerly on every message. Never exercised
   // by these user-origin payloads (origin absent -> user work short-circuits before any read), but
@@ -130,6 +132,11 @@ vi.mock('@bike4mind/common', () => {
   return {
     isSupportedEmbeddingModel: vi.fn(() => true),
     DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT: 50,
+    // Real value, not a placeholder: the halt path writes it and the assertion below is what keeps
+    // the handler's marker and the evaluators' predicate reading the same string.
+    CONVERGENCE_PAUSED_CHUNK_NOTE:
+      'Re-chunking paused by the data-lake convergence kill switch - its passages were removed and are ' +
+      'rebuilt when convergence resumes.',
     ChunkClaimLostError,
     // Mirrors the REAL dual-check in errors.ts exactly (not just re-declaring the class) - an
     // `instanceof`-only mock here would make F2's regression test below tautological, the same gap
@@ -728,5 +735,57 @@ describe('fabFileChunk handler - chunk computation runs outside the transaction 
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
     expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
     expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
+  });
+});
+
+// The kill switch's producer-side check refuses a run while the switch is already ON, so this is
+// the case that reaches here: the switch was flipped WHILE a wave was in flight, which is the
+// switch's whole purpose. By now the producer has already deleted these files' passages.
+describe('fabFileChunk handler - convergence kill switch', () => {
+  const PAUSED_CHUNK_NOTE =
+    'Re-chunking paused by the data-lake convergence kill switch - its passages were removed and are ' +
+    'rebuilt when convergence resumes.';
+  const convergencePayload = { fabFileId: 'ff1', userId: 'u1', origin: 'convergence', lakeId: undefined };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.getSettingsValue.mockImplementation(async (key: string) =>
+      key === 'PauseLakeConvergence' ? true : 'text-embedding-3-small'
+    );
+    h.findAccessibleById.mockResolvedValue({ id: 'ff1', batchId: 'batch-1' });
+  });
+
+  it('drops the message without chunking when the switch is on', async () => {
+    await expect(dispatch(makeEvent(convergencePayload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+    expect(h.prepareFabFileChunks).not.toHaveBeenCalled();
+    expect(h.fabFileFindOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  // Without this the file sits at chunkCount:0 with no error - a shape indistinguishable from an
+  // image or a pending upload, which is how QA's stranded document fell out of health's denominator,
+  // out of the convergence plan and past the retrieval withhold all at once.
+  it('marks the file so every reader can tell "passages deleted" from "never had any"', async () => {
+    await dispatch(makeEvent(convergencePayload), {} as never, mockLogger);
+
+    expect(h.fabFileUpdate).toHaveBeenCalledWith({ id: 'ff1', notes: PAUSED_CHUNK_NOTE });
+  });
+
+  // The marker is best-effort: failing the delivery would only retry it against a switch that is
+  // still on. An unmarked file is the pre-existing invisible state, and the ERROR log is its trail.
+  it('still drops the message when the marker write fails, and logs it', async () => {
+    h.fabFileUpdate.mockRejectedValue(new Error('mongo down'));
+
+    await expect(dispatch(makeEvent(convergencePayload), {} as never, mockLogger)).resolves.toBeUndefined();
+    expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('could not mark ff1'));
+  });
+
+  // A customer upload carries no origin and must never be halted - and must not be marked either.
+  it('never touches a user upload', async () => {
+    h.chunkFabfile.mockResolvedValue([]);
+
+    await dispatch(makeEvent({ fabFileId: 'ff1', userId: 'u1' }), {} as never, mockLogger);
+
+    expect(h.fabFileUpdate).not.toHaveBeenCalledWith(expect.objectContaining({ notes: PAUSED_CHUNK_NOTE }));
   });
 });

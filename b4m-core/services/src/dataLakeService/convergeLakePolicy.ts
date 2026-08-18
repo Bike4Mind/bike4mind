@@ -60,8 +60,12 @@ export type LakeConvergenceRefusal = 'policyInherited';
 export type CrossLakeConflictMember = {
   fabFileId: string;
   fileName?: string;
-  /** The disagreeing lakes, with the effective target each requires. */
-  conflictingLakes: { lakeId?: string; name: string; effectiveRequiredTarget: number }[];
+  /**
+   * The disagreeing lakes, with the effective target each requires. `lakeId` and `name` identify a
+   * THIRD-PARTY lake the caller may have no access to at all, so they are present only on the
+   * manage-gated path - see `redactCrossLakeIdentities`.
+   */
+  conflictingLakes: { lakeId?: string; name?: string; effectiveRequiredTarget: number }[];
 };
 
 export type LakeConvergencePlanReport = {
@@ -102,6 +106,31 @@ export type LakeConvergencePlanReport = {
 
 /** How many conflicting members the report names before it stops, so a payload stays bounded. */
 const CROSS_LAKE_CONFLICTS_RETURNED = 50;
+
+/**
+ * Strip third-party lake IDENTITIES from a plan, leaving the target each disagreeing lake requires.
+ *
+ * MUST be applied on every READ-gated exit, for the same reason `redactLakeForActor` exists: read
+ * access is deliberately wider than manage - `assertLakeAccess` has a public arm that crosses orgs -
+ * so anyone who can read a PUBLISHED lake reaches this report. The conflicting lakes it names are
+ * not resolved through any access filter at all (`findMemberLakesForFile` enumerates by membership
+ * signal), so a member tagged into both a public lake P and a stranger's private lake Q would
+ * otherwise hand every reader of P the id, display name and chunk policy of Q. Lake names are
+ * customer- and project-identifying.
+ *
+ * `effectiveRequiredTarget` is kept: it is the only part that explains the refusal, and it names
+ * nothing. The exact identities stay on the manage-gated POST, whose caller can act on them.
+ */
+export function redactCrossLakeIdentities(report: LakeConvergencePlanReport): LakeConvergencePlanReport {
+  return {
+    ...report,
+    crossLakeConflicts: report.crossLakeConflicts.map(member => ({
+      fabFileId: member.fabFileId,
+      fileName: member.fileName,
+      conflictingLakes: member.conflictingLakes.map(({ effectiveRequiredTarget }) => ({ effectiveRequiredTarget })),
+    })),
+  };
+}
 
 export type ConvergenceLake = Pick<
   IDataLakeDocument,
@@ -174,6 +203,46 @@ async function resolveBulkChangeShareThreshold(
   return Math.min(Math.max(pct, 1), 100) / 100;
 }
 
+type LakeReads = Pick<IDataLakeRepository, 'find' | 'findByDatalakeTag'>;
+
+/**
+ * Per-run read cache for the cross-lake check, and the reason that check is affordable.
+ *
+ * `findMemberLakesForFile` issues one `findByDatalakeTag` per meta-tag plus - because its prefix arm
+ * fires whenever any tag contains ':', which every lake member's own `datalake:` tag does - a
+ * `find({ createdByUserId })` for the file's owner. Uncached that is a per-member cost paid on a
+ * read-gated endpoint the manager panel opens with, and on a POST it is up to `MAX_CONVERGENCE_WAVE`
+ * of them against a small connection pool. Members of ONE lake overwhelmingly share both an owner
+ * and a tag set, so nearly all of it collapses to a handful of round trips.
+ *
+ * Caches the PROMISE, not the resolved value, so identical reads issued before the first resolves
+ * share it too. Scoped to a single plan run - a fresh cache per call, never module state, so no
+ * request can serve another's view of the lakes collection.
+ */
+function memoizeLakeReads(dataLakes: LakeReads): LakeReads {
+  const byFilter = new Map<string, Promise<IDataLakeDocument[]>>();
+  const byTag = new Map<string, Promise<IDataLakeDocument | null>>();
+  return {
+    find: filter => {
+      // Key on the serialized filter rather than a hand-picked field: correct for whatever shape
+      // findMemberLakesForFile grows, and it degrades to a miss rather than a wrong hit.
+      const key = JSON.stringify(filter);
+      const hit = byFilter.get(key);
+      if (hit) return hit;
+      const pending = dataLakes.find(filter);
+      byFilter.set(key, pending);
+      return pending;
+    },
+    findByDatalakeTag: tag => {
+      const hit = byTag.get(tag);
+      if (hit) return hit;
+      const pending = dataLakes.findByDatalakeTag(tag);
+      byTag.set(tag, pending);
+      return pending;
+    },
+  };
+}
+
 /**
  * Refuse the members whose repair would start an oscillation.
  *
@@ -203,11 +272,15 @@ async function partitionCrossLakeConflicts(
 ): Promise<{ safe: ConvergenceCandidate[]; conflicts: CrossLakeConflictMember[] }> {
   const safe: ConvergenceCandidate[] = [];
   const conflicts: CrossLakeConflictMember[] = [];
+  // Kept sequential on purpose even with the cache: after the first member or two every read is a
+  // cache hit, so the round trips - not the iteration - were the cost, and fanning out would put a
+  // wave's worth of cold reads on the pool at once for no gain.
+  const lakeReads = memoizeLakeReads(db.dataLakes);
 
   for (const candidate of candidates) {
     const memberLakes = await findMemberLakesForFile(
       { id: candidate.fabFileId, userId: candidate.userId, tags: candidate.tags },
-      db.dataLakes
+      lakeReads
     );
     const disagreeing = buildLakeRequirements(memberLakes, embeddingModel).filter(
       requirement =>
@@ -263,7 +336,7 @@ export async function planLakeConvergenceRun(
     changeShare: 0,
     requiresConfirmation: false,
     bulkChangeShareThreshold,
-    skipped: { conformant: 0, unmeasured: 0, indexingInFlight: 0, previouslyFailed: 0 },
+    skipped: { conformant: 0, unmeasured: 0, indexingInFlight: 0, previouslyFailed: 0, irreducibleOvershoot: 0 },
     crossLakeConflicts: [],
     crossLakeConflictCount: 0,
     scanTruncated: false,

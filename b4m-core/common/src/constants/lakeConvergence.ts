@@ -26,7 +26,7 @@
  *    already gone. "Serve stale" is not available. Every refusal here is a member the caller must
  *    report, never one it may quietly drop.
  */
-import { CONVERGENCE_PAUSED_NOTE } from './chunking';
+import { isConvergencePausedNote } from './chunking';
 
 /**
  * Why a member of a convergeable lake was NOT rewritten. Every skipped member lands in exactly one
@@ -53,6 +53,15 @@ export const CONVERGENCE_SKIP_REASONS = [
    * converged" from "these members gave up".
    */
   'previouslyFailed',
+  /**
+   * Its chunks were already built at the policy's target and STILL exceed the policy's character
+   * budget - so a rewrite would reproduce them exactly. See `decideMemberConvergence`'s fourth arm
+   * for why this is a terminal state rather than a violation: the budget is in characters and the
+   * chunker is bounded in tokens, so this predicate is not one a re-chunk can be asked to satisfy.
+   * Reported, never repaired - the fix is an operator lowering the target or the chunker gaining a
+   * character bound, neither of which convergence can do on its own.
+   */
+  'irreducibleOvershoot',
 ] as const;
 export type ConvergenceSkipReason = (typeof CONVERGENCE_SKIP_REASONS)[number];
 
@@ -106,6 +115,13 @@ export type ConvergenceCandidate = {
    * content to the serve cap are repaired before the marginal ones.
    */
   overshootChars: number;
+  /**
+   * This member has NO passages at all - a wave deleted them and the kill switch halted the rebuild.
+   * Outranks `overshootChars` in the wave order: an oversized chunk still returns something, this
+   * returns nothing, and `overshootChars` is 0 here (there is no chunk to measure), which would
+   * otherwise sort the lake's most damaged members last.
+   */
+  passagesRemoved?: boolean;
 };
 
 export type ConvergenceMemberDecision =
@@ -171,7 +187,7 @@ export function isMemberIndexingInFlight(member: {
   notes?: string | null;
 }): boolean {
   const settledByFailure = typeof member.error === 'string' && member.error.length > 0;
-  const settledByKillSwitch = member.notes === CONVERGENCE_PAUSED_NOTE;
+  const settledByKillSwitch = isConvergencePausedNote(member.notes);
   if (settledByFailure || settledByKillSwitch) return false;
   // A null count predates the field; treat it as settled so legacy files stay gradable.
   return typeof member.vectorizedChunkCount === 'number' && member.vectorizedChunkCount < member.chunkCount;
@@ -193,6 +209,30 @@ function positiveOrNull(value: number | null | undefined): number | null {
  *   3. unmeasured         - no fact proves a violation, so refuse rather than guess either way;
  *   4. proven violation   - stamped target differs, or the largest chunk is over the policy size;
  *   5. otherwise          - conformant.
+ *
+ * Arm 4 carries the one non-obvious restriction here, and it is what stops this module from
+ * spending money forever. The two violations it accepts are NOT equally satisfiable:
+ *
+ *  - The TARGET arm is satisfiable by construction. The run asks for `requiredTarget`, the handler
+ *    stamps `effectiveChunkTokenLimit` of it, and this function compares against the same clamp of
+ *    the same value - so one successful pass ends it.
+ *  - The OVERSHOOT arm is not. `policyChars` is a CHARACTER budget derived from the token target by
+ *    an upper-bound estimate (`CHARS_PER_TOKEN_SERVE_BOUND`), while `SmartChunker` is bounded in
+ *    TOKENS only - nothing anywhere enforces a character limit. Text that beats the estimate exists
+ *    and is ordinary (long whitespace runs and padded tables tokenize far denser than the bound
+ *    assumes - see `constants/chunking.ts`), and `maxChunkCharLength` is a MAX over the file's
+ *    chunks, so a single such chunk condemns the whole file.
+ *
+ * So an overshoot that survives a rewrite AT the policy's own target is a fact about the chunker,
+ * not drift: the same input at the same target deterministically produces the same chunks. Left
+ * OR'd with the target arm it would return `converge: true` on identical inputs on every wave, with
+ * no attempt counter and no `error` to catch it - re-tokenizing, deleting, reinserting and
+ * re-embedding the file at full cost, forever. The stamp is the memory that breaks the loop: once
+ * `chunkedPassageTokenTarget` equals the policy's effective target, an overshoot is terminal and
+ * the member is reported as `irreducibleOvershoot` instead.
+ *
+ * This makes the stamp load-bearing for TERMINATION, not just for reporting - which is why
+ * `commitFabFileChunks` writes it inside the same transaction as the chunks it describes.
  */
 export function decideMemberConvergence(
   member: ConvergenceMemberInput,
@@ -207,6 +247,17 @@ export function decideMemberConvergence(
     return { converge: false, fabFileId, reason: 'indexingInFlight' };
   }
 
+  // Passages deleted, rebuild halted: the producer resets a wave's chunk state BEFORE the messages
+  // are handled, so a member the kill switch stops has no chunks and no error. Graded HERE, ahead of
+  // every arm below, because all of their facts are stale in exactly the way that hides it: the
+  // reset preserves `chunkedPassageTokenTarget` but nulls `maxChunkCharLength`, so a member already
+  // repaired to the policy before the halt reads as `conformant` and nothing ever rebuilds it - it
+  // is simply absent from search, from health's denominator and from this plan at the same time.
+  // A proven violation, and repairable by precisely the rewrite convergence performs.
+  if (member.chunkCount === 0 && isConvergencePausedNote(member.notes)) {
+    return { converge: true, fabFileId, userId, fileName, overshootChars: 0, passagesRemoved: true };
+  }
+
   const stampedTarget = positiveOrNull(member.chunkedPassageTokenTarget);
   const maxChunkChars = positiveOrNull(member.maxChunkCharLength);
   if (stampedTarget === null && maxChunkChars === null) {
@@ -217,6 +268,14 @@ export function decideMemberConvergence(
   const overshootChars = maxChunkChars !== null ? Math.max(0, maxChunkChars - policy.policyChars) : 0;
   if (!targetViolates && overshootChars === 0) {
     return { converge: false, fabFileId, reason: 'conformant' };
+  }
+
+  // Overshoot alone, on chunks already built at this policy's target: a rewrite is deterministic
+  // and would land here again. Terminal, not a violation - see the arm-4 note above. A file with no
+  // stamp at all is NOT caught here: nothing has yet proved a pass at this target happened, and its
+  // one rewrite both repairs it and writes the stamp that decides it next time.
+  if (!targetViolates && stampedTarget !== null) {
+    return { converge: false, fabFileId, reason: 'irreducibleOvershoot' };
   }
 
   return { converge: true, fabFileId, userId, fileName, overshootChars };
@@ -231,12 +290,17 @@ export function planLakeConvergence(
   members: ConvergenceMemberInput[],
   policy: LakeConvergencePolicy
 ): LakeConvergencePlan {
-  const gradable = members.filter(m => m.chunkCount > 0);
+  // Chunkless members are excluded because an image or a pending upload carries no retrievable
+  // content - but a member whose passages a HALTED WAVE removed is chunkless for the opposite
+  // reason, and dropping it here is what let it vanish from every surface at once (it also leaves
+  // health's denominator, which filters the same way). Kept, and graded as the violation it is.
+  const gradable = members.filter(m => m.chunkCount > 0 || isConvergencePausedNote(m.notes));
   const skipped: Record<ConvergenceSkipReason, number> = {
     conformant: 0,
     unmeasured: 0,
     indexingInFlight: 0,
     previouslyFailed: 0,
+    irreducibleOvershoot: 0,
   };
   const candidates: ConvergenceCandidate[] = [];
 
@@ -248,6 +312,7 @@ export function planLakeConvergence(
         userId: decision.userId,
         fileName: decision.fileName,
         overshootChars: decision.overshootChars,
+        passagesRemoved: decision.passagesRemoved,
       });
     } else {
       skipped[decision.reason] += 1;
@@ -256,7 +321,13 @@ export function planLakeConvergence(
 
   // Worst-first, then by id so a wave boundary is reproducible across two calls that see the same
   // lake - an owner running a second wave must get the NEXT members, not a reshuffle of the first.
-  candidates.sort((a, b) => b.overshootChars - a.overshootChars || (a.fabFileId < b.fabFileId ? -1 : 1));
+  // Members with no passages at all lead, ahead of any overshoot: they return nothing today.
+  candidates.sort(
+    (a, b) =>
+      Number(b.passagesRemoved ?? false) - Number(a.passagesRemoved ?? false) ||
+      b.overshootChars - a.overshootChars ||
+      (a.fabFileId < b.fabFileId ? -1 : 1)
+  );
 
   return {
     candidates,

@@ -1,4 +1,5 @@
 import {
+  CONVERGENCE_PAUSED_CHUNK_NOTE,
   DATALAKE_TAG_PREFIX,
   DataLakeMembershipScope,
   FabFileChunkPolicyConflict,
@@ -1128,6 +1129,12 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * membership + liveness filter as computeDataLakeStats, and only members that produced chunks
    * (`chunkCount > 0`): a chunkless image or a still-pending upload carries no retrievable content.
    *
+   * ONE exception, and it is the case this report exists for: a member the convergence kill switch
+   * stopped mid-rewrite is chunkless because its passages were DELETED, not because it never had
+   * any. Excluding it made a lake report "Reachable 100%" over the members it still had while a
+   * document sat entirely unsearchable and absent from the drill-down - the green-counters-but-
+   * broken reading the four rules exist to catch. Admitted by its marker so it grades its real zero.
+   *
    * `limit` bounds how many rows reach app memory. It fetches one extra to detect overflow, so the
    * caller can report coverage as partial and log it, rather than silently truncating a percentage.
    */
@@ -1155,7 +1162,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           deletedAt: null,
           archivedAt: null,
           status: { $ne: 'pending' },
-          chunkCount: { $gt: 0 },
+          $or: [{ chunkCount: { $gt: 0 } }, { notes: CONVERGENCE_PAUSED_CHUNK_NOTE }],
         },
       },
       // Deterministic order before the truncation bound, so which members a very large lake reports
@@ -1216,7 +1223,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           deletedAt: null,
           archivedAt: null,
           status: { $ne: 'pending' },
-          chunkCount: { $gt: 0 },
+          // `chunkCount > 0` OR the halted-rewrite marker. A member the kill switch stopped mid-wave
+          // has no chunks BECAUSE ITS OWN WERE DELETED, and excluding it is what let it disappear
+          // from this plan at the same time as from health and from search - repairable by exactly
+          // the rewrite this plan produces, but only if it is allowed to reach the grader.
+          $or: [{ chunkCount: { $gt: 0 } }, { notes: CONVERGENCE_PAUSED_CHUNK_NOTE }],
           // A file a chunk worker is mid-run on is excluded, not refused later: its rollups describe
           // chunks that are already being replaced, so grading them would decide on stale facts.
           isChunking: { $ne: true },

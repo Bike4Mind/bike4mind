@@ -16,7 +16,7 @@
  * a substitute: the chars-per-token ratio swings by corpus, so a customer-facing percentage derived
  * from it is systematically wrong per lake - the exact "vibe" these predicates exist to remove.
  */
-import { CHARS_PER_TOKEN_SERVE_BOUND, CONVERGENCE_PAUSED_NOTE, deriveServeCharBudget } from './chunking';
+import { CHARS_PER_TOKEN_SERVE_BOUND, deriveServeCharBudget, isConvergencePausedNote } from './chunking';
 
 /** The four predicate keys, ordered as stated in #1666. Members name the ones they fail. */
 export const LAKE_HEALTH_PREDICATES = [
@@ -168,7 +168,7 @@ export function evaluateMemberHealth(member: LakeHealthMemberInput, policy: Lake
   const hasError = typeof member.error === 'string' && member.error.length > 0;
   // The kill switch marks an abandoned vectorize with `notes` and never with `error`, so this is the
   // second terminal-stall signal, not a redundant one. See LakeHealthMemberInput.notes.
-  const abandonedByKillSwitch = member.notes === CONVERGENCE_PAUSED_NOTE;
+  const abandonedByKillSwitch = isConvergencePausedNote(member.notes);
 
   // Is the file's vectorization settled, or is it still being indexed? chunk-complete stamps the char
   // rollups (making the file "measured") and zeroes the vector rollups in the SAME write, so between
@@ -263,9 +263,16 @@ export type LakeHealthReport = {
 /**
  * Aggregate per-member results into a lake report. `chunkCount === 0` members (images, still-pending
  * uploads) are excluded: they carry no retrievable content and would otherwise dilute every ratio.
+ *
+ * With ONE exception, and it is the case this report exists for: a member the convergence kill
+ * switch stalled mid-wave is also chunkless, but because its passages were DELETED, not because it
+ * never had any. Excluding it produced the exact green-counters-but-broken reading the four rules
+ * are meant to catch - a lake reporting "Reachable 100%" over the members it still had, while a
+ * document sat entirely unsearchable and absent from `affectedMembers`. Included, it fails P3 with
+ * its real zero and is named in the drill-down.
  */
 export function summarizeLakeHealth(members: LakeHealthMemberInput[], policy: LakeHealthPolicy): LakeHealthReport {
-  const withChunks = members.filter(m => m.chunkCount > 0);
+  const withChunks = members.filter(m => m.chunkCount > 0 || isConvergencePausedNote(m.notes));
   const results = withChunks.map(m => evaluateMemberHealth(m, policy));
 
   const predicates = {

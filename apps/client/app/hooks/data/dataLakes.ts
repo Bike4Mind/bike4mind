@@ -706,7 +706,13 @@ export interface LakeConvergencePlanResponse {
   changeShare: number;
   requiresConfirmation: boolean;
   bulkChangeShareThreshold: number;
-  skipped: { conformant: number; unmeasured: number; indexingInFlight: number; previouslyFailed: number };
+  skipped: {
+    conformant: number;
+    unmeasured: number;
+    indexingInFlight: number;
+    previouslyFailed: number;
+    irreducibleOvershoot: number;
+  };
   crossLakeConflicts: {
     fabFileId: string;
     fileName?: string;
@@ -717,10 +723,15 @@ export interface LakeConvergencePlanResponse {
 }
 
 export type LakeConvergenceRunResponse = LakeConvergencePlanResponse & {
-  /** `noop` = the run was allowed but had nothing it could repair (see the toast for why). */
-  outcome: 'enqueued' | 'noop' | 'confirmationRequired' | 'policyInherited';
+  /**
+   * `noop` = the run was allowed but had nothing it could repair (see the toast for why).
+   * `paused` = the convergence kill switch is on, so the run refused BEFORE touching any file.
+   */
+  outcome: 'enqueued' | 'noop' | 'paused' | 'confirmationRequired' | 'policyInherited';
   detected: number;
   enqueued: number;
+  /** Members reset but never enqueued (every send failed) - out of search with nothing rebuilding them. */
+  stranded: number;
 };
 
 /** Hook: read a lake's convergence plan. Not polled - it is a preview, refreshed by the mutation. */
@@ -750,6 +761,11 @@ export function useConvergeDataLake(dataLakeId: string | null) {
     onSuccess: data => {
       if (data.outcome === 'policyInherited') {
         toast.error('This lake has no chunk policy of its own, so there is nothing to converge toward.');
+      } else if (data.outcome === 'paused') {
+        toast.warning(
+          'Background lake work is paused, so nothing was started. No files were changed - re-run this once ' +
+            'an administrator turns convergence back on.'
+        );
       } else if (data.outcome === 'confirmationRequired') {
         // Not an error toast: the guard fired as designed and the dialog now shows the share.
         toast.warning(
@@ -760,6 +776,16 @@ export function useConvergeDataLake(dataLakeId: string | null) {
         toast.success(
           `Converging ${data.enqueued} file(s) to the lake's chunk policy. ` +
             'They are unsearchable until re-indexing completes.'
+        );
+      } else if (data.stranded > 0) {
+        // Files were reset and then nothing reached the queue. Checked before the two "nothing to
+        // do" branches below: these are sitting at chunked:false / chunkCount:0 with their old chunk
+        // rows orphaned, so the one thing this must not say is that the lake is fine. An error, not
+        // a warning - unlike a cross-lake refusal this is infrastructure failing, and repeating the
+        // run is the action that fixes it.
+        toast.error(
+          `Could not start convergence for ${data.stranded} file(s) - the chunking queue rejected the request. ` +
+            'Those files are out of search until this run is repeated; if it keeps failing, contact an administrator.'
         );
       } else if (data.crossLakeConflictCount > 0) {
         // Must NOT read as "already converged". The lake still has off-policy files; they simply

@@ -439,6 +439,9 @@ const handler = baseApi()
         // unsearchable, and the file names are already in `warning`.
         retrieval_unavailable: {
           indexing_files: search.retrievalUnavailable.indexing.count,
+          // Counted apart from `indexing_files` because waiting does not fix these - see the report
+          // type. A caller that adds them together would tell the user to retry and be wrong.
+          paused_files: search.retrievalUnavailable.paused.count,
           partial: search.retrievalUnavailable.partial,
         },
         // Spread rather than `warning: warning ?? undefined`, so the key is genuinely absent on a

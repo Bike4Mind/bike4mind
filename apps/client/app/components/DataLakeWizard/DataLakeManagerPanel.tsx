@@ -218,6 +218,9 @@ export default function DataLakeManagerPanel() {
           // Absent when withheld from a non-editor OR the lake predates the field; seed the default
           // so the picker always shows a concrete mode (matching how the resolver treats absence).
           groundingMode: l.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE,
+          // null/undefined both mean "no explicit policy" (the lake inherits), which is the state
+          // the field renders as blank - and the state in which this lake never converges.
+          requiredPassageTokenTarget: l.requiredPassageTokenTarget ?? null,
           canManage: !!l.canManage,
           embeddingSpendMicroUsd: l.embeddingSpendMicroUsd,
         }
@@ -1391,12 +1394,23 @@ function LakeInfoPanel({
               that accepts it, and `confirm: true` is sent from nowhere else. */}
           <Modal open={convergeConfirmOpen} onClose={() => setConvergeConfirmOpen(false)}>
             <ModalDialog data-testid="datalake-converge-confirm" role="alertdialog">
-              <DialogTitle>Re-chunk {Math.round((convergencePlan?.changeShare ?? 0) * 100)}% of this lake?</DialogTitle>
+              {/* The share and the file count describe DIFFERENT populations and must both say which:
+                  `changeShare` is whole-lake drift (every candidate, pre-wave-bound and pre-conflict)
+                  and is what the guard fired on, while `convergeWaveSize` is what this click actually
+                  rewrites. Stating one as a headline over the other reads as "40% == 25 files" and has
+                  the owner accept a number they were never shown. */}
+              <DialogTitle>
+                {Math.round((convergencePlan?.changeShare ?? 0) * 100)}% of this lake is off-policy - re-chunk now?
+              </DialogTitle>
               <DialogContent>
                 <Typography level="body-sm">
-                  This rewrites {convergeWaveSize} of {convergencePlan?.membersConsidered ?? 0} files to this lake{"'"}s
-                  passage target of {convergencePlan?.policy.requiredTarget} tokens. Rewriting this much of a lake at
-                  once usually means the policy itself is wrong - check the target before continuing.
+                  {convergencePlan?.convergeableCount ?? 0} of {convergencePlan?.membersConsidered ?? 0} files do not
+                  match this lake{"'"}s passage target of {convergencePlan?.policy.requiredTarget} tokens. Rewriting
+                  this much of a lake at once usually means the policy itself is wrong - check the target before
+                  continuing.
+                </Typography>
+                <Typography level="body-sm" sx={{ mt: 1 }}>
+                  This run repairs the first {convergeWaveSize}; re-run it to continue through the rest.
                 </Typography>
                 <Typography level="body-sm" sx={{ mt: 1 }}>
                   Each file stops being findable by search from the moment it is rewritten until its re-indexing

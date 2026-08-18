@@ -16,6 +16,7 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { sendToQueue } from '@server/utils/sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
+import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
 
 /**
  * GET  /api/data-lakes/:id/converge                     -> the plan (a preview; writes nothing)
@@ -92,7 +93,12 @@ const handler = baseApi()
       ...(await convergenceAdapters()),
       logger: req.logger,
     });
-    return res.json(report);
+    // Every READ-gated exit redacts, same rule and same reason as redactLakeForActor: this gate has
+    // a public arm that crosses orgs, while the conflicting lakes the report names are resolved by
+    // membership with no access filter at all. The disagreeing TARGET is what explains the refusal
+    // and is kept; the lake's id and name are not the reader's to see. The POST below is
+    // manage-gated and keeps them, because its caller is the one who can act on them.
+    return res.json(dataLakeService.redactCrossLakeIdentities(report));
   })
   .post(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
     const { id } = req.query;
@@ -109,11 +115,42 @@ const handler = baseApi()
     if (report.refusal || (report.requiresConfirmation && !confirm)) {
       // 200 with an explicit outcome, not a 4xx: the plan is the useful part of the answer and the
       // client renders it either way. `enqueued: 0` is the load-bearing field.
-      return res.json({ ...report, outcome: report.refusal ?? 'confirmationRequired', detected: 0, enqueued: 0 });
+      return res.json({ ...report, outcome: report.refusal ?? 'confirmationRequired', detected: 0, enqueued: 0, stranded: 0 });
     }
 
     let enqueued = 0;
+    /**
+     * Members whose state was RESET but whose chunk message never reached the queue. Distinct from
+     * `wave.length - enqueued`, which also counts members the reset deliberately skipped because a
+     * worker held them - those are untouched and healthy. These are not: their rollups are cleared
+     * and their old chunk rows orphaned, with nothing scheduled to rebuild them, so the caller has
+     * to be told rather than shown a zero-count success.
+     */
+    let stranded = 0;
     if (wave.length > 0) {
+      // Kill switch BEFORE the reset, not only in the consumer (#1676). The consumer's check drops
+      // messages that are already on the queue - by which point `resetChunkStateByIds` has cleared
+      // `chunked`, zeroed the counts and nulled all four health rollups for the whole wave. A paused
+      // platform would therefore still strip N files out of health and convergence accounting (both
+      // filter chunkCount > 0) while their chunk rows survive, leaving retrieval and health
+      // disagreeing about the same lake with nothing enqueued to repair it.
+      if (
+        await isConvergenceHalted(
+          { origin: CONVERGENCE_ORIGIN, lakeId: lake.id },
+          {
+            adminSettings: adminSettingsRepository,
+            scopedSettings: scopedSettingsRepository,
+            dataLakes: dataLakeRepository,
+          },
+          req.logger
+        )
+      ) {
+        req.logger?.log?.(
+          `[convergence] lake ${lake.id}: background lake work is paused; refused before touching ${wave.length} member(s)`
+        );
+        return res.json({ ...report, outcome: 'paused', detected: 0, enqueued: 0, stranded: 0 });
+      }
+
       const queueUrl = getSourceQueueUrl('fabFileChunkQueue');
       if (!queueUrl) throw new Error('Chunk queue URL not found');
 
@@ -145,12 +182,20 @@ const handler = baseApi()
       const failed = results.filter(r => r.status === 'rejected').length;
       const skipped = userById.size - resetIds.length;
       if (failed > 0 || skipped > 0) {
+        // A failed send is NOT self-healing here, unlike the same shape in /rechunk: the file is
+        // left matching the rescue sweep's filter (chunked:false, chunkCount:0, error:null), and
+        // that sweep enqueues WITHOUT a chunkSize - so it re-chunks at the owner's DefaultChunkSize,
+        // the value that produced the off-policy chunks this run exists to replace. The file comes
+        // back servable but still off-policy, and the next wave selects it again. Reported rather
+        // than papered over: `enqueued` below is the honest count and the client branches on it.
         req.logger?.error?.(
-          `convergence: lake ${lake.id} - ${failed}/${resetIds.length} sends failed; ` +
+          `convergence: lake ${lake.id} - ${failed}/${resetIds.length} sends failed (those files were reset and ` +
+            'will be rescued at the OWNER default target, not this lake policy); ' +
             `${skipped} file(s) skipped as already being chunked`
         );
       }
       enqueued = resetIds.length - failed;
+      stranded = failed;
     }
 
     req.logger?.log?.(
@@ -168,6 +213,7 @@ const handler = baseApi()
       outcome: wave.length === 0 ? 'noop' : 'enqueued',
       detected: wave.length,
       enqueued,
+      stranded,
     });
   });
 

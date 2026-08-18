@@ -6,6 +6,7 @@ import {
   IUserDocument,
   SupportedEmbeddingModelSchema,
 } from '@bike4mind/common';
+import { effectiveChunkTokenLimit } from '@bike4mind/fab-pipeline';
 import { Logger } from '@bike4mind/observability';
 import { NotFoundError, secureParameters, SmartChunker, type Chunk } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -82,6 +83,12 @@ export interface PreparedFabFileChunks {
   chunkClaimedAt?: Date;
   chunks: Chunk[];
   chunkCharLengths: number[];
+  /**
+   * The post-clamp token target these chunks were actually built at (#1662). Carried through the
+   * prepare/commit split so the commit can persist it in the SAME transaction as the chunks it
+   * describes - see the `chunkedPassageTokenTarget` write in `commitFabFileChunks`.
+   */
+  effectivePassageTokenTarget: number;
   /** Distinct embedding models the OLD chunks carried; only populated when a searchIndex is wired. */
   previousChunkEmbeddingModels: string[];
   /** `null` (not `undefined`) when the file has no extractable text - see the write below. */
@@ -117,6 +124,10 @@ export const prepareFabFileChunks = async (
   logger.updateMetadata({ mimeType: fabFile.mimeType });
 
   const chunker = new SmartChunker(embeddingModel, storage, logger, { passageTokenTarget });
+  // The same clamp the chunker just applied to itself, from the same shared helper and with the
+  // same (default) buffer - so the value persisted below is what these chunks were genuinely built
+  // at, never a second derivation that could drift from it.
+  const effectivePassageTokenTarget = effectiveChunkTokenLimit({ model: embeddingModel, passageTokenTarget });
   const chunks = await chunker.chunkFile(fabFile);
   chunker.freeEncoder();
   Logger.globalInstance.log(`Completed chunking file into ${chunks.length} chunks`);
@@ -149,6 +160,7 @@ export const prepareFabFileChunks = async (
     chunkClaimedAt,
     chunks,
     chunkCharLengths,
+    effectivePassageTokenTarget,
     previousChunkEmbeddingModels,
     serverTextHash,
   };
@@ -212,6 +224,17 @@ export const commitFabFileChunks = async (
     // `reduce`, not `Math.max(...spread)`: a file can carry tens of thousands of chunks and the
     // spread would risk a call-stack RangeError - and it matches the sum just above.
     maxChunkCharLength: chunkCharLengths.reduce((max, len) => (len > max ? len : max), 0),
+
+    // The effective chunk target these rows were built at (#1662). Written HERE, transactionally
+    // with the chunks it describes, because convergence (#1681) TERMINATES on it: a member whose
+    // stamp is stale is re-selected, re-reset and re-embedded on the next wave for nothing, and a
+    // member whose overshoot is irreducible is only distinguishable from genuine drift by this
+    // value (see decideMemberConvergence). `setChunkPolicyConflict` also writes it, but that runs
+    // best-effort AFTER the transaction and can be skipped by a lakes-read failure or a Lambda
+    // death that SQS then redelivers into the `chunked` early-return - so it cannot be the only
+    // writer of a field termination depends on. The two agree by construction: both persist the
+    // same `effectiveChunkTokenLimit` of the same requested target.
+    chunkedPassageTokenTarget: prepared.effectivePassageTokenTarget,
 
     isVectorizing: false,
     vectorized: chunked,

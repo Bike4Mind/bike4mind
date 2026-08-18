@@ -12,7 +12,7 @@ import {
 import { sendToClient } from '@server/websocket/utils';
 import { z } from 'zod';
 import { dataLakeService, fabFilesService, scopedSettingsService } from '@bike4mind/services';
-import { DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT } from '@bike4mind/common';
+import { CONVERGENCE_PAUSED_CHUNK_NOTE, DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT } from '@bike4mind/common';
 import { effectiveChunkTokenLimit, FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { getFilesStorage } from '@server/utils/storage';
@@ -54,8 +54,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
   // Convergence kill switch (#1676): re-check inside the SHARED handler so a paused switch stops
   // background work already on the queue. Gated before any DB read, so a user upload (origin absent)
-  // short-circuits with zero I/O. Returning drops the message; the file stays un-chunked (chunkCount
-  // 0), so the rescue sweep re-selects it once convergence resumes - never a lost user upload.
+  // short-circuits with zero I/O.
+  //
+  // Dropping the message is NOT the whole job. By the time this runs, the producer has already reset
+  // the wave's chunk state, so the file sits at chunkCount 0 with no error - and that shape is
+  // indistinguishable from an image or a pending upload, which is how it fell out of health's
+  // denominator, out of the convergence plan, out of the retrieval withhold and past the rescue
+  // sweep's own filter, all at once. So mark it before returning: `CONVERGENCE_PAUSED_CHUNK_NOTE` is
+  // what every one of those readers keys on to tell "its passages were deleted" from "it never had
+  // any". Mirrors what the vectorize handler already does for its half of the same switch.
   if (
     await isConvergenceHalted(
       { origin, lakeId },
@@ -67,10 +74,19 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       logger
     )
   ) {
+    // Best-effort, and deliberately not fatal: failing the delivery would retry the whole message
+    // against a switch that is still on. An unmarked file is the pre-existing invisible state, which
+    // the ERROR log is the trail for.
+    try {
+      await fabFileRepository.update({ id: fabFileId, notes: CONVERGENCE_PAUSED_CHUNK_NOTE });
+    } catch (err) {
+      logger.error(`[convergenceKillSwitch] could not mark ${fabFileId} as paused mid-rechunk: ${err}`);
+    }
     logger.log(
       `[convergenceKillSwitch] Paused background chunk work for fabFileId ${fabFileId}` +
         (lakeId ? ` (lake ${lakeId})` : '') +
-        ' - kill switch on; message dropped, will re-run when convergence resumes'
+        ' - kill switch on; message dropped and the file marked as having no passages. Convergence' +
+        ' re-selects it (and health reports it) until it is rebuilt.'
     );
     return;
   }

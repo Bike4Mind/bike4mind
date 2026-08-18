@@ -57,10 +57,12 @@ constant:
   a conflict by aligning the owner's chunk policy, or by removing the file from the conflicting lake.
 
 ### Converging a lake to its chunk policy
-A lake that declares a **required passage target** can be repaired toward it. "Converge to policy"
-appears on the lake in the manager panel when the lake has files that measurably do not satisfy it,
-and re-chunks those files at the lake's target in bounded waves - safe to repeat until the count
-reaches zero.
+A lake that declares a **required passage target** can be repaired toward it. Set one in the lake's
+**Settings -> Required passage size**; leaving it blank means the lake inherits the platform default,
+which is the state in which it is only ever measured, never repaired. Once a target is set,
+"Converge to policy" appears on the lake in the manager panel when the lake has files that measurably
+do not satisfy it, and re-chunks those files at the lake's target in bounded waves - safe to repeat
+until the count reaches zero.
 
 Convergence is **owner-triggered and system-performed**: you ask for the repair, and the platform
 carries it out, so no one needs write access to a lake for its contents to be fixed. It never runs on
@@ -88,8 +90,12 @@ Check these in order, all of them visible in the plan the button reads:
 - **The files are excluded**, as cross-lake conflicts, unmeasured, already indexing, or previously
   failed. Each has its own count in the plan, so "nothing happened" is always attributable.
 - **Background lake work is paused.** An administrator can pause convergence platform-wide or for a
-  single lake; a wave enqueued while it is paused is dropped and re-runs once it is turned back on.
-  Files stalled this way are flagged as paused in lake health.
+  single lake. Starting a run while it is already paused changes nothing at all - it is refused
+  before any file is touched. If the pause lands on a wave that is *already* running, the files it
+  had reached keep their place in the queue but are not rebuilt: they are marked as having no
+  passages, reported that way in lake health, withheld from search results (which say so, and say
+  that waiting will not fix it), and re-offered by the next convergence run once the pause is
+  lifted. They do not rebuild themselves - someone has to run convergence again, or reprocess them.
 :::
 
 Before it rewrites a large share of a lake, convergence **asks**. Rewriting most of a lake at once is
@@ -100,10 +106,11 @@ confirmed. Administrators can tune where that threshold sits.
 :::warning A converging file is not searchable until it finishes
 Re-chunking replaces a file's passages, and the replacements carry no vectors until re-indexing
 completes. The previous passages are deleted first, so there is nothing to fall back on in between.
-Search does not hide this: while any in-scope file is being re-indexed, results are explicitly marked
-**partial** and the affected files are named, rather than quietly answering from the rest of the lake.
-The files return on their own once indexing completes - re-run the search then. Prefer to converge a
-lake outside the hours people are querying it.
+Retrieval does not hide this: while any in-scope file is being re-indexed, the result is explicitly
+marked **partial** rather than quietly answering from the rest of the lake. Searches - the knowledge
+tools and the semantic-search API - name the affected files; grounded chat turns report how many were
+withheld. The files return on their own once indexing completes - re-run the search then. Prefer to
+converge a lake outside the hours people are querying it.
 :::
 
 ### Vector Embeddings

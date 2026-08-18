@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { CONVERGENCE_PAUSED_NOTE } from '@bike4mind/common';
+import { CONVERGENCE_PAUSED_CHUNK_NOTE, CONVERGENCE_PAUSED_NOTE } from '@bike4mind/common';
 import {
   buildRetrievalUnavailableReport,
   describeRetrievalUnavailable,
@@ -43,6 +43,16 @@ describe('partitionByIndexAvailability (#1681 constraint 1)', () => {
     expect(partitionByIndexAvailability([paused]).withheld).toEqual([]);
   });
 
+  // The one chunkless file that IS withheld, and the state QA found reaching every surface as
+  // "fine": a re-chunk deleted its passages and the kill switch stopped the rebuild. It is neither
+  // in flight nor searchable, so without this it is silently absent while neighbours fill the top-K.
+  it('withholds a file whose passages a paused re-chunk removed, though it has no chunks', () => {
+    const stranded = { ...settled, chunkCount: 0, vectorizedChunkCount: 0, notes: CONVERGENCE_PAUSED_CHUNK_NOTE };
+    const { servable, withheld } = partitionByIndexAvailability([stranded]);
+    expect(servable).toEqual([]);
+    expect(withheld.map(f => f.id)).toEqual(['f1']);
+  });
+
   it('serves a chunkless file (an image, a still-uploading row) rather than flagging every lake', () => {
     expect(partitionByIndexAvailability([{ ...settled, chunkCount: 0, vectorizedChunkCount: 0 }]).withheld).toEqual([]);
     expect(partitionByIndexAvailability([{ id: 'x' }]).withheld).toEqual([]);
@@ -57,6 +67,19 @@ describe('partitionByIndexAvailability (#1681 constraint 1)', () => {
 describe('buildRetrievalUnavailableReport', () => {
   it('is not partial when nothing was withheld', () => {
     expect(buildRetrievalUnavailableReport([])).toEqual(emptyRetrievalUnavailableReport());
+  });
+
+  // The two buckets differ on the only thing the prose tells a reader to do, so they are counted
+  // apart: waiting fixes one and never fixes the other.
+  it('counts a paused-rechunk file apart from the files that are merely re-indexing', () => {
+    const report = buildRetrievalUnavailableReport([
+      { id: 'f1', fileName: 'indexing.pdf' },
+      { id: 'f2', fileName: 'stranded.pdf', notes: CONVERGENCE_PAUSED_CHUNK_NOTE },
+    ]);
+    expect(report.indexing.count).toBe(1);
+    expect(report.paused.count).toBe(1);
+    expect(report.paused.sample).toEqual([{ fileId: 'f2', fileName: 'stranded.pdf' }]);
+    expect(report.partial).toBe(true);
   });
 
   it('caps the sample but keeps the count exact', () => {
@@ -81,6 +104,17 @@ describe('describeRetrievalUnavailable', () => {
     expect(text).toContain('a.pdf');
     expect(text).toContain('once indexing completes');
     expect(text).not.toMatch(/re-embed those/i);
+  });
+
+  // The opposite remedy, and the one this sentence must not get wrong: a stranded file does NOT
+  // come back on its own, so telling the reader to search again later would be false reassurance.
+  it('tells the reader a paused file needs an action, not more waiting', () => {
+    const text = describeRetrievalUnavailable(
+      buildRetrievalUnavailableReport([{ id: 'f2', fileName: 'stranded.pdf', notes: CONVERGENCE_PAUSED_CHUNK_NOTE }])
+    );
+    expect(text).toContain('stranded.pdf');
+    expect(text).toContain('do NOT return on');
+    expect(text).not.toContain('once indexing completes');
   });
 
   it('marks the sample as truncated when more files were withheld than named', () => {

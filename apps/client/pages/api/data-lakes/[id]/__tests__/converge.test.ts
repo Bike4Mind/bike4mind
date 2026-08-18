@@ -4,6 +4,10 @@ const h = vi.hoisted(() => ({
   assertLakeAccess: vi.fn(),
   assertLakeRebuildAccess: vi.fn(),
   planLakeConvergenceRun: vi.fn(),
+  // Passed through here on purpose: WHETHER the read exit redacts is this file's business, WHAT it
+  // strips is unit-tested against the real function in convergeLakePolicy.test.ts.
+  redactCrossLakeIdentities: vi.fn((r: unknown) => r),
+  isConvergenceHalted: vi.fn(async () => false),
   resetChunkStateByIds: vi.fn(),
   sendToQueue: vi.fn(),
   getSourceQueueUrl: vi.fn(() => 'https://sqs.example.com/fab-file-chunk'),
@@ -28,10 +32,12 @@ vi.mock('@bike4mind/services', () => ({
     assertLakeAccess: h.assertLakeAccess,
     assertLakeRebuildAccess: h.assertLakeRebuildAccess,
     planLakeConvergenceRun: h.planLakeConvergenceRun,
+    redactCrossLakeIdentities: h.redactCrossLakeIdentities,
     DEFAULT_CONVERGENCE_WAVE: 25,
     MAX_CONVERGENCE_WAVE: 200,
   },
 }));
+vi.mock('@server/queueHandlers/convergenceKillSwitch', () => ({ isConvergenceHalted: h.isConvergenceHalted }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
@@ -58,7 +64,7 @@ const report = (over: Record<string, unknown> = {}) => ({
   changeShare: 0.05,
   requiresConfirmation: false,
   bulkChangeShareThreshold: 0.25,
-  skipped: { conformant: 38, unmeasured: 0, indexingInFlight: 0, previouslyFailed: 0 },
+  skipped: { conformant: 38, unmeasured: 0, indexingInFlight: 0, previouslyFailed: 0, irreducibleOvershoot: 0 },
   crossLakeConflicts: [],
   crossLakeConflictCount: 0,
   scanTruncated: false,
@@ -89,6 +95,8 @@ beforeEach(() => {
   });
   h.resetChunkStateByIds.mockResolvedValue(['f1', 'f2']);
   h.sendToQueue.mockResolvedValue(undefined);
+  h.isConvergenceHalted.mockResolvedValue(false);
+  h.redactCrossLakeIdentities.mockImplementation((r: unknown) => r);
 });
 
 describe('GET /api/data-lakes/:id/converge', () => {
@@ -101,6 +109,15 @@ describe('GET /api/data-lakes/:id/converge', () => {
     expect(h.assertLakeRebuildAccess).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
     expect(json).toHaveBeenCalledWith(expect.objectContaining({ convergeableCount: 2 }));
+  });
+
+  // The read gate is deliberately WIDER than manage - it has a public arm that crosses orgs - while
+  // the conflicting lakes the plan names are resolved by membership with no access filter at all.
+  // So this exit has to redact, or a public lake becomes a directory of every private lake its
+  // members are also tagged into.
+  it('redacts third-party lake identities on the read-gated exit', async () => {
+    await invoke('GET');
+    expect(h.redactCrossLakeIdentities).toHaveBeenCalledWith(expect.objectContaining({ convergeableCount: 2 }));
   });
 });
 
@@ -214,6 +231,43 @@ describe('POST /api/data-lakes/:id/converge', () => {
     expect(h.resetChunkStateByIds).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
     expect(json).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'noop', detected: 0, enqueued: 0 }));
+  });
+
+  // The consumer's kill-switch check only drops messages that are already on the queue - by which
+  // point the reset has cleared `chunked`, zeroed the counts and nulled all four health rollups.
+  // A paused platform must not still strip a wave's worth of files out of health accounting.
+  it('refuses a paused run BEFORE resetting any chunk state', async () => {
+    h.isConvergenceHalted.mockResolvedValue(true);
+
+    const json = await invoke('POST');
+
+    expect(h.resetChunkStateByIds).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'paused', enqueued: 0, stranded: 0 }));
+  });
+
+  it('keeps third-party lake identities on the manage-gated exit, where they are actionable', async () => {
+    await invoke('POST');
+    expect(h.redactCrossLakeIdentities).not.toHaveBeenCalled();
+  });
+
+  // The reset has already run by the time a send fails, so those files are out of search with
+  // nothing scheduled to rebuild them. Reported as its own count: `wave.length - enqueued` would
+  // also fold in members the reset deliberately skipped, which are untouched and healthy.
+  it('reports files that were reset but never enqueued', async () => {
+    h.sendToQueue.mockRejectedValueOnce(new Error('queue unavailable'));
+
+    const json = await invoke('POST');
+
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'enqueued', enqueued: 1, stranded: 1 }));
+  });
+
+  it('reports a total send failure as stranded rather than a zero-count success', async () => {
+    h.sendToQueue.mockRejectedValue(new Error('queue unavailable'));
+
+    const json = await invoke('POST');
+
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'enqueued', enqueued: 0, stranded: 2 }));
   });
 
   it('honors an explicit wave limit', async () => {

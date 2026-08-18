@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { CONVERGENCE_PAUSED_NOTE } from './chunking';
+import { CONVERGENCE_PAUSED_CHUNK_NOTE, CONVERGENCE_PAUSED_NOTE } from './chunking';
 import {
   BULK_CHANGE_MIN_MEMBERS,
   decideMemberConvergence,
@@ -60,9 +60,31 @@ describe('decideMemberConvergence', () => {
     });
   });
 
-  it('converges a member whose largest chunk exceeds the policy size, and records the overshoot', () => {
-    const decision = decideMemberConvergence(member({ maxChunkCharLength: 5000 }), policy);
+  it('records the overshoot on a member it converges, so the wave can be ordered worst-first', () => {
+    const decision = decideMemberConvergence(
+      member({ chunkedPassageTokenTarget: 2100, maxChunkCharLength: 5000 }),
+      policy
+    );
     expect(decision).toMatchObject({ converge: true, overshootChars: 5000 - policy.policyChars });
+  });
+
+  // The termination bug this arm exists to prevent. policyChars is a CHARACTER budget and the
+  // chunker is bounded in TOKENS, so an overshoot can survive a rewrite at the policy's own target -
+  // and OR'd with the target arm that returned converge:true on identical inputs, forever, with no
+  // attempt counter and no `error` to catch it. The stamp is what makes it terminal.
+  it('refuses an overshoot on chunks already built at the policy target, rather than rewriting forever', () => {
+    expect(decideMemberConvergence(member({ maxChunkCharLength: 5000 }), policy)).toEqual({
+      converge: false,
+      fabFileId: 'f1',
+      reason: 'irreducibleOvershoot',
+    });
+  });
+
+  // The same overshoot IS a violation while the stamp disagrees: that rewrite is the one that both
+  // repairs the target and writes the stamp deciding it next time.
+  it('still converges an overshooting member whose stamped target has not reached the policy yet', () => {
+    expect(decideMemberConvergence(member({ chunkedPassageTokenTarget: 2100, maxChunkCharLength: 5000 }), policy))
+      .toMatchObject({ converge: true });
   });
 
   // Two configured targets that both exceed the model window clamp to the same effective limit, and
@@ -114,6 +136,19 @@ describe('decideMemberConvergence', () => {
       .toMatchObject({ converge: true });
   });
 
+  // The state QA reached by pausing mid-wave: the producer had already deleted this member's
+  // passages, so it sits at chunkCount 0 with no error - which every arm below misreads. The reset
+  // PRESERVES chunkedPassageTokenTarget and nulls maxChunkCharLength, so a member already repaired
+  // to the policy grades `conformant` and nothing ever rebuilds it.
+  it('converges a member whose passages a halted wave removed, rather than reading it as conformant', () => {
+    expect(
+      decideMemberConvergence(
+        member({ chunkCount: 0, vectorizedChunkCount: 0, maxChunkCharLength: null, notes: CONVERGENCE_PAUSED_CHUNK_NOTE }),
+        policy
+      )
+    ).toMatchObject({ converge: true, passagesRemoved: true });
+  });
+
   // A failed read is not a "no". Neither "rewrite it" nor "it is fine" is honest here.
   it('refuses a member with neither fact measured, as unmeasured rather than conformant', () => {
     expect(
@@ -132,6 +167,27 @@ describe('decideMemberConvergence', () => {
 });
 
 describe('planLakeConvergence', () => {
+  // A member with no passages returns NOTHING today, while an oversized chunk still returns
+  // something - and its overshootChars is 0 (there is no chunk to measure), which would otherwise
+  // sort the lake's most damaged members to the very back of the wave.
+  it('puts members with no passages at all ahead of the worst overshoot', () => {
+    const plan = planLakeConvergence(
+      [
+        member({ fabFileId: 'huge', maxChunkCharLength: 40000, chunkedPassageTokenTarget: null }),
+        member({
+          fabFileId: 'stranded',
+          chunkCount: 0,
+          vectorizedChunkCount: 0,
+          maxChunkCharLength: null,
+          notes: CONVERGENCE_PAUSED_CHUNK_NOTE,
+        }),
+      ],
+      policy
+    );
+
+    expect(plan.candidates.map(c => c.fabFileId)).toEqual(['stranded', 'huge']);
+  });
+
   it('excludes chunkless members from the denominator so changeShare is not diluted', () => {
     const plan = planLakeConvergence(
       [
@@ -148,13 +204,12 @@ describe('planLakeConvergence', () => {
   });
 
   it('orders the wave worst-first, tie-broken by id so two calls agree on the wave boundary', () => {
+    // Unstamped (legacy) members: overshoot is a genuine violation for these, so they all converge
+    // and the ordering is what is under test. A stamped-at-target overshoot is terminal instead.
+    const overshooting = (fabFileId: string, maxChunkCharLength: number) =>
+      member({ fabFileId, maxChunkCharLength, chunkedPassageTokenTarget: null });
     const plan = planLakeConvergence(
-      [
-        member({ fabFileId: 'small', maxChunkCharLength: 4000 }),
-        member({ fabFileId: 'huge', maxChunkCharLength: 40000 }),
-        member({ fabFileId: 'b-tie', maxChunkCharLength: 9000 }),
-        member({ fabFileId: 'a-tie', maxChunkCharLength: 9000 }),
-      ],
+      [overshooting('small', 4000), overshooting('huge', 40000), overshooting('b-tie', 9000), overshooting('a-tie', 9000)],
       policy
     );
 
@@ -168,11 +223,18 @@ describe('planLakeConvergence', () => {
         member({ fabFileId: 'failed', error: 'boom' }),
         member({ fabFileId: 'inflight', vectorizedChunkCount: 1 }),
         member({ fabFileId: 'unknown', maxChunkCharLength: null, chunkedPassageTokenTarget: null }),
+        member({ fabFileId: 'irreducible', maxChunkCharLength: 99000 }),
       ],
       policy
     );
 
-    expect(plan.skipped).toEqual({ conformant: 1, previouslyFailed: 1, indexingInFlight: 1, unmeasured: 1 });
+    expect(plan.skipped).toEqual({
+      conformant: 1,
+      previouslyFailed: 1,
+      indexingInFlight: 1,
+      unmeasured: 1,
+      irreducibleOvershoot: 1,
+    });
     expect(plan.candidates).toHaveLength(0);
     expect(plan.changeShare).toBe(0);
   });
