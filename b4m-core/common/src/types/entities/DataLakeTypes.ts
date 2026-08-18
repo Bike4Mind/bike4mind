@@ -38,9 +38,11 @@ export interface AccessContext {
    * Orgs the caller holds admin RIGHTS in (billing owner / manager / appointed admin), resolved
    * app-side via `organizationRepository.findIdsWithAdminRights` and injected here (same pre-resolved
    * seam as `entitlementKeys`; core never imports the Organization model). An org admin may MANAGE any
-   * lake scoped to one of these orgs - the org-manageable rung in `canManageLake`. Distinct from the
-   * singular `organizationId` above, which is the caller's selected-org display preference, never an
-   * authorization input on its own. Optional - absent -> no org-admin rung (back-compat).
+   * lake scoped to one of these orgs - the org-manageable rung in `canManageLake`. Distinct from
+   * `organizationIds` above: that set is MEMBERSHIP (which orgs the caller may READ), this one is
+   * admin RIGHTS (which orgs the caller may MANAGE) - a member is not an admin. Neither is
+   * `user.organizationId`, the selected-org display preference, which is never an authorization
+   * input (#1674). Optional - absent -> no org-admin rung (back-compat).
    */
   administeredOrgIds?: string[];
   /**

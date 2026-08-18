@@ -22,7 +22,7 @@ interface IOrganizationModel extends Model<IOrganizationDocument, {}> {
 // The users[] ACL permission values that constitute org membership. 'write' implies membership
 // even when 'read' was never explicitly granted - the #1674 read-side set (findMembershipOrgIds)
 // already treats it so, and search() must agree or a write-only member can reach an org they
-// cannot find. Must stay the union used by BOTH call sites below.
+// cannot find. Consumed only by orgMembershipFilter below, which is what keeps them agreeing.
 //
 // 'write' is deliberately NOT a Permission enum member: adding it broke apps/client typecheck
 // (SkillShareDialog's Record<Permission, string> must be exhaustive) and would widen
@@ -30,6 +30,24 @@ interface IOrganizationModel extends Model<IOrganizationDocument, {}> {
 // only to match legacy/out-of-band rows - every app write path persists ['read'], so a
 // write-only row can only come from a raw-driver insert or old data.
 const MEMBER_PERMISSIONS = ['read', 'write'] as const;
+
+/**
+ * THE org-membership predicate: billing owner OR a users[] ACL row granting read/write.
+ *
+ * Both call sites must describe the same membership or an org becomes selectable-but-unreadable:
+ * `search()` backs the account-switcher list, which is where BOTH data-lake write paths (create and
+ * visibility promotion, via `resolveActiveOrg`) get the org id they stamp, while
+ * `findMembershipOrgIds` backs the read scope (`AccessContext.organizationIds`) that decides which
+ * org lakes list. #1648 was exactly that disagreement - a lake created in the
+ * switched-to org was invisible in its creator's own manager - so the shape lives here once rather
+ * than as two hand-synced `$or` blocks that a new arm could widen on one side only.
+ *
+ * Deliberately NO groups arm, unlike the shareable ACL (`findAccessibleById`) that the write-side
+ * `resolveActiveOrg` validates against; see that function's note on the wider write predicate.
+ */
+const orgMembershipFilter = (userId: string): Record<string, unknown> => ({
+  $or: [{ userId }, { users: { $elemMatch: { userId, permissions: { $in: MEMBER_PERMISSIONS } } } }],
+});
 
 const OrganizationSchema = new Schema<IOrganizationDocument>(
   {
@@ -346,14 +364,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
       }
 
       if (filters.userId) {
-        q.$and = [
-          {
-            $or: [
-              { userId: filters.userId },
-              { users: { $elemMatch: { userId: filters.userId, permissions: { $in: MEMBER_PERMISSIONS } } } },
-            ],
-          },
-        ];
+        q.$and = [orgMembershipFilter(filters.userId)];
 
         if (q.$or) {
           (q.$and as unknown[]).push({ $or: q.$or });
@@ -413,14 +424,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   async findMembershipOrgIds(userId: string): Promise<string[]> {
-    const docs = await this.organizationModel
-      .find(
-        {
-          $or: [{ userId }, { users: { $elemMatch: { userId, permissions: { $in: MEMBER_PERMISSIONS } } } }],
-        },
-        { _id: 1 }
-      )
-      .lean();
+    const docs = await this.organizationModel.find(orgMembershipFilter(userId), { _id: 1 }).lean();
     return docs.map(d => String(d._id));
   }
 
