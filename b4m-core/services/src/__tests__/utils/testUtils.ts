@@ -156,6 +156,7 @@ export const createMockAuthSessionRepository = (): MockedObject<IAuthSessionRepo
     findBySid: vi.fn(),
     findActiveByUserId: vi.fn(),
     rotateHash: vi.fn(),
+    registerReplayUse: vi.fn(),
     revokeBySid: vi.fn(),
     revokeAllByUserId: vi.fn(),
   });
@@ -170,6 +171,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     removeGroupsFromUser: vi.fn(),
     findUserIdsByGroupIds: vi.fn(),
     findByIds: vi.fn(),
+    findActiveEmailsByIds: vi.fn(),
     findByUsernameOrEmail: vi.fn(),
     findByIdWithPassword: vi.fn(),
     findByEmailVerificationToken: vi.fn(),

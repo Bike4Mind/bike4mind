@@ -23,6 +23,14 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
+  // The config-audit repos this route wires (see lakeConfigAuditDb). Stubbed rather than
+  // omitted because the mock replaces the whole module: a missing export is an import-time
+  // failure, not a silent undefined.
+  lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
+  adminSettingsRepository: {
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
   dataLakeAccessGrantRepository: { listByLake: vi.fn().mockResolvedValue([]), upsertGrant: vi.fn() },
   userRepository: {},
   organizationRepository: {},
@@ -56,7 +64,15 @@ describe('POST /api/data-lakes/[id]/transfer-ownership', () => {
       expect.objectContaining({ userId: 'u1', isAdmin: false }),
       'lake-oid-1',
       'newOwner',
-      expect.anything()
+      // Not expect.anything(): the config-audit repos ride one shared helper, and a route that
+      // dropped `adminSettings` would still compile (it is optional so the retention read stays
+      // best-effort) while quietly pinning every event to the floor default.
+      expect.objectContaining({
+        db: expect.objectContaining({
+          lakeConfigChangeEvents: expect.anything(),
+          adminSettings: expect.anything(),
+        }),
+      })
     );
     expect(json).toHaveBeenCalledWith({ newOwnerUserId: 'newOwner', demotedUserIds: ['u1'] });
   });

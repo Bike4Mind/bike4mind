@@ -8,16 +8,20 @@ import {
   fabFileRepository,
   projectRepository,
   userRepository,
+  lakeAccessEventRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { getFilesStorage } from '@server/utils/storage';
 import { fabFilesService } from '@bike4mind/services';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { normalizeId } from '@bike4mind/utils/normalizeId';
+import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
+import { firstQueryValue } from '@server/dataLakes/firstQueryValue';
 
 interface ArticlesQuery {
   id: string;
   tags?: string | string[];
-  search?: string;
+  search?: string | string[];
   page?: string;
   limit?: string;
   sortBy?: string;
@@ -48,7 +52,7 @@ const handler = baseApi()
 
     const rawTags = req.query.tags;
     const filterTags: string[] = rawTags ? (Array.isArray(rawTags) ? rawTags : [rawTags]) : [];
-    const search = req.query.search ?? '';
+    const search = firstQueryValue(req.query.search) ?? '';
     const page = Math.max(1, Number(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
     const sortBy = req.query.sortBy === 'createdAt' ? ('createdAt' as const) : ('fileName' as const);
@@ -111,6 +115,26 @@ const handler = baseApi()
         restrictToDataLake: true,
       }
     );
+
+    // Best-effort audit write, only when something was actually returned - an empty
+    // page reflects no lake content read. The lake is already resolved, so no attribution needed.
+    // Awaited (never rethrows): a per-request serverless route must not race a post-response
+    // freeze of the execution environment.
+    if (result.data.length > 0) {
+      await dataLakeService.recordLakeAccessEvent(
+        lakeAccessEventRepository,
+        {
+          ...resolveAuditPrincipal(req.user, req.apiKeyInfo),
+          organizationId: normalizeId(req.user.organizationId),
+          resolvedLakeIds: [dataLake.id],
+          fileIds: (result.data as Array<{ id: string }>).map(f => f.id),
+          surface: 'data-lake-articles',
+          ...(search ? { queryText: search } : {}),
+        },
+        req.logger,
+        adminSettingsRepository
+      );
+    }
 
     return res.json({ data: result.data, total: result.total, hasMore: result.hasMore });
   });

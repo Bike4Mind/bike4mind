@@ -15,7 +15,7 @@ import {
   Typography,
 } from '@mui/joy';
 import { useTheme } from '@mui/joy/styles';
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { useComputeHashes, useCheckDuplicates } from '@client/app/hooks/data/dataLakeWizard';
 import { slugifyDataLakeName } from '@client/app/hooks/data/dataLakeSlug';
@@ -24,6 +24,7 @@ import { slugifyDataLakeName } from '@client/app/hooks/data/dataLakeSlug';
 // the reserved namespace and an overlap with another lake's prefix.
 import { tagPrefixIssue } from '@bike4mind/common';
 import { useDuplicatePrefixLake } from '@client/app/hooks/data/dataLakes';
+import { EmbeddingBudgetEstimate } from '@client/app/components/DataLakeWizard/EmbeddingBudgetEstimate';
 
 export default function ConfigStep() {
   const theme = useTheme();
@@ -57,6 +58,15 @@ export default function ConfigStep() {
   const includedFiles = allFiles.filter(f => !f.excluded);
   const includedCount = includedFiles.length;
   const duplicateCount = includedFiles.filter(f => f.isDuplicate).length;
+  // The same set that will actually be embedded - a skipped duplicate uploads nothing, so the
+  // cost estimate must use this arithmetic, not the raw included list. Memoized (keyed on the
+  // store's own allFiles reference, not the fresh includedFiles/filesToEmbed arrays derived
+  // above) so EmbeddingBudgetEstimate's own useMemo doesn't recompute on every unrelated render.
+  const filesForEstimate = useMemo(() => {
+    const eligible = allFiles.filter(f => !f.excluded);
+    const toEmbed = config.conflictResolution === 'skip' ? eligible.filter(f => !f.isDuplicate) : eligible;
+    return toEmbed.map(f => ({ name: f.relativePath, size: f.size }));
+  }, [allFiles, config.conflictResolution]);
 
   // Auto-trigger hashing on first mount
   useEffect(() => {
@@ -253,6 +263,7 @@ export default function ConfigStep() {
                 Duplicate check: pending...
               </Typography>
             )}
+            <EmbeddingBudgetEstimate files={filesForEstimate} />
           </Stack>
         </Box>
 

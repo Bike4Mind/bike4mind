@@ -192,7 +192,9 @@ export function buildOwnershipConditions(
      * someone else - the write paths can't fix those either. Group/data-lake access stays IN as
      * a deliberate product choice (they are the user's own persistent, subscribed-to workspaces,
      * not an incidental share), not because it is more reconcilable. The group/data-lake orphan
-     * case this does not cover is a known, accepted gap - see issue #1353's own options 1-3.
+     * case this does not cover is a known, accepted gap. If revisited, the two options are
+     * extending this same narrowing to the group/data-lake arms, or leaving it as accepted
+     * behavior (the choice made here).
      */
     excludePersonalShares?: boolean;
   }

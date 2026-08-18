@@ -1,7 +1,8 @@
 import { IUserDocument } from '@bike4mind/common';
 import type { QueryClient } from '@tanstack/react-query';
 import { api, isPublicPath } from '@client/app/contexts/ApiContext';
-import { takeLegacyRefreshToken, useAccessToken } from '@client/app/hooks/useAccessToken';
+import { refreshSession } from '@client/app/utils/refreshCoordinator';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useUser } from '@client/app/contexts/UserContext';
 
 /**
@@ -19,12 +20,6 @@ import { useUser } from '@client/app/contexts/UserContext';
  * a genuinely signed-out visitor who lands on a protected deep link.
  */
 
-interface RefreshResponse {
-  user?: IUserDocument;
-  accessToken: string;
-  impersonating?: boolean;
-}
-
 /** Cached for the page's lifetime: resolved OR rejected, the answer does not change until a
  *  login/logout resets it. Without caching, every route transition would re-run the exchange. */
 let bootstrapPromise: Promise<void> | null = null;
@@ -36,39 +31,53 @@ export function resetSessionBootstrap(): void {
 }
 
 async function exchangeRefreshCookie(): Promise<void> {
-  // A pre-cookie session still holds its refresh token in localStorage; send it once with
-  // `cookie: true` so the server migrates it onto a cookie instead of logging the user out.
-  const legacy = takeLegacyRefreshToken();
-
   try {
-    const { data } = await api.post<RefreshResponse>(
-      '/api/auth/refreshToken',
-      legacy ? { token: legacy, cookie: true } : {},
-      {
-        // skipAuthRefresh: a 401 here means "no session", not "refresh me" - letting the
-        // interceptor react would recurse and force a /login redirect on an anonymous visitor.
-        skipAuthRefresh: true,
-        // Same 10s bound as the interceptor's refresh: a cold Lambda must not hang the guard.
-        timeout: 10000,
-      }
-    );
+    // Through the shared coordinator, not a private call: a cold load races its own queries, and
+    // an unauthenticated query's 401 would otherwise drive a SECOND exchange concurrent with this
+    // one. The access-token store is updated by the coordinator; only `user` is ours to apply.
+    const session = await refreshSession();
 
-    useAccessToken.getState().setVerifiedSession(data.accessToken);
-    useAccessToken.getState().setImpersonating(!!data.impersonating);
-    if (data.user) {
-      useUser.getState().setCurrentUser(data.user);
+    // A token alone does not satisfy the route guard - it gates on currentUser, so leaving this
+    // null bounces a perfectly good session to /login. The refresh response usually carries the
+    // user, but not when the coordinator served an already-current token (another tab exchanged
+    // the cookie, and its response was never visible here). Resolve identity directly in that case
+    // rather than assuming the payload shape.
+    if (session.user) {
+      useUser.getState().setCurrentUser(session.user);
+      return;
     }
+
+    // This second round trip only happens on the adopt path, and it is UNRETRIED - a blip, a cold
+    // Lambda or the 10s timeout is enough to lose it. Rethrow rather than swallowing so the caller
+    // does not cache a resolved "no identity": we hold a valid cookie and a valid token here, and
+    // caching that result would redirect to /login for the page's whole lifetime with no toast and
+    // nothing to retry.
+    const { data } = await api.get<IdentifyResponse>('/api/identify', { timeout: 10000 });
+    useUser.getState().setCurrentUser(data.user);
   } catch {
     // No recoverable session. Leave the stores alone rather than marking the session expired:
     // the route guard turns a null currentUser into a /login redirect with the deep link
     // preserved, and stamping expiredReason here would show a spurious "session expired" toast
     // to someone who was simply never signed in.
+    //
+    // Uncache so the next protected navigation retries. The cached-forever behaviour is right for
+    // "there is no session" (the answer cannot change without a login, which resets this anyway)
+    // but wrong for a transient identity fetch, and the two are indistinguishable from here.
+    bootstrapPromise = null;
   }
 }
 
-/** Idempotent; safe to await from every guard and from concurrent navigations. */
+/**
+ * Idempotent; safe to await from every guard and from concurrent navigations.
+ *
+ * The short-circuit requires BOTH halves of a usable session, not just the token. The route guard
+ * gates on currentUser, so "token present, identity missing" is not a state worth skipping the
+ * bootstrap for - and it is reachable: the coordinator writes a token before every return, so an
+ * identity fetch that failed above would otherwise be latched behind a token-only check and the tab
+ * would sit on /login for its whole lifetime holding a perfectly valid cookie.
+ */
 export function bootstrapSession(): Promise<void> {
-  if (useAccessToken.getState().accessToken) {
+  if (useAccessToken.getState().accessToken && useUser.getState().currentUser) {
     return Promise.resolve();
   }
   bootstrapPromise ??= exchangeRefreshCookie();
@@ -126,7 +135,7 @@ export function shouldRevalidateOnFocus(params: {
  *  coincides with a WebsocketContext close-probe fires one authed round trip, not two. */
 let probeInFlight = false;
 
-/** Drop a stuck in-flight flag (a test left its promise unsettled). Mirrors resetRefreshPromise
+/** Drop a stuck in-flight flag (a test left its promise unsettled). Mirrors resetRefreshCoordinator
  *  in ApiContext.tsx for the same guard shape. */
 export function resetProbeGuardForTests(): void {
   probeInFlight = false;

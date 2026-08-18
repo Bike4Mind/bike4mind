@@ -33,6 +33,7 @@ import {
   slackDevWorkspaceRepository,
   usageEventRepository,
   imageModerationIncidentRepository,
+  lakeAccessEventRepository,
 } from '@bike4mind/database';
 import { NotFoundError, registerLambdaErrorHandlers } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
@@ -144,6 +145,7 @@ const getStaticOptions = () => {
       // moderation gate. The gate itself is unconditional (constructed inline
       // in the tool) - this only wires the incident record, not the block.
       imageModerationIncidents: imageModerationIncidentRepository,
+      lakeAccessEvents: lakeAccessEventRepository,
     },
     storage: getFilesStorage(),
     imageGenerateStorage: getGeneratedImageStorage(),

@@ -175,6 +175,10 @@ const toManageableConfig = (
   // current selection; absent for a non-editor OR a lake predating the field (the picker then
   // falls back to the default mode, matching how the resolver treats an absent value).
   ...(manageable && dl.groundingMode ? { groundingMode: dl.groundingMode } : {}),
+  // Editor-only, but ALWAYS present (defaulted to 0) when manageable, unlike the fields above -
+  // its presence is the client's spend-tab visibility signal, so a zero-spend manageable lake
+  // must not look identical to a non-manageable one.
+  ...(manageable ? { embeddingSpendMicroUsd: dl.embeddingSpendMicroUsd ?? 0 } : {}),
 });
 
 /**
@@ -215,7 +219,12 @@ export const listDataLakes = async (
   { db }: ListDataLakesAdapters
 ): Promise<ManageableDataLakeConfig[]> => {
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, ctx.organizationIds ?? [], db.dataLakeAccessGrants, includeReaders);
+  const grantedLakeIds = await grantedLakeIdsFor(
+    ctx.userId,
+    ctx.organizationIds ?? [],
+    db.dataLakeAccessGrants,
+    includeReaders
+  );
   let dynamicLakes: IDataLakeDocument[] = [];
   try {
     dynamicLakes = await db.dataLakes.findAccessible(ctx, { statuses: ['draft', 'active'], grantedLakeIds });
@@ -298,7 +307,12 @@ export const listArchivedDataLakes = async (
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, ctx.organizationIds ?? [], db.dataLakeAccessGrants, includeReaders);
+  const grantedLakeIds = await grantedLakeIdsFor(
+    ctx.userId,
+    ctx.organizationIds ?? [],
+    db.dataLakeAccessGrants,
+    includeReaders
+  );
   const lakes = await db.dataLakes.findAccessible(ctx, {
     statuses: ['archived'],
     includePublic: false,
@@ -318,7 +332,12 @@ export const listDeletedDataLakes = async (
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
   const includeReaders = await resolveEnforceReadGrants(db.settings);
-  const grantedLakeIds = await grantedLakeIdsFor(ctx.userId, ctx.organizationIds ?? [], db.dataLakeAccessGrants, includeReaders);
+  const grantedLakeIds = await grantedLakeIdsFor(
+    ctx.userId,
+    ctx.organizationIds ?? [],
+    db.dataLakeAccessGrants,
+    includeReaders
+  );
   const lakes = await db.dataLakes.findAccessible(ctx, { statuses: ['deleted'], includePublic: false, grantedLakeIds });
   const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
   return redactLakesForActor(lakes, ctx, grantsByLake);

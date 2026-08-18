@@ -6,6 +6,7 @@ import {
   migrateUserContext,
   UserContextProps,
   resolveIdentifyEffect,
+  shouldAdoptIdentifyToken,
   shouldRevokeForTokenVersion,
 } from './UserContext';
 
@@ -130,6 +131,22 @@ describe('resolveIdentifyEffect — mfaPending gate + cross-tab guard + stale-ca
 
   it('skips while identify is still loading (neither success nor error)', () => {
     expect(resolveIdentifyEffect({ mfaPending: false, hasToken: true, isSuccess: false, isError: false })).toBe('skip');
+  });
+});
+
+describe('shouldAdoptIdentifyToken - cached identify must never downgrade a live credential', () => {
+  it("adopts identify's token when this tab holds none (the mint case)", () => {
+    expect(shouldAdoptIdentifyToken(null)).toBe(true);
+    expect(shouldAdoptIdentifyToken(undefined)).toBe(true);
+    expect(shouldAdoptIdentifyToken('')).toBe(true);
+  });
+
+  it('refuses to overwrite a token we already hold', () => {
+    // The regression: the identify effect re-runs on every accessToken change, so an
+    // unconditional write puts each freshly rotated token back to the older one sitting in the
+    // react-query cache. The store lands on an expired credential, the next request 401s on a
+    // session that just refreshed fine, and the interceptor signs the user out.
+    expect(shouldAdoptIdentifyToken(fakeToken({ tokenVersion: 0 }))).toBe(false);
   });
 });
 

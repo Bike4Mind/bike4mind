@@ -808,9 +808,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
 
   /**
    * Per-namespace unique file counts, served alongside countFilesByTagForUser by
-   * GET /api/files/tags/counts. Takes the SAME optional scope as that sibling and must keep
-   * being called with it: the workspace rows are keyed off the tag counts but sized by these
-   * ones, so an owner-only namespace count renders a shared or data-lake workspace as zero.
+   * GET /api/files/tags/counts. That route calls the sibling twice with two different scopes
+   * (unnarrowed for tagCounts, excludePersonalShares:true for workspaceTagCounts); this must be
+   * called with the SAME (narrowed) scope as the workspaceTagCounts call specifically, since the
+   * workspace rows are keyed off that count but sized by this one - an owner-only namespace
+   * count renders a shared or data-lake workspace as zero.
    */
   async countUniqueFilesByNamespaceForUser(
     userId: string,
@@ -1071,9 +1073,10 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * transition is one-way. Same exclusion as findByContentHashes, for the same reason.
    *
    * The `{ 'tags.name': 1, archivedAt: 1, deletedAt: 1 }` index bounds the meta-tag arm fully.
-   * The prefix arm only gets a range on the leading key (an anchored regex) and its `userId`
-   * conjunct is not in that index, so a prefix-heavy lake fetches its candidate documents to
-   * check ownership.
+   * The prefix arm is bounded by the `{ userId: 1, 'tags.name': 1, archivedAt: 1, deletedAt: 1 }`
+   * index declared further down this file: `userId` equality narrows the scan to the lake
+   * creator's own files before the `tags.name` range is applied, so a prefix-heavy lake no longer
+   * fetches every other user's matching documents to check ownership.
    */
   async computeDataLakeStats(
     scope: DataLakeMembershipScope
@@ -1801,6 +1804,17 @@ FabFileSchema.index({ userId: 1, deletedAt: 1, fileName: 'text', updatedAt: -1 }
 // meta-tag). The leading `tags.name` prefix also serves the plain tag-access lookups, so no
 // separate single-field `{ 'tags.name': 1 }` index is needed (dropped in a migration).
 FabFileSchema.index({ 'tags.name': 1, archivedAt: 1, deletedAt: 1 });
+
+// Bounds the prefix arm of buildDataLakeMembershipFilter (see computeDataLakeStats above): that
+// query's userId conjunct is not covered by the index above, so without this one Mongo scans the
+// tag-prefix range across every user before filtering userId in memory.
+//
+// `tags.name` leads over `archivedAt`/`deletedAt` (not strict equality-sort-range order) because
+// some callers of buildDataLakeMembershipFilter - findIdsByDataLakeTag, hardDeleteByDataLakeTag -
+// filter on nothing but this predicate, with no archivedAt/deletedAt condition at all; putting
+// those two ahead of tags.name would leave this index unable to bound the tag range for those
+// callers, only the userId equality.
+FabFileSchema.index({ userId: 1, 'tags.name': 1, archivedAt: 1, deletedAt: 1 });
 
 // Content hash deduplication lookups
 FabFileSchema.index({ contentHash: 1, userId: 1 });

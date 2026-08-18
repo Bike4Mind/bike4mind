@@ -23,6 +23,7 @@ import {
 import { isFinalDeliveryAttempt, getDeliveryAttempt } from '@server/queueHandlers/sqsDelivery';
 import type { SQSEvent } from 'aws-lambda';
 import { Resource } from 'sst';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
 /**
  * Non-final-attempt guard shared by fabFileChunk.ts/fabFileVectorize.ts's catch blocks: on any
@@ -71,7 +72,11 @@ export async function deferFailureIfRetryable(
  */
 export async function finalizeBatchIfComplete(
   batch: IDataLakeBatchDocument | null,
-  logger: { error: (msg: string) => void }
+  // `warn` as well as `error`: this is the highest-volume producer of the auto-activate config
+  // event, and `recordLakeConfigChange` is best-effort - it warns and swallows rather than failing
+  // the batch. Without a real logger threaded to it that warning lands on `console.warn`, which is
+  // invisible to log-based alerting, so an audit trail could go quietly dark here of all places.
+  logger: { warn: (msg: string, ...args: unknown[]) => void; error: (msg: string) => void }
 ): Promise<void> {
   if (!batch) return;
   if (batch.vectorizedFiles + batch.failedFiles + batch.skippedFiles < batch.totalFiles) return;
@@ -87,8 +92,12 @@ export async function finalizeBatchIfComplete(
   try {
     const lake = await dataLakeRepository.findById(batch.dataLakeId);
     if (lake) {
+      // Batch completion is the canonical way a draft lake first holds files and flips to active,
+      // so this is the dominant producer of the `auto-activate` config-change event. Unwired, the
+      // status change most likely to happen is the one the history would not contain.
       await dataLakeService.recomputeLakeStats(lake, {
-        db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
+        db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, ...lakeConfigAuditDb },
+        logger,
       });
     }
   } catch (error) {

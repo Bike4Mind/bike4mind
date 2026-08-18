@@ -23,6 +23,9 @@ export const chatContract = defineEndpoint({
   scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
   request: SimplifiedChatRequestSchema,
   requestExample: { message: 'How do I reset my password?', toolMode: 'smart' },
+  // Served by baseApi, so the apiKeyRateLimit middleware sets the windowed
+  // X-RateLimit-* headers on every API-key-authenticated response.
+  emitsRateLimitHeaders: true,
   responses: {
     200: {
       description:

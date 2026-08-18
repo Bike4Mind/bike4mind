@@ -13,6 +13,12 @@ import {
   LAKE_ACCESS_QUERY_TEXT_RETENTION_MAX_DAYS,
   LAKE_ACCESS_QUERY_TEXT_RETENTION_MIN_DAYS,
 } from '../constants/lakeAccessAudit';
+import {
+  LAKE_CONFIG_AUDIT_RETENTION_DEFAULT_DAYS,
+  LAKE_CONFIG_AUDIT_RETENTION_FLOOR_DAYS,
+  LAKE_CONFIG_AUDIT_RETENTION_MAX_DAYS,
+} from '../constants/lakeConfigAudit';
+import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '../constants/forcedRetrieval';
 import { CHAT_MODELS, ChatModels } from '../models';
 import {
   BedrockEmbeddingModel,
@@ -290,6 +296,7 @@ export const SettingKeySchema = z.enum([
   'defaultEmbeddingModel',
   'dataLakeSearchMaxFiles',
   'dataLakeSearchMaxChunks',
+  'forcedRetrievalCharBudget',
 
   // DATA LAKE COST GOVERNANCE (spend levers - see resolveSpendLevers)
   'dataLakeEmbeddingSpendEnabled',
@@ -303,6 +310,7 @@ export const SettingKeySchema = z.enum([
   // LAKE ACCESS AUDIT SETTINGS
   'LakeAccessAuditRetentionDays',
   'LakeAccessQueryTextRetentionDays',
+  'LakeConfigAuditRetentionDays',
 
   // New MaxContentLength setting
   'MaxContentLength',
@@ -1366,6 +1374,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'defaultEmbeddingModel', order: 1 },
       { key: 'dataLakeSearchMaxFiles', order: 2 },
       { key: 'dataLakeSearchMaxChunks', order: 3 },
+      { key: 'forcedRetrievalCharBudget', order: 4 },
     ],
   },
   DATA_LAKE_COST: {
@@ -1724,12 +1733,14 @@ export const API_SERVICE_GROUPS = {
   },
   DATA_LAKE_AUDIT: {
     id: 'dataLakeAuditService',
-    name: 'Data Lake Access Audit',
-    description: 'Retention for the lake access audit trail and its opt-in query-text log',
+    name: 'Data Lake Audit',
+    description:
+      'Retention for the lake audit trail: who READ a lake (plus the opt-in query-text log) and who CHANGED its configuration',
     icon: 'Security',
     settings: [
       { key: 'LakeAccessAuditRetentionDays', order: 1 },
       { key: 'LakeAccessQueryTextRetentionDays', order: 2 },
+      { key: 'LakeConfigAuditRetentionDays', order: 3 },
     ],
   },
   // Note: CONTEXT_TELEMETRY settings are managed in the Context Inspector tab (Admin UI)
@@ -1858,9 +1869,9 @@ export const settingsMap = {
   EnableDataLakeSlackAdd: makeBooleanSetting({
     key: 'EnableDataLakeSlackAdd',
     name: 'Data Lakes: Slack "@datalake add" path',
-    defaultValue: false,
+    defaultValue: true,
     description:
-      'Server-side gate for adding content to a Data Lake from Slack via "@datalake add". Off by default - the Slack command is intercepted deterministically but performs no ingest until this is turned on.',
+      'Server-side gate for adding content to a Data Lake from Slack via "@datalake add". On by default. Turn OFF to make the Slack command inert - it is still intercepted deterministically, so the bot stays silent rather than falling through to the LLM.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 90,
@@ -3138,6 +3149,31 @@ export const settingsMap = {
     order: 3,
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
   }),
+  forcedRetrievalCharBudget: makeNumberSetting({
+    key: 'forcedRetrievalCharBudget',
+    name: 'Forced Retrieval Char Budget',
+    defaultValue: FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
+    min: 1_000,
+    // 100,000 is ~2x the top of the planned validation sweep (12K/24K/48K), not a technical ceiling
+    // this codebase enforces elsewhere (unlike DefaultChunkSize's max, which is tied to the
+    // under-chunked detection threshold). Without SOME max, a fat-fingered extra zero (24000 ->
+    // 240000) passes write-time validation cleanly, then silently sheds conversation history via
+    // ChatCompletionProcess's overflow-recovery loop before eventually hard-erroring - the retrieval
+    // block itself is never shed, only prior turns are, so the failure looks like unrelated context
+    // loss rather than a misconfigured setting.
+    max: 100_000,
+    description:
+      'Total characters of retrieved chunk text injected into a Data-Lake-mode turn. Measured ' +
+      'saturating on every turn against a 47-document lake, so this is the binding constraint on ' +
+      'how much of a corpus reaches the model - not the relevance floor. Raising it admits more ' +
+      'passages at the cost of prompt tokens and latency on every Data-Lake turn; it is NOT ' +
+      'automatically better, since more context can dilute ranking. Platform-only for now: this ' +
+      'read does not go through the scoped-settings resolver, so a `settableAt` block here would ' +
+      "be inert metadata at best and could arm the resolver's fail-loud owner check at worst.",
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 4,
+  }),
   LakeAccessAuditRetentionDays: makeNumberSetting({
     key: 'LakeAccessAuditRetentionDays',
     name: 'Lake Access Audit Retention (days)',
@@ -3150,7 +3186,9 @@ export const settingsMap = {
     description:
       'How long a lake access audit event (who read a lake, and when) is retained, in days. Has a ' +
       'floor of 450 days (12 months live plus a Type II observation tail) - this is a platform-wide ' +
-      'value, not per-organization, until a scoped settings resolver exists.',
+      'value, not per-organization, until a scoped settings resolver exists. Applies only to events ' +
+      'written after a change: expiresAt is computed once at write time and is immutable, so ' +
+      'raising or lowering this value never affects rows already recorded.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.DATA_LAKE_AUDIT.id,
     order: 1,
@@ -3164,10 +3202,31 @@ export const settingsMap = {
     description:
       'How long the opt-in query-text log (the natural-language question behind a lake retrieval) ' +
       'is retained, in days. Always resolved shorter than the audit event retention itself, ' +
-      'regardless of this value, since the query text is more sensitive than the event metadata.',
+      'regardless of this value, since the query text is more sensitive than the event metadata. ' +
+      'Applies only to events written after a change - already-recorded rows keep the expiry ' +
+      'computed at write time and are not retroactively shortened or extended.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.DATA_LAKE_AUDIT.id,
     order: 2,
+  }),
+  LakeConfigAuditRetentionDays: makeNumberSetting({
+    key: 'LakeConfigAuditRetentionDays',
+    name: 'Lake Config Change Audit Retention (days)',
+    defaultValue: LAKE_CONFIG_AUDIT_RETENTION_DEFAULT_DAYS,
+    // Same enforcement shape as the access retention above: the admin API rejects a save below
+    // this, and the write path (lakeConfigChangeEventRepository.record) clamps to it
+    // unconditionally regardless of what is stored.
+    min: LAKE_CONFIG_AUDIT_RETENTION_FLOOR_DAYS,
+    max: LAKE_CONFIG_AUDIT_RETENTION_MAX_DAYS,
+    description:
+      'How long a lake CONFIG-change event (who changed a lake, what they changed, and which ' +
+      'manage rung authorized it) is retained, in days. Floored at 1095 days - deliberately ' +
+      'longer than the access-audit retention above, because a config change is rare and alters ' +
+      'every future answer the lake gives, where a read is one turn. Platform-wide, not ' +
+      'per-organization, until a scoped settings resolver exists.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.DATA_LAKE_AUDIT.id,
+    order: 3,
   }),
   // Data-lake cost governance. These are SPEND levers, not scan budgets: 0 is a valid value
   // meaning "stop spending" (min: 0, unlike the search budgets above), the defaults apply only

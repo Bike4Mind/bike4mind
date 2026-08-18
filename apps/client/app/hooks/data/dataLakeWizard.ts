@@ -678,6 +678,23 @@ export function useBatchProgressListener() {
         // the active lake-detail view mounts one, so this is a single cheap refetch at most. Without
         // it the badge keeps its pending chip until staleTime (2 min) or a remount. (#1666)
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.healthRoot });
+        // Same reason, different surface: `fileCount`/`totalSizeBytes` are cached rollups on the lake
+        // DOCUMENT, and `finalizeBatchIfComplete` calls recomputeLakeStats BEFORE emitting this
+        // message - so the server value is already fresh here and only the client cache is stale.
+        // The batch upload door invalidates `list` at SUBMIT time (see useBatchUpload), which is too
+        // early: ingestion has not run yet, so that refetch returns the pre-upload count.
+        //
+        // PARTIAL BY CONSTRUCTION - this only fires while the wizard is open. This listener is
+        // mounted solely by UploadStep, and DataLakeWizardModal renders <Modal> without
+        // `keepMounted`, so both exits ("Close and continue in background", "Done") tear the
+        // subscription down. Worse, `status: 'complete'` is set the moment browser uploads finish -
+        // before chunk/vectorize - so the Complete screen invites the user to leave BEFORE this
+        // message ever arrives. A user who takes either exit still sees the stale count until a
+        // refresh, exactly as before; nothing regresses, but this is not a whole-product fix.
+        // Making it unconditional means hosting the listener somewhere always-mounted (e.g.
+        // DataLakeUploadIndicator in the Notebook layout) - a separate change, and one that needs
+        // the double-subscribe interaction checked rather than assumed.
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       }
       if (message.taxonomyStatus !== undefined) {
         updates.taxonomyStatus = message.taxonomyStatus;

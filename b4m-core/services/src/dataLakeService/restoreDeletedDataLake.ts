@@ -1,14 +1,22 @@
 import type { IDataLakeAccessGrantRepository, IDataLakeRepository, IFabFileRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { type ManageActor } from './manageRule';
-import { resolveCanManageLake } from './authorizeLakeManage';
+import { canManageLake, type ManageActor } from './manageRule';
+import { loadActiveLakeGrants } from './authorizeLakeManage';
 import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
+import { diffLakeConfig } from './diffLakeConfig';
+import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 import { recomputeLakeStats } from './recomputeLakeStats';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import type { UnarchiveResult } from './unarchiveDataLake';
 
-interface RestoreDeletedDataLakeAdapters {
-  db: {
+interface RestoreDeletedDataLakeAdapters extends LakeConfigAuditAdapters {
+  // The event repo is REQUIRED here, unlike the optional shape LakeConfigAuditAdapters carries
+  // for recomputeLakeStats: every caller of this service is an API route (there is exactly one
+  // per service), so nothing is spared by making it optional and a route that forgot to wire it
+  // would go dark silently - the one failure mode an audit must not have. Required here turns
+  // that into a compile error.
+  db: LakeConfigAuditAdapters['db'] & {
+    lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'setStats' | 'activateIfDraft'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
     fabFiles: Pick<
@@ -38,13 +46,16 @@ interface RestoreDeletedDataLakeAdapters {
 export const restoreDeletedDataLake = async (
   actor: ManageActor,
   dataLakeId: string,
-  { db }: RestoreDeletedDataLakeAdapters
+  { db, logger }: RestoreDeletedDataLakeAdapters
 ): Promise<UnarchiveResult> => {
   const existing = await db.dataLakes.findById(dataLakeId);
   if (!existing) {
     throw new NotFoundError('Data lake not found');
   }
-  if (!(await resolveCanManageLake(existing, actor, { db }))) {
+  // Loaded once and reused for the audit event's manage rung: the gate and the recorded rung must
+  // agree on one grant set, not two reads that could disagree.
+  const grants = await loadActiveLakeGrants(existing, { db });
+  if (!canManageLake(existing, actor, grants)) {
     throw new BadRequestError('You do not have permission to restore this data lake');
   }
   // Allow re-entry from the transitional 'restoring' state so a crashed prior attempt
@@ -83,13 +94,37 @@ export const restoreDeletedDataLake = async (
 
   // Explicit null, not undefined, which mongoose would drop and leave the spent mark in place.
   // Terminal transition only - see the note on archiveDataLake's settle step.
-  await db.dataLakes.update({
+  const updated = await db.dataLakes.update({
     id: dataLakeId,
     status: 'active',
     filesDeletedAt: null,
     filesArchivedAt: null,
     ...lakeConfigWriteStamp(actor),
   });
+  // See unarchiveDataLake: a null here means the lake vanished mid-operation, which this path has
+  // never treated as a failure and which leaves nothing to diff.
+  if (updated) {
+    await recordLakeConfigChange(
+      {
+        actor,
+        lake: existing,
+        grants,
+        action: 'restore',
+        // Diffed against THIS write's own fields, never against `updated`: `BaseModel.update` is a
+        // `findOneAndUpdate` returning the merged document, so a concurrent writer's `$set` landing in
+        // the gap would be recorded under this caller's principal and rung. Same reasoning, and the
+        // same fix, as `updateDataLake` - see its note. The field set here is fixed and small, so the
+        // projection is exact rather than reconstructed.
+        changes: diffLakeConfig(existing, {
+          ...existing,
+          status: 'active',
+          filesDeletedAt: null,
+          filesArchivedAt: null,
+        }),
+      },
+      { db, logger }
+    );
+  }
   await recomputeLakeStats(existing, { db });
 
   return { restoredCount, skippedDuplicates };

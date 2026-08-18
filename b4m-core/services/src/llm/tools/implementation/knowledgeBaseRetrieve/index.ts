@@ -1,6 +1,7 @@
 import { ToolDefinition } from '../../base/types';
 import { CitableSource, IFabFileDocument } from '@bike4mind/common';
 import { filterRetrievalExcluded, isRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
+import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
 import {
@@ -10,6 +11,8 @@ import {
 } from '../../../../dataLakeService/renderRetrievedContentBlock';
 import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
 import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
+import { attributeAccessedLakeIds } from '../../../../dataLakeService/attributeAccessedLakes';
+import { recordLakeAccessEvent } from '../../../../dataLakeService/recordLakeAccessEvent';
 
 interface KnowledgeBaseRetrieveParams {
   file_id?: string;
@@ -102,6 +105,14 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
         }
 
         try {
+          // Memoized per call: Path A's shared-file fallback, Path B's search, and the audit
+          // attribution below each need the caller's dynamic lake access, but at most one of the
+          // first two ever runs (Path A returns before Path B on a resolved/missing file_id) - this
+          // makes whichever one runs first, plus the attribution step, share a single round trip
+          // instead of each re-resolving it.
+          let dynamicAccessPromise: ReturnType<typeof getDynamicDataLakeAccess> | undefined;
+          const dynamicAccess = () => (dynamicAccessPromise ??= getDynamicDataLakeAccess(context));
+
           let files: IFabFileDocument[] = [];
 
           // Path A: direct file_id lookup
@@ -132,7 +143,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                 // without ownership filter, then verify access via data lake tags, prefixes, or group sharing
                 const sharedFile = await context.db.fabfiles.findById(file_id);
                 if (isLiveVisibleFile(sharedFile, retrievalFilter)) {
-                  const { dataLakeTags, dataLakeTagPrefixes } = await getDynamicDataLakeAccess(context);
+                  const { dataLakeTags, dataLakeTagPrefixes } = await dynamicAccess();
                   const fileTags = sharedFile.tags?.map(t => t.name) || [];
                   const hasMetaTagAccess = dataLakeTags.some(dlt => fileTags.includes(dlt));
                   const hasPrefixAccess = dataLakeTagPrefixes.some(p => fileTags.some(t => t.startsWith(p)));
@@ -183,7 +194,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                 }
               );
             } else {
-              const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await getDynamicDataLakeAccess(context);
+              const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await dynamicAccess();
               searchResults = await context.db.fabfiles.search(
                 context.userId,
                 query || '',
@@ -378,6 +389,57 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
               'progress. If content for these documents already appears earlier in this conversation, ' +
               'answer from that; only report them as unavailable if nothing about them appears above.'
             );
+          }
+
+          // Best-effort audit write, computed and recorded OFF the critical path: Path A's owned-
+          // file fast path (the common case - a caller retrieving their own file_id) never touches
+          // dynamicAccess() at all, so awaiting it here would add a full entitlement-resolution
+          // round trip to that common case purely for the audit's sake. Deferred into the same
+          // fire-and-forget shape as the write itself instead, with its own .catch() so a failure
+          // resolving dynamic access can only ever drop the audit row - never (as an inline
+          // `await` here would) propagate into the outer catch and turn a successful retrieval
+          // into "An error occurred while retrieving document content."
+          // Shared by both branches below - only resolvedLakeIds and the await-vs-defer timing differ.
+          const baseAuditPayload = {
+            // Always 'user', including an agent-executor run - see ToolContext.userId's doc comment.
+            principalKind: 'user' as const,
+            principalId: context.userId,
+            organizationId: normalizeId(context.user.organizationId),
+            fileIds: retrievedFiles.map(f => f.id),
+            surface: 'chat-kb-retrieve' as const,
+            ...(query ? { queryText: query } : {}),
+          };
+          if (scope) {
+            // Scoped branch has no lake concept at all (resolvedLakeIds is always []) but is
+            // recorded regardless, same as the search tool's scoped arm - membership IS the
+            // authorization, so there is nothing to await here either.
+            recordLakeAccessEvent(
+              context.db.lakeAccessEvents,
+              { ...baseAuditPayload, resolvedLakeIds: [] },
+              context.logger,
+              context.db.adminSettings
+            );
+          } else if (context.db.lakeAccessEvents) {
+            const fileTagLists = retrievedFiles.map(f => f.tags?.map(t => t.name) ?? []);
+            dynamicAccess()
+              .then(({ lakes }) => {
+                // This tool's corpus is always mixed (a direct id can be owned, shared, or lake;
+                // Path B's search is owner+shared+org+lake too), so a retrieved file with no
+                // recoverable datalake tag may just be the caller's own private file - never fall
+                // back to the full scope, and skip the row entirely if nothing retrieved is
+                // actually attributable to a lake.
+                const resolvedLakeIds = attributeAccessedLakeIds(fileTagLists, lakes, {
+                  allowFullScopeFallback: false,
+                });
+                if (resolvedLakeIds.length === 0) return;
+                return recordLakeAccessEvent(
+                  context.db.lakeAccessEvents,
+                  { ...baseAuditPayload, resolvedLakeIds },
+                  context.logger,
+                  context.db.adminSettings
+                );
+              })
+              .catch(err => context.logger.error('[lakeAccessAudit] failed to resolve retrieve attribution', err));
           }
 
           // Create citable source chips for the UI - mirrors web_search pattern

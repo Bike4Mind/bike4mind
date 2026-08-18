@@ -16,6 +16,12 @@ const handler = baseApi().get(
     // caller already cleared their own copy of can't stay orphaned by someone else's share.
     // `workspaceTagCounts`/`namespaceCounts` are the WORKSPACES-only pair and must share the SAME
     // (narrowed) scope with each other, or a workspace row's existence and its size disagree.
+    //
+    // Known consequence of the two scopes disagreeing by design: a tag on N owned/group files
+    // plus M personally-shared ones shows count N under WORKSPACES here, then N+M one click later
+    // in the Tags view (which reads the unnarrowed tagCounts). This is the partial-count sibling
+    // of the whole-row-disappears case (all N+M files personally shared, so the WORKSPACES row
+    // vanishes entirely) - both follow from the same personal-share exclusion.
     const scope = buildUserFileScope(req.user);
     const workspaceScope = { ...scope, excludePersonalShares: true };
 

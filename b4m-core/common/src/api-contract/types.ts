@@ -63,6 +63,14 @@ export type ResponseSpec = {
    * `X-Request-ID` is attached to every response centrally; do not repeat it.
    */
   headers?: Readonly<Record<string, string>>;
+  /**
+   * Documented exemption from the shared `ApiErrorSchema` envelope for a >= 400
+   * response, carrying the REASON it cannot conform. Deliberately a string, not a
+   * boolean: the exemptions must be greppable and justified in place, since every
+   * one of them is a shape a generated client has to special-case.
+   * Enforced by assertContractConventions.ts; see CONVENTIONS.md section 1.
+   */
+  bespokeErrorShape?: string;
 };
 
 /** curl/JS/Python sample body for the docs (attached as x-codeSamples). */
@@ -70,6 +78,34 @@ export type CodeSample = {
   body: unknown;
   authToken: string;
   streaming?: boolean;
+};
+
+/**
+ * A rule in CONVENTIONS.md that `assertContractConventions` enforces, and that a
+ * contract can be exempted from. Exemptions exist because this gate was added to
+ * an ALREADY-PUBLISHED surface: some conforming change would break live callers,
+ * which the conventions themselves forbid.
+ *
+ * `error-envelope` is deliberately absent: `ResponseSpec.bespokeErrorShape`
+ * already excuses that rule per-RESPONSE, so a contract-wide version would only
+ * ever be the blunter way to say the same thing.
+ */
+export type ConventionRule = 'status-table' | 'scope-required' | 'version-root';
+
+/**
+ * Exemptions from {@link ConventionRule}, each carrying WHY.
+ *
+ * `status-table` is keyed by the individual status it excuses, not granted
+ * contract-wide: TTS needs `402` tolerated, and that must not also wave through
+ * an unrelated `418` on the same endpoint. The other two rules are contract-wide
+ * because that is genuinely their scope - a path has one shape, and an endpoint
+ * either gates on a scope or does not.
+ */
+export type ConventionExemptions = {
+  /** HTTP status -> why this endpoint may keep returning it. */
+  'status-table'?: Readonly<Record<number, string>>;
+  'scope-required'?: string;
+  'version-root'?: string;
 };
 
 export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
@@ -111,5 +147,24 @@ export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
   responses: Record<number, ResponseSpec>;
   /** SSE endpoint: skips JSON response-body docs and gets streaming code samples. */
   streaming?: boolean;
+  /**
+   * This endpoint's responses carry the six `X-RateLimit-*-{Minute,Day}` headers,
+   * i.e. it runs the `apiKeyRateLimit` middleware (via `baseApi`). Declared here
+   * rather than inferred, because whether a route reaches that middleware is a
+   * transport fact the contract cannot derive: the Lambda adapter sets no such
+   * headers, and the Fargate SSE route computes them but discards them.
+   * Must stay in sync with the middleware chain the handler actually mounts.
+   */
+  emitsRateLimitHeaders?: boolean;
   codeSample?: CodeSample;
+  /**
+   * Conventions this endpoint is exempt from, each mapped to WHY. The only
+   * legitimate reason: the endpoint was published before the rule existed and
+   * conforming now would break live callers - a status code and a required scope
+   * cannot be aliased the way a URL or a field can. A record rather than a list
+   * so the justification lives next to the exemption and stays greppable.
+   * This is debt: entries are meant to be removed behind a sunset, never added
+   * for a new endpoint. See CONVENTIONS.md.
+   */
+  conventionExemptions?: Readonly<ConventionExemptions>;
 };

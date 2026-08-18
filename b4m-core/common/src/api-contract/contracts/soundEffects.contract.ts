@@ -49,6 +49,8 @@ export const generateSoundEffectContract = defineEndpoint({
     },
     503: { description: 'No provider API key is configured for this deployment.', schema: ApiErrorSchema },
   },
+  // Served by baseApi, so apiKeyRateLimit sets the windowed X-RateLimit-* headers.
+  emitsRateLimitHeaders: true,
   codeSample: {
     authToken: 'b4m_live_<key>',
     streaming: false,

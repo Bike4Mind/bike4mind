@@ -27,6 +27,8 @@ export interface RecordOperationalUsageParams {
   /** The user's organization, when they belong to one; attribution rolls up to it. */
   organization?: IOrganizationDocument | null;
   sessionId?: string;
+  /** Data lake this call is 1:1 attributable to (ingestion embeds only). */
+  dataLakeId?: string;
   feature: OperationalUsageFeature;
   /** Provider/backend, e.g. 'openai', 'voyageai'. */
   provider: string;
@@ -40,6 +42,17 @@ export interface RecordOperationalUsageParams {
   costUsd: number;
   latencyMs?: number;
   source?: CompletionSource;
+  /**
+   * Skip the credit-deduction path entirely, regardless of the billOperationalUsage/
+   * enforceCredits admin settings. For spend already governed by its own dedicated
+   * budget/gate (e.g. data-lake embedding spend levers) - debiting credits on top of
+   * that gate would be a second, unreviewed billing mechanism for the same spend.
+   * Redundant with passing a narrowed `db` (see RecordOperationalUsageAdapters) that omits
+   * creditTransactions/users/organizations, which already forces recorded-only - use this
+   * flag when the caller still has the full db but wants the bypass explicit and intentional
+   * rather than an incidental side effect of which repos it happened to wire up.
+   */
+  bypassCreditBilling?: boolean;
 }
 
 export interface RecordOperationalUsageAdapters {
@@ -67,6 +80,23 @@ export interface RecordOperationalUsageAdapters {
  * is measuring. The billing (deduct) path reuses the `text_generation_usage` ledger machinery
  * for both features - the precise feature ('operations' | 'embedding') lives on the UsageEvent;
  * the ledger row (opt-in, off by default) does not distinguish embeddings from operational text.
+ *
+ * PER-MEMBER CAP: deliberately EXEMPT (#1651). `maxCreditsPerMember` BELONGS at the reservation
+ * pre-flight of the paths that trigger this spend, never here - this helper must not throw, so a
+ * cap check could only skip the debit (already what an unbilled call does), break the operational
+ * call it measures, or mark the UsageEvent over-cap (observability, not enforcement). That is
+ * where the cap belongs, not a claim that it is there today: see below for where it is missing.
+ *
+ * The bound is uneven, so do not read this as "every caller is gated upstream". The LLM-tool and
+ * knowledge-base callers pass a narrowed db with no billing repos, so they can never reach the
+ * deduct path at all - their safety comes from the adapter shape, not from a gated caller. The two
+ * debit-capable callers are `server/events/recordSessionOperationalUsage` and
+ * `pages/api/data-lakes/semantic-search`, and NEITHER is gated today: session ops are queued with
+ * no pre-flight by at least `POST /api/sessions/[id]/tag`, `POST /api/sessions/[id]/summary`, the
+ * project-attach fan-out (`pages/api/projects/[id]/sessions.ts`) and the admin spider (#1852;
+ * other `SessionEvents` publishers do sit behind gated primary actions), and semantic-search has
+ * no credit check of its own (#1843). Gating belongs at those entry points, not in a measurement
+ * helper.
  */
 export async function recordOperationalUsage(
   params: RecordOperationalUsageParams,
@@ -82,6 +112,7 @@ export async function recordOperationalUsage(
     // Both gates must be on to debit: billOperationalUsage opts this spend in,
     // enforceCredits is the platform-wide metering master switch (off on self-host).
     const shouldBill =
+      !params.bypassCreditBilling &&
       (getSettingsValue('billOperationalUsage', settings) ?? false) &&
       (getSettingsValue('enforceCredits', settings) ?? false);
 
@@ -124,6 +155,7 @@ export async function recordOperationalUsage(
     ownerId: organization ? organization.id : user.id,
     ownerType: organization ? CreditHolderType.Organization : CreditHolderType.User,
     sessionId: params.sessionId,
+    dataLakeId: params.dataLakeId,
     feature,
     provider: params.provider,
     model: params.model,

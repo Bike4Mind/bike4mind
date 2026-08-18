@@ -208,6 +208,38 @@ async function tryAddSpendWithinLimit(
   return res.modifiedCount === 1;
 }
 
+/**
+ * Metered twin of tryAddSpendWithinLimit: same atomic reserve-first contract (identical filter
+ * and update - the atomicity argument is unchanged), but returns the post-increment total via
+ * `findOneAndUpdate({new: true})` instead of a modified-count boolean, so a caller can compute
+ * "what % of budget is this lake at now" without a second, racy read. `spendMicroUsd` is `null`
+ * for the amount<=0 no-op-success branch (no document read happened) and for a denial - callers
+ * must skip any %-of-budget check on `null` rather than treat it as zero spend.
+ */
+async function tryAddSpendWithinLimitMetered(
+  model: mongoose.Model<IDataLakeDocument>,
+  id: string,
+  amountMicroUsd: number,
+  limitMicroUsd: number
+): Promise<{ granted: boolean; spendMicroUsd: number | null }> {
+  if (limitMicroUsd <= 0) return { granted: false, spendMicroUsd: null };
+  if (amountMicroUsd <= 0) return { granted: true, spendMicroUsd: null };
+  if (amountMicroUsd > limitMicroUsd) return { granted: false, spendMicroUsd: null };
+  const doc = await model.findOneAndUpdate(
+    {
+      _id: id,
+      $or: [
+        { embeddingSpendMicroUsd: { $exists: false } },
+        { embeddingSpendMicroUsd: { $lte: limitMicroUsd - amountMicroUsd } },
+      ],
+    },
+    { $inc: { embeddingSpendMicroUsd: amountMicroUsd } },
+    { new: true }
+  );
+  if (!doc) return { granted: false, spendMicroUsd: null };
+  return { granted: true, spendMicroUsd: doc.embeddingSpendMicroUsd ?? null };
+}
+
 class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements IDataLakeRepository {
   constructor(private dataLakeModel: mongoose.Model<IDataLakeDocument>) {
     super(dataLakeModel);
@@ -526,7 +558,19 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
   }
 
   async tryAddEmbeddingSpend(id: string, amountMicroUsd: number, limitMicroUsd: number): Promise<boolean> {
-    return tryAddSpendWithinLimit(this.dataLakeModel, id, amountMicroUsd, limitMicroUsd);
+    // Thin wrapper over the metered twin (no production caller needs the lake-level boolean
+    // form anymore - the gate only calls tryAddEmbeddingSpendMetered), so there is exactly one
+    // atomic-write code path for this meter instead of two, while keeping the boolean form and
+    // its existing test coverage intact for any future non-metered caller.
+    return (await this.tryAddEmbeddingSpendMetered(id, amountMicroUsd, limitMicroUsd)).granted;
+  }
+
+  async tryAddEmbeddingSpendMetered(
+    id: string,
+    amountMicroUsd: number,
+    limitMicroUsd: number
+  ): Promise<{ granted: boolean; spendMicroUsd: number | null }> {
+    return tryAddSpendWithinLimitMetered(this.dataLakeModel, id, amountMicroUsd, limitMicroUsd);
   }
 
   async releaseEmbeddingSpend(id: string, amountMicroUsd: number): Promise<boolean> {

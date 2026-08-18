@@ -24,6 +24,7 @@ import {
   isMediaModelType,
   type ModelInfo,
 } from '@bike4mind/common';
+import { resolveOutputMaxTokens } from '@bike4mind/llm-adapters';
 
 /**
  * The context window a caller should reason against: the catalog's own figure, except for a media
@@ -158,6 +159,47 @@ export function attachedContentExtractionBudget(maxSafeInputTokens: number, syst
       Math.floor((maxSafeInputTokens - boundedReserve) * ATTACHED_CONTENT_EXTRACTION_SHARE)
     )
   );
+}
+
+/**
+ * Output budget used when a caller supplies no max_tokens. Within supported output limits for
+ * every configured non-reasoning model; models that reason inside the output budget default to
+ * ADAPTIVE_THINKING_MAX_TOKENS_FLOOR instead, since their reasoning would otherwise consume this
+ * whole budget (see resolveOutputMaxTokens/reasonsWithinOutputBudget for which those are).
+ * Distinct from the catalog's DEFAULT_MAX_OUTPUT_TOKENS, which fills in a model's *capability*
+ * when its record omits one.
+ */
+export const DEFAULT_OUTPUT_MAX_TOKENS = 4096;
+
+/**
+ * Verbatim-history token budget shared by every caller that sizes one: how much of the model's
+ * safe input window recent conversation turns may claim before older ones fall out to
+ * contextSummary. Pulled into one place because ChatCompletionProcess.ts and
+ * ChatCompletionFeatures.ts (QuestMaster) both need it and must not drift apart - the first
+ * version of the QuestMaster call site hand-copied the formula and got the window wrong for
+ * every model below the unknown-model floor.
+ *
+ * Always returns at least 1, even on a window so small or a message so long that the raw
+ * subtraction goes to zero or negative: `Math.max(0, budget) && budget > 0` downstream treats a
+ * falsy budget as "no budget given" and skips trimming entirely, which is the exact unbounded
+ * history this function exists to prevent. A budget of 1 still trims to the single most recent
+ * turn instead of disabling the trim.
+ */
+export function computeVerbatimTokenBudget(
+  modelInfo: ModelInfo,
+  requestedMaxTokens: number | undefined,
+  opts: { verbatimWindowFraction: number; nonHistoryOverheadTokens: number }
+): number {
+  const modelMaxOutput = modelInfo.max_tokens ?? 16384;
+  const safeMaxTokens = resolveOutputMaxTokens({
+    requested: requestedMaxTokens,
+    fallback: DEFAULT_OUTPUT_MAX_TOKENS,
+    modelInfo,
+    modelMaxOutputTokens: modelMaxOutput,
+  });
+  const safeInputTokens = Math.max(0, safeInputWindow(modelInfo, safeMaxTokens));
+  const availableForVerbatim = Math.max(0, safeInputTokens - opts.nonHistoryOverheadTokens);
+  return Math.max(1, Math.floor(availableForVerbatim * opts.verbatimWindowFraction));
 }
 
 /** The buffer buildAndSortMessages holds back before dividing the input window. */

@@ -9,9 +9,17 @@ import { isEffectiveOwner, resolveEffectiveOwnerIds, type ManageActor } from './
 import { assertLakeGrantable } from './assertLakeAccess';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
 import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
+import { ownershipChange } from './diffLakeConfig';
+import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 
-interface TransferLakeOwnershipAdapters {
-  db: {
+interface TransferLakeOwnershipAdapters extends LakeConfigAuditAdapters {
+  // The event repo is REQUIRED here, unlike the optional shape LakeConfigAuditAdapters carries
+  // for recomputeLakeStats: every caller of this service is an API route (there is exactly one
+  // per service), so nothing is spared by making it optional and a route that forgot to wire it
+  // would go dark silently - the one failure mode an audit must not have. Required here turns
+  // that into a compile error.
+  db: LakeConfigAuditAdapters['db'] & {
+    lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'update'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'upsertGrant'>;
     users: Pick<IUserRepository, 'findById'>;
@@ -163,6 +171,42 @@ export const transferLakeOwnership = async (
       });
     }
   }
+
+  // Ownership moves through grant rows, so `diffLakeConfig` can never see this change - the lake
+  // document is byte-identical apart from the stamp above. `ownershipChange` synthesizes the entry
+  // on the derived `effectiveOwnerUserId` field so a transfer reads as an ordinary before -> after
+  // row in the history rather than an action with nothing to show.
+  //
+  // Recorded from the grants the GATE used, not a re-read, and only after they have landed - the
+  // same ordering the stamp uses, and for the same reason: never claim a transfer that failed
+  // partway.
+  // The rung is passed EXPLICITLY rather than left to resolveLakeManageRung, because this gate is
+  // deliberately narrower than canManageLake (admin / effective owner / org-admin only - a curator
+  // manages but cannot hand ownership away). The resolver mirrors canManageLake's wider ladder and
+  // checks the curator grant BEFORE the org-admin rung, so it would label an org-admin succession
+  // `grant-curator` - naming an authority this function explicitly forbids from transferring. That
+  // is reachable through this very function: a prior transfer DEMOTES each former owner to curator,
+  // so a creator who is also an org admin ends up holding exactly that grant. `manageRung` is an
+  // authorization fact, so it must come from the branch that actually authorized the call.
+  const manageRung = actor.isAdmin
+    ? 'platform-admin'
+    : isOwner
+      ? grants.some(g => g.principalType === 'user' && g.principalId === actor.userId && g.role === 'owner')
+        ? 'grant-owner'
+        : 'creator'
+      : 'org-admin';
+
+  await recordLakeConfigChange(
+    {
+      actor,
+      lake,
+      grants,
+      action: 'transfer-ownership',
+      manageRung,
+      changes: [ownershipChange(priorOwners, newOwnerUserId)].filter(c => c !== null),
+    },
+    { db, logger }
+  );
 
   return { newOwnerUserId, demotedUserIds };
 };

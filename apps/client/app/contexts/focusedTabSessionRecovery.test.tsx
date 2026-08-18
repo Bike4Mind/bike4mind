@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AxiosError, type AxiosAdapter, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
-import { api, resetRefreshPromise, resetRedirectingGuard } from './ApiContext';
+import { api, resetRedirectingGuard } from './ApiContext';
+import { resetRefreshCoordinator } from '@client/app/utils/refreshCoordinator';
 import { useAccessToken } from '../hooks/useAccessToken';
 import { resetProbeGuardForTests, scheduleSessionRevalidation } from '../utils/sessionBootstrap';
 
@@ -187,7 +188,7 @@ describe('focused-tab session recovery (#1691)', () => {
     h.reconnectStopCalls = 0;
     h.lastOptions = null as unknown as CapturedWsOptions;
 
-    resetRefreshPromise();
+    resetRefreshCoordinator();
     resetRedirectingGuard();
     resetProbeGuardForTests();
 

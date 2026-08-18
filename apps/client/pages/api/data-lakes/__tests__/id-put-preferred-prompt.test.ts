@@ -28,6 +28,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
+  // The config-audit repos this route wires (see lakeConfigAuditDb). Stubbed rather than
+  // omitted because the mock replaces the whole module: a missing export is an import-time
+  // failure, not a silent undefined.
+  lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   dataLakeBatchRepository: {},
   fabFileRepository: {},
   dataLakeAccessGrantRepository: {
@@ -39,9 +43,15 @@ vi.mock('@bike4mind/database', () => ({
     removeGrant: vi.fn().mockResolvedValue(true),
     removeAllForLake: vi.fn().mockResolvedValue(0),
   },
-  // The route module imports adminSettingsRepository (GET wires the #1673 cutover flag); the mock
-  // must export it or the whole module fails to load. The PUT path under test never reads it.
-  adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(false) },
+  // ONE declaration, deliberately: this key was previously declared twice and the second silently
+  // shadowed the first, dropping the retention methods the audit path reads. It serves two
+  // consumers - the GET route's #1673 cutover flag (getSettingsValue) and the config-audit
+  // retention resolver (findBySettingNames/findAll) - so both live here.
+  adminSettingsRepository: {
+    getSettingsValue: vi.fn().mockResolvedValue(false),
+    findBySettingNames: vi.fn().mockResolvedValue([]),
+    findAll: vi.fn().mockResolvedValue([]),
+  },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 // Real allowlist predicate on purpose - the whole point is which ids pass.
@@ -87,7 +97,15 @@ describe('PUT /api/data-lakes/[id] - preferredSystemPromptId allowlist is enforc
       expect.objectContaining({ userId: 'owner', isAdmin: false }),
       'lake1',
       expect.objectContaining({ preferredSystemPromptId: 'triage_router' }),
-      expect.anything()
+      // Not expect.anything(): the config-audit repos are wired through one shared helper and a
+      // route that dropped `adminSettings` would still compile (it is optional so the retention
+      // read stays best-effort) and would silently pin every event to the floor default.
+      expect.objectContaining({
+        db: expect.objectContaining({
+          lakeConfigChangeEvents: expect.anything(),
+          adminSettings: expect.anything(),
+        }),
+      })
     );
     expect(json.mock.calls[0][0].preferredSystemPromptId).toBe('triage_router');
   });

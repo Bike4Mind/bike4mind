@@ -148,6 +148,20 @@ class LakeAccessEventRepository extends BaseRepository<ILakeAccessEventDocument>
     }
   }
 
+  /**
+   * NOT a complete picture of every read a lake was ever party to, in two different directions -
+   * a UI presenting per-lake history needs to say so rather than implying this list is exhaustive:
+   *
+   * - Under-inclusive: an agent-scoped chat read (surface chat-kb-search-scoped, or
+   *   chat-kb-retrieve/chat-kb-search under a kbScope) is authorized by the agent owner's curated
+   *   file-id whitelist, not by lake membership, so it is recorded with resolvedLakeIds always
+   *   empty and never matches this query - see the "never consults lake access" comments at those
+   *   record call sites. Those events are still fully durable and visible via listByPrincipal.
+   * - Noisy: `data-lake-public-browse` rows DO match this query (the browsed lakes are the
+   *   result, so resolvedLakeIds is genuinely populated) but are catalog-metadata reads (name/
+   *   description), not content reads - a caller presenting this as "who read this lake's
+   *   content" should filter or label by `surface` rather than treat every match as equivalent.
+   */
   async listByLake(lakeId: string, opts?: { limit?: number }): Promise<ILakeAccessEventDocument[]> {
     const query = this.eventModel.find({ resolvedLakeIds: lakeId }).sort({ createdAt: -1 });
     if (opts?.limit) query.limit(opts.limit);

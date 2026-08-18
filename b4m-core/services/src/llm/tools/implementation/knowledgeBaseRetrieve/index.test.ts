@@ -7,6 +7,7 @@ const getDynamicDataLakeAccessMock = vi.fn().mockResolvedValue({
   dataLakeTags: [],
   dataLakeTagPrefixes: [],
   scopedTagPrefixes: [],
+  lakes: [],
 });
 vi.mock('../../../../dataLakeService/getDynamicDataLakeTags', () => ({
   getDynamicDataLakeAccess: (...args: unknown[]) => getDynamicDataLakeAccessMock(...args),
@@ -770,5 +771,164 @@ describe('retrieve_knowledge_content untrusted-content delimiter (#1659)', () =>
     expect(out).not.toContain('[Data Lake -');
     expect(out).toContain(BEGIN);
     expect(out.indexOf('body')).toBeLessThan(out.indexOf(END));
+  });
+});
+
+describe('retrieve_knowledge_content access-event audit', () => {
+  const record = vi.fn().mockResolvedValue(undefined);
+  // recordLakeAccessEvent awaits a platform-retention settings read before calling record(), so
+  // the call lands one microtask after the tool itself returns - flush before asserting on it.
+  const flushAsync = () => new Promise(resolve => setImmediate(resolve));
+
+  // makeContext's `...overrides` replaces `db` wholesale rather than merging, so every case here
+  // that needs lakeAccessEvents also has to re-supply fabfiles/fabfilechunks alongside it.
+  function auditContext(overrides: Partial<ToolContext> = {}): ToolContext {
+    return makeContext({
+      db: {
+        fabfiles: { findByIdAndUserId: vi.fn(), findById: vi.fn(), search: vi.fn() },
+        fabfilechunks: pagedTextChunkRepo([{ id: 'c1', text: 'chunk body' }]),
+        lakeAccessEvents: { record },
+      } as never,
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    record.mockClear();
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:x'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [{ id: 'lake-x', datalakeTag: 'datalake:x' }],
+    });
+  });
+
+  // The regression this guards against: attribution used to await dynamicAccess() inline, so
+  // Path A's owned-file fast path (which never itself calls dynamicAccess) paid a full
+  // entitlement-resolution round trip before returning, purely for the audit's sake. If that
+  // await ever comes back, this test hangs instead of resolving, since getDynamicDataLakeAccess
+  // here never settles.
+  it('returns the retrieved content without waiting on dynamic-lake-access resolution', async () => {
+    getDynamicDataLakeAccessMock.mockReturnValue(new Promise(() => {})); // deliberately never settles
+    const ctx = auditContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Clean.pdf', tags: [] })
+    );
+
+    const out = await runById(ctx);
+
+    expect(out).toContain('Clean.pdf');
+  });
+
+  it('records a chat-kb-retrieve event attributed to the tag-matched lake', async () => {
+    const ctx = auditContext({ user: { id: 'u1', groups: [], organizationId: 'org1' } as never });
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Clean.pdf', tags: [{ name: 'datalake:x' }] })
+    );
+
+    await runById(ctx);
+    await flushAsync();
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principalKind: 'user',
+        principalId: 'u1',
+        organizationId: 'org1',
+        resolvedLakeIds: ['lake-x'],
+        fileIds: [FILE_ID],
+        surface: 'chat-kb-retrieve',
+      })
+    );
+  });
+
+  it('passes the query through as queryText on the tag/query path', async () => {
+    const ctx = auditContext();
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: [makeFile({ id: 'c', fileName: 'Clean Guide.pdf', tags: [{ name: 'datalake:x' }] })],
+    });
+
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    await tool.toolFn({ query: 'retired guide' });
+    await flushAsync();
+
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ queryText: 'retired guide' }));
+  });
+
+  it('records with no lake attribution for an agent-scoped call, without an extra lake lookup', async () => {
+    const ctx = auditContext({ retrievalFilter: undefined, kbScope: { fileIds: [FILE_ID] } });
+    (ctx.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockResolvedValue(makeFile());
+
+    await runById(ctx);
+    await flushAsync();
+
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ resolvedLakeIds: [], surface: 'chat-kb-retrieve' }));
+    // The scoped branch must never consult owner-wide lake access, audit or not.
+    expect(getDynamicDataLakeAccessMock).not.toHaveBeenCalled();
+  });
+
+  it('does not call getDynamicDataLakeAccess for attribution when no recorder is wired', async () => {
+    const ctx = makeContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(makeFile());
+
+    await runById(ctx);
+
+    expect(getDynamicDataLakeAccessMock).not.toHaveBeenCalled();
+  });
+
+  it('does not record an event when nothing was retrieved (not-found)', async () => {
+    const ctx = auditContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (ctx.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    await runById(ctx);
+
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  // This tool's corpus is always mixed (a direct id can be owned, shared, or lake; the tag/query
+  // search is owner+shared+org+lake too) - a retrieved file with no recoverable datalake tag may
+  // just be the caller's own private file, so this must NOT fall back to the full authorized scope.
+  it('does not record when the retrieved file carries no recoverable datalake tag (mixed corpus, no fallback)', async () => {
+    const ctx = auditContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'MyOwnFile.pdf' })
+    );
+
+    await runById(ctx);
+    await flushAsync();
+
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('still returns retrieved content when the audit write rejects', async () => {
+    record.mockRejectedValueOnce(new Error('mongo blip'));
+    const ctx = auditContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Clean.pdf', tags: [{ name: 'datalake:x' }] })
+    );
+
+    const out = await runById(ctx);
+    await flushAsync();
+
+    expect(out).toContain('Retrieved content from');
+    expect(record).toHaveBeenCalled();
+  });
+
+  // The attribution's own dynamicAccess() call is a separate failure point from record() above -
+  // deferred off the critical path with its own .catch(), so a rejection there can now only ever
+  // drop the audit row, not (as an inline `await` would) propagate into the tool's outer catch
+  // and turn a successful retrieval into "An error occurred while retrieving document content."
+  it('still returns retrieved content when resolving dynamic lake access for attribution rejects', async () => {
+    getDynamicDataLakeAccessMock.mockRejectedValueOnce(new Error('entitlements lookup failed'));
+    const ctx = auditContext();
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Clean.pdf', tags: [{ name: 'datalake:x' }] })
+    );
+
+    const out = await runById(ctx);
+    await flushAsync();
+
+    expect(out).toContain('Retrieved content from');
+    expect(record).not.toHaveBeenCalled();
   });
 });

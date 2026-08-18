@@ -49,9 +49,12 @@ export const OrgSubscriptionSubscribeSchema = z
     organizationId: z.string().optional(),
 
     /**
-     * The URL to redirect to after the subscription is created.
+     * The URL to redirect to after the subscription is created. Must be a real URL -
+     * origin is further restricted to the deployed app in the subscribe handler
+     * (isAllowedCallbackOrigin) to prevent an open-redirect through Stripe's hosted
+     * checkout success/cancel pages.
      */
-    callbackUrl: z.string(),
+    callbackUrl: z.string().url(),
 
     /**
      * If organizationId is not provided, this is the data of the organization to create.
