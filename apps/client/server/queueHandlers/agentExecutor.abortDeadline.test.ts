@@ -4,11 +4,12 @@ import type { Context } from 'aws-lambda';
 // `processSubagentDispatch`'s abort/deadline branch (the `abortController.signal.aborted`
 // check inside the delegation try block) disambiguates a user/cascade abort from the
 // Lambda-deadline watchdog via a second `checkAbortFlag` read, then fires
-// `fireDagNodeTerminalOnRefusal` with the matching terminal status. Per that helper's own
-// docstring, the deadline case is the realistic production failure mode for a
-// `very_thorough` node, and neither shape had a regression test driving the real handler
-// through it - the three existing `subagentCapGate` tests cover the same hook from other
-// refusal paths (member-cap, session-ownership, outer-catch) that never reach this far.
+// `fireDagNodeTerminalOnRefusal` with the matching terminal status. Per
+// `processSubagentDispatch`'s own KNOWN LIMITATION docstring, the deadline case is the
+// realistic production failure mode for a `very_thorough` node, and neither shape had a
+// regression test driving the real handler through it - the three existing
+// `subagentCapGate` tests cover the same hook from other refusal paths (member-cap,
+// session-ownership, outer-catch) that never reach this far.
 
 const benignStub: ProxyHandler<object> = {
   get(_, key) {
