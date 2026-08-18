@@ -18,6 +18,9 @@ import { SurfaceBreadcrumb } from '@client/app/components/datalake/SurfaceBreadc
 import DataLakeTree from './DataLakeTree';
 import DataLakeChatTree from './DataLakeChatTree';
 import DataLakeArticle from './DataLakeArticle';
+import { resolveEmptyVariant } from './resolveEmptyVariant';
+import DataLakeRail from './DataLakeRail';
+import SelectedLakeHeader from './SelectedLakeHeader';
 import DataLakeRailViewer from './DataLakeRailViewer';
 import { resolveManageableLake } from './resolveManageableLake';
 import { DataLakeNavProvider } from './dataLakeNavContext';
@@ -42,6 +45,7 @@ import {
   getNodesAtPath,
 } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import DataLakeIngestPickerModal from '@client/app/components/DataLakeWizard/DataLakeIngestPickerModal';
+import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { readDroppedItems } from '@client/app/utils/dropReader';
 import { DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
 import { toast } from 'sonner';
@@ -145,6 +149,8 @@ export default function DataLakeExplorer({
   const acceptedHint = copy.dropAcceptedHint;
   const accentInk = inkFor(theme.accent, isDark);
   const [breadcrumb, setBreadcrumb] = useState<string[]>([]);
+  /** Page-mode lake scope; null is the explicit all-lakes view. Chat mode never sets it. */
+  const [selectedLakeId, setSelectedLakeId] = useState<string | null>(null);
   // Page mode: file shown in the inline article reader.
   const [userSelectedFile, setUserSelectedFile] = useState<IFabFileDocument | null>(null);
   // External-chat hosts only: our own KnowledgeViewer is open beside the tree (View action).
@@ -170,6 +176,7 @@ export default function DataLakeExplorer({
   const workBenchFiles = useWorkBenchFiles(currentSessionId);
   const attachedFileIds = useMemo(() => new Set(workBenchFiles.map(f => f.id)), [workBenchFiles]);
   const setDataLakeMode = useSetDataLakeMode();
+  const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
   // When the sidenav is collapsed its floating expand control overlaps the top-left, so the
   // chat tree needs extra left clearance past it (same 48px the deck top bar uses).
   const sidenavOpen = useNotebookLayout(s => s.openSideNav);
@@ -254,8 +261,10 @@ export default function DataLakeExplorer({
     [chatEmbedded, setRailViewerOpen]
   );
 
-  // Delete gating: the lake list is only needed in chat mode (page mode has no row actions).
-  const { data: lakes } = useGetDataLakes(chatMode);
+  // Enabled on BOTH surfaces now. Chat mode needs it to gate row deletes; page mode needs it to
+  // answer "do I have any lakes?" - a question the page could not previously ask, which is why its
+  // empty state answered it from the file scope instead and got it wrong (#1645).
+  const { data: lakes, isLoading: lakesLoading, isError: lakesError, refetch: refetchLakes } = useGetDataLakes();
   const removeFile = useRemoveFileFromDataLake(deleteTarget?.lake.id ?? null);
   const canDeleteFile = useCallback((file: IFabFileDocument) => resolveManageableLake(file, lakes) != null, [lakes]);
   const handleDeleteFile = useCallback(
@@ -313,7 +322,21 @@ export default function DataLakeExplorer({
 
   // Phase 1: Lightweight counts for the tree (server-side aggregation, ~50 entries)
   const { data: tagCountsData, isLoading: tagCountsLoading, isError: tagCountsError } = useGetDataLakeTagCounts(source);
-  const tree = useMemo(() => buildTagTree(tagCountsData?.tagCounts ?? []), [tagCountsData]);
+
+  const selectedLake = useMemo(
+    () => (selectedLakeId ? (lakes?.find(l => l.id === selectedLakeId) ?? null) : null),
+    [lakes, selectedLakeId]
+  );
+
+  // Lake scoping is a client-side filter on the SAME tag-counts payload the unscoped tree uses -
+  // every taxonomy tag in a lake is namespaced under its fileTagPrefix, so no extra request is
+  // needed and switching lakes costs nothing.
+  const scopedTagCounts = useMemo(() => {
+    const all = tagCountsData?.tagCounts ?? [];
+    if (!selectedLake) return all;
+    return all.filter(tc => tc.tag.startsWith(selectedLake.fileTagPrefix));
+  }, [tagCountsData, selectedLake]);
+  const tree = useMemo(() => buildTagTree(scopedTagCounts), [scopedTagCounts]);
 
   // Derive the current leaf tag from breadcrumb + tree state. A branch node (has children) can
   // ALSO carry files tagged with its own exact path, which DataLakeTreeView renders mixed into
@@ -400,13 +423,48 @@ export default function DataLakeExplorer({
   const handleSelectFile = useCallback((file: IFabFileDocument) => setUserSelectedFile(file), []);
 
   // Truthful distinct-file count (the tree's fileCounts are tag-occurrence sums, which
-  // overcount multi-tagged articles ~2x); branch count stays tree-derived.
-  const totalArticles = tagCountsData?.uniqueArticleCounts?.total ?? 0;
+  // overcount multi-tagged articles ~2x); branch count stays tree-derived. Follows the lake scope
+  // so the ticker describes what is actually on screen.
+  const totalArticles = selectedLake
+    ? (tagCountsData?.uniqueArticleCounts?.byPrefix?.[selectedLake.fileTagPrefix] ?? 0)
+    : (tagCountsData?.uniqueArticleCounts?.total ?? 0);
   const branchCount = useMemo(() => tree.reduce((sum, node) => sum + Math.max(node.children.length, 1), 0), [tree]);
 
-  // Zero-state: nothing to browse yet. Drives the create-first affordance so the first
-  // lake can be created in place instead of dead-ending on an empty scope (#837).
-  const isEmpty = !tagCountsLoading && !tagCountsError && totalArticles === 0 && tree.length === 0;
+  /** Nothing to browse in the CURRENT scope. Says nothing about how many lakes exist. */
+  const isScopeEmpty = !tagCountsLoading && !tagCountsError && totalArticles === 0 && tree.length === 0;
+
+  // Precedence lives in resolveEmptyVariant (pure + unit-tested) rather than inline here, because
+  // the ORDER of its checks is the whole fix - see that module's contract.
+  const emptyVariant = resolveEmptyVariant({
+    chatMode,
+    lakesError,
+    lakesLoading,
+    lakeCount: lakes?.length ?? 0,
+    manageableLakeCount: lakes?.filter(l => l.canManage).length ?? 0,
+    hasSelectedLake: !!selectedLake,
+    isScopeEmpty,
+  });
+
+  const addFilesToSelectedLake = useCallback(() => {
+    if (!selectedLake) return;
+    openWizardForLake({
+      id: selectedLake.id,
+      slug: selectedLake.slug,
+      name: selectedLake.name,
+      fileTagPrefix: selectedLake.fileTagPrefix,
+      requiredUserTag: selectedLake.requiredUserTag,
+      requiredEntitlement: selectedLake.requiredEntitlement,
+    });
+  }, [selectedLake, openWizardForLake]);
+
+  // Switching lake scope invalidates the breadcrumb: it names a path in the OUTGOING lake's tree,
+  // so keeping it would leave the new lake showing an empty node (and the stale leafTag would
+  // fetch the old lake's files).
+  const handleSelectLake = useCallback((lakeId: string | null) => {
+    setSelectedLakeId(lakeId);
+    setBreadcrumb([]);
+    setUserSelectedFile(null);
+  }, []);
 
   // Richest second-level branches (top 6): the page empty-state's quick dives AND, in chat mode,
   // exposed to a host idle pane via context so its quick-dive chips can drive the tree.
@@ -570,7 +628,7 @@ export default function DataLakeExplorer({
       {/* Zero-state gets a full-width version of the same invitation - a first-time user
           has no tree to scan, so the small header hint alone reads as chrome. Page mode
           only; chat mode's tree carries its own header affordances. */}
-      {!chatMode && isEmpty && !isDragging && (
+      {!chatMode && isScopeEmpty && emptyVariant !== 'lakes-error' && !isDragging && (
         <Box
           data-testid="datalake-drop-prompt"
           sx={{
@@ -653,25 +711,52 @@ export default function DataLakeExplorer({
           </Box>
         </Box>
       ) : (
+        /* Master/detail: the lake rail owns the choice of lake, and everything to its right is
+           that lake's content. The rail is page-mode only - chat mode's host already spends its
+           width on the chat, and adding a third column there would squeeze both. */
         <Box sx={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
-          <DataLakeTree
-            tree={tree}
-            articles={leafArticles}
-            breadcrumb={breadcrumb}
-            onNavigate={handleNavigate}
-            source={source}
-            selectedFileIds={pageSelectedFileIds}
-            onSelectFile={handleSelectFile}
-            isLoading={tagCountsLoading || (!!leafTag && leafLoading && currentNodes.length === 0)}
-            isError={tagCountsError}
+          <DataLakeRail
+            lakes={lakes}
+            isLoading={lakesLoading}
+            isError={lakesError}
+            onRetry={() => void refetchLakes()}
+            selectedLakeId={selectedLakeId}
+            onSelect={handleSelectLake}
+            lakeFileCounts={tagCountsData?.lakeFileCounts}
+            totalFileCount={tagCountsData?.uniqueArticleCounts?.total ?? 0}
+            onCreate={onCreate}
           />
-          <DataLakeArticle
-            file={selectedFile}
-            onAskAbout={onAskAbout ?? (() => {})}
-            quickDives={quickDives}
-            onDive={handleNavigate}
-            onCreate={isEmpty ? onCreate : undefined}
-          />
+          <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}>
+            {selectedLake && (
+              <SelectedLakeHeader
+                lake={selectedLake}
+                fileCount={tagCountsData?.lakeFileCounts?.[selectedLake.datalakeTag]}
+              />
+            )}
+            <Box sx={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+              <DataLakeTree
+                tree={tree}
+                articles={leafArticles}
+                breadcrumb={breadcrumb}
+                onNavigate={handleNavigate}
+                source={source}
+                selectedFileIds={pageSelectedFileIds}
+                onSelectFile={handleSelectFile}
+                isLoading={tagCountsLoading || (!!leafTag && leafLoading && currentNodes.length === 0)}
+                isError={tagCountsError}
+              />
+              <DataLakeArticle
+                file={selectedFile}
+                onAskAbout={onAskAbout ?? (() => {})}
+                quickDives={quickDives}
+                onDive={handleNavigate}
+                emptyVariant={emptyVariant}
+                onCreate={onCreate}
+                onRetryLakes={() => void refetchLakes()}
+                onAddFiles={selectedLake?.canManage ? addFilesToSelectedLake : undefined}
+              />
+            </Box>
+          </Box>
         </Box>
       )}
 

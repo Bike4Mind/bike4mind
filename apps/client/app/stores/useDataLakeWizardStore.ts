@@ -159,12 +159,18 @@ interface DataLakeWizardStore {
   isManagerOpen: boolean;
   /** Which manager tab to show on open: the caller's own lakes, or the public discover catalog. */
   managerTab: ManagerTab;
+  /**
+   * Lake to preselect when the manager opens, so a per-lake action on another surface lands on
+   * that lake instead of the manager root (landing on a list is the friction #1645 is about).
+   * Cleared on close so re-deep-linking the SAME lake still fires the panel's sync effect.
+   */
+  managerLakeId: string | null;
 
   // Navigation
   openWizard: () => void;
   openWizardForLake: (lake: WizardTargetLake) => void;
   closeWizard: () => void;
-  openManager: (tab?: ManagerTab) => void;
+  openManager: (tab?: ManagerTab, lakeId?: string | null) => void;
   closeManager: () => void;
   setStep: (step: WizardStep) => void;
 
@@ -214,6 +220,7 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   targetLake: null,
   isManagerOpen: false,
   managerTab: 'mine',
+  managerLakeId: null,
 
   // ── Navigation ──────────────────────────────────────────────────────────
 
@@ -222,8 +229,9 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   // Management panel (list lakes, add files, lifecycle). Its internal "Create"
   // button calls openWizard, which stacks the wizard on top and returns here on close.
   // An optional tab lets callers deep-link straight to the public discover catalog.
-  openManager: (tab: ManagerTab = 'mine') => set({ isManagerOpen: true, managerTab: tab }),
-  closeManager: () => set({ isManagerOpen: false }),
+  openManager: (tab: ManagerTab = 'mine', lakeId: string | null = null) =>
+    set({ isManagerOpen: true, managerTab: tab, managerLakeId: lakeId }),
+  closeManager: () => set({ isManagerOpen: false, managerLakeId: null }),
 
   // Append mode: upload into an existing lake. Preseeds config from the lake so
   // the (locked) Config step shows the right values.

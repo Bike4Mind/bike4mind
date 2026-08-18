@@ -18,6 +18,17 @@ const useActiveDataLakeBatches = vi.fn(() => ({ data: [] as unknown[] }));
 // empty-section rendering.
 const useGetArchivedDataLakes = vi.fn(() => ({ data: undefined as unknown[] | undefined }));
 const useGetDeletedDataLakes = vi.fn(() => ({ data: undefined as unknown[] | undefined }));
+// LakeInfoPanel's Drive chip and the purge dialog's warning both read the connection. Default to
+// "no connection" so existing cases are unaffected; the Drive-specific cases override it.
+const useLakeDriveConnection = vi.fn(() => ({ data: null as unknown }));
+vi.mock('@client/app/hooks/data/googleDrive', () => ({
+  useLakeDriveConnection: () => useLakeDriveConnection(),
+  DRIVE_STATUS_BADGE: {
+    connected: { label: 'Connected', color: 'success' },
+    needs_reconnect: { label: 'Needs reconnect', color: 'warning' },
+    credential_error: { label: 'Credential error', color: 'danger' },
+  },
+}));
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });
   return {
