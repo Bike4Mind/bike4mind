@@ -213,3 +213,28 @@ describe('resolveLakeManageRung', () => {
     }
   });
 });
+
+describe('resolveLakeManageRung branch ORDER', () => {
+  // The parity cross-product never combines a curator grant with org-admin rights, so swapping these
+  // two branches passed the whole suite. The order is load-bearing: transferLakeOwnership overrides
+  // the rung precisely because this ladder would call an org-admin succession `grant-curator`.
+  it('reports grant-curator ahead of org-admin when the actor holds both', () => {
+    const rung = resolveLakeManageRung(
+      lake('creator', 'org-1'),
+      actor({ userId: 'both', administeredOrgIds: ['org-1'] }),
+      [grant('user', 'both', 'curator')]
+    );
+
+    expect(rung).toBe('grant-curator');
+  });
+
+  it('reports org-admin when the same actor holds no curator grant', () => {
+    const rung = resolveLakeManageRung(
+      lake('creator', 'org-1'),
+      actor({ userId: 'both', administeredOrgIds: ['org-1'] }),
+      []
+    );
+
+    expect(rung).toBe('org-admin');
+  });
+});
