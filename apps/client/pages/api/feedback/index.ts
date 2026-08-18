@@ -54,7 +54,12 @@ const handler = baseApi()
 
     const { userId, content, tags, username, userEmail, promptMeta, type } = newFeedbackData;
 
-    const existingUser = await User.findOne({ email: userEmail }).populate('organizationId');
+    // The org lookup must key off the resolved identity too, not the raw body userEmail -- otherwise
+    // two authenticated submissions from the same account can be stamped with different organizations
+    // depending on whatever email string the client happened to send.
+    const existingUser = authenticated
+      ? await User.findById(req.user.id).populate('organizationId')
+      : await User.findOne({ email: userEmail }).populate('organizationId');
 
     const organization = (existingUser?.organizationId as unknown as IOrganizationDocument)?.name || 'Unknown';
 

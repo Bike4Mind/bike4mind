@@ -4,7 +4,8 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer } from '../../../../../../packages/database/src/__test__/createMongoServer';
-import { FeedbackModel, User } from '@bike4mind/database';
+import { FeedbackModel, User, UserActivityCounter, Organization } from '@bike4mind/database';
+import { FeedbackEvents } from '@bike4mind/common';
 import errorHandler from '@server/middlewares/errorHandler';
 
 /**
@@ -126,5 +127,60 @@ describe('POST /api/feedback - authenticated caller with a mismatched body userI
     // The saved document and the analytics call must agree on the same resolved id -- the
     // authenticated user's real id, not the untrusted body value.
     expect(saved!.userId).toBe(realUser.id);
+
+    // A passing 201 alone doesn't prove logEvent actually ran under the resolved id -- deleting the
+    // whole logEvent call would still pass the assertions above. Pin that the analytics write happened.
+    const counter = await UserActivityCounter.findOne({
+      userId: realUser.id,
+      action: FeedbackEvents.CREATE_FEEDBACK,
+    });
+    expect(counter?.count).toBe(1);
+  });
+
+  it('resolves organization from the authenticated identity, not a client-supplied decoy email', async () => {
+    const realUser = await User.create({
+      username: 'e2e-org-user',
+      name: 'Org User',
+      email: 'org-user@example.com',
+    });
+    const realOrg = await Organization.create({ name: 'Real Org', userId: realUser.id });
+    await User.findByIdAndUpdate(realUser.id, { organizationId: realOrg._id });
+
+    const decoyUser = await User.create({
+      username: 'decoy-user',
+      name: 'Decoy User',
+      email: 'decoy-user@example.com',
+    });
+    const decoyOrg = await Organization.create({ name: 'Decoy Org', userId: decoyUser.id });
+    await User.findByIdAndUpdate(decoyUser.id, { organizationId: decoyOrg._id });
+
+    const { req, res } = createMocks({
+      method: 'POST',
+      body: {
+        userId: realUser.id,
+        content: 'org mismatch check',
+        tags: [],
+        username: 'reporter',
+        // A client-controlled value that happens to belong to a DIFFERENT account/org than the
+        // authenticated caller -- the org lookup must not be keyed off this.
+        userEmail: decoyUser.email,
+      },
+    });
+    (req as unknown as { isAuthenticated: () => boolean }).isAuthenticated = () => true;
+    (req as unknown as { user: { id: string; username: string; email: string } }).user = {
+      id: realUser.id,
+      username: realUser.username,
+      email: realUser.email,
+    };
+    (req as unknown as { ability: { can: () => boolean } }).ability = { can: () => true };
+    (req as unknown as { logger: unknown }).logger = stubLogger();
+    (req as unknown as { requestId: string }).requestId = 'test-request-id';
+
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(201);
+
+    const saved = await FeedbackModel.findOne({ content: 'org mismatch check' });
+    expect(saved!.organization).toBe('Real Org');
   });
 });
