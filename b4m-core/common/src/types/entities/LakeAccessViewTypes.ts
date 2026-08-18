@@ -140,11 +140,13 @@ export interface LakeAccessView {
   channels: LakeAccessChannel[];
   /**
    * Per-principal read aggregation from the access-audit events. Always a LOWER BOUND on reads, and
-   * presentation surfaces must say so: an event exists only for a retrieval surface that has been
-   * instrumented to emit one (#1678 is still wiring those call sites), and events age out on their
-   * own retention TTL. An empty `history` therefore means "no recorded reads", never "nobody read
-   * this lake" - stating the stronger claim would be the false reassurance a compliance reader has
-   * no way to detect.
+   * presentation surfaces must say so. Three reasons, all structural rather than temporary:
+   * an event exists only for a retrieval surface instrumented to emit one; the write is
+   * deliberately best-effort (`recordLakeAccessEvent` swallows its own failures so no user response
+   * depends on the audit write, and several call sites do not await it); and events age out on
+   * their own retention TTL. An empty `history` therefore means "no reads recorded", never "nobody
+   * read this lake" - stating the stronger claim would be the false reassurance a compliance reader
+   * has no way to detect.
    */
   history: LakeAccessHistoryEntry[];
   /** True when the audit read hit its cap: `history` is then the most-recent window, not the whole

@@ -269,8 +269,9 @@ opens a read-only compliance surface answering the two questions a lake owner is
 - **Who actually has?**
   - **Access history** - who has read the lake, how many times, when they last read it, and through
     which surface, aggregated from the access-audit trail. Read this as a **lower bound**: an entry
-    exists only for a retrieval surface that emits access events, and events age out on their own
-    retention window. An empty history means "no reads recorded", not "nobody read this lake".
+    exists only for a retrieval surface that emits access events, the audit write is best-effort by
+    design, and events age out on their own retention window. An empty history means "no reads
+    recorded", not "nobody read this lake".
 
 Use **Export CSV** for a downloadable artifact suitable for a compliance review; it contains the
 same three sections plus a note when the history was truncated.
@@ -288,10 +289,11 @@ same three sections plus a note when the history was truncated.
   this banner, the on-screen list is the most recent window, not the whole trail. The CSV export
   carries that **same** window, so it is not a way around the cap; the banner and the export both
   state the instant the window starts.
-- **Access history is empty after someone read the lake.** Only retrieval surfaces that have been
-  instrumented to emit access events appear here, and that instrumentation is still being rolled out
-  across the retrieval paths - so a read can succeed without producing a row. The empty state says
-  "no reads recorded" for exactly this reason.
+- **Access history is empty after someone read the lake.** A read appears here only if it went
+  through a retrieval surface that emits access events, and the audit write is deliberately
+  best-effort - it never fails a user's request, so a transient write failure drops the row rather
+  than the answer. Entries also age out on the audit retention window. The empty state says "no
+  reads recorded" rather than "nobody read this lake" for exactly these reasons.
 - **An organization's member count here is lower than on the organization page.** This count is the
   members the read gate would actually admit. Members who have not accepted their invitation, or who
   hold share-only permissions, are counted by the organization page but cannot read the lake, so they
