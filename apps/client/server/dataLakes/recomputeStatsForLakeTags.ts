@@ -53,24 +53,34 @@ export const recomputeStatsForLakeTags = async (
     actor?: { userId: string; isAdmin: boolean };
   }
 ): Promise<void> => {
-  for (const metaTag of dataLakeService.extractDataLakeMetaTags(tagNames)) {
-    try {
-      const lake = await dataLakeRepository.findByDatalakeTag(metaTag);
-      // An orphaned meta-tag left behind by a deleted lake has no stats to rebuild.
-      if (!lake) continue;
-      // The lake DOCUMENT, not a narrower shape: recomputeLakeStats derives the two-signal
-      // membership scope from it, and a partial one silently counts the meta-tag arm alone.
-      // `actor` forwarded when the calling door had one, so a user-driven flip is attributed to
-      // the person rather than to `system`. The rung stays `system` regardless - see
-      // recomputeLakeStats: `activateIfDraft` performs no authorization check, so nothing
-      // authorized this write and naming a rung would be an invention.
-      await dataLakeService.recomputeLakeStats(
-        lake,
-        { db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, ...lakeConfigAuditDb }, logger },
-        actor ? { actor } : undefined
-      );
-    } catch (error) {
-      logger.error('Error recomputing data lake stats after a file write:', { error, metaTag });
-    }
-  }
+  // Concurrent, not sequential: the lakes are independent and share no state, so a bulk delete
+  // spanning N lakes would otherwise serialize into N round trips. Matches tagService/remove and
+  // tagService/update, which recompute their affected lakes the same way.
+  //
+  // The try/catch stays INSIDE the map, per lake, which is what keeps `Promise.all` safe here: every
+  // element resolves, so one unresolvable or unwritable lake still cannot reject the batch and skip
+  // the rest. That per-lake isolation is the contract in the docstring above, not an accident of the
+  // loop it replaces.
+  await Promise.all(
+    dataLakeService.extractDataLakeMetaTags(tagNames).map(async metaTag => {
+      try {
+        const lake = await dataLakeRepository.findByDatalakeTag(metaTag);
+        // An orphaned meta-tag left behind by a deleted lake has no stats to rebuild.
+        if (!lake) return;
+        // The lake DOCUMENT, not a narrower shape: recomputeLakeStats derives the two-signal
+        // membership scope from it, and a partial one silently counts the meta-tag arm alone.
+        // `actor` forwarded when the calling door had one, so a user-driven flip is attributed to
+        // the person rather than to `system`. The rung stays `system` regardless - see
+        // recomputeLakeStats: `activateIfDraft` performs no authorization check, so nothing
+        // authorized this write and naming a rung would be an invention.
+        await dataLakeService.recomputeLakeStats(
+          lake,
+          { db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, ...lakeConfigAuditDb }, logger },
+          actor ? { actor } : undefined
+        );
+      } catch (error) {
+        logger.error('Error recomputing data lake stats after a file write:', { error, metaTag });
+      }
+    })
+  );
 };
