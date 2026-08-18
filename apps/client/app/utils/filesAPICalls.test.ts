@@ -57,9 +57,11 @@ describe('chunkFileUtility', () => {
   });
 
   it('rejects when the chunk request fails so the mutation onError can fire', async () => {
-    apiPost.mockRejectedValue(new Error('Request failed with status code 400'));
+    // A realistic rejection: the workbench holds a file that was deleted server-side, so the
+    // route returns 404. (chunkSize 1000 is a normal valid value - the route has no upper ceiling.)
+    apiPost.mockRejectedValue(new Error('Request failed with status code 404'));
 
-    await expect(chunkFileUtility('ff1', 999999)).rejects.toThrow('status code 400');
+    await expect(chunkFileUtility('ff1', 1000)).rejects.toThrow('status code 404');
   });
 
   it('resolves with the server payload on success', async () => {
