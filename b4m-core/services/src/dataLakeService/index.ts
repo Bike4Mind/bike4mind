@@ -13,7 +13,13 @@ export * from './resolveLakeReadAccess';
 export * from './authorizeLakeWrite';
 // canManageLake + ManageActor are already surfaced via authorizeLakeWrite's re-export; export the
 // rest of the pure decision core (owner resolution) by name to avoid a duplicate-export clash.
-export { isEffectiveOwner, isLakeCreator, resolveEffectiveOwnerIds, type LakeGrant } from './manageRule';
+export {
+  isEffectiveOwner,
+  isLakeCreator,
+  resolveEffectiveOwnerIds,
+  type LakeGrant,
+  type ManageActor,
+} from './manageRule';
 export * from './authorizeLakeManage';
 export * from './transferLakeOwnership';
 export * from './authorizeBatchAccess';
@@ -61,3 +67,4 @@ export * from './openSearchChunkAdapter';
 export * from './openSearchRetrievalIndex';
 export * from './attributeAccessedLakes';
 export * from './recordLakeAccessEvent';
+export * from './assembleLakeConfigHistory';
