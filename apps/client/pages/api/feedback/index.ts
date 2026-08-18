@@ -13,6 +13,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@server/utils/errors';
 import { EmailEvents } from '@server/utils/eventBus';
 import { postFeedbackToSlack } from '@server/integrations/slack/slack';
+import { toRedactedFeedback } from '@server/utils/redactedFeedback';
 import sanitizeHtml from 'sanitize-html';
 import { z } from 'zod';
 
@@ -42,7 +43,7 @@ const handler = baseApi()
       throw new NotFoundError('Feedback not found');
     }
 
-    return res.json(feedback);
+    return res.json(feedback.map(toRedactedFeedback));
   })
   .post(async (req, res) => {
     const newFeedbackData = CreateFeedbackRequestSchema.parse(req.body);

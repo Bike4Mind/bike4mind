@@ -75,6 +75,7 @@ import { getRelevantMementos } from '../mementoService';
 import {
   BaseStorage,
   computeCosineSimilarity,
+  computeVerbatimTokenBudget,
   EmbeddingFactory,
   fetchAndProcessPreviousMessages,
   IQueueService,
@@ -90,7 +91,11 @@ import { MongoAbility } from '@casl/ability';
 import mongoose from 'mongoose';
 import { z } from 'zod';
 import { GetEffectiveApiKeyAdapters } from '@bike4mind/auth/apiKeyService';
-import { ChatCompletionProcess } from './ChatCompletionProcess';
+import {
+  ChatCompletionProcess,
+  DEFAULT_VERBATIM_WINDOW_FRACTION,
+  SYSTEM_PROMPT_RESERVE_TOKENS,
+} from './ChatCompletionProcess';
 import { MCPClient } from '@bike4mind/mcp';
 import uniq from 'lodash/uniq.js';
 
@@ -468,6 +473,8 @@ export interface ChatCompletionFeature {
     startParams: z.infer<typeof ChatCompletionCreateInputSchema>;
     llm: ICompletionBackend;
     model: string;
+    /** Resolved once per turn in ChatCompletionProcess.ts; sizes any history/token budget a feature needs. */
+    modelInfo: ModelInfo;
     message: string;
     historyCount: number;
     fabFileIds: string[];
@@ -834,6 +841,7 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     startParams,
     llm,
     model,
+    modelInfo,
     message,
     historyCount,
     fabFileIds,
@@ -845,6 +853,7 @@ export class QuestMasterFeature implements ChatCompletionFeature {
     startParams: z.infer<typeof ChatCompletionCreateInputSchema>;
     llm: ICompletionBackend;
     model: string;
+    modelInfo: ModelInfo;
     message: string;
     historyCount: number;
     fabFileIds: string[];
@@ -893,9 +902,29 @@ export class QuestMasterFeature implements ChatCompletionFeature {
       // is what gates Priority 2 tool replay for Gemini (see fetchAndProcessPreviousMessages's own
       // doc comment) - this call site went live without it (missed sibling of the one in
       // ChatCompletionProcess.ts), so the flag is derived from the model id, not opt-in per caller.
+      //
+      // verbatimTokenBudget bounds the history that createQuestPlan later splices in whole
+      // (QuestMaster has no downstream trim of its own), sized against the REAL model's context
+      // window via the same helper ChatCompletionProcess.ts's own call site uses, so the two
+      // cannot drift the way an unknown-model floor would for a model with a small real window.
+      // Two known divergences from that call site's overhead: it does not read the
+      // ContextVerbatimWindowFraction admin override (no admin-settings map is threaded into
+      // QuestMasterFeature) - it always uses the compiled-in default fraction. It also omits
+      // enabledTools.length * PER_TOOL_SCHEMA_RESERVE_TOKENS, which does apply on the GPT-5
+      // function-calling quest-plan path (createQuestPlan is passed { history } only, so omitting
+      // contextSummary's reserve is correct, but the tool-schema reserve is not); this makes that
+      // path's budget slightly over-generous rather than unsafe, and QuestMasterFeature has no
+      // enabled-tool count in scope to reserve for without threading more state through.
+      const verbatimTokenBudget = computeVerbatimTokenBudget(modelInfo, startParams.max_tokens, {
+        verbatimWindowFraction: DEFAULT_VERBATIM_WINDOW_FRACTION,
+        nonHistoryOverheadTokens: SYSTEM_PROMPT_RESERVE_TOKENS + Math.ceil(message.length / 4),
+      });
       const [conversationHistory] = await fetchAndProcessPreviousMessages(session, historyCount, {
         db: this.chatCompletion.db,
-        model,
+        // modelInfo.id (post-resolveDeprecatedModelId), matching ChatCompletionProcess.ts's own
+        // call site, so a future Gemini id landing in the deprecation map can't desync the two.
+        model: modelInfo.id,
+        verbatimTokenBudget,
       });
 
       this.logger.log(`QuestMaster: Fetched ${conversationHistory.length} history messages for context`);

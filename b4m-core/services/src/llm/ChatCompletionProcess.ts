@@ -62,6 +62,8 @@ import {
   ITokenizer,
   getSettingsByNames,
   attachedContentExtractionBudget,
+  computeVerbatimTokenBudget,
+  DEFAULT_OUTPUT_MAX_TOKENS,
   effectiveContextWindow,
   safeInputWindow,
 } from '@bike4mind/utils';
@@ -227,16 +229,6 @@ function assertNeverElisionSignal(signal: never): never {
 }
 
 /**
- * Output budget used when a caller supplies no max_tokens. Within supported output
- * limits for every configured non-reasoning model; models that reason inside the
- * output budget default to ADAPTIVE_THINKING_MAX_TOKENS_FLOOR instead, since their
- * reasoning would otherwise consume this whole budget (see reasonsWithinOutputBudget
- * for which those are). Distinct from the catalog's DEFAULT_MAX_OUTPUT_TOKENS, which
- * fills in a model's *capability* when its record omits one.
- */
-const DEFAULT_OUTPUT_MAX_TOKENS = 4096;
-
-/**
  * Share of the context budget this file assumes history will take when sizing a history count. It
  * does NOT mirror how buildAndSortMessages splits the budget: that depends on historyCount, giving
  * files 70% when history is unlimited and guaranteeing them a 35% floor otherwise - a floor measured
@@ -282,7 +274,7 @@ export const KNOWLEDGE_SEARCH_TOOL_NAME = 'search_knowledge_base';
  * fraction of the raw window. Overridable per-deploy via the
  * ContextVerbatimWindowFraction admin setting.
  */
-const DEFAULT_VERBATIM_WINDOW_FRACTION = 0.55;
+export const DEFAULT_VERBATIM_WINDOW_FRACTION = 0.55;
 
 /**
  * Non-history input competes with the verbatim window for the same safe-input
@@ -294,7 +286,7 @@ const DEFAULT_VERBATIM_WINDOW_FRACTION = 0.55;
  * conservative floors used only to pick the summary boundary; the exact tokenizer
  * still enforces the real budget downstream in buildAndSortMessages.
  */
-const SYSTEM_PROMPT_RESERVE_TOKENS = 1200; // persona + artifact/help/date guidance, typical floor
+export const SYSTEM_PROMPT_RESERVE_TOKENS = 1200; // persona + artifact/help/date guidance, typical floor
 const PER_TOOL_SCHEMA_RESERVE_TOKENS = 120; // rough serialized {name,description,input_schema} per enabled tool
 
 /** Coerce an admin-setting value to a fraction in (0, 1], falling back when invalid. */
@@ -1968,6 +1960,7 @@ export class ChatCompletionProcess {
               startParams: params,
               llm,
               model,
+              modelInfo,
               message,
               historyCount,
               fabFileIds: sessionFabFileIds,
@@ -2054,7 +2047,6 @@ export class ChatCompletionProcess {
         modelInfo,
         modelMaxOutputTokens: modelMaxOutput,
       });
-      const safeInputTokens = Math.max(0, safeInputWindow(modelInfo, safeMaxTokens));
       // Reserve the non-history overhead that shares this budget before applying the
       // fraction, so heavier-payload turns (more tools, a longer running summary, a
       // large prompt) compact SOONER rather than overflowing first - this is the
@@ -2076,8 +2068,10 @@ export class ChatCompletionProcess {
         enabledTools.length * PER_TOOL_SCHEMA_RESERVE_TOKENS +
         estTokens(message) +
         estTokens(session.contextSummary);
-      const availableForVerbatim = Math.max(0, safeInputTokens - nonHistoryOverhead);
-      const verbatimTokenBudget = Math.floor(availableForVerbatim * verbatimWindowFraction);
+      const verbatimTokenBudget = computeVerbatimTokenBudget(modelInfo, params.max_tokens, {
+        verbatimWindowFraction,
+        nonHistoryOverheadTokens: nonHistoryOverhead,
+      });
       const previousMessagesResult = await fetchAndProcessPreviousMessages(session, historyCount, {
         db: this.db,
         verbatimTokenBudget,
