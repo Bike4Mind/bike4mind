@@ -35,9 +35,10 @@ const MEMBER_PERMISSIONS = ['read', 'write'] as const;
  * THE org-membership predicate: billing owner OR a users[] ACL row granting read/write.
  *
  * Both call sites must describe the same membership or an org becomes selectable-but-unreadable:
- * `search()` backs the account-switcher list, which is where the data-lake create path gets the
- * org id it stamps, while `findMembershipOrgIds` backs the read scope (`AccessContext.organizationIds`)
- * that decides which org lakes list. #1648 was exactly that disagreement - a lake created in the
+ * `search()` backs the account-switcher list, which is where BOTH data-lake write paths (create and
+ * visibility promotion, via `resolveActiveOrg`) get the org id they stamp, while
+ * `findMembershipOrgIds` backs the read scope (`AccessContext.organizationIds`) that decides which
+ * org lakes list. #1648 was exactly that disagreement - a lake created in the
  * switched-to org was invisible in its creator's own manager - so the shape lives here once rather
  * than as two hand-synced `$or` blocks that a new arm could widen on one side only.
  *

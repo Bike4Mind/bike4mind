@@ -11,7 +11,8 @@ import { setupMongoTest } from '../../__test__/utils';
  *
  * These are two independent predicates in production that have to describe the same membership:
  *  - `organizationRepository.search({ userId })` backs the account-switcher list, which is where
- *    the create path's org id comes from (`activeOrgId()` -> `resolveActiveOrg`).
+ *    BOTH lake write paths - create and visibility promotion - get their org id
+ *    (`activeOrgId()` -> `resolveActiveOrg`).
  *  - `organizationRepository.findMembershipOrgIds` backs `AccessContext.organizationIds`, which is
  *    the org arm of `findAccessible` - the manager list's filter.
  * When they disagreed, a lake created in a switched-to org was invisible in its creator's own
