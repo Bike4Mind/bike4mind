@@ -337,6 +337,51 @@ describe('setLakeVisibility', () => {
     expect(event.changes.map(c => c.field).sort()).toEqual(['organizationId']);
   });
 
+  // P2: the exposing gate is deliberately isEffectiveOwner, WITHOUT the admin bypass - so when an
+  // admin who is ALSO the owner exposes a lake, ownership is what let them through, not admin.
+  // resolveLakeManageRung's first branch returns 'platform-admin' unconditionally, so without the
+  // explicit override this records an authority that could not have passed this gate. Removing the
+  // override makes this red.
+  it('records ownership, not platform-admin, when an admin who owns the lake exposes it', async () => {
+    const existing = lake();
+    const audit = auditSpy();
+
+    await setLakeVisibility({ userId: 'owner', isAdmin: true, organizationId: 'org-1' }, 'lake1', 'organization', {
+      db: {
+        dataLakes: {
+          findById: vi.fn().mockResolvedValue(existing),
+          update: echoUpdate(existing),
+          find: vi.fn().mockResolvedValue([]),
+        },
+        dataLakeAccessGrants: noGrants,
+        ...audit.db,
+      },
+    });
+
+    expect(audit.only().manageRung).toBe('creator');
+  });
+
+  // The other half of the same rule: DEMOTION to private stays full canManageLake, so an admin
+  // demoting a lake they do not own is genuinely acting as admin and must still record that.
+  it('still records platform-admin when an admin makes a lake private', async () => {
+    const existing = lake({ isPublic: true });
+    const audit = auditSpy();
+
+    await setLakeVisibility({ userId: 'someAdmin', isAdmin: true }, 'lake1', 'private', {
+      db: {
+        dataLakes: {
+          findById: vi.fn().mockResolvedValue(existing),
+          update: echoUpdate(existing),
+          find: vi.fn().mockResolvedValue([]),
+        },
+        dataLakeAccessGrants: noGrants,
+        ...audit.db,
+      },
+    });
+
+    expect(audit.only().manageRung).toBe('platform-admin');
+  });
+
   it('records nothing on its pre-existing no-op early-return', async () => {
     const existing = lake({ isPublic: true });
     const update = vi.fn();
@@ -373,6 +418,32 @@ describe('transferLakeOwnership', () => {
       action: 'transfer-ownership',
       changes: [{ field: 'effectiveOwnerUserId', kind: 'literal', before: 'owner', after: 'newOwner' }],
     });
+  });
+
+  // P3a: the override at transferLakeOwnership.ts:190-198 had no test that could tell it from the
+  // plain resolver, because every existing case used an actor the two agree on. This is the case
+  // they DISAGREE on, and it is the exact one the override's comment describes: an org admin who was
+  // demoted to curator by a PRIOR transfer. resolveLakeManageRung checks the curator grant before
+  // the org-admin rung, so it would label this succession `grant-curator` - a rung this gate
+  // explicitly forbids from transferring. Deleting the override makes this test red.
+  it('records the org-admin rung on a transfer by an org admin who also holds a curator grant', async () => {
+    const existing = lake({ organizationId: 'org-1' });
+    const audit = auditSpy();
+    const db = transferDb(existing);
+    db.dataLakeAccessGrants.listByLake = vi
+      .fn()
+      .mockResolvedValue([{ principalType: 'user', principalId: 'orgAdmin', role: 'curator', status: 'active' }]);
+    // An org-owned lake requires the incoming owner to be a member of that org.
+    db.organizations.findById = vi.fn().mockResolvedValue({ id: 'org-1', users: [{ userId: 'newOwner' }] });
+
+    await transferLakeOwnership(
+      { userId: 'orgAdmin', isAdmin: false, administeredOrgIds: ['org-1'] },
+      'lake1',
+      'newOwner',
+      { db: { ...db, ...audit.db } }
+    );
+
+    expect(audit.only().manageRung).toBe('org-admin');
   });
 
   it('records nothing when the named owner already solely owns the lake', async () => {
