@@ -24,7 +24,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { DOCS_ROOT, loadHelpArticles, type LoadedHelpArticle } from './loadHelpArticles.js';
-import { resolveRelativePath, stripMarkdownFormatting, toAnchor, VIDEO_EXTENSIONS } from './utils.js';
+import { resolveRelativePath, stripMarkdownFormatting, toAnchor, VIDEO_EXTENSIONS, isYouTubeUrl } from './utils.js';
 
 export type FindingType = 'frontmatter' | 'link' | 'anchor' | 'image' | 'media';
 
@@ -292,14 +292,16 @@ export function validateArticles(articles: LoadedHelpArticle[], opts: ValidateOp
       if (isExternal(link.target)) {
         // EMBEDDED media (image syntax) must be committed to the docs tree so
         // it ships on the app CDN - no third-party hosts in the Help Center.
-        // Plain hyperlinks to external files ([text](https://.../x.pdf)) are
-        // not embeds and stay allowed like any other external link.
-        if (link.isImage) {
+        // EXCEPTION: YouTube links are allowed, so large demo videos can be
+        // hosted instead of bloating the repo (the renderer turns them into an
+        // embed). Plain hyperlinks to external files ([text](https://.../x.pdf))
+        // are not embeds and stay allowed like any other external link.
+        if (link.isImage && !isYouTubeUrl(link.target)) {
           findings.push({
             ...base,
             type: 'media',
             line: link.line,
-            message: `External media is not allowed: "${link.target}". Commit the file next to the article (e.g. ./media/) so it ships on the app CDN`,
+            message: `External media is not allowed: "${link.target}". Commit the file next to the article (e.g. ./media/) so it ships on the app CDN, or embed a YouTube link`,
           });
         }
         continue;

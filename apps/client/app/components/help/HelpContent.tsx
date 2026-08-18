@@ -8,7 +8,7 @@ import type { Options as RehypeSanitizeOptions } from 'rehype-sanitize';
 import type { PluggableList } from 'unified';
 import { useHelpContent } from '@client/app/hooks/useHelpContent';
 import { useHelpPanel } from '@client/app/hooks/useHelpPanel';
-import { toAnchor, resolveRelativePath, hasVideoExtension } from '@bike4mind/scripts/help/utils';
+import { toAnchor, resolveRelativePath, hasVideoExtension, parseYouTubeId } from '@bike4mind/scripts/help/utils';
 import { CodeBlock } from '@client/app/components/common/CodeBlock';
 import HelpFeedbackWidget from './HelpFeedbackWidget';
 
@@ -308,8 +308,40 @@ const HelpVideo: React.FC<{ src?: string; label?: string }> = ({ src, label }) =
 export const HelpArticleFilePathContext = React.createContext<string | undefined>(undefined);
 
 /**
- * Media renderer for markdown images. GIF-style demo videos (.webm/.mp4) use
- * the same ![alt](path) syntax as images and are dispatched here by extension.
+ * YouTube embed for hosted demo videos. Authored with the same ![alt](url)
+ * image syntax and dispatched here when the src is a YouTube link. Uses the
+ * privacy-preserving -nocookie host and native iframe lazy-loading. Rendered
+ * inside a <p> (markdown image), so span wrappers, not div/Box.
+ */
+const HelpYouTube: React.FC<{ id: string; label?: string }> = ({ id, label }) => (
+  <span
+    data-testid="help-youtube-container"
+    style={{
+      display: 'block',
+      position: 'relative',
+      width: '100%',
+      aspectRatio: '16 / 9',
+      borderRadius: 8,
+      overflow: 'hidden',
+      backgroundColor: 'var(--joy-palette-background-level1)',
+    }}
+  >
+    <iframe
+      src={`https://www.youtube-nocookie.com/embed/${id}`}
+      title={label || 'YouTube video player'}
+      loading="lazy"
+      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+      allowFullScreen
+      data-testid="help-youtube-iframe"
+      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0 }}
+    />
+  </span>
+);
+
+/**
+ * Media renderer for markdown images. Dispatches by src: YouTube links become
+ * embeds, .webm/.mp4 become gif-style demo videos, everything else is an image.
+ * All three use the same ![alt](src) markdown syntax.
  */
 const HelpMedia: React.FC<React.ImgHTMLAttributes<HTMLImageElement> & { node?: unknown }> = ({
   node: _node,
@@ -319,6 +351,10 @@ const HelpMedia: React.FC<React.ImgHTMLAttributes<HTMLImageElement> & { node?: u
 }) => {
   const currentFilePath = React.useContext(HelpArticleFilePathContext);
   const rawSrc = typeof src === 'string' ? src : undefined;
+  const youTubeId = rawSrc ? parseYouTubeId(rawSrc) : null;
+  if (youTubeId) {
+    return <HelpYouTube id={youTubeId} label={alt} />;
+  }
   const resolvedSrc = resolveHelpMediaSrc(rawSrc, currentFilePath);
   if (rawSrc && hasVideoExtension(rawSrc)) {
     return <HelpVideo src={resolvedSrc} label={alt} />;

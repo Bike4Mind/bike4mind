@@ -132,6 +132,22 @@ describe('help media rendering', () => {
     expect(screen.queryByTestId('help-video-placeholder')).toBeNull();
     expect(observer.disconnect).toHaveBeenCalled();
   });
+
+  it('renders a YouTube link as a privacy-preserving lazy embed', () => {
+    renderMarkdown('![Enabling Research Mode](https://www.youtube.com/watch?v=dQw4w9WgXcQ)');
+    const iframe = screen.getByTestId('help-youtube-iframe');
+    expect(iframe.getAttribute('src')).toBe('https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ');
+    expect(iframe.getAttribute('title')).toBe('Enabling Research Mode');
+    expect(iframe.getAttribute('loading')).toBe('lazy');
+    expect(iframe.hasAttribute('allowfullscreen')).toBe(true);
+  });
+
+  it('accepts the youtu.be short-link form', () => {
+    renderMarkdown('![demo](https://youtu.be/dQw4w9WgXcQ)');
+    expect(screen.getByTestId('help-youtube-iframe').getAttribute('src')).toBe(
+      'https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ'
+    );
+  });
 });
 
 describe('media path resolution through HelpContent', () => {

@@ -271,6 +271,23 @@ describe('validateArticles - media guards', () => {
     expect(findings.filter(f => f.type === 'link')).toEqual([]);
   });
 
+  it('allows YouTube embeds but still rejects other external media', () => {
+    const articles = [
+      makeArticle(
+        'features/a.md',
+        [
+          '![Enable](https://www.youtube.com/watch?v=dQw4w9WgXcQ)', // YouTube embed: allowed
+          '![Setup](https://youtu.be/dQw4w9WgXcQ)', // youtu.be embed: allowed
+          '![Bad](https://example.com/demo.gif)', // other external embed: rejected
+        ].join('\n')
+      ),
+    ];
+    const findings = validateArticles(articles, { docsRoot: DOCS_ROOT, fileExists: () => false });
+    const media = findings.filter(f => f.type === 'media');
+    expect(media).toHaveLength(1);
+    expect(media[0].line).toBe(3);
+  });
+
   it('caps bundled PDFs like other assets', () => {
     const articles = [makeArticle('features/a.md', '[Guide](./files/guide.pdf)')];
     const findings = validateArticles(articles, {
