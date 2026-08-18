@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest';
+import { ServerAgentStore } from './agents/ServerAgentStore';
 import {
   BLOG_REQUEST_PATTERN,
   hasPriorToolUse,
+  mentionsDelegatableAgent,
   shouldOfferBlogTools,
+  shouldOfferDelegation,
   shouldOfferSkillTool,
 } from './autoAddedToolGating';
 
@@ -131,5 +134,117 @@ describe('shouldOfferSkillTool', () => {
 
   it('empty message does not throw', () => {
     expect(shouldOfferSkillTool({ ...base, message: '' })).toBe(false);
+  });
+});
+
+// Derived from the real store rather than a hand-copied list: these are exactly the names
+// ChatCompletionProcess feeds the gate (it constructs ServerAgentStore with no user/org overlays),
+// and exactly the values `delegate_to_agent`'s `agent` enum can hold. Renaming a built-in fails
+// these tests instead of quietly making them assert against a set that no longer exists.
+const STORE_AGENTS = new ServerAgentStore({}).getAgentNames();
+
+describe('mentionsDelegatableAgent', () => {
+  // Names the cases below type as @mentions. Asserted up front so a built-in rename reports
+  // "researcher is gone" rather than a pile of confusing false-vs-true failures downstream.
+  it('pins the built-in names these cases rely on', () => {
+    expect(STORE_AGENTS).toEqual(expect.arrayContaining(['researcher', 'code_review', 'analyst']));
+  });
+
+  it.each(['@researcher find the specs', 'hey @code_review take a look', 'ping @analyst on this'])(
+    'fires on a mention naming a store agent: %j',
+    message => {
+      expect(mentionsDelegatableAgent(message, STORE_AGENTS)).toBe(true);
+    }
+  );
+
+  // The store spells its multi-word names with underscores; the mention parser accepts hyphens.
+  // Without normalization `@code-review` would silently lose delegation.
+  it('accepts the hyphenated spelling of an underscored store name', () => {
+    expect(mentionsDelegatableAgent('@code-review please', STORE_AGENTS)).toBe(true);
+  });
+
+  it('is case-insensitive', () => {
+    expect(mentionsDelegatableAgent('@Researcher look this up', STORE_AGENTS)).toBe(true);
+  });
+
+  // The regression this narrowing exists for: ordinary prose containing an @handle used to attach
+  // the delegate_to_agent schema (~786 tokens) plus the tool prompt's agent directory.
+  it.each([
+    'can you loop in @dave on this thread',
+    'follow @anthropicai for updates',
+    '@here does anyone know the answer',
+    'my address is nao@bike4mind.com',
+    'the researcher agent could help here',
+    '',
+  ])('does not fire on %j', message => {
+    expect(mentionsDelegatableAgent(message, STORE_AGENTS)).toBe(false);
+  });
+
+  // A persona agent from the `agents` collection is applied as a system prompt by
+  // AgentDetectionFeature; it is never a value delegate_to_agent's `agent` enum can take.
+  it('does not fire on a persona mention that the delegation store cannot run', () => {
+    expect(mentionsDelegatableAgent('@coffee-bot what should I order', STORE_AGENTS)).toBe(false);
+  });
+
+  it('does not fire when the store is empty', () => {
+    expect(mentionsDelegatableAgent('@researcher find the specs', [])).toBe(false);
+  });
+});
+
+describe('shouldOfferDelegation', () => {
+  const base = {
+    disableUserIntegrations: false,
+    allowedAgents: undefined,
+    sessionAgentIds: undefined,
+    message: 'compare the latest smartphones',
+    delegatableAgentNames: STORE_AGENTS,
+    priorToolNames: [] as string[],
+  };
+
+  it('withholds delegation from a benign prompt with no signal', () => {
+    expect(shouldOfferDelegation(base)).toBe(false);
+  });
+
+  it('offers delegation for a mention naming a store agent', () => {
+    expect(shouldOfferDelegation({ ...base, message: '@researcher compare the latest smartphones' })).toBe(true);
+  });
+
+  it('withholds delegation for a mention that names nothing the store can run', () => {
+    expect(shouldOfferDelegation({ ...base, message: '@dave compare the latest smartphones' })).toBe(false);
+  });
+
+  it('offers delegation when the caller passes an allowedAgents allowlist', () => {
+    expect(shouldOfferDelegation({ ...base, allowedAgents: ['researcher'] })).toBe(true);
+  });
+
+  // An empty allowlist means "no delegation requested", not "delegation requested with no targets" -
+  // the latter would expose the tool to the model and give it nothing valid to call.
+  it('treats an empty allowedAgents allowlist as no delegation requested', () => {
+    expect(shouldOfferDelegation({ ...base, allowedAgents: [] })).toBe(false);
+  });
+
+  it('offers delegation when an agent is attached to the session', () => {
+    expect(shouldOfferDelegation({ ...base, sessionAgentIds: ['agent-id'] })).toBe(true);
+  });
+
+  // Without this a multi-turn delegated workflow loses the tool on the first follow-up that stops
+  // repeating the @mention - the "no feature degradation" guardrail this gate has to respect.
+  it('rescues a follow-up turn that continues a delegation started earlier in the conversation', () => {
+    expect(shouldOfferDelegation({ ...base, priorToolNames: ['delegate_to_agent'] })).toBe(true);
+  });
+
+  it('does not treat an unrelated prior tool call as a delegation continuation', () => {
+    expect(shouldOfferDelegation({ ...base, priorToolNames: ['web_search', 'skill'] })).toBe(false);
+  });
+
+  // disableUserIntegrations is a hard veto: a curated surface must never delegate, whatever the
+  // other signals say.
+  it.each([
+    ['an allowlist', { allowedAgents: ['researcher'] }],
+    ['a session agent', { sessionAgentIds: ['agent-id'] }],
+    ['a store-agent mention', { message: '@researcher help' }],
+    ['a prior delegation', { priorToolNames: ['delegate_to_agent'] }],
+  ])('vetoes delegation on a disableUserIntegrations surface despite %s', (_label, override) => {
+    expect(shouldOfferDelegation({ ...base, ...override, disableUserIntegrations: true })).toBe(false);
   });
 });
