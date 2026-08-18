@@ -23,6 +23,7 @@ import {
   LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS,
   LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS,
 } from '../constants/lakeAccessAudit';
+import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '../constants/forcedRetrieval';
 import { SRE_SECRET_PLACEHOLDER } from '../types/entities/SreTypes';
 
 describe('makeObjectSetting JSON preprocess', () => {
@@ -463,6 +464,46 @@ describe('DefaultChunkSize agrees with the chunker', () => {
     // Still clamps up at the floor, and leaves an in-range value alone.
     expect(clamp!(1)).toBe(MIN_PASSAGE_TOKEN_TARGET);
     expect(clamp!(DEFAULT_PASSAGE_TOKEN_TARGET)).toBe(DEFAULT_PASSAGE_TOKEN_TARGET);
+  });
+});
+
+describe('forcedRetrievalCharBudget agrees with the forced-retrieval fallback (#1831)', () => {
+  // Same drift class as DefaultChunkSize above: before this setting existed, the char budget was a
+  // hand-copied literal (12000) in ChatCompletionFeatures.ts. Both now import
+  // FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT from the same constants module, so this pins that the
+  // setting's default cannot silently diverge from the coded fallback a settings outage returns to.
+  it('defaults to the shared constant, not a hand-copied literal', () => {
+    expect(settingsMap.forcedRetrievalCharBudget.defaultValue).toBe(FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT);
+  });
+
+  it('is platform-only: declares no scope, unlike its sibling dataLakeSearchMaxFiles/MaxChunks', () => {
+    // Deliberate, not an oversight - see the setting's own description. This path reads the setting
+    // directly rather than through the scoped-settings resolver, so a settableAt block here would be
+    // inert at best and could arm the resolver's fail-loud owner check at worst.
+    expect(settingsMap.forcedRetrievalCharBudget.scope).toBeUndefined();
+  });
+
+  it('prefaults to the shared constant rather than makeNumberSetting fallback 0', () => {
+    expect(settingsMap.forcedRetrievalCharBudget.schema.parse(undefined)).toBe(FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT);
+  });
+
+  it('rejects a value below the declared floor at write time', () => {
+    // Same pattern as DefaultChunkSize above: the write path (settings/update.ts) calls
+    // schema.parse and throws on failure, so this is what actually stops an admin from saving an
+    // unusably small budget - positiveIntOr's own floor is defense-in-depth, not the real gate.
+    expect(settingsMap.forcedRetrievalCharBudget.min).toBe(1_000);
+    expect(() => settingsMap.forcedRetrievalCharBudget.schema.parse(999)).toThrow();
+    expect(settingsMap.forcedRetrievalCharBudget.schema.parse(1_000)).toBe(1_000);
+  });
+
+  it('rejects a value above the declared ceiling at write time (#1860 P2-1)', () => {
+    // Without this, a fat-fingered extra zero (24000 -> 240000) passed write-time validation
+    // cleanly and silently shed conversation history via ChatCompletionProcess's overflow-recovery
+    // loop before eventually hard-erroring - the retrieval block itself is never shed, only prior
+    // turns are.
+    expect(settingsMap.forcedRetrievalCharBudget.max).toBe(100_000);
+    expect(() => settingsMap.forcedRetrievalCharBudget.schema.parse(100_001)).toThrow();
+    expect(settingsMap.forcedRetrievalCharBudget.schema.parse(100_000)).toBe(100_000);
   });
 });
 

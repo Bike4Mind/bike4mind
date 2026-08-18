@@ -34,6 +34,7 @@ export * from './constants/chunking';
 export * from './constants/lakeHealth';
 export * from './constants/lakeAccessAudit';
 export * from './constants/lakeConfigAudit';
+export * from './constants/forcedRetrieval';
 export * from './constants/publish';
 export * from './constants/artifactElision';
 export * from './schemas/openai';

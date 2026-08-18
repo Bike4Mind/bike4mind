@@ -162,8 +162,12 @@ function scopeHasRung(scope: SettingScope): boolean {
   return !!(scope.organizationId || scope.owner?.id || scope.lakeId);
 }
 
-/** An unset setting is normal and silent; a set-but-unusable one is a misconfiguration worth saying. */
-function positiveIntOr(
+/**
+ * An unset setting is normal and silent; a set-but-unusable one is a misconfiguration worth saying.
+ * Exported so other numeric-setting readers (e.g. forced retrieval's char budget in
+ * `ChatCompletionFeatures.ts`) share this parse-and-warn contract instead of hand-rolling a copy.
+ */
+export function positiveIntOr(
   raw: string | number | null | undefined,
   fallback: number,
   label: string,

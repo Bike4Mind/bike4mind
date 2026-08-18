@@ -59,3 +59,5 @@ export * from './resolveLakeAuditRetention';
 export * from './openSearchVectorSearch';
 export * from './openSearchChunkAdapter';
 export * from './openSearchRetrievalIndex';
+export * from './attributeAccessedLakes';
+export * from './recordLakeAccessEvent';

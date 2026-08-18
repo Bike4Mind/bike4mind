@@ -376,8 +376,46 @@ export const DATA_LAKES: DataLakeConfig[] = [
     datalakeTag: 'datalake:opti-knowledge',
   },
   // Overlay-contributed customer lakes (e.g. the sales-intelligence lake) - absent in the fork.
+  // ASSUMPTION, unenforced at load time: no two entries here (including this one) may have
+  // overlapping fileTagPrefix values (e.g. 'opti:' and 'opti:legal:'). openLakeTagPrefix's callers
+  // (grantingLakes, attributeAccessedLakeIds) each independently reverse a prefix match back to
+  // ONE lake with no exclusivity check between lakes - an overlap would let a single file's
+  // content-tag satisfy two lakes' prefixes at once, over-attributing/over-granting to both. A
+  // dynamic (DB) lake is checked against this list at creation time (collidesWithRegistryPrefix in
+  // createDataLake.ts); nothing checks entries within this list against each other.
   ...PREMIUM_DATA_LAKES,
 ];
+
+/** Static-registry lake ids - see `openLakeTagPrefix`'s doc comment for what this set decides. */
+export const STATIC_LAKE_IDS = new Set(DATA_LAKES.map(l => l.id));
+
+/**
+ * A lake's normalized file-tag prefix, but ONLY if the lake is in the static registry
+ * (`STATIC_LAKE_IDS`) - `undefined` for a dynamic (user-created) lake's prefix, which is
+ * user-controlled and can collide across tenants, so it is never usable as a standalone grant or
+ * attribution signal on its own; or for a static lake with no usable prefix at all.
+ *
+ * The shared place "is this lake's prefix an OPEN one" is decided BY ID MEMBERSHIP in the static
+ * registry, so every consumer that reverses a content-tag-prefix match back to a specific lake -
+ * `grantingLakes`/`isFileInAccessibleLake` (`apps/client/server/dataLakes/grantingLakes.ts`,
+ * naming the grantor of a single already-authorized file), `splitTagPrefixes` (same file's
+ * barrel, scoping a browse/search query), and `attributeAccessedLakeIds`
+ * (`b4m-core/services/src/dataLakeService/attributeAccessedLakes.ts`, naming the lake a retrieved
+ * file's content actually came from) - agrees on the same answer. Two independently-normalized
+ * copies of this predicate have drifted before (a padded prefix passed create validation but
+ * mismatched between the ownership arm and the tag counter); one shared computation is what keeps
+ * that class of bug from recurring in THOSE consumers.
+ *
+ * NOT the right predicate everywhere open/dynamic provenance matters, though: id-membership
+ * answers "is this id in the hardcoded list", not "did this lake come from the DB". A DB row can
+ * shadow a registry id, and there the two answers diverge - see `getDynamicDataLakeTags.ts`'s
+ * `dynamicIds`, which classifies by source for exactly that reason and must not be replaced with
+ * this function.
+ */
+export function openLakeTagPrefix(lake: { id: string; fileTagPrefix?: string | null }): string | undefined {
+  if (!STATIC_LAKE_IDS.has(lake.id)) return undefined;
+  return normalizeTagPrefix(lake.fileTagPrefix) ?? undefined;
+}
 
 /**
  * Canonical normalization for entitlement keys + `requiredEntitlement` values - the ONE

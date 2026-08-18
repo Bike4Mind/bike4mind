@@ -44,20 +44,26 @@ import {
   CitableSource,
   OpenAIEmbeddingModel,
   ImageModerationIncident,
+  ILakeAccessEventRepository,
   isExperimentalFeatureEnabled,
   isSupportedEmbeddingModel,
   resolveHistoryFetchLimit,
   buildMemoryContext,
   buildLakeMemoryContext,
+  FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
+  FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
+import { positiveIntOr } from '../dataLakeService/resolveSearchBudgets';
 import {
   classifyLoadedChunk,
   partitionFilesByEmbeddingModel,
   resolveMajorityEmbeddingModel,
 } from '../dataLakeService/embeddingMismatch';
 import { getAccessibleDataLakePrompts, datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
+import { attributeAccessedLakeIds } from '../dataLakeService/attributeAccessedLakes';
+import { recordLakeAccessEvent } from '../dataLakeService/recordLakeAccessEvent';
 import { renderDataLakePromptSection } from '../dataLakeService/renderDataLakePromptBlock';
 import {
   defangRetrievedContent,
@@ -73,6 +79,7 @@ import {
   fetchAndProcessPreviousMessages,
   IQueueService,
   ITokenizer,
+  normalizeId,
   postMessageToSlack,
   QuestMaster,
 } from '@bike4mind/utils';
@@ -166,6 +173,11 @@ interface DatabaseAdapters {
    * incident audit record, not the block.
    */
   imageModerationIncidents?: { record(input: ImageModerationIncident): Promise<unknown> };
+  /**
+   * Lake access audit sink. Optional - see recordLakeAccessEvent, which no-ops when
+   * a host hasn't wired it in rather than blocking forced retrieval.
+   */
+  lakeAccessEvents?: Pick<ILakeAccessEventRepository, 'record'>;
 }
 export type featureNames =
   | 'slack'
@@ -1408,14 +1420,19 @@ const FORCED_RETRIEVAL_BATCH_CHUNK_CAP = 1000;
 const FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS = 4000;
 // Above-floor candidates retained for the char-budget walk, so resident chunk text stays bounded.
 // The budget can only fit this many sections while the mean retained chunk exceeds
-// 12000/256 ~ 47 chars, which real chunking always does; a corpus of very short chunks (one
-// record per chunk) could inject fewer sections than before.
+// (configured char budget)/256 chars - ~47 at the 12,000-char default, which real chunking always
+// clears. Since the char budget became a setting (see `forcedRetrievalCharBudget` below), a very
+// large configured value could in principle admit more sections than this caps; a corpus of very
+// short chunks could inject fewer than expected regardless of budget.
 const FORCED_RETRIEVAL_MAX_SCORED_CHUNKS = 256;
-// Total characters of retrieved chunk text injected into the prompt.
-const FORCED_RETRIEVAL_CHAR_BUDGET = 12000;
 // Minimum cosine similarity (ada-002) for a chunk to count as relevant. Below this,
-// no chunk is injected and the turn falls back to forcedRetrievalNoContextPrompt.
-const FORCED_RETRIEVAL_MIN_SIMILARITY = 0.75;
+// no chunk is injected and the turn falls back to forcedRetrievalNoContextPrompt. Not itself a
+// lever - shares its default with the settings schema (`forcedRetrievalCharBudget`'s sibling
+// constant) so the two cannot drift.
+const FORCED_RETRIEVAL_MIN_SIMILARITY = FORCED_RETRIEVAL_MIN_SIMILARITY_DEFAULT;
+// The char budget is now a lever (`forcedRetrievalCharBudget` setting, resolved once per turn by
+// resolveForcedRetrievalCharBudget below) rather than a module constant - every former reference to
+// a FORCED_RETRIEVAL_CHAR_BUDGET constant is a resolved local variable instead.
 
 /**
  * Common to all three findings below. Every instruction here and in the finding bodies is
@@ -1559,6 +1576,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     dataLakeTags: string[];
     dataLakeTagPrefixes: string[];
     scopedTagPrefixes: string[];
+    lakes: Awaited<ReturnType<typeof getDynamicDataLakeAccess>>['lakes'];
   }> {
     const { db, user } = this.chatCompletion;
     const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
@@ -1692,6 +1710,37 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     return factoryDefault;
   }
 
+  /**
+   * The admin's configured `forcedRetrievalCharBudget`, or the coded default on anything unusable.
+   * Mirrors `resolveEmbeddingModelFallback` above: same try/catch shape, same loud-fallback policy.
+   * Resolved ONCE per turn by the caller and closed over, never re-read inside the per-chunk
+   * accumulation loop below.
+   *
+   * `positiveIntOr`'s unset/unusable-value branches are defense-in-depth here, not something
+   * normal operation exercises: `getSettingsValue` runs the setting's own schema (`.min(1_000)`,
+   * now also `.max`) via `safeParse` before this ever sees the value, so those branches cannot
+   * fire for any input that reached the DB through the write path OR a direct edit - the schema
+   * check applies to whatever is stored, regardless of how it got there. The only branch that is
+   * genuinely reachable is the outer catch below (a settings-read failure/outage).
+   */
+  private async resolveForcedRetrievalCharBudget(): Promise<number> {
+    try {
+      const configured = await this.chatCompletion.db.adminSettings.getSettingsValue('forcedRetrievalCharBudget');
+      return positiveIntOr(
+        configured as string | number | null | undefined,
+        FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
+        'forcedRetrievalCharBudget',
+        this.logger
+      );
+    } catch (err) {
+      this.logger.warn(
+        `🔒 Forced retrieval: failed to read forcedRetrievalCharBudget; falling back to ${FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT}`,
+        err
+      );
+      return FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT;
+    }
+  }
+
   private noContextMessages(finding: 'unavailable' | 'no_match_partial' | 'no_match'): IMessage[] {
     return [{ role: 'system' as const, content: forcedRetrievalNoContextPrompt(finding) }];
   }
@@ -1723,7 +1772,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     }
 
     try {
-      const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await this.resolveDataLakeAccess();
+      const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } = await this.resolveDataLakeAccess();
+      // Resolved ONCE here, before the scan - never re-read per chunk in the accumulation loop below.
+      const forcedRetrievalCharBudget = await this.resolveForcedRetrievalCharBudget();
 
       // 1. List the lake-accessible files (empty query -> all accessible). Ranking is by semantic
       //    similarity below, but the ORDER still matters: on a lake larger than the candidate cap
@@ -1919,15 +1970,17 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       let used = 0;
       const sections: string[] = [];
       const sourceFileIds: string[] = [];
+      const injectedChunkIds: string[] = [];
       // `scored` is already floor-filtered during the scan, so the walk only enforces the budget.
       for (const candidate of scored) {
-        if (used >= FORCED_RETRIEVAL_CHAR_BUDGET) break;
+        if (used >= forcedRetrievalCharBudget) break;
+        injectedChunkIds.push(candidate.id);
         const file = fileById.get(candidate.fabFileId);
-        const remaining = FORCED_RETRIEVAL_CHAR_BUDGET - used;
+        const remaining = forcedRetrievalCharBudget - used;
         // Defang BEFORE the budget slice, not after: the defang adds one space per line-initial
         // marker, so slicing the raw text and defanging the result would emit more characters than
-        // `used` counts and overshoot FORCED_RETRIEVAL_CHAR_BUDGET. Slicing the defanged string
-        // keeps `used` equal to what is actually injected.
+        // `used` counts and overshoot the char budget. Slicing the defanged string keeps `used`
+        // equal to what is actually injected.
         const defanged = defangRetrievedContent(candidate.text);
         const text = defanged.length > remaining ? defanged.slice(0, remaining) : defanged;
         const name = file?.fileName || candidate.fabFileId;
@@ -2082,6 +2135,36 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // prompt. Ahead of the retrieved content so it frames how to use it. Fail-safe: any failure
       // here degrades to no lake prompt and never drops the retrieved context.
       const lakePromptMessage = await this.resolveRetrievedLakePromptMessage(sourceFileIds, fileById);
+
+      // Best-effort audit write, attributed via the tags on the files this turn actually
+      // grounded on (sourceFileIds), not the wider scanned candidate pool. The candidate search
+      // is a mixed corpus (owned + shared + org-shared + data lake, via includeShared:true with
+      // no restrictToDataLake), so a grounded file with no recoverable datalake tag may be the
+      // caller's own private file - never fall back to the full scope, and skip the row entirely
+      // if the turn grounded on zero lake content.
+      const forcedRetrievalLakeIds = attributeAccessedLakeIds(
+        sourceFileIds.map(fid => fileById.get(fid)?.tags?.map(t => t.name) ?? []),
+        lakes,
+        { allowFullScopeFallback: false }
+      );
+      if (forcedRetrievalLakeIds.length > 0) {
+        recordLakeAccessEvent(
+          this.chatCompletion.db.lakeAccessEvents,
+          {
+            principalKind: 'user',
+            principalId: user.id,
+            organizationId: normalizeId(user.organizationId),
+            resolvedLakeIds: forcedRetrievalLakeIds,
+            fileIds: sourceFileIds,
+            chunkIds: injectedChunkIds,
+            surface: 'forced-retrieval',
+            queryText: query,
+          },
+          this.logger,
+          this.chatCompletion.db.adminSettings
+        );
+      }
+
       return lakePromptMessage ? [lakePromptMessage, retrievedContext] : [retrievedContext];
     } catch (error) {
       // A failed search still leaves the turn ungrounded, so it gets the abstention block for the

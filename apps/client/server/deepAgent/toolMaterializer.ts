@@ -12,6 +12,7 @@ import {
   fabFileChunkRepository,
   fabFileRepository,
   imageModerationIncidentRepository,
+  lakeAccessEventRepository,
   organizationRepository,
   projectRepository,
   userRepository,
@@ -94,6 +95,7 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
         // inline in the tool) - this only wires the incident record, not the block.
         imageModerationIncidents: imageModerationIncidentRepository,
         organizations: organizationRepository,
+        lakeAccessEvents: lakeAccessEventRepository,
       },
       storage: getFilesStorage(),
       imageGenerateStorage: getGeneratedImageStorage(),

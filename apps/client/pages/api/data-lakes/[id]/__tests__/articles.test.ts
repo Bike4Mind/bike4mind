@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   isFallbackLake: vi.fn(),
   search: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'viewer-9', isAdmin: false })),
+  record: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -26,11 +27,16 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
-vi.mock('@bike4mind/services', () => ({
+vi.mock('@bike4mind/services', async () => ({
   dataLakeService: {
     assertLakeAccess: h.assertLakeAccess,
     lakeMembershipScope: h.lakeMembershipScope,
     isFallbackLake: h.isFallbackLake,
+    // Real implementation (already unit-tested on its own) so this suite asserts on the actual
+    // lakeAccessEventRepository.record call args rather than a reimplementation.
+    recordLakeAccessEvent: (
+      await import('../../../../../../../b4m-core/services/src/dataLakeService/recordLakeAccessEvent')
+    ).recordLakeAccessEvent,
   },
   fabFilesService: { search: h.search },
 }));
@@ -49,6 +55,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   projectRepository: {},
   userRepository: { findById: vi.fn() },
+  lakeAccessEventRepository: { record: h.record },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ getSignedUrl: vi.fn() }) }));
@@ -147,5 +154,78 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
 
     expect(json).toHaveBeenCalledWith({ data: [], total: 0, hasMore: false });
     expect(h.search).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/data-lakes/:id/articles access-event audit', () => {
+  it('records an event scoped to the resolved lake, with file ids from the result', async () => {
+    h.search.mockResolvedValue({ data: [{ id: 'f1' }, { id: 'f2' }], total: 2, hasMore: false });
+    const { res } = makeRes();
+
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);
+
+    expect(h.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principalKind: 'user',
+        principalId: 'viewer-9',
+        resolvedLakeIds: ['lake1'],
+        fileIds: ['f1', 'f2'],
+        surface: 'data-lake-articles',
+      })
+    );
+  });
+
+  it('narrows a repeated ?search= (Express hands back an array) to its first value', async () => {
+    h.search.mockResolvedValue({ data: [{ id: 'f1' }], total: 1, hasMore: false });
+    const { res } = makeRes();
+    const req = { ...makeReq(), query: { id: 'lake1', search: ['onboarding', 'other'] } };
+
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+
+    expect(h.record).toHaveBeenCalledWith(expect.objectContaining({ queryText: 'onboarding' }));
+  });
+
+  it('does not record an event when the lake has no meta-tag (no search ran)', async () => {
+    h.assertLakeAccess.mockResolvedValue({ ...LAKE, datalakeTag: '' });
+    const { res } = makeRes();
+
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);
+
+    expect(h.record).not.toHaveBeenCalled();
+  });
+
+  // Negative control distinct from the empty-result cases above: here the caller is denied
+  // ACCESS outright (assertLakeAccess throws), so the handler never reaches the search or the
+  // audit write at all - proving the recorder is skipped on a failed authorization, not merely
+  // on an authorized-but-empty read.
+  it('does not record an event when the access gate itself denies the request', async () => {
+    h.assertLakeAccess.mockRejectedValue(new Error('not found'));
+    const { res } = makeRes();
+
+    await expect((handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res)).rejects.toThrow(
+      'not found'
+    );
+
+    expect(h.search).not.toHaveBeenCalled();
+    expect(h.record).not.toHaveBeenCalled();
+  });
+
+  it('does not record an event when the search ran but found no files', async () => {
+    h.search.mockResolvedValue({ data: [], total: 0, hasMore: false });
+    const { res } = makeRes();
+
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);
+
+    expect(h.record).not.toHaveBeenCalled();
+  });
+
+  it('still returns the response when the audit write rejects', async () => {
+    h.search.mockResolvedValue({ data: [{ id: 'f1' }], total: 1, hasMore: false });
+    h.record.mockRejectedValueOnce(new Error('mongo blip'));
+    const { res, json } = makeRes();
+
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);
+
+    expect(json).toHaveBeenCalledWith({ data: [{ id: 'f1' }], total: 1, hasMore: false });
   });
 });

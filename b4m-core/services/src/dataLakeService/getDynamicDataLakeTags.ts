@@ -202,7 +202,13 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   // Split prefixes by provenance: static-registry lakes are OPEN (shared KB - ownership
   // bypass by design); dynamic (DB) lakes are SCOPED (their user-controlled prefix must be
   // matched ONLY within owner/org access, else a colliding prefix leaks another tenant's
-  // files). A lake is dynamic iff it came from the DB set.
+  // files). A lake is dynamic iff it came from the DB set - deliberately NOT
+  // `openLakeTagPrefix`/`STATIC_LAKE_IDS` (@bike4mind/common), which classify by id membership in
+  // the hardcoded registry instead of by source. Those two answers usually agree, but a DB row can
+  // shadow a registry id (see `isShadowedRegistryTag` below and `resolveDataLakeAccess`'s "DB takes
+  // precedence" rule) - a shadowed row must stay SCOPED, which only the source-based check gets
+  // right; `STATIC_LAKE_IDS.has(dl.id)` would wrongly call it OPEN and turn its user-controlled
+  // prefix into an ownership-bypassing grant. Do not swap this for the shared helper.
   const dynamicIds = new Set((dynamicDataLakes ?? []).map(d => d.id));
   // The meta-tag arm is an ownership bypass, safe only because a lake's datalakeTag is
   // globally unique. A DB row can still carry a tag the static registry owns (the registry

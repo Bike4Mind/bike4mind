@@ -11,6 +11,7 @@ import {
   userRepository,
   withTransaction,
   User,
+  lakeAccessEventRepository,
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { NotFoundError } from '@bike4mind/utils';
@@ -18,9 +19,11 @@ import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
-import { findLakeAccessibleFabFile } from '@server/dataLakes';
+import { grantingLakes, resolveAccessibleLakes } from '@server/dataLakes';
 import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
 import { getFilesStorage } from '@server/utils/storage';
+import { normalizeId } from '@bike4mind/utils/normalizeId';
+import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import { Request } from 'express';
 import { Types } from 'mongoose';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
@@ -57,9 +60,37 @@ const handler = baseApi()
       // so getFabFile 404s for entitled non-owner users. Re-authorize via the SAME lake gate the
       // browse endpoints use and, if granted, mint a fresh signed URL through the same path so
       // the shared file viewer (KnowledgeModal) can render it. (#836)
-      const lakeFile = await findLakeAccessibleFabFile(req, req.query.id);
-      if (!lakeFile) throw error; // not lake-accessible either - preserve the original 404
-      const fabFile = await fabFilesService.generateSignedUrl(lakeFile, adapter);
+      const lakes = await resolveAccessibleLakes(req);
+      // Fetched directly and checked against the already-resolved `lakes` rather than a per-id
+      // helper that would re-run resolveAccessibleLakes's own DB read - the same one-resolve,
+      // reuse-everywhere shape as files/byIds.ts's lake fallback.
+      const candidate = lakes.length > 0 ? await fabFileRepository.findById(req.query.id) : null;
+      // The SAME computation grants access and names the grantor, so an open-prefix match (no
+      // tag to reverse) attributes to the specific lake whose prefix matched rather than falling
+      // back to every accessible lake - a false row in an immutable, 450-day-floor audit trail is
+      // worse than a missing one.
+      const grantors =
+        candidate && !candidate.deletedAt ? grantingLakes(lakes, candidate.tags?.map(t => t.name) ?? []) : [];
+      // No accessible lake serves this id either - never an audit-worthy read, so nothing is
+      // recorded; preserve the original 404 exactly as getFabFile raised it.
+      if (!candidate || grantors.length === 0) throw error;
+      const fabFile = await fabFilesService.generateSignedUrl(candidate, adapter);
+      // Best-effort audit write - this is the same single-file metadata + URL read as the
+      // articles `?id=` deep link, just reached through the direct-fetch fallback door instead.
+      // Awaited (never rethrows): a per-request serverless route must not race a post-response
+      // freeze of the execution environment.
+      await dataLakeService.recordLakeAccessEvent(
+        lakeAccessEventRepository,
+        {
+          ...resolveAuditPrincipal(req.user, req.apiKeyInfo),
+          organizationId: normalizeId(req.user.organizationId),
+          resolvedLakeIds: grantors.map(lake => lake.id),
+          fileIds: [candidate.id],
+          surface: 'data-lake-file-fallback',
+        },
+        req.logger,
+        adminSettingsRepository
+      );
       return res.json(fabFile);
     }
   })

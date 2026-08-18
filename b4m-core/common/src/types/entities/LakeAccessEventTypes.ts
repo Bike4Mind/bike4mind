@@ -4,13 +4,18 @@ import { IMongoDocument } from './common';
 // -- Lake Access Event ----------------------------------------------------------------------
 //
 // The audit trail a lake never had: one row per retrieval call, answering "who read this lake,
-// and when" (see #1658's "zero lake access records of any kind" finding). Types live here rather
-// than inline in the model (unlike MemoryLedgerEventModel) because the callers that will record
-// events (#1678's retrieval surfaces) live in b4m-core/services, which cannot import
+// and when". Types live here rather than inline in the model (unlike MemoryLedgerEventModel)
+// because the callers that record events live in b4m-core/services, which cannot import
 // @bike4mind/database - the same split DataLakeAccessGrantModel uses.
 //
-// SCOPE: this module is the event shape and vocabulary only. Nothing here calls `record()` yet -
-// instrumenting the retrieval surfaces is a separate ticket.
+// SCOPE: this module is the event shape and vocabulary. The write path lives on
+// LakeAccessEventModel.record(); the retrieval surfaces call it via recordLakeAccessEvent.
+//
+// PRODUCT DECISION: a query that returns zero lake content is not recorded at all, even though
+// the query itself happened - every retrieval surface skips the write on an empty/unattributable
+// result (see each call site's own guard). This trail answers "what was read", not "what was
+// asked" - a principal probing a lake's contents with queries that happen to match nothing leaves
+// no row here. Revisit if that gap ever needs closing; it is deliberate, not an oversight.
 
 /** Who performed the retrieval. Flat fields (not a nested object), mirroring
  * MemoryLedgerEventModel's principalKind/principalId shape. */
@@ -19,12 +24,19 @@ export type LakeAccessPrincipalKind = (typeof LAKE_ACCESS_PRINCIPAL_KINDS)[numbe
 
 /**
  * Which code path produced the retrieval. `rlm-answer` is reserved for the RLM answer endpoint's
- * own in-process retrieval - its loopback tool call to the semantic-search route must be recorded
- * under `data-lake-semantic-search` instead (whichever surface #1678 instruments), or one
- * user-visible retrieval double-counts as two events.
+ * own in-process retrieval - its loopback tool call to the semantic-search route is recorded
+ * under `data-lake-semantic-search` instead, or one user-visible retrieval double-counts as two
+ * events.
  */
 export const LAKE_ACCESS_SURFACES = [
   'data-lake-semantic-search',
+  'data-lake-articles',
+  'data-lake-public-browse',
+  'data-lake-sync-delta',
+  // The GET /api/files/:id lake-accessible fallback (files/[id]/index.ts) - same single-file
+  // metadata + URL read as the articles `?id=` deep link, reached through a different door, so it
+  // gets its own value rather than reusing data-lake-articles and conflating the two entry points.
+  'data-lake-file-fallback',
   'chat-kb-search',
   'chat-kb-search-scoped',
   'chat-kb-retrieve',
@@ -51,12 +63,35 @@ export interface ILakeAccessEvent {
   /** Set when a system/agent principal acted for a human, so the human is still findable in "who
    * read this" without conflating the two identities in `principalId`. */
   onBehalfOfUserId?: string;
+  /**
+   * The READER's organization - whoever performed the retrieval, not necessarily the lake
+   * owner's. A caller answering "who read *my org's* lake" (the question an org-manageable-lake
+   * admin actually asks) must filter/join on the lake's own org, not this field; an outside
+   * grant-holder's read is a real row here under their own org, and `listByLake` returns nothing
+   * for that admin if they filter on this field instead.
+   */
   organizationId?: string;
   /**
-   * The retrieval SCOPE that was authorized and searched, not per-chunk attribution - the
-   * retrieval primitives this event records do not carry which lake produced which chunk. One
-   * retrieval call commonly spans several lakes at once. Answers "was lake X in scope for this
-   * read", not "did this specific chunk come from lake X".
+   * Best-effort attribution: lakes whose `datalake:<slug>` meta-tag appears on a returned
+   * result, OR (for a static-registry lake only) whose open content-tag prefix appears - a
+   * registry lake's files structurally cannot carry its meta-tag (no write path stamps one for a
+   * fallback lake), so without this second arm every retrieval of registry content would be
+   * unattributable, which is the NORMAL shape of a read there, not an edge case. Narrowed from the
+   * full authorized scope where either is recoverable. One retrieval call commonly spans several
+   * lakes.
+   *
+   * When nothing in the result set carries a recoverable tag, `attributeAccessedLakeIds`'s
+   * `allowFullScopeFallback` option decides what happens: `true` (the default) falls back to the
+   * FULL authorized/searched scope, so a lake is never dropped from its own audit trail just
+   * because attribution was inconclusive - sound ONLY where every possible result is guaranteed
+   * lake content. Every other retrieval surface searches a corpus mixed with owned/shared
+   * content, where an inconclusive match may be the caller's own private file; those pass `false`
+   * and skip the row entirely rather than fabricate a lake read that never happened. As of this
+   * writing every non-scoped call site is mixed-corpus and passes `false` - the `true` default
+   * exists for a genuinely lake-only search, not because one is wired to it today. A single
+   * already-authorized file (the `?id=` deep link, the `/api/files/:id` lake fallback) does not
+   * go through this fallback at all; it is attributed via `grantingLakes`, which names the
+   * specific granting lake(s) directly rather than falling back to the full scope.
    */
   resolvedLakeIds: string[];
   /** Identifiers only - chunk TEXT must never reach this model. */

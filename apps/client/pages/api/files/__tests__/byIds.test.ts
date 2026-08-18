@@ -8,10 +8,14 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 const listFabFiles = vi.fn();
 const generateSignedUrl = vi.fn();
+const recordLakeAccessEvent = vi.fn();
 vi.mock('@bike4mind/services', () => ({
   fabFilesService: {
     listFabFiles: (...args: unknown[]) => listFabFiles(...args),
     generateSignedUrl: (...args: unknown[]) => generateSignedUrl(...args),
+  },
+  dataLakeService: {
+    recordLakeAccessEvent: (...args: unknown[]) => recordLakeAccessEvent(...args),
   },
 }));
 
@@ -21,12 +25,16 @@ vi.mock('@bike4mind/database/content', () => ({
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: {} }));
 vi.mock('@bike4mind/database/infra', () => ({ adminSettingsRepository: {} }));
+vi.mock('@bike4mind/database', () => ({ lakeAccessEventRepository: {} }));
 
 const resolveAccessibleLakes = vi.fn();
-const isFileInAccessibleLake = vi.fn();
+const grantingLakes = vi.fn();
 vi.mock('@server/dataLakes', () => ({
   resolveAccessibleLakes: (...args: unknown[]) => resolveAccessibleLakes(...args),
-  isFileInAccessibleLake: (...args: unknown[]) => isFileInAccessibleLake(...args),
+  grantingLakes: (...args: unknown[]) => grantingLakes(...args),
+}));
+vi.mock('@server/dataLakes/resolveAuditPrincipal', () => ({
+  resolveAuditPrincipal: (user: { id: string }) => ({ principalKind: 'user', principalId: user.id }),
 }));
 
 vi.mock('@server/utils/storage', () => ({
@@ -58,7 +66,11 @@ function makeRes() {
   return { res, getJson: () => jsonBody };
 }
 
-const makeReq = (ids: string[]) => ({ query: { ids }, user: { id: 'u1' } });
+const makeReq = (ids: string[]) => ({
+  query: { ids },
+  user: { id: 'u1' },
+  logger: { warn: vi.fn(), error: vi.fn() },
+});
 
 describe('GET /api/files/byIds', () => {
   beforeEach(() => {
@@ -67,6 +79,7 @@ describe('GET /api/files/byIds', () => {
     resolveAccessibleLakes.mockResolvedValue([]);
     findAllInIds.mockResolvedValue([]);
     generateSignedUrl.mockImplementation(async (file: { id: string }) => ({ ...file, fileUrl: 'signed-url' }));
+    recordLakeAccessEvent.mockResolvedValue(undefined);
   });
 
   it('re-admits ACL-dropped lake files via one lake resolution and one batched lookup', async () => {
@@ -74,7 +87,7 @@ describe('GET /api/files/byIds', () => {
     const lakeFile = { id: LAKE_ID, tags: [{ name: 'datalake:lake-1' }] };
     const deletedFile = { id: DELETED_ID, deletedAt: new Date(), tags: [{ name: 'datalake:lake-1' }] };
     findAllInIds.mockResolvedValue([lakeFile, deletedFile]);
-    isFileInAccessibleLake.mockReturnValue(true);
+    grantingLakes.mockReturnValue([{ id: 'lake-1' }]);
 
     const { res, getJson } = makeRes();
     await handler(makeReq([OWNED_ID, LAKE_ID, DELETED_ID, UNKNOWN_ID]), res);
@@ -87,6 +100,50 @@ describe('GET /api/files/byIds', () => {
     const body = getJson() as Array<{ id: string; fileUrl?: string }>;
     expect(body.map(f => f.id)).toEqual([OWNED_ID, LAKE_ID]); // deleted candidate filtered out
     expect(body.find(f => f.id === LAKE_ID)?.fileUrl).toBe('signed-url');
+  });
+
+  // The byIds twin of the single-file fallback in files/[id]/index.ts - same surface, batched.
+  describe('access-event audit', () => {
+    it('records one batched event covering every lake-granted file, attributed to the union of grantors', async () => {
+      resolveAccessibleLakes.mockResolvedValue([{ id: 'lake-1' }, { id: 'lake-2' }]);
+      const fileA = { id: LAKE_ID, tags: [{ name: 'datalake:lake-1' }] };
+      const fileB = { id: DELETED_ID, tags: [{ name: 'datalake:lake-2' }] }; // reusing a hex id as a second file
+      findAllInIds.mockResolvedValue([fileA, fileB]);
+      grantingLakes.mockImplementation((_lakes: unknown, tagNames: string[]) =>
+        tagNames.includes('datalake:lake-1') ? [{ id: 'lake-1' }] : [{ id: 'lake-2' }]
+      );
+
+      await handler(makeReq([OWNED_ID, LAKE_ID, DELETED_ID]), makeRes().res);
+
+      expect(recordLakeAccessEvent).toHaveBeenCalledWith(
+        {},
+        expect.objectContaining({
+          principalKind: 'user',
+          principalId: 'u1',
+          resolvedLakeIds: expect.arrayContaining(['lake-1', 'lake-2']),
+          fileIds: [LAKE_ID, DELETED_ID],
+          surface: 'data-lake-file-fallback',
+        }),
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it('does not record when no candidate is actually granted by any lake', async () => {
+      resolveAccessibleLakes.mockResolvedValue([{ id: 'lake-1' }]);
+      findAllInIds.mockResolvedValue([{ id: LAKE_ID, tags: [] }]);
+      grantingLakes.mockReturnValue([]);
+
+      await handler(makeReq([OWNED_ID, LAKE_ID]), makeRes().res);
+
+      expect(recordLakeAccessEvent).not.toHaveBeenCalled();
+    });
+
+    it('does not record when there are no ACL-dropped candidates at all', async () => {
+      await handler(makeReq([OWNED_ID]), makeRes().res);
+
+      expect(recordLakeAccessEvent).not.toHaveBeenCalled();
+    });
   });
 
   it('skips the fallback entirely when the misses are not valid ObjectIds', async () => {

@@ -9,7 +9,22 @@ import {
   resetProbeGuardForTests,
   nextRevalidationDelayMs,
   scheduleSessionRevalidation,
+  bootstrapSession,
+  resetSessionBootstrap,
 } from './sessionBootstrap';
+import { refreshSession } from './refreshCoordinator';
+import { useUser } from '@client/app/contexts/UserContext';
+
+// resetRefreshCoordinator + listenForSiblingRefresh are re-exported/consumed by ApiContext, which
+// this file imports transitively - a mock missing them fails at import time, not at call time.
+vi.mock('./refreshCoordinator', () => ({
+  refreshSession: vi.fn(),
+  resetRefreshCoordinator: vi.fn(),
+  listenForSiblingRefresh: vi.fn(() => () => {}),
+}));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: { getState: vi.fn(() => ({ setCurrentUser: vi.fn() })) },
+}));
 
 /** A macrotask flush - long enough for a settled promise's .catch().finally() chain to run. */
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -29,6 +44,91 @@ const base = {
   expired: false,
   pathname: '/new',
 };
+
+describe('bootstrapSession - establishing currentUser on a cold load', () => {
+  let setCurrentUser: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetSessionBootstrap();
+    useAccessToken.setState({ accessToken: null });
+    setCurrentUser = vi.fn();
+    vi.mocked(useUser.getState).mockReturnValue({ setCurrentUser } as never);
+  });
+
+  it('uses the user the refresh response carried, without a second round trip', async () => {
+    vi.mocked(refreshSession).mockResolvedValue({ accessToken: 'fresh', user: { id: 'u1' } as never });
+    const get = vi.spyOn(api, 'get');
+
+    await bootstrapSession();
+
+    expect(setCurrentUser).toHaveBeenCalledWith({ id: 'u1' });
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it('resolves identity itself when the coordinator served an already-current token', async () => {
+    // The adopt path carries no user: another tab exchanged the cookie and its response was never
+    // visible here. Leaving currentUser null bounces a perfectly good session to /login, because
+    // the route guard gates on currentUser rather than on the token.
+    vi.mocked(refreshSession).mockResolvedValue({ accessToken: 'adopted' });
+    const get = vi.spyOn(api, 'get').mockResolvedValue({ data: { user: { id: 'u2' } } } as never);
+
+    await bootstrapSession();
+
+    expect(get).toHaveBeenCalledWith('/api/identify', expect.anything());
+    expect(setCurrentUser).toHaveBeenCalledWith({ id: 'u2' });
+  });
+
+  it('leaves the stores untouched when there is no recoverable session', async () => {
+    // An anonymous visitor on a protected deep link: the guard turns a null currentUser into a
+    // /login redirect. Stamping an expiry here would show a spurious "session expired" toast.
+    useAccessToken.setState({ accessToken: null, expired: false, expiredReason: null });
+    vi.mocked(refreshSession).mockRejectedValue(new Error('401'));
+
+    await expect(bootstrapSession()).resolves.toBeUndefined();
+
+    expect(setCurrentUser).not.toHaveBeenCalled();
+    // Untouched, not stamped expired - that flag is what raises the toast.
+    expect(useAccessToken.getState().expired).toBe(false);
+    expect(useAccessToken.getState().expiredReason).toBeNull();
+  });
+
+  it('retries on the next navigation when the identity fetch failed but a token is held', async () => {
+    // The adopt path leaves a token in the store before returning, so a token-only short-circuit
+    // would latch this tab on "valid cookie, valid token, no identity" - the route guard gates on
+    // currentUser, so it sits on /login for the page's whole lifetime with nothing to retry.
+    let current: unknown = null;
+    setCurrentUser = vi.fn(user => {
+      current = user;
+    });
+    vi.mocked(useUser.getState).mockImplementation(() => ({ setCurrentUser, currentUser: current }) as never);
+
+    vi.mocked(refreshSession).mockResolvedValue({ accessToken: 'adopted' });
+    useAccessToken.setState({ accessToken: 'adopted' });
+    const get = vi
+      .spyOn(api, 'get')
+      .mockRejectedValueOnce(new Error('cold lambda'))
+      .mockResolvedValueOnce({ data: { user: { id: 'u3' } } } as never);
+
+    await bootstrapSession();
+    expect(setCurrentUser).not.toHaveBeenCalled();
+
+    // Next protected navigation: must re-enter rather than return the cached resolved promise.
+    await bootstrapSession();
+
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(setCurrentUser).toHaveBeenCalledWith({ id: 'u3' });
+  });
+
+  it('short-circuits once both a token and an identity are established', async () => {
+    vi.mocked(useUser.getState).mockReturnValue({ setCurrentUser, currentUser: { id: 'u1' } } as never);
+    useAccessToken.setState({ accessToken: 'live' });
+
+    await bootstrapSession();
+
+    expect(refreshSession).not.toHaveBeenCalled();
+  });
+});
 
 describe('shouldRevalidateOnFocus - refocus liveness-check gate', () => {
   it('revalidates when the tab is visible and holding a token', () => {

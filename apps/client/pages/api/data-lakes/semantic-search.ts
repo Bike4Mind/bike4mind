@@ -12,6 +12,7 @@ import {
   organizationRepository,
   usageEventRepository,
   userRepository,
+  lakeAccessEventRepository,
 } from '@bike4mind/database';
 import { apiKeyService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
 import { getProviderFromModel } from '@bike4mind/fab-pipeline';
@@ -23,9 +24,10 @@ import {
   isSupportedEmbeddingModel,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
-import { createTokenizer, getSettingsByNames, type ITokenizer } from '@bike4mind/utils';
+import { createTokenizer, getSettingsByNames, normalizeId, type ITokenizer } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import { resolveRetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
+import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 
 // Reused across requests so the tiktoken encoder is resolved once, not per search.
 let sharedTokenizer: ITokenizer | undefined;
@@ -224,7 +226,7 @@ const handler = baseApi()
       const isAborted = () => clientAborted;
 
       // --- Resolve accessible data lakes (this IS the access gate) ---
-      const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await resolveRetrievalLakeScope(req);
+      const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes, lakes } = await resolveRetrievalLakeScope(req);
 
       // Every lake contributes exactly one meta-tag, so an empty tag list means zero
       // accessible lakes. Gating on the prefixes instead would be wrong: a caller can
@@ -315,6 +317,38 @@ const handler = baseApi()
           vectorIndex: selfHostOpenSearchEnabled() ? dataLakeService.openSearchChunkAdapter : undefined,
         }
       );
+
+      // semanticDataLakeSearch's file search is a MIXED corpus (includeShared: true, no
+      // restrictToDataLake - collectScopedFiles ORs the caller's own/shared files in alongside
+      // the lake arms), so a hit with no recoverable tag may be the caller's own private file -
+      // this must NOT fall back to the full scope, and is skipped entirely when nothing returned
+      // is actually attributable to a lake (not merely when nothing was returned at all).
+      // Awaited (never rethrows - see recordLakeAccessEvent's doc comment): a per-request
+      // serverless route must not race a post-response freeze of the execution environment.
+      // Recorded here, right as the search results come back - NOT after the later isAborted()
+      // check - because the read already happened at this point regardless of whether the client
+      // is still there for the response.
+      const resolvedLakeIds = dataLakeService.attributeAccessedLakeIds(
+        search.results.map(r => r.fileTags),
+        lakes,
+        { allowFullScopeFallback: false }
+      );
+      if (resolvedLakeIds.length > 0) {
+        await dataLakeService.recordLakeAccessEvent(
+          lakeAccessEventRepository,
+          {
+            ...resolveAuditPrincipal(req.user, req.apiKeyInfo),
+            organizationId: normalizeId(req.user.organizationId),
+            resolvedLakeIds,
+            chunkIds: search.results.map(r => r.chunkId),
+            fileIds: [...new Set(search.results.map(r => r.fileId))],
+            surface: 'data-lake-semantic-search',
+            queryText: query,
+          },
+          req.logger,
+          adminSettingsRepository
+        );
+      }
 
       // Record the query-embedding spend for the primary model plus every alternate model the
       // mixed-embeddingModel ANN cutover actually embedded under - each alternate embed ran (and

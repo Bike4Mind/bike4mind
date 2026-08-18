@@ -27,6 +27,7 @@ import {
   dataLakeRepository,
   latticeModelRepository,
   imageModerationIncidentRepository,
+  lakeAccessEventRepository,
   Quest,
   usageEventRepository,
 } from '@bike4mind/database';
@@ -129,6 +130,7 @@ const getStaticOptions = () => {
       // moderation gate. The gate itself is unconditional (constructed inline
       // in the tool) - this only wires the incident record, not the block.
       imageModerationIncidents: imageModerationIncidentRepository,
+      lakeAccessEvents: lakeAccessEventRepository,
     },
     storage: getFilesStorage(),
     imageGenerateStorage: getGeneratedImageStorage(),
