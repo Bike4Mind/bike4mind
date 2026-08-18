@@ -98,9 +98,9 @@ const handler = baseApi()
       await postFeedbackToSlack(
         type || 'CS',
         organization,
-        username,
-        userEmail,
-        userId,
+        newFeedback.username,
+        newFeedback.userEmail,
+        newFeedback.userId,
         content,
         promptMetaForExternalEgress ? JSON.stringify(promptMetaForExternalEgress) : 'No prompt meta'
       );
@@ -115,8 +115,8 @@ const handler = baseApi()
     if (getSettingsValue('EnableFeedBackToEmail', settings) && feedbackEmails.length > 0) {
       console.log('Sending feedback to email is enabled');
       const sanitizedContent = sanitizeHtml(content);
-      const sanitizedUsername = sanitizeHtml(username);
-      const sanitizedUserEmail = sanitizeHtml(userEmail);
+      const sanitizedUsername = sanitizeHtml(newFeedback.username);
+      const sanitizedUserEmail = sanitizeHtml(newFeedback.userEmail ?? '');
       const sanitizedType = type ? sanitizeHtml(type) : '';
       const sanitizedTags = tags ? tags.map(tag => sanitizeHtml(tag)) : [];
       const sanitizedPromptMeta = promptMetaForExternalEgress
@@ -221,7 +221,7 @@ const handler = baseApi()
                   <div class="content">
                     <h2>New Feedback Submission</h2>
                     <div class="info">
-                      <p><strong>From:</strong> ${sanitizedUsername} (ID: ${userId})</p>
+                      <p><strong>From:</strong> ${sanitizedUsername} (ID: ${newFeedback.userId})</p>
                       <p><strong>Email:</strong> ${sanitizedUserEmail}</p>
                       ${sanitizedType ? `<p><strong>Type:</strong> ${sanitizedType}</p>` : ''}
                     </div>
