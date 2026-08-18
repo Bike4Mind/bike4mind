@@ -13,6 +13,7 @@ import {
   LAKE_ACCESS_QUERY_TEXT_RETENTION_MAX_DAYS,
   LAKE_ACCESS_QUERY_TEXT_RETENTION_MIN_DAYS,
 } from '../constants/lakeAccessAudit';
+import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '../constants/forcedRetrieval';
 import { CHAT_MODELS, ChatModels } from '../models';
 import {
   BedrockEmbeddingModel,
@@ -290,6 +291,7 @@ export const SettingKeySchema = z.enum([
   'defaultEmbeddingModel',
   'dataLakeSearchMaxFiles',
   'dataLakeSearchMaxChunks',
+  'forcedRetrievalCharBudget',
 
   // DATA LAKE COST GOVERNANCE (spend levers - see resolveSpendLevers)
   'dataLakeEmbeddingSpendEnabled',
@@ -1366,6 +1368,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'defaultEmbeddingModel', order: 1 },
       { key: 'dataLakeSearchMaxFiles', order: 2 },
       { key: 'dataLakeSearchMaxChunks', order: 3 },
+      { key: 'forcedRetrievalCharBudget', order: 4 },
     ],
   },
   DATA_LAKE_COST: {
@@ -3137,6 +3140,31 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 3,
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
+  }),
+  forcedRetrievalCharBudget: makeNumberSetting({
+    key: 'forcedRetrievalCharBudget',
+    name: 'Forced Retrieval Char Budget',
+    defaultValue: FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
+    min: 1_000,
+    // 100,000 is ~2x the top of the planned validation sweep (12K/24K/48K), not a technical ceiling
+    // this codebase enforces elsewhere (unlike DefaultChunkSize's max, which is tied to the
+    // under-chunked detection threshold). Without SOME max, a fat-fingered extra zero (24000 ->
+    // 240000) passes write-time validation cleanly, then silently sheds conversation history via
+    // ChatCompletionProcess's overflow-recovery loop before eventually hard-erroring - the retrieval
+    // block itself is never shed, only prior turns are, so the failure looks like unrelated context
+    // loss rather than a misconfigured setting.
+    max: 100_000,
+    description:
+      'Total characters of retrieved chunk text injected into a Data-Lake-mode turn. Measured ' +
+      'saturating on every turn against a 47-document lake, so this is the binding constraint on ' +
+      'how much of a corpus reaches the model - not the relevance floor. Raising it admits more ' +
+      'passages at the cost of prompt tokens and latency on every Data-Lake turn; it is NOT ' +
+      'automatically better, since more context can dilute ranking. Platform-only for now: this ' +
+      'read does not go through the scoped-settings resolver, so a `settableAt` block here would ' +
+      "be inert metadata at best and could arm the resolver's fail-loud owner check at worst.",
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 4,
   }),
   LakeAccessAuditRetentionDays: makeNumberSetting({
     key: 'LakeAccessAuditRetentionDays',
