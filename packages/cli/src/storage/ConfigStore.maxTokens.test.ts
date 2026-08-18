@@ -103,6 +103,27 @@ describe('ConfigStore - output budget preference', () => {
     expect(config.preferences.temperature).toBe(0.7);
   });
 
+  // The migration rewrites the file, so it is a one-time cleanup rather than a standing
+  // rule that 4096 is unrepresentable - otherwise a user who deliberately picks the value
+  // the /config select still offers would silently lose it on every restart.
+  it('runs once, so a 4096 chosen after the migration survives a reload', async () => {
+    await writeConfig(configPath, { maxTokens: LEGACY_PINNED_MAX_TOKENS });
+    expect((await new ConfigStore(configPath).get()).preferences.maxTokens).toBeUndefined();
+
+    // The legacy value is gone from disk, not just from the in-memory copy.
+    const onDisk = JSON.parse(await fs.readFile(configPath, 'utf-8'));
+    expect(onDisk.preferences.maxTokens).toBeUndefined();
+    expect(onDisk.userId).toBe('test-user');
+
+    const chooser = new ConfigStore(configPath);
+    await chooser.update({
+      preferences: { ...(await chooser.get()).preferences, maxTokens: LEGACY_PINNED_MAX_TOKENS },
+    });
+
+    const reloaded = new ConfigStore(configPath);
+    expect((await reloaded.get()).preferences.maxTokens).toBe(LEGACY_PINNED_MAX_TOKENS);
+  });
+
   it('round-trips an explicit budget through a save', async () => {
     const store = new ConfigStore(configPath);
     await store.update({ preferences: { ...(await store.get()).preferences, maxTokens: 8192 } });

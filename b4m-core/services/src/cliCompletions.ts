@@ -146,13 +146,6 @@ function estimateInputTokens(messages: IMessage[]): number {
 }
 
 /**
- * Output cap assumed for a model whose catalog row declares no `max_tokens`. Mirrors the
- * figure ChatCompletionProcess uses for the same unknown - kept in step with it, since a
- * lower value here would clamp a resolved budget below what that path allows.
- */
-const UNKNOWN_MODEL_MAX_OUTPUT_TOKENS = 16384;
-
-/**
  * Shared LLM completion logic
  * Used by Next.js API route, Lambda function, and available for 3rd party integrations
  */
@@ -223,11 +216,14 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         requested: options?.maxTokens,
         fallback: DEFAULT_OUTPUT_MAX_TOKENS,
         modelInfo,
-        // Same unknown-cap default as ChatCompletionProcess, deliberately NOT
-        // DEFAULT_OUTPUT_MAX_TOKENS: the cap CLAMPS the resolved budget, so falling back to
-        // 4096 here would re-pin an adaptive model whose catalog row happens to omit
-        // max_tokens - reintroducing this very bug for runtime-discovered models.
-        modelMaxOutputTokens: modelInfo.max_tokens ?? UNKNOWN_MODEL_MAX_OUTPUT_TOKENS,
+        // The declared cap clamps the resolved budget. No fallback here on purpose:
+        // ModelInfo.max_tokens is required, and toModelInfo already substitutes
+        // DEFAULT_MAX_OUTPUT_TOKENS (4096) for a catalog row that declares none - so a
+        // fallback at this seam could never fire. That substitution is itself the hole
+        // (a *derived* cap should not clamp an adaptive model down to 4096), and it has
+        // to be closed in toModelInfo, where declared and derived are still tellable
+        // apart. Same reasoning applies at the anthropicBackend call site.
+        modelMaxOutputTokens: modelInfo.max_tokens,
       })
     : (options?.maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS);
   // Promote wire tools to ICompletionOptionTools by stamping a no-op toolFn.
@@ -286,15 +282,20 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   if (enforceCredits && modelInfo) {
     // Estimate cost based on input message length + expected output.
     //
-    // Deliberately NOT `maxTokens`: that is now a model-sized *ceiling* (64K on adaptive
-    // reasoners), not an expectation, and a ceiling-sized hold is a real user-facing
-    // regression - the reservation below is atomically deducted and rejects the turn
-    // outright, so reserving 16x would fail short prompts for anyone near their balance
-    // or org member cap. Settlement further down trues the ledger up to actual usage, so
-    // this only needs to stay a sane guard, and holding it at the historical basis keeps
-    // reservation behavior byte-for-byte unchanged.
+    // The basis is the caller's own budget when they named one, and DEFAULT_OUTPUT_MAX_TOKENS
+    // when they did not - i.e. exactly what this path reserved against before the ceiling
+    // became model-sized. An explicit budget MUST size its own hold: the reservation is
+    // atomically deducted and is also what isMemberCreditCapExceeded below is checked
+    // against, so estimating a large explicit request at 4096 would let a member clear an
+    // administrator-configured per-member cap in a single turn.
+    //
+    // Deliberately not the resolved ceiling for the absent case: that is now up to 64K on an
+    // adaptive reasoner and a ceiling-sized hold rejects short prompts outright for anyone
+    // near their balance. Settlement further down trues the ledger up to actual usage, so the
+    // estimate only needs to stay a sane guard. Clamped by `maxTokens` either way, since the
+    // model cannot emit past its own cap.
     const estimatedInputTokens = estimateInputTokens(messages);
-    const estimatedOutputTokens = Math.min(maxTokens, DEFAULT_OUTPUT_MAX_TOKENS);
+    const estimatedOutputTokens = Math.min(maxTokens, options?.maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS);
     const estimatedUsdCost = getTextModelCost(modelInfo, estimatedInputTokens, estimatedOutputTokens);
     reservedCredits = usdToCredits(estimatedUsdCost);
 

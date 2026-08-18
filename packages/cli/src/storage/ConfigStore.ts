@@ -372,18 +372,27 @@ const ProjectLocalConfigSchema = z.object({
 /**
  * The output budget every pre-migration config was born with, back when
  * `preferences.maxTokens` was required and DEFAULT_CONFIG supplied this value. It is
- * indistinguishable from a user who deliberately typed 4096 - accepted deliberately,
- * because reverting an explicit 4096 to model-sized costs that user nothing (they can
- * set it again) while leaving it pinned keeps the truncation bug alive for everyone who
- * never chose it at all.
+ * indistinguishable from a user who deliberately typed 4096, and the migration reverts
+ * it either way - acceptable only because the cleanup runs ONCE (see CONFIG_SCHEMA_VERSION):
+ * a user who wanted 4096 sets it again and keeps it, while an install that never chose it
+ * stops being capped by it. A value-keyed rule with no marker would instead make 4096
+ * permanently unrepresentable, even though the /config select still offers it.
  */
 const LEGACY_PINNED_MAX_TOKENS = 4096;
+
+/**
+ * Schema version of the on-disk config, and the marker that makes the migrations in
+ * `load()` one-time. A file stamped with anything else gets the upgrade pass and is
+ * rewritten at the current version; a file already at it is left alone. Bump this when
+ * adding a migration, and gate the new step on the version it needs to run from.
+ */
+const CONFIG_SCHEMA_VERSION = '0.2.0';
 
 /**
  * Default configuration
  */
 const DEFAULT_CONFIG: CliConfig = {
-  version: '0.1.0',
+  version: CONFIG_SCHEMA_VERSION,
   userId: uuidv4(),
   defaultModel: ChatModels.CLAUDE_4_5_SONNET,
   toolApiKeys: {
@@ -775,14 +784,29 @@ export class ConfigStore {
           }
         }
 
-        // Auto-migrate the legacy pinned output budget. Every config written before
-        // maxTokens became optional carries this exact value from the old DEFAULT_CONFIG,
-        // not from a user decision - and leaving it pinned keeps starving adaptive
-        // reasoning models on machines that have merely *run* an older CLI. Only the
-        // untouched legacy value is cleared, so a budget the user actually chose (any
-        // other number) survives.
-        if (rawConfig.preferences?.maxTokens === LEGACY_PINNED_MAX_TOKENS) {
-          delete rawConfig.preferences.maxTokens;
+        // One-time upgrade pass, gated on the version stamp so each step runs against a
+        // given file exactly once and is then written back at the current version. Without
+        // the stamp a value-keyed step is not a migration at all but a standing rule, and
+        // the user can never hold the value it rewrites.
+        if (rawConfig.version !== CONFIG_SCHEMA_VERSION) {
+          // Clear the legacy pinned output budget. Every config written before maxTokens
+          // became optional carries this exact value from the old DEFAULT_CONFIG, not from
+          // a user decision - and leaving it pinned keeps starving adaptive reasoning models
+          // on machines that have merely *run* an older CLI. Only the untouched legacy value
+          // is cleared, so a budget the user actually chose (any other number) survives.
+          if (rawConfig.preferences?.maxTokens === LEGACY_PINNED_MAX_TOKENS) {
+            delete rawConfig.preferences.maxTokens;
+          }
+          rawConfig.version = CONFIG_SCHEMA_VERSION;
+
+          // A failed write (read-only home, etc.) is non-fatal: the in-memory result of this
+          // pass still applies to the current session and the stamp simply stays behind, so
+          // the migration retries on the next launch rather than being silently skipped.
+          try {
+            await fs.writeFile(this.configPath, JSON.stringify(rawConfig, null, 2), 'utf-8');
+          } catch {
+            // Intentionally ignored - see above.
+          }
         }
 
         // Validate with Zod - this auto-migrates missing fields

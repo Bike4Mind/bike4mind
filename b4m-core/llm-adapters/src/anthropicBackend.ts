@@ -919,7 +919,11 @@ export class AnthropicBackend implements ICompletionBackend {
             requested: options.maxTokens,
             fallback: DEFAULT_ANTHROPIC_MAX_TOKENS,
             modelInfo: currentModelInfo,
-            modelMaxOutputTokens: currentModelInfo.max_tokens ?? DEFAULT_ANTHROPIC_MAX_TOKENS,
+            // No fallback, matching cliCompletions: ModelInfo.max_tokens is required and
+            // toModelInfo already substitutes a derived cap for a row that declares none,
+            // so a fallback here could never fire. See that call site for why the derived
+            // substitution is the actual gap and why it has to be closed in toModelInfo.
+            modelMaxOutputTokens: currentModelInfo.max_tokens,
           })
         : (options.maxTokens ?? DEFAULT_ANTHROPIC_MAX_TOKENS),
       messages: filteredMessages.map(m => ({

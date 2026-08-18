@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { ChatModels } from '@bike4mind/common';
+import { ChatModels, ModelBackend, type ModelInfo } from '@bike4mind/common';
 import { AnthropicBackend } from './anthropicBackend';
 import type { ICompletionOptions } from './backend';
 import { ADAPTIVE_THINKING_MAX_TOKENS_FLOOR } from './thinkingParams';
@@ -83,6 +83,30 @@ describe('AnthropicBackend default max_tokens', () => {
     await runComplete(backend, { stream: true, maxTokens: 1000 }, ChatModels.CLAUDE_5_OPUS);
 
     expect(getCaptured()[0].max_tokens).toBe(1000);
+  });
+
+  // Parity with the cliCompletions call site: the model's declared cap CLAMPS the sized
+  // budget, so the floor applies only up to what the model can actually emit. Reachable
+  // through the catalog-only branch of modelRecordFor, since every adaptive model in the
+  // adapter table declares 128K.
+  it('clamps the sized budget to a catalog-only adaptive cap below the floor', async () => {
+    const { backend, getCaptured } = buildBackend();
+    backend.setDispatchModel({
+      id: 'catalog-only-adaptive',
+      type: 'text',
+      name: 'Catalog Only Adaptive',
+      backend: ModelBackend.Anthropic,
+      contextWindow: 200_000,
+      max_tokens: 16_000,
+      can_stream: true,
+      can_think: true,
+      thinkingStyle: 'adaptive',
+      pricing: {},
+    } as ModelInfo);
+
+    await runComplete(backend, { stream: true }, 'catalog-only-adaptive');
+
+    expect(getCaptured()[0].max_tokens).toBe(16_000);
   });
 
   // The sized default must not defeat the SDK's non-streaming duration limit; the existing

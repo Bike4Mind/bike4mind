@@ -16,6 +16,7 @@ vi.mock('./apiKeyService', () => ({ getEffectiveLLMApiKeys: vi.fn().mockResolved
 vi.mock('./creditService', async importOriginal => ({
   ...(await importOriginal<typeof import('./creditService')>()),
   subtractCredits: vi.fn().mockResolvedValue(undefined),
+  isMemberCreditCapExceeded: vi.fn(() => false),
 }));
 
 let capturedOptions: Record<string, any> | undefined;
@@ -53,8 +54,9 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 
 import { getTextModelCost } from '@bike4mind/common';
 import { ADAPTIVE_THINKING_MAX_TOKENS_FLOOR } from '@bike4mind/llm-adapters';
-import { DEFAULT_OUTPUT_MAX_TOKENS } from '@bike4mind/utils';
+import { DEFAULT_OUTPUT_MAX_TOKENS, usdToCredits } from '@bike4mind/utils';
 import { executeCompletion } from './cliCompletions';
+import { isMemberCreditCapExceeded } from './creditService';
 
 const ADAPTIVE_MODEL = {
   id: 'adaptive-model',
@@ -99,6 +101,10 @@ describe('executeCompletion - output budget', () => {
     vi.clearAllMocks();
     capturedOptions = undefined;
     backendStopReason = undefined;
+    // clearAllMocks keeps implementations, so restore the flat cost stubs that the
+    // org-member-cap test below swaps for proportional ones.
+    vi.mocked(getTextModelCost).mockReturnValue(0.001);
+    vi.mocked(usdToCredits).mockReturnValue(10);
   });
 
   it('sizes an absent budget to the adaptive floor for a reasoning model', async () => {
@@ -129,16 +135,15 @@ describe('executeCompletion - output budget', () => {
     expect(capturedOptions?.maxTokens).toBe(1000);
   });
 
-  // The model cap CLAMPS the resolved budget, so an adaptive model whose runtime-discovered
-  // catalog row omits max_tokens must not fall back to 4096 - that would re-pin it at
-  // exactly the value this whole change exists to stop sending.
-  it('does not re-pin an adaptive model whose catalog row omits max_tokens', async () => {
-    availableModels = [{ ...ADAPTIVE_MODEL, max_tokens: undefined }];
+  // The declared cap CLAMPS the sized budget, so the floor is a floor only up to what the
+  // model can actually emit - over-requesting 400s the whole turn.
+  it('clamps the sized budget to an adaptive model cap below the floor', async () => {
+    availableModels = [{ ...ADAPTIVE_MODEL, max_tokens: 16_000 }];
     const { db } = buildDb();
 
     await executeCompletion({ ...baseParams, model: 'adaptive-model', db });
 
-    expect(capturedOptions?.maxTokens).toBeGreaterThan(DEFAULT_OUTPUT_MAX_TOKENS);
+    expect(capturedOptions?.maxTokens).toBe(16_000);
   });
 
   it('clamps an over-large explicit budget to the model cap', async () => {
@@ -170,6 +175,45 @@ describe('executeCompletion - output budget', () => {
     await executeCompletion({ ...baseParams, model: 'adaptive-model', db, options: { maxTokens: 500 } });
 
     expect(vi.mocked(getTextModelCost).mock.calls[0]?.[2]).toBe(500);
+  });
+
+  // An explicit budget above the historical basis must size its own hold. Capping the
+  // estimate at 4096 here would let a caller ask for 50K, clear the pre-flight check on a
+  // 4096-sized hold, and drive settlement past their balance or their org member cap.
+  it('estimates from an explicit budget when it is above the historical basis', async () => {
+    availableModels = [ADAPTIVE_MODEL];
+    const { db } = buildDb();
+
+    await executeCompletion({ ...baseParams, model: 'adaptive-model', db, options: { maxTokens: 50_000 } });
+
+    expect(vi.mocked(getTextModelCost).mock.calls[0]?.[2]).toBe(50_000);
+  });
+
+  // The member cap is checked against the reservation, so an under-sized estimate is a
+  // bypass of an administrator-configured control, not just an inaccurate hold.
+  it('checks the org member cap against a large explicit budget', async () => {
+    availableModels = [ADAPTIVE_MODEL];
+    const { db } = buildDb();
+    // Proportional so the cap sees the estimate rather than this suite's flat stub.
+    vi.mocked(getTextModelCost).mockImplementation((_model, _input, output) => (output ?? 0) / 1000);
+    vi.mocked(usdToCredits).mockImplementation(usd => usd);
+    const organization = { id: 'org1', currentCredits: 100_000 };
+    const organizations = {
+      findById: vi.fn().mockResolvedValue(organization),
+      incrementCredits: vi.fn().mockResolvedValue(organization),
+      ensureUserDetails: vi.fn().mockResolvedValue(undefined),
+      updateUserDetails: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await executeCompletion({
+      ...baseParams,
+      model: 'adaptive-model',
+      db: { ...db, organizations: organizations as any },
+      billingOrganizationId: 'org1',
+      options: { maxTokens: 50_000 },
+    });
+
+    expect(vi.mocked(isMemberCreditCapExceeded)).toHaveBeenCalledWith(organization, 'user1', 50);
   });
 
   // Without this the CLI cannot tell a cut-off reply from a finished one, which is what
