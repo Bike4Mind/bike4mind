@@ -11,6 +11,7 @@ import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 
 const TransferOwnershipInput = z.object({
   newOwnerUserId: z.string().min(1),
@@ -37,7 +38,8 @@ const handler = baseApi()
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
-    const result = await dataLakeService.transferLakeOwnership(ctx, lake.id, newOwnerUserId, {
+    const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
+    const result = await dataLakeService.transferLakeOwnership(actor, lake.id, newOwnerUserId, {
       db: {
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
