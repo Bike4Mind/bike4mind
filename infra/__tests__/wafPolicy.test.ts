@@ -19,6 +19,9 @@ interface WafRule {
 
 const mockEmergencyIpSetArn = 'arn:aws:wafv2:us-east-1:123456789012:global/ipset/test-ipset/abc123';
 
+/** Suffix marking a rule as a Count-only clone of the production rule of the same base name. */
+const SHADOW_SUFFIX = '-prod-shadow';
+
 // any: deeply nested AWS WAF statement shapes - a bare ByteMatch or an OrStatement of them
 /** The CommonRuleSet scope-down statement for a stage, exactly as WAF receives it. */
 function commonRuleSetScopeDown(stage: string): any {
@@ -178,12 +181,38 @@ describe('wafPolicy', () => {
       const ruleJson = buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'dev' });
       const parsed = JSON.parse(ruleJson);
 
-      const shadows = (parsed as WafRule[]).filter(rule => rule.Name.endsWith('-prod-shadow'));
+      const shadows = (parsed as WafRule[]).filter(rule => rule.Name.endsWith(SHADOW_SUFFIX));
       expect(shadows.length).toBeGreaterThan(0);
 
       for (const rule of shadows) {
         expect(rule.Action).toEqual({ Count: {} });
         expect(rule.OverrideAction).toBeUndefined();
+      }
+    });
+    // A shadow rule is only worth reading if it still mirrors the production rule it stands in for.
+    // Nothing but a naming convention links the two, and they live in separate files, so a later
+    // retune of production's limits would leave the shadow counting against a threshold nobody
+    // enforces. That failure is invisible in the worst way: the metric still populates and the
+    // number still looks meaningful, so it would be used to make the promotion call. Compare the
+    // statements directly rather than trusting the copy.
+    it('keeps every prod-shadow statement identical to the production rule it shadows', () => {
+      const devRules: WafRule[] = JSON.parse(
+        buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'dev' })
+      );
+      const prodRules: WafRule[] = JSON.parse(
+        buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' })
+      );
+
+      const shadows = devRules.filter(rule => rule.Name.endsWith(SHADOW_SUFFIX));
+      expect(shadows.length).toBeGreaterThan(0);
+
+      for (const shadow of shadows) {
+        const originName = shadow.Name.slice(0, -SHADOW_SUFFIX.length);
+        const origin = prodRules.find(rule => rule.Name === originName);
+
+        // A shadow whose origin has been renamed or removed is the same drift, caught earlier.
+        expect(origin, `no production rule named ${originName} for ${shadow.Name}`).toBeDefined();
+        expect(shadow.Statement).toEqual(origin!.Statement);
       }
     });
 
