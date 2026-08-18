@@ -195,7 +195,7 @@ describe('checkMemberCreditCap wiring sites', () => {
   const source = readFileSync(join(__dirname, 'agentExecutor.ts'), 'utf-8');
 
   it('wires both the top-level and dispatched-subagent sites through buildInProcessCreditCapCheck', () => {
-    const wiringSites = source.match(/checkMemberCreditCap: buildInProcessCreditCapCheck\(/g) ?? [];
+    const wiringSites = source.match(/checkMemberCreditCap:\s*buildInProcessCreditCapCheck\(/g) ?? [];
     expect(wiringSites).toHaveLength(2);
   });
 
