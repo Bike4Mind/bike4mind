@@ -699,7 +699,10 @@ export interface LakeConvergencePlanResponse {
   refusal: 'policyInherited' | null;
   policy: { requiredTarget: number; effectiveRequiredTarget: number; policyChars: number };
   membersConsidered: number;
+  /** Whole-lake drift, BEFORE the per-wave cross-lake check. Not an action count - see `waveSize`. */
   convergeableCount: number;
+  /** What a run would actually enqueue now. THE number to label the action with. */
+  waveSize: number;
   changeShare: number;
   requiresConfirmation: boolean;
   bulkChangeShareThreshold: number;
@@ -714,7 +717,8 @@ export interface LakeConvergencePlanResponse {
 }
 
 export type LakeConvergenceRunResponse = LakeConvergencePlanResponse & {
-  outcome: 'enqueued' | 'confirmationRequired' | 'policyInherited';
+  /** `noop` = the run was allowed but had nothing it could repair (see the toast for why). */
+  outcome: 'enqueued' | 'noop' | 'confirmationRequired' | 'policyInherited';
   detected: number;
   enqueued: number;
 };
@@ -757,8 +761,16 @@ export function useConvergeDataLake(dataLakeId: string | null) {
           `Converging ${data.enqueued} file(s) to the lake's chunk policy. ` +
             'They are unsearchable until re-indexing completes.'
         );
+      } else if (data.crossLakeConflictCount > 0) {
+        // Must NOT read as "already converged". The lake still has off-policy files; they simply
+        // cannot be repaired from here, and saying otherwise would send the owner away from the one
+        // action that fixes it (aligning the two lakes' targets).
+        toast.warning(
+          `Nothing could be converged: ${data.crossLakeConflictCount} remaining file(s) belong to another ` +
+            'data lake that requires a different passage target. Align the two lakes, or remove the files from one.'
+        );
       } else {
-        toast.success('Every measurable file already satisfies this lake\'s chunk policy.');
+        toast.success("Every measurable file already satisfies this lake's chunk policy.");
       }
       if (dataLakeId) {
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.convergencePlan(dataLakeId) });

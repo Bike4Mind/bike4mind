@@ -95,6 +95,41 @@ describe('planLakeConvergenceRun', () => {
       fabFileId: 'shared',
       conflictingLakes: [{ lakeId: 'lake-2', name: 'Lake Two' }],
     });
+    // The defect a live run exposed: `convergeableCount` counts whole-lake drift BEFORE this check,
+    // so it stays 1 while nothing can actually run. A caller that labels an action with it shows a
+    // count that repairs nothing on every click, forever - `waveSize` is the honest number.
+    expect(report.convergeableCount).toBe(1);
+    expect(report.waveSize).toBe(0);
+  });
+
+  it('reports waveSize as what would actually run, not the pre-refusal drift count', async () => {
+    const adapters = makeAdapters(
+      [
+        member('a', 2100),
+        member('b', 2100),
+        member('shared', 2100, { tags: [{ name: 'datalake:lake-one' }, { name: 'datalake:lake-two' }] }),
+      ],
+      {
+        otherLakes: [
+          { id: 'lake-2', name: 'Lake Two', datalakeTag: 'datalake:lake-two', requiredPassageTokenTarget: 1024 },
+        ],
+      }
+    );
+
+    const { report, wave } = await planLakeConvergenceRun(lake, adapters);
+
+    expect(report.convergeableCount).toBe(3);
+    expect(report.waveSize).toBe(2);
+    expect(wave).toHaveLength(2);
+  });
+
+  it('caps waveSize by the wave bound, so it never overstates one run', async () => {
+    const members = Array.from({ length: 40 }, (_, i) => member(`f${i}`, 2100));
+
+    const { report } = await planLakeConvergenceRun(lake, makeAdapters(members), 5);
+
+    expect(report.convergeableCount).toBe(40);
+    expect(report.waveSize).toBe(5);
   });
 
   // The conflict record #1662 stores lists only the lakes currently VIOLATED, so a lake the file

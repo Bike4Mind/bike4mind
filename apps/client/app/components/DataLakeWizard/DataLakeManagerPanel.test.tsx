@@ -129,7 +129,7 @@ const useUnderChunkedCount = vi.fn(() => ({
 }));
 const useLakeConvergencePlan = vi.fn(() => ({
   data: undefined as
-    | { refusal: 'policyInherited' | null; convergeableCount: number; requiresConfirmation: boolean }
+    | { refusal: 'policyInherited' | null; convergeableCount: number; waveSize: number; requiresConfirmation: boolean }
     | undefined,
 }));
 
@@ -913,6 +913,7 @@ describe('DataLakeManagerPanel - converge to policy (#1681)', () => {
     data: {
       refusal: null,
       convergeableCount: 3,
+      waveSize: 3,
       requiresConfirmation: false,
       membersConsidered: 40,
       changeShare: 0.075,
@@ -947,7 +948,7 @@ describe('DataLakeManagerPanel - converge to policy (#1681)', () => {
 
   it('hides the action when the lake is already converged', async () => {
     useGetDataLakes.mockReturnValue({ data: [mineLake], isLoading: false });
-    useLakeConvergencePlan.mockReturnValue(plan({ convergeableCount: 0 }) as never);
+    useLakeConvergencePlan.mockReturnValue(plan({ convergeableCount: 0, waveSize: 0 }) as never);
     const user = userEvent.setup();
     renderPanel();
 
@@ -996,6 +997,36 @@ describe('DataLakeManagerPanel - converge to policy (#1681)', () => {
     await user.click(screen.getByTestId('datalake-converge-confirm-btn'));
 
     expect(convergeMutate).toHaveBeenCalledWith({ confirm: true }, expect.anything());
+  });
+
+  // Verified live on a preview: a lake whose entire remaining drift is cross-lake conflicted reports
+  // convergeableCount 1 and a wave of 0. Labelling the action with the former gives a button that
+  // repairs nothing on every click, forever, and says nothing about why.
+  it('offers no action when every remaining off-policy file is blocked, and explains why instead', async () => {
+    useGetDataLakes.mockReturnValue({ data: [mineLake], isLoading: false });
+    useLakeConvergencePlan.mockReturnValue(
+      plan({ convergeableCount: 1, waveSize: 0, crossLakeConflictCount: 1 }) as never
+    );
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+
+    expect(screen.queryByTestId('datalake-converge-policy-btn-mine')).toBeNull();
+    expect(screen.getByTestId('datalake-converge-blocked-chip-mine')).toHaveTextContent('1 blocked by another lake');
+  });
+
+  it('labels the action with what a run would actually repair, not whole-lake drift', async () => {
+    useGetDataLakes.mockReturnValue({ data: [mineLake], isLoading: false });
+    useLakeConvergencePlan.mockReturnValue(
+      plan({ convergeableCount: 9, waveSize: 4, crossLakeConflictCount: 5 }) as never
+    );
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+
+    expect(screen.getByTestId('datalake-converge-policy-btn-mine')).toHaveTextContent('Converge to policy (4)');
   });
 
   it('names the excluded cross-lake members in the dialog rather than silently dropping them', async () => {

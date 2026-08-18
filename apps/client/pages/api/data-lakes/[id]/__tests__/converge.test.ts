@@ -54,6 +54,7 @@ const report = (over: Record<string, unknown> = {}) => ({
   policy: { requiredTarget: 512, effectiveRequiredTarget: 512, policyChars: 3072 },
   membersConsidered: 40,
   convergeableCount: 2,
+  waveSize: 2,
   changeShare: 0.05,
   requiresConfirmation: false,
   bulkChangeShareThreshold: 0.25,
@@ -197,6 +198,22 @@ describe('POST /api/data-lakes/:id/converge', () => {
 
     expect(h.sendToQueue).not.toHaveBeenCalled();
     expect(json).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'policyInherited' }));
+  });
+
+  // A run allowed to proceed but with nothing it CAN repair (everything left is cross-lake
+  // conflicted) must not report as a successful enqueue - it returns here on every subsequent run,
+  // and "enqueued 0" reads to a client as "already converged".
+  it('reports a run with nothing repairable as noop, not enqueued', async () => {
+    h.planLakeConvergenceRun.mockResolvedValue({
+      report: report({ convergeableCount: 1, waveSize: 0, crossLakeConflictCount: 1 }),
+      wave: [],
+    });
+
+    const json = await invoke('POST');
+
+    expect(h.resetChunkStateByIds).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'noop', detected: 0, enqueued: 0 }));
   });
 
   it('honors an explicit wave limit', async () => {

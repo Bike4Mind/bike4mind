@@ -155,10 +155,20 @@ const handler = baseApi()
 
     req.logger?.log?.(
       `[convergence] lake ${lake.id}: enqueued ${enqueued}/${wave.length} member(s) at target ` +
-        `${report.policy.requiredTarget} (${report.convergeableCount} convergeable of ${report.membersConsidered} graded)`
+        `${report.policy.requiredTarget} (${report.convergeableCount} off-policy of ${report.membersConsidered} graded, ` +
+        `${report.crossLakeConflictCount} refused for cross-lake disagreement)`
     );
 
-    return res.json({ ...report, outcome: 'enqueued', detected: wave.length, enqueued });
+    // `noop` is its own outcome, not a zero-count `enqueued`: a lake whose entire remaining drift is
+    // cross-lake conflicted returns here on EVERY run, and reporting that as a successful enqueue
+    // would have the caller announce a repair that cannot happen and will not happen next time
+    // either. The client needs to say why instead.
+    return res.json({
+      ...report,
+      outcome: wave.length === 0 ? 'noop' : 'enqueued',
+      detected: wave.length,
+      enqueued,
+    });
   });
 
 export const config = { api: { externalResolver: true } };

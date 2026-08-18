@@ -1212,8 +1212,16 @@ function LakeInfoPanel({
   // Confirm dialog state: the bulk-change guard's whole point is that the share is SEEN before it
   // is accepted, so `confirm: true` is only ever sent from this dialog.
   const [convergeConfirmOpen, setConvergeConfirmOpen] = useState(false);
-  const convergeableCount = convergencePlan?.convergeableCount ?? 0;
-  const canConverge = !!lake.canRebuild && convergencePlan?.refusal === null && convergeableCount > 0;
+  // waveSize, NOT convergeableCount: the latter counts whole-lake drift before the cross-lake check,
+  // so a lake whose entire remaining drift belongs to a lake requiring a different target would show
+  // an action count that repairs nothing on every click, forever. Verified live on a preview.
+  const convergeWaveSize = convergencePlan?.waveSize ?? 0;
+  const convergeBlockedCount = convergencePlan?.crossLakeConflictCount ?? 0;
+  const canConverge = !!lake.canRebuild && convergencePlan?.refusal === null && convergeWaveSize > 0;
+  // Nothing to repair from here, but the lake is NOT converged - surfaced as its own advisory so the
+  // absence of a button is explained rather than read as "healthy".
+  const showConvergeBlocked =
+    !!lake.canRebuild && convergencePlan?.refusal === null && convergeWaveSize === 0 && convergeBlockedCount > 0;
 
   return (
     <Box
@@ -1333,7 +1341,7 @@ function LakeInfoPanel({
           {canConverge && (
             <Tooltip
               title={
-                `Re-chunk ${convergeableCount} file(s) to this lake's declared passage target of ` +
+                `Re-chunk ${convergeWaveSize} file(s) to this lake's declared passage target of ` +
                 `${convergencePlan?.policy.requiredTarget} tokens. They are unsearchable until re-indexing ` +
                 'completes. Runs in bounded waves; safe to repeat.'
               }
@@ -1353,8 +1361,28 @@ function LakeInfoPanel({
                 }
                 sx={{ flexShrink: 0, fontSize: '13px' }}
               >
-                Converge to policy ({convergeableCount})
+                Converge to policy ({convergeWaveSize})
               </Button>
+            </Tooltip>
+          )}
+          {showConvergeBlocked && (
+            <Tooltip
+              title={
+                `${convergeBlockedCount} file(s) in this lake do not satisfy its passage target and cannot be ` +
+                'repaired here: another data lake requires a different target for them, so re-chunking would make ' +
+                'the two lakes take turns rewriting them. Align the two lakes, or remove the files from one.'
+              }
+              size="sm"
+            >
+              <Chip
+                size="sm"
+                variant="soft"
+                color="warning"
+                data-testid={`datalake-converge-blocked-chip-${lake.id}`}
+                sx={{ flexShrink: 0 }}
+              >
+                {convergeBlockedCount} blocked by another lake
+              </Chip>
             </Tooltip>
           )}
           {/* Bulk-change guard (#1681 constraint 4). A mass rewrite is the signature of a
@@ -1366,7 +1394,7 @@ function LakeInfoPanel({
               <DialogTitle>Re-chunk {Math.round((convergencePlan?.changeShare ?? 0) * 100)}% of this lake?</DialogTitle>
               <DialogContent>
                 <Typography level="body-sm">
-                  This rewrites {convergeableCount} of {convergencePlan?.membersConsidered ?? 0} files to this lake{"'"}s
+                  This rewrites {convergeWaveSize} of {convergencePlan?.membersConsidered ?? 0} files to this lake{"'"}s
                   passage target of {convergencePlan?.policy.requiredTarget} tokens. Rewriting this much of a lake at
                   once usually means the policy itself is wrong - check the target before continuing.
                 </Typography>

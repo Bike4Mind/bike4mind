@@ -70,8 +70,22 @@ export type LakeConvergencePlanReport = {
   policy: LakeConvergencePolicy;
   /** Members graded - the denominator behind `changeShare`. */
   membersConsidered: number;
-  /** Members that would be rewritten, AFTER the cross-lake refusal. */
+  /**
+   * Members across the WHOLE lake whose chunks fail the policy. This is the drift figure, and it is
+   * measured BEFORE the cross-lake refusal - that check costs a lakes read per member, so it runs
+   * only on the bounded wave and its verdict for the rest of the lake is genuinely unknown here.
+   * `waveSize` is what a run would actually enqueue; the two differ whenever a candidate belongs to
+   * a lake requiring a different target, and a caller must not present this one as an action count.
+   */
   convergeableCount: number;
+  /**
+   * Members this run would actually enqueue: the wave bound applied to `convergeableCount`, minus
+   * the members refused for cross-lake disagreement. THE number to label a button with. Can be 0
+   * while `convergeableCount` is not - a lake whose entire remaining drift is cross-lake conflicted
+   * is permanently unrepairable until an operator aligns the two policies, and an action count of
+   * "1" that repairs nothing on every click is exactly the lie this field exists to prevent.
+   */
+  waveSize: number;
   /** Share of gradable members this run would rewrite, in [0,1]. */
   changeShare: number;
   /** True when `changeShare` is past the operator's threshold and the run needs confirmation. */
@@ -245,6 +259,7 @@ export async function planLakeConvergenceRun(
     policy,
     membersConsidered: 0,
     convergeableCount: 0,
+    waveSize: 0,
     changeShare: 0,
     requiresConfirmation: false,
     bulkChangeShareThreshold,
@@ -293,9 +308,11 @@ export async function planLakeConvergenceRun(
 
   const { safe, conflicts } = await partitionCrossLakeConflicts(lake, withTags, policy, adapters);
 
-  // The share is computed over the whole lake's candidates, NOT the wave: the guard asks "how much
-  // of this lake would this policy rewrite", and a wave limit of 25 would otherwise make every run
-  // on a 1000-member lake look like a 2.5% change.
+  // The share is computed over the whole lake's candidates, NOT the wave and NOT `waveSize`: the
+  // guard asks "how much of this lake does this policy disagree with", and a wave limit of 25 would
+  // otherwise make every run on a 1000-member lake look like a 2.5% change. Counting cross-lake
+  // conflicted members here is deliberate too - a policy that disagrees with a sibling lake across
+  // most of a corpus is exactly the misconfiguration the guard exists to surface.
   const requiresConfirmation = requiresBulkChangeConfirmation(plan, bulkChangeShareThreshold);
 
   if (conflicts.length > 0) {
@@ -311,6 +328,7 @@ export async function planLakeConvergenceRun(
       policy,
       membersConsidered: plan.membersConsidered,
       convergeableCount: plan.candidates.length,
+      waveSize: safe.length,
       changeShare: plan.changeShare,
       requiresConfirmation,
       bulkChangeShareThreshold,
