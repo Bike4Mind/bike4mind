@@ -1,4 +1,9 @@
 import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/client-cloudwatch';
+import type {
+  FeedbackDeliveryChannel,
+  FeedbackDeliveryStageClass,
+  FeedbackDeliverySkipReason,
+} from '@bike4mind/common';
 
 /**
  * CloudWatch metric dimensions
@@ -501,4 +506,88 @@ export async function recordReconcileRun(): Promise<void> {
  */
 export async function recordTaxonomyTagsApplySkipped(count: number): Promise<void> {
   return emitDataLakeBatchMetric(DataLakeBatchMetrics.TAXONOMY_TAGS_APPLY_SKIPPED, count, {}, StandardUnit.Count);
+}
+
+// Feedback Delivery Metrics - Namespace: Lumina5/FeedbackDelivery
+// DeliveryAttempted, DeliverySucceeded, DeliveryFailed, DeliverySkipped, split by channel
+// (slack|email) and stageClass (production|nonprod). Feeds feedbackDeliveryFailureAlarm
+// (infra/alarms.ts).
+
+const FEEDBACK_DELIVERY_NAMESPACE = 'Lumina5/FeedbackDelivery';
+
+export const FeedbackDeliveryMetrics = {
+  DELIVERY_ATTEMPTED: 'DeliveryAttempted',
+  DELIVERY_SUCCEEDED: 'DeliverySucceeded',
+  DELIVERY_FAILED: 'DeliveryFailed',
+  DELIVERY_SKIPPED: 'DeliverySkipped',
+} as const;
+
+export async function emitFeedbackDeliveryMetric(
+  metricName: string,
+  value: number,
+  dimensions: MetricDimensions = {},
+  unit: StandardUnit = StandardUnit.Count
+): Promise<void> {
+  return emitMetric(FEEDBACK_DELIVERY_NAMESPACE, metricName, value, dimensions, unit);
+}
+
+export async function emitFeedbackDeliveryMetrics(
+  metrics: Array<{ name: string; value: number; dimensions?: MetricDimensions; unit?: StandardUnit }>
+): Promise<void> {
+  return emitMetrics(FEEDBACK_DELIVERY_NAMESPACE, metrics);
+}
+
+/**
+ * The exact MetricData shape a delivery failure emits - exported so the alarm's dimension
+ * contract is unit-testable on its own, without mocking the AWS SDK.
+ *
+ * `feedbackDeliveryFailures` (infra/alarms.ts) reads a DIMENSIONLESS `DeliveryFailed` metric,
+ * so this always emits one dimensionless entry too - a dimensioned metric is a DISTINCT stream
+ * from its dimensionless namesake in CloudWatch, so the alarm would never receive data otherwise
+ * (see `webhookDeliveryHighFailures`, an existing sibling alarm with exactly this bug: it alarms
+ * on a dimensionless stream that `recordWebhookDeliveryFailure` never populates). The dimensionless
+ * entry is scoped to `stageClass === 'production'` only, so a non-prod failure (a broken preview
+ * webhook, local dev flakiness) never trips the alarm meant to watch production delivery health -
+ * the per-stageClass dimensioned entry still always emits, for drill-down across every stage.
+ */
+export function buildFeedbackDeliveryFailureMetrics(
+  channel: FeedbackDeliveryChannel,
+  stageClass: FeedbackDeliveryStageClass,
+  errorType: string
+): Array<{ name: string; value: number; dimensions?: MetricDimensions; unit: StandardUnit }> {
+  const metrics: Array<{ name: string; value: number; dimensions?: MetricDimensions; unit: StandardUnit }> = [
+    {
+      name: FeedbackDeliveryMetrics.DELIVERY_FAILED,
+      value: 1,
+      dimensions: { channel, stageClass, errorType },
+      unit: StandardUnit.Count,
+    },
+  ];
+  if (stageClass === 'production') {
+    metrics.push({ name: FeedbackDeliveryMetrics.DELIVERY_FAILED, value: 1, dimensions: {}, unit: StandardUnit.Count });
+  }
+  return metrics;
+}
+
+export async function recordFeedbackDeliverySuccess(
+  channel: FeedbackDeliveryChannel,
+  stageClass: FeedbackDeliveryStageClass
+): Promise<void> {
+  return emitFeedbackDeliveryMetric(FeedbackDeliveryMetrics.DELIVERY_SUCCEEDED, 1, { channel, stageClass });
+}
+
+export async function recordFeedbackDeliveryFailure(
+  channel: FeedbackDeliveryChannel,
+  stageClass: FeedbackDeliveryStageClass,
+  errorType: string
+): Promise<void> {
+  return emitFeedbackDeliveryMetrics(buildFeedbackDeliveryFailureMetrics(channel, stageClass, errorType));
+}
+
+export async function recordFeedbackDeliverySkipped(
+  channel: FeedbackDeliveryChannel,
+  stageClass: FeedbackDeliveryStageClass,
+  reason: FeedbackDeliverySkipReason
+): Promise<void> {
+  return emitFeedbackDeliveryMetric(FeedbackDeliveryMetrics.DELIVERY_SKIPPED, 1, { channel, stageClass, reason });
 }

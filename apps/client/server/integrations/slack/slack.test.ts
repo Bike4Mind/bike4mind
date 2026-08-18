@@ -13,7 +13,10 @@ const mocks = vi.hoisted(() => ({
 // Mock the SST-backed Config so the test never touches `Resource`.
 vi.mock('@server/utils/config', () => ({ Config: mocks.config }));
 
-vi.mock('axios', () => ({ default: { post: mocks.post } }));
+vi.mock('axios', () => ({
+  default: { post: mocks.post, isAxiosError: (err: unknown) => !!(err as { isAxiosError?: boolean })?.isAxiosError },
+  isAxiosError: (err: unknown) => !!(err as { isAxiosError?: boolean })?.isAxiosError,
+}));
 
 // Mirror the real settings parsing: return the stored value or '' (the default for these string settings).
 // slack.ts imports only getSettingsMap/getSettingsValue from @bike4mind/utils.
@@ -41,8 +44,19 @@ vi.mock('@bike4mind/observability', () => ({
   Logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }));
 
+vi.mock('@server/utils/cloudwatch', () => ({
+  recordFeedbackDeliverySuccess: vi.fn(),
+  recordFeedbackDeliveryFailure: vi.fn(),
+  recordFeedbackDeliverySkipped: vi.fn(),
+}));
+
 import { resolveSlackWebhookUrl, resolveFeedbackSlackRoute, postFeedbackToSlack } from './slack';
 import { Logger } from '@bike4mind/observability';
+import {
+  recordFeedbackDeliverySuccess,
+  recordFeedbackDeliveryFailure,
+  recordFeedbackDeliverySkipped,
+} from '@server/utils/cloudwatch';
 
 describe('resolveSlackWebhookUrl', () => {
   const channelUrl = 'https://hooks.slack.com/services/channel';
@@ -167,6 +181,9 @@ describe('postFeedbackToSlack', () => {
     mocks.post.mockResolvedValue({ status: 200 });
     vi.mocked(Logger.error).mockClear();
     vi.mocked(Logger.warn).mockClear();
+    vi.mocked(recordFeedbackDeliverySuccess).mockClear();
+    vi.mocked(recordFeedbackDeliveryFailure).mockClear();
+    vi.mocked(recordFeedbackDeliverySkipped).mockClear();
   });
 
   it('posts to the feedback channel on production with a configured webhook', async () => {
@@ -176,6 +193,7 @@ describe('postFeedbackToSlack', () => {
     const [url, body] = mocks.post.mock.calls[0];
     expect(url).toBe('https://hooks.slack.com/services/feedback');
     expect(body.text).toContain('*Type:* Bug');
+    expect(recordFeedbackDeliverySuccess).toHaveBeenCalledWith('slack', 'production');
   });
 
   it('posts to the non-prod webhook (never the prod one) on a non-prod stage, with a stage marker', async () => {
@@ -189,6 +207,7 @@ describe('postFeedbackToSlack', () => {
     const [url, body] = mocks.post.mock.calls[0];
     expect(url).toBe('https://hooks.slack.com/services/nonprod');
     expect(body.text).toContain('*[pr-1234]*');
+    expect(recordFeedbackDeliverySuccess).toHaveBeenCalledWith('slack', 'nonprod');
   });
 
   it('does not post when the non-prod stage has no non-prod webhook configured', async () => {
@@ -196,6 +215,14 @@ describe('postFeedbackToSlack', () => {
     mocks.getSettingsMap.mockResolvedValue({ SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback' });
     await postFeedbackToSlack(...args);
     expect(mocks.post).not.toHaveBeenCalled();
+    expect(recordFeedbackDeliverySkipped).toHaveBeenCalledWith('slack', 'nonprod', 'nonprod_unconfigured');
+  });
+
+  it('records a skip with unconfigured_webhook when production has no webhook configured', async () => {
+    mocks.getSettingsMap.mockResolvedValue({});
+    await postFeedbackToSlack(...args);
+    expect(mocks.post).not.toHaveBeenCalled();
+    expect(recordFeedbackDeliverySkipped).toHaveBeenCalledWith('slack', 'production', 'unconfigured_webhook');
   });
 
   it('still posts on production even when NODE_ENV is not "production" (the removed early-return regression check)', async () => {
@@ -210,11 +237,28 @@ describe('postFeedbackToSlack', () => {
     }
   });
 
-  it('resolves without throwing when the post rejects, and logs the error', async () => {
+  it('resolves without throwing on a network-level rejection, logs the error, and records a "network" failure metric', async () => {
     mocks.getSettingsMap.mockResolvedValue({ SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback' });
-    mocks.post.mockRejectedValue(new Error('network down'));
+    mocks.post.mockRejectedValue(Object.assign(new Error('network down'), { isAxiosError: true }));
     await expect(postFeedbackToSlack(...args)).resolves.toBeUndefined();
     expect(Logger.error).toHaveBeenCalled();
+    expect(recordFeedbackDeliveryFailure).toHaveBeenCalledWith('slack', 'production', 'network');
+  });
+
+  it('records an "unknown" failure metric when the rejection is not an axios error', async () => {
+    mocks.getSettingsMap.mockResolvedValue({ SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback' });
+    mocks.post.mockRejectedValue(new Error('unexpected'));
+    await expect(postFeedbackToSlack(...args)).resolves.toBeUndefined();
+    expect(recordFeedbackDeliveryFailure).toHaveBeenCalledWith('slack', 'production', 'unknown');
+  });
+
+  it('records the HTTP status as the failure errorType when the axios error carries a response', async () => {
+    mocks.getSettingsMap.mockResolvedValue({ SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback' });
+    mocks.post.mockRejectedValue(
+      Object.assign(new Error('bad request'), { isAxiosError: true, response: { status: 400 } })
+    );
+    await expect(postFeedbackToSlack(...args)).resolves.toBeUndefined();
+    expect(recordFeedbackDeliveryFailure).toHaveBeenCalledWith('slack', 'production', '400');
   });
 
   it('the non-prod stage marker never touches the redacted Prompt Meta section', async () => {

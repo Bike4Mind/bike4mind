@@ -14,6 +14,7 @@
 import { modelDiscoveryFunction } from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
 import { subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
+import { dlqAlarmTopic } from './dlqAlarms';
 import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
@@ -1064,6 +1065,40 @@ if (isMonitoredStage) {
     tags: {
       Application: 'DataLakeBatch',
       Severity: 'Medium',
+    },
+  });
+
+  /**
+   * Alarm: Feedback Delivery Failure
+   *
+   * A user submitted feedback and neither Slack nor email actually delivered it - the
+   * submission is saved, but no human was notified. Feedback volume is low, so any loss
+   * is worth investigating; threshold 0 means one failure alarms.
+   *
+   * Routed to the shared dlqAlarmTopic (not a dedicated topic) to reuse its existing
+   * Slack-forwarding subscription rather than duplicating that wiring for a single alarm.
+   *
+   * Metric emitted by: server/utils/cloudwatch.ts -> recordFeedbackDeliveryFailure, wired
+   * from server/integrations/slack/slack.ts's postFeedbackToSlack and
+   * pages/api/feedback/index.ts's email path.
+   * Namespace: Lumina5/FeedbackDelivery / DeliveryFailed (dimensionless entry only -
+   * scoped to production failures, see buildFeedbackDeliveryFailureMetrics).
+   */
+  new aws.cloudwatch.MetricAlarm('feedbackDeliveryFailures', {
+    name: `${$app.name}-${$app.stage}-feedback-delivery-failures`,
+    alarmDescription: 'Feedback submitted by a user failed to reach Slack or email',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'DeliveryFailed',
+    namespace: 'Lumina5/FeedbackDelivery',
+    period: 300,
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    alarmActions: [dlqAlarmTopic!.arn],
+    tags: {
+      Application: 'FeedbackDelivery',
+      Severity: 'High',
     },
   });
 }

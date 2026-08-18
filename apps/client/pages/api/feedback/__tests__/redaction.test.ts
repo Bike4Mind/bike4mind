@@ -67,6 +67,14 @@ vi.mock('@bike4mind/utils', () => ({
   }),
 }));
 
+vi.mock('@server/utils/config', () => ({ Config: { STAGE: 'production' } }));
+
+vi.mock('@server/utils/cloudwatch', () => ({
+  recordFeedbackDeliverySuccess: vi.fn(),
+  recordFeedbackDeliveryFailure: vi.fn(),
+  recordFeedbackDeliverySkipped: vi.fn(),
+}));
+
 import '../index';
 
 const PROMPT_META_WITH_TOOL_OUTPUT = {

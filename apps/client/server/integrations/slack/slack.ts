@@ -6,6 +6,11 @@ import type { FeedbackDeliveryStageClass, FeedbackDeliverySkipReason } from '@bi
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { buildEmailMirrorMessage, type EmailMirrorPayload } from './emailMirror';
+import {
+  recordFeedbackDeliverySuccess,
+  recordFeedbackDeliveryFailure,
+  recordFeedbackDeliverySkipped,
+} from '@server/utils/cloudwatch';
 
 /** Channel-specific Slack incoming-webhook settings (each maps to a dedicated Slack channel). */
 type SlackChannelSettingKey =
@@ -119,6 +124,7 @@ export async function postFeedbackToSlack(
             ? 'no SlackFeedbackWebhookUrl / SlackDefaultWebhookUrl set in admin settings or config'
             : 'no SlackNonProdFeedbackWebhookUrl configured for this non-production stage')
       );
+      await recordFeedbackDeliverySkipped('slack', route.stageClass, route.reason);
       return;
     }
 
@@ -128,13 +134,20 @@ export async function postFeedbackToSlack(
     const message = `${stagePrefix}*Type:* ${type}\n*User Details:* ${organization} - ${username} (ID: ${userId})\n*User Email:* ${userEmail}\n*Feedback:* ${content}
     \n*Prompt Meta:* ${promptMeta}`;
 
-    await axios.post(
-      route.webhookUrl,
-      { text: message },
-      {
-        headers: { 'Content-Type': 'application/json' },
-      }
-    );
+    try {
+      await axios.post(
+        route.webhookUrl,
+        { text: message },
+        {
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+    } catch (postError) {
+      const errorType = axios.isAxiosError(postError) ? String(postError.response?.status ?? 'network') : 'unknown';
+      await recordFeedbackDeliveryFailure('slack', route.stageClass, errorType);
+      throw postError;
+    }
+    await recordFeedbackDeliverySuccess('slack', route.stageClass);
   } catch (error) {
     Logger.error('Error posting feedback to Slack:', error);
   }

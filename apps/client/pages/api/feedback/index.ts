@@ -14,6 +14,12 @@ import { NotFoundError } from '@server/utils/errors';
 import { EmailEvents } from '@server/utils/eventBus';
 import { postFeedbackToSlack } from '@server/integrations/slack/slack';
 import { toRedactedFeedback } from '@server/utils/redactedFeedback';
+import { Config } from '@server/utils/config';
+import {
+  recordFeedbackDeliverySuccess,
+  recordFeedbackDeliveryFailure,
+  recordFeedbackDeliverySkipped,
+} from '@server/utils/cloudwatch';
 import sanitizeHtml from 'sanitize-html';
 import { z } from 'zod';
 
@@ -72,6 +78,7 @@ const handler = baseApi()
     await newFeedback.save();
 
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+    const stageClass = Config.STAGE === 'production' ? 'production' : 'nonprod';
 
     // A bug report leaves the product entirely (third-party Slack workspace, unencrypted email
     // to a static recipient list). functionCalls[].returnValue can hold verbatim tool output -
@@ -89,7 +96,9 @@ const handler = baseApi()
         { ability: req.ability }
       );
 
-    // Send feedback to Slack if enabled
+    // Send feedback to Slack if enabled. postFeedbackToSlack records its own
+    // success/failure/skip metrics; the 'disabled' skip is recorded here since it never
+    // even calls into postFeedbackToSlack.
     if (getSettingsValue('EnableFeedBackToSlack', settings)) {
       console.log('Sending feedback to Slack is enabled');
       await postFeedbackToSlack(
@@ -101,6 +110,8 @@ const handler = baseApi()
         content,
         promptMetaForExternalEgress ? JSON.stringify(promptMetaForExternalEgress) : 'No prompt meta'
       );
+    } else {
+      await recordFeedbackDeliverySkipped('slack', stageClass, 'disabled');
     }
 
     // Find all of the settings that have a tag 'feedbackEmail'
@@ -108,8 +119,12 @@ const handler = baseApi()
 
     console.log(`Sending feedback to all of these folks: ${feedbackEmails}`);
 
-    // Send Feedback to Email
-    if (getSettingsValue('EnableFeedBackToEmail', settings) && feedbackEmails.length > 0) {
+    const emailEnabled = getSettingsValue('EnableFeedBackToEmail', settings);
+    if (!emailEnabled) {
+      await recordFeedbackDeliverySkipped('email', stageClass, 'disabled');
+    } else if (feedbackEmails.length === 0) {
+      await recordFeedbackDeliverySkipped('email', stageClass, 'no_recipients');
+    } else {
       console.log('Sending feedback to email is enabled');
       const sanitizedContent = sanitizeHtml(content);
       const sanitizedUsername = sanitizeHtml(username);
@@ -120,7 +135,9 @@ const handler = baseApi()
         ? sanitizeHtml(JSON.stringify(promptMetaForExternalEgress, null, 2))
         : '';
 
-      await Promise.all(
+      // allSettled (not all): one rejected recipient must not take down the whole handler
+      // after Slack has already fired, and partial success/failure both need recording.
+      const emailResults = await Promise.allSettled(
         feedbackEmails.map((email: string) =>
           EmailEvents.Send.publish({
             to: email,
@@ -251,6 +268,13 @@ const handler = baseApi()
           })
         )
       );
+      const succeeded = emailResults.filter(r => r.status === 'fulfilled').length;
+      if (succeeded > 0) {
+        await recordFeedbackDeliverySuccess('email', stageClass);
+      }
+      if (succeeded < emailResults.length) {
+        await recordFeedbackDeliveryFailure('email', stageClass, 'publish_error');
+      }
     }
 
     return res.status(201).send(newFeedback);
