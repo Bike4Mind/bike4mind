@@ -10,8 +10,8 @@ const taskIdParamSchema = z.object({ taskId: z.string() });
 const taskUpdateBodySchema = z.object({
   title: z.string(),
   description: z.string(),
-  type: z.nativeEnum(ResearchTaskType),
-  urls: z.array(z.string().url()).min(1).optional(),
+  type: z.enum(ResearchTaskType),
+  urls: z.array(z.url()).min(1).optional(),
   canDiscoverLinks: z.boolean().optional(),
 });
 

@@ -13,8 +13,12 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { ProjectEvents } from '@bike4mind/common';
 import { getFilesStorage } from '@server/utils/storage';
 
-const fileIdsBodySchema = z.object({
+const addFileIdsBodySchema = z.object({
   fileIds: z.array(z.string()).min(1),
+});
+
+const removeFileIdsBodySchema = z.object({
+  fileIds: z.array(z.string()),
 });
 
 const handler = baseApi()
@@ -42,7 +46,7 @@ const handler = baseApi()
   .post(
     asyncHandler<{ id: string }>(async (req, res) => {
       const { id } = req.query as { id: string };
-      const { fileIds } = fileIdsBodySchema.parse(req.body);
+      const { fileIds } = addFileIdsBodySchema.parse(req.body);
 
       const project = await withTransaction(() =>
         projectService.addFiles(
@@ -84,7 +88,7 @@ const handler = baseApi()
   .delete(
     asyncHandler<{ id: string }>(async (req, res) => {
       const { id } = req.query as { id: string };
-      const { fileIds } = fileIdsBodySchema.parse(req.body);
+      const { fileIds } = removeFileIdsBodySchema.parse(req.body);
 
       const project = await withTransaction(() =>
         projectService.removeFiles(

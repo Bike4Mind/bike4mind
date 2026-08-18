@@ -1,12 +1,6 @@
 import { z } from 'zod';
 import { organizationService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
-
-const addMemberBodySchema = z.object({
-  userId: z.string().optional(),
-  email: z.string().optional(),
-  force: z.boolean().optional(),
-});
 import { withTransaction } from '@bike4mind/database';
 import { BadRequestError } from '@server/utils/errors';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -23,6 +17,12 @@ import { Request } from 'express';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { userRepository } from '@bike4mind/database/auth';
 import { groupRepository } from '@bike4mind/database/social';
+
+const addMemberBodySchema = z.object({
+  userId: z.string().optional(),
+  email: z.string().optional(),
+  force: z.boolean().optional(),
+});
 
 const handler = baseApi()
   .get(async (req, res) => {

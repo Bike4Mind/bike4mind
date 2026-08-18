@@ -33,8 +33,8 @@ const handler = baseApi()
     return res.json(projects);
   })
   .post(async (req, res) => {
+    const body = createProjectBodySchema.parse(req.body);
     try {
-      const body = createProjectBodySchema.parse(req.body);
       const project = await projectService.createProject(req.user.id, body, {
         db: {
           projects: projectRepository,
