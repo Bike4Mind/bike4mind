@@ -137,6 +137,9 @@ export async function persistRunAsQuest(
         sessionId: execution.sessionId,
         userId: execution.userId,
         executionId,
+        // The caller's opt-out gates the durable rows too, not just the emission prompt: a model can
+        // still tag `<artifact>` off habit or a persona instruction after the prompt is withheld.
+        enableArtifacts: execution.enableArtifacts,
         logger,
       });
     }

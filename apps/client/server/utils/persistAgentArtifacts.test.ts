@@ -67,7 +67,7 @@ function storeBackedDeps(options: { failAfterContentWrite?: boolean } = {}) {
   return { deps, contents, artifacts };
 }
 
-function persist(replyText: string, deps: PersistAgentArtifactsDeps) {
+function persist(replyText: string, deps: PersistAgentArtifactsDeps, enableArtifacts?: boolean) {
   return persistAgentArtifacts({
     replyText,
     questId: QUEST_ID,
@@ -75,6 +75,7 @@ function persist(replyText: string, deps: PersistAgentArtifactsDeps) {
     sessionId: SESSION_ID,
     userId: USER_ID,
     executionId: EXECUTION_ID,
+    enableArtifacts,
     logger,
     deps,
   });
@@ -175,12 +176,34 @@ describe('persistAgentArtifacts', () => {
     expect(deps.createArtifact).not.toHaveBeenCalled();
   });
 
-  it('persists nothing when EnableArtifacts is off', async () => {
+  it('persists nothing when the gate resolves off', async () => {
     const deps = stubDeps({ isArtifactsEnabled: vi.fn().mockResolvedValue(false) });
 
     await persist(reactArtifact('foo'), deps);
 
     expect(deps.createArtifact).not.toHaveBeenCalled();
+  });
+
+  it("passes the caller's opt-out to the gate, so a tagged reply still writes nothing", async () => {
+    // The prompt half is only half the contract: a model can emit `<artifact>` off habit or a
+    // persona instruction after the emission prompt was withheld, and the durable row must not land.
+    const isArtifactsEnabled = vi.fn(async (caller?: boolean) => caller !== false);
+    const deps = stubDeps({ isArtifactsEnabled });
+
+    await persist(reactArtifact('foo'), deps, false);
+
+    expect(isArtifactsEnabled).toHaveBeenCalledWith(false);
+    expect(deps.createArtifact).not.toHaveBeenCalled();
+  });
+
+  it('leaves the admin setting as the only gate when the caller expressed no preference', async () => {
+    const isArtifactsEnabled = vi.fn(async (caller?: boolean) => caller !== false);
+    const deps = stubDeps({ isArtifactsEnabled });
+
+    await persist(reactArtifact('foo'), deps, undefined);
+
+    expect(isArtifactsEnabled).toHaveBeenCalledWith(undefined);
+    expect(deps.createArtifact).toHaveBeenCalledTimes(1);
   });
 
   it('skips an artifact that already exists', async () => {

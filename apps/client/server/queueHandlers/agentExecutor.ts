@@ -56,13 +56,7 @@ import {
   type IterationResult,
   type ServerAgentDefinition,
 } from '@bike4mind/agents';
-import {
-  getTextModelCost,
-  CreditHolderType,
-  ARTIFACT_EMISSION_PROMPT,
-  type IAgent,
-  type IUserDocument,
-} from '@bike4mind/common';
+import { getTextModelCost, CreditHolderType, type IAgent, type IUserDocument } from '@bike4mind/common';
 import { usdToCreditsStochastic } from '@bike4mind/utils';
 import {
   buildSharedTools,
@@ -84,7 +78,7 @@ import { creditService, apiKeyService, estimateGeneratedMediaUsd } from '@bike4m
 import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
 // Artifact launch-gate. Same admin-AND-caller resolution the chat pipeline uses; see that module's
 // header for why the start-payload/doc precedence is the part worth pinning in a test.
-import { resolveAgentArtifactGate } from './agentExecutor.artifactGate';
+import { resolveAgentArtifactEmissionPrompt, resolveAgentArtifactGate } from './agentExecutor.artifactGate';
 import { selectGatedAction } from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
 import { resolveDisplayAnswer } from './agentExecutorUtils/truncatedReply';
@@ -1530,14 +1524,11 @@ async function processExecution(
       startPayloadEnableArtifacts: startPayload?.enableArtifacts,
       executionEnableArtifacts: execution.enableArtifacts,
     });
-    // NOTE: this `|| ARTIFACT_EMISSION_PROMPT` fallback must resolve to the SAME default as the chat
-    // path, which uses the util getSettingsValue('ArtifactEmissionPrompt', settings, ARTIFACT_EMISSION_PROMPT)
-    // in ChatCompletionProcess. Two resolvers, one default - keep them in sync so an empty/unset value
-    // reverts to the same built-in prompt on both paths.
-    const artifactEmissionPrompt =
-      isNewExecution && enableArtifacts
-        ? (await adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt')) || ARTIFACT_EMISSION_PROMPT
-        : undefined;
+    const artifactEmissionPrompt = await resolveAgentArtifactEmissionPrompt({
+      artifactsEnabled: enableArtifacts,
+      isNewExecution,
+      readPromptSetting: () => adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt'),
+    });
 
     // Create or restore ReActAgent. LLM runtime knobs are merged via
     // `buildReActAgentRuntimeConfig` - a pure helper that conditionally spreads
@@ -3041,9 +3032,10 @@ async function processSubagentDispatch(
       adminEnableArtifacts: await adminSettingsRepository.getSettingsValue('EnableArtifacts'),
       executionEnableArtifacts: child.enableArtifacts,
     });
-    const childArtifactEmissionPrompt = childArtifactsEnabled
-      ? (await adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt')) || ARTIFACT_EMISSION_PROMPT
-      : undefined;
+    const childArtifactEmissionPrompt = await resolveAgentArtifactEmissionPrompt({
+      artifactsEnabled: childArtifactsEnabled,
+      readPromptSetting: () => adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt'),
+    });
 
     logger.info('[AgentExecutor][MCP] dispatched subagent tool pool', {
       agentName,
