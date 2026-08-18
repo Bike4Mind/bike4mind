@@ -160,3 +160,31 @@ describe('ownershipChange', () => {
     expect(ownershipChange(['alice'], 'alice')).toBeNull();
   });
 });
+
+describe('access-gate fields do not trim', () => {
+  // The gate predicate every read path runs is lakeMatchesAccess, whose test is raw truthiness:
+  // `!!lake.requiredUserTag`. `!!' '` is true, so a whitespace-only tag is a LIVE gate nobody can
+  // satisfy, while '' is no gate at all. Trimming both to "unset" made the audit blind to clearing
+  // a stuck whitespace gate - the single write this feature exists to catch.
+  it('records clearing a whitespace-only user tag, which is a live gate rather than an empty one', () => {
+    const changes = diffLakeConfig({ requiredUserTag: ' ' }, { requiredUserTag: '' });
+
+    expect(changes).toEqual([{ field: 'requiredUserTag', kind: 'literal', before: ' ' }]);
+  });
+
+  it('records setting a whitespace-only entitlement, since it starts gating immediately', () => {
+    const changes = diffLakeConfig({}, { requiredEntitlement: ' ' });
+
+    expect(changes).toEqual([{ field: 'requiredEntitlement', kind: 'literal', after: ' ' }]);
+  });
+
+  it('still records nothing when clearing a gate that was already truly empty', () => {
+    expect(diffLakeConfig({ requiredUserTag: '' }, { requiredUserTag: '' })).toEqual([]);
+    expect(diffLakeConfig({}, { requiredUserTag: '' })).toEqual([]);
+  });
+
+  // Non-gate free text keeps trimming: a whitespace-only description is empty for every reader.
+  it('still trims a non-gate field, where whitespace really is absence', () => {
+    expect(diffLakeConfig({ description: ' ' }, { description: '' })).toEqual([]);
+  });
+});
