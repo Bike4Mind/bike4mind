@@ -2442,6 +2442,7 @@ describe('ChatCompletionProcess', () => {
       message: string;
       sessionAgentIds?: string[];
       allowedAgents?: string[];
+      priorToolNames?: string[];
     }) => {
       // vi.spyOn on a prototype is idempotent across tests: the same underlying
       // mock survives, so `mock.calls` accumulates. Clear before each invocation
@@ -2474,7 +2475,7 @@ describe('ChatCompletionProcess', () => {
         messages: [{ role: 'user', content: params.message }],
         messageTruncation: null,
       });
-      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, { priorToolNames: params.priorToolNames ?? [] }]);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: params.message });
 
       const body = {
@@ -2520,6 +2521,29 @@ describe('ChatCompletionProcess', () => {
         allowedAgents: ['researcher'],
       });
       expect(agentStore).toBeDefined();
+    });
+
+    // An @mention is only a delegation signal when it names an agent the store can actually run.
+    // "Any @mention at all" attached the tool (and the tool prompt's agent directory) to ordinary
+    // prose that happened to contain a handle, which is both wasted tokens and a live
+    // self-delegation side-channel on a turn the user never asked to delegate on.
+    it('does NOT expose delegate_to_agent for an @mention that names no delegatable agent', async () => {
+      const agentStore = await runWithBuildToolsSpy({
+        message: 'can you loop in @dave and compare the smartphones',
+      });
+      expect(agentStore).toBeUndefined();
+    });
+
+    // No prior-turn rescue here, deliberately, unlike the blog/skill gates: an earlier delegation
+    // must not re-arm autonomous subagent spawning for the rest of the conversation. A real
+    // multi-turn workflow rides session.agentIds, which AgentDetectionFeature persists for any
+    // summon that resolved to a real agent.
+    it('does NOT re-expose delegate_to_agent on a follow-up turn just because an earlier turn delegated', async () => {
+      const agentStore = await runWithBuildToolsSpy({
+        message: 'now check battery life too',
+        priorToolNames: ['delegate_to_agent'],
+      });
+      expect(agentStore).toBeUndefined();
     });
 
     it('treats an empty allowedAgents allowlist as "no delegation" rather than "delegation to nothing"', async () => {

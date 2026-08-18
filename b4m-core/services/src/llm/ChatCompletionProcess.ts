@@ -161,11 +161,10 @@ import {
 import type { ToolTelemetry, ToolErrorCategory, SystemPromptDetail, DataLakeGroundingMode } from '@bike4mind/common';
 import { buildAlwaysOnFloorDetails, buildInjectedBlockDetails } from './systemPromptFloorTelemetry';
 import { resolveArtifactsEnabled } from './artifactGating';
-import { shouldOfferBlogTools, shouldOfferSkillTool } from './autoAddedToolGating';
+import { shouldOfferBlogTools, shouldOfferDelegation, shouldOfferSkillTool } from './autoAddedToolGating';
 import { resolveMementoGates } from './mementoGating';
 import {
   ContextTelemetryAlertsSchema,
-  detectAgentMentions,
   sanitizeTelemetryError,
   mapMimeTypeToArtifactType,
   ARTIFACT_EMISSION_PROMPT,
@@ -2333,31 +2332,47 @@ export class ChatCompletionProcess {
       // this gate only affects the regular chat path, where delegate_to_agent had
       // been a silent side-channel.
       //
-      // We expose delegation only when the user actually asked for it:
-      //   - caller passed an explicit `allowedAgents` allowlist (persona surfaces
-      //     that scope the agent set), OR
-      //   - the user typed `@agent` in this turn's message, OR
-      //   - the user attached an agent to the session via the UI.
-      // Otherwise `agentStore` is undefined and both `sharedToolBuilder` and the
-      // tool-prompt builder skip injecting the delegation surface entirely.
+      // The signal set lives in `shouldOfferDelegation` (autoAddedToolGating.ts) alongside the
+      // blog/skill gates, so all three auto-added surfaces are decided by seam-testable predicates
+      // rather than an inline boolean here.
       //
-      // An explicit `allowedAgents: []` is treated as "no delegation requested"
-      // rather than "delegation requested with no allowed agents" - the latter
-      // would expose `delegate_to_agent` to the model but give it nothing to
-      // delegate to, which is strictly worse than suppressing the tool.
-      // Predicate order is cheap-first: allowedAgents/session.agentIds are O(1)
-      // property reads; detectAgentMentions runs a regex over the prompt.
+      // The @mention arm is narrowed to mentions that name an agent this store can actually run.
+      // "Any @mention at all" fired on every `@teammate` or pasted handle in ordinary prose, which
+      // both paid the ~786-token schema on chats with no delegatable target and re-opened the
+      // self-delegation side-channel above.
+      //
+      // Narrowing it costs no reachable behavior because a *persona* mention arrives here through
+      // the session arm instead: AgentDetectionFeature.beforeDataGathering runs earlier in this
+      // method (the features_before loop), resolves `@handle` against the `agents` collection by
+      // trigger word, and writes every match onto `session.agentIds` in place - so by the time this
+      // gate reads `session.agentIds`, a mention that named a real persona has already set it. The
+      // mentions this narrowing drops are exactly the ones that resolved to nothing. (Personas
+      // could not be delegation targets anyway: they are applied as a system prompt, while
+      // `delegate_to_agent`'s `agent` enum only ever lists this store's own definitions.)
+      //
+      // The hand-off needs AgentDetectionFeature registered, which takes the per-user
+      // `enableAgents` experimental feature (default OFF) plus the EnableAgents admin setting.
+      // With either off the feature never runs, so a persona mention resolves to nothing and does
+      // not apply its system prompt either - the mention was already inert, and withholding the
+      // tool on it costs no working behavior. Verified live on a preview both ways.
       const hasAllowedAgentsAllowlist = (parsedBody.allowedAgents?.length ?? 0) > 0;
-      const hasSessionAgent = (session.agentIds?.length ?? 0) > 0;
-      // A curated surface that suppresses user integrations (session.disableUserIntegrations)
-      // must never delegate to agents - force this off so `agentStore` stays undefined and
-      // `delegate_to_agent` is never injected, regardless of allowedAgents / session.agentIds /
-      // @mentions (none of which consult `enableAgents`). This makes the field honor its
-      // "no agent delegation" contract self-sufficiently; the disabledTools denylist below is
-      // the second layer of defense.
-      const userRequestedDelegation =
-        !session.disableUserIntegrations &&
-        (hasAllowedAgentsAllowlist || hasSessionAgent || detectAgentMentions(message).length > 0);
+      const userRequestedDelegation = shouldOfferDelegation({
+        // A curated surface that suppresses user integrations must never delegate to agents. This
+        // hard veto makes `session.disableUserIntegrations` honor its "no agent delegation"
+        // contract self-sufficiently; the disabledTools denylist below is the second layer.
+        disableUserIntegrations: Boolean(session.disableUserIntegrations),
+        allowedAgents: parsedBody.allowedAgents,
+        sessionAgentIds: session.agentIds,
+        message,
+        delegatableAgentNames: fullAgentStore.getAgentNames(),
+      });
+      // All three delegation surfaces (the tool schema in sharedToolBuilder, the "Agent Delegation"
+      // section of the tool prompt, and `promptMeta.offeredTools`) key off the `agentStore` below,
+      // so this one line explains all of them.
+      logger.debug(
+        `[Delegation] delegate_to_agent ${userRequestedDelegation ? 'offered' : 'withheld'} ` +
+          `(allowlist=${hasAllowedAgentsAllowlist}, sessionAgents=${session.agentIds?.length ?? 0})`
+      );
       const agentStore = !userRequestedDelegation
         ? undefined
         : hasAllowedAgentsAllowlist
