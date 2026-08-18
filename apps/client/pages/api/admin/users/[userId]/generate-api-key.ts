@@ -7,11 +7,11 @@ import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@server/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
-import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
+import { UserApiKeyEvents } from '@bike4mind/common';
 import { ADMIN_ONLY_API_KEY_SCOPES, USER_API_KEY_SCOPE_VALUES } from '@client/app/constants/apiKeyScopes';
 
 // Scopes this admin endpoint may mint: the standard self-service set plus the
-// admin-provisioned ingest scopes. ADMIN and CC_BRIDGE are still excluded —
+// admin-provisioned ingest scopes. ADMIN and CC_BRIDGE are still excluded -
 // those must come through their own dedicated flows.
 const ADMIN_ENDPOINT_MINTABLE_SCOPES = new Set<string>([
   ...USER_API_KEY_SCOPE_VALUES,
