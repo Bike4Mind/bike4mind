@@ -2348,10 +2348,13 @@ export class ChatCompletionProcess {
       // gate reads `session.agentIds`, a mention that named a real persona has already set it. The
       // mentions this narrowing drops are exactly the ones that resolved to nothing. (Personas
       // could not be delegation targets anyway: they are applied as a system prompt, while
-      // `delegate_to_agent`'s `agent` enum only ever lists this store's own definitions.) That
-      // hand-off needs AgentDetectionFeature to be registered, which takes `enableAgents` plus the
-      // EnableAgents admin setting - with agents switched off there is no persona to summon, so a
-      // mention resolving to nothing is the correct answer rather than a lost capability.
+      // `delegate_to_agent`'s `agent` enum only ever lists this store's own definitions.)
+      //
+      // The hand-off needs AgentDetectionFeature registered, which takes the per-user
+      // `enableAgents` experimental feature (default OFF) plus the EnableAgents admin setting.
+      // With either off the feature never runs, so a persona mention resolves to nothing and does
+      // not apply its system prompt either - the mention was already inert, and withholding the
+      // tool on it costs no working behavior. Verified live on a preview both ways.
       const hasAllowedAgentsAllowlist = (parsedBody.allowedAgents?.length ?? 0) > 0;
       const userRequestedDelegation = shouldOfferDelegation({
         // A curated surface that suppresses user integrations must never delegate to agents. This
