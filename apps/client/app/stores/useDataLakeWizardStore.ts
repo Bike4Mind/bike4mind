@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { isReservedTagPrefix } from '@bike4mind/common';
 import type { TaxonomyStatus } from '@bike4mind/common';
 import type { FolderTreeNode, WizardFile } from '../utils/folderTreeParser';
-import { slugifyDataLakeName } from '../hooks/data/dataLakeSlug';
+import { deriveTagPrefixFromLakeName } from '../hooks/data/dataLakeSlug';
 import {
   parseFilesToTree,
   getAllFiles,
@@ -299,7 +299,10 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
       const current = state.config.tagPrefix.trim();
       const isOurs = !current || current === state.autoDerivedTagPrefix;
       if (!isOurs) return state;
-      const prefix = `${slugifyDataLakeName(state.config.name)}:`;
+      // Capped to the server's prefix max (see deriveTagPrefixFromLakeName) - a long name
+      // used to derive a prefix the create endpoint refuses, which is the one value in this
+      // form the user never chose.
+      const prefix = deriveTagPrefixFromLakeName(state.config.name);
       // A lake named "Datalake" derives the reserved membership namespace, which the server
       // rejects and Start Upload gates on - leaving the user blocked over a value they never
       // typed. Leave the field for them to fill instead of seeding one that cannot be used.
