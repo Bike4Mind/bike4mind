@@ -171,6 +171,15 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
   findByDriveFolderId(driveFolderId: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
   /**
+   * Enabled, healthy ('connected') connections whose last poll is due (never polled, or older than
+   * the cutoff), oldest-first and capped. The re-sync poll cron's scan primitive - it enqueues each
+   * onto the same ingest queue the manual Re-sync uses, so both share one delta-aware apply path.
+   * Excludes 'syncing'/'credential_error'/'needs_reconnect' so a dead or in-flight connection is not
+   * re-enqueued every run (claimForSync remains the ultimate per-connection race guard).
+   */
+  findDueForPoll(cutoff: Date, limit: number): Promise<IOrgGoogleDriveConnectionDocument[]>;
+
+  /**
    * Load a connection WITH its encrypted credential, scoped to an org.
    * organizationId is REQUIRED so this accessor cannot hand one org's Google credential to another.
    * SECURITY: server-side only; decrypt before use; never expose in a response.
@@ -215,7 +224,7 @@ export interface IOrgGoogleDriveConnectionRepository extends IBaseRepository<IOr
    * and can never clobber a terminal status (e.g. credential_error) set underneath it. The success
    * path releases via `updateHealth({ status: 'connected' })` instead.
    */
-  releaseSyncClaim(id: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
+  releaseSyncClaim(id: string, lastError?: string): Promise<IOrgGoogleDriveConnectionDocument | null>;
 
   /**
    * Delete a connection (org-scoped), releasing its GLOBAL Drive-folder claim so the folder can be
