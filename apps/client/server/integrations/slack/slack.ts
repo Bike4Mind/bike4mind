@@ -2,7 +2,11 @@ import axios from 'axios';
 import { Config } from '@server/utils/config';
 import { Logger } from '@bike4mind/observability';
 import { isPlaceholderValue } from '@bike4mind/common';
-import type { FeedbackDeliveryStageClass, FeedbackDeliverySkipReason } from '@bike4mind/common';
+import type {
+  FeedbackDeliveryStageClass,
+  FeedbackDeliverySkipReason,
+  FeedbackChannelDelivery,
+} from '@bike4mind/common';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
 import { buildEmailMirrorMessage, type EmailMirrorPayload } from './emailMirror';
@@ -53,8 +57,9 @@ type FeedbackSlackRoute =
  *
  * Non-production stages deliberately do NOT fall through resolveSlackWebhookUrl's chain: doing so
  * would leak into SlackDefaultWebhookUrl / the production feedback channel, which is exactly the
- * stage-leak bug this resolver exists to close (every deployed Lambda's NODE_ENV is 'production'
- * regardless of actual stage, so the old check never separated stages at all).
+ * stage-leak bug this resolver exists to close (a deployed Lambda's NODE_ENV commonly reads
+ * 'production' independent of the actual deploy stage, since nothing in infra/ sets it per stage,
+ * so the old check could not reliably separate stages).
  */
 export function resolveFeedbackSlackRoute(
   stage: string | undefined,
@@ -108,7 +113,7 @@ export async function postFeedbackToSlack(
   userId: string,
   content: string,
   promptMeta: string
-): Promise<void> {
+): Promise<FeedbackChannelDelivery> {
   try {
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
     const route = resolveFeedbackSlackRoute(Config.STAGE, settings);
@@ -125,7 +130,7 @@ export async function postFeedbackToSlack(
             : 'no SlackNonProdFeedbackWebhookUrl configured for this non-production stage')
       );
       await recordFeedbackDeliverySkipped('slack', route.stageClass, route.reason);
-      return;
+      return { outcome: 'skipped', reason: route.reason };
     }
 
     // Prefix non-prod posts with the stage name so a mis-pointed non-prod webhook is self-evident
@@ -145,11 +150,14 @@ export async function postFeedbackToSlack(
     } catch (postError) {
       const errorType = axios.isAxiosError(postError) ? String(postError.response?.status ?? 'network') : 'unknown';
       await recordFeedbackDeliveryFailure('slack', route.stageClass, errorType);
-      throw postError;
+      Logger.error('Error posting feedback to Slack:', postError);
+      return { outcome: 'failed', reason: 'error' };
     }
     await recordFeedbackDeliverySuccess('slack', route.stageClass);
+    return { outcome: 'delivered' };
   } catch (error) {
     Logger.error('Error posting feedback to Slack:', error);
+    return { outcome: 'failed', reason: 'error' };
   }
 }
 

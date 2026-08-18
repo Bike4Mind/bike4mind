@@ -188,12 +188,13 @@ describe('postFeedbackToSlack', () => {
 
   it('posts to the feedback channel on production with a configured webhook', async () => {
     mocks.getSettingsMap.mockResolvedValue({ SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback' });
-    await postFeedbackToSlack(...args);
+    const result = await postFeedbackToSlack(...args);
     expect(mocks.post).toHaveBeenCalledTimes(1);
     const [url, body] = mocks.post.mock.calls[0];
     expect(url).toBe('https://hooks.slack.com/services/feedback');
     expect(body.text).toContain('*Type:* Bug');
     expect(recordFeedbackDeliverySuccess).toHaveBeenCalledWith('slack', 'production');
+    expect(result).toEqual({ outcome: 'delivered' });
   });
 
   it('posts to the non-prod webhook (never the prod one) on a non-prod stage, with a stage marker', async () => {
@@ -213,16 +214,18 @@ describe('postFeedbackToSlack', () => {
   it('does not post when the non-prod stage has no non-prod webhook configured', async () => {
     mocks.config.STAGE = 'pr-1234';
     mocks.getSettingsMap.mockResolvedValue({ SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback' });
-    await postFeedbackToSlack(...args);
+    const result = await postFeedbackToSlack(...args);
     expect(mocks.post).not.toHaveBeenCalled();
     expect(recordFeedbackDeliverySkipped).toHaveBeenCalledWith('slack', 'nonprod', 'nonprod_unconfigured');
+    expect(result).toEqual({ outcome: 'skipped', reason: 'nonprod_unconfigured' });
   });
 
   it('records a skip with unconfigured_webhook when production has no webhook configured', async () => {
     mocks.getSettingsMap.mockResolvedValue({});
-    await postFeedbackToSlack(...args);
+    const result = await postFeedbackToSlack(...args);
     expect(mocks.post).not.toHaveBeenCalled();
     expect(recordFeedbackDeliverySkipped).toHaveBeenCalledWith('slack', 'production', 'unconfigured_webhook');
+    expect(result).toEqual({ outcome: 'skipped', reason: 'unconfigured_webhook' });
   });
 
   it('still posts on production even when NODE_ENV is not "production" (the removed early-return regression check)', async () => {
@@ -240,16 +243,18 @@ describe('postFeedbackToSlack', () => {
   it('resolves without throwing on a network-level rejection, logs the error, and records a "network" failure metric', async () => {
     mocks.getSettingsMap.mockResolvedValue({ SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback' });
     mocks.post.mockRejectedValue(Object.assign(new Error('network down'), { isAxiosError: true }));
-    await expect(postFeedbackToSlack(...args)).resolves.toBeUndefined();
+    const result = await postFeedbackToSlack(...args);
     expect(Logger.error).toHaveBeenCalled();
     expect(recordFeedbackDeliveryFailure).toHaveBeenCalledWith('slack', 'production', 'network');
+    expect(result).toEqual({ outcome: 'failed', reason: 'error' });
   });
 
   it('records an "unknown" failure metric when the rejection is not an axios error', async () => {
     mocks.getSettingsMap.mockResolvedValue({ SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback' });
     mocks.post.mockRejectedValue(new Error('unexpected'));
-    await expect(postFeedbackToSlack(...args)).resolves.toBeUndefined();
+    const result = await postFeedbackToSlack(...args);
     expect(recordFeedbackDeliveryFailure).toHaveBeenCalledWith('slack', 'production', 'unknown');
+    expect(result).toEqual({ outcome: 'failed', reason: 'error' });
   });
 
   it('records the HTTP status as the failure errorType when the axios error carries a response', async () => {
@@ -257,8 +262,9 @@ describe('postFeedbackToSlack', () => {
     mocks.post.mockRejectedValue(
       Object.assign(new Error('bad request'), { isAxiosError: true, response: { status: 400 } })
     );
-    await expect(postFeedbackToSlack(...args)).resolves.toBeUndefined();
+    const result = await postFeedbackToSlack(...args);
     expect(recordFeedbackDeliveryFailure).toHaveBeenCalledWith('slack', 'production', '400');
+    expect(result).toEqual({ outcome: 'failed', reason: 'error' });
   });
 
   it('the non-prod stage marker never touches the redacted Prompt Meta section', async () => {

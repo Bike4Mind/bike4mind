@@ -6,6 +6,8 @@ import {
   PromptMetaZodSchema,
   redactFunctionCallsForViewer,
 } from '@bike4mind/common';
+import type { FeedbackChannelDelivery, FeedbackDeliveryResult } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import { logEvent } from '@server/utils/analyticsLog';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { adminSettingsRepository } from '@bike4mind/database';
@@ -97,11 +99,12 @@ const handler = baseApi()
       );
 
     // Send feedback to Slack if enabled. postFeedbackToSlack records its own
-    // success/failure/skip metrics; the 'disabled' skip is recorded here since it never
-    // even calls into postFeedbackToSlack.
+    // success/failure/skip metrics and reports its own outcome; the 'disabled' skip is
+    // recorded here since it never even calls into postFeedbackToSlack.
+    let slack: FeedbackChannelDelivery;
     if (getSettingsValue('EnableFeedBackToSlack', settings)) {
       console.log('Sending feedback to Slack is enabled');
-      await postFeedbackToSlack(
+      slack = await postFeedbackToSlack(
         type || 'CS',
         organization,
         username,
@@ -111,18 +114,28 @@ const handler = baseApi()
         promptMetaForExternalEgress ? JSON.stringify(promptMetaForExternalEgress) : 'No prompt meta'
       );
     } else {
+      slack = { outcome: 'skipped', reason: 'disabled' };
       await recordFeedbackDeliverySkipped('slack', stageClass, 'disabled');
     }
 
-    // Find all of the settings that have a tag 'feedbackEmail'
-    const feedbackEmails = (getSettingsValue('FeedbackReceiveEmail', settings) || '').split(',').filter(Boolean);
+    // Split the FeedbackReceiveEmail setting into individual addresses, trimmed: a
+    // comma-separated list like 'a@x.com, b@x.com' would otherwise leave a leading space on
+    // every entry after the first, and a whitespace-only entry (',' or ' ') must resolve to
+    // zero recipients rather than publishing to a blank address.
+    const feedbackEmails = (getSettingsValue('FeedbackReceiveEmail', settings) || '')
+      .split(',')
+      .map(email => email.trim())
+      .filter(Boolean);
 
     console.log(`Sending feedback to all of these folks: ${feedbackEmails}`);
 
+    let email: FeedbackChannelDelivery;
     const emailEnabled = getSettingsValue('EnableFeedBackToEmail', settings);
     if (!emailEnabled) {
+      email = { outcome: 'skipped', reason: 'disabled' };
       await recordFeedbackDeliverySkipped('email', stageClass, 'disabled');
     } else if (feedbackEmails.length === 0) {
+      email = { outcome: 'skipped', reason: 'no_recipients' };
       await recordFeedbackDeliverySkipped('email', stageClass, 'no_recipients');
     } else {
       console.log('Sending feedback to email is enabled');
@@ -138,9 +151,9 @@ const handler = baseApi()
       // allSettled (not all): one rejected recipient must not take down the whole handler
       // after Slack has already fired, and partial success/failure both need recording.
       const emailResults = await Promise.allSettled(
-        feedbackEmails.map((email: string) =>
+        feedbackEmails.map((recipientEmail: string) =>
           EmailEvents.Send.publish({
-            to: email,
+            to: recipientEmail,
             subject: 'New Feedback Received',
             body: `
               <!DOCTYPE html>
@@ -275,9 +288,27 @@ const handler = baseApi()
       if (succeeded < emailResults.length) {
         await recordFeedbackDeliveryFailure('email', stageClass, 'publish_error');
       }
+      // 'email delivered' means the outbound-mail event was enqueued (EmailEvents.Send.publish
+      // resolved), not that SMTP actually sent it - the downstream mail consumer that does the
+      // real send is a separate, uninstrumented subsystem.
+      email = succeeded > 0 ? { outcome: 'delivered' } : { outcome: 'failed', reason: 'error' };
     }
 
-    return res.status(201).send(newFeedback);
+    const delivery: FeedbackDeliveryResult = {
+      delivered: slack.outcome === 'delivered' || email.outcome === 'delivered',
+      channels: { slack, email },
+    };
+    if (!delivery.delivered) {
+      Logger.error('[feedback] no delivery path fired for a submitted feedback record', {
+        feedbackId: newFeedback.id,
+        delivery,
+      });
+    }
+
+    // newFeedback.toJSON() (not a spread of the hydrated doc) - the schema sets
+    // toJSON: { virtuals: true }, which is what produces `id`; spreading the doc directly
+    // yields Mongoose's internal _doc/$__ fields instead.
+    return res.status(201).json({ ...newFeedback.toJSON(), delivery });
   });
 
 export const config = {

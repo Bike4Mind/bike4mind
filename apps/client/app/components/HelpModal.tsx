@@ -39,6 +39,7 @@ export const HelpModal: React.FC = () => {
   const logEvent = useLogEvent();
   const { settings, updatePreferences } = useUserSettings();
   const [feedbackContent, setFeedbackContent] = useState<string>('');
+  const [submitting, setSubmitting] = useState(false);
   const theme = useTheme();
   const [productType] = useState<ProductType>(ProductType.Bike4Mind);
   const [productTitle] = useState<string>(APP_NAME);
@@ -75,14 +76,12 @@ export const HelpModal: React.FC = () => {
   };
 
   const handleSubmitFeedback = async () => {
+    if (!feedbackContent.trim()) {
+      console.error('Feedback content is empty');
+      return;
+    }
+    setSubmitting(true);
     try {
-      if (!feedbackContent.trim()) {
-        console.error('Feedback content is empty');
-        return;
-      }
-      toast.success('Thank you! Your feedback has been submitted.');
-      console.log('Submitting feedback:', currentUser?.email);
-
       toggleShowHelp();
 
       const feedbackCreated = await createFeedbackOnServer({
@@ -94,6 +93,12 @@ export const HelpModal: React.FC = () => {
         status: FeedbackStatus.New,
       });
 
+      if (feedbackCreated.delivery.delivered) {
+        toast.success('Thank you! Your feedback has been submitted.');
+      } else {
+        toast.warning('Saved your feedback, but we could not notify the team - please ping support if it is urgent.');
+      }
+
       logEvent.mutate({
         type: FeedbackEvents.FEEDBACK_SENT,
         metadata: { id: feedbackCreated.id, content: feedbackCreated.content },
@@ -102,6 +107,9 @@ export const HelpModal: React.FC = () => {
       setFeedbackContent('');
     } catch (error) {
       console.error('Failed to submit feedback:', error);
+      toast.error('Could not submit your feedback. Please try again.');
+    } finally {
+      setSubmitting(false);
     }
   };
   if (!settings.showHelp) return null;
@@ -207,12 +215,14 @@ export const HelpModal: React.FC = () => {
 
         <Box display="flex" flexDirection="column" alignItems="flex-end">
           <Textarea
+            data-testid="help-modal-feedback-textarea"
             minRows={8}
             value={feedbackContent}
             onChange={e => setFeedbackContent(e.target.value)}
             sx={theme => ({ width: '100%', mt: 1, color: theme.palette.feedback.border })}
           />
           <Button
+            data-testid="help-modal-feedback-submit-btn"
             sx={{
               mt: 2,
               backgroundColor: 'green',
@@ -222,6 +232,7 @@ export const HelpModal: React.FC = () => {
               },
             }}
             onClick={handleSubmitFeedback}
+            disabled={submitting}
           >
             Send Feedback
           </Button>

@@ -1,14 +1,15 @@
 import { api } from '@client/app/contexts/ApiContext';
-import { IFeedbackDocument } from '@bike4mind/common';
+import { IFeedbackDocument, CreateFeedbackResponse } from '@bike4mind/common';
 
 export const getFeedbackFromServer = async () => {
   const response = await api.get<IFeedbackDocument[]>(`/api/feedback`);
   return response.data;
 };
 
-export const createFeedbackOnServer = async (feedbackData: Partial<IFeedbackDocument>) => {
-  console.log('feedbackData', feedbackData);
-  const response = await api.post<IFeedbackDocument>('/api/feedback', feedbackData);
+export const createFeedbackOnServer = async (
+  feedbackData: Partial<IFeedbackDocument>
+): Promise<CreateFeedbackResponse> => {
+  const response = await api.post<CreateFeedbackResponse>('/api/feedback', feedbackData);
   return response.data;
 };
 

@@ -35,7 +35,11 @@ const mockSave = vi.fn().mockResolvedValue(undefined);
 const mockFind = vi.fn();
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function FeedbackModelMock(this: any, data: unknown) {
-  Object.assign(this, data, { id: savedFeedback.id, save: mockSave });
+  Object.assign(this, data, {
+    id: savedFeedback.id,
+    save: mockSave,
+    toJSON: () => ({ id: savedFeedback.id, ...(data as object) }),
+  });
 }
 FeedbackModelMock.find = mockFind;
 
@@ -47,7 +51,7 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
-const mockPostFeedbackToSlack = vi.fn().mockResolvedValue(undefined);
+const mockPostFeedbackToSlack = vi.fn().mockResolvedValue({ outcome: 'delivered' });
 vi.mock('@server/integrations/slack/slack', () => ({
   postFeedbackToSlack: (...args: unknown[]) => mockPostFeedbackToSlack(...args),
 }));
@@ -68,6 +72,8 @@ vi.mock('@bike4mind/utils', () => ({
 }));
 
 vi.mock('@server/utils/config', () => ({ Config: { STAGE: 'production' } }));
+
+vi.mock('@bike4mind/observability', () => ({ Logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }));
 
 vi.mock('@server/utils/cloudwatch', () => ({
   recordFeedbackDeliverySuccess: vi.fn(),

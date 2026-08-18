@@ -23,6 +23,7 @@ interface BugReportModalProps {
 const BugReportModal: React.FC<BugReportModalProps> = ({ open, onClose, promptMeta }) => {
   const [bugReport, setBugReport] = useState('');
   const [feedbackType, setFeedbackType] = useState<FeedbackType>(FeedbackType.BUG);
+  const [submitting, setSubmitting] = useState(false);
   const userContext = useUser();
   const theme = useTheme();
   const handleFeedbackTypeChange = (type: FeedbackType) => {
@@ -61,20 +62,30 @@ const BugReportModal: React.FC<BugReportModalProps> = ({ open, onClose, promptMe
     },
   });
 
-  const handleSubmit = () => {
-    console.log('Submitting bug report:', bugReport);
-    createFeedbackOnServer({
-      userId: userContext?.currentUser?.id ?? 'Unknown',
-      username: userContext?.currentUser?.username ?? 'Unknown',
-      userEmail: userContext?.currentUser?.email ?? 'Unknown',
-      tags: ['bug', 'feedback', 'bugReport'],
-      type: feedbackType,
-      content: bugReport || 'No feedback details provided',
-      promptMeta: promptMeta ?? {},
-    });
-    onClose();
-    toast.success(`${feedbackType} report submitted successfully`);
-    setBugReport('');
+  const handleSubmit = async () => {
+    setSubmitting(true);
+    try {
+      const result = await createFeedbackOnServer({
+        userId: userContext?.currentUser?.id ?? 'Unknown',
+        username: userContext?.currentUser?.username ?? 'Unknown',
+        userEmail: userContext?.currentUser?.email ?? 'Unknown',
+        tags: ['bug', 'feedback', 'bugReport'],
+        type: feedbackType,
+        content: bugReport || 'No feedback details provided',
+        promptMeta: promptMeta ?? {},
+      });
+      onClose();
+      if (result.delivery.delivered) {
+        toast.success(`${feedbackType} report submitted successfully`);
+      } else {
+        toast.warning('Saved your report, but we could not notify the team - please ping support if it is urgent.');
+      }
+      setBugReport('');
+    } catch {
+      toast.error('Could not submit your report. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -113,6 +124,7 @@ const BugReportModal: React.FC<BugReportModalProps> = ({ open, onClose, promptMe
         <Box sx={{ mt: 2 }}>
           <Typography level="h3">Please give us as much information as possible to improve your experience.</Typography>
           <Textarea
+            data-testid="bug-report-textarea"
             minRows={10}
             value={bugReport || ''}
             onChange={e => setBugReport(e.target.value)}
@@ -129,10 +141,10 @@ const BugReportModal: React.FC<BugReportModalProps> = ({ open, onClose, promptMe
           <Typography level="body-xs">{JSON.stringify(promptMeta, null, 2)}</Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end', mt: 2 }}>
-          <Button onClick={onClose} variant="outlined">
+          <Button onClick={onClose} variant="outlined" disabled={submitting}>
             Cancel
           </Button>
-          <Button onClick={handleSubmit} variant="solid">
+          <Button data-testid="bug-report-submit-btn" onClick={handleSubmit} variant="solid" disabled={submitting}>
             Submit
           </Button>
         </Box>
