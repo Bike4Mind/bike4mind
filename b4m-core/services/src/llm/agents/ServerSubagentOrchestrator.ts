@@ -4,7 +4,7 @@ import { getTextModelCost, type ModelInfo } from '@bike4mind/common';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { usdToCredits } from '@bike4mind/utils';
-import { MEMBER_CREDIT_CAP_MESSAGE } from '../../creditService';
+import { MemberCreditCapError } from '../../creditService';
 
 /** Maximum delegation depth rendered inline in the UI. Children at this
  * depth and beyond have `delegate_to_agent` stripped so nesting stays bounded. */
@@ -344,7 +344,7 @@ export class ServerSubagentOrchestrator {
       this.deps.logger.warn('[Credits] Member credit cap reached; refusing in-process delegation', {
         agent: agentDef.name,
       });
-      throw new Error(MEMBER_CREDIT_CAP_MESSAGE);
+      throw new MemberCreditCapError();
     }
 
     // Use the agent's preferred model if specified, fall back to parent's model

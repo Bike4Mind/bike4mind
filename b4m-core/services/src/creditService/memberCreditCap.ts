@@ -27,6 +27,31 @@ type MemberCapOrg = Pick<IOrganizationDocument, 'userDetails' | 'maxCreditsPerMe
  */
 export const MEMBER_CREDIT_CAP_MESSAGE = 'Organization member credit limit reached';
 
+/**
+ * Thrown by `ServerSubagentOrchestrator.delegateToAgent()` when the delegating
+ * member is at or over their organization's per-member credit cap. A dedicated
+ * class - rather than matching a plain `Error` on `.message` - so a caller that
+ * needs to special-case this refusal survives a future rewrap: `isMemberCreditCapError`
+ * walks the `.cause` chain, so wrapping this in another error (e.g. `new Error('...',
+ * { cause: original })`) still detects it, where a string-equality check would not.
+ */
+export class MemberCreditCapError extends Error {
+  constructor() {
+    super(MEMBER_CREDIT_CAP_MESSAGE);
+    this.name = 'MemberCreditCapError';
+  }
+}
+
+/** True when `error` is a `MemberCreditCapError`, or wraps one via `.cause`. */
+export function isMemberCreditCapError(error: unknown): boolean {
+  let current: unknown = error;
+  while (current instanceof Error) {
+    if (current instanceof MemberCreditCapError) return true;
+    current = current.cause;
+  }
+  return false;
+}
+
 /** Credits a member has already spent against the org pool (0 when untracked). */
 export function getMemberUsedCredits(organization: Pick<IOrganizationDocument, 'userDetails'>, userId: string): number {
   return organization.userDetails?.find(u => u.id === userId)?.usedCredits ?? 0;

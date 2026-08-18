@@ -12,7 +12,7 @@ import type { ModelInfo } from '@bike4mind/common';
 import { ServerSubagentOrchestrator } from '../../agents/ServerSubagentOrchestrator';
 import type { ServerSubagentTracker, SubagentHandoffSignal } from '../../agents/ServerSubagentOrchestrator';
 import { ServerAgentStore } from '../../agents/ServerAgentStore';
-import { MEMBER_CREDIT_CAP_MESSAGE } from '../../../creditService';
+import { isMemberCreditCapError } from '../../../creditService';
 
 /**
  * Maximum number of nodes the coordinator is allowed to emit in a single DAG.
@@ -246,7 +246,7 @@ export function createCoordinateTaskTool(deps: CoordinateTaskToolDeps): IComplet
         // at warn (matching the sibling gates) rather than error, and skip suggesting
         // delegate_to_agent as a fallback, since it shares the same gate and would just
         // spend the grace iteration on a guaranteed refusal.
-        if (msg === MEMBER_CREDIT_CAP_MESSAGE) {
+        if (isMemberCreditCapError(error)) {
           deps.logger.warn('[coordinate_task] coordinator refused: member credit cap reached');
           return `Error: ${msg}`;
         }
