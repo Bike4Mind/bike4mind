@@ -457,12 +457,18 @@ export const ssrfSafeLookup: LookupFunction = (hostname, options, callback) => {
  * after redirects, and an https URL that 302s to http would otherwise slip past a single agent.
  *
  * SCOPE - these protect callers that fetch through Node's http/https stack, which today means
- * `fetchAndParseURL` in `ingest.ts` and nothing else. They do NOT cover the webfetch LLM tool
- * (`services/src/llm/tools/implementation/webfetch/plainFetch.ts`), which fetches attacker-supplied
- * URLs through global `fetch` behind its own `ssrfGuard.ts` and carries the same check-then-resolve
- * gap. Closing it there needs a different mechanism - an undici `Agent` with a validating `connect` -
- * because global `fetch` ignores `http.Agent` entirely. Stated here so the gap is a known boundary
- * rather than something a reader assumes this module already handles.
+ * `fetchAndParseURL` in `ingest.ts` and nothing else. That does NOT mean other fetchers are unpinned:
+ * the webfetch LLM tool (`services/src/llm/tools/implementation/webfetch/plainFetch.ts`) reaches the
+ * same guarantee by a different route, and a reader should not go looking for a gap there that is
+ * already closed. It vets via `ssrfGuard.ts`, then for http rewrites the URL's hostname to the vetted
+ * IP while preserving `Host`, and sets `redirect: 'error'` so a public origin cannot 302-pivot at all.
+ * That is connect-by-IP under global `fetch` - so the technique IS available there, and an
+ * undici `Agent` with a validating `connect` is not required to pin.
+ *
+ * The honest residual over there is narrower: https keeps the hostname and leans on TLS validation, so
+ * what is left is an SYN-level probe oracle rather than a rebind to a private target. The reason to
+ * use the agents here instead is that axios drives a manual redirect chain over an arbitrary number of
+ * hops and schemes, where per-request agent selection is the tractable place to enforce this.
  */
 export const ssrfSafeHttpAgent = new http.Agent({ lookup: ssrfSafeLookup, keepAlive: false });
 export const ssrfSafeHttpsAgent = new https.Agent({ lookup: ssrfSafeLookup, keepAlive: false });
