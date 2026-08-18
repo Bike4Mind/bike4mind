@@ -33,6 +33,7 @@ import { Logger } from '@bike4mind/observability';
 import { handleToolResultStreaming } from './toolStreamingHelper';
 import { ensureToolPairingIntegrity, stripAllToolBlocks, stripToolDependentMessages } from './toolPairingUtils';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
+import { systemContentToText } from './systemContent';
 import { withRetry, isUserInitiatedAbort, isRetryableError } from '@bike4mind/common';
 import { buildThinkingParams, THINKING_ANSWER_HEADROOM_TOKENS, type ThinkingConfig } from './thinkingParams';
 import { DispatchModel } from './dispatchModel';
@@ -816,7 +817,7 @@ export class AnthropicBackend implements ICompletionBackend {
       const systemMessages = messages.filter(m => m.role === 'system');
       const blocks: Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> = [];
       for (const sm of systemMessages) {
-        const text = typeof sm.content === 'string' ? sm.content : JSON.stringify(sm.content);
+        const text = systemContentToText(sm.content);
         if (sm.cache === true) {
           blocks.push({ type: 'text', text, cache_control: { type: 'ephemeral' } });
         } else {
@@ -2589,7 +2590,12 @@ export class AnthropicBackend implements ICompletionBackend {
     const systemMessages = messages.filter(m => m.role === 'system');
     if (systemMessages.length === 0) return undefined;
 
-    return systemMessages.map(m => m.content).join('\n');
+    // Array-valued content must go through systemContentToText: a bare join coerces
+    // each block with String(), producing "[object Object]" in the prompt.
+    return systemMessages
+      .map(m => systemContentToText(m.content))
+      .filter(text => text !== '')
+      .join('\n');
   }
 
   private isToolUseEvent(event: unknown): event is ToolUseEvent {

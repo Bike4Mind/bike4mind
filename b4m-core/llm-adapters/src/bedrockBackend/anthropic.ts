@@ -21,6 +21,7 @@ import {
 } from '../backend';
 import { BaseBedrockBackend } from './base';
 import { getCachingAdapter } from '../caching/adapters';
+import { systemContentToText } from '../systemContent';
 import { DispatchModel } from '../dispatchModel';
 import { buildThinkingParams } from '../thinkingParams';
 
@@ -663,7 +664,10 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
     let systemMessage = messages
       .filter(m => m.role === 'system' && m.content)
-      .map(m => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
+      .map(m => systemContentToText(m.content))
+      // A block array carrying no text flattens to '', which would otherwise
+      // contribute a blank line to the joined prompt.
+      .filter(text => text !== '')
       .join('\n');
 
     // Append model identity so the model correctly identifies itself when asked.
