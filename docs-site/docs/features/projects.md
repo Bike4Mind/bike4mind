@@ -21,11 +21,27 @@ A project contains:
 
 ## Creating a Project
 
+Every project starts the same way: enter a **name** and **description**, optionally add initial notebooks or files, then click **Create Project**. How you open the create dialog depends on whether you already have a project.
+
+### Your first project (from Gears)
+
+On a new account, Projects has not earned a sidebar spot yet, so you start from **Gears**:
+
+1. Open **Gears** and find the **Projects** card
+2. Click **Create your first project** (then **Create your first project** again on the Projects page)
+3. Enter a name and description, optionally add notebooks or files, and click **Create Project**
+
+![Creating your first project from Gears](./media/create-project-new-account.gif)
+
+### From the sidebar
+
+Once you have at least one project, **Projects** appears in the sidebar:
+
 1. Navigate to **Projects** from the sidebar
-2. Click **Create Project**
-3. Enter a name and description
-4. Optionally add initial notebooks or files
-5. Click **Create**
+2. Click **New Project**
+3. Enter a name and description, optionally add notebooks or files, and click **Create Project**
+
+![Creating a project from the sidebar](./media/create-project-existing-account.gif)
 
 ### Project Settings
 

@@ -4999,6 +4999,16 @@
         },
         {
           "level": 3,
+          "text": "Your first project (from Gears)",
+          "anchor": "your-first-project-from-gears"
+        },
+        {
+          "level": 3,
+          "text": "From the sidebar",
+          "anchor": "from-the-sidebar"
+        },
+        {
+          "level": 3,
           "text": "Project Settings",
           "anchor": "project-settings"
         },
@@ -14431,6 +14441,16 @@
             },
             {
               "level": 3,
+              "text": "Your first project (from Gears)",
+              "anchor": "your-first-project-from-gears"
+            },
+            {
+              "level": 3,
+              "text": "From the sidebar",
+              "anchor": "from-the-sidebar"
+            },
+            {
+              "level": 3,
               "text": "Project Settings",
               "anchor": "project-settings"
             },
@@ -18855,5 +18875,5 @@
       "accessLevel": "public"
     }
   ],
-  "version": "2026-07-15T14:34:12.156Z"
+  "version": "2026-08-18T04:28:30.392Z"
 }
