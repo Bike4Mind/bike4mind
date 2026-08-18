@@ -6,6 +6,7 @@ import type {
   IDataLakeSpendResponse,
   IFabFileDocument,
   LakeHealthApiResponse,
+  LakeConfigHistoryView,
   ManageableDataLakeConfig,
   TaxonomyTag,
 } from '@bike4mind/common';
@@ -88,6 +89,40 @@ export function useGetDataLakeHealth(dataLakeId: string | null, enabled = true) 
 }
 
 /**
+ * One lake's config-change history (#1769): who changed how this lake answers, what moved, and which
+ * manage rung authorized it. Manager-only server-side - a mere reader gets a 403.
+ *
+ * `staleTime: 0` unlike the other lake reads, because this surface mounts in the same modal that
+ * EDITS the lake: a cached history would show an owner their own just-saved change as absent, which
+ * reads as "the audit missed it" - the one impression an audit surface must never give. `retry: false`
+ * matches the sibling reads (the feature-gate 403 and the manage 403 are both terminal, not transient).
+ */
+export function useLakeConfigHistory(dataLakeId: string | null, enabled = true, limit?: number) {
+  const query = useQuery({
+    queryKey: dataLakeKeys.configHistory(dataLakeId, limit),
+    enabled: enabled && !!dataLakeId,
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 0,
+    queryFn: async () => {
+      const response = await api.get<{ data: LakeConfigHistoryView }>(
+        `/api/data-lakes/${dataLakeId}/config-history`,
+        limit == null ? undefined : { params: { limit } }
+      );
+      return response.data.data;
+    },
+  });
+  // Same derivation as useDataLakeSpend, and used the same way: a rejection RETRACTS the surface
+  // rather than painting an error into it. Both of this route's refusals are permission-shaped (the
+  // EnableDataLakes gate and the manage gate), and neither becomes true by retrying.
+  const isForbidden =
+    isAxiosError(query.error) &&
+    (query.error.response?.status ?? 0) >= 400 &&
+    (query.error.response?.status ?? 0) < 500;
+  return { ...query, isForbidden };
+}
+
+/**
  * The data lake in the current create scope whose `fileTagPrefix` would overlap `prefix`, if any.
  *
  * Two lakes sharing a prefix share their prefix-tagged files, so permanently deleting one would
@@ -156,8 +191,11 @@ export function useUpdateDataLake() {
       const response = await api.put<DataLakeConfig>(`/api/data-lakes/${id}`, params);
       return response.data;
     },
-    onSuccess: () => {
+    onSuccess: (_data, { id }) => {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      // This write is exactly what adds a config-history row, and the history renders in the same
+      // modal that submitted it - without this the owner sees their own change missing from the audit.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
       toast.success('Data lake updated');
     },
     onError: (error: Error) => {
