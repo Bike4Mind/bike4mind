@@ -129,7 +129,7 @@ export async function postFeedbackToSlack(
             ? 'no SlackFeedbackWebhookUrl / SlackDefaultWebhookUrl set in admin settings or config'
             : 'no SlackNonProdFeedbackWebhookUrl configured for this non-production stage')
       );
-      await recordFeedbackDeliverySkipped('slack', route.stageClass, route.reason);
+      await recordFeedbackDeliverySkipped('slack', route.stageClass, route.reason, Config.STAGE);
       return { outcome: 'skipped', reason: route.reason };
     }
 
@@ -149,7 +149,7 @@ export async function postFeedbackToSlack(
       );
     } catch (postError) {
       const errorType = axios.isAxiosError(postError) ? String(postError.response?.status ?? 'network') : 'unknown';
-      await recordFeedbackDeliveryFailure('slack', route.stageClass, errorType);
+      await recordFeedbackDeliveryFailure('slack', route.stageClass, errorType, Config.STAGE);
       Logger.error('Error posting feedback to Slack:', postError);
       return { outcome: 'failed', reason: 'error' };
     }

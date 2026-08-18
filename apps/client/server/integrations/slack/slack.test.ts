@@ -216,7 +216,7 @@ describe('postFeedbackToSlack', () => {
     mocks.getSettingsMap.mockResolvedValue({ SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback' });
     const result = await postFeedbackToSlack(...args);
     expect(mocks.post).not.toHaveBeenCalled();
-    expect(recordFeedbackDeliverySkipped).toHaveBeenCalledWith('slack', 'nonprod', 'nonprod_unconfigured');
+    expect(recordFeedbackDeliverySkipped).toHaveBeenCalledWith('slack', 'nonprod', 'nonprod_unconfigured', 'pr-1234');
     expect(result).toEqual({ outcome: 'skipped', reason: 'nonprod_unconfigured' });
   });
 
@@ -224,7 +224,12 @@ describe('postFeedbackToSlack', () => {
     mocks.getSettingsMap.mockResolvedValue({});
     const result = await postFeedbackToSlack(...args);
     expect(mocks.post).not.toHaveBeenCalled();
-    expect(recordFeedbackDeliverySkipped).toHaveBeenCalledWith('slack', 'production', 'unconfigured_webhook');
+    expect(recordFeedbackDeliverySkipped).toHaveBeenCalledWith(
+      'slack',
+      'production',
+      'unconfigured_webhook',
+      'production'
+    );
     expect(result).toEqual({ outcome: 'skipped', reason: 'unconfigured_webhook' });
   });
 
@@ -245,7 +250,7 @@ describe('postFeedbackToSlack', () => {
     mocks.post.mockRejectedValue(Object.assign(new Error('network down'), { isAxiosError: true }));
     const result = await postFeedbackToSlack(...args);
     expect(Logger.error).toHaveBeenCalled();
-    expect(recordFeedbackDeliveryFailure).toHaveBeenCalledWith('slack', 'production', 'network');
+    expect(recordFeedbackDeliveryFailure).toHaveBeenCalledWith('slack', 'production', 'network', 'production');
     expect(result).toEqual({ outcome: 'failed', reason: 'error' });
   });
 
@@ -253,7 +258,7 @@ describe('postFeedbackToSlack', () => {
     mocks.getSettingsMap.mockResolvedValue({ SlackFeedbackWebhookUrl: 'https://hooks.slack.com/services/feedback' });
     mocks.post.mockRejectedValue(new Error('unexpected'));
     const result = await postFeedbackToSlack(...args);
-    expect(recordFeedbackDeliveryFailure).toHaveBeenCalledWith('slack', 'production', 'unknown');
+    expect(recordFeedbackDeliveryFailure).toHaveBeenCalledWith('slack', 'production', 'unknown', 'production');
     expect(result).toEqual({ outcome: 'failed', reason: 'error' });
   });
 
@@ -263,7 +268,7 @@ describe('postFeedbackToSlack', () => {
       Object.assign(new Error('bad request'), { isAxiosError: true, response: { status: 400 } })
     );
     const result = await postFeedbackToSlack(...args);
-    expect(recordFeedbackDeliveryFailure).toHaveBeenCalledWith('slack', 'production', '400');
+    expect(recordFeedbackDeliveryFailure).toHaveBeenCalledWith('slack', 'production', '400', 'production');
     expect(result).toEqual({ outcome: 'failed', reason: 'error' });
   });
 

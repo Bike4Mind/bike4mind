@@ -1,15 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { buildFeedbackDeliveryFailureMetrics } from './cloudwatch';
+import { buildFeedbackDeliveryFailureMetrics, buildFeedbackDeliverySkippedMetrics } from './cloudwatch';
 
-// Deliberately does not mock the AWS SDK - this tests only the pure metric-shape builder,
-// which is the alarm's real contract. A dimensioned metric is a DISTINCT CloudWatch stream
-// from its dimensionless namesake, so `feedbackDeliveryFailures` (infra/alarms.ts), which reads
-// the dimensionless `DeliveryFailed` stream, only receives data if this builder emits one. See
-// the sibling `webhookDeliveryHighFailures` alarm, which lacks this and can never fire.
+// Deliberately does not mock the AWS SDK - this tests only the pure metric-shape builders,
+// which are the alarms' real contract. A metric identified by a subset of dimensions is a
+// DISTINCT CloudWatch stream from the full-dimension one, so `feedbackDeliveryFailures` and
+// `feedbackDeliveryMisconfigured` (infra/alarms.ts), which read a `{ Stage }`-only stream, only
+// receive data if these builders emit that exact rollup. See the sibling `webhookDeliveryHighFailures`
+// alarm, which lacks any rollup and can never fire.
 describe('buildFeedbackDeliveryFailureMetrics', () => {
-  it('emits both a dimensioned drill-down entry and a dimensionless alarm-read entry on production', () => {
-    const metrics = buildFeedbackDeliveryFailureMetrics('slack', 'production', '500');
+  it('emits both a full drill-down entry and a Stage-only rollup entry', () => {
+    const metrics = buildFeedbackDeliveryFailureMetrics('slack', 'production', '500', 'production');
 
     expect(metrics).toHaveLength(2);
     expect(metrics).toContainEqual({
@@ -21,20 +22,69 @@ describe('buildFeedbackDeliveryFailureMetrics', () => {
     expect(metrics).toContainEqual({
       name: 'DeliveryFailed',
       value: 1,
-      dimensions: {},
+      dimensions: { Stage: 'production' },
       unit: StandardUnit.Count,
     });
   });
 
-  it('emits ONLY the dimensioned entry on a non-prod stage, so a nonprod failure never trips the production alarm', () => {
-    const metrics = buildFeedbackDeliveryFailureMetrics('email', 'nonprod', 'publish_error');
+  it('scopes the rollup to the real stage value, not a binary production/nonprod split, so a dev-stage failure is distinguishable from a preview', () => {
+    const devMetrics = buildFeedbackDeliveryFailureMetrics('email', 'nonprod', 'publish_error', 'dev');
+    const previewMetrics = buildFeedbackDeliveryFailureMetrics('email', 'nonprod', 'publish_error', 'pr-1234');
 
-    expect(metrics).toHaveLength(1);
-    expect(metrics[0]).toEqual({
-      name: 'DeliveryFailed',
+    expect(devMetrics).toContainEqual(
+      expect.objectContaining({ name: 'DeliveryFailed', dimensions: { Stage: 'dev' } })
+    );
+    expect(previewMetrics).toContainEqual(
+      expect.objectContaining({ name: 'DeliveryFailed', dimensions: { Stage: 'pr-1234' } })
+    );
+    // Different Stage dimension values are different CloudWatch metric streams - an alarm
+    // reading { Stage: 'dev' } structurally cannot match a { Stage: 'pr-1234' } data point.
+  });
+
+  it('falls back to "unknown" when the stage is undefined, rather than dropping the rollup', () => {
+    const metrics = buildFeedbackDeliveryFailureMetrics('slack', 'nonprod', 'network', undefined);
+
+    expect(metrics).toContainEqual(expect.objectContaining({ dimensions: { Stage: 'unknown' } }));
+  });
+});
+
+describe('buildFeedbackDeliverySkippedMetrics', () => {
+  it('emits a rollup for unconfigured_webhook (enabled but broken) on top of the drill-down entry', () => {
+    const metrics = buildFeedbackDeliverySkippedMetrics('slack', 'production', 'unconfigured_webhook', 'production');
+
+    expect(metrics).toHaveLength(2);
+    expect(metrics).toContainEqual({
+      name: 'DeliverySkipped',
       value: 1,
-      dimensions: { channel: 'email', stageClass: 'nonprod', errorType: 'publish_error' },
+      dimensions: { channel: 'slack', stageClass: 'production', reason: 'unconfigured_webhook' },
       unit: StandardUnit.Count,
     });
+    expect(metrics).toContainEqual({
+      name: 'DeliverySkipped',
+      value: 1,
+      dimensions: { Stage: 'production' },
+      unit: StandardUnit.Count,
+    });
+  });
+
+  it('emits a rollup for no_recipients the same way', () => {
+    const metrics = buildFeedbackDeliverySkippedMetrics('email', 'production', 'no_recipients', 'production');
+
+    expect(metrics).toContainEqual(
+      expect.objectContaining({ name: 'DeliverySkipped', dimensions: { Stage: 'production' } })
+    );
+  });
+
+  it('does NOT emit a rollup for "disabled" - an admin turning the setting off is not an incident', () => {
+    const metrics = buildFeedbackDeliverySkippedMetrics('slack', 'production', 'disabled', 'production');
+
+    expect(metrics).toHaveLength(1);
+    expect(metrics[0].dimensions).toEqual({ channel: 'slack', stageClass: 'production', reason: 'disabled' });
+  });
+
+  it('does NOT emit a rollup for "nonprod_unconfigured" - the deliberate non-prod suppression case', () => {
+    const metrics = buildFeedbackDeliverySkippedMetrics('slack', 'nonprod', 'nonprod_unconfigured', 'pr-1234');
+
+    expect(metrics).toHaveLength(1);
   });
 });

@@ -1081,8 +1081,12 @@ if (isMonitoredStage) {
    * Metric emitted by: server/utils/cloudwatch.ts -> recordFeedbackDeliveryFailure, wired
    * from server/integrations/slack/slack.ts's postFeedbackToSlack and
    * pages/api/feedback/index.ts's email path.
-   * Namespace: Lumina5/FeedbackDelivery / DeliveryFailed (dimensionless entry only -
-   * scoped to production failures, see buildFeedbackDeliveryFailureMetrics).
+   * Namespace: Lumina5/FeedbackDelivery / DeliveryFailed. Reads the coarse `{ Stage }`-only
+   * rollup entry (see buildFeedbackDeliveryFailureMetrics), the same pattern
+   * `anthropicRateLimitErrors` above uses - scoping by the actual deploying stage rather than a
+   * dimensionless or binary production/non-production split means this alarm only ever matches
+   * failures from ITS OWN stage, so the dev-stage deployment of this alarm can receive data too,
+   * and an unrelated PR-preview's failures never trip either the dev or production alarm.
    */
   new aws.cloudwatch.MetricAlarm('feedbackDeliveryFailures', {
     name: `${$app.name}-${$app.stage}-feedback-delivery-failures`,
@@ -1095,10 +1099,44 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 0,
     treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
     alarmActions: [dlqAlarmTopic!.arn],
     tags: {
       Application: 'FeedbackDelivery',
       Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Feedback Delivery Misconfigured
+   *
+   * The ticket's own opening scenario: an admin left Slack/email feedback enabled but never
+   * finished configuring it (no webhook URL, or no recipient list) - not a hard error, so it
+   * never trips `feedbackDeliveryFailures` above, but it is exactly the "fails silently" case
+   * this pair of alarms exists to close. Deliberate operator choices ('disabled',
+   * 'nonprod_unconfigured') do not emit the rollup this reads - see
+   * buildFeedbackDeliverySkippedMetrics - so this alarm never pages for a setting an admin chose.
+   *
+   * Metric emitted by: server/utils/cloudwatch.ts -> recordFeedbackDeliverySkipped, wired from
+   * the same two call sites as feedbackDeliveryFailures above.
+   * Namespace: Lumina5/FeedbackDelivery / DeliverySkipped, Stage-scoped identically.
+   */
+  new aws.cloudwatch.MetricAlarm('feedbackDeliveryMisconfigured', {
+    name: `${$app.name}-${$app.stage}-feedback-delivery-misconfigured`,
+    alarmDescription: 'Feedback delivery is enabled but not actually configured (no webhook URL or no recipients)',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'DeliverySkipped',
+    namespace: 'Lumina5/FeedbackDelivery',
+    period: 300,
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: { Stage: $app.stage },
+    alarmActions: [dlqAlarmTopic!.arn],
+    tags: {
+      Application: 'FeedbackDelivery',
+      Severity: 'Medium',
     },
   });
 }

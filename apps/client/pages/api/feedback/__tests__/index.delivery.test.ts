@@ -130,6 +130,17 @@ describe('POST /api/feedback - delivery outcome', () => {
     expect(body.delivery.channels.slack).toEqual({ outcome: 'skipped', reason: 'unconfigured_webhook' });
   });
 
+  it('reports delivered:true via Slack alone when it is the only channel that actually fires', async () => {
+    mockSettings.EnableFeedBackToSlack = true;
+    mockPostFeedbackToSlack.mockResolvedValue({ outcome: 'delivered' });
+    const { req, res } = run();
+    await mockRefs.postHandler!(req, res);
+
+    const body = res._getJSONData();
+    expect(body.delivery.channels.slack).toEqual({ outcome: 'delivered' });
+    expect(body.delivery.delivered).toBe(true);
+  });
+
   it('does not publish email when EnableFeedBackToEmail is off, even with recipients configured', async () => {
     mockSettings.FeedbackReceiveEmail = 'team@example.com';
     const { req, res } = run();
@@ -204,7 +215,7 @@ describe('POST /api/feedback - delivery outcome', () => {
     const body = res._getJSONData();
     expect(body.delivery.delivered).toBe(true);
     expect(body.delivery.channels.email.outcome).toBe('delivered');
-    expect(mockRecordFailure).toHaveBeenCalledWith('email', 'production', 'publish_error');
+    expect(mockRecordFailure).toHaveBeenCalledWith('email', 'production', 'publish_error', 'production');
   });
 
   it('reports email failed and delivered:false when Slack is off and every publish rejects', async () => {

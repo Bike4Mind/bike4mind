@@ -115,7 +115,7 @@ const handler = baseApi()
       );
     } else {
       slack = { outcome: 'skipped', reason: 'disabled' };
-      await recordFeedbackDeliverySkipped('slack', stageClass, 'disabled');
+      await recordFeedbackDeliverySkipped('slack', stageClass, 'disabled', Config.STAGE);
     }
 
     // Split the FeedbackReceiveEmail setting into individual addresses, trimmed: a
@@ -133,10 +133,10 @@ const handler = baseApi()
     const emailEnabled = getSettingsValue('EnableFeedBackToEmail', settings);
     if (!emailEnabled) {
       email = { outcome: 'skipped', reason: 'disabled' };
-      await recordFeedbackDeliverySkipped('email', stageClass, 'disabled');
+      await recordFeedbackDeliverySkipped('email', stageClass, 'disabled', Config.STAGE);
     } else if (feedbackEmails.length === 0) {
       email = { outcome: 'skipped', reason: 'no_recipients' };
-      await recordFeedbackDeliverySkipped('email', stageClass, 'no_recipients');
+      await recordFeedbackDeliverySkipped('email', stageClass, 'no_recipients', Config.STAGE);
     } else {
       console.log('Sending feedback to email is enabled');
       const sanitizedContent = sanitizeHtml(content);
@@ -286,7 +286,7 @@ const handler = baseApi()
         await recordFeedbackDeliverySuccess('email', stageClass);
       }
       if (succeeded < emailResults.length) {
-        await recordFeedbackDeliveryFailure('email', stageClass, 'publish_error');
+        await recordFeedbackDeliveryFailure('email', stageClass, 'publish_error', Config.STAGE);
       }
       // 'email delivered' means the outbound-mail event was enqueued (EmailEvents.Send.publish
       // resolved), not that SMTP actually sent it - the downstream mail consumer that does the
