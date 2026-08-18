@@ -82,8 +82,6 @@ export const HelpModal: React.FC = () => {
     }
     setSubmitting(true);
     try {
-      toggleShowHelp();
-
       const feedbackCreated = await createFeedbackOnServer({
         userId: userId,
         username: currentUser?.username ?? 'Unknown',
@@ -92,6 +90,10 @@ export const HelpModal: React.FC = () => {
         content: feedbackContent,
         status: FeedbackStatus.New,
       });
+
+      // Close only once the outcome is known, so a rejection's error toast (in the catch
+      // below) still applies to a modal the user can see closing, not one already gone.
+      toggleShowHelp();
 
       if (feedbackCreated.delivery.delivered) {
         toast.success('Thank you! Your feedback has been submitted.');

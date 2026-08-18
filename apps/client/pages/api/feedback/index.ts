@@ -16,7 +16,7 @@ import { NotFoundError } from '@server/utils/errors';
 import { EmailEvents } from '@server/utils/eventBus';
 import { postFeedbackToSlack } from '@server/integrations/slack/slack';
 import { toRedactedFeedback } from '@server/utils/redactedFeedback';
-import { Config } from '@server/utils/config';
+import { Config, classifyStage } from '@server/utils/config';
 import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,
@@ -80,7 +80,7 @@ const handler = baseApi()
     await newFeedback.save();
 
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-    const stageClass = Config.STAGE === 'production' ? 'production' : 'nonprod';
+    const stageClass = classifyStage(Config.STAGE);
 
     // A bug report leaves the product entirely (third-party Slack workspace, unencrypted email
     // to a static recipient list). functionCalls[].returnValue can hold verbatim tool output -
@@ -282,12 +282,12 @@ const handler = baseApi()
         )
       );
       const succeeded = emailResults.filter(r => r.status === 'fulfilled').length;
-      if (succeeded > 0) {
-        await recordFeedbackDeliverySuccess('email', stageClass);
-      }
-      if (succeeded < emailResults.length) {
-        await recordFeedbackDeliveryFailure('email', stageClass, 'publish_error', Config.STAGE);
-      }
+      await Promise.all([
+        succeeded > 0 ? recordFeedbackDeliverySuccess('email', stageClass) : undefined,
+        succeeded < emailResults.length
+          ? recordFeedbackDeliveryFailure('email', stageClass, 'publish_error', Config.STAGE)
+          : undefined,
+      ]);
       // 'email delivered' means the outbound-mail event was enqueued (EmailEvents.Send.publish
       // resolved), not that SMTP actually sent it - the downstream mail consumer that does the
       // real send is a separate, uninstrumented subsystem.

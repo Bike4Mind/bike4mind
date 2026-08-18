@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Config } from '@server/utils/config';
+import { Config, classifyStage } from '@server/utils/config';
 import { Logger } from '@bike4mind/observability';
 import { isPlaceholderValue } from '@bike4mind/common';
 import type {
@@ -52,8 +52,9 @@ type FeedbackSlackRoute =
   | { kind: 'skip'; stageClass: FeedbackDeliveryStageClass; reason: FeedbackDeliverySkipReason };
 
 /**
- * Decides where feedback-to-Slack posts go for a given deploy stage. `stage === 'production'` is
- * the same comparison `isProduction()` (@server/utils/config) performs - keep the two in sync.
+ * Decides where feedback-to-Slack posts go for a given deploy stage, via the shared
+ * classifyStage() (@server/utils/config) - the single source of truth for the
+ * production/non-production split, so a future stage rename touches one file.
  *
  * Non-production stages deliberately do NOT fall through resolveSlackWebhookUrl's chain: doing so
  * would leak into SlackDefaultWebhookUrl / the production feedback channel, which is exactly the
@@ -65,7 +66,7 @@ export function resolveFeedbackSlackRoute(
   stage: string | undefined,
   settings: Record<string, string>
 ): FeedbackSlackRoute {
-  const stageClass: FeedbackDeliveryStageClass = stage === 'production' ? 'production' : 'nonprod';
+  const stageClass: FeedbackDeliveryStageClass = classifyStage(stage);
 
   if (stageClass === 'production') {
     const webhookUrl = resolveSlackWebhookUrl('SlackFeedbackWebhookUrl', settings);

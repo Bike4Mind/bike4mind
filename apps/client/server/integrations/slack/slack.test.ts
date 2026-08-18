@@ -11,7 +11,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // Mock the SST-backed Config so the test never touches `Resource`.
-vi.mock('@server/utils/config', () => ({ Config: mocks.config }));
+vi.mock('@server/utils/config', () => ({
+  Config: mocks.config,
+  classifyStage: (stage: string | undefined) => (stage === 'production' ? 'production' : 'nonprod'),
+}));
 
 vi.mock('axios', () => ({
   default: { post: mocks.post, isAxiosError: (err: unknown) => !!(err as { isAxiosError?: boolean })?.isAxiosError },
