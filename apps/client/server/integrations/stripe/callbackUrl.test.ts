@@ -54,6 +54,10 @@ describe('isAllowedCallbackOrigin', () => {
     // Origin is scheme + host + port, so a lookalike subdomain and a scheme downgrade both fail.
     expect(isAllowedCallbackOrigin('https://app.example.com.attacker.net/')).toBe(false);
     expect(isAllowedCallbackOrigin('http://app.example.com/')).toBe(false);
+    // Userinfo: the allowed host sits before the `@`, so it reads as the app origin to a
+    // human but parses to an origin of https://attacker.net. Comparing origins is what
+    // defeats it - a prefix or substring check on the URL would not.
+    expect(isAllowedCallbackOrigin('https://app.example.com@attacker.net')).toBe(false);
   });
 
   it('rejects anything the URL parser cannot resolve to an origin', () => {
@@ -62,6 +66,9 @@ describe('isAllowedCallbackOrigin', () => {
     expect(isAllowedCallbackOrigin('/settings/billing')).toBe(false);
     expect(isAllowedCallbackOrigin('not a url')).toBe(false);
     expect(isAllowedCallbackOrigin('')).toBe(false);
+    // Protocol-relative: a browser would resolve this against the current page, but the
+    // guard has no base URL, so `new URL()` throws and the catch rejects it.
+    expect(isAllowedCallbackOrigin('//attacker.net')).toBe(false);
   });
 
   it('fails closed when APP_URL is missing in production', () => {
