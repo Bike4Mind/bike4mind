@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -700,20 +700,27 @@ describe('useBatchProgressListener - refreshes the lake list on completion', () 
     });
 
   // Spy on the prototype rather than reshaping mountHook, which owns its QueryClient internally.
-  const spyInvalidate = () => vi.spyOn(QueryClient.prototype, 'invalidateQueries').mockResolvedValue(undefined);
+  // Restored in afterEach, NOT at the end of each test body: this file sets no `restoreMocks` in
+  // its vitest config, so a thrown assertion would otherwise leave invalidateQueries mocked for
+  // every test that runs after it.
+  let spy: ReturnType<typeof vi.spyOn>;
 
-  const invalidatedKeys = (spy: ReturnType<typeof spyInvalidate>) =>
+  const invalidatedKeys = () =>
     spy.mock.calls.map(([arg]) => JSON.stringify((arg as { queryKey?: unknown })?.queryKey));
 
   beforeEach(() => {
     subscribeToAction.mockClear();
     seedActiveBatch();
+    spy = vi.spyOn(QueryClient.prototype, 'invalidateQueries').mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    spy.mockRestore();
   });
 
   it.each(['completed', 'completed_with_errors'] as const)(
     'invalidates the lake list when the batch reports %s',
     status => {
-      const spy = spyInvalidate();
       mountHook(useBatchProgressListener);
       const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
 
@@ -723,15 +730,13 @@ describe('useBatchProgressListener - refreshes the lake list on completion', () 
 
       // `['data-lakes']` is dataLakeKeys.list - asserted as a literal so a rename of the key's VALUE
       // (not just its name) still fails here rather than silently agreeing with itself.
-      expect(invalidatedKeys(spy)).toContain(JSON.stringify(['data-lakes']));
-      spy.mockRestore();
+      expect(invalidatedKeys()).toContain(JSON.stringify(['data-lakes']));
     }
   );
 
   it('does NOT invalidate the lake list on an ordinary progress tick', () => {
     // The guard against "just invalidate on every message": mid-ingest the server rollup has not
     // run yet, so refetching then would re-cache the stale count and cost a request per tick.
-    const spy = spyInvalidate();
     mountHook(useBatchProgressListener);
     const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
 
@@ -739,7 +744,6 @@ describe('useBatchProgressListener - refreshes the lake list on completion', () 
       onMessage({ action: 'data_lake_batch_progress', batchId: 'batch1', chunkedFiles: 1 });
     });
 
-    expect(invalidatedKeys(spy)).not.toContain(JSON.stringify(['data-lakes']));
-    spy.mockRestore();
+    expect(invalidatedKeys()).not.toContain(JSON.stringify(['data-lakes']));
   });
 });
