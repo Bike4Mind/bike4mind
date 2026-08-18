@@ -99,7 +99,7 @@ const handler = baseApi()
         type || 'CS',
         organization,
         newFeedback.username,
-        newFeedback.userEmail,
+        newFeedback.userEmail ?? '',
         newFeedback.userId,
         content,
         promptMetaForExternalEgress ? JSON.stringify(promptMetaForExternalEgress) : 'No prompt meta'
