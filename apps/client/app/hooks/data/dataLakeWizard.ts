@@ -678,6 +678,13 @@ export function useBatchProgressListener() {
         // the active lake-detail view mounts one, so this is a single cheap refetch at most. Without
         // it the badge keeps its pending chip until staleTime (2 min) or a remount. (#1666)
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.healthRoot });
+        // Same reason, different surface: `fileCount`/`totalSizeBytes` are cached rollups on the lake
+        // DOCUMENT, and `finalizeBatchIfComplete` calls recomputeLakeStats BEFORE emitting this
+        // message - so the server value is already fresh here and only the client cache is stale.
+        // The upload doors invalidate `list` at SUBMIT time, which is too early: ingestion has not
+        // run yet, so that refetch returns the pre-upload count and nothing asks again. Without this
+        // the count sits stale until a hard refresh.
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       }
       if (message.taxonomyStatus !== undefined) {
         updates.taxonomyStatus = message.taxonomyStatus;
