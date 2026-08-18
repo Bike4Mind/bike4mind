@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { ProjectEvents } from '@bike4mind/common';
 import { projectRepository, userRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
@@ -5,6 +6,11 @@ import { UnprocessableEntityError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { logEvent } from '@server/utils/analyticsLog';
+
+const updateProjectBodySchema = z.object({
+  name: z.string().optional(),
+  description: z.string().optional(),
+});
 
 const handler = baseApi()
   .get(async (req, res) => {
@@ -18,12 +24,13 @@ const handler = baseApi()
   })
   .put(async (req, res) => {
     let project;
+    const body = updateProjectBodySchema.parse(req.body);
     try {
       project = await projectService.update(
         req.user.id,
         {
           ...(req.query as any),
-          ...(req.body as any),
+          ...body,
         },
         {
           db: {
@@ -48,7 +55,7 @@ const handler = baseApi()
         metadata: {
           projectId: project.id,
           projectName: project.name,
-          updatedFields: Object.keys(req.body),
+          updatedFields: Object.keys(body),
         },
       },
       { ability: req.ability }
