@@ -20,7 +20,7 @@ type SnipSessionAdapters = {
         sessionId: string,
         timestamp: Date
       ) => Promise<IChatHistoryItemDocument[]>;
-      findById: (id: string) => Promise<IChatHistoryItemDocument | null>;
+      findBySessionIdAndId: (sessionId: string, id: string) => Promise<IChatHistoryItemDocument | null>;
       create: (chat: Omit<IChatHistoryItemDocument, 'id'>) => Promise<IChatHistoryItemDocument>;
     };
   };
@@ -36,7 +36,7 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
   const session = await db.sessions.findByIdAndUserId(sessionId, userId);
   if (!session) throw new NotFoundError('Session not found');
 
-  const message = await db.chatHistories.findById(messageId);
+  const message = await db.chatHistories.findBySessionIdAndId(sessionId, messageId);
   if (!message) throw new NotFoundError('Message not found');
 
   const newSession = await createSession(
