@@ -196,6 +196,11 @@ export const submittedTagPrefix = (prefix: string | undefined | null): string =>
  * The reason a `fileTagPrefix` is unusable, as user-facing copy, or null when it is fine. Shared
  * by the wizard steps that can both edit a prefix so their wording cannot drift apart; the server
  * rejects all four cases at create.
+ *
+ * There is deliberately no MIN-length branch: the value judged here is the SUBMITTED one, and
+ * appending ":" makes any positive-length entry at least 2 characters, so MIN cannot fail from
+ * something the user typed. A bare ":" trips the blank-segment rule instead, and an empty field
+ * stays silent so an untouched form reports nothing.
  */
 export const tagPrefixIssue = (
   prefix: string | undefined | null,
