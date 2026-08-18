@@ -71,6 +71,45 @@ describe('applyQuestStatusChanges', () => {
     });
   });
 
+  describe('promptMeta.warnings', () => {
+    it('accretes warnings from independent producers instead of overwriting', () => {
+      // Response truncation and knowledge-base partial results each send only their own
+      // string; a wholesale overwrite drops whichever landed first.
+      const quest = makeQuest({
+        promptMeta: { warnings: ['Response was truncated against the output-token limit.'] },
+      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(quest, {
+        promptMeta: { warnings: ['Partial knowledge-base results: 1 file(s) were excluded.'] },
+      } as Partial<IChatHistoryItemDocument>);
+      expect(quest.promptMeta?.warnings).toEqual([
+        'Response was truncated against the output-token limit.',
+        'Partial knowledge-base results: 1 file(s) were excluded.',
+      ]);
+    });
+
+    it('dedupes an identical warning reported twice', () => {
+      const quest = makeQuest({ promptMeta: { warnings: ['same'] } } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(quest, { promptMeta: { warnings: ['same'] } } as Partial<IChatHistoryItemDocument>);
+      expect(quest.promptMeta?.warnings).toEqual(['same']);
+    });
+
+    it('does not erase existing warnings when the change set carries none', () => {
+      // Already held before the merge was added (spreading an object without the key cannot
+      // delete it); locked here so the new merge does not regress it.
+      const quest = makeQuest({ promptMeta: { warnings: ['keep me'] } } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(quest, {
+        promptMeta: { citables: [{ id: '1', url: 'u1', title: 't1' }] },
+      } as Partial<IChatHistoryItemDocument>);
+      expect(quest.promptMeta?.warnings).toEqual(['keep me']);
+    });
+
+    it('adds no warnings key when neither side has one', () => {
+      const quest = makeQuest({ promptMeta: { citables: [] } } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(quest, { promptMeta: { citables: [] } } as Partial<IChatHistoryItemDocument>);
+      expect(quest.promptMeta && 'warnings' in quest.promptMeta).toBe(false);
+    });
+  });
+
   describe('other fields', () => {
     it('overwrites non-accreting fields wholesale', () => {
       const quest = makeQuest({ status: 'running' } as Partial<IChatHistoryItemDocument>);

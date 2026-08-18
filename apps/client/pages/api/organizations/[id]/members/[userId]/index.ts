@@ -1,14 +1,21 @@
 import { organizationService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
+import { withTransaction } from '@bike4mind/database';
 import { organizationRepository } from '@bike4mind/database/infra';
+import { userRepository } from '@bike4mind/database/auth';
+import { groupRepository } from '@bike4mind/database/social';
 import { OrganizationEvents, toSafeOrganization } from '@bike4mind/common';
 import { logEvent } from '@server/utils/analyticsLog';
 
 const handler = baseApi().delete(async (req, res) => {
-  const organization = await organizationService.revokeAccess(
-    req.user,
-    { ...(req.query as any) },
-    { db: { organizations: organizationRepository } }
+  // Transaction: removing the member from the org, pulling the org's group ids from their
+  // user doc, and dropping them from adminUserIds must all commit together (org-groups #1172).
+  const organization = await withTransaction(() =>
+    organizationService.revokeAccess(
+      req.user,
+      { ...(req.query as any) },
+      { db: { organizations: organizationRepository, users: userRepository, groups: groupRepository } }
+    )
   );
 
   await logEvent(

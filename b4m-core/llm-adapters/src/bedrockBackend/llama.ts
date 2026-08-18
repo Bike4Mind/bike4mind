@@ -172,16 +172,29 @@ export default class LlamaBedrockBackend extends BaseBedrockBackend {
     model: string,
     chunk: Record<string, unknown>
   ): { done: boolean; chunk: ICompletionResponseChunk } {
+    const response = chunk as {
+      generation?: string;
+      prompt_token_count?: number;
+      generation_token_count?: number;
+      stop_reason?: string;
+    };
+
     return {
-      done: !!chunk.stop_reason,
+      done: !!response.stop_reason,
       chunk: {
         model,
         choices: [
           {
-            chunkText: chunk.generation as string,
+            chunkText: response.generation as string,
             index: 0,
             status: ChoiceStatus.END,
             statusEndReason: ChoiceEndReason.STOP,
+            // Bedrock only populates these on the terminal chunk (where stop_reason is set);
+            // Math.max accumulation in BaseBedrockBackend means 0 on intermediate chunks is safe.
+            usage: {
+              input_tokens: response.prompt_token_count || 0,
+              output_tokens: response.generation_token_count || 0,
+            },
           },
         ],
       },

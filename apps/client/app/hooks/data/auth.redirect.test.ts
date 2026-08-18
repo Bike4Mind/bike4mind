@@ -24,7 +24,7 @@ vi.mock('@tanstack/react-query', () => ({
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ setCurrentUser: vi.fn() }) }));
 vi.mock('@client/app/hooks/useAccessToken', () => ({
-  useAccessToken: { getState: () => ({ setVerifiedTokens: vi.fn() }) },
+  useAccessToken: { getState: () => ({ setVerifiedSession: vi.fn() }) },
 }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn() } }));
 

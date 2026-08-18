@@ -1,5 +1,6 @@
 import { useUpdateSettings } from '@client/app/hooks/data/settings';
-import { settingsMap } from '@bike4mind/common';
+import { getErrorMessage } from '@client/app/utils/error';
+import { isMaskedSensitiveSettingValue, settingsMap } from '@bike4mind/common';
 import SaveIcon from '@mui/icons-material/Save';
 import WarningIcon from '@mui/icons-material/Warning';
 import {
@@ -78,6 +79,21 @@ const SubSettingToggle = ({ setting, defaultValue }: SubSetting) => {
   );
 };
 
+/**
+ * Why the server would refuse this number, in the words the field shows. The setting's own
+ * schema carries the same bounds (makeNumberSetting in @bike4mind/common), and the update
+ * route parses with it directly, so an out-of-range value comes back as an untranslated
+ * ZodError: without this the admin sees Save do nothing and is told nothing.
+ */
+const rangeMessage = (value: number, min?: number, max?: number): string | undefined => {
+  const inRange = (min === undefined || value >= min) && (max === undefined || value <= max);
+  if (!Number.isNaN(value) && inRange) return undefined;
+  if (min !== undefined && max !== undefined) return `Enter a number between ${min} and ${max}.`;
+  if (min !== undefined) return `Enter a number of ${min} or more.`;
+  if (max !== undefined) return `Enter a number of ${max} or less.`;
+  return 'Enter a number.';
+};
+
 const AdminSettingInputField = ({
   setting,
   index,
@@ -94,14 +110,59 @@ const AdminSettingInputField = ({
     return defaultValue ?? null;
   });
   const updateSettings = useUpdateSettings();
-  const [focused, setFocused] = useState(false);
   const [showEmbeddingWarning, setShowEmbeddingWarning] = useState(false);
+  // Whether the admin actually typed into a sensitive field, as opposed to the field
+  // being emptied by focus clearing the mask. Distinguishes a deliberate "unset this
+  // key" from an accidental empty write - see the guard in saveValue.
+  const [secretEdited, setSecretEdited] = useState(false);
 
-  const isDirty = value !== defaultValue;
+  // A sensitive field sitting empty purely because focus cleared its mask is not an edit,
+  // so Save stays disabled. Without this the field reads as dirty the moment it is focused
+  // and an empty write becomes one click away (saveValue guards the write itself as well).
+  const isUntouchedClearedSecret = setting.isSensitive === true && value === '' && !secretEdited;
+  const isDirty = value !== defaultValue && !isUntouchedClearedSecret;
+  const showsStoredSecretMask = setting.isSensitive === true && isMaskedSensitiveSettingValue(value);
   const isEmbeddingModelSetting = setting.key === 'defaultEmbeddingModel';
 
+  // Only number settings declare bounds, and only some of those, so they are read through
+  // the type discriminant rather than off the union.
+  const bounds: { min?: number; max?: number } = setting.type === 'number' ? setting : {};
+  const rangeError =
+    setting.type === 'number' && value !== null
+      ? rangeMessage(typeof value === 'number' ? value : Number(value), bounds.min, bounds.max)
+      : undefined;
+  // A rejected write is otherwise silent: the mutation surfaces nothing of its own and the
+  // Save button simply stops spinning.
+  const saveError = updateSettings.error ? getErrorMessage(updateSettings.error) : undefined;
+  const fieldError = rangeError ?? saveError;
+
+  const saveValue = (next: string | number | boolean) => {
+    // Backstop, intentionally unreachable while isDirty excludes the untouched-empty state
+    // above. Kept because it does not depend on event ordering: the dirty check protects the
+    // button, this protects the write, so loosening one cannot silently expose ''.
+    // Do not delete as redundant. The original rationale cited macOS Safari and Firefox not
+    // blurring the input before a save click; that was measured and is wrong - both do blur
+    // on the button's mousedown and restore the mask. No browser is known to skip the blur,
+    // but nothing in the DOM contract guarantees it either.
+    if (setting.isSensitive && next === '' && !secretEdited) return;
+
+    updateSettings.mutate(
+      // An empty value on a sensitive setting destroys a live credential, so the server
+      // requires the intent to be explicit rather than inferred from an absent value.
+      { key: setting.key, value: next, ...(setting.isSensitive && next === '' ? { confirmClear: true } : {}) },
+      {
+        // Drop the typed plaintext as soon as it is stored: the server answers a sensitive
+        // write with the mask, which is all this field should ever hold afterwards.
+        onSuccess: (data: { settingValue?: unknown } | undefined) => {
+          setSecretEdited(false);
+          if (setting.isSensitive && typeof data?.settingValue === 'string') setValue(data.settingValue);
+        },
+      }
+    );
+  };
+
   const handleSaveSetting = () => {
-    if (value === null) return;
+    if (value === null || rangeError) return;
 
     // Show warning for embedding model changes
     if (isEmbeddingModelSetting && isDirty) {
@@ -110,12 +171,12 @@ const AdminSettingInputField = ({
     }
 
     // Save directly for other settings
-    updateSettings.mutate({ key: setting.key, value });
+    saveValue(value);
   };
 
   const confirmEmbeddingModelChange = () => {
     if (value === null) return;
-    updateSettings.mutate({ key: setting.key, value });
+    saveValue(value);
     setShowEmbeddingWarning(false);
   };
 
@@ -127,7 +188,7 @@ const AdminSettingInputField = ({
       >
         <Grid container spacing={2}>
           <Grid xs={12} md={6}>
-            <FormControl sx={{ width: '100%' }}>
+            <FormControl error={Boolean(fieldError)} sx={{ width: '100%' }}>
               <FormLabel>{setting.name}</FormLabel>
 
               {setting.type === 'boolean' ? (
@@ -138,6 +199,15 @@ const AdminSettingInputField = ({
                 />
               ) : setting.type === 'number' ? (
                 <Input
+                  // The schema's own bounds, so the browser offers the same range the server
+                  // will accept rather than leaving the field unbounded.
+                  slotProps={{
+                    input: {
+                      'data-testid': `admin-setting-${setting.key}-input`,
+                      min: bounds.min,
+                      max: bounds.max,
+                    },
+                  }}
                   type="number"
                   value={typeof value === 'number' ? value : Number(value)}
                   onChange={e => setValue(Number(e.target.value))}
@@ -153,31 +223,50 @@ const AdminSettingInputField = ({
                   </Select>
                 ) : (
                   <Input
-                    value={
-                      setting.isSensitive && !focused && value
-                        ? '••••••••••••••••••••••••••••••••••••••'
-                        : (value as string) || ''
-                    }
-                    onChange={e => setValue(e.target.value)}
-                    onFocus={() => setFocused(true)}
-                    onBlur={() => setFocused(false)}
+                    slotProps={{ input: { 'data-testid': `admin-setting-${setting.key}-input` } }}
+                    // Once the admin has typed, the field holds real plaintext. main used to
+                    // re-hide it on blur; keep that property by switching to a password field
+                    // rather than leaving a pasted key rendered until the page is left. The
+                    // server mask stays plain text so its last-4 tail is readable.
+                    type={setting.isSensitive && secretEdited ? 'password' : 'text'}
+                    value={(value as string) || ''}
+                    placeholder={setting.isSensitive ? 'Enter a new value to replace the stored secret' : undefined}
+                    onChange={e => {
+                      setValue(e.target.value);
+                      if (setting.isSensitive) setSecretEdited(true);
+                    }}
+                    // A sensitive setting arrives already masked from the server, so there is
+                    // nothing to reveal. Clear the mask on focus so the admin types a fresh
+                    // value, and restore it on an untouched blur so the field stays non-dirty.
+                    // A field the admin deliberately emptied is left alone - that is a clear.
+                    onFocus={() => {
+                      if (showsStoredSecretMask) setValue('');
+                    }}
+                    onBlur={() => {
+                      if (setting.isSensitive && value === '' && !secretEdited) {
+                        setValue((defaultValue as string) ?? '');
+                      }
+                    }}
                   />
                 )
               ) : null}
 
-              <FormHelperText>{setting.description}</FormHelperText>
+              <FormHelperText data-testid={`admin-setting-${setting.key}-helper`}>
+                {fieldError ?? setting.description}
+              </FormHelperText>
             </FormControl>
           </Grid>
 
           <Grid xs={12} md={6} sx={{ display: 'flex', alignItems: { xs: 'flex-start', md: 'center' } }}>
             <Tooltip title="Update Setting" placement="top">
               <Button
+                data-testid={`admin-setting-${setting.key}-save-btn`}
                 color="success"
                 size="sm"
                 type="button"
                 loading={updateSettings.isPending}
                 onClick={handleSaveSetting}
-                disabled={!isDirty}
+                disabled={!isDirty || Boolean(rangeError)}
               >
                 <SaveIcon sx={{ marginX: 1 }} />
               </Button>

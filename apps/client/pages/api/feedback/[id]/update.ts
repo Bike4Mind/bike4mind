@@ -4,6 +4,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { FeedbackEvents } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { toRedactedFeedback } from '@server/utils/redactedFeedback';
 import { z } from 'zod';
 
 const UpdateFeedbackRequestSchema = z.object({
@@ -55,7 +56,7 @@ const handler = baseApi().put(
       { ability: req.ability }
     );
 
-    return res.json(updatedFeedback);
+    return res.json(updatedFeedback ? toRedactedFeedback(updatedFeedback) : updatedFeedback);
   })
 );
 

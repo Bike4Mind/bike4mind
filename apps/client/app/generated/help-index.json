@@ -5931,6 +5931,11 @@
         },
         {
           "level": 3,
+          "text": "Active Sessions",
+          "anchor": "active-sessions"
+        },
+        {
+          "level": 3,
           "text": "Blocked IPs",
           "anchor": "blocked-ips"
         },
@@ -6148,8 +6153,18 @@
         },
         {
           "level": 3,
+          "text": "Chunk Policy (passage size)",
+          "anchor": "chunk-policy-passage-size"
+        },
+        {
+          "level": 3,
           "text": "Vector Embeddings",
           "anchor": "vector-embeddings"
+        },
+        {
+          "level": 3,
+          "text": "Lake Health (retrievability)",
+          "anchor": "lake-health-retrievability"
         },
         {
           "level": 2,
@@ -8719,6 +8734,11 @@
           "level": 2,
           "text": "Visibility — who can see it",
           "anchor": "visibility-who-can-see-it"
+        },
+        {
+          "level": 2,
+          "text": "Search engines",
+          "anchor": "search-engines"
         },
         {
           "level": 2,
@@ -15373,6 +15393,11 @@
             },
             {
               "level": 3,
+              "text": "Active Sessions",
+              "anchor": "active-sessions"
+            },
+            {
+              "level": 3,
               "text": "Blocked IPs",
               "anchor": "blocked-ips"
             },
@@ -15590,8 +15615,18 @@
             },
             {
               "level": 3,
+              "text": "Chunk Policy (passage size)",
+              "anchor": "chunk-policy-passage-size"
+            },
+            {
+              "level": 3,
               "text": "Vector Embeddings",
               "anchor": "vector-embeddings"
+            },
+            {
+              "level": 3,
+              "text": "Lake Health (retrievability)",
+              "anchor": "lake-health-retrievability"
             },
             {
               "level": 2,
@@ -18164,6 +18199,11 @@
             },
             {
               "level": 2,
+              "text": "Search engines",
+              "anchor": "search-engines"
+            },
+            {
+              "level": 2,
               "text": "Managing what you've published",
               "anchor": "managing-what-youve-published"
             },
@@ -18875,5 +18915,5 @@
       "accessLevel": "public"
     }
   ],
-  "version": "2026-08-18T04:28:30.392Z"
+  "version": "2026-08-18T04:36:37.336Z"
 }

@@ -59,7 +59,12 @@ const SubscriptionModal = ({
   subscription?: ISubscription;
   pricePerSeat: number;
 }) => {
-  const minimumSeats = Math.max(ORGANIZATION_SUBSCRIPTION_MIN_SEATS, organization.users.length + 1);
+  // Clamp the floor at the ceiling so an over-cap org can still be set down to the max (#1424) -
+  // mirrors the server validateSeatChange clamp; otherwise the decrement gate never lets it recover.
+  const minimumSeats = Math.min(
+    Math.max(ORGANIZATION_SUBSCRIPTION_MIN_SEATS, organization.users.length + 1),
+    ORGANIZATION_SUBSCRIPTION_MAX_SEATS
+  );
   // Initialize with current seats if it's an existing subscription, otherwise use minimum seats
   const [seats, setSeats] = useState(subscription ? organization.seats : minimumSeats);
   const updateSeats = useUpdateSubscriptionSeats();

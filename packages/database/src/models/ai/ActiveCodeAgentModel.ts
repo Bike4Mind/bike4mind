@@ -106,6 +106,9 @@ export const ActiveCodeAgent: IActiveCodeAgentModel =
   (mongoose.models[ModelName] as IActiveCodeAgentModel) ||
   model<IActiveCodeAgentDoc, IActiveCodeAgentModel>(ModelName, ActiveCodeAgentSchema);
 
+/** Identity of a session removed by the $disconnect sweep. */
+export type SweptCodeAgent = Pick<IActiveCodeAgentDoc, 'instanceId' | 'deviceId' | 'workspaceName' | 'source'>;
+
 export const activeCodeAgentRepository = {
   /** Upsert a session record on register. Idempotent: bridge reconnects call this again. */
   async upsertOnRegister(
@@ -210,11 +213,24 @@ export const activeCodeAgentRepository = {
     return res.deletedCount > 0;
   },
 
-  /** Sweep all records for a torn-down WS connection. Called from $disconnect. */
-  async removeByConnectionId(connectionId: string): Promise<string[]> {
-    const doomed = await ActiveCodeAgent.find({ connectionId }, { instanceId: 1 }).lean();
+  /**
+   * Sweep all records for a torn-down WS connection. Called from $disconnect.
+   * Returns each swept session's identity fields rather than bare instanceIds:
+   * the caller also reports the session end elsewhere (Hearth presence) and
+   * cannot re-read rows it has just deleted.
+   */
+  async removeByConnectionId(connectionId: string): Promise<SweptCodeAgent[]> {
+    const doomed = await ActiveCodeAgent.find(
+      { connectionId },
+      { instanceId: 1, deviceId: 1, workspaceName: 1, source: 1 }
+    ).lean();
     if (doomed.length === 0) return [];
     await ActiveCodeAgent.deleteMany({ connectionId });
-    return doomed.map(d => d.instanceId);
+    return doomed.map(d => ({
+      instanceId: d.instanceId,
+      deviceId: d.deviceId,
+      workspaceName: d.workspaceName,
+      source: d.source,
+    }));
   },
 };

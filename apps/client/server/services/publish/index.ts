@@ -71,7 +71,13 @@ export {
   type MintDraftUploadUrlInput,
 } from './draftUploadUrl';
 export { toPublishUser, authorDisplayName, canAnnotate, toAnnotationDto, type AnnotationLean } from './annotations';
-export { validateEmbedOrigins, validateEmbedKeyOrigins, type EmbedOriginsResult } from './embedOrigins';
+export {
+  validateEmbedOrigins,
+  validateEmbedKeyOrigins,
+  validateEmbedBranding,
+  type EmbedOriginsResult,
+  type EmbedBrandingResult,
+} from './embedOrigins';
 export {
   buildReactArtifactBundle,
   assembleReactBundleHtml,
@@ -81,3 +87,4 @@ export {
   UnsupportedReactDependencyError,
   ReactArtifactTranspileError,
 } from './transpileReactArtifact';
+export { renderArtifactIndexHtml } from './renderArtifactHtml';

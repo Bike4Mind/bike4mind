@@ -584,4 +584,57 @@ describe('creditService - subtractCredits', () => {
       });
     });
   });
+
+  describe('music_generation_usage transactions', () => {
+    it('writes a NEGATIVE ledger row so a charge is never recorded as a credit', async () => {
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      const parameters: SubtractCreditsParameters = {
+        type: 'music_generation_usage',
+        ownerId: 'user1',
+        ownerType: CreditHolderType.User,
+        credits: 75,
+        model: 'music_v1',
+        sessionId: 'music-u1-1',
+        source: 'api',
+      };
+
+      await subtractCredits(parameters, mockAdapters);
+
+      // Sign is the whole point: the route already moved the balance, so a positive
+      // row here would make the ledger disagree with the balance in the customer's favour.
+      expect(mockCreditTransactionRepo.createTransaction).toHaveBeenCalledWith('music_generation_usage', {
+        ownerId: 'user1',
+        ownerType: CreditHolderType.User,
+        credits: -75,
+        description: 'Music generation usage',
+        metadata: undefined,
+        source: 'api',
+        model: 'music_v1',
+        sessionId: 'music-u1-1',
+      });
+    });
+
+    it('bills the organization pool when the owner is an organization', async () => {
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockOrganization);
+
+      await subtractCredits(
+        {
+          type: 'music_generation_usage',
+          ownerId: 'org1',
+          ownerType: CreditHolderType.Organization,
+          credits: 200,
+          model: 'music_v1',
+          sessionId: 'music-u1-2',
+        },
+        mockAdapters
+      );
+
+      expect(mockCreditHolderMethods.incrementCredits).toHaveBeenCalledWith('org1', -200);
+      expect(mockCreditTransactionRepo.createTransaction).toHaveBeenCalledWith(
+        'music_generation_usage',
+        expect.objectContaining({ ownerId: 'org1', ownerType: CreditHolderType.Organization, credits: -200 })
+      );
+    });
+  });
 });

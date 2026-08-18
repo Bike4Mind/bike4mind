@@ -3,6 +3,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { getFilesStorage } from '@server/utils/storage';
+import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import type { Request, Response } from 'express';
 
 /**
@@ -83,6 +84,10 @@ const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES }).put(
     // recovers; the webhook's own status write (when it arrives) is an idempotent no-op.
     fabFile.status = 'complete';
     await fabFile.save();
+
+    // Same reason the status write does not wait for the webhook: the PUT succeeded, so the file
+    // is really in its lakes now. The webhook's own recompute, when it arrives, is idempotent.
+    await recomputeStatsForUploadedFile(fabFile, { logger: req.logger });
 
     return res.status(200).json({ ok: true, fabFileId: fabFile.id });
   })

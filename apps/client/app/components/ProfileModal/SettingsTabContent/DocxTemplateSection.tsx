@@ -10,6 +10,7 @@ import UploadFileIcon from '@mui/icons-material/UploadFile';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { VALID_DOCX_MIME_TYPES, MAX_DOCX_TEMPLATE_SIZE } from '@server/services/docxTemplateService';
+import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
 
 interface TemplateInfo {
   fileId: string;
@@ -52,23 +53,17 @@ const DocxTemplateSection = () => {
     mutationFn: async (file: File) => {
       if (!userId) throw new Error('User not logged in');
 
-      // Step 1: Get presigned URL for upload
-      const formData = new FormData();
-      formData.append('fileName', file.name);
-      formData.append('fileSize', file.size.toString());
-      formData.append('mimeType', file.type);
-
-      const presignedResponse = await api.post('/api/app-files/generate-presigned-url', formData);
-      const { presignedUrl, fileId } = presignedResponse.data;
-
-      // Step 2: Upload file to S3
-      await fetch(presignedUrl, {
-        method: 'PUT',
-        body: file,
-        headers: {
-          'Content-Type': file.type,
-        },
+      // Step 1: Get the upload URL. The endpoint zod-parses a JSON body and returns it as `url`.
+      const presignedResponse = await api.post('/api/app-files/generate-presigned-url', {
+        fileName: file.name,
+        fileSize: file.size,
+        mimeType: file.type,
       });
+      const { url: uploadUrl, fileId } = presignedResponse.data;
+
+      // Step 2: Upload the bytes. The shared helper handles both shapes the server can hand back:
+      // an S3 presign (hosted, raw axios) and the same-origin app-file proxy (self-host, authed api).
+      await uploadFileToUrl(uploadUrl, file, file.type);
 
       // Step 3: Set as template
       const response = await api.post(`/api/users/${userId}/docx-template`, { fileId });

@@ -1,0 +1,9 @@
+{
+  "models": [
+    { "id": "grok-4.5", "input_modalities": ["text"], "prompt_text_token_price": 20000, "completion_text_token_price": 60000 },
+    { "input_modalities": ["text"] },
+    { "id": "", "prompt_text_token_price": 1 },
+    { "id": "grok-bad-price", "prompt_text_token_price": "20000", "completion_text_token_price": null },
+    null
+  ]
+}

@@ -1,7 +1,7 @@
 {
   "name": "@bike4mind/services",
   "description": "This packages contains all the core business logic",
-  "version": "3.0.0",
+  "version": "6.0.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -205,6 +205,7 @@
     "@bike4mind/agents": "workspace:*",
     "@bike4mind/auth": "workspace:*",
     "@bike4mind/common": "workspace:*",
+    "@bike4mind/db-core": "workspace:*",
     "@bike4mind/fab-pipeline": "workspace:*",
     "@bike4mind/llm-adapters": "workspace:*",
     "@bike4mind/mcp": "workspace:*",
@@ -216,7 +217,7 @@
     "@mendable/firecrawl-js": "^1.29.3",
     "@opensearch-project/opensearch": "2.11.0",
     "async-mutex": "^0.5.0",
-    "axios": "1.16.1",
+    "axios": "1.18.0",
     "bcryptjs": "^3.0.2",
     "cheerio": "1.2.0",
     "chess.js": "^1.0.0-beta.8",
@@ -235,7 +236,7 @@
     "sharp": "^0.35.3",
     "tiktoken": "^1.0.22",
     "turndown": "^7.2.4",
-    "uuid": "^13.0.2",
+    "uuid": "^14.0.1",
     "write-excel-file": "^4.1.1",
     "yauzl": "^3.4.0",
     "zod": "^4.4.3",
@@ -247,7 +248,7 @@
     "@types/mailparser": "^3.4.6",
     "@types/mime-types": "^3.0.1",
     "@types/turndown": "^5.0.6",
-    "@types/yauzl": "^2.10.3",
+    "@types/yauzl": "^3.4.0",
     "@vitest/coverage-v8": "^4.1.10",
     "@vitest/ui": "^4.1.10",
     "mailparser": "^3.9.14",

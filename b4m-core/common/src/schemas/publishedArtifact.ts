@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { VisibilitySchema } from './artifacts';
 import { CommentPolicySchema } from './annotation';
+import { ArtifactTypeSchema } from '../types/entities/ArtifactTypes';
 
 /**
  * Published-artifact schemas - the B4M instantiation of the `artifact-publishing`
@@ -67,11 +68,14 @@ export const PublishSourceSchema = z.object({
   /** Set when kind === 'fabfile'. */
   fabFileId: z.string().optional(),
   /**
-   * Set when the uploaded index.html is RAW React/JSX source rather than an inert page: finalize
-   * transpiles it into a self-contained inert HTML bundle at publish time (issue #21). Absent for
-   * already-inert HTML/SVG bundles that need no server transform.
+   * Set when the uploaded index.html is RAW artifact content that finalize must render into the
+   * canonical published page server-side, rather than an already-inert bundle. `react` transpiles
+   * to a self-contained inert HTML bundle (issue #21); every other type is wrapped by
+   * `renderArtifactIndexHtml`. Absent for already-inert HTML/SVG bundles that need no server
+   * transform (the web client pre-renders those until the raw-upload switch lands), so this stays
+   * backward compatible: existing drafts omit it and finalize serves their bytes unchanged.
    */
-  artifactType: z.literal('react').optional(),
+  artifactType: ArtifactTypeSchema.optional(),
 });
 export type PublishSource = z.infer<typeof PublishSourceSchema>;
 
@@ -236,9 +240,10 @@ export function isOriginUnderHost(origin: string, host: string): boolean {
 }
 
 /**
- * Request-time origin gate shared by both embed surfaces (the Next mint-route
- * CORS middleware and the Fargate chat route's in-handler CORS), so both decide
- * "is this browser Origin approved?" identically. Normalizes the incoming raw
+ * Request-time origin membership check shared by both embed surfaces (the Next
+ * mint route and the Fargate chat route reach it through the app layer's
+ * isEmbedOriginAllowed composition, which adds the first-party exemption), so
+ * both decide "is this browser Origin approved?" identically. Normalizes the incoming raw
  * Origin via `parseEmbedOrigin` and checks exact membership against the key's
  * stored `allowedOrigins` (already normalized at write time). An unparseable
  * origin or an empty/absent allow-list yields false. Note (per the AC): a
@@ -334,6 +339,15 @@ export const PublishedArtifactSchema = z.object({
   /** Collaboration gate: who (among viewers) may annotate. Orthogonal to
    *  `visibility`. Defaults to `none` (read-only) until the owner opts in. */
   commentPolicy: CommentPolicySchema.prefault('none'),
+
+  /** Search-engine opt-IN. `visibility: 'public'` means "anyone with the link may
+   *  view"; it does NOT mean "list this in Google". Those are different promises and
+   *  owners consistently read the first as the second, so indexability is a separate
+   *  explicit choice that defaults OFF: every viewer surface is served `noindex`
+   *  unless the owner turns this on for an open-public artifact.
+   *  Independent of social unfurling - OG/Twitter cards still render either way, so a
+   *  non-discoverable link previews correctly in chat without entering a search index. */
+  discoverable: z.boolean().prefault(false),
 
   /** Exact external origins permitted to embed this artifact (frame-ancestors
    *  grants). Publication-level; empty/absent means app host only. Uses the same

@@ -24,7 +24,13 @@ const handler = baseApi().delete(
 
     await logEvent({ userId, type: ApiKeyEvents.DELETE_API_KEY, metadata: { id } }, { ability: req.ability });
 
-    return res.status(200).json(deletedApiKey);
+    // Never echo the stored key (ciphertext at rest) back to the browser; the client only
+    // needs the record's id/metadata to drop it from its cache. Mirrors set-active.
+    const record = (deletedApiKey as unknown as { toObject?: () => Record<string, unknown> }).toObject?.() ?? {
+      ...(deletedApiKey as unknown as Record<string, unknown>),
+    };
+    delete record.apiKey;
+    return res.status(200).json(record);
   })
 );
 

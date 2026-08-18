@@ -2,8 +2,16 @@ import {
   ExtractedArtifact,
   CurationArtifactType as ArtifactType,
   CurationOptions,
+  IChatHistoryItem,
   mapMimeTypeToArtifactType as mapMimeTypeToSharedArtifactType,
 } from '@bike4mind/common';
+
+/**
+ * The loaded `IChatHistoryItem` plus the mongo `_id` that document/lean-form items
+ * carry but the interface omits (used only as an id fallback). Also the input type of
+ * computeCurationContentHash in ./index - see there for which fields the hash covers.
+ */
+export type CurationMessage = IChatHistoryItem & { _id?: { toString(): string } };
 
 /**
  * Extracts code, diagrams, and other artifacts from conversation messages.
@@ -11,13 +19,16 @@ import {
  */
 
 const ARTIFACT_TAG_REGEX = /<artifact\s+(.*?)>([\s\S]*?)<\/artifact>/gi;
-const ATTRIBUTE_REGEX = /(\w+)=["']([^"']*?)["']/g;
+// Value is anchored to its own quote kind so a double-quoted value can contain
+// apostrophes (title="Bob's App") and vice versa. Group 2 is the double-quoted
+// body, group 3 the single-quoted one; exactly one matches.
+const ATTRIBUTE_REGEX = /(\w+)=(?:"([^"]*)"|'([^']*)')/g;
 const CODE_BLOCK_REGEX = /```(\w+)?\s*([\s\S]*?)```/g;
 
 /**
  * Extract artifacts from a single message
  */
-export function extractArtifactsFromMessage(message: any, options: CurationOptions): ExtractedArtifact[] {
+export function extractArtifactsFromMessage(message: CurationMessage, options: CurationOptions): ExtractedArtifact[] {
   const artifacts: ExtractedArtifact[] = [];
   const messageId = message.id || message._id?.toString() || 'unknown';
   const timestamp = message.timestamp ? new Date(message.timestamp) : new Date();
@@ -81,7 +92,7 @@ export function extractArtifactsFromMessage(message: any, options: CurationOptio
 
   // 5. Extract images
   if (options.includeImages && message.images && message.images.length > 0) {
-    message.images.forEach((imagePath: string, index: number) => {
+    message.images.forEach((imagePath, index) => {
       artifacts.push({
         type: ArtifactType.IMAGE,
         content: imagePath,
@@ -116,8 +127,8 @@ function extractArtifactTags(content: string, messageId: string, timestamp: Date
     ATTRIBUTE_REGEX.lastIndex = 0;
 
     while ((attrMatch = ATTRIBUTE_REGEX.exec(attributesString)) !== null) {
-      const [, key, value] = attrMatch;
-      attributes[key] = value;
+      const [, key, doubleQuoted, singleQuoted] = attrMatch;
+      attributes[key] = doubleQuoted ?? singleQuoted;
     }
 
     const mimeType = attributes.type || '';

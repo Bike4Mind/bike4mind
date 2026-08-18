@@ -33,20 +33,38 @@ describe('csrfProtection', () => {
   });
 
   describe('API key exemption', () => {
-    it('calls next() when x-api-key header is present', () => {
+    // The exemption uses extractApiKeyFromHeaders (same extractor as apiKeyAuth), so
+    // EVERY accepted form is exempt - not just x-api-key. Reverting the broadening
+    // (P3-4) makes the ApiKey / Bearer-b4m_ cases below fail.
+    const apiKeyForms: [string, Record<string, string>][] = [
+      ['x-api-key', { 'x-api-key': 'b4m_live_somekey' }],
+      ['Authorization: ApiKey', { authorization: 'ApiKey b4m_live_somekey' }],
+      ['Authorization: Bearer b4m_ (canonical, spec-advertised)', { authorization: 'Bearer b4m_live_somekey' }],
+    ];
+
+    it.each(apiKeyForms)('calls next() for an API-key request via %s', (_label, headers) => {
       const next = makeNext();
-      csrfProtection()(makeReq({ headers: { 'x-api-key': 'b4m_live_somekey' } }), makeRes(), next);
+      csrfProtection()(makeReq({ headers }), makeRes(), next);
       expect(next).toHaveBeenCalledOnce();
     });
 
-    it('does not reach origin check when x-api-key is present — even with a cross-site Sec-Fetch-Site', () => {
-      const next = makeNext();
-      csrfProtection()(
-        makeReq({ headers: { 'x-api-key': 'b4m_live_somekey', 'sec-fetch-site': 'cross-site' } }),
-        makeRes(),
-        next
-      );
-      expect(next).toHaveBeenCalledOnce();
+    it.each(apiKeyForms)(
+      'exempts %s even with a cross-site Sec-Fetch-Site (never reaches origin check)',
+      (_l, headers) => {
+        const next = makeNext();
+        csrfProtection()(makeReq({ headers: { ...headers, 'sec-fetch-site': 'cross-site' } }), makeRes(), next);
+        expect(next).toHaveBeenCalledOnce();
+      }
+    );
+
+    it('does NOT exempt a Bearer JWT (no b4m_ prefix) - it still gets the origin checks', () => {
+      expect(() =>
+        csrfProtection()(
+          makeReq({ headers: { authorization: 'Bearer eyJ.jwt.token', 'sec-fetch-site': 'cross-site' } }),
+          makeRes(),
+          makeNext()
+        )
+      ).toThrow(ForbiddenError);
     });
   });
 

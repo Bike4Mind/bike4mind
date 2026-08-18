@@ -36,24 +36,33 @@ export interface IAgentOpsSettingsRepository {
   incrementGenerationCount(): Promise<void>;
 }
 
+/**
+ * Named model IDs used as defaults in this file. Deliberately NOT a schema `enum` constraint:
+ * the selectable set is the live model catalog, validated at the agent-ops-settings endpoint, so
+ * pinning it here again would make every newly shipped model unsaveable until someone remembered
+ * to add it. The historical values below are kept because documents may still hold them.
+ */
 export enum AgentOpsLlmModel {
   // Modern models
   CLAUDE_FABLE_5 = 'claude-fable-5',
+  CLAUDE_OPUS_5 = 'claude-opus-5',
   CLAUDE_OPUS_4_8 = 'claude-opus-4-8',
   CLAUDE_OPUS_4_7 = 'claude-opus-4-7',
   CLAUDE_OPUS_4_6 = 'claude-opus-4-6',
   CLAUDE_SONNET_5 = 'claude-sonnet-5',
   CLAUDE_SONNET_4_6 = 'claude-sonnet-4-6',
   CLAUDE_OPUS_4 = 'claude-opus-4-20250514',
-  CLAUDE_SONNET_4 = 'claude-sonnet-4-20250514',
   CLAUDE_SONNET_4_5 = 'claude-sonnet-4-5-20250929',
   CLAUDE_HAIKU_4_5 = 'claude-haiku-4-5-20251001',
   O3 = 'o3-2025-04-16',
   GPT_4_1 = 'gpt-4.1-2025-04-14',
-  GROK_3 = 'grok-3',
+  GROK_4_5 = 'grok-4.5',
   GPT_4O = 'gpt-4o',
   GPT_4O_MINI = 'gpt-4o-mini',
-  // Deprecated - kept for Mongoose validation of existing DB documents
+  // Retired upstream and absent from the catalog, so no longer selectable; kept so a document
+  // still pinned to one loads. Model selection falls back to the default for those.
+  GROK_3 = 'grok-3',
+  CLAUDE_SONNET_4 = 'claude-sonnet-4-20250514',
   GPT_4_TURBO = 'gpt-4-turbo',
   CLAUDE_3_7_SONNET = 'claude-3-7-sonnet-20250219',
   CLAUDE_3_5_SONNET = 'claude-3-5-sonnet-20241022',
@@ -103,7 +112,6 @@ const AgentOpsSettingsSchema = new Schema(
   {
     generationLlmModel: {
       type: String,
-      enum: Object.values(AgentOpsLlmModel),
       required: true,
       default: AgentOpsLlmModel.CLAUDE_OPUS_4_6,
     },

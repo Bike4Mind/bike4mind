@@ -45,6 +45,27 @@ describe('extractLoadedProblem', () => {
       extractLoadedProblem('populateDecomposition', { instances: [{ problem: { family: 'scheduling' } }] })
     ).toEqual({ family: 'scheduling' });
   });
+  it('unwraps a populateProblem payload that nests the problem alongside solve outputs', () => {
+    const problem = { name: 'S', jobs: [], machines: [] };
+    // A solve tool wraps the problem with solver-run outputs; extract the problem itself,
+    // not the envelope (otherwise the whole wrapper would be injected as the brief). Exercise
+    // the full PopulatedSolveOutputs shape (results/result/errors/solvedAt) to confirm the
+    // unwrap is field-agnostic and never leaks any envelope field into the brief.
+    expect(
+      extractLoadedProblem('populateProblem', {
+        problem,
+        results: [{ objective: 1 }],
+        result: { objective: 1 },
+        errors: ['solver-b timed out'],
+        solvedAt: 'x',
+      })
+    ).toEqual(problem);
+    // A bare scheduling problem (carries `jobs`, no `problem` key) is returned as-is.
+    expect(extractLoadedProblem('populateProblem', problem)).toEqual(problem);
+    // A wrapper whose `problem` is null unwraps to null (the `?? null` guard).
+    expect(extractLoadedProblem('populateProblem', { problem: null, solvedAt: 'x' })).toBeNull();
+  });
+
   it('returns null for plan-only decomposition (instances[0] === null) and unknown types', () => {
     expect(extractLoadedProblem('populateDecomposition', { instances: [null] })).toBeNull();
     expect(extractLoadedProblem('somethingElse', { problem: {} })).toBeNull();

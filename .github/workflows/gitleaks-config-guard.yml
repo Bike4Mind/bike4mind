@@ -1,0 +1,54 @@
+name: Gitleaks Config Guard
+
+# Asserts that .gitleaks.toml actually detects, rather than merely loading.
+#
+# The config previously ended in a `[useBuiltinRules]` table, which is not gitleaks
+# config syntax. It parsed as an empty table, so every builtin rule was disabled and
+# both CI and the pre-commit hook scanned with only the domain rules below it.
+# Nothing failed and nothing caught an AWS key.
+#
+# The Secrets Security (Scan) workflow cannot catch that: it is workflow_dispatch
+# only, and it runs gitleaks with --exit-code=0 so it reports to a dashboard rather
+# than failing. This is the always-on gate. See
+# scripts/gitleaks-config-selftest.sh for what is asserted.
+#
+# gitleaks is pinned to the same version secrets-scan.yml installs. The two MUST
+# stay in sync: config forms that load on one version are silently ignored by
+# another, so a guard on a different version proves nothing about the real scan.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.gitleaks.toml'
+      - '.gitleaksignore'
+      - '.husky/gitleaks-pre-commit.sh'
+      - 'scripts/gitleaks-config-selftest.sh'
+      - '.github/workflows/gitleaks-config-guard.yml'
+      - '.github/workflows/secrets-scan.yml'
+  # Also run on the merge queue so the check reports there if it later becomes a
+  # required branch-protection check (see semantic-pr-title.yml for why a required
+  # check must run on merge_group).
+  merge_group:
+    branches: [main]
+
+jobs:
+  check:
+    if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install gitleaks CLI
+        env:
+          # Keep in sync with secrets-scan.yml.
+          GITLEAKS_VERSION: 8.24.3
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Verify the gitleaks config detects what it must
+        env:
+          GITLEAKS_REQUIRED: '1'
+        run: sh scripts/gitleaks-config-selftest.sh

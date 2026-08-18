@@ -1,9 +1,25 @@
-import { AvailableMigrations } from './migrations';
+import { AvailableMigrations, type MigrationFile } from './migrations';
 import { Migration, connectDB, getDB } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { seeders } from '../seeders';
 import { Resource } from 'sst';
 import { Config } from '../utils/config';
+
+// Shared applied-SET selection (not a high-water-mark) - see up()'s comment for why. Exported so
+// `migrate/index.ts`'s `list --pending` preview uses the exact same semantics as `up()` actually
+// runs; the two drifting apart (list() kept the old high-water-mark filter after up()/down() moved
+// to applied-set) is what caused list() to report nothing pending while up() silently ran an
+// overlay migration - a real gap caught in review of the PR that introduced applied-set selection.
+export function selectPending(
+  available: MigrationFile[],
+  appliedIds: Set<number>,
+  target: number | null = null
+): MigrationFile[] {
+  return available
+    .filter(m => !appliedIds.has(m.id))
+    .filter(m => target === null || m.id <= target)
+    .sort((a, b) => a.id - b.id);
+}
 
 export class MigrationManager {
   private logger: Logger;
@@ -24,13 +40,19 @@ export class MigrationManager {
   }
 
   async up(target: number | null): Promise<void> {
-    const lastMigration = await Migration.findOne().sort({ id: -1 });
-    const migrations = AvailableMigrations.filter(m => !lastMigration || m.id > lastMigration.id)
-      .filter(m => target === null || m.id <= target)
-      .sort((a, b) => a.id - b.id);
+    // Applied-SET semantics, not a high-water-mark: core migrations get monotonic ids per
+    // commit, but overlay migrations pin-bump on an independent cadence, so an overlay
+    // migration id can land below the current max applied id. A `m.id > max(applied)` filter
+    // would then skip it forever, silently. Selecting by "not yet in the applied set" runs any
+    // registered migration regardless of where its id falls relative to the max.
+    const appliedMigrations = await Migration.find();
+    const appliedIds = new Set(appliedMigrations.map(m => m.id));
+    const lastAppliedId = appliedIds.size > 0 ? Math.max(...appliedIds) : null;
+
+    const migrations = selectPending(AvailableMigrations, appliedIds, target);
 
     this.logger.log(`Total migrations known: ${AvailableMigrations.length}`);
-    this.logger.log(`Last migration: ${lastMigration?.id || 'none'}`);
+    this.logger.log(`Last migration: ${lastAppliedId ?? 'none'}`);
     this.logger.log(`Target migration: ${target === null ? 'all' : target}`);
     this.logger.log(`Migrations to run: ${migrations.length}`);
     this.logger.log('');
@@ -56,8 +78,11 @@ export class MigrationManager {
   }
 
   async down(target: number | null): Promise<void> {
-    const lastMigration = await Migration.findOne().sort({ id: -1 });
-    const migrationsToRemove = AvailableMigrations.filter(m => lastMigration && m.id <= lastMigration.id)
+    // Mirror of up()'s applied-set selection - see comment there.
+    const appliedMigrations = await Migration.find();
+    const appliedIds = new Set(appliedMigrations.map(m => m.id));
+
+    const migrationsToRemove = AvailableMigrations.filter(m => appliedIds.has(m.id))
       .filter(m => target === null || m.id > target)
       .sort((a, b) => b.id - a.id);
 

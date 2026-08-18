@@ -1,9 +1,20 @@
-import { ArtifactPayload, ArtifactOperation, ArtifactType, mapMimeTypeToArtifactType } from '@bike4mind/common';
+import {
+  ARTIFACT_ATTRS_PATTERN,
+  ArtifactPayload,
+  ArtifactOperation,
+  ArtifactType,
+  mapMimeTypeToArtifactType,
+} from '@bike4mind/common';
+import { detectElidedContent } from '@bike4mind/utils/artifactElision';
 import { tryParseChartJSON } from './chartJsonParser';
 
-// Regular expression to match Claude-style artifact syntax
-const ARTIFACT_REGEX = /<artifact\s+(.*?)>([\s\S]*?)<\/artifact>/gi;
-const ATTRIBUTE_REGEX = /(\w+)=["']([^"']*?)["']/g;
+// Built from the shared ARTIFACT_ATTRS_PATTERN so the attribute sub-pattern
+// stays in sync with the core parser and PromptReplies truncation detector.
+const ARTIFACT_REGEX = new RegExp(`<artifact\\s+(${ARTIFACT_ATTRS_PATTERN})>([\\s\\S]*?)<\\/artifact>`, 'gi');
+// Value is anchored to its own quote kind so a double-quoted value can contain
+// apostrophes (title="Bob's App") and vice versa. Group 2 is the double-quoted
+// body, group 3 the single-quoted one; exactly one matches.
+const ATTRIBUTE_REGEX = /(\w+)=(?:"([^"]*)"|'([^']*)')/g;
 
 export interface ParsedArtifact {
   fullMatch: string;
@@ -69,8 +80,8 @@ export function parseArtifacts(
     ATTRIBUTE_REGEX.lastIndex = 0;
 
     while ((attrMatch = ATTRIBUTE_REGEX.exec(attributesString)) !== null) {
-      const [, key, value] = attrMatch;
-      attributes[key] = value;
+      const [, key, doubleQuoted, singleQuoted] = attrMatch;
+      attributes[key] = doubleQuoted ?? singleQuoted;
     }
 
     // Determine artifact type and operation
@@ -199,7 +210,10 @@ export function parseArtifactsWithFallback(
   options?: { rechartsDisplayMode?: 'inline' | 'artifact' }
 ): ArtifactParseResult {
   const parseResult = parseArtifacts(content, options);
-  const contentForConversion = parseResult.cleanedContent || content;
+  // ?? (not ||): cleanedContent is always a string, but when every byte of the
+  // input was inside artifact tags it is "" -- || would fall back to the original
+  // content and re-convert fenced code blocks that live inside those tags.
+  const contentForConversion = parseResult.cleanedContent ?? content;
   const convertedContent = convertCodeBlocksToArtifacts(contentForConversion);
   if (convertedContent === contentForConversion) {
     return parseResult;
@@ -795,10 +809,11 @@ function toolCallJsonToArtifact(candidate: string): string | null {
   );
   if (!html) return null;
 
-  // Strip quotes from the model-controlled title before interpolating it into
-  // title="...": the artifact attribute parser (ATTRIBUTE_REGEX) has no escape
-  // mechanism, so an embedded quote would silently truncate the attribute.
-  const title = (extractHTMLTitle(html) || 'HTML Page').replace(/["']/g, '') || 'HTML Page';
+  // Strip double quotes from the model-controlled title before interpolating it
+  // into title="...": the artifact attribute parser (ATTRIBUTE_REGEX) has no
+  // escape mechanism, so an embedded " would truncate the attribute. Apostrophes
+  // are safe inside a double-quoted value and are kept.
+  const title = (extractHTMLTitle(html) || 'HTML Page').replace(/"/g, '') || 'HTML Page';
   const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
   return `<artifact identifier="${identifier}" type="text/html" title="${title}">
 ${html.trim()}
@@ -914,6 +929,84 @@ export function getArtifactTimestamp(questOrMessageId: string): number {
 export function generateCompleteArtifactId(type: string, identifier: string, timestamp: number, index: number): string {
   const baseId = identifier || `generated_${timestamp}`;
   return `artifact_${type}_${baseId}_${timestamp}_${index}`;
+}
+
+/**
+ * Returns true when `tail` (the substring from `<artifact` onward) contains
+ * a complete opening tag (i.e. the closing `>` arrived before the stream was
+ * cut). Used by the truncated-artifact detector in PromptReplies to decide
+ * whether to best-effort close the tag or drop the partial.
+ */
+export function hasCompleteOpeningTag(tail: string): boolean {
+  return new RegExp(`^<artifact\\s+${ARTIFACT_ATTRS_PATTERN}>`).test(tail);
+}
+
+/**
+ * Whether to show the "may be incomplete" notice for a reply. Companion to the truncation
+ * check above and deliberately subordinate to it: a truncated reply already gets a more
+ * accurate banner, so this stays quiet rather than stacking two warnings on one artifact.
+ *
+ * `suspectedElision` is the server's verdict (stamped in ChatCompletionProcess); the local
+ * scan is the fallback for replies generated before that shipped and for backends that
+ * persist no promptMeta. Advisory only - the caller must still render the artifact as-is.
+ */
+/**
+ * `detectElidedContent` behind a catch, for symmetry with the server call sites, which are all
+ * wrapped. The detector is advisory, so a throw must never cost the user something real - and the
+ * render path is the dangerous one, since a throw inside a render memo would unmount the reply
+ * container over a warning that was never load-bearing. Fails OPEN: no warning beats no reply.
+ *
+ * Lives CLIENT-side rather than next to the detector in `@bike4mind/utils` on purpose: it reports
+ * through `console.warn`, which is this file's convention for a degraded path but wrong on the Lambda,
+ * where the server call sites wrap their own calls with `logger.warn` instead. Shared code would have
+ * to pick one. `publishApi` imports it from here for that reason.
+ */
+export function detectElidedSafe(content: string, type?: ArtifactType): boolean {
+  try {
+    return detectElidedContent(content, type).elided;
+  } catch (error) {
+    // Logged rather than swallowed silently: the server call sites log their failures, and a detector
+    // that starts throwing in the browser would otherwise look exactly like a detector that finds
+    // nothing. Matches the console.warn convention used elsewhere in this file for degraded paths.
+    console.warn('Elision detection failed; treating artifact as complete:', error);
+    return false;
+  }
+}
+
+export function shouldWarnElidedArtifact(input: {
+  completed: boolean;
+  isTruncatedArtifact: boolean;
+  suspectedElision: boolean;
+  artifacts: Array<{ content: string; type: ArtifactType }>;
+}): boolean {
+  if (!input.completed || input.isTruncatedArtifact) return false;
+  if (input.suspectedElision) return true;
+  return input.artifacts.some(a => detectElidedSafe(a.content, a.type));
+}
+
+/**
+ * Whether sharing a whole REPLY should warn that it may be incomplete.
+ *
+ * Separate from `shouldWarnElidedArtifact` because the inputs differ: the reply-share surface has no
+ * parsed artifact list and no artifact type, only the raw markdown it is about to snapshot. Publishing
+ * a reply persists that markdown INCLUDING any `<artifact>` body, so this surface can put an elided
+ * artifact behind a public link just as the artifact surfaces can.
+ *
+ * Prefers the server verdict; falls back to scanning the markdown. The fallback is weaker on purpose
+ * and not a bug: with no type to gate on, the JS-bearing scans (undefined references, hollow bodies)
+ * do not run, so only the placeholder-comment signal applies. That is the loudest, highest-confidence
+ * signal, and a missed warning here leaves the surface exactly as it was before this existed.
+ *
+ * Note this is NOT subordinate to truncation the way the chat banner is: there is no truncation
+ * affordance in the share dialog to defer to, so suppressing here would just lose the warning.
+ */
+export function elidedReplyWarning(
+  promptMeta: { suspectedElision?: unknown } | null | undefined,
+  markdown: string | undefined
+): boolean {
+  if (promptMeta?.suspectedElision) return true;
+  if (!markdown) return false;
+  return detectElidedSafe(markdown);
 }
 
 // Re-export validation functions from the core utils package

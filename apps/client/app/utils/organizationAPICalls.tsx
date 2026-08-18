@@ -10,7 +10,8 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { z } from 'zod';
-import axios, { AxiosResponse, isAxiosError } from 'axios';
+import { AxiosResponse, isAxiosError } from 'axios';
+import { uploadFileToUrl } from './uploadFileToUrl';
 
 export const fetchOrganizations = async (): Promise<IOrganizationDocument[]> => {
   try {
@@ -23,24 +24,10 @@ export const fetchOrganizations = async (): Promise<IOrganizationDocument[]> => 
 };
 
 // Mutation hooks using react-query
-export function useCreateOrganization() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (organizationData: Partial<IOrganization>) => {
-      const { data } = await api.post('/api/organizations', organizationData);
-      return data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['organizations'] });
-      toast.success('Organization created successfully!');
-    },
-    onError: (error: unknown) => {
-      console.error('Failed to create organization:', error);
-      toast.error('Failed to create organization. Please try again.');
-    },
-  });
-}
-
+// NOTE: org creation deliberately does NOT live here. `POST /api/organizations` is admin-only,
+// and its one caller is the admin panel via `useCreateOrganization` in
+// app/hooks/data/organizations.ts. An unused duplicate here would 403 for any non-admin surface
+// that picked it up, surfacing as a generic toast rather than a permission error.
 export function useUpdateOrganization() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -181,11 +168,9 @@ export function useUploadOrganizationLogo() {
 
       const { url, fileId } = data;
 
-      await axios.put(url, file, {
-        headers: {
-          'Content-Type': file.type,
-        },
-      });
+      // The shared helper handles both shapes the server can hand back: an S3 presign (hosted,
+      // raw axios) and the same-origin app-file upload proxy (self-host, authed api).
+      await uploadFileToUrl(url, file, file.type);
 
       return fileId;
     },

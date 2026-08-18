@@ -104,6 +104,33 @@ export function useAdjustOrgSeats() {
   });
 }
 
+/**
+ * Re-sync an org's seat count to its active subscription's billed quantity.
+ * Unlike useAdjustOrgSeats (PATCH /seats, which the backend refuses for
+ * Stripe-billed orgs), this only PULLS from what Stripe already invoices, so
+ * it is the repair path for orgs whose seats drifted from their paid quantity.
+ */
+export function useReconcileOrgSeats() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: { organizationId: string }) => {
+      const res = await api.post<{ organizationId: string; before: number; after: number }>(
+        `/api/admin/organizations/${params.organizationId}/reconcile-seats`
+      );
+      return res.data;
+    },
+    onSuccess: data => {
+      toast.success(
+        data.before === data.after
+          ? `Seats already in sync (${data.after})`
+          : `Seats reconciled: ${data.before} -> ${data.after}`
+      );
+      queryClient.invalidateQueries({ queryKey: ['organizations'] });
+    },
+    onError: err => toast.error(apiErrorMessage(err, 'Reconcile failed')),
+  });
+}
+
 export function useConvertOrgToPaid() {
   const queryClient = useQueryClient();
   return useMutation({

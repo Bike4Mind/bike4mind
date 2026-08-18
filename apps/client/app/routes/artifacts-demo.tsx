@@ -1,15 +1,13 @@
 import React, { useState } from 'react';
 import { Box, Typography, Stack, Button, Modal, ModalDialog, ModalClose, Divider, Alert, Chip } from '@mui/joy';
 import { AutoAwesome as MagicIcon, Visibility as ViewIcon, Create as CreateIcon } from '@mui/icons-material';
-import { ArtifactGallery, ArtifactCreator, ArtifactEditor } from '@client/app/components/artifacts';
-import { type BaseArtifact } from '@bike4mind/common';
+import {
+  ArtifactGallery,
+  ArtifactCreator,
+  ArtifactEditor,
+  type ArtifactWithContent,
+} from '@client/app/components/artifacts';
 import { toast } from 'sonner';
-
-interface ArtifactWithContent extends BaseArtifact {
-  content?: string;
-  contentSize: number;
-  contentHash: string;
-}
 
 const ArtifactsDemoPage: React.FC = () => {
   const [showCreator, setShowCreator] = useState(false);
@@ -22,10 +20,10 @@ const ArtifactsDemoPage: React.FC = () => {
     setShowCreator(true);
   };
 
-  const handleArtifactSave = (artifact: BaseArtifact) => {
+  // Neither save handler toasts: the creator and editor each raise their own success toast.
+  const handleArtifactSave = () => {
     setShowCreator(false);
     setRefreshKey(prev => prev + 1); // Force refresh of gallery
-    toast.success(`Artifact "${artifact.title}" created successfully!`);
   };
 
   const handleArtifactSelect = (artifact: ArtifactWithContent) => {
@@ -38,11 +36,10 @@ const ArtifactsDemoPage: React.FC = () => {
     setShowEditor(true);
   };
 
-  const handleArtifactUpdate = (artifact: BaseArtifact) => {
+  const handleArtifactUpdate = () => {
     setShowEditor(false);
     setEditingArtifact(null);
     setRefreshKey(prev => prev + 1); // Force refresh of gallery
-    toast.success(`Artifact "${artifact.title}" updated successfully!`);
   };
 
   return (
@@ -178,7 +175,12 @@ const ArtifactsDemoPage: React.FC = () => {
         >
           <ModalClose />
           {editingArtifact && (
+            // Keyed by id because the editor is mount-scoped: formData and originalData are
+            // seeded once and never resync, and the PUT body is a diff against originalData. A
+            // prop swap without this remount would send artifact B's edits to artifact A. Do not
+            // remove - this is the data-integrity guard, not a display nicety.
             <ArtifactEditor
+              key={editingArtifact.id}
               artifact={editingArtifact}
               onClose={() => setShowEditor(false)}
               onSave={handleArtifactUpdate}

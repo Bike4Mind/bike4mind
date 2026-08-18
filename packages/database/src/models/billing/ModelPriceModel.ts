@@ -1,4 +1,4 @@
-import mongoose, { Model, Schema, model } from 'mongoose';
+import mongoose, { Model, PipelineStage, Schema, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import {
   IModelPrice,
@@ -56,8 +56,28 @@ const ModelPriceSchema = new Schema<IModelPriceDocument>(
 // deterministic seed epoch instead of double-inserting; reprices use a fresh
 // effectiveFrom and never conflict.
 ModelPriceSchema.index({ modelId: 1, unit: 1, effectiveFrom: -1 }, { unique: true });
+// rowsInForce() filters and sorts on effectiveFrom alone, which cannot use the
+// compound index above (effectiveFrom is not its prefix). Mirrors the same index
+// on ModelCatalog, whose rowsInForce has the identical query shape.
+ModelPriceSchema.index({ effectiveFrom: -1 });
 
 export type IModelPriceModel = Model<IModelPriceDocument>;
+
+/**
+ * The newest-row-per-(model, unit) read. Exported so the index test can explain()
+ * the exact pipeline the hot path runs.
+ */
+export const rowsInForcePipeline = (at: Date): PipelineStage[] => [
+  { $match: { effectiveFrom: { $lte: at } } },
+  { $sort: { effectiveFrom: -1 } },
+  {
+    $group: {
+      _id: { modelId: '$modelId', unit: '$unit' },
+      doc: { $first: '$$ROOT' },
+    },
+  },
+  { $replaceRoot: { newRoot: '$doc' } },
+];
 
 export class ModelPriceRepository extends BaseRepository<IModelPriceDocument> implements IModelPriceRepository {
   constructor(model: IModelPriceModel) {
@@ -80,17 +100,7 @@ export class ModelPriceRepository extends BaseRepository<IModelPriceDocument> im
   }
 
   async rowsInForce(at: Date = new Date()): Promise<IModelPrice[]> {
-    const docs = await this.model.aggregate<IModelPriceDocument>([
-      { $match: { effectiveFrom: { $lte: at } } },
-      { $sort: { effectiveFrom: -1 } },
-      {
-        $group: {
-          _id: { modelId: '$modelId', unit: '$unit' },
-          doc: { $first: '$$ROOT' },
-        },
-      },
-      { $replaceRoot: { newRoot: '$doc' } },
-    ]);
+    const docs = await this.model.aggregate<IModelPriceDocument>(rowsInForcePipeline(at));
     // Aggregation bypasses Mongoose casting; Map fields come back as plain objects.
     return docs.map(doc => ({ ...doc, pricing: doc.pricing }) as IModelPrice);
   }

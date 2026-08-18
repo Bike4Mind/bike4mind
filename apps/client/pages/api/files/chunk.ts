@@ -13,6 +13,12 @@ const handler = baseApi().post(
   asyncHandler(async (req: Request<{ fabFileId: string; chunkSize?: string }>, res) => {
     const { fabFileId, chunkSize } = req.body;
     if (!fabFileId || !chunkSize) throw new BadRequestError('Missing parameters: fabFileId or chunkSize');
+    // chunkSize is the passage target in TOKENS. Reject a malformed value here with a clear
+    // 400 - the queue consumer fails soft on bad input (fabFileChunk.ts), which would silently
+    // chunk at the default instead of what the caller asked for.
+    if (!/^\d+$/.test(String(chunkSize)) || Number(chunkSize) < 1) {
+      throw new BadRequestError('chunkSize must be a positive integer (tokens)');
+    }
 
     const fabFile = await getFabFileById(fabFileId, req.ability!, Permission.update);
     if (!fabFile) throw new NotFoundError('FabFile not found');

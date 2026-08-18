@@ -106,7 +106,12 @@ export function buildSSEEvent(text: (string | null | undefined)[], info?: Comple
   };
 
   if (info?.toolsUsed && info.toolsUsed.length > 0) {
-    event.tools = info.toolsUsed;
+    // Project rather than pass the array through by reference: toolsUsed is re-emitted on
+    // every streaming callback (not just the terminal one), and once a backend attaches a
+    // returnValue (up to several KB, see recordToolResult) that reference would put the full
+    // tool output on every SSE frame. SSEContentEvent.tools is the declared wire contract and
+    // stays narrow regardless of what CompletionInfo.toolsUsed later grows.
+    event.tools = info.toolsUsed.map(t => ({ name: t.name, arguments: t.arguments, id: t.id }));
   }
 
   if (
@@ -146,7 +151,10 @@ export function buildSSEEvent(text: (string | null | undefined)[], info?: Comple
  * Allowlists only what such a caller may see - assistant text plus usage/credit
  * accounting - and drops server-internal reasoning metadata: tool calls
  * (`toolsUsed` names + model-chosen arguments), extended-thinking blocks
- * (`thinking`), and `responseFormatMode`. This is a redaction contract, so it
+ * (`thinking`), and `responseFormatMode`. It also withholds `usdCost` (raw
+ * provider dollar cost): an anonymous widget visitor is not the account
+ * holder, so the owner's model economics stay private; `creditsUsed` is the
+ * only consumption signal forwarded. This is a redaction contract, so it
  * allowlists forward: any field later added to CompletionInfo stays hidden from
  * public surfaces until deliberately surfaced here.
  */
@@ -158,15 +166,14 @@ export function buildPublicSSEEvent(text: (string | null | undefined)[], info?: 
   if (!info) return buildSSEEvent(responseOnly, undefined);
   // Allowlist forward (not denylist): explicitly name the fields a public caller may
   // see, so a field later added to CompletionInfo stays hidden until surfaced HERE.
-  // Everything not listed (toolsUsed, thinking, responseFormatMode, and any future
-  // addition) is dropped by omission.
+  // Everything not listed (toolsUsed, thinking, responseFormatMode, usdCost, and
+  // any future addition) is dropped by omission.
   const safeInfo: CompletionInfo = {
     inputTokens: info.inputTokens,
     outputTokens: info.outputTokens,
     cacheReadInputTokens: info.cacheReadInputTokens,
     cacheCreationInputTokens: info.cacheCreationInputTokens,
     creditsUsed: info.creditsUsed,
-    usdCost: info.usdCost,
   };
   return buildSSEEvent(responseOnly, safeInfo);
 }

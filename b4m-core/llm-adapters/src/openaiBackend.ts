@@ -14,6 +14,7 @@ import {
   type ReasoningEffort,
   type CacheUsageStats,
 } from '@bike4mind/common';
+import { stripToolDependentMessages } from './toolPairingUtils';
 import OpenAI from 'openai';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources/chat/completions';
 import type {
@@ -26,6 +27,7 @@ import type {
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
 import { executeToolsBatch } from './executeToolsBatch';
+import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   CompletionInfo,
   DEFAULT_MAX_TOOL_CALLS,
@@ -37,6 +39,7 @@ import {
   getLatestToolCallIdOpenAI,
 } from './backend';
 import { handleToolResultStreaming } from './toolStreamingHelper';
+import { DispatchModel } from './dispatchModel';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { withRetry, isUserInitiatedAbort, isRetryableError } from '@bike4mind/common';
@@ -97,11 +100,40 @@ export class OpenAIBackend implements ICompletionBackend {
   // OpenAI can attribute abuse to an individual user and scope enforcement to
   // them rather than the whole shared platform key. See `toProviderEndUserId`.
   private readonly _endUserId?: string;
+  /** Catalog view of the model being completed; see DispatchModel. */
+  private readonly _dispatch = new DispatchModel();
 
   constructor(apiKey: string, logger?: Logger, endUserId?: string) {
     this._api = new OpenAI({ apiKey });
     this.logger = logger ?? new Logger();
     this._endUserId = endUserId;
+  }
+
+  setDispatchModel(info: ModelInfo): void {
+    this._dispatch.set(info);
+  }
+
+  /**
+   * Do this model's tool turns go to /v1/responses? The profile answers it for
+   * a model the id arrays never heard of; without one the arrays decide, which
+   * is exactly today's behavior.
+   *
+   * Keyed on the FIELD, not on the profile: the lenient read schema
+   * (ModelRecordPatchRead) makes every profile key optional, so a sparse row
+   * would otherwise read as a negative assertion and take a GPT-5 model off
+   * /v1/responses. An absent key is "not stated" and falls through.
+   */
+  private usesResponsesToolTransport(model: string): boolean {
+    const profile = this._dispatch.profileFor(model);
+    if (profile?.toolTransport !== undefined) return profile.toolTransport === 'responses';
+    return RESPONSES_API_TOOL_MODELS.has(model);
+  }
+
+  /** Which complexity->effort table applies (effortMap_GPT5_1_2 vs effortMap). */
+  private usesGPT5EffortMap(model: string): boolean {
+    const profile = this._dispatch.profileFor(model);
+    if (profile?.effortMapVariant !== undefined) return profile.effortMapVariant === 'gpt5_1_2';
+    return GPT5_1_MODELS.includes(model) || GPT5_2_MODELS.includes(model) || GPT5_4_MODELS.includes(model);
   }
 
   async getModelInfo(): Promise<ModelInfo[]> {
@@ -177,6 +209,7 @@ export class OpenAIBackend implements ICompletionBackend {
         logoFile: 'OpenAI_Logo.svg',
         rank: 0,
         trainingCutoff: '2024-06-01',
+        deprecationDate: '2026-10-23', // Deprecated as per https://platform.openai.com/docs/deprecations
         description:
           'Designed for high-volume, low-cost processing with rapid response times, ideal for budget-conscious applications.',
       },
@@ -239,6 +272,7 @@ export class OpenAIBackend implements ICompletionBackend {
         logoFile: 'OpenAI_Logo.svg',
         rank: 0,
         trainingCutoff: '2024-06-01',
+        deprecationDate: '2026-12-11', // Deprecated as per https://platform.openai.com/docs/deprecations
         description:
           "OpenAI's O3 reasoning model with broad capabilities and up-to-date training data. Superseded by O4 Mini for most use cases.",
         isSlowModel: true,
@@ -324,6 +358,7 @@ export class OpenAIBackend implements ICompletionBackend {
         logoFile: 'OpenAI_Logo.svg',
         rank: 10,
         trainingCutoff: '2025-04-01',
+        deprecationDate: '2026-10-23', // Deprecated as per https://platform.openai.com/docs/deprecations
         description:
           "OpenAI's compact reasoning model optimized for fast, cost-efficient performance with strong multimodal and agentic capabilities. Excellent for STEM tasks and coding.",
         isSlowModel: true,
@@ -536,6 +571,7 @@ export class OpenAIBackend implements ICompletionBackend {
         rank: 1,
         trainingCutoff: '2024-09-30',
         releaseDate: '2025-11-13',
+        deprecationDate: '2026-08-10', // Deprecated as per https://platform.openai.com/docs/deprecations
         description: 'Latest GPT-5.2 model version. Automatically updated with improvements and optimizations.',
       },
 
@@ -582,6 +618,7 @@ export class OpenAIBackend implements ICompletionBackend {
         rank: 1,
         trainingCutoff: '2024-09-30',
         releaseDate: '2025-11-13',
+        deprecationDate: '2026-07-23', // Deprecated as per https://platform.openai.com/docs/deprecations
         description:
           'Continuously updated GPT-5.1 chat model with advanced conversational abilities and vision support, ideal for dynamic, real-time applications.',
       },
@@ -674,6 +711,7 @@ export class OpenAIBackend implements ICompletionBackend {
         rank: 3,
         trainingCutoff: '2024-09-30',
         releaseDate: '2025-08-07',
+        deprecationDate: '2026-07-23', // Deprecated as per https://platform.openai.com/docs/deprecations
         description:
           'Continuously updated GPT-5 chat model with advanced conversational abilities and vision support, ideal for dynamic, real-time applications.',
       },
@@ -731,6 +769,7 @@ export class OpenAIBackend implements ICompletionBackend {
         logoFile: 'OpenAI_Logo.svg',
         rank: 10,
         supportsTools: true,
+        deprecationDate: '2026-10-23', // Deprecated as per https://platform.openai.com/docs/deprecations
         description:
           'Delivers fast, efficient text generation with advanced reasoning, a large context window, and integrated vision and tool capabilities.',
       },
@@ -740,7 +779,10 @@ export class OpenAIBackend implements ICompletionBackend {
         name: 'GPT-4',
         backend: ModelBackend.OpenAI,
         contextWindow: 8192,
-        max_tokens: 8192,
+        // Half the context window, deliberately: this was listed as the full 8192, which left
+        // maxSafeInputTokens (context - output - buffer) negative and silently emptied the prompt.
+        // Whatever the provider's own output ceiling is, this entry has to keep that figure positive.
+        max_tokens: 4096,
         can_stream: true,
         pricing: {
           8000: { input: 30 / 1000000, output: 60.0 / 1000000 }, // $30 / 1M Input tokens, $60 / 1M Output tokens
@@ -750,10 +792,16 @@ export class OpenAIBackend implements ICompletionBackend {
         logoFile: 'OpenAI_Logo.svg',
         rank: 11,
         supportsTools: false,
+        deprecationDate: '2026-10-23', // Deprecated as per https://platform.openai.com/docs/deprecations
         description:
           "OpenAI's original GPT-4 model. Legacy model good for basic tasks and content generation, but newer models offer better capabilities.",
       },
       // OpenAI Image Models
+      //
+      // max_tokens equals contextWindow on purpose here: both are the prompt-length limit,
+      // and max_tokens is never sent to the image API. Do not "correct" it to a smaller
+      // output reserve - safeInputWindow (ChatCompletionProcess) skips the reserve for media
+      // types precisely because there is no token output to reserve.
       {
         id: ImageModels.GPT_IMAGE_1,
         type: 'image',
@@ -768,6 +816,7 @@ export class OpenAIBackend implements ICompletionBackend {
         description:
           'OpenAI GPT-Image-1 - Advanced multimodal image generation with text integration, supporting up to 2048x2048 resolution and image editing capabilities.',
         rank: 10,
+        deprecationDate: '2026-10-23', // Deprecated as per https://platform.openai.com/docs/deprecations
       },
       {
         id: ImageModels.GPT_IMAGE_1_5,
@@ -783,6 +832,7 @@ export class OpenAIBackend implements ICompletionBackend {
         description:
           'OpenAI GPT-Image-1.5 - Enhanced version of GPT-Image-1 with improved image generation quality and text integration, supporting up to 2048x2048 resolution and image editing capabilities.',
         rank: 9,
+        deprecationDate: '2026-12-01', // Deprecated as per https://platform.openai.com/docs/deprecations
       },
       {
         id: ImageModels.GPT_IMAGE_2,
@@ -814,6 +864,7 @@ export class OpenAIBackend implements ICompletionBackend {
         description:
           'OpenAI GPT-Image-1 Mini - Faster, cost-effective version of GPT-Image-1 with good quality image generation and text integration, supporting up to 2048x2048 resolution and image editing capabilities.',
         rank: 11,
+        deprecationDate: '2026-12-01', // Deprecated as per https://platform.openai.com/docs/deprecations
       },
       // OpenAI Speech-to-Text Models
       {
@@ -854,6 +905,8 @@ export class OpenAIBackend implements ICompletionBackend {
         supportsImageVariation: false,
         logoFile: 'OpenAI_Logo.svg',
         rank: 1,
+        // Sora 2 and the Videos API are being removed with no OpenAI replacement. https://platform.openai.com/docs/deprecations
+        deprecationDate: '2026-09-24',
         description:
           "OpenAI's Sora video generation model. Creates high-quality videos from text prompts with durations of 4, 8, or 12 seconds.",
       },
@@ -874,6 +927,8 @@ export class OpenAIBackend implements ICompletionBackend {
         supportsImageVariation: false,
         logoFile: 'OpenAI_Logo.svg',
         rank: 0,
+        // Sora 2 Pro and the Videos API are being removed with no OpenAI replacement. https://platform.openai.com/docs/deprecations
+        deprecationDate: '2026-09-24',
         description:
           "OpenAI's premium Sora video generation model. Produces the highest quality videos with enhanced detail, coherence, and visual fidelity.",
       },
@@ -894,7 +949,7 @@ export class OpenAIBackend implements ICompletionBackend {
     messages: IMessage[],
     options: Partial<ICompletionOptions>,
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
-    toolsUsed: Array<{ name: string; arguments?: string; id?: string }> = []
+    toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     this.currentModel = model;
     options = {
@@ -922,7 +977,8 @@ export class OpenAIBackend implements ICompletionBackend {
       // Remove tools when limit is hit and continue, preserving _internal settings
       await this.complete(
         model,
-        messages,
+        // Tools are going away, so the prompts that order the model to use one have to go with them.
+        stripToolDependentMessages(messages),
         {
           ...options,
           tools: undefined,
@@ -952,21 +1008,26 @@ export class OpenAIBackend implements ICompletionBackend {
     // reasoning + tools work together and `reasoning_effort` is preserved. Only when
     // function tools are actually present; the terminal (no-tools) synthesis turn
     // falls through to the streaming chat path below.
-    if (options.tools?.length && RESPONSES_API_TOOL_MODELS.has(model)) {
+    if (options.tools?.length && this.usesResponsesToolTransport(model)) {
       return this.completeViaResponses(model, messages, options, callback, toolsUsed);
     }
 
-    const isO1Model = O1_MODELS.includes(model);
-    const isGPT5Model = GPT5_MODELS.includes(model);
-    const isGPT5_1Model = GPT5_1_MODELS.includes(model);
-    const isGPT5_2Model = GPT5_2_MODELS.includes(model);
-    const isGPT5_4Model = GPT5_4_MODELS.includes(model);
-    const isGPT5_5Model = GPT5_5_MODELS.includes(model);
-    const isGPT5_6Model = GPT5_6_MODELS.includes(model);
+    const profile = this._dispatch.profileFor(model);
+    // Per FIELD, not per profile: a sparse row must not read as a negative
+    // assertion. See usesResponsesToolTransport.
+    const isO1Model = profile?.messageFormat !== undefined ? profile.messageFormat === 'o1' : O1_MODELS.includes(model);
     const usesMaxCompletionTokens =
-      isO1Model || isGPT5Model || isGPT5_1Model || isGPT5_2Model || isGPT5_4Model || isGPT5_5Model || isGPT5_6Model;
+      profile?.maxTokensParam !== undefined
+        ? profile.maxTokensParam === 'max_completion_tokens'
+        : O1_MODELS.includes(model) ||
+          GPT5_MODELS.includes(model) ||
+          GPT5_1_MODELS.includes(model) ||
+          GPT5_2_MODELS.includes(model) ||
+          GPT5_4_MODELS.includes(model) ||
+          GPT5_5_MODELS.includes(model) ||
+          GPT5_6_MODELS.includes(model);
     // GPT-5.1/5.2/5.4 share the same complexity->reasoning-effort mapping (effortMap_GPT5_1_2).
-    const usesGPT5EffortMap = isGPT5_1Model || isGPT5_2Model || isGPT5_4Model;
+    const usesGPT5EffortMap = this.usesGPT5EffortMap(model);
 
     // Base parameters that work for all models
     const parameters: ChatCompletionCreateParams & ReasoningParameter = {
@@ -980,7 +1041,15 @@ export class OpenAIBackend implements ICompletionBackend {
 
     // Add parameters conditionally based on model type
     const supportsReasoning = REASONING_SUPPORTED_MODELS.has(model);
-    const requiresFixedTemp = FIXED_TEMPERATURE_MODELS.has(model);
+    // A reasoning model that is only known through the catalog is not in
+    // FIXED_TEMPERATURE_MODELS, and OpenAI rejects any temperature but 1 on one.
+    // Losing temperature control on a model that would have accepted it is
+    // recoverable; a 400 on every turn is not. Keyed on the profile STATING the
+    // reasoning-shaped max-tokens param rather than on a row merely existing, so
+    // a sparse patch cannot pin a seeded model's temperature as a side effect.
+    const requiresFixedTemp =
+      FIXED_TEMPERATURE_MODELS.has(model) ||
+      (profile?.maxTokensParam === 'max_completion_tokens' && this._dispatch.for(model)?.can_think === true);
     if (usesMaxCompletionTokens) {
       // Force temperature to 1.0 for models in FIXED_TEMPERATURE_MODELS
       // (reasoning models, chat-latest variants, and GPT-5.5).
@@ -1160,6 +1229,12 @@ export class OpenAIBackend implements ICompletionBackend {
                 this.logger.warn(`JSON parse error for ${toolCall.function.name} arguments`);
                 const entry = toolsUsed.find(t => t.name === toolCall.function.name && t.id === toolCall.id);
                 if (entry) entry.arguments = '{}';
+                recordToolResult(
+                  toolsUsed,
+                  { id: toolCall.id, name: toolCall.function.name },
+                  'Error: Tool arguments were malformed and could not be parsed.',
+                  false
+                );
               }
             }
 
@@ -1225,6 +1300,7 @@ export class OpenAIBackend implements ICompletionBackend {
                   outcome.error instanceof Error ? outcome.error.message : 'Unknown error'
                 }`;
                 streamedText[c.index] = errorMsg;
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, errorMsg, false);
                 // Push error result so the model can acknowledge the failure
                 this.pushToolMessages(
                   messages,
@@ -1266,6 +1342,9 @@ export class OpenAIBackend implements ICompletionBackend {
                   )
                 : resultStr;
 
+              // Record the sanitized string, not resultStr - that's what the model actually saw.
+              recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, sanitizedResult, true);
+
               this.pushToolMessages(
                 messages,
                 { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
@@ -1295,7 +1374,9 @@ export class OpenAIBackend implements ICompletionBackend {
             // correct credit attribution).
             await this.complete(
               model,
-              messages,
+              // Tracks the tools decision on the next line: this branch keeps tools only for MCP
+              // chaining, so on the built-in-tool path the tool-dependent prompts have to go too.
+              anyMcpTool ? messages : stripToolDependentMessages(messages),
               {
                 ...options,
                 tools: anyMcpTool ? options.tools : undefined,
@@ -1526,6 +1607,12 @@ export class OpenAIBackend implements ICompletionBackend {
             this.logger.warn('JSON parse error for tool parameters (skipping):', { name, parameters });
             const entry = toolsUsed.find(t => t.name === name && t.id === id);
             if (entry) entry.arguments = '{}';
+            recordToolResult(
+              toolsUsed,
+              { id, name },
+              'Error: Tool arguments were malformed and could not be parsed.',
+              false
+            );
           }
         }
 
@@ -1588,11 +1675,13 @@ export class OpenAIBackend implements ICompletionBackend {
         for (const outcome of outcomes) {
           if (!outcome.ok) {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
+            const errorMsg = `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`;
+            recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, errorMsg, false);
             // Push error result so the model can acknowledge the failure
             this.pushToolMessages(
               messages,
               { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-              `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`
+              errorMsg
             );
             continue;
           }
@@ -1628,6 +1717,8 @@ export class OpenAIBackend implements ICompletionBackend {
                 '[Artifact rendered and delivered to user]'
               )
             : resultStr;
+
+          recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, sanitizedResult, true);
 
           this.pushToolMessages(
             messages,
@@ -1769,7 +1860,15 @@ export class OpenAIBackend implements ICompletionBackend {
       )
       .map(m => m.content)
       .join('\n\n');
-    const mergedContent = callerSystem ? `${systemContent}\n\n${callerSystem}` : systemContent;
+    // Bare-completion contract (API promptMode raw): synthesize nothing - no
+    // helpful-assistant preamble, no identity line. The lead message is then exactly the
+    // caller's own system text, or absent entirely. Must stay in sync with the same flag
+    // in anthropicBackend / bedrockBackend.
+    const mergedContent = options.omitIdentityReminder
+      ? callerSystem
+      : callerSystem
+        ? `${systemContent}\n\n${callerSystem}`
+        : systemContent;
 
     const systemMessage: OpenAI.ChatCompletionSystemMessageParam = {
       role: 'system',
@@ -1783,8 +1882,9 @@ export class OpenAIBackend implements ICompletionBackend {
     const formattedMessages = convertedMessages as OpenAI.ChatCompletionMessageParam[];
 
     // O1 models take no system message at all (their system content was already stripped
-    // from filteredMessages above); every other model gets the consolidated lead message.
-    return isO1Model ? formattedMessages : [systemMessage, ...formattedMessages];
+    // from filteredMessages above); every other model gets the consolidated lead message -
+    // unless there is nothing to lead with (bare-completion path, no caller system text).
+    return isO1Model || !mergedContent ? formattedMessages : [systemMessage, ...formattedMessages];
   }
 
   pushToolMessages(messages: IMessage[], tool: IChoiceEndToolUse['tool'], result: string, _thinkingBlocks?: unknown[]) {
@@ -1886,9 +1986,7 @@ export class OpenAIBackend implements ICompletionBackend {
     if (options.reasoningEffort) return options.reasoningEffort;
     const complexity = options.complexity as keyof typeof effortMap | undefined;
     if (complexity && effortMap[complexity]) {
-      const usesGPT5EffortMap =
-        GPT5_1_MODELS.includes(model) || GPT5_2_MODELS.includes(model) || GPT5_4_MODELS.includes(model);
-      return (usesGPT5EffortMap ? effortMap_GPT5_1_2 : effortMap)[complexity] as ReasoningEffort;
+      return (this.usesGPT5EffortMap(model) ? effortMap_GPT5_1_2 : effortMap)[complexity] as ReasoningEffort;
     }
     return undefined;
   }
@@ -1913,7 +2011,7 @@ export class OpenAIBackend implements ICompletionBackend {
     messages: IMessage[],
     options: Partial<ICompletionOptions>,
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
-    toolsUsed: Array<{ name: string; arguments?: string; id?: string }> = []
+    toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     const toolCallCount = options._internal?.toolCallCount ?? 0;
     const accumInputTokens = options._internal?.accumInputTokens ?? 0;
@@ -2056,6 +2154,12 @@ export class OpenAIBackend implements ICompletionBackend {
         });
       } catch {
         this.logger.warn(`JSON parse error for ${fc.name} arguments (Responses path)`);
+        recordToolResult(
+          toolsUsed,
+          { id: fc.call_id, name: fc.name },
+          'Error: Tool arguments were malformed and could not be parsed.',
+          false
+        );
       }
     }
 
@@ -2078,16 +2182,15 @@ export class OpenAIBackend implements ICompletionBackend {
       const outcome = batchOutcomes[i];
       const r = resolved[i];
       if (outcome.ok) {
-        this.pushToolMessages(
-          messages,
-          { id: r.callId, name: r.name, parameters: r.args },
-          outcome.result.result.toString()
-        );
+        const resultStr = outcome.result.result.toString();
+        recordToolResult(toolsUsed, { id: r.callId, name: r.name }, resultStr, true);
+        this.pushToolMessages(messages, { id: r.callId, name: r.name, parameters: r.args }, resultStr);
       } else {
         if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
         const errorMsg = `Error processing ${r.name} tool: ${
           outcome.error instanceof Error ? outcome.error.message : 'Unknown error'
         }`;
+        recordToolResult(toolsUsed, { id: r.callId, name: r.name }, errorMsg, false);
         this.pushToolMessages(messages, { id: r.callId, name: r.name, parameters: r.args }, errorMsg);
       }
     }

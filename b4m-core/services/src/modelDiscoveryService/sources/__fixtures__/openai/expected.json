@@ -1,0 +1,127 @@
+[
+  {
+    "modelId": "babbage-002",
+    "patch": {
+      "id": "babbage-002",
+      "vendor": "openai",
+      "backend": "openai"
+    }
+  },
+  {
+    "modelId": "gpt-4",
+    "patch": {
+      "id": "gpt-4",
+      "vendor": "openai",
+      "backend": "openai"
+    }
+  },
+  {
+    "modelId": "gpt-4.1-2025-04-14",
+    "patch": {
+      "id": "gpt-4.1-2025-04-14",
+      "vendor": "openai",
+      "backend": "openai"
+    }
+  },
+  {
+    "modelId": "gpt-4o-mini",
+    "patch": {
+      "id": "gpt-4o-mini",
+      "vendor": "openai",
+      "backend": "openai"
+    }
+  },
+  {
+    "modelId": "gpt-5",
+    "patch": {
+      "id": "gpt-5",
+      "vendor": "openai",
+      "backend": "openai"
+    }
+  },
+  {
+    "modelId": "gpt-5-chat-latest",
+    "patch": {
+      "id": "gpt-5-chat-latest",
+      "vendor": "openai",
+      "backend": "openai"
+    }
+  },
+  {
+    "modelId": "gpt-5.4-nano",
+    "patch": {
+      "id": "gpt-5.4-nano",
+      "vendor": "openai",
+      "backend": "openai"
+    }
+  },
+  {
+    "modelId": "gpt-5.6-sol",
+    "patch": {
+      "id": "gpt-5.6-sol",
+      "vendor": "openai",
+      "backend": "openai"
+    }
+  },
+  {
+    "modelId": "gpt-image-1.5",
+    "patch": {
+      "id": "gpt-image-1.5",
+      "vendor": "openai",
+      "backend": "openai",
+      "type": "image"
+    }
+  },
+  {
+    "modelId": "o3-2025-04-16",
+    "patch": {
+      "id": "o3-2025-04-16",
+      "vendor": "openai",
+      "backend": "openai"
+    }
+  },
+  {
+    "modelId": "o4-mini-2025-04-16",
+    "patch": {
+      "id": "o4-mini-2025-04-16",
+      "vendor": "openai",
+      "backend": "openai"
+    }
+  },
+  {
+    "modelId": "sora-2",
+    "patch": {
+      "id": "sora-2",
+      "vendor": "openai",
+      "backend": "openai",
+      "type": "video"
+    }
+  },
+  {
+    "modelId": "text-embedding-3-small",
+    "patch": {
+      "id": "text-embedding-3-small",
+      "vendor": "openai",
+      "backend": "openai",
+      "type": "embedding"
+    }
+  },
+  {
+    "modelId": "tts-1",
+    "patch": {
+      "id": "tts-1",
+      "vendor": "openai",
+      "backend": "openai",
+      "type": "tts"
+    }
+  },
+  {
+    "modelId": "whisper-1",
+    "patch": {
+      "id": "whisper-1",
+      "vendor": "openai",
+      "backend": "openai",
+      "type": "speech-to-text"
+    }
+  }
+]

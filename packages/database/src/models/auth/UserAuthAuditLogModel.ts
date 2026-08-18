@@ -7,8 +7,8 @@ import BaseRepository from '@bike4mind/db-core';
  * not be duplicated. Integration-level OAuth connect/disconnect lives in
  * IntegrationAuditLogModel; this collection captures identity-level events.
  *
- * `session_revoked` is reserved for a future "log out everywhere" action; no
- * endpoint writes it yet.
+ * `session_revoked` records an admin force-logout (revoke all of a user's sessions
+ * via the tokenVersion kill switch); written by the admin revoke-sessions route.
  */
 export type UserAuthAuditEvent =
   | 'login_success'
@@ -18,7 +18,10 @@ export type UserAuthAuditEvent =
   | 'mfa_disabled'
   | 'oauth_link'
   | 'oauth_unlink'
-  | 'session_revoked';
+  | 'session_revoked'
+  | 'trusted_device_granted'
+  | 'trusted_device_used'
+  | 'trusted_device_revoked';
 
 const USER_AUTH_AUDIT_EVENTS: UserAuthAuditEvent[] = [
   'login_success',
@@ -29,6 +32,9 @@ const USER_AUTH_AUDIT_EVENTS: UserAuthAuditEvent[] = [
   'oauth_link',
   'oauth_unlink',
   'session_revoked',
+  'trusted_device_granted',
+  'trusted_device_used',
+  'trusted_device_revoked',
 ];
 
 export interface IUserAuthAuditLogDocument extends Document {
@@ -37,6 +43,8 @@ export interface IUserAuthAuditLogDocument extends Document {
   event: UserAuthAuditEvent;
   /** Auth strategy involved, when relevant (e.g. oauth_link/oauth_unlink). */
   strategy?: string;
+  /** The user who performed the action, when it differs from `userId` (e.g. an admin force-logout). */
+  actorUserId?: string;
   actorIp: string;
   userAgent: string;
   requestId?: string;
@@ -49,6 +57,7 @@ export interface CreateUserAuthAuditLogInput {
   userId: string;
   event: UserAuthAuditEvent;
   strategy?: string;
+  actorUserId?: string;
   actorIp: string;
   userAgent: string;
   requestId?: string;
@@ -60,6 +69,7 @@ const UserAuthAuditLogSchema = new Schema<IUserAuthAuditLogDocument>(
     userId: { type: String, required: true },
     event: { type: String, required: true, enum: USER_AUTH_AUDIT_EVENTS },
     strategy: { type: String },
+    actorUserId: { type: String },
     actorIp: { type: String, required: true },
     userAgent: { type: String, required: true },
     requestId: { type: String },

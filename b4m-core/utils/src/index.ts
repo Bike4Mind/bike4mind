@@ -3,6 +3,9 @@ export {
   SmartChunker,
   ChunkSchema,
   type Chunk,
+  type SmartChunkerOptions,
+  DEFAULT_PASSAGE_TOKEN_TARGET,
+  MIN_PASSAGE_TOKEN_TARGET,
   // ingest
   URL_REGEX,
   detectURLs,
@@ -20,6 +23,10 @@ export {
   EmbeddingModelProvider,
   type EmbeddingModelInfo,
   getProviderFromModel,
+  resolveEmbeddingConfig,
+  type EmbeddingKeyTable,
+  type EmbeddingCredential,
+  type ResolvedEmbeddingConfig,
   BedrockEmbeddingService,
   type BedrockCredentials,
   BEDROCK_EMBEDDING_MODEL_MAP,
@@ -44,6 +51,7 @@ export * from './registrableDomain';
 // Also available via the lightweight `@bike4mind/utils/escapeRegex` subpath -
 // prefer that in server modules covered by client vitest suites.
 export * from './escapeRegex';
+export * from './normalizeId';
 // Also available via the lightweight `@bike4mind/utils/retrievalExclusion` subpath -
 // prefer that in server modules covered by client vitest suites.
 export * from './retrievalExclusion';
@@ -53,17 +61,24 @@ export * from './cacheKeys';
 export * from './pagination';
 export * from './settings';
 export * from './cache/AdminSettingsCache';
+export * from './cache/ScopedSettingsCache';
 export * from './cache/RapidReplyMappingsCache';
 export * from './queue';
 export * from './ws';
 export * from './promptModeration';
-export * from './imageModeration';
+// NOTE: './imageModeration' is intentionally NOT re-exported here - it pulls in
+// @aws-sdk/client-rekognition + jimp. Import it via the '@bike4mind/utils/imageModeration'
+// subpath instead so those server-only deps stay out of bundles that don't moderate
+// images (e.g. the CLI). See issue #660.
 export * from './file';
 export * from './questMaster';
 export * from './questMasterToolSchema';
 export * from './imageGeneration';
 export type { ImageEditResponse } from './imageGeneration';
+export * from './voiceGeneration';
 export * from './videoGeneration';
+export * from './soundGeneration';
+export * from './musicGeneration';
 export * from './analytics';
 export * from './user';
 export * from './pricing';
@@ -71,6 +86,10 @@ export * from './functionQueueRunner';
 export * from './fabfile';
 export * from './office/officeEdit';
 export * from './artifactParser';
+// NOT barrel-exported on purpose: `artifactElision` is reached only via the
+// `@bike4mind/utils/artifactElision` subpath. Re-exporting it here pulled the whole detector
+// (pattern tables + ambient-global set) into every barrel consumer's bundle, including the CLI,
+// which tripped its size baseline. Every consumer imports the subpath already.
 export * from './adminSettings';
 export * from './notificationDeduplicator';
 export * from './tokenCounting';
@@ -87,3 +106,7 @@ export * from './circuitBreaker';
 export * from './rateLimitHeaders';
 export * from './voiceHistory';
 export * from './lambdaErrorHandler';
+// NOT barrel-exported on purpose: at-rest crypto is reached only via the
+// `@bike4mind/utils/security` subpath, so importing it never drags the utils barrel
+// (artifactParser et al.) into a caller's graph or its test mocks. Same pattern as
+// artifactElision above.

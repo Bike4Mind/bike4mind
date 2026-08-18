@@ -1,9 +1,10 @@
-import { IUserApiKeyRepository } from '@bike4mind/common';
+import { IOrganizationRepository, IUserApiKeyRepository } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { randomBytes } from 'crypto';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { KEY_PREFIX_LENGTH } from './constants';
+import { resolveOwnedApiKey } from './resolveOwnedApiKey';
 
 const rotateUserApiKeySchema = z.object({
   keyId: z.string(),
@@ -14,6 +15,7 @@ export type RotateUserApiKeyParameters = z.infer<typeof rotateUserApiKeySchema>;
 interface RotateUserApiKeyAdapters {
   db: {
     userApiKeys: IUserApiKeyRepository;
+    organizations: Pick<IOrganizationRepository, 'findIdsAdministeredBy'>;
   };
 }
 
@@ -36,6 +38,10 @@ function generateNewApiKey(): { key: string; keyPrefix: string; keyHash: string 
   return { key, keyPrefix, keyHash };
 }
 
+/**
+ * Rotate a key's secret, scoped by resolveOwnedApiKey (the key's minter, or an
+ * admin of the org it is billed to).
+ */
 export const rotateUserApiKey = async (
   userId: string,
   parameters: RotateUserApiKeyParameters,
@@ -44,7 +50,7 @@ export const rotateUserApiKey = async (
   const { db } = adapters;
   const params = secureParameters(parameters, rotateUserApiKeySchema);
 
-  const apiKey = await db.userApiKeys.findByUserIdAndId(userId, params.keyId);
+  const apiKey = await resolveOwnedApiKey(userId, params.keyId, { db });
   if (!apiKey) {
     throw new NotFoundError('API key not found');
   }

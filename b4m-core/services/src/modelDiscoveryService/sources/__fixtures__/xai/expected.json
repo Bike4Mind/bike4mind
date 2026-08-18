@@ -1,0 +1,102 @@
+[
+  {
+    "modelId": "grok-3-mini",
+    "patch": {
+      "id": "grok-3-mini",
+      "vendor": "xai",
+      "backend": "xai",
+      "type": "text",
+      "contextWindow": 131072,
+      "canStream": true,
+      "supportsVision": false,
+      "promptCaching": {
+        "supported": true
+      }
+    },
+    "pricing": {
+      "inputPerMTok": 0.3,
+      "outputPerMTok": 0.5
+    }
+  },
+  {
+    "modelId": "grok-4-0709",
+    "patch": {
+      "id": "grok-4-0709",
+      "vendor": "xai",
+      "backend": "xai",
+      "type": "text",
+      "contextWindow": 256000,
+      "canStream": true,
+      "supportsVision": true,
+      "promptCaching": {
+        "supported": false
+      }
+    },
+    "pricing": {
+      "inputPerMTok": 3,
+      "outputPerMTok": 15
+    }
+  },
+  {
+    "modelId": "grok-4.20-multi-agent-0309",
+    "patch": {
+      "id": "grok-4.20-multi-agent-0309",
+      "vendor": "xai",
+      "backend": "xai",
+      "type": "text",
+      "canStream": true,
+      "supportsVision": false,
+      "promptCaching": {
+        "supported": true
+      }
+    },
+    "pricing": {
+      "inputPerMTok": 5,
+      "outputPerMTok": 20
+    }
+  },
+  {
+    "modelId": "grok-4.5",
+    "patch": {
+      "id": "grok-4.5",
+      "vendor": "xai",
+      "backend": "xai",
+      "type": "text",
+      "contextWindow": 500000,
+      "canStream": true,
+      "supportsVision": true,
+      "promptCaching": {
+        "supported": true
+      }
+    },
+    "pricing": {
+      "inputPerMTok": 2,
+      "outputPerMTok": 6
+    }
+  },
+  {
+    "modelId": "grok-embedding-1",
+    "patch": {
+      "id": "grok-embedding-1",
+      "vendor": "xai",
+      "backend": "xai",
+      "type": "embedding",
+      "contextWindow": 0
+    },
+    "pricing": {
+      "inputPerMTok": 0.02,
+      "outputPerMTok": 0.02
+    }
+  },
+  {
+    "modelId": "grok-imagine-image-quality",
+    "patch": {
+      "id": "grok-imagine-image-quality",
+      "vendor": "xai",
+      "backend": "xai",
+      "type": "image",
+      "contextWindow": 1024,
+      "supportsImageVariation": true
+    }
+  }
+]

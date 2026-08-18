@@ -104,3 +104,18 @@ export const enhanceAgentField = async (
     throw error;
   }
 };
+
+export interface AgentEmbedKey {
+  id: string;
+  name: string;
+  keyPrefix: string;
+  agentId: string;
+  allowedOrigins: string[];
+  status: string;
+  createdAt: string;
+}
+
+export const getAgentEmbedKeys = async (agentId: string): Promise<AgentEmbedKey[]> => {
+  const response = await api.get<AgentEmbedKey[]>(`/api/agents/${agentId}/embed-keys`);
+  return response.data;
+};

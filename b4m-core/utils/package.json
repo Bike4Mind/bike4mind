@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/utils",
-  "version": "3.0.0",
+  "version": "4.1.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -29,6 +29,36 @@
         "default": "./dist/artifactParser.cjs"
       }
     },
+    "./artifactElision": {
+      "import": {
+        "types": "./dist/artifactElision.d.mts",
+        "default": "./dist/artifactElision.mjs"
+      },
+      "require": {
+        "types": "./dist/artifactElision.d.cts",
+        "default": "./dist/artifactElision.cjs"
+      }
+    },
+    "./imageModeration": {
+      "import": {
+        "types": "./dist/imageModeration/index.d.mts",
+        "default": "./dist/imageModeration/index.mjs"
+      },
+      "require": {
+        "types": "./dist/imageModeration/index.d.cts",
+        "default": "./dist/imageModeration/index.cjs"
+      }
+    },
+    "./imageResize": {
+      "import": {
+        "types": "./dist/imageResize.d.mts",
+        "default": "./dist/imageResize.mjs"
+      },
+      "require": {
+        "types": "./dist/imageResize.d.cts",
+        "default": "./dist/imageResize.cjs"
+      }
+    },
     "./llm/backend": {
       "import": {
         "types": "./dist/llm/backend.d.mts",
@@ -49,6 +79,16 @@
         "default": "./dist/escapeRegex.cjs"
       }
     },
+    "./normalizeId": {
+      "import": {
+        "types": "./dist/normalizeId.d.mts",
+        "default": "./dist/normalizeId.mjs"
+      },
+      "require": {
+        "types": "./dist/normalizeId.d.cts",
+        "default": "./dist/normalizeId.cjs"
+      }
+    },
     "./retrievalExclusion": {
       "import": {
         "types": "./dist/retrievalExclusion.d.mts",
@@ -67,6 +107,16 @@
       "require": {
         "types": "./dist/registrableDomain.d.cts",
         "default": "./dist/registrableDomain.cjs"
+      }
+    },
+    "./security": {
+      "import": {
+        "types": "./dist/security/index.d.mts",
+        "default": "./dist/security/index.mjs"
+      },
+      "require": {
+        "types": "./dist/security/index.d.cts",
+        "default": "./dist/security/index.cjs"
       }
     }
   },
@@ -97,9 +147,9 @@
     "@bike4mind/observability": "workspace:*",
     "@casl/ability": "^6.8.1",
     "@google/genai": "^1.46.0",
-    "axios": "1.16.1",
+    "axios": "1.18.0",
     "cheerio": "1.2.0",
-    "csv-parse": "^6.2.1",
+    "csv-parse": "^7.0.1",
     "dayjs": "^1.11.21",
     "dotenv": "^17.4.2",
     "file-type": "^22.0.1",
@@ -112,7 +162,7 @@
     "tiktoken": "^1.0.22",
     "tldts": "^7.4.8",
     "unpdf": "^1.6.2",
-    "uuid": "^13.0.2",
+    "uuid": "^14.0.1",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.4.3"
   },

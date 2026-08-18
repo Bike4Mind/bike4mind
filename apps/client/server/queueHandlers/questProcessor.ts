@@ -27,6 +27,7 @@ import {
   dataLakeRepository,
   latticeModelRepository,
   imageModerationIncidentRepository,
+  lakeAccessEventRepository,
   Quest,
   usageEventRepository,
 } from '@bike4mind/database';
@@ -48,6 +49,8 @@ import { IUserDocument, Permission } from '@bike4mind/common';
 import { LLMEvents, SessionEvents } from '@server/utils/eventBus';
 import { getSharedTokenizer, publishTelemetryAlertCallback } from '../utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
+import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
+import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
 import { slackToolDefinitions, createPendingActionToolDefs } from '@bike4mind/slack';
 import { executePendingAction, cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
@@ -127,6 +130,7 @@ const getStaticOptions = () => {
       // moderation gate. The gate itself is unconditional (constructed inline
       // in the tool) - this only wires the incident record, not the block.
       imageModerationIncidents: imageModerationIncidentRepository,
+      lakeAccessEvents: lakeAccessEventRepository,
     },
     storage: getFilesStorage(),
     imageGenerateStorage: getGeneratedImageStorage(),
@@ -161,6 +165,10 @@ const getStaticOptions = () => {
       });
     },
     recallMementosV2,
+    recallLakeMemory: recallLakeMemoryForSession,
+    // Without this the worker resolves session.systemPromptId to undefined, so a triage session
+    // gets no authored prompt while the route has already suppressed the brand identity.
+    loadSystemPromptById,
     summarizeSession: summarizeSession,
     contextSummarizeSession: contextSummarizeSession,
     getMcpClient: getMcpClientAdapter,

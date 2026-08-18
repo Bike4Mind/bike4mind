@@ -28,7 +28,11 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: mockGetEffectiveLLMApiKeys, getEffectiveApiKey: vi.fn() },
 }));
-vi.mock('@bike4mind/llm-adapters', () => ({
+// buildApiKeyTable comes from the REAL module, not a stub: it is what decides
+// which providers this service can see, and a hand-rolled copy here would be free
+// to drift a provider behind exactly the way the literal it replaced did.
+vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
   getAvailableModels: mockGetAvailableModels,
   getLlmByModel: mockGetLlmByModel,
 }));

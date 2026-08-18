@@ -5,7 +5,7 @@ import {
   useSystemPromptFiles,
   useWorkBenchStore,
 } from '@client/app/contexts/SessionsContext';
-import { IFabFileDocument, MimeType } from '@bike4mind/common';
+import { IFabFileDocument, MimeType, isImageAttachment } from '@bike4mind/common';
 import CodeIcon from '@mui/icons-material/Code';
 import DescriptionIcon from '@mui/icons-material/Description';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
@@ -264,11 +264,11 @@ const WorkBench: React.FC<WorkBenchProps> = ({ model, collapsed = false, onToggl
   const fileSupported = (file: IFabFileDocument) => {
     let supported = true;
     if (modelInfo?.type === 'text') {
-      if (!modelInfo?.supportsVision && file.mimeType.startsWith('image/')) {
+      if (!modelInfo?.supportsVision && isImageAttachment(file.mimeType)) {
         supported = false;
       }
     } else if (modelInfo?.type === 'image') {
-      if (file.mimeType.startsWith('image/')) {
+      if (isImageAttachment(file.mimeType)) {
         if (!modelInfo?.supportsImageVariation) {
           supported = false;
         }

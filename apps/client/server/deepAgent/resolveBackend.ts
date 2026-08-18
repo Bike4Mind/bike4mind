@@ -1,4 +1,4 @@
-import { getAvailableModels, getLlmByModel, type ICompletionBackend } from '@bike4mind/llm-adapters';
+import { buildApiKeyTable, getAvailableModels, getLlmByModel, type ICompletionBackend } from '@bike4mind/llm-adapters';
 import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
@@ -23,14 +23,9 @@ export async function buildSystemApiKeyTable(logger: Logger) {
     getSettingsByNames,
   };
   const keys = await apiKeyService.getEffectiveLLMApiKeys('system', dbAdapters);
-  return {
-    openai: keys.openai || undefined,
-    anthropic: keys.anthropic || undefined,
-    gemini: keys.gemini || undefined,
-    bfl: keys.bfl || undefined,
-    ollama: keys.ollama || undefined,
-    xai: keys.xai || undefined,
-  };
+  // Shared helper, not a literal: a provider absent here is a provider deep
+  // agents silently cannot run.
+  return buildApiKeyTable(keys);
 }
 
 /**

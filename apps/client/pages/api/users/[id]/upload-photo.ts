@@ -3,6 +3,7 @@ import { AppFile } from '@bike4mind/database/content';
 import { User, withTransaction } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { resolveBrowserAppFileUploadUrl } from '@server/utils/browserUploadUrl';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
@@ -79,7 +80,8 @@ const handler = baseApi().post(
       { ability: req.ability }
     );
 
-    return res.json({ url: presignedUrl, fileId, fileKey });
+    // Self-host swaps the (browser-unreachable) MinIO presign for the same-origin upload proxy.
+    return res.json({ url: resolveBrowserAppFileUploadUrl(fileId, presignedUrl), fileId, fileKey });
   })
 );
 

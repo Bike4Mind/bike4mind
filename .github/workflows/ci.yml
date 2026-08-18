@@ -84,40 +84,61 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Pre-merge gate: a PR may point premium-overlay.lock.json at a b4m-overwatch
-      # BRANCH while preview-testing a premium change, but that must be bumped to a
-      # 40-char SHA before landing on main. This fails the merge queue so a branch
-      # pin can't reach main. (The deploy-time backstop moved to the internal
-      # deployer along with deploys.)
-      # Iterates ALL keys in the lock file, so a future overlay (b4m-tavern, …) is
-      # covered without editing this step. The same [0-9a-f]{40} check
-      # `pnpm premium:pin --check`
-      # (scripts/premium-pin.mjs) runs locally - keep the two in sync if this
-      # regex ever changes.
-      - name: Verify premium overlay pins are SHAs (merge-queue gate)
-        if: github.event_name == 'merge_group'
-        run: |
-          python3 - <<'PY'
-          import json, re, sys
-          try:
-              pins = json.load(open('premium-overlay.lock.json'))
-          except Exception as e:
-              print(f"::error::Could not read premium-overlay.lock.json: {e}")
-              sys.exit(1)
-          bad = {k: v for k, v in pins.items() if not re.fullmatch(r'[0-9a-f]{40}', str(v))}
-          for k, v in bad.items():
-              print(f"::error::premium-overlay.lock.json '{k}' must pin a 40-char SHA before merging to main (got: {v}). Bump it to the merged commit SHA.")
-          if bad:
-              sys.exit(1)
-          for k, v in pins.items():
-              print(f"Premium overlay pin verified: {k}={v}")
-          PY
-
       - name: Check for API files missing baseApi()
         run: bash scripts/check-no-baseapi.sh
 
       - name: Check user $lookup field projections
         run: node scripts/check-user-lookup-projection.mjs
+
+      # Resolve what "added" means for the two ASCII checks below.
+      #
+      # `pull_request.base.sha` is the base-branch head recorded when the PR was opened -
+      # NOT the fork point, and it does not move as the base branch advances. Both checks
+      # scan ADDED lines relative to that base, so on a long-lived PR every commit main
+      # gained in the meantime is attributed to the PR. That is not hypothetical: a PR
+      # opened 83 commits back failed this job on em-dashes that were already on main, in
+      # files it never touched, and no change to the PR could have cleared it.
+      #
+      # The real base is the merge base of the base branch and what we have checked out.
+      # On a `pull_request` run the checkout is the merge ref, so this resolves to the base
+      # branch tip and the diff is exactly the PR's net contribution. Falls back to the
+      # event's own sha for push / merge_group, and to the empty string if nothing resolves -
+      # which makes both scripts over-scan the whole tree rather than silently check nothing.
+      - name: Resolve base for the ASCII checks
+        id: ascii-base
+        # Both values arrive as env, never interpolated into the script body. `BASE_REF` is a
+        # branch name, and git permits `;`, `$()`, backticks, `|` and quotes in a ref, so an
+        # inline `${{ }}` would let a crafted base branch break out of the quoting and run
+        # arbitrary commands on the runner. Env values are passed as data and are never parsed
+        # by the shell, which is also the pattern the two checks below already used.
+        env:
+          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          resolved="$EVENT_BASE"
+          if [ -n "$BASE_REF" ]; then
+            if git fetch --no-tags --quiet origin "$BASE_REF" 2>/dev/null; then
+              if merge_base=$(git merge-base FETCH_HEAD HEAD 2>/dev/null); then
+                resolved="$merge_base"
+              fi
+            fi
+          fi
+          echo "base=$resolved" >> "$GITHUB_OUTPUT"
+          echo "ASCII checks diff against ${resolved:-<whole tree>} (event base was ${EVENT_BASE:-<none>})"
+
+      # Mirrors the husky pre-commit guard so a `--no-verify` bypass is still caught.
+      - name: Check for raw control bytes in source files
+        run: bash scripts/check-no-control-bytes.sh --changed "$CONTROL_BYTES_BASE"
+        env:
+          CONTROL_BYTES_BASE: ${{ steps.ascii-base.outputs.base }}
+
+      # The other half of the ASCII-only rule. Scans ADDED lines only, so the pre-existing
+      # em-dashes in ~645 tracked files do not gate anything; same base resolution as above.
+      - name: Check for smart punctuation in added lines
+        run: bash scripts/check-no-smart-punctuation.sh --changed "$SMART_PUNCTUATION_BASE"
+        env:
+          SMART_PUNCTUATION_BASE: ${{ steps.ascii-base.outputs.base }}
 
       - name: Check deploy contract matches infra
         run: python3 scripts/check-deploy-contract.py
@@ -183,7 +204,16 @@ jobs:
           path: |
             b4m-core/*/dist
             packages/database/dist
-          retention-days: 7
+          # Intra-run handoff only: the jobs that consume this all `needs:
+          # core-build`, so it is dead weight the moment the run ends. It was on
+          # 7 days, which at ~1.8 GiB/day of CI artifacts overran the org's 2 GB
+          # Actions+Packages storage pool on 2026-07-25 and blocked EVERY deploy
+          # (staging, previews and production promotion) with "Failed to
+          # CreateArtifact: Artifact storage quota has been hit" for four days.
+          # Storage is billed regardless of repo visibility - public repos get
+          # free minutes, not free storage. Same content hash re-uploads once per
+          # run anyway, so this is not a cross-run cache and 1 day costs nothing.
+          retention-days: 1
           if-no-files-found: error
 
   typecheck:
@@ -328,6 +358,62 @@ jobs:
       - name: Lint (errors only)
         run: pnpm exec eslint . --quiet --cache --cache-location node_modules/.cache/eslint/
 
+  # OpenAPI contract gate: the spec is generated from the same Zod schemas that
+  # validate requests at runtime, so it cannot drift silently - UNLESS a schema
+  # change lands without regenerating the committed spec. This job regenerates
+  # and fails on any diff, then structurally lints the spec (redocly). Source
+  # only: generation runs via tsx (no core build), so this leg needs neither the
+  # core-build artifact nor SST types - it depends on `changes` directly.
+  openapi:
+    needs: changes
+    if: needs.changes.outputs.deployable == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    name: OpenAPI Spec
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.pnpm-store
+            node_modules
+            */*/node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --recursive
+
+      - name: Regenerate OpenAPI spec from Zod schemas
+        run: pnpm turbo:openapi:generate
+
+      # Fails the PR if a schema change did not regenerate the committed spec.
+      - name: Verify committed spec is up to date (no drift)
+        run: git diff --exit-code apps/client/public/openapi.json
+
+      # Structural lint. Rules + intentional-rule exceptions live in redocly.yaml.
+      - name: Lint OpenAPI spec (redocly)
+        run: pnpm --package=@redocly/cli@1.34.5 dlx redocly lint apps/client/public/openapi.json
+
   # Tests run as a matrix of shards so wall time is the slowest shard, not the
   # serial sum. The heavy suites are isolated onto their own runners:
   #   - client: the large apps/client suite (thousands of fast files) — alone so
@@ -442,6 +528,28 @@ jobs:
         run: pnpm sst install
         env:
           CI: 'true'
+
+      # Persist the downloaded mongod binary across runs so the pre-warm below is usually a
+      # no-op restore. restore-keys lets a lockfile bump reuse the prior binary (the pre-warm
+      # then tops up any new version) instead of a cold download every time.
+      - name: Cache mongodb-memory-server binary
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/mongodb-binaries
+          key: ${{ runner.os }}-mongodb-binaries-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-mongodb-binaries-
+
+      # Resolve (download if absent) the mongod binary in a dedicated step, OUTSIDE any test's
+      # beforeAll hook budget. Under CI load a cold download + createMongoServer's port-retry
+      # loop can blow that budget, timing out the hook and silently skipping the whole file -
+      # the #1 flake in #1098. Fail-soft: tests still download on demand if this misses. Uses
+      # the same package + default version as createMongoServer, so the same binary is cached.
+      - name: Pre-warm mongodb-memory-server binary
+        continue-on-error: true
+        run: >-
+          pnpm --filter @bike4mind/database exec node -e
+          "require('mongodb-memory-server').MongoBinary.getPath({}).then(p => console.log('mongod binary ready:', p)).catch(e => console.warn('prewarm skipped:', e.message))"
 
       - name: Run Tests (${{ matrix.shard.name }})
         run: pnpm --recursive --workspace-concurrency=4 ${{ matrix.shard.filter }} test
@@ -578,7 +686,7 @@ jobs:
   # ============================================================
   ci-complete:
     name: CI Complete
-    needs: [changes, core-build, typecheck, lint, test, cli-e2e]
+    needs: [changes, core-build, typecheck, lint, openapi, test, cli-e2e]
     if: always()
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
@@ -588,13 +696,14 @@ jobs:
           CORE_BUILD: ${{ needs.core-build.result }}
           TYPECHECK: ${{ needs.typecheck.result }}
           LINT: ${{ needs.lint.result }}
+          OPENAPI: ${{ needs.openapi.result }}
           TEST: ${{ needs.test.result }}
           CLI_E2E: ${{ needs.cli-e2e.result }}
         run: |
-          echo "results: changes=$CHANGES core-build=$CORE_BUILD typecheck=$TYPECHECK lint=$LINT test=$TEST cli-e2e=$CLI_E2E"
+          echo "results: changes=$CHANGES core-build=$CORE_BUILD typecheck=$TYPECHECK lint=$LINT openapi=$OPENAPI test=$TEST cli-e2e=$CLI_E2E"
           # A CI leg that genuinely failed flips the check red. Skipped
           # (non-deployable change) is treated as passing.
-          for r in "$CHANGES" "$CORE_BUILD" "$TYPECHECK" "$LINT" "$TEST" "$CLI_E2E"; do
+          for r in "$CHANGES" "$CORE_BUILD" "$TYPECHECK" "$LINT" "$OPENAPI" "$TEST" "$CLI_E2E"; do
             if [ "$r" = "failure" ]; then
               echo "::error::A CI gate failed; failing the required check."
               exit 1

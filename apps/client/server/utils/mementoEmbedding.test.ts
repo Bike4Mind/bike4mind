@@ -6,7 +6,11 @@ const { generateEmbeddingMock, embeddingFactoryMock, getProviderFromModelMock } 
   getProviderFromModelMock: vi.fn(),
 }));
 
-vi.mock('@bike4mind/fab-pipeline', () => ({
+// Only the two boundaries are mocked. resolveEmbeddingConfig is pure provider-to-config
+// mapping and is exercised for real, so this test still covers which credential reaches
+// the factory rather than asserting against a stubbed answer.
+vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/fab-pipeline')>()),
   getProviderFromModel: getProviderFromModelMock,
   EmbeddingFactory: embeddingFactoryMock,
 }));

@@ -1,0 +1,15 @@
+{
+  "modelSummaries": [
+    {
+      "modelArn": "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-6-v1:0",
+      "modelId": "anthropic.claude-opus-6-v1:0",
+      "modelName": "Claude Opus 6",
+      "providerName": "Anthropic",
+      "inputModalities": ["TEXT", "IMAGE", "VIDEO"],
+      "outputModalities": ["TEXT", "HOLOGRAM"],
+      "responseStreamingSupported": true,
+      "inferenceTypesSupported": ["INFERENCE_PROFILE", "SERVERLESS_V2"],
+      "modelLifecycle": { "status": "SUNSETTING", "legacyTime": "2027-01-01T00:00:00.000Z" }
+    }
+  ]
+}

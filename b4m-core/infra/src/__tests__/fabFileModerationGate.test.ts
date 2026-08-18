@@ -175,6 +175,12 @@ const ALLOWLIST: Record<string, string> = {
 
   // --- Upload-only / delete-only: no read path. ---
   'apps/client/pages/api/files/createFabFile.ts': 'upload-only presigned PUT (getSignedUrl mode "put"), no read',
+  'apps/client/server/slack/dataLakeIngestDeps.ts':
+    'DI passthrough to the already-gated fabFileService.createFabFile, which withholds fileUrl for images; the adapter only forwards the mode createFabFile asks for',
+
+  // --- Audio-only generation, never an image. ---
+  'apps/client/server/utils/persistGeneratedAudio.ts':
+    'audio-only (type AUDIO, audio/* mime from TTS/sound-effects) — DI passthrough to the already-gated fabFileService.createFabFile, which withholds fileUrl for images; audio is never image content, so isImageServeable is inapplicable',
 
   // --- Synchronous pre-persist moderation, not the stored-moderationStatus gate. ---
   'apps/client/pages/api/agents/[id]/generate-avatar.ts':

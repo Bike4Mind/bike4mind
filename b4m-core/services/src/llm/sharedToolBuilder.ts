@@ -23,6 +23,7 @@ import type { ToolDefinition } from './tools/base/types';
 import { createDelegateToAgentTool, type SubagentUsageMeta } from './tools/implementation/delegateToAgent';
 import { createCoordinateTaskTool } from './tools/implementation/coordinateTask';
 import type { DagDispatcher, DagHandoffSignal } from './tools/implementation/coordinateTask';
+import { isToolOfferable, type ToolAvailability } from './toolAvailability';
 import { extractAndSaveEntitiesFromToolResult, shouldExtractEntitiesFromTool } from '../conversationContextService';
 import type { MinimalSessionRepository } from '../conversationContextService/types';
 
@@ -42,6 +43,17 @@ export interface ToolBuilderDeps {
   retrievalFilter?: ToolContext['retrievalFilter'];
   /** Agent-scoped KB restriction, forwarded to the tool context (see ToolContext.kbScope). */
   kbScope?: ToolContext['kbScope'];
+  /** Inlined-attachment ids, forwarded to the tool context (see ToolContext.inlinedAttachmentIds). */
+  inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
+  /** Fully-inlined-attachment ids, forwarded to the tool context (see ToolContext.fullyInlinedAttachmentIds). */
+  fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
+  /**
+   * Sink for tool-internal LLM spend, forwarded to the tool context. The agent
+   * executor wires this to fold nested tool generation into iteration billing (#630);
+   * omit on hosts that don't bill nested tool spend to the customer (e.g. the chat
+   * path). See ToolContext.onToolLlmUsage.
+   */
+  onToolLlmUsage?: ToolContext['onToolLlmUsage'];
   storage: BaseStorage;
   imageGenerateStorage: BaseStorage;
   imageProcessorLambdaName?: string;
@@ -191,6 +203,13 @@ export interface BuildSharedToolsOptions {
   agentOnlyMcpServers?: string[];
   getAbortSignal?: () => AbortSignal | undefined;
   externalTools?: Record<string, ToolDefinition>;
+  /**
+   * Per-request key-gated tool availability (from `resolveToolAvailability`). Omitted ->
+   * every enabled tool is offered unfiltered (callers that haven't wired it yet keep today's
+   * behavior). Passed, a tool the caller enabled but that has no working key/config is dropped
+   * from the schema sent to the model instead of reaching it and then throwing or refusing.
+   */
+  toolAvailability?: ToolAvailability;
 }
 
 // Sentinel types for wrapping. A tool may emit one of these generic
@@ -198,9 +217,21 @@ export interface BuildSharedToolsOptions {
 // payload is dispatched via onUiSideEffect (and the terse displayMessage replaces
 // the model-visible result) rather than echoed back to the model.
 // `populateDecomposition` loads a decomposed multi-step plan's first sub-problem.
-const VALID_SIDE_EFFECT_TYPES = new Set(['populateProblem', 'populateFamilyProblem', 'populateDecomposition']);
+// `populateScheduleRace` carries a solve tool's scheduling problem + its bounded race under a
+// type distinct from `populateProblem`, so a client predating it ignores the race rather than
+// persisting the wrapper as the brief (allowlisting it here is what lets the frame through).
+const VALID_SIDE_EFFECT_TYPES = new Set([
+  'populateProblem',
+  'populateScheduleRace',
+  'populateFamilyProblem',
+  'populateDecomposition',
+]);
 const TOOL_ARTIFACT_RE = /<artifact\s+([^>]*)>([\s\S]*?)<\/artifact>/gi;
-const TOOL_ATTR_RE = /(\w+)=["']([^"']*?)["']/g;
+// Value is anchored to its own quote kind so a double-quoted value can contain
+// apostrophes (title="Bob's App") and vice versa. Group 2 is the double-quoted
+// body, group 3 the single-quoted one; exactly one matches. Must stay in sync
+// with ATTRIBUTE_REGEX in utils/artifactParser.ts and the client mirror.
+const TOOL_ATTR_RE = /(\w+)=(?:"([^"]*)"|'([^']*)')/g;
 
 // ---------------------------------------------------------------------------
 // Main function
@@ -225,6 +256,7 @@ export function buildSharedTools(
     agentOnlyMcpServers = [],
     getAbortSignal,
     externalTools,
+    toolAvailability,
   } = options;
 
   const {
@@ -240,6 +272,8 @@ export function buildSharedTools(
     entitlementKeys,
     retrievalFilter,
     kbScope,
+    inlinedAttachmentIds,
+    fullyInlinedAttachmentIds,
   } = deps;
 
   // Merge built-in tools with any external tool definitions (e.g., Slack tools)
@@ -249,7 +283,7 @@ export function buildSharedTools(
     userId,
     user,
     logger,
-    { db, retrievalFilter, kbScope },
+    { db, retrievalFilter, kbScope, inlinedAttachmentIds, fullyInlinedAttachmentIds },
     storage,
     imageGenerateStorage,
     callbacks.onStatusUpdate,
@@ -260,6 +294,7 @@ export function buildSharedTools(
       deep_research: config.deep_research,
       image_generation: config.image_generation,
       edit_image: config.image_generation,
+      audio_generation: config.audio_generation,
     },
     model,
     imageProcessorLambdaName,
@@ -268,17 +303,27 @@ export function buildSharedTools(
     entitlementKeys ?? [],
     callbacks.sessionId,
     undefined, // codeMinifier - CLI-only (web-tree-sitter); server path has no minifier
-    deps.precomputed?.models
+    deps.precomputed?.models,
+    deps.onToolLlmUsage
   );
 
   // Filter to enabled tools only
   let tools: ICompletionOptionTools[] | undefined = undefined;
   if (enabledTools.length > 0) {
-    const mappedTools = enabledTools.filter(tool => tool in llmToolDefinitions).map(tool => llmToolDefinitions[tool]);
+    const mappedTools = enabledTools
+      .filter(tool => tool in llmToolDefinitions && isToolOfferable(tool, toolAvailability))
+      .map(tool => llmToolDefinitions[tool]);
 
     const undefinedTools = enabledTools.filter(tool => !llmToolDefinitions[tool]);
     if (undefinedTools.length > 0) {
       logger.warn(`Undefined tools requested (will be skipped): ${undefinedTools.join(', ')}`);
+    }
+
+    const unavailableTools = enabledTools.filter(
+      tool => tool in llmToolDefinitions && !isToolOfferable(tool, toolAvailability)
+    );
+    if (unavailableTools.length > 0) {
+      logger.info(`Enabled tools dropped as unavailable (no working key/config): ${unavailableTools.join(', ')}`);
     }
 
     tools = mappedTools.filter((tool): tool is ICompletionOptionTools => tool !== undefined);
@@ -522,7 +567,7 @@ function wrapToolsForSentinels(
               let attrMatch;
               TOOL_ATTR_RE.lastIndex = 0;
               while ((attrMatch = TOOL_ATTR_RE.exec(attrsStr)) !== null) {
-                attrs[attrMatch[1]] = attrMatch[2];
+                attrs[attrMatch[1]] = attrMatch[2] ?? attrMatch[3];
               }
 
               let metadata: Record<string, unknown> = {

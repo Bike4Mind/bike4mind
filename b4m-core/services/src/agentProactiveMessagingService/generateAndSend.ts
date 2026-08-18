@@ -23,7 +23,7 @@ import {
   IUsageEventRepository,
   IOrganizationRepository,
 } from '@bike4mind/common';
-import { generateTools } from '../llm';
+import { b4mTools, generateTools } from '../llm';
 
 interface GenerateAndSendProactiveMessageAdapters {
   config: ISessionAgentConfigDocument;
@@ -50,7 +50,12 @@ interface GenerateAndSendProactiveMessageAdapters {
      * Optional: recording degrades to a no-op when a caller leaves them unwired.
      */
     usageEvents?: Pick<IUsageEventRepository, 'record'>;
-    organizations?: Pick<IOrganizationRepository, 'findById'>;
+    /**
+     * Required: forwarded verbatim into `generateTools`'s `ToolContext['db']`, whose
+     * `organizations` field is itself required (#1674 - the data-lake retrieval resolver reads
+     * `findMembershipOrgIds` off it).
+     */
+    organizations: Pick<IOrganizationRepository, 'findById' | 'findMembershipOrgIds'>;
   };
   apiKeyTable: ApiKeyTable;
   /**
@@ -131,7 +136,7 @@ export async function generateAndSendProactiveMessage({
       {},
       model,
       undefined, // imageProcessorLambdaName
-      undefined, // tools (defaults to b4mTools)
+      b4mTools, // tools: full server-side tool set
       undefined, // allowedDirectories
       undefined, // entitlementKeys
       session.id, // sessionId: attribute proactive-message tool spend to its session

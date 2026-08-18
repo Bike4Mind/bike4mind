@@ -1,0 +1,8 @@
+{
+  "object": "list",
+  "data": [
+    { "id": "kimi-k3", "object": "model", "owned_by": "moonshot" },
+    { "id": "moonshot-embedding-1", "object": "model", "owned_by": "moonshot" },
+    { "id": "kimi-tts-preview", "object": "file", "owned_by": "moonshot" }
+  ]
+}

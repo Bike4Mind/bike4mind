@@ -15,36 +15,58 @@ import {
   Typography,
 } from '@mui/joy';
 import { useTheme } from '@mui/joy/styles';
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { useComputeHashes, useCheckDuplicates } from '@client/app/hooks/data/dataLakeWizard';
-
-function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 60);
-}
+import { slugifyDataLakeName } from '@client/app/hooks/data/dataLakeSlug';
+// The name, its slug rule, and the duplicate-name hint moved to the source step (#824), so
+// their imports live there now. tagPrefixIssue covers both prefix problems this step reports:
+// the reserved namespace and an overlap with another lake's prefix.
+import { tagPrefixIssue } from '@bike4mind/common';
+import { useDuplicatePrefixLake } from '@client/app/hooks/data/dataLakes';
+import { EmbeddingBudgetEstimate } from '@client/app/components/DataLakeWizard/EmbeddingBudgetEstimate';
 
 export default function ConfigStep() {
   const theme = useTheme();
   const config = useDataLakeWizardStore(s => s.config);
   const setConfig = useDataLakeWizardStore(s => s.setConfig);
+  const setTagPrefix = useDataLakeWizardStore(s => s.setTagPrefix);
   const targetLake = useDataLakeWizardStore(s => s.targetLake);
-  const taxonomy = useDataLakeWizardStore(s => s.taxonomy);
+  const optionalSteps = useDataLakeWizardStore(s => s.optionalSteps);
   const allFiles = useDataLakeWizardStore(s => s.allFiles);
   const duplicateCheckResults = useDataLakeWizardStore(s => s.duplicateCheckResults);
+  // Append mode inherits the target lake's prefix, which by definition already coexists with it.
+  const duplicatePrefixLake = useDuplicatePrefixLake(config.tagPrefix, !!targetLake);
+  const prefixIssue = tagPrefixIssue(config.tagPrefix, duplicatePrefixLake);
   const hashingProgress = useDataLakeWizardStore(s => s.hashingProgress);
 
   const computeHashes = useComputeHashes();
   const checkDuplicates = useCheckDuplicates();
+
+  // Append mode reuses the target lake's real slug (which may be disambiguated, e.g.
+  // "niche-2"), so show that rather than what its name slugifies to. Name and slug are set
+  // on the source step; they appear here read-only in the summary.
+  const slug = targetLake ? targetLake.slug : slugifyDataLakeName(config.name);
+
+  // The Tag Prefix's only editable home is here (the taxonomy step, its former competing
+  // owner, was removed - AI tag suggestion now runs post-upload and never touches the prefix).
+  // Append mode always inherits the target lake's.
+  const prefixEditable = !targetLake;
 
   const autoTriggered = useRef(false);
 
   const includedFiles = allFiles.filter(f => !f.excluded);
   const includedCount = includedFiles.length;
   const duplicateCount = includedFiles.filter(f => f.isDuplicate).length;
+  // The same set that will actually be embedded - a skipped duplicate uploads nothing, so the
+  // cost estimate must use this arithmetic, not the raw included list. Memoized (keyed on the
+  // store's own allFiles reference, not the fresh includedFiles/filesToEmbed arrays derived
+  // above) so EmbeddingBudgetEstimate's own useMemo doesn't recompute on every unrelated render.
+  const filesForEstimate = useMemo(() => {
+    const eligible = allFiles.filter(f => !f.excluded);
+    const toEmbed = config.conflictResolution === 'skip' ? eligible.filter(f => !f.isDuplicate) : eligible;
+    return toEmbed.map(f => ({ name: f.relativePath, size: f.size }));
+  }, [allFiles, config.conflictResolution]);
 
   // Auto-trigger hashing on first mount
   useEffect(() => {
@@ -75,7 +97,7 @@ export default function ConfigStep() {
               <Typography level="body-xs">
                 These files join the existing lake (prefix <code>{targetLake.fileTagPrefix}</code>
                 {targetLake.requiredUserTag ? `, access tag “${targetLake.requiredUserTag}”` : ''}). Name, prefix, and
-                access tag can’t be changed here.
+                access tag can’t be changed here - edit them in the lake’s settings.
               </Typography>
             </Box>
           </Alert>
@@ -98,21 +120,6 @@ export default function ConfigStep() {
           </Alert>
         )}
 
-        {/* Name */}
-        <FormControl required>
-          <FormLabel>Data Lake Name</FormLabel>
-          <Input
-            data-testid="config-name-input"
-            value={config.name}
-            onChange={e => setConfig({ name: e.target.value })}
-            placeholder="e.g. Legal Contracts Knowledge Base"
-            disabled={!!targetLake}
-          />
-          <FormHelperText>
-            Slug: <code>{slugify(config.name) || '...'}</code>
-          </FormHelperText>
-        </FormControl>
-
         {/* Description */}
         <FormControl>
           <FormLabel>Description</FormLabel>
@@ -125,23 +132,31 @@ export default function ConfigStep() {
           />
         </FormControl>
 
-        {/* Tag Prefix */}
-        <FormControl required>
+        {/* Tag Prefix - editable only in create mode (see prefixEditable), locked in append
+            mode. Still reports a prefix problem even when locked, so an inherited value's
+            issue is visible here rather than only disabling Start Upload. */}
+        <FormControl required={prefixEditable} error={!!prefixIssue}>
           <FormLabel>Tag Prefix</FormLabel>
           <Input
+            data-testid="config-tag-prefix-input"
             value={config.tagPrefix}
-            onChange={e => setConfig({ tagPrefix: e.target.value })}
+            onChange={e => setTagPrefix(e.target.value)}
             onBlur={e => {
               const v = e.target.value.trim();
               if (v && !v.endsWith(':')) {
-                setConfig({ tagPrefix: v + ':' });
+                setTagPrefix(v + ':');
               }
             }}
             placeholder="e.g. legal:"
             sx={{ fontFamily: 'monospace' }}
-            disabled={!!targetLake}
+            disabled={!prefixEditable}
           />
-          <FormHelperText>All tags will be prefixed with this (must end with &quot;:&quot;)</FormHelperText>
+          <FormHelperText data-testid="datalake-config-tagprefix-help">
+            {prefixIssue ??
+              (prefixEditable
+                ? 'All tags will be prefixed with this (must end with ":"). Derived from the name - change it if you like.'
+                : 'Inherited from the existing data lake.')}
+          </FormHelperText>
         </FormControl>
 
         {/* Required User Tag */}
@@ -154,7 +169,8 @@ export default function ConfigStep() {
             disabled={!!targetLake}
           />
           <FormHelperText>
-            If set, only users with this tag can access this data lake. Leave blank to allow all authenticated users.
+            If set, only users with this tag can access this data lake. Leave blank to keep it private to you (share it
+            later from the lake&apos;s settings). Can be changed or removed there too.
           </FormHelperText>
         </FormControl>
 
@@ -206,6 +222,17 @@ export default function ConfigStep() {
             Upload Summary
           </Typography>
           <Stack gap={0.5}>
+            {/* Name is set on the source step; echo it here so the last screen before upload
+                still shows what is about to be created. */}
+            <Typography level="body-sm" data-testid="config-summary-name">
+              {targetLake ? 'Adding to' : 'Name'}: <strong>{config.name || '-'}</strong>
+              {slug && (
+                <Typography component="span" level="body-xs" color="neutral">
+                  {' '}
+                  (<code>{slug}</code>)
+                </Typography>
+              )}
+            </Typography>
             <Typography level="body-sm">
               Files to upload:{' '}
               <strong>
@@ -220,9 +247,11 @@ export default function ConfigStep() {
                 </Typography>
               )}
             </Typography>
-            <Typography level="body-sm">
-              Tag categories: <strong>{taxonomy.tags.filter(t => !t.deleted).length}</strong>
-            </Typography>
+            {optionalSteps.taxonomy && !targetLake && (
+              <Typography level="body-sm" color="neutral">
+                AI tag suggestions will run in the background after upload - review them from the Data Lakes list.
+              </Typography>
+            )}
             {duplicateCheckResults && (
               <Typography level="body-sm" color={duplicateCheckResults.duplicateCount > 0 ? 'warning' : 'success'}>
                 Duplicates: <strong>{duplicateCheckResults.duplicateCount}</strong>
@@ -234,6 +263,7 @@ export default function ConfigStep() {
                 Duplicate check: pending...
               </Typography>
             )}
+            <EmbeddingBudgetEstimate files={filesForEstimate} />
           </Stack>
         </Box>
 

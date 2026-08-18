@@ -44,12 +44,18 @@ import type { ChessArtifact, MermaidArtifact } from '@bike4mind/common';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import EditModeContent from './EditModeContent';
 import { ExpandCollapseButton } from './ExpandCollapseButton';
-import { IAgent } from '@bike4mind/common';
+import { IAgent, GENERATED_AUDIO_EXTENSION_RE, GENERATED_IMAGE_EXTENSION_RE } from '@bike4mind/common';
+import { ArtifactElisionBanner } from './ArtifactElisionBanner';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { isAxiosError } from 'axios';
 import { useConfig } from '@client/app/hooks/data/settings';
-import { parseArtifactsWithFallback, validateMermaidSyntax } from '@client/app/utils/artifactParser';
+import {
+  hasCompleteOpeningTag,
+  parseArtifactsWithFallback,
+  shouldWarnElidedArtifact,
+  validateMermaidSyntax,
+} from '@client/app/utils/artifactParser';
 import RechartsRenderer from '../Charts/RechartsRenderer';
 import ChessBoard from '../Chess/ChessBoard';
 import { useSessions } from '@client/app/contexts/SessionsContext';
@@ -64,6 +70,7 @@ import NavigationButtons from './NavigationButtons';
 import { NotebookExecutionButtons } from './NotebookExecutionButtons';
 import type { UiSideEffect } from '@bike4mind/common';
 import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
+import { getReplyTruncationState } from '@client/app/utils/replyTruncation';
 
 // Artifact system (extracted modules)
 import ArtifactRenderer from './artifacts/ArtifactRenderer';
@@ -82,11 +89,6 @@ import {
 // Code block registry: stable IDs for code blocks during streaming
 
 const codeBlockRegistry = new Map<string, Set<string>>();
-
-// Provider stop reasons that indicate the model finished its turn normally (vs being
-// cut off at the output-token ceiling). Used to tell a genuinely truncated artifact
-// apart from a completed reply that merely mentions `<artifact` in prose.
-const CLEAN_FINISH_REASONS = new Set(['end_turn', 'stop', 'tool_use', 'stop_sequence']);
 
 function simpleHash(str: string): string {
   let hash = 0;
@@ -454,6 +456,29 @@ function omitBetweenTags(input: string, openTag: string, closeTag: string): stri
   return result;
 }
 
+/**
+ * Partition the files a tool dropped into `quest.images` this turn into three disjoint
+ * buckets by extension: the inline <img> grid, inline <audio> players, and download
+ * chips (everything else - also surfaced in the Knowledge Base). Every entry lands in
+ * exactly one bucket, and `others` is the catch-all so a newly added media type degrades
+ * to a download chip rather than silently vanishing or rendering as a broken <img>.
+ */
+export function classifyGeneratedFiles(files: string[]): {
+  images: string[];
+  audio: string[];
+  others: string[];
+} {
+  const images: string[] = [];
+  const audio: string[] = [];
+  const others: string[] = [];
+  for (const file of files) {
+    if (GENERATED_IMAGE_EXTENSION_RE.test(file)) images.push(file);
+    else if (GENERATED_AUDIO_EXTENSION_RE.test(file)) audio.push(file);
+    else others.push(file);
+  }
+  return { images, audio, others };
+}
+
 // PromptReplies: top-level component (public API unchanged)
 
 const PromptReplies: FC<PromptReplyProps> = ({
@@ -475,28 +500,19 @@ const PromptReplies: FC<PromptReplyProps> = ({
 
   const generatedImagesUrl = `${cdnUrl}/generated`;
   // quest.images carries every file a tool generated this turn, but not all of them are
-  // images - e.g. excel_generation drops an .xlsx in here. Only actual images belong in the
-  // inline image grid; anything else would render as a broken <img>. Split by extension and
-  // surface non-image files as download chips instead (they also appear in the Knowledge Base).
-  const images = useMemo(
-    () =>
-      generatedImagesUrl
-        ? (messageData.images ?? [])
-            .filter(image => /\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i.test(image))
-            .map(image => `${generatedImagesUrl}/${image}`)
-            .filter(Boolean)
-        : [],
-    [messageData.images, generatedImagesUrl]
-  );
-  const generatedFiles = useMemo(
-    () =>
-      generatedImagesUrl
-        ? (messageData.images ?? [])
-            .filter(image => !/\.(png|jpe?g|webp|gif|svg|bmp|avif)$/i.test(image))
-            .map(image => ({ name: image, url: `${generatedImagesUrl}/${image}` }))
-        : [],
-    [messageData.images, generatedImagesUrl]
-  );
+  // images - e.g. excel_generation drops an .xlsx and music_generation an audio track in
+  // here. Classify once into the inline grid, inline audio players, and download chips
+  // (non-image/-audio files, also surfaced in the Knowledge Base) so each lands in exactly
+  // one place instead of rendering as a broken <img>. See classifyGeneratedFiles.
+  const { images, audio, generatedFiles } = useMemo(() => {
+    if (!generatedImagesUrl) return { images: [], audio: [], generatedFiles: [] };
+    const buckets = classifyGeneratedFiles(messageData.images ?? []);
+    return {
+      images: buckets.images.map(image => `${generatedImagesUrl}/${image}`),
+      audio: buckets.audio.map(file => `${generatedImagesUrl}/${file}`),
+      generatedFiles: buckets.others.map(name => ({ name, url: `${generatedImagesUrl}/${name}` })),
+    };
+  }, [messageData.images, generatedImagesUrl]);
   const videos = useMemo(
     () =>
       generatedImagesUrl ? messageData.videos?.map(video => `${generatedImagesUrl}/${video}`).filter(Boolean) : [],
@@ -542,6 +558,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
         images={images}
         generatedFiles={generatedFiles}
         videos={videos}
+        audio={audio}
         search={search}
         isExpandable={isExpandable}
         promptMeta={messageData.promptMeta}
@@ -1087,6 +1104,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   images = [],
   generatedFiles = [],
   videos = [],
+  audio = [],
   search,
   isExpandable = false,
   completed = false,
@@ -1333,34 +1351,22 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
     ? userSettings.rechartsDisplayMode || 'inline'
     : 'inline';
 
-  // An <artifact> tag that opened but never closed. This happens in two states:
-  //  - still streaming: we hide the partial to avoid flicker, OR
-  //  - COMPLETED while truncated: the model hit the output-token limit mid-artifact
-  //    (e.g. cut off inside a <script>), so the closing </artifact> never arrived.
-  // In the completed case the raw partial must NOT fall through to the markdown
-  // renderer, where it shows as broken/escaped HTML in the chat bubble.
-  const hasUnclosedArtifact = useMemo(() => {
-    if (!cleanReply) return false;
-    // Compare open/close tag counts rather than a bare substring check so a reply that
-    // emits one CLOSED artifact followed by a second UNCLOSED one is still detected
-    // (a substring check would see the lone </artifact> and miss the dangling tag).
-    const opens = (cleanReply.match(/<artifact\b/gi) || []).length;
-    const closes = (cleanReply.match(/<\/artifact>/gi) || []).length;
-    return opens > closes;
-  }, [cleanReply]);
-
-  const isStreamingArtifact = hasUnclosedArtifact && !completed;
-
-  // Distinguish a genuinely truncated artifact from a completed reply that merely
-  // *mentions* `<artifact` in prose or inline code (the artifact system prompt makes
-  // such mentions more likely). The server records the provider stop reason on
-  // promptMeta.finishReason: a clean finish (end_turn / stop / tool_use /
-  // stop_sequence) means the unclosed `<artifact` is a mention, not truncation - so we
-  // must NOT mangle it into a card. When the stop reason is 'max_tokens' (or absent -
-  // older quests / backends that don't report one) we fall back to containment so raw
-  // HTML can never leak.
-  const finishedCleanly = !!promptMeta?.finishReason && CLEAN_FINISH_REASONS.has(promptMeta.finishReason);
-  const isTruncatedArtifact = hasUnclosedArtifact && !!completed && !finishedCleanly;
+  // How the output-token ceiling affected this reply: an artifact left unclosed (still
+  // streaming vs completed-and-truncated), a reply cut off in prose, or one that produced
+  // nothing at all before the limit. See replyTruncation.ts for the exact rules.
+  const {
+    isStreamingArtifact,
+    isTruncatedArtifact,
+    notice: truncationNotice,
+  } = useMemo(
+    () =>
+      getReplyTruncationState({
+        reply: cleanReply,
+        completed: !!completed,
+        finishReason: promptMeta?.finishReason,
+      }),
+    [cleanReply, completed, promptMeta?.finishReason]
+  );
 
   const { artifacts, processedContent } = useMemo(() => {
     if (!cleanReply) return { artifacts: [], processedContent: '' };
@@ -1380,14 +1386,12 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       // drop the partial from that tag onward so no raw HTML leaks into the bubble.
       const artifactIndex = preprocessedContent.lastIndexOf('<artifact');
       const tail = artifactIndex !== -1 ? preprocessedContent.substring(artifactIndex) : '';
-      if (/^<artifact\s+[^>]*>/.test(tail)) {
+      if (hasCompleteOpeningTag(tail)) {
         preprocessedContent = `${preprocessedContent.trimEnd()}\n</artifact>`;
       } else {
         // Opening tag truncated mid-attribute - nothing renderable. Log the dropped
         // length so mid-attribute truncations are observable if they occur in prod.
-        console.warn(
-          `[Artifacts] Dropping truncated artifact with incomplete opening tag (${tail.length} chars) (#9259)`
-        );
+        console.warn(`[Artifacts] Dropping truncated artifact with incomplete opening tag (${tail.length} chars)`);
         preprocessedContent =
           artifactIndex === -1 ? preprocessedContent : preprocessedContent.substring(0, artifactIndex).trim();
       }
@@ -1403,6 +1407,24 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       processedContent: parseResult.cleanedContent,
     };
   }, [cleanReply, rechartsDisplayMode, isStreamingArtifact, isTruncatedArtifact]);
+
+  // Suspected elision: the model abbreviated the artifact body instead of running out of
+  // room, so the stop reason is clean and the truncation banner never fires. Decision logic
+  // lives in shouldWarnElidedArtifact (unit-tested); memoized because the local fallback
+  // scan walks every artifact body and this component re-renders per streamed token.
+  // Depends on the BOOLEAN, not the object: a referentially-fresh but identical
+  // `suspectedElision` would otherwise re-run the scan for no change in the answer.
+  const hasServerElisionVerdict = !!promptMeta?.suspectedElision;
+  const isElidedArtifact = useMemo(
+    () =>
+      shouldWarnElidedArtifact({
+        completed: !!completed,
+        isTruncatedArtifact,
+        suspectedElision: hasServerElisionVerdict,
+        artifacts,
+      }),
+    [completed, isTruncatedArtifact, hasServerElisionVerdict, artifacts]
+  );
 
   const chessArtifacts = useMemo(() => artifacts.filter(a => a.type === 'chess'), [artifacts]);
   const nonChessArtifacts = useMemo(() => artifacts.filter(a => a.type !== 'chess'), [artifacts]);
@@ -1517,7 +1539,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       {/* Truncated-artifact recovery banner: the response hit the output-token
           limit before the artifact closed. The partial is best-effort recovered into a
           card below the reply; never leak the raw HTML into the bubble. */}
-      {isTruncatedArtifact && (
+      {truncationNotice === 'artifact' && (
         <Alert
           data-testid="artifact-truncated-warning"
           color="warning"
@@ -1527,10 +1549,42 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
           <Typography level="title-sm">⚠️ Artifact was truncated</Typography>
           <Typography level="body-sm">
             This response reached the output length limit before the artifact finished generating. The preview below may
-            be incomplete — ask me to regenerate it (or to continue or shorten it) for a complete version.
+            be incomplete - ask me to regenerate it (or to continue or shorten it) for a complete version.
           </Typography>
         </Alert>
       )}
+
+      {/* Truncation that landed before any artifact tag was emitted. Without this the
+          bubble renders blank (or stops mid-sentence) with no explanation at all. */}
+      {(truncationNotice === 'reply-empty' ||
+        truncationNotice === 'reply-partial' ||
+        truncationNotice === 'reply-degenerate') && (
+        <Alert
+          data-testid="reply-truncated-warning"
+          color="warning"
+          variant="soft"
+          sx={{ my: 1, flexDirection: 'column', alignItems: 'flex-start', gap: 0.5 }}
+        >
+          <Typography level="title-sm">
+            {truncationNotice === 'reply-degenerate' ? '⚠️ Response stopped early' : '⚠️ Response was cut off'}
+          </Typography>
+          <Typography level="body-sm">
+            {truncationNotice === 'reply-degenerate'
+              ? // Deliberately does NOT say "ask me to continue": continuing from a
+                // degenerated tail is what tends to reproduce the loop.
+                'This response began repeating itself, so it was stopped early rather than run to the output length limit. The reply above is what completed before that point - rephrasing the request usually works better than continuing.'
+              : truncationNotice === 'reply-empty'
+                ? 'This response reached the output length limit before it produced any content. Try a smaller or more focused request, or ask for the work in parts.'
+                : 'This response reached the output length limit and stopped early. Ask me to continue, or try a smaller or more focused request.'}
+          </Typography>
+        </Alert>
+      )}
+
+      {/* Suspected-elision notice: the artifact finished cleanly but its body looks
+          abbreviated (placeholder comments, or handlers calling functions that were never
+          defined). Deliberately softer than the truncation copy above - this is a heuristic,
+          and the artifact below is shown exactly as generated. */}
+      {isElidedArtifact && <ArtifactElisionBanner />}
 
       {showSyntaxHighlight ? (
         <SyntaxHighlighter style={oneDark}>{processedContent || cleanReply}</SyntaxHighlighter>
@@ -1565,7 +1619,11 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
             />
           ) : (
             <>
-              {(cleanReply || images.length > 0 || generatedFiles.length > 0 || videos.length > 0) && (
+              {(cleanReply ||
+                images.length > 0 ||
+                generatedFiles.length > 0 ||
+                videos.length > 0 ||
+                audio.length > 0) && (
                 <Box
                   sx={{
                     position: 'relative',
@@ -1657,6 +1715,22 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                           </Box>
                         )}
 
+                        {audio.length > 0 && (
+                          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, width: '100%', mt: 1 }}>
+                            {audio.map((src, index) => (
+                              <Box
+                                key={index}
+                                component="audio"
+                                controls
+                                preload="metadata"
+                                src={src}
+                                data-testid="generated-audio-player"
+                                sx={{ width: '100%', maxWidth: 480 }}
+                              />
+                            ))}
+                          </Box>
+                        )}
+
                         {videos?.length > 0 && (
                           <Box
                             sx={{
@@ -1712,7 +1786,11 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                                 },
                               }}
                             />
-                            <Typography level="body-sm" sx={{ color: 'primary.700' }}>
+                            <Typography
+                              level="body-sm"
+                              sx={{ color: 'primary.700' }}
+                              data-testid="generating-artifact-indicator"
+                            >
                               Generating artifact...
                             </Typography>
                           </Box>

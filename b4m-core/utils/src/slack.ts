@@ -1,7 +1,7 @@
 import axios, { isAxiosError } from 'axios';
 import { Logger } from '@bike4mind/observability';
 import { getNotificationDeduplicator } from './notificationDeduplicator';
-import { CloudWatchLogsEvent } from 'aws-lambda';
+import type { CloudWatchLogsEvent, CloudWatchLogsDecodedData, CloudWatchLogsLogEvent } from 'aws-lambda';
 import * as util from 'node:util';
 import * as zlib from 'node:zlib';
 
@@ -24,7 +24,7 @@ export const notifyEventLogsToSlack = async ({
   // Decode from base64 and decompress the data
   const payload = Buffer.from(event.awslogs.data, 'base64');
   const decompressed = await util.promisify(zlib.gunzip)(payload);
-  const logData = JSON.parse(decompressed.toString('utf8'));
+  const logData: CloudWatchLogsDecodedData = JSON.parse(decompressed.toString('utf8'));
 
   const allowedStages = enabledStages ?? ['production'];
   if (!allowedStages.includes(stage)) return;
@@ -49,7 +49,7 @@ export const notifyEventLogsToSlack = async ({
    *   ]
    * }
    */
-  const logEvents: { id: string; timestamp: number; message: string }[] = logData.logEvents;
+  const logEvents: CloudWatchLogsLogEvent[] = logData.logEvents;
 
   for (const logEvent of logEvents) {
     try {

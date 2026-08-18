@@ -42,11 +42,18 @@ export interface IMementoDocument extends IMemento, IMongoDocument {
 }
 
 export interface IMementoRepository extends IBaseRepository<IMementoDocument> {
+  /**
+   * `limit`/`afterId` are opt-in keyset paging over `_id`, which is unique and so gives a total
+   * order and an exact cursor. Supplying neither leaves the query exactly as it was for the
+   * existing unpaged callers - in particular it stays unsorted.
+   */
   findByUserId(
     userId: string,
     options: {
       tier?: MementoTier;
       select?: string;
+      limit?: number;
+      afterId?: string;
     }
   ): Promise<IMementoDocument[]>;
   /**

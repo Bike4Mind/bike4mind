@@ -1,3 +1,4 @@
+import type { AttachScopeMode } from '@bike4mind/common';
 import React, { useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Box, CircularProgress, Dropdown, IconButton, Menu, MenuButton } from '@mui/joy';
@@ -47,8 +48,8 @@ interface SessionToolbarProps {
   toggleFileUpload: () => void;
   setFileBrowserOpen: (open: boolean) => void;
   rollRandomDice: () => Promise<void>;
-  isSessionFileMode: boolean;
-  setIsSessionFileMode: (mode: boolean) => void;
+  attachScopeMode: AttachScopeMode;
+  setAttachScopeMode: (mode: AttachScopeMode) => void;
   totalFilesCount: number;
   hasEmbeddingMismatches: boolean;
   model: string;
@@ -103,8 +104,8 @@ export function SessionToolbar(props: SessionToolbarProps) {
     toggleFileUpload,
     setFileBrowserOpen,
     rollRandomDice,
-    isSessionFileMode,
-    setIsSessionFileMode,
+    attachScopeMode,
+    setAttachScopeMode,
     totalFilesCount,
     hasEmbeddingMismatches,
     model,
@@ -188,8 +189,8 @@ export function SessionToolbar(props: SessionToolbarProps) {
                     }
                   }}
                   onAddFromFileBrowser={() => setFileBrowserOpen(true)}
-                  isSessionFileMode={isSessionFileMode}
-                  onToggleFileMode={setIsSessionFileMode}
+                  attachScopeMode={attachScopeMode}
+                  onAttachScopeModeChange={setAttachScopeMode}
                   totalFilesCount={totalFilesCount}
                   chatInputValue={chatInputValue}
                   onOptimizePrompt={async () => {

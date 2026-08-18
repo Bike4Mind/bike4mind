@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { useShallow } from 'zustand/react/shallow';
@@ -6,14 +6,19 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useLocation, useSearch } from '@tanstack/react-router';
 import { createOptimisticPromptBubble, createOptimisticSessionId } from '@client/app/utils/llm';
 import { useSessionRouter } from '@client/app/hooks/useSessionRouter';
+import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
+import useCreateDataLakeSession from '@client/app/hooks/useCreateDataLakeSession';
 
 import {
+  AudioGenerationToolCall,
   B4MLLMTools,
   GenerateImageToolCall,
   IChatHistoryItemDocument,
   ISessionDocument,
   ModelName,
+  requiresImageInput,
 } from '@bike4mind/common';
+import { useAudioGenSettings } from '@client/app/stores/useAudioGenSettings';
 import type { IAgent } from '@bike4mind/common';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -45,7 +50,7 @@ import {
 } from '@client/app/hooks/useAgentMentions';
 import { useAgentExecutionDispatch } from '@client/app/hooks/useAgentExecution';
 import { useAgentExecutionStore } from '@client/app/stores/useAgentExecutionStore';
-import { classifyQueryComplexity, routeQuery } from '@bike4mind/common';
+import { classifyQueryComplexity, isImageAttachment, routeQuery } from '@bike4mind/common';
 import { pickOrchestrationAgent } from '@client/app/utils/agentOrchestration';
 import { evaluateShortCircuits, hasExplicitAgentLiteral } from '@client/app/utils/intentClassifierShortCircuits';
 import { useIntentClassifier } from '@client/app/hooks/useIntentClassifier';
@@ -144,6 +149,7 @@ export function useSendMessage({
   const recordImageTemplateUse = useRecordImageTemplateUse();
   const navigate = useNavigate();
   const location = useLocation();
+  const createDataLakeSession = useCreateDataLakeSession();
   const { projectId: routerProjectId } = useSearch({ strict: false }) as { projectId?: string };
   const { data: modelInfo } = useModelInfo();
   const { accessibleModels, userTags } = useAccessibleModels();
@@ -258,7 +264,15 @@ export function useSendMessage({
   // `execution_started` event during the `/new -> /notebooks/$id` swap.
   const agentExecution = useAgentExecutionDispatch();
 
-  const [submitting, setSubmitting] = useState<boolean>(false);
+  const [submitting, setSubmittingState] = useState<boolean>(false);
+  // Ref-based mutex: React state updates are batched, so two rapid calls can
+  // both read `submitting === false` from their closure. The ref flips
+  // synchronously, making the guard at the top of handleSendClick airtight.
+  const submittingRef = useRef(false);
+  const setSubmitting = useCallback((value: boolean) => {
+    submittingRef.current = value;
+    setSubmittingState(value);
+  }, []);
   const [stoppingMessage, setStoppingMessage] = useState<boolean>(false);
   const [pendingAutoSubmitGoal, setPendingAutoSubmitGoal] = useState<string | null>(null);
   const [enableQuestMasterOnSubmit, setEnableQuestMasterOnSubmit] = useState(false);
@@ -294,7 +308,9 @@ export function useSendMessage({
 
     try {
       await stopChatMessage(currentSessionId);
-      toast.success('Generation cancelled successfully');
+      // No success toast here: the inline statusMessage below already surfaces the
+      // cancellation, and a bottom-right toast covers the whole prompt area on
+      // narrow layouts (e.g. chat docked to the right).
       setChatCompletion(prev => ({
         ...prev,
         completed: true,
@@ -316,7 +332,11 @@ export function useSendMessage({
     newPrompt?: string,
     options?: { forceEnableQuestMaster?: boolean; toolsOverride?: B4MLLMTools[] }
   ): Promise<IChatHistoryItemDocument | undefined> => {
-    if (submitting) return;
+    if (submittingRef.current) return;
+
+    // Lock out concurrent sends immediately so a second click/Enter during
+    // validation or the host-create await cannot slip through the guard above.
+    setSubmitting(true);
 
     // For editor-driven sends (newPrompt === undefined) serialize the composer to
     // markdown so inline formatting (Ctrl+B / Ctrl+I) round-trips into the rendered
@@ -343,6 +363,7 @@ export function useSendMessage({
     if (errorMessage) {
       console.error(errorMessage);
       toast.error(errorMessage);
+      setSubmitting(false);
       return;
     }
 
@@ -358,14 +379,32 @@ export function useSendMessage({
       const hostCreateSession = useSessionRouter.getState().hostCreateSession;
       if (hostCreateSession) {
         await hostCreateSession(prompt);
+        setSubmitting(false);
         return;
       }
     }
 
-    setSubmitting(true);
+    // Data Lake mode with no session yet: create the grounded session up front so the FIRST
+    // message is retrieval-grounded. Creation (cache seeding, adoption, /new -> notebook URL
+    // swap) lives in useCreateDataLakeSession, shared with the explorer's file-click path.
+    // (The submit lock at the top of this function keeps a rapid second Enter from racing
+    // the awaited create into a second creation.)
+    let dataLakeCreated: ISessionDocument | null = null;
+    if (!currentSession && useDataLakeMode.getState().enabled) {
+      try {
+        dataLakeCreated = await createDataLakeSession();
+      } catch (error) {
+        console.error('Data Lake session create failed:', error);
+        setSubmitting(false);
+        toast.error("Couldn't start the chat - please try again.");
+        return;
+      }
+    }
+
     setSessionLayout({ selectedArtifactId: undefined, artifactData: undefined });
     const session = currentSession;
     let sessionToSend = session;
+    if (dataLakeCreated) sessionToSend = dataLakeCreated;
     let isNewSession = false;
     // Tracks the client-generated tmpId during optimistic pre-navigation so we
     // can clean up the fake cache entry if the API call fails.
@@ -594,6 +633,21 @@ export function useSendMessage({
       output_format,
     };
 
+    // Snapshot the current audio-generation selections so the audio_generation tool has
+    // provider/voice/format/duration defaults without the model having to pick them. Read
+    // synchronously from the store (single source of truth, #1055/PR #1183) at send time,
+    // exactly as the direct Generate Audio action does. An empty `voice` stays empty so the
+    // server falls back to the user's preferredVoice / provider default.
+    const audioState = useAudioGenSettings.getState();
+    const audioSettings: AudioGenerationToolCall = {
+      ttsProvider: audioState.ttsProvider,
+      voice: audioState.voice || undefined,
+      format: audioState.format,
+      languageCode: audioState.languageCode || undefined,
+      durationSeconds: audioState.durationSeconds,
+      promptInfluence: audioState.promptInfluence,
+    };
+
     const currentModelInfo = modelInfo?.find(m => m.id === model);
     // Tool-resolution ladder (model-capability gate -> Smart recommendations -> Fast ->
     // briefcase per-message override) extracted to useLLMSettingsAssembly.
@@ -609,13 +663,33 @@ export function useSendMessage({
       return;
     }
 
-    // Warn if images are attached but model doesn't support vision
+    // Warn if images are attached but a TEXT model can't see them (no vision). Gated to text
+    // models: for image models "vision" is irrelevant - image-input capability is handled by
+    // the image-model block below. Without the type gate this fired for every image model
+    // (none set supportsVision), wrongly telling a Kontext user - a model that REQUIRES an
+    // image - that their image "will not be visible".
     const hasImageFiles =
-      pendingMessageFiles.some(pf => pf.fabFile.mimeType?.startsWith('image/')) ||
-      workBenchFiles.some(f => f.mimeType?.startsWith('image/'));
-    if (hasImageFiles && currentModelInfo && !currentModelInfo.supportsVision) {
+      pendingMessageFiles.some(pf => isImageAttachment(pf.fabFile.mimeType)) ||
+      workBenchFiles.some(f => isImageAttachment(f.mimeType));
+    if (hasImageFiles && currentModelInfo?.type === 'text' && !currentModelInfo.supportsVision) {
       toast.warning(
         `${currentModelInfo.name || model} does not support image input. Your images will not be visible to the model.`
+      );
+    }
+
+    // Image-gen: a text-to-image-only model ('none' - no variation support and not a
+    // required-input model like Kontext/Fill) can't use an attached image. The server
+    // drops it and generates from the prompt alone, so warn rather than let it silently
+    // vanish. Uses hasImageFiles (workbench AND inline paperclip attachments) since both
+    // now feed generation. (Vision above is the text-model case; this is the image-model case.)
+    if (
+      hasImageFiles &&
+      currentModelInfo?.type === 'image' &&
+      !currentModelInfo.supportsImageVariation &&
+      !requiresImageInput(currentModelInfo.id)
+    ) {
+      toast.info(
+        `${currentModelInfo.name || model} can't transform an attached image - generating from your prompt only.`
       );
     }
 
@@ -656,6 +730,7 @@ export function useSendMessage({
           researchMode,
           deepResearchConfig,
           imageConfig: imageSettings,
+          audioConfig: audioSettings,
           modelConfigurations: accessibleModels,
           userTags,
           setChatCompletion,
@@ -698,6 +773,7 @@ export function useSendMessage({
           researchMode,
           deepResearchConfig,
           imageConfig: imageSettings,
+          audioConfig: audioSettings,
           setChatCompletion,
           ...llmSettings,
           mcpServers: enabledMcpServers ?? undefined,
@@ -715,7 +791,7 @@ export function useSendMessage({
     // Optimistic pre-navigation: on /new, always create a fresh session immediately,
     // even if currentSession is stale from the previous route (useEffect cleanup runs
     // after render, so context may not be cleared yet when the user sends quickly).
-    if (location.pathname === '/new') {
+    if (location.pathname === '/new' && !dataLakeCreated) {
       isNewSession = true;
       const tmpId = createOptimisticSessionId();
       optimisticTmpId = tmpId;
@@ -774,7 +850,10 @@ export function useSendMessage({
         // `preferredImageModel` resolution above (#agent-mode-persona). Falls
         // back to the caller's `model` when neither agent pins one.
         const dispatchModel = (orchestrationAgent ?? mentionedAgent)?.preferredModel ?? (model as string);
-        let dispatchSessionId = currentSessionId;
+        // `currentSessionId` is a stale render-closure value on `/new` (still null even
+        // after the Data Lake seam above just created + set the session), so fall back to
+        // the locally-created id to avoid minting a second, ungrounded session here.
+        let dispatchSessionId = currentSessionId ?? dataLakeCreated?.id;
         if (!dispatchSessionId) {
           const realSession = await generateNewSession(
             prompt.slice(0, 60),
@@ -893,6 +972,13 @@ export function useSendMessage({
           // (consumed only by buildSubagentToolConfig), so it can't reintroduce
           // the prior `structuredClone` failure.
           imageConfig: imageSettings.model ? imageSettings : undefined,
+          // Audio config parity with imageConfig: forward the user's saved audio
+          // settings so the executor's audio_generation tool resolves the same
+          // provider/voice/format the classic-chat path uses (`audioSettings` is
+          // the useAudioGenSettings snapshot taken above). Without it the tool
+          // falls back to OpenAI + provider-default voice, ignoring the Audio tab
+          // and hard-failing for an ElevenLabs-only user.
+          audioConfig: audioSettings,
           // Memento parity with chat_completion. Mirrors the
           // `enableMementos: isMementosEnabled` payload field used by the
           // chat-completion dispatchers above so agent-mode runs evaluate

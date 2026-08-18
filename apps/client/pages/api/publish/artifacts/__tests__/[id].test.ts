@@ -194,3 +194,137 @@ describe('PATCH domain access gate - stored as entered, validated', () => {
     expect(artifact.accessGate).toEqual({ kind: 'domain', allowedDomains: ['acme.onmicrosoft.com'] });
   });
 });
+
+describe('PATCH /api/publish/artifacts/[id] - discoverable (search-engine opt-in)', () => {
+  async function patchBody(body: Record<string, unknown>, artifact = makeArtifact()) {
+    findOne.mockResolvedValue(artifact);
+    const { req, res } = createMocks({ method: 'PATCH' });
+    (req as unknown as { query: unknown }).query = { id: 'pub-1' };
+    (req as unknown as { user?: unknown }).user = { id: OWNER };
+    (req as unknown as { body: unknown }).body = body;
+    (req as unknown as { logger: unknown }).logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+    return { res, artifact };
+  }
+
+  it('sets discoverable when the owner opts in', async () => {
+    const { res, artifact } = await patchBody({ discoverable: true });
+    expect(res._getStatusCode()).toBe(200);
+    expect((artifact as unknown as { discoverable?: boolean }).discoverable).toBe(true);
+  });
+
+  it('clears discoverable when the owner opts back out', async () => {
+    const artifact = makeArtifact();
+    (artifact as unknown as { discoverable?: boolean }).discoverable = true;
+    const { res } = await patchBody({ discoverable: false }, artifact);
+    expect(res._getStatusCode()).toBe(200);
+    expect((artifact as unknown as { discoverable?: boolean }).discoverable).toBe(false);
+  });
+
+  it('leaves discoverable untouched when the field is absent from the patch', async () => {
+    const artifact = makeArtifact();
+    (artifact as unknown as { discoverable?: boolean }).discoverable = true;
+    await patchBody({ title: 'Renamed' }, artifact);
+    expect((artifact as unknown as { discoverable?: boolean }).discoverable).toBe(true);
+  });
+
+  it('rejects a non-boolean discoverable', async () => {
+    const { res } = await patchBody({ discoverable: 'yes' });
+    expect(res._getStatusCode()).toBe(400);
+  });
+
+  it('purges the CDN when discoverability changes - the robots header is cached', async () => {
+    const { invalidatePublishCdn } = await import('@server/services/publish');
+    vi.mocked(invalidatePublishCdn).mockClear();
+    await patchBody({ discoverable: true });
+    expect(invalidatePublishCdn).toHaveBeenCalled();
+  });
+
+  it('does NOT purge when discoverable is re-sent unchanged', async () => {
+    const { invalidatePublishCdn } = await import('@server/services/publish');
+    vi.mocked(invalidatePublishCdn).mockClear();
+    const artifact = makeArtifact();
+    (artifact as unknown as { discoverable?: boolean }).discoverable = true;
+    await patchBody({ discoverable: true }, artifact);
+    expect(invalidatePublishCdn).not.toHaveBeenCalled();
+  });
+});
+
+describe('PATCH /api/publish/artifacts/[id] - discoverable de-arms on leaving open-public', () => {
+  async function patchBody(body: Record<string, unknown>, artifact = makeArtifact()) {
+    findOne.mockResolvedValue(artifact);
+    const { req, res } = createMocks({ method: 'PATCH' });
+    (req as unknown as { query: unknown }).query = { id: 'pub-1' };
+    (req as unknown as { user?: unknown }).user = { id: OWNER };
+    (req as unknown as { body: unknown }).body = body;
+    (req as unknown as { logger: unknown }).logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+    return { res, artifact };
+  }
+
+  /** A listed, open-public artifact. */
+  function listedArtifact() {
+    const a = makeArtifact();
+    (a as unknown as { discoverable?: boolean }).discoverable = true;
+    return a;
+  }
+
+  const isDiscoverable = (a: unknown) => (a as { discoverable?: boolean }).discoverable;
+
+  it('clears discoverable when visibility drops to private', async () => {
+    // Otherwise the flag survives inert and silently re-arms indexing whenever the
+    // artifact is widened back to public - nobody chose that in context.
+    const { res, artifact } = await patchBody({ visibility: 'private' }, listedArtifact());
+    expect(res._getStatusCode()).toBe(200);
+    expect(isDiscoverable(artifact)).toBe(false);
+  });
+
+  it('clears discoverable when a passphrase gate is added', async () => {
+    const { res, artifact } = await patchBody(
+      { accessGate: { kind: 'passphrase', passphrase: 'a-long-passphrase' } },
+      listedArtifact()
+    );
+    expect(res._getStatusCode()).toBe(200);
+    expect(isDiscoverable(artifact)).toBe(false);
+  });
+
+  it('clears discoverable when a domain gate is added', async () => {
+    const { res, artifact } = await patchBody(
+      { accessGate: { kind: 'domain', allowedDomains: ['acme.com'] } },
+      listedArtifact()
+    );
+    expect(res._getStatusCode()).toBe(200);
+    expect(isDiscoverable(artifact)).toBe(false);
+  });
+
+  it('rejects discoverable:true in the SAME patch that adds a gate', async () => {
+    // Apply-order independence: the de-arm runs against the final open-public state.
+    const { artifact } = await patchBody({
+      discoverable: true,
+      accessGate: { kind: 'passphrase', passphrase: 'a-long-passphrase' },
+    });
+    expect(isDiscoverable(artifact)).toBe(false);
+  });
+
+  it('leaves discoverable alone while the artifact stays open-public', async () => {
+    const { artifact } = await patchBody({ title: 'Renamed' }, listedArtifact());
+    expect(isDiscoverable(artifact)).toBe(true);
+  });
+
+  it('purges the CDN on an implicit de-arm, not just an explicit toggle', async () => {
+    // The robots header is cached bytes; a de-arm that skipped the purge would keep
+    // serving an indexable copy for up to s-maxage.
+    const { invalidatePublishCdn } = await import('@server/services/publish');
+    vi.mocked(invalidatePublishCdn).mockClear();
+    await patchBody({ visibility: 'private' }, listedArtifact());
+    expect(invalidatePublishCdn).toHaveBeenCalled();
+  });
+
+  it('does not re-list an artifact when a gate is later cleared', async () => {
+    const a = makeArtifact();
+    (a as unknown as { discoverable?: boolean }).discoverable = false;
+    (a as unknown as { accessGate: unknown }).accessGate = { kind: 'passphrase' };
+    const { artifact } = await patchBody({ accessGate: null }, a);
+    expect(isDiscoverable(artifact)).toBe(false);
+  });
+});

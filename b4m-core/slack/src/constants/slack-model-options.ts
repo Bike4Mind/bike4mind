@@ -2,10 +2,12 @@ import {
   AnthropicBackend,
   UndifferentiatedBedrockBackend,
   GeminiBackend,
+  KimiBackend,
   OllamaBackend,
   OpenAIBackend,
   XAIBackend,
   AWSBackend,
+  buildApiKeyTable,
 } from '@bike4mind/llm-adapters';
 import { ModelBackend } from '@bike4mind/common';
 import type { ModelInfo } from '@bike4mind/common';
@@ -31,6 +33,7 @@ const BACKEND_DISPLAY_NAMES: Partial<Record<ModelBackend, string>> = {
   [ModelBackend.Bedrock]: 'Bedrock',
   [ModelBackend.Gemini]: 'Gemini',
   [ModelBackend.XAI]: 'xAI',
+  [ModelBackend.Kimi]: 'Moonshot (Kimi)',
   [ModelBackend.Ollama]: 'Ollama',
   [ModelBackend.AWS]: 'AWS',
 };
@@ -51,13 +54,7 @@ export async function buildSlackModelOptionsFromDashboard(): Promise<{
     };
     const coreKeys = await apiKeyService.getEffectiveLLMApiKeys('system', dbAdapters);
 
-    const apiKeys = {
-      openai: coreKeys.openai || undefined,
-      anthropic: coreKeys.anthropic || undefined,
-      gemini: coreKeys.gemini || undefined,
-      ollama: coreKeys.ollama || undefined,
-      xai: coreKeys.xai || undefined,
-    };
+    const apiKeys = buildApiKeyTable(coreKeys);
 
     const backends: Partial<Record<ModelBackend, { getModelInfo(): Promise<ModelInfo[]> }>> = {
       [ModelBackend.OpenAI]: apiKeys.openai ? new OpenAIBackend(apiKeys.openai) : undefined,
@@ -66,6 +63,7 @@ export async function buildSlackModelOptionsFromDashboard(): Promise<{
       [ModelBackend.Gemini]: apiKeys.gemini ? new GeminiBackend(apiKeys.gemini) : undefined,
       [ModelBackend.Ollama]: apiKeys.ollama ? new OllamaBackend(apiKeys.ollama) : undefined,
       [ModelBackend.XAI]: apiKeys.xai ? new XAIBackend(apiKeys.xai) : undefined,
+      [ModelBackend.Kimi]: apiKeys.kimi ? new KimiBackend(apiKeys.kimi) : undefined,
       [ModelBackend.AWS]: new AWSBackend(),
     };
 

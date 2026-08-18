@@ -1,6 +1,6 @@
 import React, { useCallback } from 'react';
 import { toast } from 'sonner';
-import { IFabFileDocument, ISessionDocument, KnowledgeType } from '@bike4mind/common';
+import { IFabFileDocument, ISessionDocument, KnowledgeType, isImageAttachment } from '@bike4mind/common';
 import { QueryClient } from '@tanstack/react-query';
 import { generateSmartFileName } from '@client/app/utils/generateSmartFileName';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
@@ -104,7 +104,7 @@ export function useChatPaste(deps: UseChatPasteDeps) {
       // Check for image paste
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
-        if (item.type.startsWith('image/')) {
+        if (isImageAttachment(item.type)) {
           e.preventDefault();
           const file = item.getAsFile();
           if (file) {

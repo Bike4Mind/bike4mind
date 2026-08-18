@@ -15,9 +15,9 @@ describe('OpenAIImageGenerationInput legacy model remapping', () => {
     }
   });
 
-  it('remaps legacy dall-e ids to gpt-image-1', () => {
-    expect(OpenAIImageGenerationInput.parse({ prompt: 'x', model: 'dall-e-3' }).model).toBe(ImageModels.GPT_IMAGE_1);
-    expect(OpenAIImageGenerationInput.parse({ prompt: 'x', model: 'dall-e-2' }).model).toBe(ImageModels.GPT_IMAGE_1);
+  it('remaps legacy dall-e ids to gpt-image-2', () => {
+    expect(OpenAIImageGenerationInput.parse({ prompt: 'x', model: 'dall-e-3' }).model).toBe(ImageModels.GPT_IMAGE_2);
+    expect(OpenAIImageGenerationInput.parse({ prompt: 'x', model: 'dall-e-2' }).model).toBe(ImageModels.GPT_IMAGE_2);
   });
 
   it('passes supported models through unchanged', () => {

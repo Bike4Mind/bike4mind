@@ -1,4 +1,5 @@
 import { api } from '@client/app/contexts/ApiContext';
+import { useIsFullyAuthenticated } from '@client/app/hooks/useAccessToken';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 
 /**
@@ -19,6 +20,9 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
  */
 export const useEntitlements = (options: { enabled?: boolean } = {}) => {
   const { enabled = true } = options;
+  // Gate on the fully-authenticated state so this doesn't fire during the login
+  // mfaPending window, where it would 401 (#804).
+  const isFullyAuthenticated = useIsFullyAuthenticated();
 
   return useQuery({
     queryKey: ['entitlements'],
@@ -29,7 +33,7 @@ export const useEntitlements = (options: { enabled?: boolean } = {}) => {
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: true,
     placeholderData: keepPreviousData,
-    enabled,
+    enabled: enabled && isFullyAuthenticated,
   });
 };
 

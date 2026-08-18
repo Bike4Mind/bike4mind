@@ -15,6 +15,7 @@
 
 import { withWebSocketContext } from '@server/websocket/utils';
 import {
+  adminSettingsRepository,
   agentExecutionRepository,
   organizationRepository,
   sessionRepository,
@@ -24,8 +25,9 @@ import {
 import type { AgentCheckpoint, AgentStep } from '@bike4mind/agents';
 import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
 import { persistRunAsQuest } from '@server/utils/persistRunAsQuest';
+import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
-import { publishMementoCompletion } from '@server/utils/publishMementoCompletion';
+import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
 import { decideInlineBudgets } from '@server/websocket/reconnectBudget';
 import { verifyJwtToken, checkRateLimit, verifyApiKey, checkApiKeyRateLimitOrThrow } from '@server/cli/auth';
 import { Resource } from 'sst';
@@ -33,7 +35,7 @@ import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import type { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { z } from 'zod';
-import { GenerateImageToolCallSchema } from '@bike4mind/common';
+import { GenerateImageToolCallSchema, AudioGenerationToolCallSchema } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
 /**
@@ -134,6 +136,12 @@ const StartCommandSchema = BaseMessageSchema.extend({
   // Consumed only by `buildSubagentToolConfig`; never enters the checkpoint, so
   // it doesn't reintroduce the prior `structuredClone` failure.
   imageConfig: GenerateImageToolCallSchema.partial().optional(),
+  // User's selected audio-generation config, forwarded so the audio_generation
+  // tool resolves the user's saved provider/voice/format instead of its built-in
+  // defaults (the agent-mode analogue of imageConfig). Same lifecycle: consumed
+  // only by `buildSubagentToolConfig`, never enters the checkpoint. `.partial()`
+  // because the client may omit fields.
+  audioConfig: AudioGenerationToolCallSchema.partial().optional(),
   // Provenance of the routing decision. Persisted on the
   // dispatch-time Quest so the client renders the `AutoRouteBadge` over
   // classifier-routed responses on reload. Pure metadata - the executor
@@ -178,8 +186,10 @@ const lambdaClient = new LambdaClient({});
  * because they're a downstream effect of an already-counted parent.
  *
  * TODO: Make this configurable per organization or plan tier.
+ *
+ * The value itself lives in `@server/utils/executionLimits` so the QuestMaster
+ * v5 node runner enforces the same cap - see that module.
  */
-const MAX_CONCURRENT_EXECUTIONS_PER_USER = 3;
 
 // ---------------------------------------------------------------------------
 // Handler
@@ -243,7 +253,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     }
     case 'permission_response': {
       const permCmd = PermissionResponseSchema.parse(rawBody);
-      await handlePermissionResponse(permCmd, userId, connectionId, logger);
+      await handlePermissionResponse(permCmd, userId, connectionId, endpoint, logger);
       break;
     }
     case 'gate_response': {
@@ -319,7 +329,6 @@ async function handleStart(
   // pays the DB hit. Threshold cooperates with the 20-min sweep window -
   // a 60s memo can't hide a stale execution from the next sweep more than
   // 60s past its eligibility.
-  const STALE_ACTIVE_MS = 20 * 60 * 1000;
   const now = Date.now();
   const lastSweptAt = lastSweptAtByUser.get(userId) ?? 0;
   if (now - lastSweptAt > SWEEP_MEMO_TTL_MS) {
@@ -401,6 +410,9 @@ async function handleStart(
     // Snapshot the user's image config so image tools resolve a model on the
     // first AND continuation iterations (#agent-mode-image-gen).
     imageConfig: cmd.imageConfig,
+    // Snapshot the user's audio config so the audio_generation tool resolves the
+    // saved provider/voice/format on the first AND continuation iterations.
+    audioConfig: cmd.audioConfig,
   });
 
   const executionId = execution.id;
@@ -614,6 +626,7 @@ async function handlePermissionResponse(
   cmd: z.infer<typeof PermissionResponseSchema>,
   userId: string,
   connectionId: string,
+  endpoint: string,
   logger: Logger
 ): Promise<void> {
   const execution = await agentExecutionRepository.findById(cmd.executionId);
@@ -629,18 +642,40 @@ async function handlePermissionResponse(
     return;
   }
 
-  // Update permission state
-  if (cmd.approved) {
-    await agentExecutionRepository.updatePermissionState(cmd.executionId, {
-      pendingPermission: null,
-      approvedTool: cmd.rememberForSession ? cmd.toolName : undefined,
-    });
-  } else {
+  // Deny stops the run. The tool already executed this iteration (Phase 1
+  // post-execution gating), but we must not let the agent keep acting on a
+  // denied action. Mirror the executor's own denied-tool outcome: mark the run
+  // failed and emit `failed`; do NOT resume. (Previously this branch fell
+  // through to the resume below, so a one-time Deny silently let the run
+  // continue - the tool was only recorded when `rememberForSession` was set,
+  // which the Deny button never sends.)
+  if (!cmd.approved) {
     await agentExecutionRepository.updatePermissionState(cmd.executionId, {
       pendingPermission: null,
       deniedTool: cmd.rememberForSession ? cmd.toolName : undefined,
     });
+    await agentExecutionRepository.markFailed(cmd.executionId, {
+      message: `Execution stopped: you denied "${cmd.toolName}".`,
+    });
+    await sendAgentEvent(connectionId, endpoint, {
+      action: 'failed',
+      executionId: cmd.executionId,
+      reason: 'tool_denied',
+      toolName: cmd.toolName,
+      message: `Execution stopped: you denied "${cmd.toolName}".`,
+    });
+    logger.info('[Permission] Denied — execution stopped', {
+      executionId: cmd.executionId,
+      toolName: cmd.toolName,
+    });
+    return;
   }
+
+  // Approved: record (optionally remembering it for the session) and resume.
+  await agentExecutionRepository.updatePermissionState(cmd.executionId, {
+    pendingPermission: null,
+    approvedTool: cmd.rememberForSession ? cmd.toolName : undefined,
+  });
 
   // Re-invoke Lambda to resume execution.
   // Note: checkpointDepth is not carried here - it lives in the SQS message from the previous
@@ -664,9 +699,8 @@ async function handlePermissionResponse(
     })
   );
 
-  logger.info('[Permission] Response processed, Lambda re-invoked', {
+  logger.info('[Permission] Approved — Lambda re-invoked', {
     executionId: cmd.executionId,
-    approved: cmd.approved,
   });
 }
 
@@ -743,9 +777,9 @@ async function handleGateResponse(
     );
     // Memento parity with chat_completion. Stop-at-gate is also a
     // terminal `completed` write, so fire the same event the executor's
-    // natural completion path fires. Guarded inside the helper on
-    // `enableMementos` and `parentExecutionId`.
-    await publishMementoCompletion(execution, logger);
+    // natural completion path fires. Resolve gates through the shared authority
+    // and hand them over; the helper guards on the gates and `parentExecutionId`.
+    await resolveAndPublishMementoCompletion(execution, { db: { adminSettings: adminSettingsRepository } }, logger);
     logger.info('[Gate] Stopped execution with partial answer', { executionId: cmd.executionId });
     return;
   }

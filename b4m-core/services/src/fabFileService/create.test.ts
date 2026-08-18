@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
-import { KnowledgeType } from '@bike4mind/common';
+import { FabFileSourceType, KnowledgeType } from '@bike4mind/common';
 import { createFabFile, type CreateFabFileAdapters } from './create';
 
 // Unsupported file-type gating on ingest. The rejection throws right
@@ -133,5 +133,200 @@ describe('createFabFile (upload moderation gate root cause)', () => {
     expect(storageGenerateSignedUrl).toHaveBeenCalledWith(expect.any(String), 600, 'put');
     expect(result.fileUrl).toBeUndefined();
     expect((result as { presignedUrl?: string }).presignedUrl).toBe('https://s3.example.com/signed-url');
+  });
+
+  // Audio (generated TTS / sound effects) is storable-but-not-ingestable: it was
+  // previously rejected by the mime gate (audio isn't in SupportedFabFileMimeTypes),
+  // and must now be accepted via isStorableFabFileMimeType and stored as AUDIO.
+  it('accepts generated audio and stores it as AUDIO with a servable GET url', async () => {
+    const result = await createFabFile(
+      mockUserId,
+      {
+        fileName: 'speech-hello-1234.mp3',
+        mimeType: 'audio/mpeg',
+        fileSize: 4096,
+        type: KnowledgeType.AUDIO,
+        content: Buffer.from('fake-audio-bytes'),
+        contentType: 'audio/mpeg',
+        prefix: 'generated-audio',
+      },
+      mockAdapters
+    );
+
+    expect(storageUpload).toHaveBeenCalled();
+    // Non-image content path: a GET url is minted immediately (no moderation hold).
+    expect(storageGenerateSignedUrl).toHaveBeenCalledWith(expect.any(String), expect.any(Number), 'get');
+    expect(result.fileUrl).toBe('https://s3.example.com/signed-url');
+
+    const persistedData = fabFilesCreate.mock.calls[0][0];
+    expect(persistedData.type).toBe(KnowledgeType.AUDIO);
+    expect(persistedData.mimeType).toBe('audio/mpeg');
+    // Stored under the generated-audio prefix with an .mp3 extension.
+    expect(persistedData.filePath).toMatch(/^generated-audio\/.+\.mp3$/);
+  });
+});
+
+describe('createFabFile provenance', () => {
+  const mockUserId = 'user-123';
+  let fabFilesCreate: Mock;
+  let mockAdapters: CreateFabFileAdapters;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fabFilesCreate = vi.fn().mockImplementation(async data => ({ id: 'fab-1', ...data }));
+    mockAdapters = {
+      db: {
+        fabFiles: { create: fabFilesCreate },
+        adminSettings: {
+          findAll: vi.fn().mockResolvedValue([]),
+          findBySettingNames: vi.fn().mockResolvedValue([]),
+        },
+        users: {
+          findById: vi.fn().mockResolvedValue({ id: mockUserId, storageLimit: 1000, currentStorageSize: 0 }),
+        },
+      },
+      storage: {
+        generateSignedUrl: vi.fn().mockResolvedValue('https://s3.example.com/signed-url'),
+        upload: vi.fn().mockResolvedValue(undefined),
+      },
+    } as unknown as CreateFabFileAdapters;
+  });
+
+  const params = {
+    fileName: 'notes.txt',
+    mimeType: 'text/plain',
+    fileSize: 10,
+    type: KnowledgeType.FILE as const,
+  };
+
+  it('stamps a server-supplied origin onto the persisted document', async () => {
+    await createFabFile(mockUserId, params, {
+      ...mockAdapters,
+      provenance: {
+        sourceType: FabFileSourceType.SLACK,
+        sourceMetadata: { channel: 'C1', messageTs: '1700000000.0001' },
+      },
+    });
+
+    const persisted = fabFilesCreate.mock.calls[0][0];
+    expect(persisted.sourceType).toBe(FabFileSourceType.SLACK);
+    expect(persisted.sourceMetadata).toEqual({ channel: 'C1', messageTs: '1700000000.0001' });
+  });
+
+  it('leaves both fields off when no provenance is supplied', async () => {
+    await createFabFile(mockUserId, params, mockAdapters);
+
+    const persisted = fabFilesCreate.mock.calls[0][0];
+    expect(persisted).not.toHaveProperty('sourceType');
+    expect(persisted).not.toHaveProperty('sourceMetadata');
+  });
+
+  // The whole reason provenance is an adapter and not a schema field: a request body must never
+  // be able to claim an origin. This asserts the schema still strips it.
+  it('ignores sourceType smuggled in through the request parameters', async () => {
+    await createFabFile(
+      mockUserId,
+      { ...params, sourceType: FabFileSourceType.SLACK, sourceMetadata: { channel: 'spoofed' } } as never,
+      mockAdapters
+    );
+
+    const persisted = fabFilesCreate.mock.calls[0][0];
+    expect(persisted).not.toHaveProperty('sourceType');
+    expect(persisted).not.toHaveProperty('sourceMetadata');
+  });
+});
+
+// This is the door researchTaskService/process.ts and downloadRelevantLinks.ts create files
+// through - it had NO lake-tag gating at all before this, unlike the update/toggle doors.
+describe('createFabFile - lake-tag gate at create time', () => {
+  const findByDatalakeTag = vi.fn().mockResolvedValue(null);
+
+  const mockAdaptersFor = (isAdmin: boolean): CreateFabFileAdapters =>
+    ({
+      db: {
+        fabFiles: { create: vi.fn().mockImplementation(async data => ({ id: 'fab-1', ...data })) },
+        adminSettings: { findAll: vi.fn().mockResolvedValue([]), findBySettingNames: vi.fn().mockResolvedValue([]) },
+        users: { findById: vi.fn().mockResolvedValue({ id: 'u1', isAdmin }) },
+        dataLakes: { findByDatalakeTag },
+      },
+      storage: { generateSignedUrl: vi.fn().mockResolvedValue('url'), upload: vi.fn() },
+    }) as unknown as CreateFabFileAdapters;
+
+  it('refuses a non-admin creating a file with a static-registry-prefixed tag', async () => {
+    await expect(
+      createFabFile(
+        'u1',
+        { ...base, fileName: 'notes.txt', mimeType: 'text/plain', tags: [{ name: 'opti:report', strength: 1 }] },
+        mockAdaptersFor(false)
+      )
+    ).rejects.toThrow(/only an admin can change this data lake/i);
+  });
+
+  it('allows an admin to create a file with a static-registry-prefixed tag', async () => {
+    const result = await createFabFile(
+      'u1',
+      { ...base, fileName: 'notes.txt', mimeType: 'text/plain', tags: [{ name: 'opti:report', strength: 1 }] },
+      mockAdaptersFor(true)
+    );
+    expect(result.id).toBe('fab-1');
+  });
+
+  it('refuses a datalake:* meta-tag naming no lake, even for the fallback researchTaskService path', async () => {
+    await expect(
+      createFabFile(
+        'u1',
+        {
+          ...base,
+          fileName: 'notes.txt',
+          mimeType: 'text/plain',
+          tags: [{ name: 'datalake:ghost-lake', strength: 1 }],
+        },
+        mockAdaptersFor(false)
+      )
+    ).rejects.toThrow(/do not have permission to change this data lake/i);
+  });
+
+  it('does not touch the dataLakes adapter for a create with no lake-related tags', async () => {
+    findByDatalakeTag.mockClear();
+    await createFabFile(
+      'u1',
+      { ...base, fileName: 'notes.txt', mimeType: 'text/plain', tags: [{ name: 'notes', strength: 1 }] },
+      mockAdaptersFor(false)
+    );
+    expect(findByDatalakeTag).not.toHaveBeenCalled();
+  });
+
+  // This is exactly the call shape packages/scripts/datalake/ingest-pdf-datalake.ts makes to seed
+  // a STATIC REGISTRY lake (datalake:opti-knowledge, no owning DB document) - the only supported
+  // way to populate one. Centralizing assertCanWriteDataLakeTags here must not break it.
+  it('allows an admin to create a file tagged into a static-registry lake with no DB lookup', async () => {
+    findByDatalakeTag.mockClear();
+    const result = await createFabFile(
+      'u1',
+      {
+        ...base,
+        fileName: 'notes.txt',
+        mimeType: 'text/plain',
+        tags: [{ name: 'datalake:opti-knowledge', strength: 1 }],
+      },
+      mockAdaptersFor(true)
+    );
+    expect(result.id).toBe('fab-1');
+    expect(findByDatalakeTag).not.toHaveBeenCalled();
+  });
+
+  it('refuses a non-admin creating a file tagged into a static-registry lake', async () => {
+    await expect(
+      createFabFile(
+        'u1',
+        {
+          ...base,
+          fileName: 'notes.txt',
+          mimeType: 'text/plain',
+          tags: [{ name: 'datalake:opti-knowledge', strength: 1 }],
+        },
+        mockAdaptersFor(false)
+      )
+    ).rejects.toThrow(/only an admin can change this data lake/i);
   });
 });

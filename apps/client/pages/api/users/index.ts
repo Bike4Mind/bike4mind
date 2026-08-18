@@ -3,6 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { IUserObject, Project, User, executeFacetCompatible, convertPipelineForDocumentDB } from '@bike4mind/database';
 import { mongoose } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
+import { ADMIN_USER_PROJECTION, PUBLIC_USER_LIST_PROJECTION } from '@client/app/utils/adminUserProjection';
 import * as z from 'zod';
 import qs from 'qs';
 import { Request } from 'express';
@@ -10,7 +11,10 @@ import { Request } from 'express';
 const querySchema = z.object({
   page: z.string().regex(/^\d+$/).transform(Number).default(1),
   limit: z.string().regex(/^\d+$/).transform(Number).default(10),
-  search: z.string().optional(),
+  search: z
+    .string()
+    .optional()
+    .transform(val => val?.trim()),
   sortField: z.string().default('createdAt'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
   orgSearch: z.array(z.string()).default(['all']),
@@ -26,49 +30,6 @@ const querySchema = z.object({
     .transform(val => val === 'true'),
 });
 
-// Admin users-list projection: an inclusion allowlist, so a newly-added secret
-// field on the User schema can never silently appear here. Aggregation ignores
-// Mongoose select:false, so this projection is the only guard. MFA is narrowed to
-// enrollment status -- totpSecret / backupCodes must never reach the client, even
-// an admin's browser. (The joined `organization` object is admin-scoped org data;
-// its own field-level exposure is tracked separately, not here.)
-const ADMIN_USER_PROJECTION: Record<string, 1> = {
-  _id: 1,
-  name: 1,
-  username: 1,
-  email: 1,
-  isAdmin: 1,
-  level: 1,
-  tags: 1,
-  isBanned: 1,
-  isModerated: 1,
-  photoUrl: 1,
-  phone: 1,
-  role: 1,
-  team: 1,
-  isOnline: 1,
-  preferences: 1,
-  'mfa.totpEnabled': 1,
-  'mfa.setupAt': 1,
-  'mfa.lastUsedAt': 1,
-  storageLimit: 1,
-  currentStorageSize: 1,
-  createdAt: 1,
-  updatedAt: 1,
-  lastActiveAt: 1,
-  // loginRecords is admin-only PII (IPs/userAgents): it is in USER_SECRET_FIELDS so the
-  // toSafeUser/redactUserSecretsForSelf serializers drop it, but the admin activity view
-  // reads it here. Intentional admin-only exposure, not a serialize-everywhere field.
-  loginRecords: 1,
-  subscribedUntil: 1,
-  numReferralsAvailable: 1,
-  currentCredits: 1,
-  organizationId: 1,
-  organization: 1,
-  pendingEmail: 1,
-  emailVerified: 1,
-};
-
 const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async (req, res) => {
   try {
     const { page, limit, search, publicView, sortField, sortOrder, orgSearch, tags, downloadAll, projectId } =
@@ -76,12 +37,21 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
 
     // publicView is the limited directory search used by invite/member pickers; it
     // bypasses CASL by design (regular users have no read grant on User). Keep it
-    // usable for targeted search, but not as a bulk-export or full-directory dump for
-    // non-admins: downloadAll (unbounded) is admin-only, and the publicView page size
-    // is capped. (Return 403 directly - the surrounding try/catch turns throws into 500.)
+    // usable for targeted lookup, but not as a bulk-export or full-directory dump:
+    // non-admins require a minimum search term to prevent blind pagination over all
+    // users, downloadAll is admin-only, and the page size is hard-capped.
     const isAdmin = !!req.user?.isAdmin;
-    if (downloadAll && !isAdmin) {
-      return res.status(403).json({ message: 'Bulk user export is admin-only' });
+    if (publicView && !isAdmin) {
+      // projectId-scoped requests show members of one specific project -- not a full-directory
+      // enumeration path -- so they are exempt from the search-term minimum.
+      if (!projectId && (!search || search.length < 3)) {
+        return res.status(400).json({ message: 'A search term of at least 3 characters is required.' });
+      }
+      if (downloadAll) {
+        return res.status(403).json({ message: 'Bulk user export is admin-only.' });
+      }
+    } else if (downloadAll && !isAdmin) {
+      return res.status(403).json({ message: 'Bulk user export is admin-only.' });
     }
     const PUBLIC_VIEW_MAX_LIMIT = 50;
     const effectiveLimit = publicView && !isAdmin ? Math.min(limit, PUBLIC_VIEW_MAX_LIMIT) : limit;
@@ -212,7 +182,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
         },
         {
           $project: {
-            ...(publicView ? { _id: 1, username: 1, name: 1, email: 1 } : ADMIN_USER_PROJECTION),
+            ...(publicView ? PUBLIC_USER_LIST_PROJECTION : ADMIN_USER_PROJECTION),
             score: 1,
           },
         },
@@ -240,7 +210,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
           },
         },
         { $sort: { [sortField]: sortOrder === 'asc' ? 1 : -1 } },
-        { $project: publicView ? { _id: 1, username: 1, name: 1, email: 1 } : ADMIN_USER_PROJECTION },
+        { $project: publicView ? PUBLIC_USER_LIST_PROJECTION : ADMIN_USER_PROJECTION },
       ];
     }
 

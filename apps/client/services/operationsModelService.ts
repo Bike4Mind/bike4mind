@@ -1,5 +1,5 @@
 import { getSettingsByNames } from '@bike4mind/utils';
-import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
+import { buildApiKeyTable, getAvailableModels, getLlmByModel, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { ModelBackend, type ModelInfo } from '@bike4mind/common';
 import { apiKeyRepository, adminSettingsRepository, AdminSettings } from '@bike4mind/database';
@@ -11,15 +11,13 @@ import {
   getApiKeyTypeFromBackend,
 } from '../server/utils/modelResolvers';
 
-/** System-level key table shape passed to getAvailableModels/getLlmByModel. */
-type OperationsApiKeyTable = {
-  openai?: string;
-  anthropic?: string;
-  gemini?: string;
-  bfl?: string;
-  ollama?: string;
-  xai?: string;
-};
+/**
+ * System-level key table passed to getAvailableModels/getLlmByModel. Aliases the
+ * shared ApiKeyTable rather than redeclaring the provider list: the local shape
+ * this replaced had drifted a provider behind, so background auto-naming,
+ * summaries and research could never reach a newly added backend.
+ */
+type OperationsApiKeyTable = ApiKeyTable;
 
 /** Text-only operations result: no image/speech resolution. */
 export type OperationsTextModelResult = Pick<OperationsModelResult, 'modelId' | 'llm' | 'modelInfo'>;
@@ -71,7 +69,9 @@ export class OperationsModelService {
 
   /** True when a cloud text-model API key is available; gates the self-host Ollama default. */
   private static hasCloudTextKey(apiKeyTable: OperationsApiKeyTable): boolean {
-    return !!(apiKeyTable.openai || apiKeyTable.anthropic || apiKeyTable.gemini || apiKeyTable.xai);
+    // Kimi counts: it is a hosted text provider, so holding only a Moonshot key
+    // should stop self-host from defaulting operations to local Ollama.
+    return !!(apiKeyTable.openai || apiKeyTable.anthropic || apiKeyTable.gemini || apiKeyTable.xai || apiKeyTable.kimi);
   }
 
   /**
@@ -120,14 +120,7 @@ export class OperationsModelService {
       getSettingsByNames,
     };
     const coreKeys = await apiKeyService.getEffectiveLLMApiKeys('system', dbAdapters);
-    const apiKeyTable: OperationsApiKeyTable = {
-      openai: coreKeys.openai || undefined,
-      anthropic: coreKeys.anthropic || undefined,
-      gemini: coreKeys.gemini || undefined,
-      bfl: coreKeys.bfl || undefined,
-      ollama: coreKeys.ollama || undefined,
-      xai: coreKeys.xai || undefined,
-    };
+    const apiKeyTable = buildApiKeyTable(coreKeys);
     const models = await getAvailableModels(apiKeyTable);
 
     // Prefer the admin-configured operations model; else the hardcoded default id.
@@ -180,14 +173,7 @@ export class OperationsModelService {
         getSettingsByNames,
       };
       const coreKeys = await apiKeyService.getEffectiveLLMApiKeys('system', dbAdapters);
-      const apiKeyTable = {
-        openai: coreKeys.openai || undefined,
-        anthropic: coreKeys.anthropic || undefined,
-        gemini: coreKeys.gemini || undefined,
-        bfl: coreKeys.bfl || undefined,
-        ollama: coreKeys.ollama || undefined,
-        xai: coreKeys.xai || undefined,
-      };
+      const apiKeyTable = buildApiKeyTable(coreKeys);
       const models = await getAvailableModels(apiKeyTable);
 
       const modelInfo = models.find(m => m.id === config.modelId);
@@ -283,14 +269,7 @@ export class OperationsModelService {
       getSettingsByNames,
     };
     const coreKeys = await apiKeyService.getEffectiveLLMApiKeys('system', dbAdapters);
-    const apiKeyTable = {
-      openai: coreKeys.openai || undefined,
-      anthropic: coreKeys.anthropic || undefined,
-      gemini: coreKeys.gemini || undefined,
-      bfl: coreKeys.bfl || undefined,
-      ollama: coreKeys.ollama || undefined,
-      xai: coreKeys.xai || undefined,
-    };
+    const apiKeyTable = buildApiKeyTable(coreKeys);
     const models = await getAvailableModels(apiKeyTable);
 
     const modelInfo = OperationsModelService.pickOperationsTextModelInfo(apiKeyTable, models, defaultConfig.modelId);
@@ -399,14 +378,7 @@ export class OperationsModelService {
       getSettingsByNames,
     };
     const coreKeys = await apiKeyService.getEffectiveLLMApiKeys('system', dbAdapters);
-    const apiKeyTable = {
-      openai: coreKeys.openai || undefined,
-      anthropic: coreKeys.anthropic || undefined,
-      gemini: coreKeys.gemini || undefined,
-      bfl: coreKeys.bfl || undefined,
-      ollama: coreKeys.ollama || undefined,
-      xai: coreKeys.xai || undefined,
-    };
+    const apiKeyTable = buildApiKeyTable(coreKeys);
     const models = await getAvailableModels(apiKeyTable);
 
     const modelInfo = OperationsModelService.pickOperationsTextModelInfo(apiKeyTable, models, defaultConfig.modelId);

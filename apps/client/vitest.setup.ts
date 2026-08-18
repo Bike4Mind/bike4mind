@@ -102,6 +102,13 @@ if (typeof ResizeObserver === 'undefined') {
   };
 }
 
+// Polyfill scrollIntoView for jsdom (not implemented in jsdom). Without it, any component
+// that scrolls an element into view throws an unhandled TypeError from whatever timer or
+// effect called it - which vitest reports as a failed run even when every assertion passed.
+if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = function scrollIntoView() {};
+}
+
 // Mock WebsocketContext to avoid import resolution issues in tests
 vi.mock('@/app/contexts/WebsocketContext', () => ({
   useWebsocket: () => ({

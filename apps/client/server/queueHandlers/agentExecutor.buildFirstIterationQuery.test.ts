@@ -34,12 +34,26 @@ const BASE_QUERY = 'What does the attached PDF say?';
 // any shape works for these tests.
 const SCOPE = { $or: [{ userId: 'u1' }, { isGlobalRead: true }] };
 
+// Resolved toolbelts. The generic default agent profile carries both knowledge
+// tools; a surface-scoped profile may carry neither (see `agentExecutor.optiProfile.ts`),
+// which is what makes the readability guard necessary.
+const TOOLS_WITH_READER = ['retrieve_knowledge_content', 'search_knowledge_base', 'web_search'];
+const TOOLS_WITHOUT_READER = ['optihashi_solve', 'web_search', 'current_datetime'];
+
 describe('buildFirstIterationQuery', () => {
   it('returns the base query unchanged when no IDs are forwarded', async () => {
     const repo = makeRepo(vi.fn());
     const logger = makeLogger();
 
-    const result = await buildFirstIterationQuery(BASE_QUERY, { userId: 'u1' }, [], logger, repo, SCOPE);
+    const result = await buildFirstIterationQuery(
+      BASE_QUERY,
+      { userId: 'u1' },
+      [],
+      logger,
+      repo,
+      SCOPE,
+      TOOLS_WITH_READER
+    );
 
     expect(result).toBe(BASE_QUERY);
     expect(repo.getAccessibleFiles).not.toHaveBeenCalled();
@@ -55,7 +69,8 @@ describe('buildFirstIterationQuery', () => {
       [],
       logger,
       repo,
-      SCOPE
+      SCOPE,
+      TOOLS_WITH_READER
     );
 
     expect(result).toBe(BASE_QUERY);
@@ -75,7 +90,8 @@ describe('buildFirstIterationQuery', () => {
       [],
       logger,
       repo,
-      SCOPE
+      SCOPE,
+      TOOLS_WITH_READER
     );
 
     expect(result).toBe(BASE_QUERY);
@@ -98,7 +114,8 @@ describe('buildFirstIterationQuery', () => {
       [],
       logger,
       repo,
-      SCOPE
+      SCOPE,
+      TOOLS_WITH_READER
     );
 
     expect(result).toContain(BASE_QUERY);
@@ -118,7 +135,8 @@ describe('buildFirstIterationQuery', () => {
       [],
       logger,
       repo,
-      SCOPE
+      SCOPE,
+      TOOLS_WITH_READER
     );
 
     expect(result).toContain('"unknown-type.bin" (unknown) -> fabFileId: id1');
@@ -134,7 +152,8 @@ describe('buildFirstIterationQuery', () => {
       [],
       logger,
       repo,
-      SCOPE
+      SCOPE,
+      TOOLS_WITH_READER
     );
 
     expect(logger.warn).toHaveBeenCalledWith(
@@ -148,7 +167,15 @@ describe('buildFirstIterationQuery', () => {
     const repo = makeRepo(getAccessibleFiles);
     const logger = makeLogger();
 
-    await buildFirstIterationQuery(BASE_QUERY, { userId: 'u1', messageFileIds: ['id1'] }, [], logger, repo, SCOPE);
+    await buildFirstIterationQuery(
+      BASE_QUERY,
+      { userId: 'u1', messageFileIds: ['id1'] },
+      [],
+      logger,
+      repo,
+      SCOPE,
+      TOOLS_WITH_READER
+    );
 
     // Guards against regressing to an owner-only `{ userId }` scope - chat
     // completion passes the CASL `accessibleBy(...).ofType(FabFile)` filter
@@ -167,7 +194,8 @@ describe('buildFirstIterationQuery', () => {
       ['id2', 'id4'],
       logger,
       repo,
-      SCOPE
+      SCOPE,
+      TOOLS_WITH_READER
     );
 
     expect(getAccessibleFiles).toHaveBeenCalledTimes(1);
@@ -190,14 +218,15 @@ describe('buildFirstIterationQuery', () => {
       [],
       logger,
       repo,
-      SCOPE
+      SCOPE,
+      TOOLS_WITH_READER
     );
 
     // First 25 listed, last 5 collapsed into a trailer.
     expect(result).toContain('"file-0.pdf"');
     expect(result).toContain('"file-24.pdf"');
     expect(result).not.toContain('"file-25.pdf"');
-    expect(result).toContain('(5 more — use search_knowledge_base to discover them)');
+    expect(result).toContain('(5 more - use search_knowledge_base to discover them)');
   });
 
   it('escapes quotes and newlines in filenames so they cannot break out of the preamble', async () => {
@@ -210,7 +239,8 @@ describe('buildFirstIterationQuery', () => {
       [],
       logger,
       repo,
-      SCOPE
+      SCOPE,
+      TOOLS_WITH_READER
     );
 
     // The stripped quote and newlines mean the file entry stays on a single
@@ -238,7 +268,8 @@ describe('buildFirstIterationQuery', () => {
       [],
       logger,
       repo,
-      SCOPE
+      SCOPE,
+      TOOLS_WITH_READER
     );
 
     const fileLine = result.split('\n').find(line => line.includes('id1')) ?? '';
@@ -246,6 +277,95 @@ describe('buildFirstIterationQuery', () => {
     expect(fileLine).toContain('lead');
     expect(fileLine).toContain('tail');
     expect(fileLine).toContain('fabFileId: id1');
+  });
+});
+
+describe('buildFirstIterationQuery readability guard', () => {
+  // The agent path injects file METADATA only and points the agent at
+  // `retrieve_knowledge_content` to read it. A profile that omits that tool leaves the agent
+  // holding filenames it cannot open, which surfaced as "the analyst agent couldn't access the
+  // attached file" on a file that was complete, chunked, and vectorized.
+
+  it('tells the agent the files are unreadable when the toolbelt has no content-reading tool', async () => {
+    const repo = makeRepo(vi.fn().mockResolvedValue([makeFile('id1', 'results.txt', 'text/plain')]));
+    const logger = makeLogger();
+
+    const result = await buildFirstIterationQuery(
+      BASE_QUERY,
+      { userId: 'u1', messageFileIds: ['id1'] },
+      [],
+      logger,
+      repo,
+      SCOPE,
+      TOOLS_WITHOUT_READER
+    );
+
+    expect(result).toContain('METADATA ONLY');
+    expect(result).toContain('NOT available to you');
+    // The file is still named so the agent can tell the user WHICH file it cannot open.
+    expect(result).toContain('"results.txt" (text/plain) -> fabFileId: id1');
+    // Never name a tool this run does not have - that instruction is what produced a
+    // confident-sounding promise to analyze a file the agent could not open.
+    expect(result).not.toContain('retrieve_knowledge_content');
+  });
+
+  it('warns so an unreadable attachment is greppable in ops logs', async () => {
+    const repo = makeRepo(vi.fn().mockResolvedValue([makeFile('id1', 'results.txt', 'text/plain')]));
+    const logger = makeLogger();
+
+    await buildFirstIterationQuery(
+      BASE_QUERY,
+      { userId: 'u1', messageFileIds: ['id1'] },
+      [],
+      logger,
+      repo,
+      SCOPE,
+      TOOLS_WITHOUT_READER
+    );
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('no content-reading tool'),
+      expect.objectContaining({ resolved: 1, contentReadTool: 'retrieve_knowledge_content' })
+    );
+  });
+
+  it('does not warn when the toolbelt can read files', async () => {
+    const repo = makeRepo(vi.fn().mockResolvedValue([makeFile('id1', 'results.txt', 'text/plain')]));
+    const logger = makeLogger();
+
+    await buildFirstIterationQuery(
+      BASE_QUERY,
+      { userId: 'u1', messageFileIds: ['id1'] },
+      [],
+      logger,
+      repo,
+      SCOPE,
+      TOOLS_WITH_READER
+    );
+
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('omits search_knowledge_base from the over-cap trailer when that tool is absent', async () => {
+    const many = Array.from({ length: 30 }, (_, i) => makeFile(`id${i}`, `file-${i}.pdf`, 'application/pdf'));
+    const repo = makeRepo(vi.fn().mockResolvedValue(many));
+    const logger = makeLogger();
+
+    // Reader present, search absent: the preamble may still point at the reader, but it must
+    // not send the agent to a discovery tool it does not have.
+    const result = await buildFirstIterationQuery(
+      BASE_QUERY,
+      { userId: 'u1', messageFileIds: many.map(f => f.id) },
+      [],
+      logger,
+      repo,
+      SCOPE,
+      ['retrieve_knowledge_content']
+    );
+
+    expect(result).toContain('retrieve_knowledge_content');
+    expect(result).not.toContain('use search_knowledge_base to discover them');
+    expect(result).toContain('(5 more, not listed and not reachable in this run)');
   });
 });
 
@@ -261,6 +381,7 @@ describe('maybeBuildFirstIterationQuery (gate)', () => {
     execution: { userId: 'u1', messageFileIds: ['id1'] },
     sessionKnowledgeIds: [],
     scope: SCOPE,
+    availableToolNames: TOOLS_WITH_READER,
   } as const;
 
   it('returns undefined and skips the repo when the execution is a continuation', async () => {
@@ -304,5 +425,19 @@ describe('maybeBuildFirstIterationQuery (gate)', () => {
     expect(repo.getAccessibleFiles).toHaveBeenCalledTimes(1);
     expect(result).toContain('[ATTACHED FILES');
     expect(result).toContain('"spec.pdf"');
+  });
+
+  it('forwards availableToolNames through the gate', async () => {
+    const repo = makeRepo(vi.fn().mockResolvedValue([makeFile('id1', 'spec.pdf', 'application/pdf')]));
+    const logger = makeLogger();
+
+    const result = await maybeBuildFirstIterationQuery(
+      { ...baseArgs, availableToolNames: TOOLS_WITHOUT_READER, isNewExecution: true, iterationIndex: 0 },
+      logger,
+      repo
+    );
+
+    // Proves the gate is not dropping the toolbelt on the floor and defaulting to "readable".
+    expect(result).toContain('METADATA ONLY');
   });
 });

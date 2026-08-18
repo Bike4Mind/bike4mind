@@ -153,6 +153,13 @@ describe('extensionFromMimeType', () => {
     expect(extensionFromMimeType(detectMimeType('sheet.xlsx'))).toBe('xlsx');
     expect(extensionFromMimeType(detectMimeType('notes.md'))).toBe('md');
   });
+
+  it('maps generated-audio types to their canonical extension', () => {
+    expect(extensionFromMimeType('audio/mpeg')).toBe('mp3');
+    expect(extensionFromMimeType('audio/wav')).toBe('wav');
+    expect(extensionFromMimeType('audio/opus')).toBe('opus');
+    expect(extensionFromMimeType('audio/flac')).toBe('flac');
+  });
 });
 
 describe('MIME_TYPE_MAP', () => {

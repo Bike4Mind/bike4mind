@@ -1,5 +1,6 @@
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { createS3Client } from '@bike4mind/fab-pipeline';
 import {
   AppFileEvents,
   FileGeneratePresignedUrlRequestInput,
@@ -10,12 +11,13 @@ import { AppFile } from '@bike4mind/database/content';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { resolveBrowserAppFileUploadUrl } from '@server/utils/browserUploadUrl';
 import { BadRequestError } from '@server/utils/errors';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { Resource } from 'sst';
 
-const s3Client = new S3Client();
+const s3Client = createS3Client();
 
 const handler = baseApi().post(
   asyncHandler<unknown, FileGeneratePresignedUrlResponseType, FileGeneratePresignedUrlRequestInputType>(
@@ -56,7 +58,8 @@ const handler = baseApi().post(
         { ability: req.ability }
       );
 
-      return res.json({ url: presignedUrl, fileId: file.id, fileKey });
+      // Self-host swaps the (browser-unreachable) MinIO presign for the same-origin upload proxy.
+      return res.json({ url: resolveBrowserAppFileUploadUrl(file.id, presignedUrl), fileId: file.id, fileKey });
     }
   )
 );

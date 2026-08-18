@@ -21,7 +21,8 @@
  */
 
 import { FC, useEffect, useState } from 'react';
-import { Box, Button, CircularProgress, Stack, Typography } from '@mui/joy';
+import { Box, Button, CircularProgress, Divider, Stack, Typography } from '@mui/joy';
+import { keyframes } from '@mui/system';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import PsychologyOutlinedIcon from '@mui/icons-material/PsychologyOutlined';
@@ -33,6 +34,13 @@ import {
   type IterationStep,
 } from '@client/app/stores/useAgentExecutionStore';
 import IterationStream from './IterationStream';
+
+// Entrance animation for the expanded trace frame - a quick fade + slight
+// slide-down so the reasoning reveals rather than snapping into place.
+const revealIn = keyframes`
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+`;
 
 // Recursively converts a server ChildExecutionSnapshot tree into the store's
 // ChildExecution map shape. Module-level so it can self-reference.
@@ -144,55 +152,107 @@ const ReasoningDisclosure: FC<ReasoningDisclosureProps> = ({
   // page refresh clears it. Adding a focused per-execution evictor would be
   // a small follow-up if the store ever holds many replays at once.
 
-  return (
-    <Box data-testid={`reasoning-disclosure-${agentExecutionId}`} sx={{ mt: 0.5 }}>
-      <Button
-        size="sm"
-        variant="plain"
-        color="neutral"
-        startDecorator={<PsychologyOutlinedIcon fontSize="small" />}
-        endDecorator={expanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
-        onClick={() => setExpanded(v => !v)}
-        sx={{ '--Button-gap': '0.4rem', fontWeight: 400, color: 'text.tertiary' }}
-      >
-        {expanded ? 'Hide reasoning' : 'Show reasoning'}
-      </Button>
+  const toggle = (
+    <Button
+      size="sm"
+      variant="plain"
+      color="neutral"
+      startDecorator={<PsychologyOutlinedIcon fontSize="small" />}
+      endDecorator={expanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+      onClick={() => setExpanded(v => !v)}
+      sx={{
+        '--Button-gap': '0.4rem',
+        fontWeight: 400,
+        fontSize: '13px',
+        color: 'text.primary', // label
+        '& .MuiButton-startDecorator svg': { color: 'text.tertiary', fontSize: '18px' }, // brain icon
+        '& .MuiButton-endDecorator svg': { color: 'text.tertiary', fontSize: '18px' }, // chevron (default)
+        '&:hover .MuiButton-endDecorator svg': { color: 'text.primary' }, // chevron on hover
+        // No background hover - the only hover cue is the chevron color change
+        // above. Pin the plain-variant hover/active bg to each state's rest bg so
+        // Joy's default gray hover doesn't sneak in. Collapsed: the button IS the
+        // framed card (surface2 + outlined border + 8px radius, 12/16 padding),
+        // sized to content, whole card clickable. Expanded: bare full-width header.
+        ...(expanded
+          ? {
+              '--Button-paddingInline': '0px',
+              p: 0,
+              minHeight: '24px',
+              width: '100%',
+              justifyContent: 'flex-start',
+              '--variant-plainHoverBg': 'transparent',
+              '--variant-plainActiveBg': 'transparent',
+            }
+          : {
+              width: 'fit-content',
+              minHeight: 0,
+              py: 1.5, // 12px top/bottom
+              px: 2, // 16px sides
+              border: '1px solid',
+              borderColor: 'neutral.outlinedBorder',
+              borderRadius: '8px',
+              backgroundColor: 'background.surface2',
+              '--variant-plainHoverBg': 'var(--joy-palette-background-surface2)',
+              '--variant-plainActiveBg': 'var(--joy-palette-background-surface2)',
+            }),
+      }}
+    >
+      {expanded ? 'Hide reasoning' : 'Show reasoning'}
+    </Button>
+  );
 
+  return (
+    <Box data-testid={`reasoning-disclosure-${agentExecutionId}`}>
       {expanded ? (
-        <Box sx={{ mt: 0.5, pl: 1, borderLeft: theme => `2px solid ${theme.palette.neutral.outlinedBorder}` }}>
+        // Expanded: one frame (matching the iteration-stream frame) with the
+        // "Hide reasoning" header on top, then the trace rendered unframed inside
+        // it so the border isn't doubled.
+        <Box
+          sx={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 1.5, // 12px: header -> divider -> content
+            pt: 1.5, // 12px top
+            px: 2, // 16px sides
+            pb: 2, // 16px bottom
+            border: '1px solid',
+            borderColor: 'neutral.outlinedBorder',
+            backgroundColor: 'background.surface2',
+            borderRadius: '8px',
+            animation: `${revealIn} 0.2s ease`,
+          }}
+        >
+          {toggle}
+          {/* Full-width separator: negative horizontal margin cancels the frame's
+              16px side padding so the line runs edge to edge. */}
+          <Divider sx={{ mx: -2 }} />
           {isLoading ? (
-            <Stack direction="row" alignItems="center" spacing={1} sx={{ py: 1 }}>
+            <Stack direction="row" alignItems="center" spacing={1}>
               <CircularProgress size="sm" thickness={2} />
               <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
                 Loading reasoning trace…
               </Typography>
             </Stack>
           ) : isError ? (
-            <Typography level="body-sm" sx={{ color: 'danger.softColor', py: 1 }}>
+            <Typography level="body-sm" sx={{ color: 'danger.softColor' }}>
               Couldn&apos;t load the reasoning trace. The execution may be older than its retention window.
             </Typography>
           ) : data && !showFinalAnswer && !data.steps.some(s => s.type !== 'final_answer') ? (
             // Only treat a final-answer-only run as "empty" when we're ALSO hiding
             // the answer (Quest-bubble context: the answer is in the reply above).
-            // When showFinalAnswer is set (focused panel), fall through to
-            // IterationStream so the answer box renders as the panel's content.
-            <Typography level="body-sm" sx={{ color: 'text.tertiary', py: 1, fontStyle: 'italic' }}>
+            <Typography level="body-sm" sx={{ color: 'text.tertiary', fontStyle: 'italic' }}>
               No reasoning steps recorded for this run.
             </Typography>
           ) : data ? (
-            // hideFinalAnswer (default): the parent Quest's reply bubble (above the
-            // disclosure) already displays the final answer prominently; re-rendering
-            // it inside the green box at the end of the trace would duplicate the
-            // answer within a few centimeters of itself. The standalone focused panel
-            // has no such bubble, so it shows the answer (showFinalAnswer).
-            //
-            // expandAll: replay hydrates all iterations at once, so without this only
-            // the last accordion mounts open. The user explicitly asked to see the
-            // trace - show the work.
-            <IterationStream executionId={replayId} hideFinalAnswer={!showFinalAnswer} expandAll />
+            // hideFinalAnswer (default): the reply bubble above already shows the
+            // final answer; collapsedByDefault: iterations start collapsed;
+            // unframed: this disclosure supplies the frame (above).
+            <IterationStream executionId={replayId} hideFinalAnswer={!showFinalAnswer} collapsedByDefault unframed />
           ) : null}
         </Box>
-      ) : null}
+      ) : (
+        toggle
+      )}
     </Box>
   );
 };

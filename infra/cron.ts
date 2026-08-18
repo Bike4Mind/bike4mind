@@ -8,9 +8,12 @@ import {
   whatsNewHighlightsQueue,
   liveOpsTriageQueue,
   deepAgentWakeQueue,
+  dataLakeTaxonomyQueue,
+  fabFileChunkQueue,
 } from './queues';
 import { lambdaVpc } from './vpc';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
+import { websocketApi } from './websocket';
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
   schedule: 'rate(5 minutes)',
@@ -557,6 +560,74 @@ const attackSimulationCron = new sst.aws.Cron('attackSimulationCron', {
 });
 
 /**
+ * Model Discovery
+ *
+ * Refreshes the model catalog from provider APIs and aggregators. Standalone
+ * Lambda + `event` payload so an admin "Run now" can InvokeAsync the same ARN
+ * with `{ trigger: 'manual' }`, exactly like attackSimulation above.
+ *
+ * Timeout is 10 minutes rather than 5 because Bedrock availability is a
+ * per-model call over ~300 foundation models; the run's own global deadline
+ * (timeout minus a minute) is what actually ends a run, and it commits what
+ * finished. The timeout is the backstop, not the error handler.
+ */
+const modelDiscoveryFunction = new sst.aws.Function('modelDiscoveryFunction', {
+  vpc: lambdaVpc,
+  handler: 'apps/client/server/cron/modelDiscovery.handler',
+  runtime: 'nodejs24.x',
+  timeout: '10 minutes',
+  // Both entry points are async invokes, so Lambda's default of 2 retries would
+  // re-issue the whole provider fan-out twice more on a failing run. A discovery
+  // run is not idempotent-cheap; the 6h cron below is the real retry.
+  retries: 0,
+  link: [...allSecrets],
+  environment: {
+    ...DEFAULT_LAMBDA_ENVIRONMENT,
+  },
+  logging: {
+    retention: '1 week',
+  },
+  permissions: [
+    {
+      actions: ['cloudwatch:PutMetricData'],
+      resources: ['*'],
+    },
+    {
+      actions: ['bedrock:ListFoundationModels', 'bedrock:GetFoundationModelAvailability'],
+      resources: ['*'],
+    },
+  ],
+});
+
+/**
+ * Stage-differentiated anchors instead of `rate(6 hours)`.
+ *
+ * dev and production share provider accounts and egress the same NAT, and a
+ * rate() schedule is anchored to whenever the rule was created - two stages
+ * deployed close together arrive at every provider simultaneously, forever, and
+ * nothing in the expression says otherwise. Fixed anchors 3h30m apart make the
+ * separation explicit and reviewable. The service's per-source minimum-interval
+ * guard is the backstop that also covers a manual run landing next to a
+ * scheduled one; jitter is deliberately NOT implemented as a sleep, which would
+ * bill Lambda time to do nothing.
+ *
+ * Minute offsets (:20 / :50) also keep discovery off the top of the hour, where
+ * every other cron in this file starts.
+ */
+const MODEL_DISCOVERY_SCHEDULE_BY_STAGE: Record<string, `cron(${string})`> = {
+  production: 'cron(20 0,6,12,18 * * ? *)', // 00:20, 06:20, 12:20, 18:20 UTC
+  dev: 'cron(50 3,9,15,21 * * ? *)', // 03:50, 09:50, 15:50, 21:50 UTC
+};
+
+const modelDiscoveryCron = new sst.aws.Cron('modelDiscoveryCron', {
+  schedule: MODEL_DISCOVERY_SCHEDULE_BY_STAGE[$app.stage] ?? MODEL_DISCOVERY_SCHEDULE_BY_STAGE.production,
+  job: modelDiscoveryFunction.arn,
+  event: { trigger: 'cron' },
+  // Preview stages never hammer providers.
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
+/**
  * Data Lake Batch Reconcile (daily fallback)
  * Global watchdog: forces batches stuck non-terminal past the timeout to terminal via the same
  * guarded reconciler as the read-time path, so a batch that goes stuck while nobody opens their
@@ -572,7 +643,12 @@ const dataLakeBatchReconcileCron = new sst.aws.Cron('dataLakeBatchReconcile', {
     handler: 'apps/client/server/cron/dataLakeBatchReconcile.handler',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
-    link: [...allSecrets],
+    // dataLakeTaxonomyQueue + websocketApi: the stuck-batch backstop calls
+    // enqueueTaxonomyAnalysisIfWanted, which needs Resource.dataLakeTaxonomyQueue.url to
+    // enqueue and, on a rate-limited batch, Resource.websocket.managementEndpoint to push the
+    // live status update. fabFileChunkQueue: the un-chunked rescue sweep (#1420) re-enqueues
+    // complete-but-never-chunked files for chunking.
+    link: [...allSecrets, dataLakeTaxonomyQueue, websocketApi, fabFileChunkQueue],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
@@ -623,6 +699,26 @@ const agentExecutionAbandonedSweepCron = new sst.aws.Cron('agentExecutionAbandon
   enabled: ['production', 'dev'].includes($app.stage),
 });
 
+// Spend Reconciliation -- fetches authoritative billing from Anthropic/OpenAI
+// admin APIs and compares against internal COGS estimates.
+const spendReconciliationCron = new sst.aws.Cron('spendReconciliation', {
+  schedule: 'cron(0 6 * * ? *)', // Daily at 6am UTC
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/client/server/cron/spendReconciliation.handler',
+    runtime: 'nodejs24.x',
+    timeout: '5 minutes',
+    link: [...allSecrets],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    logging: {
+      retention: '1 week',
+    },
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
 export {
   dailyUserActivityReport,
   weeklyUserActivityReport,
@@ -645,6 +741,9 @@ export {
   sreStaleDispatchCron,
   attackSimulationFunction,
   attackSimulationCron,
+  modelDiscoveryFunction,
+  modelDiscoveryCron,
   agentExecutionAbandonedSweepCron,
   dataLakeBatchReconcileCron,
+  spendReconciliationCron,
 };

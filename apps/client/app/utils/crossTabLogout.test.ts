@@ -10,15 +10,16 @@ describe('resolveCrossTabRedirect', () => {
     expect(resolveCrossTabRedirect(null, loc('/new'))).toBe('/login');
   });
 
-  it('returns null when the other tab still holds an accessToken (cross-tab refresh)', () => {
-    // A token refresh in another tab rewrites the entry with a fresh accessToken -
-    // this tab is still authenticated, so it must NOT bounce to /login.
-    expect(resolveCrossTabRedirect(payload({ accessToken: 'fresh', expired: false }), loc('/new'))).toBeNull();
+  it('returns null when the other tab still reports an active session', () => {
+    // A sign-in in another tab rewrites the entry with hasSession: true - this tab is still
+    // authenticated, so it must NOT bounce to /login. (A plain token refresh no longer touches
+    // localStorage at all, so it never even reaches here.)
+    expect(resolveCrossTabRedirect(payload({ hasSession: true, expired: false }), loc('/new'))).toBeNull();
   });
 
   it('surfaces session_expired with redirectTo on a refresh-failure expiry', () => {
     const url = resolveCrossTabRedirect(
-      payload({ accessToken: null, expired: true, expiredReason: 'expired' }),
+      payload({ hasSession: false, expired: true, expiredReason: 'expired' }),
       loc('/projects', '?a=1', '#x')
     );
     expect(url).toBe(`/login?error=session_expired&redirectTo=${encodeURIComponent('/projects?a=1#x')}`);
@@ -26,7 +27,7 @@ describe('resolveCrossTabRedirect', () => {
 
   it('surfaces session_revoked for a security-forced logout (MFA lockout)', () => {
     const url = resolveCrossTabRedirect(
-      payload({ accessToken: null, expired: true, expiredReason: 'revoked' }),
+      payload({ hasSession: false, expired: true, expiredReason: 'revoked' }),
       loc('/new')
     );
     expect(url).toBe(`/login?error=session_revoked&redirectTo=${encodeURIComponent('/new')}`);
@@ -36,21 +37,21 @@ describe('resolveCrossTabRedirect', () => {
     // A background tab mid-login / register / password-reset must not be yanked to /login
     // by another tab's session change - that would wipe an in-progress form.
     expect(
-      resolveCrossTabRedirect(payload({ accessToken: null, expired: true, expiredReason: 'expired' }), loc('/login'))
+      resolveCrossTabRedirect(payload({ hasSession: false, expired: true, expiredReason: 'expired' }), loc('/login'))
     ).toBeNull();
     expect(
-      resolveCrossTabRedirect(payload({ accessToken: null, expired: true, expiredReason: 'revoked' }), loc('/register'))
+      resolveCrossTabRedirect(payload({ hasSession: false, expired: true, expiredReason: 'revoked' }), loc('/register'))
     ).toBeNull();
     // even a plain removed-key logout is a no-op on a public path
     expect(resolveCrossTabRedirect(null, loc('/login'))).toBeNull();
   });
 
   it('uses a plain /login for a voluntary logout (expired: false)', () => {
-    expect(resolveCrossTabRedirect(payload({ accessToken: null, expired: false }), loc('/new'))).toBe('/login');
+    expect(resolveCrossTabRedirect(payload({ hasSession: false, expired: false }), loc('/new'))).toBe('/login');
   });
 
   it('uses a plain /login when expired is true but the reason is unknown', () => {
-    expect(resolveCrossTabRedirect(payload({ accessToken: null, expired: true }), loc('/new'))).toBe('/login');
+    expect(resolveCrossTabRedirect(payload({ hasSession: false, expired: true }), loc('/new'))).toBe('/login');
   });
 
   it('treats malformed JSON as a plain logout', () => {
@@ -59,7 +60,7 @@ describe('resolveCrossTabRedirect', () => {
 });
 
 describe('resolveStorageEventRedirect', () => {
-  const cleared = payload({ accessToken: null, expired: true, expiredReason: 'expired' });
+  const cleared = payload({ hasSession: false, expired: true, expiredReason: 'expired' });
 
   it('ignores storage events for any other localStorage key', () => {
     // Same payload that WOULD redirect, but under an unrelated key - must be a no-op.
@@ -73,10 +74,10 @@ describe('resolveStorageEventRedirect', () => {
     );
   });
 
-  it('returns null for the access-token key when a token is still present (delegated no-op)', () => {
+  it('returns null for the access-token key when a session is still active (delegated no-op)', () => {
     expect(
       resolveStorageEventRedirect(
-        { key: ACCESS_TOKEN_STORAGE_KEY, newValue: payload({ accessToken: 'fresh' }) },
+        { key: ACCESS_TOKEN_STORAGE_KEY, newValue: payload({ hasSession: true }) },
         loc('/new')
       )
     ).toBeNull();

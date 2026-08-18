@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { useAdminModal } from '@client/app/components/admin/AdminPage';
+import { useAdminModal } from '@client/app/components/admin/useAdminModal';
 import { useOptiNavigation } from './useOptiNavigation';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';

@@ -1,0 +1,26 @@
+{
+  "details": {
+    "parent_model": "",
+    "format": "gguf",
+    "family": "gemma4",
+    "families": [
+      "gemma4"
+    ],
+    "parameter_size": "25.8B",
+    "quantization_level": "Q4_K_M"
+  },
+  "capabilities": [
+    "completion",
+    "vision",
+    "tools",
+    "thinking"
+  ],
+  "modified_at": "2026-07-26T05:37:46.517490147Z",
+  "model_info": {
+    "gemma4.context_length": 262144,
+    "gemma4.embedding_length": 2816,
+    "gemma4.vision.embedding_length": 1152,
+    "general.architecture": "gemma4",
+    "general.parameter_count": 25805936462
+  }
+}

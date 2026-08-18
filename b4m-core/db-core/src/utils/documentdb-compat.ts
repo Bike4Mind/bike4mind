@@ -61,18 +61,25 @@ export async function executeFacetCompatible<T>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   pipeline: any[],
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  facetStages: Record<string, any[]>
+  facetStages: Record<string, any[]>,
+  /** Forwarded to every underlying aggregate() - callers size allowDiskUse/maxTimeMS to their route. */
+  options?: mongoose.AggregateOptions
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): Promise<any> {
+  // Call arity is preserved when no options are given: this helper has many mocked call sites
+  // that assert aggregate() was called with the pipeline alone.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const run = (stages: any[]) => (options ? model.aggregate(stages, options) : model.aggregate(stages));
+
   if (!USE_DOCUMENTDB()) {
     // Use native $facet for MongoDB 7.x
-    return model.aggregate([...pipeline, { $facet: facetStages }]);
+    return run([...pipeline, { $facet: facetStages }]);
   }
 
   // Execute each facet stage separately and combine results
   const results = await Promise.all(
     Object.entries(facetStages).map(async ([key, stages]) => {
-      const result = await model.aggregate([...pipeline, ...stages]);
+      const result = await run([...pipeline, ...stages]);
       return { key, result };
     })
   );

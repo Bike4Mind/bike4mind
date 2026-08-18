@@ -66,14 +66,9 @@ import SystemSecretsTab from './SystemSecretsTab';
 import MenuIcon from '@mui/icons-material/Menu';
 import ApiReferenceTab from './ApiReferenceTab';
 import ApiCookbookTab from './ApiCookbookTab';
-import {
-  AdminTab,
-  SIDEBAR_SECTIONS,
-  SIDEBAR_EXPANDED_STORAGE_KEY,
-  findSectionKeyForTab,
-  type SidebarGate,
-  type SidebarItem,
-} from './adminSidebarConfig';
+import { AdminTab, SIDEBAR_SECTIONS, type SidebarGate, type SidebarItem } from './adminSidebarConfig';
+import { useAdminModal } from './useAdminModal';
+import { useAdminSidebarSections } from './useAdminSidebarSections';
 
 export { AdminTab } from './adminSidebarConfig';
 
@@ -88,6 +83,7 @@ const AgentExecutionsTab = dynamic(() => import('./AgentExecutionsTab'), { ssr: 
 const SubscribersTab = dynamic(() => import('./SubscribersTab'), { ssr: false });
 const PartnerSignupRulesTab = dynamic(() => import('./PartnerSignupRulesTab'), { ssr: false });
 const ModelMetricsTab = dynamic(() => import('./ModelMetrics'), { ssr: false });
+const ModelLifecycleTab = dynamic(() => import('./ModelLifecycleTab'), { ssr: false });
 const EventMetricsTab = dynamic(() => import('./EventMetrics'), { ssr: false });
 const SecurityDashboardMock = dynamic(() => import('./SecurityDashboardMock'), { ssr: false });
 const Team = lazy(() => import('./Team'));
@@ -102,20 +98,9 @@ const IntegrationHealthTab = dynamic(() => import('./IntegrationHealth'), { ssr:
 const SreAgentTab = dynamic(() => import('./SreAgentTab'), { ssr: false });
 const SecopsTriageTab = dynamic(() => import('./SecopsTriageTab'), { ssr: false });
 const PublishedArtifactsTab = dynamic(() => import('./PublishedArtifactsTab'), { ssr: false });
+const PrReportTab = dynamic(() => import('./PrReport/PrReportTab'), { ssr: false });
 const ArchitectureDiagramsTab = dynamic(() => import('./ArchitectureDiagramsTab'), { ssr: false });
 const DependenciesTab = dynamic(() => import('./DependenciesTab'), { ssr: false });
-
-export const useAdminModal = create<{
-  open: boolean;
-  activeTab: AdminTab | string | null;
-  setOpen: (open: boolean | ((open: boolean) => boolean)) => void;
-  setActiveTab: (activeTab: AdminTab | string | null) => void;
-}>((set, get) => ({
-  open: true, // open by default
-  activeTab: AdminTab.Users, // defaults to Users; overridden when migration is available
-  setOpen: open => set({ open: typeof open === 'function' ? open(get().open) : open }),
-  setActiveTab: (activeTab: AdminTab | string | null) => set({ activeTab }),
-}));
 
 export const useAdminNotifications = create<{
   hiddenNotifications: string[];
@@ -147,38 +132,7 @@ const SidebarNav = ({
 }: SidebarNavProps) => {
   const activeTab = useAdminModal(state => state.activeTab);
 
-  // Expand state keyed by section. On mount, restore the user's last choice from
-  // localStorage; otherwise expand only the section containing the active tab so
-  // the sidebar opens scannable instead of fully expanded.
-  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const stored = window.localStorage.getItem(SIDEBAR_EXPANDED_STORAGE_KEY);
-        if (stored) {
-          const parsed = JSON.parse(stored) as Record<string, boolean>;
-          return Object.fromEntries(SIDEBAR_SECTIONS.map(s => [s.key, parsed[s.key] ?? false]));
-        }
-      } catch {
-        // Ignore malformed storage and fall through to active-section default.
-      }
-    }
-    const activeKey = findSectionKeyForTab(activeTab);
-    return Object.fromEntries(SIDEBAR_SECTIONS.map(s => [s.key, s.key === activeKey]));
-  });
-
-  const toggleSection = (key: string) => {
-    setExpandedSections(prev => {
-      const next = { ...prev, [key]: !prev[key] };
-      if (typeof window !== 'undefined') {
-        try {
-          window.localStorage.setItem(SIDEBAR_EXPANDED_STORAGE_KEY, JSON.stringify(next));
-        } catch {
-          // Persistence is best-effort; ignore quota/serialization failures.
-        }
-      }
-      return next;
-    });
-  };
+  const { isExpanded, toggleSection } = useAdminSidebarSections(activeTab);
 
   const gates: Record<SidebarGate, boolean> = {
     userMigration: !!enableUserMigration,
@@ -235,8 +189,12 @@ const SidebarNav = ({
         return (
           <Accordion
             key={section.key}
-            expanded={expandedSections[section.key] ?? false}
+            expanded={isExpanded(section.key)}
             onChange={() => toggleSection(section.key)}
+            // raise an expanded panel above its neighbors so a neighboring
+            // header cannot intercept clicks on this section's nav items. Joy
+            // elevates a summary to zIndex 1 on focus/hover, so beat that.
+            sx={{ position: 'relative', ...(isExpanded(section.key) && { zIndex: 2 }) }}
           >
             <AccordionSummary>
               <SectionIcon color="primary" />
@@ -564,6 +522,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               <TabPanel value={AdminTab.ModelMetrics}>
                 {activeTab === AdminTab.ModelMetrics && <ModelMetricsTab />}
               </TabPanel>
+              <TabPanel value={AdminTab.ModelLifecycle}>
+                {activeTab === AdminTab.ModelLifecycle && <ModelLifecycleTab />}
+              </TabPanel>
               <TabPanel value={AdminTab.ContextInspector}>
                 {activeTab === AdminTab.ContextInspector && <ContextInspectorTab />}
               </TabPanel>
@@ -631,6 +592,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               <TabPanel value={AdminTab.PublishedPages}>
                 {activeTab === AdminTab.PublishedPages && <PublishedArtifactsTab />}
               </TabPanel>
+              <TabPanel value={AdminTab.PrReport}>{activeTab === AdminTab.PrReport && <PrReportTab />}</TabPanel>
             </Tabs>
           </Grid>
         </Grid>

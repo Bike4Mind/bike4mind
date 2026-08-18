@@ -1,4 +1,4 @@
-import { EmbeddingFactory, getProviderFromModel } from '@bike4mind/fab-pipeline';
+import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
 import { IAdminSettingsRepository, isSupportedEmbeddingModel, SupportedEmbeddingModel } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
@@ -39,30 +39,14 @@ export async function generateMementoSummaryEmbedding(
   }
 
   const provider = getProviderFromModel(defaultEmbeddingModel);
-  const embeddingConfig: { openaiApiKey?: string | null; voyageApiKey?: string | null; ollamaBaseUrl?: string | null } =
-    {};
-
-  if (provider === 'openai') {
-    if (!apiKeyTable?.openai) {
-      logger?.warn('Memento embedding skipped: OpenAI API key not found');
-      return null;
-    }
-    embeddingConfig.openaiApiKey = apiKeyTable.openai;
-  } else if (provider === 'voyageai') {
-    if (!apiKeyTable?.voyageai) {
-      logger?.warn('Memento embedding skipped: VoyageAI API key not found');
-      return null;
-    }
-    embeddingConfig.voyageApiKey = apiKeyTable.voyageai;
-  } else if (provider === 'ollama') {
-    // apiKeyTable.ollama carries the Ollama base URL (no secret) in self-host.
-    if (!apiKeyTable?.ollama) {
-      logger?.warn('Memento embedding skipped: Ollama base URL not found');
-      return null;
-    }
-    embeddingConfig.ollamaBaseUrl = apiKeyTable.ollama;
+  // Keyless providers (Bedrock) report nothing missing and proceed on the AWS credential chain.
+  const { config: embeddingConfig, missing } = resolveEmbeddingConfig(provider, apiKeyTable);
+  if (missing) {
+    logger?.warn(
+      `Memento embedding skipped: ${missing === 'ollama' ? 'Ollama base URL' : `${missing === 'openai' ? 'OpenAI' : 'VoyageAI'} API key`} not found`
+    );
+    return null;
   }
-  // Bedrock uses AWS credentials, no key needed.
 
   try {
     const embeddingService = new EmbeddingFactory(embeddingConfig).createEmbeddingService(

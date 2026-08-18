@@ -62,6 +62,18 @@ export async function recordToolOperationalUsage(
       ? getTextModelCost(modelInfo, inputTokens, outputTokens, cachedInputTokens, cacheWriteTokens)
       : 0;
 
+    // Report the spend to a billing host (e.g. the agent executor) so nested tool
+    // generation is folded into its ledger rather than billed at zero (#630). Fired
+    // before the analytics write so an analytics failure can't drop the charge.
+    context.onToolLlmUsage?.({
+      model,
+      inputTokens,
+      outputTokens,
+      cacheReadTokens: cachedInputTokens,
+      cacheWriteTokens,
+      costUsd,
+    });
+
     await recordOperationalUsage(
       {
         requestId: context.sessionId ?? context.userId,

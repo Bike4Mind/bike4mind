@@ -104,8 +104,12 @@ const handler = baseApi({ auth: false })
     // Only OPEN-public (ungated) may be shared-cached: a gated artifact's list is
     // authorized per viewer, so it keeps the no-store default even though its
     // visibility is still 'public'.
+    // No stale-while-revalidate: it let a viewer who had just commented be served the
+    // pre-comment body for up to a further 60s, so a fresh comment appeared to vanish
+    // on reload. A short shared TTL still collapses the polling fan-out. The widget
+    // additionally sends `cache: 'no-store'` on its FIRST load for the same reason.
     if (isOpenPublic(artifact)) {
-      res.setHeader('Cache-Control', 'public, max-age=5, s-maxage=15, stale-while-revalidate=60');
+      res.setHeader('Cache-Control', 'public, max-age=5, s-maxage=5');
     }
     return res.status(200).json(response);
   })
@@ -147,7 +151,12 @@ const handler = baseApi({ auth: false })
         createdAt: { $gte: new Date(Date.now() - COMMENT_RATE_WINDOW_MS) },
       });
       if (recent >= COMMENT_RATE_MAX) {
-        return res.status(429).json({ error: 'You are commenting too quickly - please slow down' });
+        // Names the account-wide window explicitly: it counts across ALL artifacts, so
+        // a message about "this artifact" would misdirect when it fires somewhere the
+        // author has not commented.
+        return res.status(429).json({
+          error: 'You have posted too many comments across your account recently - please slow down',
+        });
       }
     }
 

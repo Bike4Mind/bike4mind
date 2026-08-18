@@ -11,6 +11,7 @@
  * that touch alarm/dashboard code).
  */
 
+import { modelDiscoveryFunction } from './cron';
 import { whatsNewGenerationQueueSubscription, webhookDeliveryQueueSubscription } from './queues';
 import { subscribeQueryRoute, unsubscribeQueryRoute } from './subscriberFanout';
 import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
@@ -101,6 +102,32 @@ export const agentCheckpointDepthExceededAlarm = isMonitoredStage
   : undefined;
 
 export const websocketRouteOomAlarm = isMonitoredStage ? new sst.aws.SnsTopic('WebSocketRouteOomAlarm') : undefined;
+
+export const largeApiResponseAlarm = isMonitoredStage ? new sst.aws.SnsTopic('LargeApiResponseAlarm') : undefined;
+
+export const modelDiscoveryFailureAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('ModelDiscoveryFailureAlarm')
+  : undefined;
+
+export const modelDiscoveryRowsRejectedAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('ModelDiscoveryRowsRejectedAlarm')
+  : undefined;
+
+export const modelDiscoveryPriceFlaggedAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('ModelDiscoveryPriceFlaggedAlarm')
+  : undefined;
+
+export const modelDiscoveryDocsParserShiftAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('ModelDiscoveryDocsParserShiftAlarm')
+  : undefined;
+
+export const deprecatedModelRequestAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('DeprecatedModelRequestAlarm')
+  : undefined;
+
+export const dataLakeStuckBatchesAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('DataLakeStuckBatchesAlarm')
+  : undefined;
 
 // --- MetricAlarm definitions (only created for monitored stages) ---
 
@@ -788,4 +815,255 @@ if (isMonitoredStage) {
       },
     });
   }
+
+  /**
+   * Alarm: Large UNCOMPRESSED API Response
+   *
+   * Fires when an API route ships a >= 5MB body that was NOT gzipped (client sent no gzip in
+   * Accept-Encoding, or DISABLE_RESPONSE_GZIP is set). Emitted by sendMaybeGzip -
+   * apps/client/server/utils/sendMaybeGzip.ts. That is the only remaining case that can hit
+   * Lambda's hard ~6MB synchronous-invocation response limit and fail as a bare 502 with nothing
+   * logged at the application level; a gzipped body of the same size ships at ~10% of it.
+   *
+   * Deliberately NOT alarming on the companion LargeApiResponseBytes metric: that one fires on
+   * every large response including the compressed (safe) ones, which on this route is routine.
+   * It stays as a dimensioned diagnostic for tracking uncompressed growth over time.
+   *
+   * Maximum, not Sum: the metric value is a byte count, so Maximum puts the actual size of the
+   * largest offending response in the notification instead of a meaningless total.
+   */
+  new aws.cloudwatch.MetricAlarm('largeUncompressedApiResponse', {
+    name: `${$app.name}-${$app.stage}-large-uncompressed-api-response`,
+    alarmDescription: 'An uncompressed API response body is approaching the Lambda 6MB response-size limit (>= 5MB)',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'LargeUncompressedApiResponseBytes',
+    namespace: 'Lumina5/ApiResponse',
+    period: 300, // 5 minutes
+    statistic: 'Maximum',
+    threshold: 0, // Alert on any occurrence
+    treatMissingData: 'notBreaching',
+    alarmActions: [largeApiResponseAlarm!.arn],
+    tags: {
+      Application: 'ApiResponse',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
+   * The dimension set server/modelDiscovery/metrics.ts stamps on every datum.
+   * CloudWatch keys a custom metric by namespace + name + the exact dimension
+   * set and never rolls up, so an alarm that omits these watches an empty
+   * series and sits in INSUFFICIENT_DATA forever. Host is the hosted lambda's
+   * label; a self-host worker publishes nothing to this account.
+   * MUST STAY IN SYNC with discoveryDimensions() in that file.
+   */
+  const modelDiscoveryDimensions = { Stage: $app.stage, Host: 'hosted' };
+
+  /**
+   * Alarm: Model Discovery consecutive run failures
+   *
+   * Three failed runs in a row. The period is the 6-hour cadence, so three
+   * evaluation periods is three scheduled runs; a period with no run at all
+   * does not breach, which keeps a disabled or preview stage quiet.
+   *
+   * Metric emitted by: server/modelDiscovery/metrics.ts
+   * Namespace: Lumina5/ModelDiscovery / RunFailures
+   */
+  new aws.cloudwatch.MetricAlarm('modelDiscoveryRunFailures', {
+    name: `${$app.name}-${$app.stage}-model-discovery-run-failures`,
+    alarmDescription: 'Model discovery has failed 3 consecutive runs - the catalog is going stale',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 3,
+    metricName: 'RunFailures',
+    namespace: 'Lumina5/ModelDiscovery',
+    period: 21600, // 6 hours, the run cadence
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: modelDiscoveryDimensions,
+    alarmActions: [modelDiscoveryFailureAlarm!.arn],
+    tags: {
+      Application: 'ModelDiscovery',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Model Discovery Lambda Errors
+   *
+   * Monitors the Lambda itself. The application-level RunFailures metric can
+   * only be published by a handler that reached its emit call, so a timeout or
+   * an init-time crash shows up here and nowhere else. Routed to the same topic
+   * as a failed run: both mean the catalog stopped refreshing.
+   */
+  new aws.cloudwatch.MetricAlarm('modelDiscoveryLambdaErrors', {
+    name: `${$app.name}-${$app.stage}-model-discovery-lambda-errors`,
+    alarmDescription: 'Model discovery Lambda has errors',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'Errors',
+    namespace: 'AWS/Lambda',
+    period: 300,
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: {
+      FunctionName: modelDiscoveryFunction.name,
+    },
+    alarmActions: [modelDiscoveryFailureAlarm!.arn],
+    tags: {
+      Application: 'ModelDiscovery',
+      Severity: 'High',
+    },
+  });
+
+  /**
+   * Alarm: Catalog rows rejected
+   *
+   * A rejected row is a contract failure, not a data gap: the write schema
+   * refused something a source produced, so any occurrence is a work item.
+   */
+  new aws.cloudwatch.MetricAlarm('modelDiscoveryRowsRejected', {
+    name: `${$app.name}-${$app.stage}-model-discovery-rows-rejected`,
+    alarmDescription: 'Model discovery rejected one or more catalog rows - a source is producing invalid records',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'CatalogRowsRejected',
+    namespace: 'Lumina5/ModelDiscovery',
+    period: 21600,
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: modelDiscoveryDimensions,
+    alarmActions: [modelDiscoveryRowsRejectedAlarm!.arn],
+    tags: {
+      Application: 'ModelDiscovery',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
+   * Alarm: Price move flagged
+   *
+   * Notify, not page (sec 10): a flagged price was NOT applied, so the risk is
+   * a stale price rather than a wrong charge. Every entry has to be explainable
+   * line by line before discovery leaves report mode.
+   */
+  new aws.cloudwatch.MetricAlarm('modelDiscoveryPriceFlagged', {
+    name: `${$app.name}-${$app.stage}-model-discovery-price-flagged`,
+    alarmDescription: 'Model discovery flagged a price move or an aggregator disagreement - review before it applies',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'PriceFlagged',
+    namespace: 'Lumina5/ModelDiscovery',
+    period: 21600,
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: modelDiscoveryDimensions,
+    alarmActions: [modelDiscoveryPriceFlaggedAlarm!.arn],
+    tags: {
+      Application: 'ModelDiscovery',
+      Severity: 'Low',
+    },
+  });
+
+  /**
+   * Alarm: Docs parser row-count shift
+   *
+   * Notify, not page (sec 5.10): a parser whose row count moved sharply
+   * run-over-run is the signature of a page restructure. It fires before the
+   * bad data is actioned - a docs signal cannot hide a model on its own, so the
+   * damage is still only a queue item at this point.
+   */
+  new aws.cloudwatch.MetricAlarm('modelDiscoveryDocsParserShift', {
+    name: `${$app.name}-${$app.stage}-model-discovery-docs-parser-shift`,
+    alarmDescription: 'A model discovery docs parser changed row count sharply - the source page likely restructured',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'DocsParserRowShift',
+    namespace: 'Lumina5/ModelDiscovery',
+    period: 21600,
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: modelDiscoveryDimensions,
+    alarmActions: [modelDiscoveryDocsParserShiftAlarm!.arn],
+    tags: {
+      Application: 'ModelDiscovery',
+      Severity: 'Low',
+    },
+  });
+
+  /**
+   * Alarm: requests pinned to a deprecated model
+   *
+   * A model that 404s upstream reports itself; a stored pin on a deprecated
+   * model is silent - the resolver upgrades it and the user sees a plausible
+   * answer either way, so nobody files a ticket. This is the only signal that
+   * stale pins are still arriving, so it fires on the first one rather than a
+   * volume threshold. Notify, do not page.
+   *
+   * Not latching: with treatMissingData=notBreaching and a single 1h period, it
+   * returns to OK after any hour with no stale pin, so an occasional offender
+   * flaps rather than holding ALARM until the pin is rewritten. The dashboard
+   * carries the history.
+   *
+   * Metric emitted by: b4m-core/llm-adapters/src/modelSunsetMetrics.ts, from
+   * resolveDeprecatedModelId - the last point that still sees the id the caller
+   * asked for. Alarms match one exact dimension set, so this uses the Stage-only
+   * datapoint; the per-model breakdown lives on the model-sunset dashboard.
+   */
+  new aws.cloudwatch.MetricAlarm('deprecatedModelRequest', {
+    name: `${$app.name}-${$app.stage}-deprecated-model-request`,
+    alarmDescription: 'A request arrived pinned to a deprecated model - a session or agent pin needs upgrading',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'DeprecatedModelRequest',
+    namespace: 'Lumina5/ModelSunset',
+    period: 3600, // 1 hour - stale pins are chronic, not a spike
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    dimensions: {
+      Stage: $app.stage,
+    },
+    alarmActions: [deprecatedModelRequestAlarm!.arn],
+    tags: {
+      Application: 'ModelSunset',
+      Severity: 'Medium',
+    },
+  });
+
+  /**
+   * Alarm: Data Lake stuck-batch count
+   *
+   * The reconciler (hosted cron + self-host worker) samples the stuck-batch gauge once per
+   * sweep; each forced-terminal batch is lost work for a user, but an occasional one is expected
+   * noise (e.g. a browser tab closed mid-upload). Threshold 10 in one sample is a systemic
+   * problem, not a one-off.
+   *
+   * Metric emitted by: server/utils/cloudwatch.ts -> recordStuckBatchGauge, wired from
+   * server/cron/dataLakeBatchReconcile.ts's runStuckBatchSweep.
+   * Namespace: Lumina5/DataLakeBatch / StuckBatches
+   */
+  new aws.cloudwatch.MetricAlarm('dataLakeStuckBatchesHigh', {
+    name: `${$app.name}-${$app.stage}-data-lake-stuck-batches-high`,
+    alarmDescription:
+      'Data lake stuck-batch count crossed threshold - the reconciler is forcing an unusual number of batches terminal',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'StuckBatches',
+    namespace: 'Lumina5/DataLakeBatch',
+    period: 86400, // 1 day - matches the once-per-sweep sample cadence
+    statistic: 'Maximum',
+    threshold: 10,
+    treatMissingData: 'notBreaching',
+    alarmActions: [dataLakeStuckBatchesAlarm!.arn],
+    tags: {
+      Application: 'DataLakeBatch',
+      Severity: 'Medium',
+    },
+  });
 }

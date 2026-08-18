@@ -1,19 +1,31 @@
 /**
- * CLI-only tool loader - isolated from tools/index.ts to prevent Turbopack
- * from tracing into tool implementations that use dynamic path.resolve() calls.
+ * CLI tool surface - the single entry point CLI consumers import so their bundle
+ * never reaches the full `tools/index.ts` graph.
  *
- * Turbopack follows both static and dynamic import() expressions when building
- * the dependency graph. By keeping these imports in a separate file that the
- * web app never touches, we break the trace chain entirely.
+ * Two boundaries converge here:
+ *
+ * 1. Turbopack: `tools/index.ts` transitively imports tool implementations that
+ *    use dynamic `path.resolve(process.cwd(), ...)`, which makes Turbopack trace
+ *    11k+ files. Keeping the CLI's tools in a file the web app never imports for
+ *    that purpose breaks the trace chain.
+ *
+ * 2. CLI bundle externals (issue #660): `tools/index.ts` also statically imports
+ *    server-only tools (image generation -> jimp/@aws-sdk/client-rekognition,
+ *    excel export -> write-excel-file) the CLI never runs. Importing anything
+ *    from `tools/index.ts` drags those + their heavy npm deps into the CLI
+ *    bundle. This module exposes exactly the surface the CLI needs - the CLI-only
+ *    tools, the small subset of shared tools it enables, and the pure
+ *    tool/MCP generators - so the CLI can drop the `@bike4mind/services` barrel
+ *    entirely and the build's externals guard stays green.
  *
  * Import chain that MUST NOT exist:
  *   opti.ts -> ChatCompletionProcess -> tools/index -> [CLI tools]
  *
  * Instead, CLI consumers import directly:
- *   toolsAdapter.ts -> tools/cliTools -> [CLI tools]
+ *   toolsAdapter.ts / mcpAdapter.ts -> tools/cliTools -> [CLI-safe surface]
  */
 import type { ToolDefinition } from './base/types';
-import type { CliLlmTools } from './index';
+import type { CliLlmTools, LlmTools } from './index';
 
 // Static imports - these modules do NOT use dynamic path.resolve(process.cwd(), ...)
 // and are safe from Turbopack's broad file pattern tracing.
@@ -21,6 +33,17 @@ import { fileReadTool } from './implementation/fileRead';
 import { editLocalFileTool } from './implementation/editLocalFile';
 import { recentChangesTool } from './implementation/recentChanges';
 import { askUserQuestionTool } from './implementation/askUserQuestion';
+
+// Shared b4mTools the CLI enables. Imported individually (not via `b4mTools` from
+// tools/index) so the CLI never statically reaches the server-only image/excel
+// tools that live alongside them in that map. See issue #660.
+import { diceRollTool } from './implementation/diceroll';
+import { mathTool } from './implementation/math';
+import { currentDateTimeTool } from './implementation/currentDateTime';
+import { promptEnhancementTool } from './implementation/promptEnhancement';
+import { weatherTool } from './implementation/weather';
+import { webSearchTool } from './implementation/websearch';
+import { webFetchTool } from './implementation/webfetch';
 import {
   checkShellOutputTool,
   writeShellStdinTool,
@@ -43,6 +66,32 @@ export {
   type ShellSession,
   type ShellSessionStatus,
 } from './implementation/bashExecute/ShellSessionManager';
+
+// Pure tool/MCP generators - free of any tool-implementation imports - re-exported
+// so the CLI gets them without touching tools/index. See toolGenerators.ts.
+export { generateTools, generateMcpTools, generateMcpToolsFromCache } from './toolGenerators';
+
+// The ask_user_question callback setter and its payload types, so the CLI's
+// interactive prompt can be wired in without importing the barrel.
+export { setShowUserQuestionFn } from './implementation/askUserQuestion';
+export type { UserQuestionPayload, UserQuestionResponse } from './implementation/askUserQuestion';
+export type { LlmTools } from './index';
+
+/**
+ * The subset of shared `b4mTools` the CLI enables. Exposed as a map so the CLI
+ * builds its tool set from a services-owned boundary instead of filtering the
+ * full `b4mTools` (which would drag the server-only image/excel tools into its
+ * bundle). Keep in sync with the CLI's enabled-tools policy in toolsAdapter.ts.
+ */
+export const cliSharedTools = {
+  dice_roll: diceRollTool,
+  math_evaluate: mathTool,
+  current_datetime: currentDateTimeTool,
+  prompt_enhancement: promptEnhancementTool,
+  weather_info: weatherTool,
+  web_search: webSearchTool,
+  web_fetch: webFetchTool,
+} satisfies Partial<Record<LlmTools, ToolDefinition>>;
 
 /**
  * The 6 Lattice tool implementations as a resolvable map keyed by tool name.

@@ -122,6 +122,10 @@ export interface IUserPreferences {
   agentModeDefault?: 'off' | 'auto' | 'on';
   /** Whether to show fun/novelty tools (chess, dice, ISS tracker, etc.) in the tools catalog. Default: false. */
   showFunTools?: boolean;
+  /** Whether generated audio (TTS, sound-effect, music) is saved to storage as a browsable FabFile. Default: true. */
+  saveGeneratedAudio?: boolean;
+  /** Whether to show the prompt suggestion cards on the splash screen. Default: false. */
+  showSplashCards?: boolean;
 }
 
 /** Source of a moderation flag - which moderation backend produced the hit. */
@@ -591,6 +595,27 @@ export interface IUserDocument extends IUser, IMongoDocument {}
 export interface IUserRepository extends IBaseRepository<IUserDocument>, ICreditHolderMethods {
   findByUsernameOrEmail: (username: string, email: string) => Promise<IUserDocument | null>;
   findByEmail: (email: string) => Promise<IUserDocument | null>;
+  /**
+   * Remove the given group ids from EVERY user's `groups[]` (org-wide blast radius; used when a
+   * group type is revoked and its instances are soft-deleted). Named for the scope so a caller
+   * cannot mistake it for a single-user operation.
+   */
+  removeGroupsFromAllUsers: (groupIds: string[]) => Promise<void>;
+  /** Add a single group id to one user's `groups[]` (idempotent; used when assigning a member). */
+  addGroupToUser: (userId: string, groupId: string) => Promise<void>;
+  /** Remove a single group id from one user's `groups[]` (used when unassigning a member). */
+  removeGroupFromUser: (userId: string, groupId: string) => Promise<void>;
+  /**
+   * Remove several group ids from ONE user's `groups[]` (idempotent $pull). Used when a member
+   * leaves or is removed from an org, to strip that org's group ids from just that member.
+   */
+  removeGroupsFromUser: (userId: string, groupIds: string[]) => Promise<void>;
+  /**
+   * Member ids per group id in a single aggregation (keyed by group id, absent = no members).
+   * Used by the group-list route - one pass instead of an N+1 of per-group reads. The management
+   * UI needs the ids (to render + unassign members), and memberCount is derived from them.
+   */
+  findUserIdsByGroupIds: (groupIds: string[]) => Promise<Record<string, string[]>>;
   findByEmailVerificationToken: (token: string) => Promise<IUserDocument | null>;
   findByPendingEmailToken: (token: string) => Promise<IUserDocument | null>;
   findByIdWithPassword: (id: string) => Promise<IUserDocument | null>;
@@ -599,9 +624,13 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
   atomicRecordMfaFailedAttempt: (userId: string) => Promise<IUserDocument | null>;
   findAllByEmailsOrUsernames: (emails: string[], usernames: string[]) => Promise<IUserDocument[]>;
   findByStripeCustomerId: (stripeCustomerId: string) => Promise<IUserDocument | null>;
+  // `id` is included so callers can map results back to the requested ids (Mongoose adds the
+  // id virtual regardless of the projection); other consumers already rely on it at runtime.
   findByIds: (
     ids: string[]
-  ) => Promise<Pick<IUserDocument, 'name' | 'email' | 'username' | 'lastActiveAt' | 'isOnline' | 'photoUrl'>[]>;
+  ) => Promise<Pick<IUserDocument, 'id' | 'name' | 'email' | 'username' | 'lastActiveAt' | 'isOnline' | 'photoUrl'>[]>;
+  /** Active (non-soft-deleted), emailed users among `ids` - for a notification addressee resolver. */
+  findActiveEmailsByIds: (ids: string[]) => Promise<Array<{ id: string; email: string }>>;
   searchCollections: (
     userId: string,
     options: {
@@ -620,6 +649,14 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
    * @param count - The amount to increment by (can be negative for decrements)
    */
   incrementCurrentStorage: (userId: string, count: number) => Promise<void>;
+  /**
+   * Atomically bump the user's tokenVersion - the server-side session kill switch.
+   * Every currently-issued access/refresh token for the user carries the old version and
+   * is rejected on its next request (per-request check in auth.ts, and at WS connect).
+   * Returns the new tokenVersion. Throws NotFoundError if the user no longer exists,
+   * rather than silently reporting a successful revoke that never happened.
+   */
+  incrementTokenVersion: (userId: string) => Promise<number>;
   /**
    * Find a user by their Slack user ID
    * Used for OAuth user linking to prevent duplicate Slack ID associations

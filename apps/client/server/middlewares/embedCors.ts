@@ -10,8 +10,9 @@ import { Request, Response, NextFunction } from 'express';
  * This sets the response CORS headers and answers the OPTIONS preflight; it does
  * NOT decide whether an origin is approved. Preflight carries no credential, so
  * the allow-list can only be checked once the handler has resolved the key/token
- * - each embed handler enforces `isOriginPermitted(origin, allowedOrigins)` and
- * rejects a disallowed origin before doing any work. Echoing the requesting
+ * - each embed handler enforces `isEmbedOriginAllowed` (first-party origin or
+ * the key's allow-list, see firstPartyOrigin.ts) and rejects a disallowed
+ * origin before doing any work. Echoing the requesting
  * origin here keeps that rejection (and every real response) readable by the
  * browser; a successful 200 is only ever produced for an approved origin.
  */

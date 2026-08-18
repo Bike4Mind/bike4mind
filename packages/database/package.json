@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/database",
-  "version": "0.1.57",
+  "version": "0.1.60",
   "private": true,
   "type": "module",
   "main": "dist/index.mjs",
@@ -37,6 +37,10 @@
     "./infra": {
       "types": "./dist/models/infra/index.d.mts",
       "default": "./dist/models/infra/index.mjs"
+    },
+    "./hearth": {
+      "types": "./dist/models/hearth/index.d.mts",
+      "default": "./dist/models/hearth/index.mjs"
     }
   },
   "scripts": {
@@ -50,12 +54,16 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:ui": "vitest --ui",
-    "generate:model-price-seed": "tsx src/seeds/regenerateModelPriceSeed.ts"
+    "generate:model-price-seed": "tsx src/seeds/regenerateModelPriceSeed.ts",
+    "generate:model-catalog-seed": "tsx src/seeds/regenerateModelCatalogSeed.ts"
   },
   "dependencies": {
     "@bike4mind/common": "workspace:*",
     "@bike4mind/db-core": "workspace:*",
+    "@bike4mind/fab-pipeline": "workspace:*",
+    "@bike4mind/hearth": "workspace:*",
     "@bike4mind/llm-adapters": "workspace:*",
+    "@bike4mind/resource": "workspace:*",
     "@bike4mind/utils": "workspace:*",
     "@casl/ability": "^6.8.1",
     "@casl/mongoose": "^8.0.5",
@@ -63,6 +71,7 @@
     "dayjs": "^1.11.21",
     "mongoose": "^8.24.1",
     "mongoose-lean-virtuals": "^2.1.0",
+    "sst": "4.17.1",
     "typescript": "^5.9.3"
   },
   "devDependencies": {
@@ -72,6 +81,7 @@
     "tsdown": "^0.22.3",
     "tsx": "^4.23.0",
     "vite-tsconfig-paths": "^6.1.1",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "zod": "^4.4.3"
   }
 }

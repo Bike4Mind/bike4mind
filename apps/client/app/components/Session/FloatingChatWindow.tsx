@@ -19,6 +19,8 @@ const DraggableComponent = Draggable;
 interface FloatingChatWindowProps {
   children: React.ReactNode;
   headerActions?: React.ReactNode;
+  /** Overrides the default "AI Chat" title-bar label (e.g. /opti swaps in the Data Lakes toggle). */
+  title?: React.ReactNode;
 }
 
 // Animation for expand/collapse
@@ -81,7 +83,7 @@ const getCursorForHandle = (position: string): string => {
   return cursors[position] || 'default';
 };
 
-const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, headerActions }) => {
+const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, headerActions, title }) => {
   const nodeRef = useRef<HTMLDivElement>(null);
   const [isResizing, setIsResizing] = useState(false);
 
@@ -89,7 +91,6 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
   const position = useSessionLayout(s => s.floatingChatPosition);
   const size = useSessionLayout(s => s.floatingChatSize);
   const isMinimized = useSessionLayout(s => s.floatingChatMinimized);
-  const previousLayout = useSessionLayout(s => s.previousLayout);
 
   // Prevent wheel events from bubbling out of the floating window to parent
   // JS scroll handlers (e.g. a docked landing page). Re-attaches after minimize/
@@ -298,15 +299,11 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
     }
   }, [isMinimized]);
 
-  // Handle close - return to previous layout
+  // Handle close - dismiss the panel entirely. Re-docking is a separate action
+  // (the dock-right/dock-bottom controls in ChatPanelControls), not this button's job.
   const handleClose = useCallback(() => {
-    const targetLayout = previousLayout && previousLayout !== 'floatingChat' ? previousLayout : 'vertical';
-    setSessionLayout({
-      layout: targetLayout,
-      floatingChatMinimized: false,
-      previousLayout: undefined,
-    });
-  }, [previousLayout]);
+    setSessionLayout({ layout: 'hide', floatingChatMinimized: false });
+  }, []);
 
   const bounds = {
     left: 0,
@@ -411,9 +408,22 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
             >
               <SmartToyIcon sx={{ fontSize: 18 }} />
             </Box>
-            <Typography level="body-sm" fontWeight="md">
-              AI Chat
-            </Typography>
+            {title ? (
+              // The title bar is the drag handle; stop pointer events so clicking an interactive
+              // title (e.g. the Data Lakes toggle) doesn't start a window drag.
+              <Box
+                sx={{ display: 'flex', alignItems: 'center' }}
+                onMouseDown={e => e.stopPropagation()}
+                onTouchStart={e => e.stopPropagation()}
+                onPointerDown={e => e.stopPropagation()}
+              >
+                {title}
+              </Box>
+            ) : (
+              <Typography level="body-sm" fontWeight="md">
+                AI Chat
+              </Typography>
+            )}
           </Box>
 
           {/* Stop all event propagation so react-draggable doesn't swallow taps on mobile */}

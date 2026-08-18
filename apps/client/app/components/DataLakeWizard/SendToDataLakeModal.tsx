@@ -14,12 +14,13 @@ import {
   Stack,
   Typography,
 } from '@mui/joy';
-import StorageIcon from '@mui/icons-material/Storage';
+import { DataLakeIcon, DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { KnowledgeType } from '@bike4mind/common';
 import { createFabFileOnServerWithUpload, updateFabFileOnServer } from '@client/app/utils/filesAPICalls';
-import { useDataLakes } from '@client/app/hooks/data/dataLakeWizard';
+import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
+import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
 
@@ -28,7 +29,7 @@ import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStor
  * arbitrary text into it as a tagged file. Open it from anywhere via
  * `useSendToDataLakeStore.open({ content, fileName, sourceLabel })` rather than mounting a
  * modal per call site - previously one was rendered inside every chat message, so a long
- * session mounted N copies each subscribing to useDataLakes().
+ * session mounted N copies each subscribing to useGetDataLakes().
  *
  * Composes the existing primitives: create a FabFile (which uploads to S3 and triggers the
  * standard chunk/vectorize pipeline) then tag it with the lake's datalakeTag so it shows up
@@ -42,7 +43,7 @@ export default function SendToDataLakeModal() {
   // singleton fires the admin-gated /api/data-lakes call on every page, which 403s when
   // EnableDataLakes is off. The flag defaults closed while settings load, so no fetch races in.
   const { isFeatureEnabled } = useAdminSettingsCache();
-  const { data: lakes, isLoading } = useDataLakes(isOpen && isFeatureEnabled('EnableDataLakes'));
+  const { data: lakes, isLoading } = useGetDataLakes(isOpen && isFeatureEnabled('EnableDataLakes'));
   // Sending a file tags it into the lake - a write - so only lakes the caller can manage are
   // valid targets. The list also carries other users' read-only public lakes; exclude them.
   const manageableLakes = lakes?.filter(l => l.canManage);
@@ -77,8 +78,13 @@ export default function SendToDataLakeModal() {
         tags: [{ name: lake.datalakeTag, strength: 1 }],
         primaryTag: lake.datalakeTag,
       });
-      queryClient.invalidateQueries({ queryKey: ['dataLakeFiles', lake.id] });
-      queryClient.invalidateQueries({ queryKey: ['data-lakes'] });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesOf(lake.id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      // A new member shifts the lake's reachable-content share; the final figure lands once the file
+      // finishes processing, and the badge picks it up on its next refetch.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(lake.id) });
+      // The tag write above lands on the file, so every per-tag file count is now stale.
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       toast.success(`Saved ${sourceLabel} to “${lake.name}”. It'll be searchable once processing finishes.`);
       setSelectedId(null);
       closeStore();
@@ -105,7 +111,7 @@ export default function SendToDataLakeModal() {
   return (
     <Modal open={isOpen} onClose={close}>
       <ModalDialog data-testid="send-to-datalake-modal" sx={{ width: { xs: '95%', sm: '28rem' }, maxWidth: '28rem' }}>
-        <DialogTitle>Send to Data Lake</DialogTitle>
+        <DialogTitle>Send to {DATA_LAKE}</DialogTitle>
         <DialogContent>
           <Typography level="body-sm" sx={{ mb: 1 }}>
             Choose a data lake to add “{fileName}”. It will be tagged into the lake and indexed for retrieval.
@@ -118,7 +124,7 @@ export default function SendToDataLakeModal() {
             </Stack>
           ) : !manageableLakes || manageableLakes.length === 0 ? (
             <Box sx={{ textAlign: 'center', py: 3 }}>
-              <StorageIcon sx={{ fontSize: 36, opacity: 0.3, mb: 1 }} />
+              <DataLakeIcon sx={{ fontSize: 36, opacity: 0.3, mb: 1 }} />
               <Typography level="body-sm" color="neutral">
                 No data lakes you can add to. Create one first from Files → Data Lakes.
               </Typography>
@@ -134,7 +140,7 @@ export default function SendToDataLakeModal() {
                   sx={{ borderRadius: 'sm', gap: 1 }}
                 >
                   <Radio checked={selectedId === lake.id} size="sm" />
-                  <StorageIcon sx={{ fontSize: 18, color: 'primary.400' }} />
+                  <DataLakeIcon sx={{ fontSize: 18, color: 'primary.400' }} />
                   <Typography level="title-sm" noWrap>
                     {lake.name}
                   </Typography>

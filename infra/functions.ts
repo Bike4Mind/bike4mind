@@ -59,6 +59,9 @@ export const slackQuestProcessor = new sst.aws.Function('SlackQuestProcessor', {
     // imageEdit queues already have this).
     { actions: ['rekognition:DetectModerationLabels'], resources: ['*'] },
     { actions: ['xray:*'], resources: ['*'] },
+    // ChatCompletionProcess resolves the session's pinned model here too, which
+    // emits Lumina5/ModelSunset. PutMetricData takes no resource scope.
+    { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
     {
       actions: [
         'transcribe:StartTranscriptionJob',

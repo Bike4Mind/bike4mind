@@ -3,7 +3,6 @@ import {
   buildMetaEvent,
   buildPublicSSEEvent,
   formatSSEError,
-  isOriginPermitted,
   resolveRequestId,
   serializeSSEEvent,
   SSE_DONE_SIGNAL,
@@ -20,6 +19,7 @@ import {
   resolveQuestErrorCode,
   buildSharedTools,
   apiKeyService,
+  resolveToolAvailability,
   type ToolBuilderDeps,
   type ToolBuilderCallbacks,
 } from '@bike4mind/services';
@@ -45,9 +45,11 @@ import {
   fabFileRepository,
   fabFileChunkRepository,
   dataLakeRepository,
+  lakeAccessEventRepository,
 } from '@bike4mind/database';
 import { verifyEmbedApiKey, verifyEmbedKeyById, type ApiKeyInfo } from '@server/cli/auth';
 import { verifyEmbedSessionToken } from '@server/embed/embedSessionToken';
+import { isEmbedOriginAllowed } from '@server/embed/firstPartyOrigin';
 import { checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { checkEmbedSessionRateLimit } from '@server/utils/embedSessionRateLimit';
 import { embedCors } from '@server/middlewares/embedCors';
@@ -63,7 +65,7 @@ import { z } from 'zod';
  * ChatCompletion service (Fargate) so the SSE stream isn't bounded by a Lambda
  * timeout. Runs a *configured agent* (persona hydrated from AgentModel) for an
  * anonymous end-user, billing the embed key's organization. Reachable by
- * browsers only via CloudFront (M6 wires the route + Origin/OPTIONS forwarding).
+ * browsers only via CloudFront (the router forwards the route + Origin/OPTIONS).
  *
  * Unlike the CLI completions route, all auth/origin/balance/rate-limit gates run
  * BEFORE any SSE bytes flush, so a rejection returns a real HTTP status (401/403/
@@ -187,10 +189,11 @@ async function buildEmbedServerTools(args: {
    * Owner org, or null. Set only when the bound agent passed the ORG-ownership clause -
    * it authorizes a project owned by any org member (org projects are routinely created
    * by a teammate). Null for a personal agent, which restricts to the key owner's own
-   * projects. Membership is read from the org's own member list (a User doc carries no
-   * org field), so no extra lookup is needed.
+   * projects. Membership is read from the org's authoritative `users[]` ACL (a User doc
+   * carries no org field), so no extra lookup is needed. NOT `userDetails[]`, which is a
+   * per-member credit side-table and can lag membership (a member may have no row yet).
    */
-  ownerOrg: { userId?: string; userDetails?: Array<{ id: string }> | null } | null;
+  ownerOrg: { userId?: string; users?: Array<{ userId?: string }> | null } | null;
   logger: Logger;
   getAbortSignal: () => AbortSignal | undefined;
 }): Promise<ICompletionOptionTools[] | undefined> {
@@ -199,21 +202,31 @@ async function buildEmbedServerTools(args: {
   const enabledTools = resolveEmbedTools(hydrated);
   if (enabledTools.length === 0) return undefined;
 
-  // These three reads are independent, so fetch them together (mirrors the
+  // These reads are independent, so fetch them together (mirrors the
   // agent/org parallel fetch on the request path above).
-  const [project, owner, toolApiKeys] = await Promise.all([
+  const [project, owner, toolApiKeys, toolAvailability] = await Promise.all([
     hydrated.projectId ? projectRepository.findById(hydrated.projectId) : Promise.resolve(null),
     userRepository.findById(ctx.userId),
     apiKeyService.getEffectiveLLMApiKeys(ctx.userId, {
       db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
       getSettingsByNames,
     }),
+    // Never rejects (see resolveToolAvailability's doc comment). Fail-closed here (unlike the
+    // Tools picker UI's fail-open default): embed-widget end users have no way to add their own
+    // key, so a tool this lookup couldn't confirm works should not reach the model.
+    resolveToolAvailability(
+      ctx.userId,
+      { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } },
+      { onLookupError: 'unavailable', logger }
+    ),
   ]);
 
   let kbFileIds: string[] = [];
   if (project && !project.deletedAt) {
+    // Defensive on an authorization compare: never let an empty/absent id match, even
+    // though the real IUserShare.userId is a required string (the local type widens it).
     const isOrgMember = (userId: string): boolean =>
-      !!ownerOrg && (ownerOrg.userId === userId || (ownerOrg.userDetails ?? []).some(d => d.id === userId));
+      !!ownerOrg && (ownerOrg.userId === userId || (ownerOrg.users ?? []).some(u => !!u.userId && u.userId === userId));
     // Authorized when the key owner owns the project, or - for an org agent - any org
     // member does. Anything else fails closed to an empty scope (never owner-wide).
     if (project.userId === ctx.userId || isOrgMember(project.userId)) {
@@ -248,6 +261,7 @@ async function buildEmbedServerTools(args: {
       dataLakes: dataLakeRepository,
       organizations: organizationRepository,
       usageEvents: usageEventRepository,
+      lakeAccessEvents: lakeAccessEventRepository,
     },
     entitlementKeys: [],
     kbScope: { fileIds: kbFileIds },
@@ -262,7 +276,7 @@ async function buildEmbedServerTools(args: {
     onToolFinish: async () => {},
   };
 
-  const tools = buildSharedTools(deps, callbacks, { enabledTools, getAbortSignal });
+  const tools = buildSharedTools(deps, callbacks, { enabledTools, getAbortSignal, toolAvailability });
   return tools && tools.length > 0 ? tools : undefined;
 }
 
@@ -311,9 +325,12 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       // A sandboxed iframe without allow-same-origin sends the literal `Origin: null`;
       // treat that like an absent Origin (let the credential decide) rather than a
       // hard 403 that would break a legitimate embed without stopping a real attacker
-      // (who can just omit the header anyway).
+      // (who can just omit the header anyway). Our own serving origin is implicitly
+      // permitted: the /embed/* widget page posts from the app host, which can never
+      // appear on an allow-list (see firstPartyOrigin.ts) - must stay in lockstep
+      // with the mint gate in pages/api/embed/session.ts.
       const requestOrigin = headers.origin && headers.origin !== 'null' ? headers.origin : undefined;
-      if (requestOrigin && !isOriginPermitted(requestOrigin, ctx.allowedOrigins)) {
+      if (requestOrigin && !isEmbedOriginAllowed(requestOrigin, ctx.allowedOrigins, headers.host)) {
         return res.status(403).json({ error: 'forbidden', error_description: 'Origin not allowed for this embed key' });
       }
 
@@ -352,10 +369,17 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       }
 
       const hydrated = hydrateEmbedAgent(agent);
+      // Deliberately fail-closed: embed chat never inherits the system default, so a
+      // public embed's model (and cost profile) cannot drift when an admin changes it.
+      // The literal code stays off QUEST_ERROR_CODES - that tuple is SSE-frame scoped
+      // and feeds the streamed-action enum; this is a pre-stream JSON contract.
       if (!hydrated.model) {
-        return res
-          .status(422)
-          .json({ error: 'unprocessable', error_description: 'Bound agent has no configured model' });
+        return res.status(422).json({
+          error: 'unprocessable',
+          error_description:
+            'Bound agent has no explicit model configured. Set a model on the agent; embed chat does not fall back to the system default.',
+          code: 'agent_model_not_configured',
+        });
       }
 
       // A key can outlive its org (org deleted while the key stayed active). That is a
@@ -384,8 +408,11 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       // Per-key spend-cap gate, the second billing-class check: the org may be
       // solvent while this key has exhausted its own budget. Reads the validation-
       // time snapshot off ctx (no fresh query - the auth layer just loaded the
-      // key); the in-flight race this leaves open is bounded and accepted, since
-      // the cap is a leaked-key backstop, not exact accounting.
+      // key); the race this leaves open is bounded and accepted, since the cap is
+      // a leaked-key backstop, not exact accounting. Not only N parallel streams:
+      // settlement is a fire-and-forget write after the stream closes (see
+      // cliCompletions.ts), so even back-to-back sequential requests from a fast
+      // client can pass this gate before the prior increment lands.
       try {
         assertKeySpendWithinCap({ spendCap: ctx.spendCap, currentSpend: ctx.currentSpend });
       } catch (capErr) {

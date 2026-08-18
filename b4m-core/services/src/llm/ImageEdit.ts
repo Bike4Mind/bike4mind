@@ -8,7 +8,6 @@ import {
   LLMEvents,
   ImageModels,
   BFL_SAFETY_TOLERANCE,
-  getTextModelCost,
   IChatHistoryItemRepository,
   IUserRepository,
   PromptMeta,
@@ -22,6 +21,7 @@ import {
   IOrganizationRepository,
   IOrganizationDocument,
   ImageModerationIncident as ImageModerationIncidentInput,
+  insufficientCreditsError,
 } from '@bike4mind/common';
 import { BFL_IMAGE_MODELS, isImageServeable } from '@bike4mind/common';
 import {
@@ -35,12 +35,11 @@ import {
   NotFoundError,
   OpenaiModerationsService,
   TiktokenTokenizer,
-  usdToCredits,
   ImageEditResponse,
   BaseStorage,
   getSettingsByNames,
-  ImageModerationService,
 } from '@bike4mind/utils';
+import type { ImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { MongoAbility } from '@casl/ability';
@@ -50,10 +49,12 @@ import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
-import { deductCreditsWithOrgSupport } from '../creditService';
+import { deductCreditsWithOrgSupport, isMemberCreditCapExceeded } from '../creditService';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { startQuestHeartbeat } from './questHeartbeat';
-import { insufficientCreditsError, getQuestErrorCode } from '@bike4mind/common';
+// Aliased: this module also has a private method named validateUserCredits.
+import { validateUserCredits as validateImageUserCredits } from './tools/base/utils';
+import { getQuestErrorCode } from '@bike4mind/common';
 
 export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   sessionId: z.string(),
@@ -232,35 +233,29 @@ export class ImageEditService {
     user: IUserDocument,
     model: string,
     n: number = 1,
+    imageParams: Pick<ImageEditBody, 'size' | 'quality'>,
+    logger: Logger,
     organization?: IOrganizationDocument | null
   ) {
-    let credits = user.currentCredits ?? 0;
-    let creditsSource: 'user' | 'organization' = 'user';
-
-    // If organization exists, use organization credits instead
-    if (organization) {
-      credits = organization.currentCredits ?? 0;
-      creditsSource = 'organization';
-    }
-
     const apiKeyTable = await getEffectiveLLMApiKeys(user.id, { db: this.db, getSettingsByNames });
     const models = await getAvailableModels(apiKeyTable);
     const modelInfo = models.find(m => m.id === model);
     if (!modelInfo) throw new BadRequestError(`Invalid model: "${model}" is not available`);
 
-    //TODO: Change this to getImageModelCost?
-    const usdCost = getTextModelCost(modelInfo, 0, 0);
-    const requiredCredits = usdToCredits(usdCost * n);
+    // Same estimator the chat edit_image tool charges through (ToolBuilder.onToolStart),
+    // so both paths bill identically. Returns { requiredCredits, usdCost } n-scaled.
+    const result = await validateImageUserCredits(user, modelInfo, n, { model, ...imageParams }, logger, organization);
 
-    if (credits < requiredCredits) {
-      const creditsOwner = creditsSource === 'organization' ? 'Your organization does' : 'You do';
+    // Org-billed: enforce the per-member cap here, at pre-flight, before touching the
+    // shared pool. This is the only enforcement point - the settlement write
+    // (deductCreditsWithOrgSupport) intentionally does NOT re-check the cap (#1536).
+    if (organization && isMemberCreditCapExceeded(organization, user.id, result.requiredCredits)) {
       throw insufficientCreditsError(
-        `${creditsOwner} not have enough credits to complete this request. ${creditsSource === 'organization' ? 'Organization' : 'You'} currently have ${credits} credits, and this request requires approximately ${requiredCredits} credits. Try reducing the number of images to lower the credit cost.`
+        `Your organization member credit limit has been reached for image editing. Contact your organization administrator.`
       );
     }
 
-    // usdCost returned only for usage-event analytics; billing still uses requiredCredits.
-    return { requiredCredits, usdCost: usdCost * n };
+    return result;
   }
 
   public async process({ body, logger }: { body: z.infer<typeof ImageEditBodySchema>; logger: Logger }) {
@@ -278,6 +273,7 @@ export class ImageEditService {
       aspect_ratio,
       fabFileIds,
       size,
+      quality,
       image: sourceImageUrl,
       organizationId,
     } = ImageEditBodySchema.parse(body);
@@ -328,7 +324,14 @@ export class ImageEditService {
       // Validate credits before proceeding
       let usageCostUsd = 0;
       if (adminSettingsEnforceCredits && model && this.db.creditTransactions) {
-        const { requiredCredits, usdCost } = await this.validateUserCredits(user, model, n, organization);
+        const { requiredCredits, usdCost } = await this.validateUserCredits(
+          user,
+          model,
+          n,
+          { size, quality },
+          logger,
+          organization
+        );
         quest.creditsUsed = requiredCredits;
         usageCostUsd = usdCost;
       }

@@ -35,7 +35,7 @@ import {
   type ChildExecution,
   type IterationStep,
 } from '@client/app/stores/useAgentExecutionStore';
-import type { IAgentStep, GenerateImageToolCall } from '@bike4mind/common';
+import type { IAgentStep, GenerateImageToolCall, AudioGenerationToolCall } from '@bike4mind/common';
 import { appendReplyToLatestOptimisticBubble, swapOptimisticPromptBubbleId } from '@client/app/utils/llm';
 import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
 
@@ -83,6 +83,14 @@ interface AgentExecuteStart {
    * picker UI in a headless run). Server-parsed via `GenerateImageToolCallSchema.partial()`.
    */
   imageConfig?: GenerateImageToolCall;
+  /**
+   * User's selected audio-generation config (TTS provider/voice/format/language,
+   * SFX duration/prompt-influence). Forwarded so the executor's audio_generation
+   * tool resolves the user's saved audio settings instead of falling back to its
+   * built-in defaults (OpenAI + provider-default voice) - the agent-mode analogue
+   * of imageConfig. Server-parsed via `AudioGenerationToolCallSchema.partial()`.
+   */
+  audioConfig?: AudioGenerationToolCall;
   /**
    * Provenance of the routing decision that produced this dispatch.
    * Persisted onto the resulting `IChatHistoryItem.routingSource` so the

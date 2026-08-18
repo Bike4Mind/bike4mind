@@ -5,6 +5,7 @@ import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import { parseEmbedOrigin, EMBED_ORIGINS_MAX } from '@bike4mind/common';
 import { updatePublishedEmbedOrigins, getPublishedEmbedState } from '@client/app/utils/publishApi';
+import { copyTextWithToast } from '@client/app/utils/copyToClipboard';
 
 export interface EmbedAllowlistEditorProps {
   publicId: string;
@@ -129,14 +130,7 @@ export function EmbedAllowlistEditor({
     .replace(/&/g, '&amp;')
     .replace(/"/g, '&quot;')}"></iframe>`;
 
-  const copySnippet = async () => {
-    try {
-      await navigator.clipboard.writeText(snippet);
-      toast.success('Embed code copied to clipboard!');
-    } catch {
-      toast.error("Couldn't copy - select the code manually");
-    }
-  };
+  const copySnippet = () => copyTextWithToast(snippet, 'Embed code copied to clipboard!');
 
   return (
     <Box data-testid={`${testIdPrefix}-section`}>

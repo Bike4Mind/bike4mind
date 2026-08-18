@@ -85,6 +85,32 @@ describe('POST /api/embed/session - mint embed session token', () => {
     expect(res._getStatusCode()).toBe(403);
   });
 
+  it('permits the first-party serving origin even though it can never be allow-listed', async () => {
+    // The /embed/* widget page mints from our own host; its same-origin POST
+    // still carries an Origin header. Deleting the first-party exemption in the
+    // gate must fail this test - the widget would be dead on every deployment.
+    // vitest.setup pins SERVER_DOMAIN, so PUBLISH_HOST is app.bike4mind.com here
+    // and this exercises the branded-deployment branch (the production path).
+    const { req, res } = makeReq({
+      'x-api-key': 'b4m_live_embed',
+      origin: 'https://app.bike4mind.com',
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (handler as any)(req, res);
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('does not treat an Origin merely matching a spoofed non-self Host as approved', async () => {
+    const { req, res } = makeReq({
+      'x-api-key': 'b4m_live_embed',
+      origin: 'https://evil.com',
+      host: 'app.selfhost.example',
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (handler as any)(req, res);
+    expect(res._getStatusCode()).toBe(403);
+  });
+
   it('accepts a request from an approved Origin', async () => {
     const { req, res } = makeReq({ 'x-api-key': 'b4m_live_embed', origin: 'https://example.com' });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -1,5 +1,6 @@
 import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
+import { organizationRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { logEvent } from '@server/utils/analyticsLog';
 import { UserApiKeyEvents } from '@bike4mind/common';
@@ -14,12 +15,13 @@ const handler = baseApi().post(
 
     if (!keyId) throw new BadRequestError('Invalid key ID');
 
-    await userApiKeyService.revokeUserApiKey(
+    const { name } = await userApiKeyService.revokeUserApiKey(
       userId,
       { keyId, reason },
       {
         db: {
           userApiKeys: userApiKeyRepository,
+          organizations: organizationRepository,
         },
       }
     );
@@ -30,7 +32,7 @@ const handler = baseApi().post(
         type: UserApiKeyEvents.REVOKED,
         metadata: {
           keyId,
-          name: 'Unknown', // We could fetch this if needed
+          name,
           reason,
         },
       },

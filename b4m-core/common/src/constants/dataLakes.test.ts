@@ -5,8 +5,14 @@ import {
   getAccessibleDataLakes,
   getDataLakeTags,
   lakeMatchesAccess,
+  isReservedTagPrefix,
   normalizeEntitlementKey,
+  normalizeTagPrefix,
   toDataLakeConfig,
+  tagPrefixesOverlap,
+  tagPrefixIssue,
+  hasBlankTagPrefixSegment,
+  satisfiesTagPrefix,
 } from './dataLakes';
 
 // A dynamic (DB-registered) lake config builder. Passing dynamicDataLakes bypasses the
@@ -126,10 +132,9 @@ describe('toDataLakeConfig', () => {
     expect(config.requiredUserTag).toBe('tag');
   });
 
-  // The projection dropped `slug`, so the lake list returned lakes without a slug.
-  // The Add-files (append) wizard reads `lake.slug` to send `dataLakeSlug`; without it the
-  // server never resolved the lake tag and uploaded files were never registered to the lake.
-  it('carries slug through the projection (append-mode upload depends on it)', () => {
+  // The projection dropped `slug`, so the lake list returned lakes without a slug - and the
+  // wizard carries whatever the list gave it into the lake it is adding files to.
+  it('carries slug through the projection (clients read it off a lake they hold)', () => {
     const config = toDataLakeConfig({
       id: 'lake1',
       slug: 'acme-robotics-kb',
@@ -162,10 +167,182 @@ describe('toDataLakeConfig', () => {
     });
     expect(config.description).toBeUndefined();
   });
+
+  // The invariant behind ManageableDataLakeConfig: this projection has no actor, so it must
+  // never carry an editor-only field. Every actor-less consumer (access filters, tag lookups,
+  // the static registry) goes through here, and systemPrompt is readable by a lake's editors
+  // only - it enters a response solely via the manage-gated list projection.
+  it('never carries systemPrompt, even when the source document has one', () => {
+    const config = toDataLakeConfig({
+      id: 'l',
+      slug: 'l',
+      name: 'L',
+      fileTagPrefix: 'l:',
+      datalakeTag: 'datalake:l',
+      systemPrompt: 'Only cite peer-reviewed sources.',
+    } as Parameters<typeof toDataLakeConfig>[0]);
+    expect('systemPrompt' in config).toBe(false);
+  });
 });
 
 describe('normalizeEntitlementKey', () => {
   it('trims and lowercases', () => {
     expect(normalizeEntitlementKey('  MedLib:Pro ')).toBe('medlib:pro');
+  });
+});
+
+describe('normalizeTagPrefix', () => {
+  it('returns the trimmed prefix when it ends with a colon', () => {
+    expect(normalizeTagPrefix('acme:')).toBe('acme:');
+    expect(normalizeTagPrefix('  acme:  ')).toBe('acme:');
+  });
+
+  // Read scoping and the removal write path share this, so anything rejected here is a
+  // prefix no query matches AND no removal clears.
+  it.each([
+    ['', 'empty would match every tag'],
+    ['   ', 'whitespace-only collapses to empty'],
+    ['acme', 'no trailing colon would match unrelated tags like acmex:'],
+    [undefined, 'absent'],
+    [null, 'null'],
+  ])('rejects %o (%s)', prefix => {
+    expect(normalizeTagPrefix(prefix as string | undefined | null)).toBeNull();
+  });
+});
+
+describe('isReservedTagPrefix', () => {
+  it.each(['datalake:', 'datalake:x:', '  datalake:'])('flags %o as reserved', prefix => {
+    expect(isReservedTagPrefix(prefix)).toBe(true);
+  });
+
+  it.each(['acme:', 'opti:', 'data:', undefined, null])('allows %o', prefix => {
+    expect(isReservedTagPrefix(prefix as string | undefined | null)).toBe(false);
+  });
+});
+
+describe('tagPrefixesOverlap', () => {
+  it.each([
+    ['identical prefixes', 'acme:', 'acme:'],
+    ['padded values', '  acme:  ', 'acme:'],
+    ['a nested prefix', 'docs:legal:', 'docs:'],
+    ['a nested prefix the other way round', 'docs:', 'docs:legal:'],
+  ])('reports %s as overlapping', (_label, a, b) => {
+    expect(tagPrefixesOverlap(a, b)).toBe(true);
+  });
+
+  it.each([
+    ['unrelated prefixes', 'globex:', 'acme:'],
+    ['a shared word that is not a prefix boundary', 'acme-docs:', 'acme:x:'],
+    // The predicate builds an unflagged ^regex, so these two cannot reach each other's tags.
+    ['prefixes differing only in case', 'ACME:', 'acme:'],
+  ])('reports %s as safe', (_label, a, b) => {
+    expect(tagPrefixesOverlap(a, b)).toBe(false);
+  });
+
+  it.each([
+    ['empty', '', 'acme:'],
+    ['whitespace only', '   ', 'acme:'],
+    ['missing the trailing colon', 'acme', 'acme:'],
+    ['null', null, 'acme:'],
+    ['undefined', undefined, 'acme:'],
+  ])('never overlaps when one side is %s, since no query arm is built from it', (_label, a, b) => {
+    expect(tagPrefixesOverlap(a, b)).toBe(false);
+    expect(tagPrefixesOverlap(b, a)).toBe(false);
+  });
+});
+
+describe('satisfiesTagPrefix', () => {
+  it.each([
+    ['a plain content tag', ['acme:legal']],
+    ['a nested content tag', ['acme:legal:2024']],
+    ['one satisfying tag among several', ['important', 'globex:x', 'acme:legal']],
+    // The suffix is any non-empty string, including one that starts with a separator.
+    ['a tag whose suffix begins with a colon', ['acme::odd']],
+  ])('is satisfied by %s', (_label, tags) => {
+    expect(satisfiesTagPrefix(tags, 'acme:')).toBe(true);
+  });
+
+  it.each([
+    ['no tags at all', []],
+    ['only tags outside the prefix', ['important', 'globex:legal']],
+    // Renders as an unlabeled row in the tag tree, so it is not a category to navigate to.
+    ['a bare prefix with no suffix', ['acme:']],
+    // The read arms build an unflagged ^regex, so this file is still uncategorized to them.
+    ['a differently-cased prefix', ['ACME:legal']],
+    ['a prefix that is only a substring', ['not-acme:legal']],
+  ])('is not satisfied by %s', (_label, tags) => {
+    expect(satisfiesTagPrefix(tags, 'acme:')).toBe(false);
+  });
+
+  it('never counts a membership meta-tag as content, whatever its case', () => {
+    // The tag counters exclude `datalake:*` from the tree, so a meta-tag leaves the file
+    // uncategorized even when the lake prefix would otherwise match it.
+    expect(satisfiesTagPrefix(['datalake:acme'], 'datalake:')).toBe(false);
+    expect(satisfiesTagPrefix(['DataLake:acme'], 'DataLake:')).toBe(false);
+  });
+
+  it('ignores malformed entries rather than throwing', () => {
+    expect(satisfiesTagPrefix([null, undefined, 42, { name: 'acme:legal' }], 'acme:')).toBe(false);
+    expect(satisfiesTagPrefix([null, 'acme:legal'], 'acme:')).toBe(true);
+  });
+});
+
+describe('hasBlankTagPrefixSegment', () => {
+  it.each(['::', 'a::', ':a:', 'a::b:', 'a: :', ' :'])('flags an empty or whitespace segment (%s)', prefix => {
+    expect(hasBlankTagPrefixSegment(prefix)).toBe(true);
+  });
+
+  // trim() strips WhiteSpace but not Cf format characters - these render as the same
+  // blank tree node, so the check requires ink instead. U+FEFF (BOM) is Cf too.
+  it.each(['a:\u200b:', 'a:\u2060:', 'a:\ufeff:'])('flags a zero-width segment (%s)', prefix => {
+    expect(hasBlankTagPrefixSegment(prefix)).toBe(true);
+  });
+
+  // Not every blank-renderer is whitespace or Cf: Hangul/halfwidth fillers are letters (Lo),
+  // braille blank is a symbol (So), BEL is a control outside \s. All must count as blank.
+  it.each(['a:\u3164:', 'a:\uffa0:', 'a:\u2800:', 'a:\u115f:', 'a:\u0007:'])(
+    'flags an invisible-ink segment (%s)',
+    prefix => {
+      expect(hasBlankTagPrefixSegment(prefix)).toBe(true);
+    }
+  );
+
+  it('accepts ordinary single- and multi-segment prefixes', () => {
+    expect(hasBlankTagPrefixSegment('acme:')).toBe(false);
+    expect(hasBlankTagPrefixSegment('acme:legal:')).toBe(false);
+  });
+
+  // Pins that the rule is "has ink", not an ASCII allowlist: real scripts and punctuation
+  // are valid segments, guarding against a future "fix" that would reject non-Latin users.
+  it('accepts non-Latin and punctuation-bearing segments', () => {
+    expect(hasBlankTagPrefixSegment('\u0444\u0430\u0439\u043b\u044b:')).toBe(false);
+    expect(hasBlankTagPrefixSegment('\u6587\u4ef6:')).toBe(false);
+    expect(hasBlankTagPrefixSegment('r&d:')).toBe(false);
+  });
+
+  // A colon-less value must not manufacture a phantom blank segment out of its last
+  // character - the trailing-colon rule is a separate check with its own message.
+  it('does not flag a colon-less prefix', () => {
+    expect(hasBlankTagPrefixSegment('a:b')).toBe(false);
+    expect(hasBlankTagPrefixSegment('acme')).toBe(false);
+  });
+});
+
+describe('tagPrefixIssue - blank segments', () => {
+  it('reports a blank segment as user-facing copy', () => {
+    expect(tagPrefixIssue('legal::')).toMatch(/visible character/);
+    expect(tagPrefixIssue('legal: :')).toMatch(/visible character/);
+  });
+
+  it('stays quiet for a healthy prefix and still reports the other two cases', () => {
+    expect(tagPrefixIssue('legal:')).toBeNull();
+    expect(tagPrefixIssue('datalake:')).toMatch(/reserved/);
+    expect(tagPrefixIssue('legal:', { name: 'Docs', fileTagPrefix: 'legal:' })).toMatch(/overlaps/);
+  });
+
+  // Precedence matches the schema's refine order, so the wizard and a server 400 name
+  // the same culprit for an input that trips both rules.
+  it('names the blank segment before the reserved namespace for "datalake::"', () => {
+    expect(tagPrefixIssue('datalake::')).toMatch(/visible character/);
   });
 });

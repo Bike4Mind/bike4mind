@@ -42,6 +42,22 @@ export function isTransientOpenSearchError(error: Error): boolean {
 }
 
 /**
+ * Whether an index-create failure is a `resource_already_exists_exception` - the outcome of
+ * losing a create race to a concurrent caller for the same index, not a real error. A 400 with
+ * this body means the index exists now regardless of who created it, so the loser should treat
+ * it as success rather than propagate the throw (which would otherwise abort every chunk in the
+ * same `Promise.all` batch, not just the one racing index create).
+ */
+export function isIndexAlreadyExistsError(error: Error): boolean {
+  const statusCode = (error as { statusCode?: number }).statusCode;
+  const body = (error as { body?: { error?: { type?: string } } }).body;
+  if (statusCode === 400 && body?.error?.type === 'resource_already_exists_exception') {
+    return true;
+  }
+  return (error.message ?? '').toLowerCase().includes('resource_already_exists_exception');
+}
+
+/**
  * Extract a `Retry-After` delay (ms) from an opensearch-js `ResponseError`, if the cluster
  * sent one. opensearch-js exposes response headers on `error.headers` (and `error.meta.headers`).
  * `Retry-After` is either a number of seconds or an HTTP date. Returns null when absent/unparseable.
@@ -75,22 +91,37 @@ export class OpenSearchClient {
    */
   public client: Client;
 
-  constructor(endpoint: string) {
-    this.client = new Client({
-      ...AwsSigv4Signer({
-        region: 'us-east-2',
-        service: 'es',
-        getCredentials: () => {
-          const credentialsProvider = defaultProvider();
-          return credentialsProvider();
-        },
-      }),
-      node: `https://${endpoint}`,
-      requestTimeout: OPENSEARCH_REQUEST_TIMEOUT_MS,
-      // Disable the client's built-in retry - it does not retry 429 and skips non-idempotent
-      // writes, so it gives a pressured cluster no relief. We own retry via `withRetry` below.
-      maxRetries: 0,
-    });
+  /**
+   * `selfHosted: true` builds a plain client for a docker-compose self-host container reachable
+   * over HTTP with security disabled (see compose.selfhost.yaml) - it has no AWS endpoint to
+   * sign requests against, unlike the managed AWS OpenSearch Service the default path targets.
+   */
+  constructor(endpoint: string, options?: { selfHosted?: boolean }) {
+    // Strip any scheme the caller already included (e.g. OPENSEARCH_ENDPOINT set to
+    // "http://opensearch:9200" instead of the documented bare "opensearch:9200") so we
+    // don't double it up into "http://http://...", which fails with an opaque connection error.
+    const host = endpoint.replace(/^https?:\/\//i, '');
+    this.client = options?.selfHosted
+      ? new Client({
+          node: `http://${host}`,
+          requestTimeout: OPENSEARCH_REQUEST_TIMEOUT_MS,
+          maxRetries: 0,
+        })
+      : new Client({
+          ...AwsSigv4Signer({
+            region: 'us-east-2',
+            service: 'es',
+            getCredentials: () => {
+              const credentialsProvider = defaultProvider();
+              return credentialsProvider();
+            },
+          }),
+          node: `https://${host}`,
+          requestTimeout: OPENSEARCH_REQUEST_TIMEOUT_MS,
+          // Disable the client's built-in retry - it does not retry 429 and skips non-idempotent
+          // writes, so it gives a pressured cluster no relief. We own retry via `withRetry` below.
+          maxRetries: 0,
+        });
   }
 
   /**
@@ -117,9 +148,9 @@ export class OpenSearchClient {
       this.client.indices.create({
         index: indexName,
         body: {
-          settings: {
-            knn: true,
-          },
+          // knn:true is the baseline every vector index needs; merge in any caller-provided
+          // index-level settings (e.g. knn.algo_param.ef_search) instead of discarding them.
+          settings: { knn: true, ...settings.settings },
           mappings: settings.mappings,
         },
       })
@@ -129,6 +160,43 @@ export class OpenSearchClient {
   async indexExists(indexName: string): Promise<boolean> {
     const response = await this.withRetry(() => this.client.indices.exists({ index: indexName }));
     return response.body;
+  }
+
+  /**
+   * k-NN vector search. `filter` restricts candidates to a subset (e.g. fabFileId/embeddingModel)
+   * BEFORE k-NN ranks them - it must sit inside the `knn` clause itself (OpenSearch's lucene-
+   * engine efficient filtering), not as a separate post-filter stage. A per-model index is
+   * shared across every file using that model, so a caller scoped to a handful of files needs
+   * the filter applied during the HNSW/exact traversal, not after a global top-k pass - a
+   * post-filter would rank the whole index first and could return zero in-scope hits even when
+   * the caller's files ARE indexed, since their chunks may not make the global top-k.
+   */
+  /**
+   * `k` is the candidate pool the kNN engine ranks internally, NOT the number of hits to return -
+   * conflating them (passing `k` as `size` too) ships the whole candidate pool (up to 10,000
+   * documents) back over the wire for every query. `options.size` is the actual page size the
+   * caller wants; `options.excludeSource` drops fields the caller never reads (the indexed
+   * `vector` array in particular - a 1536-float embedding on every one of thousands of candidate
+   * hits is the dominant cost of an unbounded response).
+   */
+  async knnQuery(
+    indexName: string,
+    vector: number[],
+    k: number,
+    options?: { filter?: Record<string, any>; size?: number; excludeSource?: string[] }
+  ): Promise<Array<{ id: string; score: number; source: Record<string, any> }>> {
+    const { filter, size = k, excludeSource } = options ?? {};
+    const query = { knn: { vector: filter ? { vector, k, filter } : { vector, k } } };
+    const body: Record<string, any> = { size, query };
+    if (excludeSource?.length) {
+      body._source = { excludes: excludeSource };
+    }
+    const response = await this.withRetry(() => this.client.search({ index: indexName, body }));
+    return response.body.hits.hits.map((hit: { _id: string; _score: number; _source: Record<string, any> }) => ({
+      id: hit._id,
+      score: hit._score,
+      source: hit._source,
+    }));
   }
 
   async deleteIndex(indexName: string) {

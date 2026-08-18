@@ -1,4 +1,4 @@
-import type { IChatHistoryItemDocument, ISessionDocument, ModelInfo } from '@bike4mind/common';
+import type { IChatHistoryItemDocument, ISessionDocument, ModelInfo, SupersededModelInfo } from '@bike4mind/common';
 import type { AxiosError } from 'axios';
 import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
@@ -329,16 +329,24 @@ export async function updateOptimisticQuest(
   }
 }
 
-export const getModels = async (): Promise<ModelInfo[]> => {
+export type ModelCatalog = {
+  models: ModelInfo[];
+  /** Retired/superseded ids a session may still be pinned to. See SupersededModelInfo. */
+  supersededModels: SupersededModelInfo[];
+};
+
+export const getModelCatalog = async (): Promise<ModelCatalog> => {
   try {
     const response = await api.get('/api/models');
-    return response.data.models;
+    return { models: response.data.models, supersededModels: response.data.supersededModels ?? [] };
   } catch (error: unknown) {
     const axiosError = error as AxiosError;
     perfLogger.log('[Client] Error fetching LLM models:', axiosError);
     throw new Error('Failed to fetch LLM models: ' + axiosError.message);
   }
 };
+
+export const getModels = async (): Promise<ModelInfo[]> => (await getModelCatalog()).models;
 
 export type SendMessageOptions = {
   isRetry?: boolean;

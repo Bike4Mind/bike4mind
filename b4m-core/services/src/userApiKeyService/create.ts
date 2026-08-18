@@ -3,6 +3,7 @@ import {
   ApiKeyScope,
   ApiKeyStatus,
   CreditHolderType,
+  EmbedBrandingSchema,
   EmbedOriginsSchema,
   IEmbedBranding,
   IUserApiKeyRepository,
@@ -12,18 +13,12 @@ import { randomBytes } from 'crypto';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { KEY_PREFIX_LENGTH } from './constants';
+import { API_KEY_RATE_LIMIT_DEFAULTS, apiKeyRateLimitSchema } from './rateLimit';
 
 // Sanity ceiling for a per-embed-key spend cap, in whole credits - a guard against
 // fat-finger/overflow values, not a product limit. Shared with the spend-cap update
 // path (setEmbedKeySpendCap).
 export const EMBED_SPEND_CAP_MAX_CREDITS = 100_000_000;
-
-const embedBrandingSchema = z.object({
-  primaryColor: z.string().optional(),
-  logoUrl: z.string().optional(),
-  displayName: z.string().optional(),
-  hideBranding: z.boolean().optional(),
-});
 
 const createUserApiKeySchema = z.object({
   name: z.string().min(1).max(100),
@@ -36,17 +31,13 @@ const createUserApiKeySchema = z.object({
   // the coherence guard below (which the route mirrors via `!== undefined`).
   agentId: z.string().min(1).optional(),
   allowedOrigins: EmbedOriginsSchema.optional(),
-  branding: embedBrandingSchema.optional(),
+  branding: EmbedBrandingSchema.optional(),
   // Spend settles in whole credits, so a fractional cap has no resolution.
   // `.positive()` rejects a 0 cap at mint (a dead-on-arrival key), but enforcement
   // still honors a stored 0 as a real cap.
   spendCap: z.number().int().positive().max(EMBED_SPEND_CAP_MAX_CREDITS).optional(),
-  rateLimit: z
-    .object({
-      requestsPerMinute: z.number().min(1).max(10_000).prefault(60),
-      requestsPerDay: z.number().min(1).max(1_000_000).prefault(1000),
-    })
-    .optional(),
+  // Bounds live in ./rateLimit so mint and update can never accept different values.
+  rateLimit: apiKeyRateLimitSchema.optional(),
   metadata: z.object({
     clientIP: z.string().optional(),
     userAgent: z.string().optional(),
@@ -134,6 +125,15 @@ export const createUserApiKey = async (
   if (isEmbedKey && !params.agentId) {
     throw new BadRequestError('agentId is required for embed:chat scope');
   }
+  // Embed keys bill a bounded Organization pool, never a user's. Enforce the org
+  // pairing at mint so an incoherent key is never created (e.g. a forged/scripted
+  // request bypassing the admin UI). Must match assertEmbedCredential in
+  // apps/client/server/cli/auth.ts, which rejects a non-org-owned embed key at serve/session.
+  if (isEmbedKey && (params.billingOwnerType !== CreditHolderType.Organization || !params.organizationId)) {
+    throw new BadRequestError(
+      'embed:chat scope requires organization billing (billingOwnerType Organization with an organizationId)'
+    );
+  }
   if (
     !isEmbedKey &&
     (params.agentId !== undefined ||
@@ -176,10 +176,7 @@ export const createUserApiKey = async (
 
   const { key, keyPrefix, keyHash } = generateApiKey();
 
-  const rateLimit = params.rateLimit || {
-    requestsPerMinute: 60,
-    requestsPerDay: 1000,
-  };
+  const rateLimit = params.rateLimit || API_KEY_RATE_LIMIT_DEFAULTS;
 
   const apiKeyDocument = await db.userApiKeys.create({
     userId,

@@ -2,7 +2,10 @@ import { describe, it, expect, vi } from 'vitest';
 import { loadAgentMcpTools } from './loadAgentMcpTools';
 
 const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() } as any;
-const getMcpClient = vi.fn(async () => ({ callTool: vi.fn(async () => ({ content: [{ text: 'ok' }] })) }));
+const getMcpClient = vi.fn(async () => ({
+  getTools: vi.fn(async () => []),
+  callTool: vi.fn(async () => ({ content: [{ text: 'ok' }] })),
+}));
 
 const atlassian = {
   id: 'a1',
@@ -35,14 +38,44 @@ describe('loadAgentMcpTools', () => {
     expect(mcpToolsByServer.atlassian[0].name).toBe('atlassian__jira_list_projects');
   });
 
-  it('skips enabled servers with no cached schemas', async () => {
+  it('skips enabled servers when cached schemas and live fetch both return empty', async () => {
     const bare = { id: 'b1', name: 'github', userId: 'u1', enabled: true, toolSchemas: [] } as any;
-    const mcpServers = { find: vi.fn(async () => [bare]) };
+    const emptyGetTools = vi.fn(async () => []);
+    const emptyClient = vi.fn(async () => ({ getTools: emptyGetTools, callTool: vi.fn() }));
+    const mcpServers = { find: vi.fn(async () => [bare]), update: vi.fn() };
     const { mcpToolsByServer } = await loadAgentMcpTools(
-      { mcpServers: mcpServers as any, getMcpClient, logger },
+      { mcpServers: mcpServers as any, getMcpClient: emptyClient, logger },
       { userId: 'u1', enableMCPServer: true }
     );
     expect(mcpToolsByServer).toEqual({});
+    // Should have attempted a live fetch
+    expect(emptyGetTools).toHaveBeenCalled();
+  });
+
+  it('live-fetches and caches tool schemas when cached schemas are missing', async () => {
+    const bare = { id: 'b1', name: 'notion', userId: 'u1', enabled: true, toolSchemas: [] } as any;
+    const liveTools = [
+      { name: 'notion_search', description: 'search', input_schema: {} },
+      { name: 'notion_create_page', description: 'create', input_schema: {} },
+    ];
+    const liveGetTools = vi.fn(async () => liveTools);
+    const liveClient = vi.fn(async () => ({ getTools: liveGetTools, callTool: vi.fn() }));
+    const update = vi.fn();
+    const mcpServers = { find: vi.fn(async () => [bare]), update };
+    const { mcpToolsByServer } = await loadAgentMcpTools(
+      { mcpServers: mcpServers as any, getMcpClient: liveClient, logger },
+      { userId: 'u1', enableMCPServer: true }
+    );
+    expect(Object.keys(mcpToolsByServer)).toEqual(['notion']);
+    expect(mcpToolsByServer.notion).toHaveLength(2);
+    // Should have persisted the schemas
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'b1',
+        tools: ['notion_search', 'notion_create_page'],
+        toolSchemas: liveTools,
+      })
+    );
   });
 
   it('isolates a failing server so the others still load', async () => {

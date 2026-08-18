@@ -6,6 +6,7 @@ import type { IChoiceEndToolUse, ICompletionOptions, ICompletionResponseChunk } 
 import { BaseBedrockBackend } from './base';
 import { IMessage, ModelInfo } from '@bike4mind/common';
 import DeepSeekBedrockBackend from './deepseek';
+import MoonshotBedrockBackend from './moonshot';
 
 // Useful for getModelInfo():
 export class UndifferentiatedBedrockBackend extends BaseBedrockBackend {
@@ -16,6 +17,7 @@ export class UndifferentiatedBedrockBackend extends BaseBedrockBackend {
       ...(await new JurassicTwoBedrockBackend().getModelInfo()),
       ...(await new TitanBedrockBackend().getModelInfo()),
       ...(await new DeepSeekBedrockBackend().getModelInfo()),
+      ...(await new MoonshotBedrockBackend().getModelInfo()),
     ];
   }
 

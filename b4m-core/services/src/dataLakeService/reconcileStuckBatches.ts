@@ -1,5 +1,5 @@
 import type {
-  IDataLakeBatchDocument,
+  IDataLakeBatchSummary,
   IDataLakeRepository,
   IDataLakeBatchRepository,
   IFabFileRepository,
@@ -7,23 +7,42 @@ import type {
 import { BATCH_NON_TERMINAL_STATUSES } from '@bike4mind/common';
 import { recomputeLakeStats } from './recomputeLakeStats';
 
-/** Default stuck-batch timeout: a non-terminal batch idle longer than this is forced terminal. */
-export const DEFAULT_STUCK_BATCH_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+/**
+ * Default stuck-batch timeout: a non-terminal batch idle longer than this is forced terminal.
+ *
+ * Must exceed the worst-case time a batch can spend legitimately retrying a chunk/vectorize
+ * failure before the queue handlers themselves account it (see fabFileChunk.ts's and
+ * fabFileVectorize.ts's deferFailureIfRetryable gate) - otherwise this reconciler forces the
+ * batch terminal mid-retry, before a later attempt gets the chance to succeed. The chunk queue
+ * is the long pole: infra/queues.ts pins fabFileChunkQueue to a 60-minute visibility timeout and
+ * dlq.retry: 3. Each visibility wait already covers that attempt's own Lambda execution time (the
+ * timeout starts at receipt, not at completion), so only the FINAL attempt's own run needs adding
+ * on top of the two full waits between attempts: 2*60 + 13 (Lambda timeout) = 133 minutes worst
+ * case before the final attempt's own accounting can possibly land. 180 minutes leaves real
+ * margin over that.
+ */
+export const DEFAULT_STUCK_BATCH_TIMEOUT_MS = 180 * 60 * 1000; // 180 minutes (3 hours)
 
 interface ReconcileStuckBatchesAdapters {
   db: {
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats'>;
+    dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats' | 'activateIfDraft'>;
     batches: Pick<IDataLakeBatchRepository, 'markTerminalIfActive'>;
     fabFiles: Pick<IFabFileRepository, 'computeDataLakeStats'>;
   };
   logger?: { info: (msg: string, ...args: unknown[]) => void; warn: (msg: string, ...args: unknown[]) => void };
   /**
    * Optional metric hooks, wired by the app callers (core can't import the CloudWatch helper).
-   * `emitForcedTerminal` fires once per batch actually forced terminal; `emitStuckGauge` reports
-   * the stuck count and is wired only from the cron (a fixed cadence), never the read-time path.
+   * `emitForcedTerminal` fires once per batch actually forced terminal, passed the full
+   * (post-transition) batch doc - app callers use this both to record the metric and to
+   * backstop the background AI-tag-suggestion enqueue: a batch forced terminal here
+   * bypassed `finalizeBatchIfComplete` entirely (e.g. the browser tab closed mid-upload and
+   * `upload-complete` never ran), so this is the only place left that can still trigger it.
+   * The taxonomy-phase transition is independently guarded, so calling it again here when
+   * upload-complete already fired it is a harmless no-op. `emitStuckGauge` reports the stuck
+   * count and is wired only from the cron (a fixed cadence), never the read-time path.
    */
   metrics?: {
-    emitForcedTerminal?: (batchId: string, dataLakeId: string) => void | Promise<void>;
+    emitForcedTerminal?: (batch: IDataLakeBatchSummary) => void | Promise<void>;
     emitStuckGauge?: (count: number) => void | Promise<void>;
   };
 }
@@ -39,7 +58,7 @@ interface ReconcileStuckBatchesAdapters {
  * "work being lost").
  */
 export const reconcileStuckBatches = async (
-  batches: IDataLakeBatchDocument[],
+  batches: IDataLakeBatchSummary[],
   timeoutMs: number,
   { db, logger, metrics }: ReconcileStuckBatchesAdapters,
   now: number = Date.now()
@@ -64,7 +83,7 @@ export const reconcileStuckBatches = async (
     if (!won) continue; // a real increment finalized it first - nothing to reconcile.
     forced.push(batch.id);
     try {
-      await metrics?.emitForcedTerminal?.(batch.id, batch.dataLakeId);
+      await metrics?.emitForcedTerminal?.(won);
     } catch (error) {
       logger?.warn(`Reconciler forced-terminal metric emit failed for batch ${batch.id}:`, error);
     }
@@ -72,7 +91,7 @@ export const reconcileStuckBatches = async (
     try {
       const lake = await db.dataLakes.findById(batch.dataLakeId);
       if (lake) {
-        await recomputeLakeStats(lake.id, lake.datalakeTag, { db });
+        await recomputeLakeStats(lake, { db });
       }
     } catch (error) {
       logger?.warn(`Reconciler stat recompute failed for batch ${batch.id}:`, error);

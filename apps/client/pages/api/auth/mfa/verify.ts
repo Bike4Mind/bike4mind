@@ -2,28 +2,29 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
-import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { issueBrowserSession } from '@server/auth/issueSession';
+import { grantTrustedDevice, trustedDevicesAllowed } from '@server/auth/trustedDevice';
+import { logAuthAudit } from '@server/utils/authAudit';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
+import * as z from 'zod';
+
+const tokenBodySchema = z.object({
+  token: z
+    .string()
+    .trim()
+    .regex(/^[A-Z0-9]{6,10}$/i, 'Invalid token format.'),
+  rememberDevice: z.boolean().optional(),
+});
 
 const handler = baseApi() // Now requires authentication
   // No rate limiting - using 3-strike abort for stronger security
   .post(
     asyncHandler(async (req, res) => {
       const user = req.user;
-      const { token } = req.body as { token?: string };
+      const { token: cleanToken, rememberDevice } = tokenBodySchema.parse(req.body);
 
       if (!user) {
         return res.status(401).json({ error: 'Authentication required.' });
-      }
-
-      if (!token || typeof token !== 'string') {
-        return res.status(400).json({ error: 'Valid token is required.' });
-      }
-
-      // Basic token format validation
-      const cleanToken = token.trim();
-      if (!/^[A-Z0-9]{6,10}$/i.test(cleanToken)) {
-        return res.status(400).json({ error: 'Invalid token format.' });
       }
 
       // Get fresh user data (incl. select:false MFA secrets) to verify the code + check lockout
@@ -54,11 +55,40 @@ const handler = baseApi() // Now requires authentication
 
         // Generate FULL access tokens (remove mfaPending) for login completion
         const tokenUserId = result.user.id;
-        const tokens = authTokenGenerator.createAccessToken(tokenUserId, result.user.tokenVersion ?? 0); // No mfaPending
+        // No mfaPending: MFA is satisfied, so mint a full session.
+        const { accessToken } = await issueBrowserSession(req, res, tokenUserId, {
+          createdVia: 'mfa',
+          tokenVersion: result.user.tokenVersion ?? 0,
+        });
+        const tokens = { accessToken };
+
+        // "Remember this device": grant only on a genuine second-factor pass, so the trust
+        // can never be established by anything weaker than the challenge it later skips.
+        // Best-effort - the login already succeeded, so a failed grant must not 500 it; the
+        // user simply gets challenged again next time.
+        let deviceRemembered = false;
+        if (rememberDevice) {
+          try {
+            if (await trustedDevicesAllowed()) {
+              const device = await grantTrustedDevice(req, res, tokenUserId);
+              deviceRemembered = !!device;
+              if (device) {
+                await logAuthAudit(req, {
+                  userId: tokenUserId,
+                  event: 'trusted_device_granted',
+                  metadata: { deviceId: device.id, label: device.label, expiresAt: device.expiresAt.toISOString() },
+                });
+              }
+            }
+          } catch (err) {
+            req.logger?.error('Trusted-device grant failed after successful MFA verification', err);
+          }
+        }
 
         res.json({
           verified: true,
           usedBackupCode: result.usedBackupCode,
+          deviceRemembered,
           ...tokens,
           user: redactUserSecretsForSelf(result.user),
         });

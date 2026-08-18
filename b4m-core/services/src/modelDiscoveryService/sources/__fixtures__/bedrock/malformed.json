@@ -1,0 +1,19 @@
+{
+  "modelSummaries": [
+    {
+      "modelArn": "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-4-5-20251101-v1:0",
+      "modelId": "anthropic.claude-opus-4-5-20251101-v1:0",
+      "modelName": "Claude Opus 4.5",
+      "providerName": "Anthropic",
+      "outputModalities": ["TEXT"],
+      "modelLifecycle": { "status": "ACTIVE" }
+    },
+    { "modelArn": "arn:aws:bedrock:us-east-1::foundation-model/no-id", "modelName": "No Model Id" },
+    { "modelId": "", "modelName": "Blank" },
+    {
+      "modelId": "vendor.broken-v1:0",
+      "modelLifecycle": { "status": "LEGACY", "legacyTime": "not-a-date", "endOfLifeTime": "also-not-a-date" }
+    },
+    null
+  ]
+}

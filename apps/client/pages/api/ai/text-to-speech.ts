@@ -1,92 +1,82 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import OpenAI from 'openai';
 import * as z from 'zod';
-import { apiKeyService } from '@bike4mind/services';
-import { ApiKeyType } from '@bike4mind/common';
-import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
+import { aiVoiceService } from '@bike4mind/utils';
+import { resolveTtsProvider, TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
+import { exceedsTtsResponseLimit, TTS_RESPONSE_TOO_LARGE_MESSAGE } from '@server/utils/ttsResponseLimit';
+import {
+  assertTtsCreditsAvailable,
+  deductTtsCredits,
+  InsufficientTtsCreditsError,
+} from '@server/utils/deductTtsCredits';
 
-// OpenAI Text-to-Speech API endpoint
+// Legacy OpenAI TTS adapter. Kept as a thin, contract-stable wrapper over the
+// unified aiVoiceService (#724): body { text, voice? } -> raw audio/mpeg bytes.
+// New integrations should use POST /api/ai/tts.
 const handler = baseApi().post(async (req, res) => {
-  console.log('[DEBUG] TTS API - Request received');
-  console.log('[DEBUG] TTS API - Method:', req.method);
-  console.log('[DEBUG] TTS API - Body:', req.body);
-
-  const validatedBody = z
+  const { text, voice } = z
     .object({
       text: z.string().min(1).max(4096), // OpenAI TTS limit
       voice: z.string().optional(),
     })
     .parse(req.body);
 
-  const { text, voice } = validatedBody;
-  console.log('[DEBUG] TTS API - Validated body:', { text: text.substring(0, 50) + '...', voice });
-
-  // Get voice settings from admin settings
-  const settings = await getSettingsMap(
-    {
-      adminSettings: adminSettingsRepository,
-    },
-    {
-      names: ['voiceSessionAiVoice'],
+  let resolved;
+  try {
+    resolved = await resolveTtsProvider({
+      provider: 'openai',
+      userId: req.user?.id,
+      requestedVoice: voice,
+      preferredVoice: req.user?.preferredVoice,
+    });
+  } catch (error) {
+    if (error instanceof TtsProviderNotConfiguredError) {
+      return res.status(401).json({ error: error.message });
     }
-  );
-
-  // Debug logging
-  console.log('[DEBUG] TTS API - User ID:', req.user?.id);
-  console.log('[DEBUG] TTS API - User object:', req.user ? 'exists' : 'missing');
-
-  // Get OpenAI API key using the same method as voice sessions
-  const openaiApiKey = await apiKeyService.getEffectiveApiKey(
-    req.user?.id,
-    { type: ApiKeyType.openai, nullIfMissing: true },
-    { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } }
-  );
-
-  console.log('[DEBUG] TTS API - OpenAI key exists:', !!openaiApiKey);
-  console.log('[DEBUG] TTS API - OpenAI key length:', openaiApiKey ? openaiApiKey.length : 'N/A');
-
-  if (!openaiApiKey) {
-    console.log('[ERROR] TTS API - No OpenAI API key found');
-    return res.status(401).json({ error: 'OpenAI API key not configured' });
+    throw error;
   }
 
-  // Use provided voice or fall back to user preference or admin setting
-  const adminVoice = getSettingsValue('voiceSessionAiVoice', settings) || 'alloy';
-  const selectedVoice = voice || req.user?.preferredVoice || adminVoice;
+  const userId = req.user?.id;
+  if (userId) {
+    try {
+      await assertTtsCreditsAvailable(userId);
+    } catch (error) {
+      if (error instanceof InsufficientTtsCreditsError) {
+        return res.status(402).json({ error: error.message });
+      }
+      throw error;
+    }
+  }
 
   try {
-    const openai = new OpenAI({ apiKey: openaiApiKey });
-
-    const response = await openai.audio.speech.create({
-      model: 'tts-1', // Use the standard model for faster response
-      voice: selectedVoice as any, // OpenAI voice names
-      input: text,
-      response_format: 'mp3',
+    const { audio, model, characters } = await aiVoiceService('openai', resolved.apiKey, req.logger).synthesize(text, {
+      voice: resolved.voice,
+      model: 'tts-1', // standard model for faster response
+      format: 'mp3',
     });
 
-    // Convert response to buffer
-    const buffer = Buffer.from(await response.arrayBuffer());
-
-    // Set appropriate headers for audio response
-    res.setHeader('Content-Type', 'audio/mpeg');
-    res.setHeader('Content-Length', buffer.length);
-    res.setHeader('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
-
-    return res.send(buffer);
-  } catch (error: any) {
-    console.error('OpenAI TTS error:', error);
-
-    // Handle specific OpenAI errors
-    if (error.status === 400) {
-      return res.status(400).json({ error: 'Invalid request parameters' });
-    } else if (error.status === 401) {
-      return res.status(401).json({ error: 'Invalid OpenAI API key' });
-    } else if (error.status === 429) {
-      return res.status(429).json({ error: 'Rate limit exceeded. Please try again later.' });
-    } else {
-      return res.status(500).json({ error: 'Failed to generate speech' });
+    if (userId) {
+      await deductTtsCredits({ userId, vendor: 'openai', model, characters, logger: req.logger });
     }
+
+    if (exceedsTtsResponseLimit(audio.length)) {
+      return res.status(413).json({ error: TTS_RESPONSE_TOO_LARGE_MESSAGE });
+    }
+
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Length', audio.length);
+    res.setHeader('Cache-Control', 'public, max-age=3600'); // 1 hour
+    return res.send(audio);
+  } catch (error: unknown) {
+    req.logger.error('OpenAI TTS error:', { error });
+    const status = (error as { status?: number })?.status;
+    if (status === 400) {
+      return res.status(400).json({ error: 'Invalid request parameters' });
+    } else if (status === 401) {
+      return res.status(401).json({ error: 'Invalid OpenAI API key' });
+    } else if (status === 429) {
+      return res.status(429).json({ error: 'Rate limit exceeded. Please try again later.' });
+    }
+    return res.status(500).json({ error: 'Failed to generate speech' });
   }
 });
 

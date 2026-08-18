@@ -10,7 +10,9 @@ import {
 import { appendMemoryEvent } from '@server/memory/ledgerMemoryStore';
 import { createKeyProvider } from '@server/memory/factCipher';
 
-const PRINCIPAL_KINDS: readonly PrincipalKind[] = ['user', 'agent', 'org', 'system'];
+// The kinds this endpoint accepts an append for. A deliberate subset of PrincipalKind: `lake` is
+// persistable but has no write surface until its authz is defined (#1440), so it 400s here.
+const WRITABLE_PRINCIPAL_KINDS: readonly PrincipalKind[] = ['user', 'agent', 'org', 'system'];
 const EVENT_KINDS = ['assert', 'affirm', 'retract'] as const;
 type EventKind = (typeof EVENT_KINDS)[number];
 
@@ -29,10 +31,10 @@ const handler = baseApi().post(async (req, res) => {
 
   const kind = String(req.query.kind);
   const id = String(req.query.id);
-  if (!PRINCIPAL_KINDS.includes(kind as PrincipalKind)) {
-    return res
-      .status(400)
-      .json({ error: `Unknown principal kind '${kind}'. Expected one of: ${PRINCIPAL_KINDS.join(', ')}.` });
+  if (!WRITABLE_PRINCIPAL_KINDS.includes(kind as PrincipalKind)) {
+    return res.status(400).json({
+      error: `Unsupported principal kind '${kind}'. Expected one of: ${WRITABLE_PRINCIPAL_KINDS.join(', ')}.`,
+    });
   }
   if (kind !== 'user' || id !== ownerUserId) {
     return res.status(403).json({ error: 'You can only append to your own user memory for now.' });
@@ -48,11 +50,9 @@ const handler = baseApi().post(async (req, res) => {
   // assert resets derivedFrom/provenance - silently discarding citations, or (with no prior belief)
   // injecting the raw subject string as the memory. Fact-less operations belong to affirm/retract.
   if (eventKind === 'assert' && (!fact || !fact.trim())) {
-    return res
-      .status(400)
-      .json({
-        error: "An 'assert' event requires a non-empty 'fact'. Use 'affirm' or 'retract' for fact-less operations.",
-      });
+    return res.status(400).json({
+      error: "An 'assert' event requires a non-empty 'fact'. Use 'affirm' or 'retract' for fact-less operations.",
+    });
   }
   // Subject identity: an explicit subject wins; otherwise derive a stable key from the fact so
   // re-mentions coalesce (affirm) instead of piling up. Null means neither gave a usable key.

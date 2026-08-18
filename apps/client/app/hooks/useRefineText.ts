@@ -4,9 +4,7 @@ import { api } from '../contexts/ApiContext';
 const useRefineText = (callbacks?: { onSuccess?: (text: string) => void }) => {
   return useMutation({
     mutationFn: async (values: { text: string; context?: string }) => {
-      const response = await api.get<{ text: string }>('/api/ai/refineText', {
-        params: values,
-      });
+      const response = await api.post<{ text: string }>('/api/ai/refineText', values);
 
       return response.data;
     },

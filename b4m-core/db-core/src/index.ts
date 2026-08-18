@@ -6,4 +6,5 @@ export { default } from './models/BaseModel'; // default export for facade shims
 export { default as BaseRepository } from './models/BaseModel';
 export * from './utils/mongo';
 export * from './utils/documentdb-compat';
+export * from './utils/vector-backend';
 export * from './certs/documentdb-cert-manager';

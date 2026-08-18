@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockArtifactFindOne, mockProjectFindOne, mockDownload, mockUpdateOne } = vi.hoisted(() => ({
+const { mockArtifactFindOne, mockProjectFindOne, mockDownload, mockUpdateOne, mockUserFindById } = vi.hoisted(() => ({
   mockArtifactFindOne: vi.fn(),
   mockProjectFindOne: vi.fn(),
   mockDownload: vi.fn(),
   mockUpdateOne: vi.fn(() => Promise.resolve()),
+  // Domain access gates look the viewer's verified email up through User (checkVisibility).
+  mockUserFindById: vi.fn(),
 }));
 
 // baseApi mock: callable chain routed by req.method; .use() no-op; last fn per verb is handler.
@@ -47,6 +49,9 @@ vi.mock('@bike4mind/database', () => ({
   Project: {
     findOne: (...a: unknown[]) => ({ select: () => ({ lean: () => Promise.resolve(mockProjectFindOne(...a)) }) }),
   },
+  User: {
+    findById: (...a: unknown[]) => ({ select: () => ({ lean: () => Promise.resolve(mockUserFindById(...a)) }) }),
+  },
 }));
 
 import handler from '../[...path]';
@@ -66,10 +71,11 @@ type RunOpts = {
   userAgent?: string;
   embed?: boolean;
   a?: string;
+  exportAs?: unknown;
 };
 const run = (
   segments: string[],
-  { user, host = 'app.bike4mind.com', raw, v, uc, format, cookie, userAgent, embed, a }: RunOpts = {}
+  { user, host = 'app.bike4mind.com', raw, v, uc, format, cookie, userAgent, embed, a, exportAs }: RunOpts = {}
 ) => {
   const query: Record<string, unknown> = { path: segments };
   if (raw) query.raw = '1';
@@ -77,6 +83,7 @@ const run = (
   if (format) query.format = format;
   if (embed) query.embed = '1';
   if (a !== undefined) query.a = a;
+  if (exportAs !== undefined) query.export = exportAs;
   const effectiveHost = uc ? `${uc}.usercontent.app.bike4mind.com` : host;
   if (uc) query.__uc = '1';
   const headers: Record<string, string> = { host: effectiveHost };
@@ -106,6 +113,7 @@ beforeEach(() => {
   mockProjectFindOne.mockReset().mockResolvedValue(null);
   mockDownload.mockReset();
   mockUpdateOne.mockReset().mockResolvedValue(undefined);
+  mockUserFindById.mockReset().mockResolvedValue(null);
 });
 
 describe('GET /api/publish/serve - sandboxed bundle', () => {
@@ -133,6 +141,7 @@ describe('GET /api/publish/serve - sandboxed bundle', () => {
     // Wrapper has no inline scripts / bundle libs in Approach B -> tightened script-src.
     expect(csp).not.toContain("script-src 'unsafe-inline'");
     expect(csp).toContain('/api/publish/widget'); // only the external overlay widget
+    expect(data).not.toContain("b4m:'hash'"); // no inline hash bridge - the CSP would block it
   });
 
   it('falls back to the same-origin srcdoc when the wrapper is NOT served from an app host', async () => {
@@ -153,6 +162,8 @@ describe('GET /api/publish/serve - sandboxed bundle', () => {
     expect(data).not.toContain('usercontent.app.bike4mind.com'); // no cross-origin embed attempted
     const csp = res.getHeader('Content-Security-Policy') as string;
     expect(csp).toContain("script-src 'unsafe-inline'"); // srcdoc inherits -> must permit bundle inline JS
+    expect(data).toContain("b4m:'hash'"); // srcdoc mode carries the wrapper hash bridge
+    expect(data).toContain("b4m:'fragment'"); // and the srcdoc carries the fragment-nav helper
   });
 
   it('isolated origin serves the bundle AS the page with inline JS + unsafe-inline CSP', async () => {
@@ -169,6 +180,8 @@ describe('GET /api/publish/serve - sandboxed bundle', () => {
     expect(data).toContain('console.log(42)'); // author inline JS runs on the isolated origin
     expect(data).toContain('<base href='); // public tier <base> -> assets stay on the isolated origin
     expect(data).not.toContain('<iframe'); // it IS the page, not a wrapper
+    // Fragment-nav helper knows BOTH the /uc alias it is served at and the canonical /p path.
+    expect(data).toContain('"paths":["/uc/u/scope123/my-slug","/p/u/scope123/my-slug"]');
     const csp = res.getHeader('Content-Security-Policy') as string;
     expect(csp).toContain("script-src 'unsafe-inline'"); // inline allowed - isolation is the origin, not stripping
     // frame-ancestors is the EXACT app wrapper host, no wildcard. Since usercontent
@@ -324,12 +337,13 @@ describe('GET /api/publish/serve - gated-bundle loader shell', () => {
     const data = res._getData() as string;
     expect(data).toContain('<iframe id="b4m-frame" sandbox="allow-scripts"');
     expect(data).not.toContain('allow-same-origin');
-    expect(data).toContain("localStorage.getItem('access-token-storage')");
+    expect(data).toContain("fetch('/api/auth/refreshToken'");
     expect(data).toContain("'raw=1'");
-    // CSP permits the shell's inline bootstrap + the same-origin ?raw=1 fetch.
+    // CSP permits the shell's inline bootstrap + the same-origin refresh/?raw=1 fetches.
     const csp = res.getHeader('Content-Security-Policy') as string;
     expect(csp).toContain("script-src 'unsafe-inline'");
     expect(csp).toContain('connect-src https://app.bike4mind.com');
+    expect(data).toContain("b4m:'hash'"); // hash bridge feeds deep links into the injected srcdoc
     // Shell carries no secret - no index download happens.
     expect(mockDownload).not.toHaveBeenCalled();
   });
@@ -930,7 +944,7 @@ describe('GET /api/publish/serve - gated reply/fabfile loader shell', () => {
     const data = res._getData() as string;
     expect(data).toContain('<iframe id="b4m-frame" sandbox="allow-scripts"');
     expect(data).not.toContain('allow-same-origin');
-    expect(data).toContain("localStorage.getItem('access-token-storage')");
+    expect(data).toContain("fetch('/api/auth/refreshToken'");
     expect(data).toContain("'raw=1'");
     // Shell must NOT leak the gated reply's content or title.
     expect(data).not.toContain('Secret org reply');
@@ -1381,11 +1395,15 @@ describe('GET /api/publish/serve - access gates (issue #383)', () => {
     expect(data).not.toContain('My Artifact');
     expect(data).not.toContain('pub1');
     expect(res.getHeader('Cache-Control')).toBe('no-store');
-    expect(res.getHeader('X-Robots-Tag')).toBe('noindex');
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
     // The credential-input page must not be frame-able (clickjacking).
     const csp = res.getHeader('Content-Security-Policy') as string;
     expect(csp).toContain("frame-ancestors 'self'");
     expect(csp).toContain("form-action 'self'");
+    // Framed fallback: inside a sandboxed iframe the form cannot submit, so the
+    // shell script swaps it for open-in-own-tab guidance instead of a dead end.
+    expect(data).toContain('window.top !== window.self');
+    expect(data).toContain('cannot be unlocked inside an embedded view');
   });
 
   it('a valid per-artifact proof cookie unlocks the gated bundle - served like a gated (non-public) page', async () => {
@@ -1403,6 +1421,11 @@ describe('GET /api/publish/serve - access gates (issue #383)', () => {
     expect(res.getHeader('Cache-Control')).toBe('private, no-store, must-revalidate');
     const data = res._getData() as string;
     expect(data).not.toContain('usercontent.app.bike4mind.com');
+    // Same-page # links must scroll in place: an iframe re-navigation would drop the
+    // SameSite proof cookie and dead-end at the prompt shell inside the sandbox.
+    expect(data).toContain("b4m:'fragment'"); // helper inside the srcdoc
+    expect(data).toContain("b4m:'hash'"); // bridge in the wrapper
+    expect(data).toContain('&quot;paths&quot;:[&quot;/p/u/scope123/my-slug&quot;]'); // config, srcdoc-attr escaped
   });
 
   it('a proof for a DIFFERENT artifact does not unlock (re-prompts instead)', async () => {
@@ -1732,5 +1755,589 @@ describe('GET /api/publish/serve - embed allowlist', () => {
       else process.env.NEXT_PUBLIC_SHARE_BUILTIN_LOGO = prev;
       vi.resetModules();
     }
+  });
+});
+
+describe('GET /api/publish/serve - search-engine discoverability is opt-in', () => {
+  const ROBOTS_META = '<meta name="robots" content="noindex,nofollow">';
+
+  it('a public bundle is NOT indexable by default (no `discoverable` on the record)', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+    expect(res._getData() as string).toContain(ROBOTS_META);
+  });
+
+  it('an explicitly non-discoverable public bundle is noindexed', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ discoverable: false }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+    expect(res._getData() as string).toContain(ROBOTS_META);
+  });
+
+  it('opting in drops BOTH the robots header and the meta - the only indexable case', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ discoverable: true }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('X-Robots-Tag')).toBeUndefined();
+    expect(res._getData() as string).not.toContain('name="robots"');
+  });
+
+  it('opting in does NOT survive a gate: discoverable + accessGate is still noindexed', async () => {
+    // The serve route ANDs `discoverable` with isOpenPublic, so a stale opt-in left on a
+    // newly-gated artifact can never re-expose it to crawlers.
+    mockArtifactFindOne.mockReturnValue(bundle({ discoverable: true, accessGate: { kind: 'passphrase' } }));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+  });
+
+  it('opting in does NOT survive a visibility downgrade: discoverable + private is noindexed', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ discoverable: true, visibility: 'private' }));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { user: { id: 'owner1' } });
+    await promise;
+
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+  });
+
+  it('a share-token link is noindexed even when the artifact opted in', async () => {
+    // Possession of the token is the capability; an unlisted link must never be
+    // reachable from a search result regardless of the owner's discovery choice.
+    mockArtifactFindOne.mockReturnValue(bundle({ discoverable: true }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+    expect(res._getData() as string).toContain(ROBOTS_META);
+  });
+
+  it('keeps OG/unfurl meta on a non-discoverable public page - previews are not indexing', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ description: 'A thing' }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain(ROBOTS_META);
+    // Unfurlers read OG tags and ignore robots directives, so a link pasted into a chat
+    // app still renders a card while the page stays out of the search index.
+    expect(data).toContain('og:title');
+  });
+
+  // The reply/fabfile viewer page is a SEPARATE render path from the bundle wrapper
+  // (renderViewerPage vs renderBundleWrapper), and it is where most published LLM output
+  // lands. Reverting just that call site to `isShare` must not pass.
+  const publicReply = (over: Record<string, unknown> = {}) => ({
+    publicId: 'rep1',
+    title: 'My Reply',
+    visibility: 'public',
+    ownerId: 'owner1',
+    source: { kind: 'reply' },
+    renderedBody: '# Hello',
+    storageKeyPrefix: '',
+    manifest: [],
+    tier: 'user',
+    scopeId: 'scope123',
+    slug: 'r-pub',
+    ...over,
+  });
+
+  it('noindexes a public REPLY viewer page by default', async () => {
+    mockArtifactFindOne.mockReturnValue(publicReply());
+
+    const { res, promise } = run(['r', 'rep1']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+    expect(res._getData() as string).toContain(ROBOTS_META);
+  });
+
+  it('drops the robots meta from a REPLY viewer page once opted in', async () => {
+    mockArtifactFindOne.mockReturnValue(publicReply({ discoverable: true }));
+
+    const { res, promise } = run(['r', 'rep1']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('X-Robots-Tag')).toBeUndefined();
+    expect(res._getData() as string).not.toContain('name="robots"');
+  });
+
+  it('noindexes a public FABFILE viewer page by default', async () => {
+    mockArtifactFindOne.mockReturnValue(publicReply({ source: { kind: 'fabfile' }, publicId: 'fab1' }));
+
+    const { res, promise } = run(['f', 'fab1']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain(ROBOTS_META);
+  });
+
+  it('noindexes a superseded ?v=<sha> render even when opted in', async () => {
+    // The version switcher emits real crawlable anchors, so a replaced v1 stays
+    // reachable; rel=canonical is a hint, not a guarantee.
+    mockArtifactFindOne.mockReturnValue(
+      bundle({ discoverable: true, sha256Index: 'shaCURRENT', versions: [{ sha256Index: 'shaOLD' }] })
+    );
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Old</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { v: 'shaOLD' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+  });
+
+  it('noindexes ?format=raw even when opted in - text/plain cannot carry a meta tag', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ discoverable: true }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { format: 'raw' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+  });
+
+  it('noindexes an individual bundle ASSET even when opted in', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      bundle({
+        discoverable: true,
+        manifest: [
+          { path: 'index.html', mimeType: 'text/html' },
+          { path: 'page2.html', mimeType: 'text/html' },
+        ],
+      })
+    );
+    mockDownload.mockResolvedValue(Buffer.from('<html><body>two</body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug', 'page2.html']);
+    await promise;
+
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+  });
+
+  it('keeps no-referrer scoped to share links, not every noindexed public page', async () => {
+    // no-referrer exists to stop a share TOKEN leaking via Referer. Riding it along with
+    // the robots meta would make it the default for every public page - killing outbound
+    // referral attribution and blanking document.referrer inside the isolated bundle.
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain(ROBOTS_META);
+    expect(data).not.toContain('name="referrer"');
+    expect(res.getHeader('Referrer-Policy')).toBeUndefined();
+  });
+
+  it('still emits BOTH robots and referrer meta on a share link', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain(ROBOTS_META);
+    expect(data).toContain('<meta name="referrer" content="no-referrer">');
+    expect(res.getHeader('Referrer-Policy')).toBe('no-referrer');
+  });
+
+  it('does NOT index the isolated usercontent origin, even when opted in', async () => {
+    // The /uc origin serves the bare bundle with no wrapper, branding, or canonical
+    // link. Opting in must make exactly one URL indexable: the canonical /p page.
+    mockArtifactFindOne.mockReturnValue(bundle({ discoverable: true }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+  });
+
+  it('does NOT index the embed render, even when opted in', async () => {
+    // An embed is meant to be framed inside someone else's page, not to stand alone
+    // as a search result competing with the canonical page.
+    mockArtifactFindOne.mockReturnValue(bundle({ discoverable: true }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { embed: true });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+  });
+
+  it('the ?format=raw plain-text surface is noindexed unless opted in', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { format: 'raw' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+  });
+});
+
+describe('GET /api/publish/serve - ?export= content export (issue #1142)', () => {
+  const publicReply = (over: Record<string, unknown> = {}) => ({
+    publicId: 'rexp',
+    title: 'My Reply',
+    description: 'A short blurb',
+    visibility: 'public',
+    ownerId: 'owner1',
+    source: { kind: 'reply' },
+    renderedBody: '## Heading\n\nSome *markdown* body.',
+    storageKeyPrefix: '',
+    manifest: [],
+    tier: 'user',
+    scopeId: 's',
+    slug: 'rexp',
+    ...over,
+  });
+
+  it('exports a reply as Markdown: attachment, title heading, body verbatim', async () => {
+    mockArtifactFindOne.mockReturnValue(publicReply());
+    const { res, promise } = run(['r', 'rexp'], { exportAs: 'md' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Content-Type')).toBe('text/markdown; charset=utf-8');
+    expect(res.getHeader('Content-Disposition')).toBe('attachment; filename="my-reply.md"');
+    expect(res.getHeader('X-Content-Type-Options')).toBe('nosniff');
+    // Author bytes never render on the app origin: attachment + nosniff + a sandbox CSP.
+    expect(res.getHeader('Content-Security-Policy')).toBe("default-src 'none'; sandbox");
+    const data = res._getData() as string;
+    expect(data).toBe('# My Reply\n\nA short blurb\n\n## Heading\n\nSome *markdown* body.\n');
+  });
+
+  it('exports a reply as a STANDALONE html file - no CSP meta, no root-relative report link', async () => {
+    mockArtifactFindOne.mockReturnValue(publicReply());
+    const { res, promise } = run(['r', 'rexp'], { exportAs: 'html' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Content-Type')).toBe('text/html; charset=utf-8');
+    expect(res.getHeader('Content-Disposition')).toBe('attachment; filename="my-reply.html"');
+    const data = res._getData() as string;
+    expect(data).toContain('<h2>Heading</h2>');
+    // A downloaded file resolves nothing against the app origin, so the served-page-only
+    // chrome is dropped (the CSP meta would also kill inlined artifacts' JS).
+    expect(data).not.toContain('http-equiv="Content-Security-Policy"');
+    expect(data).not.toContain('/report/rexp');
+    expect(data).not.toContain('?export=');
+  });
+
+  it('inlines an embedded html artifact as srcdoc in a standalone export (not a ?a= URL)', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      publicReply({
+        renderedBody:
+          '<artifact identifier="t" type="text/html" title="Tip"><html><body><script>window.ok=1</script></body></html></artifact>',
+      })
+    );
+    const { res, promise } = run(['r', 'rexp'], { exportAs: 'html' });
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain('srcdoc=');
+    expect(data).not.toContain('?a=0');
+    // Same opaque-origin posture as the served page; the artifact's own JS travels with it.
+    expect(data).toContain('sandbox="allow-scripts"');
+    expect(data).toContain('window.ok=1');
+  });
+
+  it('exports a fabfile as html but 404s a Markdown request (no faithful conversion)', async () => {
+    const fab = publicReply({ publicId: 'fexp', source: { kind: 'fabfile' }, renderedBody: 'col_a,col_b\n1,2\n' });
+    mockArtifactFindOne.mockReturnValue(fab);
+    const { res, promise } = run(['f', 'fexp'], { exportAs: 'html' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain('col_a,col_b');
+
+    mockArtifactFindOne.mockReturnValue(fab);
+    const md = run(['f', 'fexp'], { exportAs: 'md' });
+    await md.promise;
+    expect(md.res._getStatusCode()).toBe(404);
+  });
+
+  it('exports a bundle as a self-contained html file with its assets inlined', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      bundle({
+        manifest: [
+          { path: 'index.html', mimeType: 'text/html' },
+          { path: 'logo.png', mimeType: 'image/png' },
+        ],
+      })
+    );
+    mockDownload.mockImplementation((key: string) =>
+      Promise.resolve(
+        key.endsWith('index.html')
+          ? Buffer.from('<html><body><img src="logo.png"><h1>Hi</h1></body></html>')
+          : Buffer.from([1, 2, 3])
+      )
+    );
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { exportAs: 'html' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Content-Disposition')).toBe('attachment; filename="my-artifact.html"');
+    const data = res._getData() as string;
+    // Assets inline even though the artifact is PUBLIC (the served view would use <base>):
+    // a downloaded file has no route to fetch them back through.
+    expect(data).toContain('data:image/png;base64,');
+    expect(data).not.toContain('<base href=');
+  });
+
+  it('404s a Markdown export of a bundle', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { exportAs: 'md' });
+    await promise;
+    expect(res._getStatusCode()).toBe(404);
+    expect(mockDownload).not.toHaveBeenCalled(); // rejected before touching storage
+  });
+
+  it('404s an unknown export format, and ignores an empty one', async () => {
+    mockArtifactFindOne.mockReturnValue(publicReply());
+    const pdf = run(['r', 'rexp'], { exportAs: 'pdf' });
+    await pdf.promise;
+    expect(pdf.res._getStatusCode()).toBe(404);
+
+    // `?export=` with no value falls through to the normal page render.
+    mockArtifactFindOne.mockReturnValue(publicReply());
+    const empty = run(['r', 'rexp'], { exportAs: '' });
+    await empty.promise;
+    expect(empty.res._getStatusCode()).toBe(200);
+    expect(empty.res.getHeader('Content-Type')).toBe('text/html; charset=utf-8');
+    expect(empty.res.getHeader('Content-Disposition')).toBeUndefined();
+  });
+
+  it('is never search-indexable, even for a discoverable open-public artifact', async () => {
+    mockArtifactFindOne.mockReturnValue(publicReply({ discoverable: true }));
+    const { res, promise } = run(['r', 'rexp'], { exportAs: 'md' });
+    await promise;
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+  });
+
+  it('hard-fails an anonymous export of a gated reply instead of returning the loader shell', async () => {
+    // The shell recovers a NAVIGATION by re-fetching ?raw=1, which yields the page - so a
+    // shell delivered as a download would dead-end. 401, and never the body.
+    mockArtifactFindOne.mockReturnValue(
+      publicReply({ visibility: 'organization', tier: 'organization', scopeId: 'org_1' })
+    );
+    const { res, promise } = run(['r', 'rexp'], { exportAs: 'md' });
+    await promise;
+    expect(res._getStatusCode()).toBe(401);
+    const data = res._getData() as string;
+    expect(data).not.toContain('Some *markdown* body.');
+    expect(data).not.toContain('b4m-frame'); // not the loader shell either
+    expect(res.getHeader('Content-Disposition')).toBeUndefined();
+  });
+
+  it('403s an export for an authenticated viewer the gate rejects', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      publicReply({ visibility: 'organization', tier: 'organization', scopeId: 'org_1' })
+    );
+    const { res, promise } = run(['r', 'rexp'], { exportAs: 'md', user: { id: 'other', organizationId: 'org_9' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+  });
+
+  it('exports for an authorized org member', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      publicReply({ visibility: 'organization', tier: 'organization', scopeId: 'org_1' })
+    );
+    const { res, promise } = run(['r', 'rexp'], { exportAs: 'md', user: { id: 'other', organizationId: 'org_1' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain('Some *markdown* body.');
+  });
+
+  it('exports through a /a/<shareToken> link, no-store and no-referrer', async () => {
+    mockArtifactFindOne.mockReturnValue(publicReply({ visibility: 'private', shareToken: 'tok123' }));
+    const { res, promise } = run(['a', 'tok123'], { exportAs: 'md' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain('Some *markdown* body.');
+    expect(res.getHeader('Cache-Control')).toContain('no-store');
+    expect(res.getHeader('Referrer-Policy')).toBe('no-referrer');
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+  });
+
+  it('404s an export on the isolated usercontent origin (bare bundle, no app affordances)', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1', exportAs: 'html' });
+    await promise;
+    expect(res._getStatusCode()).toBe(404);
+  });
+
+  it('never shared-caches an export, not even an open-public one', async () => {
+    // A cached `?export=` would be an ATTACHMENT served in place of the page on any shared
+    // cache that does not key on the query string. Same reasoning as the `?v=` cold path.
+    mockArtifactFindOne.mockReturnValue(publicReply());
+    const { res, promise } = run(['r', 'rexp'], { exportAs: 'md' });
+    await promise;
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store, must-revalidate');
+
+    mockArtifactFindOne.mockReturnValue(
+      publicReply({ visibility: 'organization', tier: 'organization', scopeId: 'org_1' })
+    );
+    const gated = run(['r', 'rexp'], { exportAs: 'md', user: { id: 'other', organizationId: 'org_1' } });
+    await gated.promise;
+    expect(gated.res.getHeader('Cache-Control')).toContain('no-store');
+  });
+});
+
+describe('GET /api/publish/serve - export affordances on the viewer surfaces (issue #1142)', () => {
+  const publicReply = (over: Record<string, unknown> = {}) => ({
+    publicId: 'rexp',
+    title: 'My Reply',
+    visibility: 'public',
+    ownerId: 'owner1',
+    source: { kind: 'reply' },
+    renderedBody: 'body text',
+    storageKeyPrefix: '',
+    manifest: [],
+    tier: 'user',
+    scopeId: 's',
+    slug: 'rexp',
+    ...over,
+  });
+
+  it('offers Markdown + HTML downloads on an open-public reply page, with no script', async () => {
+    mockArtifactFindOne.mockReturnValue(publicReply());
+    const { res, promise } = run(['r', 'rexp']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain('href="/p/r/rexp?export=md" download');
+    expect(data).toContain('href="/p/r/rexp?export=html" download');
+    // The page is served script-src 'none' - the affordance must be pure markup.
+    expect(data).not.toContain('<script');
+  });
+
+  it('offers only HTML on a fabfile page (no faithful Markdown form)', async () => {
+    mockArtifactFindOne.mockReturnValue(publicReply({ publicId: 'fexp', source: { kind: 'fabfile' }, slug: 'fexp' }));
+    const { res, promise } = run(['f', 'fexp']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain('href="/p/f/fexp?export=html" download');
+    expect(data).not.toContain('?export=md');
+  });
+
+  it('points the links at the token path on a /a/<shareToken> view', async () => {
+    mockArtifactFindOne.mockReturnValue(publicReply({ visibility: 'private', shareToken: 'tok123' }));
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain('href="/a/tok123?export=md" download');
+    expect(data).not.toContain('/p/r/rexp?export=');
+  });
+
+  it('omits the links on a Bearer-gated reply, which would answer the click with the loader shell', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      publicReply({ visibility: 'organization', tier: 'organization', scopeId: 'org_1' })
+    );
+    const { res, promise } = run(['r', 'rexp'], { user: { id: 'other', organizationId: 'org_1' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('body text'); // authorized, page rendered
+    expect(data).not.toContain('?export=');
+  });
+
+  it('puts "Save as HTML" in the lead-gen bar on an own-tab open-public bundle', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain('class="b4m-bar-export"');
+    expect(data).toContain('href="/p/u/scope123/my-slug?export=html" download');
+  });
+
+  it('drops the bundle export affordance in chrome-less embed mode', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { embed: true });
+    await promise;
+
+    expect(res._getData() as string).not.toContain('?export=');
+  });
+
+  it('offers the bundle export as a floating chip on a share-token view', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ visibility: 'private' }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain('<div class="b4m-actions">');
+    expect(data).toContain('class="b4m-export"');
+    expect(data).toContain('href="/a/tok123?export=html" download');
+  });
+
+  it('omits the links on a DOMAIN-gated share link, whose gate reads req.user', async () => {
+    // Possession of the token is not enough for a domain gate, and a `?export=` navigation
+    // carries no Bearer - so the link would 401. Stricter than canFrameArtifacts on purpose.
+    mockArtifactFindOne.mockReturnValue(
+      publicReply({ shareToken: 'tok123', accessGate: { kind: 'domain', allowedDomains: ['acme.com'] } })
+    );
+    mockUserFindById.mockResolvedValue({ email: 'a@acme.com', emailVerified: true });
+    const { res, promise } = run(['a', 'tok123'], { user: { id: 'u1' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).not.toContain('?export=');
+  });
+
+  it('offers the links on a passphrase-verified page - the proof cookie rides the navigation', async () => {
+    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    mockArtifactFindOne.mockReturnValue(publicReply({ accessGate: { kind: 'passphrase' } }));
+    const { res, promise } = run(['r', 'rexp'], { cookie: `b4m_pg_rexp=${signGateToken({ publicId: 'rexp' })}` });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain('?export=md');
+  });
+
+  it('omits the bundle export affordance for a Bearer-gated bundle', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ visibility: 'organization', tier: 'organization', scopeId: 'org_1' }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><h1>Hi</h1></body></html>'));
+    const { res, promise } = run(['u', 'org_1', 'my-slug'], { user: { id: 'other', organizationId: 'org_1' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).not.toContain('?export=');
   });
 });

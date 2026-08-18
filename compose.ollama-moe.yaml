@@ -1,0 +1,31 @@
+# MoE expert offload for the bundled `ollama` service.
+#
+# Keeping the MoE expert tensors in system RAM leaves only attention and the KV
+# cache on the GPU, so a 20-35B sparse model runs on a small card. Ollama >= 0.31
+# runs upstream llama-server as its runner and passes its own environment through,
+# which is how the LLAMA_ARG_* knobs below reach llama.cpp.
+#
+# Use as a third -f, after compose.ollama-gpu.yaml:
+#   docker compose -f compose.selfhost.yaml -f compose.ollama-gpu.yaml \
+#     -f compose.ollama-moe.yaml --env-file .env.selfhost --profile ollama up -d
+#
+# Works without a GPU too (drop compose.ollama-gpu.yaml); the experts are already
+# on the CPU, so only the attention layers change places.
+name: bike4mind-selfhost
+
+services:
+  ollama:
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      # Leading layers whose MoE weights stay on CPU. 999 = all of them. Inert for
+      # dense models, so it is safe to leave on for a mixed model set.
+      LLAMA_ARG_N_CPU_MOE: ${LLAMA_ARG_N_CPU_MOE:-999}
+      # Deliberately not setting LLAMA_ARG_N_GPU_LAYERS: pinning it defeats
+      # llama.cpp's --fit auto-placement and hard-OOMs any dense model too large
+      # for the card, instead of letting it spill to CPU.
+
+      # Not MoE-specific: a general throughput/KV-footprint win, and the KV cache is
+      # the one thing still on the GPU once the experts move to RAM.
+      OLLAMA_FLASH_ATTENTION: '1'
+      # Reloading a 20-35B model is expensive, so hold it longer than Ollama's 5m default.
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-10m}

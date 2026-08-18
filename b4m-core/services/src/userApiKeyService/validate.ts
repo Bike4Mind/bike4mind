@@ -3,6 +3,7 @@ import {
   ApiKeyBillingOwnerType,
   ApiKeyScope,
   ApiKeyStatus,
+  IEmbedBranding,
   IUserApiKeyDocument,
   IUserApiKeyRepository,
 } from '@bike4mind/common';
@@ -33,6 +34,8 @@ export interface ValidationResult {
   agentId?: string;
   /** Origins an embed key may be used from (defense-in-depth); embed keys only. */
   allowedOrigins?: string[];
+  /** White-label config for an embed key; consumed by the widget serve route. */
+  branding?: IEmbedBranding;
   /** Spend ceiling in credits for an embed key. Present 0 = real cap; absent = uncapped. */
   spendCap?: number;
   /** Cumulative settled spend in credits (`usage.totalSpendCredits`) at validation time. */
@@ -71,6 +74,7 @@ function finalizeApiKeyValidation(apiKey: IUserApiKeyDocument, db: ValidateUserA
     organizationId: apiKey.organizationId,
     agentId: apiKey.agentId,
     allowedOrigins: apiKey.allowedOrigins,
+    branding: apiKey.branding,
     spendCap: apiKey.spendCap,
     currentSpend: apiKey.usage?.totalSpendCredits,
   };

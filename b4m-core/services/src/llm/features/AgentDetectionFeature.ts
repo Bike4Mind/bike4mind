@@ -129,7 +129,6 @@ export class AgentDetectionFeature implements ChatCompletionFeature {
     quest: IChatHistoryItemDocument & { _agentsToProcess?: IAgent[] },
     embeddingFactory: EmbeddingFactory,
     message: string,
-    maxTokens: number,
     modelInfo: ModelInfo
   ): Promise<IMessage[]> {
     // Get agents stored from beforeDataGathering

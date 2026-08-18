@@ -38,20 +38,29 @@ export async function handler() {
 
   let transitioned = 0;
 
-  // Timeout stale 'fixing' docs (no callback from GitHub Actions)
+  // Timeout stale 'fixing' docs. Two very different failures land here, so blame the
+  // right one: githubRunDispatched is set by claimDispatch inside the sreFix handler,
+  // so it is the only signal that the dispatch actually reached GitHub. dispatchedAt
+  // cannot tell them apart - it is stamped at enqueue time, before sreFix runs.
   const stale = await sreErrorTrackingRepository.findStaleDispatches(STALE_TIMEOUT_MINUTES);
   for (const doc of stale) {
     try {
+      const reachedGitHub = doc.githubRunDispatched === true;
+      const errorMessage = reachedGitHub
+        ? `Fix dispatch timed out after ${STALE_TIMEOUT_MINUTES} minutes - dispatched to GitHub Actions but no callback received`
+        : `Fix dispatch timed out after ${STALE_TIMEOUT_MINUTES} minutes - the sreFix handler never dispatched to GitHub. Check the sreFix Lambda (init/invoke timeout, crash) and the sreFixQueue DLQ; GitHub Actions was never reached.`;
+
       // Use atomicTransition (CAS) instead of updateStatus to prevent race with
       // Surgeon callback that may have already transitioned fixing -> fixed.
       const result = await sreErrorTrackingRepository.atomicTransition(doc.id, 'fixing', 'failed', {
-        errorMessage: `Fix dispatch timed out after ${STALE_TIMEOUT_MINUTES} minutes — no callback received from GitHub Actions`,
+        errorMessage,
       });
       if (!result) continue; // Callback already transitioned it — skip
       transitioned++;
       logger.warn('[SRE-STALE-DISPATCH] Timed out', {
         trackingId: doc.id,
         fingerprint: doc.errorFingerprint,
+        reachedGitHub,
       });
     } catch (error) {
       logger.error('[SRE-STALE-DISPATCH] Error transitioning', { trackingId: doc.id, error });

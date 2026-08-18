@@ -16,6 +16,9 @@ const featureMeta: Record<ExperimentalFeature, FeatureMeta> = {
   enableRapidReply: { adminKey: 'EnableRapidReply', defaultKey: 'EnableRapidReplyDefault' },
   enableResearchEngine: { adminKey: 'EnableResearchEngine', defaultKey: 'EnableResearchEngineDefault' },
   enableQuestMaster: { adminKey: 'EnableQuestMaster', defaultKey: 'EnableQuestMasterDefault' },
+  // User-controlled only (no admin SettingKey yet) - a per-user opt-in to the v5 node-graph
+  // QuestMaster, peer to V1. Promote to an admin-gated flag when rolling out org-wide.
+  enableQuestMasterV5: {},
   enableMementos: { adminKey: 'EnableMementos', defaultKey: 'EnableMementosDefault' },
   // User-controlled only (no admin SettingKey yet) - a per-user opt-in to the Mementos 2.0 ledger,
   // peer to V1. Promote to an admin-gated flag when rolling out org-wide.
@@ -25,6 +28,7 @@ const featureMeta: Record<ExperimentalFeature, FeatureMeta> = {
   enableBmPi: { adminKey: 'EnableBmPi', defaultKey: 'EnableBmPiDefault' },
   enableLattice: { adminKey: 'EnableLattice', defaultKey: 'EnableLatticeDefault' },
   enableBriefcase: { adminKey: 'EnableBriefcase', defaultKey: 'EnableBriefcaseDefault' },
+  enableHearth: { adminKey: 'EnableHearth', defaultKey: 'EnableHearthDefault' },
   // enableResearchMode has no admin SettingKey - it is user-controlled only
   enableResearchMode: {},
   // agentMode is the Layer-1 gate for the Agent-mode / Smart Routing toggle UI.

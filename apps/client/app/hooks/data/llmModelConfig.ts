@@ -97,8 +97,11 @@ export function useLLMModelConfigurationsWithDefaults(modelInfos?: ModelInfo[]) 
 
 // Default model configuration logic
 export const getDefaultModelConfig = (modelInfo: ModelInfo): LLMModelConfig => {
-  // Enabled by default unless the model is private
-  const isEnabled = !modelInfo.private;
+  // Enabled by default unless the model is private, or blocked by an operator
+  // (`disabled`) or by discovery (`autoDisabled`, which toModelInfo folds into the
+  // same flag). Defaulting a blocked model to enabled would undo the block for
+  // every model that has no saved config yet.
+  const isEnabled = !modelInfo.private && !modelInfo.disabled;
 
   // All users get access to all models by default - no cost-based restrictions.
   // Expressed as the reserved `base` entitlement (held by every authenticated

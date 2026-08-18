@@ -1,3 +1,7 @@
+import type { MetadataFilter } from '@server/analytics/metadataFilterContract';
+
+export type { MetadataFilter };
+
 export enum AnalyticsSubTab {
   UserActivity = 'user_activity',
   DailyReport = 'daily_report',
@@ -31,12 +35,18 @@ export interface AnalyticsState {
   excludedOrgs: ExcludedOrgs;
   dateFilters: DateFilters;
   userActivityFilters: UserActivityFilters;
+  metadataFilters: MetadataFilter[];
+  page: number;
+  limit: number;
   showUserActivityAdvancedFilters: boolean;
   setActiveSubTab: (tab: AnalyticsSubTab) => void;
   setSelectedOrganizations: (orgs: string[]) => void;
   toggleExcludedOrg: (key: keyof ExcludedOrgs) => void;
   setDateFilters: (filters: DateFilters) => void;
   setUserActivityFilters: (filters: Partial<UserActivityFilters>) => void;
+  setMetadataFilters: (filters: MetadataFilter[]) => void;
+  setPage: (page: number) => void;
+  setLimit: (limit: number) => void;
   setShowUserActivityAdvancedFilters: (show: boolean) => void;
 }
 

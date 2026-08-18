@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { extractReactDependencies, parseArtifactsWithFallback, isSvgGraphicallyEmpty } from './artifactParser';
+import {
+  extractReactDependencies,
+  hasCompleteOpeningTag,
+  parseArtifactsWithFallback,
+  isSvgGraphicallyEmpty,
+  shouldWarnElidedArtifact,
+  elidedReplyWarning,
+} from './artifactParser';
 
 describe('extractReactDependencies', () => {
   it('detects packages imported via multi-line named imports', () => {
@@ -58,6 +65,110 @@ describe('parseArtifactsWithFallback', () => {
     const result = parseArtifactsWithFallback('Just a normal answer with no code or HTML.');
     expect(result.artifacts).toHaveLength(0);
     expect(result.cleanedContent).toBe('Just a normal answer with no code or HTML.');
+  });
+
+  it('parses an artifact whose opening tag spans multiple lines', () => {
+    const input = [
+      'Here is the app:',
+      '<artifact',
+      '  identifier="app"',
+      '  type="application/vnd.ant.react"',
+      '  title="My App">',
+      'export default function App() { return <div>Hello</div>; }',
+      '</artifact>',
+    ].join('\n');
+
+    const result = parseArtifactsWithFallback(input);
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].title).toBe('My App');
+    expect(result.artifacts[0].type).toBe('react');
+    expect(result.cleanedContent).not.toContain('<artifact');
+  });
+
+  it('parses an artifact whose title contains ">"', () => {
+    const input =
+      '<artifact identifier="tool" type="application/vnd.ant.react" title="React -> Next.js Migrator">code</artifact>';
+
+    const result = parseArtifactsWithFallback(input);
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].title).toBe('React -> Next.js Migrator');
+    expect(result.cleanedContent).not.toContain('code');
+  });
+
+  it('does not duplicate artifacts when cleanedContent is empty and body contains a fenced code block', () => {
+    // When the entire input is a single artifact whose body contains a ```tsx
+    // fence, the old || fallback re-ran convertCodeBlocksToArtifacts on the
+    // original content, double-emitting the inner code block as a second artifact.
+    const input = [
+      '<artifact identifier="app" type="application/vnd.ant.react" title="App">',
+      '```tsx',
+      'export default function Inner() { return <div/>; }',
+      '```',
+      '</artifact>',
+    ].join('\n');
+
+    const result = parseArtifactsWithFallback(input);
+    expect(result.artifacts).toHaveLength(1);
+  });
+
+  it('parses an artifact with single-quoted attribute values', () => {
+    const input = "<artifact identifier='widget' type='application/vnd.ant.react' title='My Widget'>code</artifact>";
+
+    const result = parseArtifactsWithFallback(input);
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].title).toBe('My Widget');
+  });
+
+  it('parses a multi-line opening tag whose title contains ">"', () => {
+    const input = [
+      '<artifact',
+      '  identifier="converter"',
+      '  type="application/vnd.ant.react"',
+      '  title="A -> B Converter">',
+      'export default function App() { return <div/>; }',
+      '</artifact>',
+    ].join('\n');
+
+    const result = parseArtifactsWithFallback(input);
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].title).toBe('A -> B Converter');
+  });
+
+  it('does not match an artifact with an unterminated quote containing ">"', () => {
+    // Malformed input: the opening quote on title is never closed.
+    // The new regex correctly rejects this (the old one matched, leaking
+    // broken HTML); documenting the intentional change in behavior.
+    const input = '<artifact identifier="x" type="text/html" title="A -> B>content</artifact>';
+
+    const result = parseArtifactsWithFallback(input);
+    expect(result.artifacts).toHaveLength(0);
+  });
+});
+
+describe('hasCompleteOpeningTag', () => {
+  it('returns true for a well-formed single-line opening tag', () => {
+    expect(hasCompleteOpeningTag('<artifact identifier="x" type="text/html" title="Page">')).toBe(true);
+  });
+
+  it('returns true for an opening tag with ">" inside a quoted attribute', () => {
+    expect(hasCompleteOpeningTag('<artifact identifier="x" type="text/html" title="A -> B">')).toBe(true);
+  });
+
+  it('returns false when the opening tag is truncated mid-attribute', () => {
+    expect(hasCompleteOpeningTag('<artifact identifier="x" type="text/ht')).toBe(false);
+  });
+
+  it('returns false for a truncated tag with an unterminated quote containing ">"', () => {
+    // Old regex [^>]* would see the > inside the unterminated quote and
+    // return true, leaking broken HTML. The fixed pattern correctly rejects it.
+    expect(hasCompleteOpeningTag('<artifact identifier="x" title="A -> B')).toBe(false);
+  });
+
+  it('returns true for a multi-line opening tag', () => {
+    const tag = ['<artifact', '  identifier="app"', '  type="application/vnd.ant.react"', '  title="My App">'].join(
+      '\n'
+    );
+    expect(hasCompleteOpeningTag(tag)).toBe(true);
   });
 });
 
@@ -205,5 +316,167 @@ describe('parseArtifactsWithFallback - graphically-empty SVG suppression', () =>
       '<artifact identifier="x" type="image/svg+xml" title="X"><svg viewBox="0 0 4 4">   </svg></artifact>'
     );
     expect(artifacts).toHaveLength(0);
+  });
+});
+
+/**
+ * ATTRIBUTE_REGEX used to stop the value capture at the first quote of either kind,
+ * so a double-quoted value containing an apostrophe was silently truncated.
+ */
+describe('parseArtifactsWithFallback - attribute values containing quotes', () => {
+  it('keeps an apostrophe inside a double-quoted title', () => {
+    const result = parseArtifactsWithFallback(
+      `<artifact identifier="bobs-app" type="text/html" title="Bob's App"><p>hi</p></artifact>`
+    );
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].title).toBe("Bob's App");
+    expect(result.artifacts[0].identifier).toBe('bobs-app');
+  });
+
+  it('keeps double quotes inside a single-quoted value', () => {
+    const result = parseArtifactsWithFallback(
+      `<artifact identifier='x' type='text/html' title='A "quoted" phrase'><p>hi</p></artifact>`
+    );
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].title).toBe('A "quoted" phrase');
+  });
+
+  it('does not accept mismatched opening and closing quotes', () => {
+    // The unterminated double quote makes the whole opening tag unmatchable.
+    const result = parseArtifactsWithFallback(
+      `<artifact identifier="x" type="text/html" title="mismatched'><p>hi</p></artifact>`
+    );
+    expect(result.artifacts).toHaveLength(0);
+  });
+});
+
+/**
+ * The elision notice's decision logic. Mirrors how hasCompleteOpeningTag is tested above:
+ * PromptReplies renders the banner, this decides whether it should.
+ */
+describe('shouldWarnElidedArtifact', () => {
+  const ELIDED = {
+    content: '<html><body><script>// ... (same JS as before)\nfunction init(){} init();</script></body></html>',
+    type: 'html' as const,
+  };
+  const COMPLETE = {
+    content: '<html><body><script>function init(){ document.title = "x"; } init();</script></body></html>',
+    type: 'html' as const,
+  };
+
+  it('warns on a completed reply whose artifact body is stubbed', () => {
+    expect(
+      shouldWarnElidedArtifact({
+        completed: true,
+        isTruncatedArtifact: false,
+        suspectedElision: false,
+        artifacts: [ELIDED],
+      })
+    ).toBe(true);
+  });
+
+  it('stays silent for a complete artifact', () => {
+    expect(
+      shouldWarnElidedArtifact({
+        completed: true,
+        isTruncatedArtifact: false,
+        suspectedElision: false,
+        artifacts: [COMPLETE],
+      })
+    ).toBe(false);
+  });
+
+  it('defers to the truncation banner rather than stacking two warnings', () => {
+    expect(
+      shouldWarnElidedArtifact({
+        completed: true,
+        isTruncatedArtifact: true,
+        suspectedElision: true,
+        artifacts: [ELIDED],
+      })
+    ).toBe(false);
+  });
+
+  it('stays silent while the reply is still streaming', () => {
+    expect(
+      shouldWarnElidedArtifact({
+        completed: false,
+        isTruncatedArtifact: false,
+        suspectedElision: true,
+        artifacts: [ELIDED],
+      })
+    ).toBe(false);
+  });
+
+  it("trusts the server's verdict even when the local scan finds nothing", () => {
+    expect(
+      shouldWarnElidedArtifact({
+        completed: true,
+        isTruncatedArtifact: false,
+        suspectedElision: true,
+        artifacts: [COMPLETE],
+      })
+    ).toBe(true);
+  });
+
+  it('warns when any one of several artifacts is stubbed', () => {
+    expect(
+      shouldWarnElidedArtifact({
+        completed: true,
+        isTruncatedArtifact: false,
+        suspectedElision: false,
+        artifacts: [COMPLETE, ELIDED],
+      })
+    ).toBe(true);
+  });
+});
+
+describe('elidedReplyWarning', () => {
+  const ELIDED_MARKDOWN = `Here is the dashboard.
+
+<artifact identifier="board" type="text/html" title="Board">
+<html><body><script>
+  function init() {
+    // All the interactive JS from the previous complete artifact
+  }
+  init();
+</script></body></html>
+</artifact>`;
+
+  const CLEAN_MARKDOWN = `Here is the dashboard.
+
+<artifact identifier="board" type="text/html" title="Board">
+<html><body><script>
+  function init() { document.title = 'Board'; }
+  init();
+</script></body></html>
+</artifact>`;
+
+  it('trusts the server verdict when it survived the save', () => {
+    expect(
+      elidedReplyWarning({ suspectedElision: { confidence: 'low', signalCount: 2, details: [] } }, undefined)
+    ).toBe(true);
+  });
+
+  it('falls back to scanning the markdown when there is no server verdict', () => {
+    expect(elidedReplyWarning({}, ELIDED_MARKDOWN)).toBe(true);
+    expect(elidedReplyWarning(undefined, ELIDED_MARKDOWN)).toBe(true);
+    expect(elidedReplyWarning(null, ELIDED_MARKDOWN)).toBe(true);
+  });
+
+  it('does not warn on a reply whose artifact is complete', () => {
+    expect(elidedReplyWarning({}, CLEAN_MARKDOWN)).toBe(false);
+  });
+
+  it('does not warn when there is nothing to share', () => {
+    expect(elidedReplyWarning({}, undefined)).toBe(false);
+    expect(elidedReplyWarning({}, '')).toBe(false);
+  });
+
+  it('does not warn on ordinary prose that merely discusses abbreviation', () => {
+    // The reply body is prose, not code, so the comment-context anchoring is what has to hold here -
+    // this surface scans raw markdown with no artifact type to gate on.
+    const prose = 'The changelog below is abbreviated for brevity; the rest of the entries are omitted.';
+    expect(elidedReplyWarning({}, prose)).toBe(false);
   });
 });

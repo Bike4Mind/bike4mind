@@ -34,12 +34,18 @@ export const getApiKeyTypeFromBackend = (backend: ModelBackend): ApiKeyType | nu
       return ApiKeyType.ollama;
     case ModelBackend.XAI:
       return ApiKeyType.xai;
-    case ModelBackend.Bedrock:
-      // Bedrock doesn't use API keys from the system - uses AWS credentials
-      return null;
+    case ModelBackend.Kimi:
+      return ApiKeyType.kimi;
     case ModelBackend.VoyageAI:
       return ApiKeyType.voyageai;
-    default:
+    // AWS-credentialed backends hold no API key of their own, and local-image is
+    // a base URL. Enumerated rather than left to `default` so that adding a
+    // ModelBackend is a compile error here: this function's null return is the
+    // "no key configured" diagnostic, so a provider that falls through silently
+    // loses its error message as well as its key.
+    case ModelBackend.Bedrock:
+    case ModelBackend.AWS:
+    case ModelBackend.LocalImage:
       return null;
   }
 };
@@ -48,11 +54,11 @@ export const getApiKeyTypeFromBackend = (backend: ModelBackend): ApiKeyType | nu
  * Get default image model with fallback priority
  */
 export function getDefaultImageModel(models: ModelInfo[]): ModelInfo | undefined {
-  // Priority order: FLUX_PRO_1_1 -> FLUX_KONTEXT_PRO -> GPT_IMAGE_1 -> any image model
+  // Priority order: FLUX_PRO_1_1 -> FLUX_KONTEXT_PRO -> GPT_IMAGE_2 -> any image model
   return (
     models.find(m => m.id === 'flux-pro-1.1') ||
     models.find(m => m.id === 'flux-kontext-pro') ||
-    models.find(m => m.id === 'gpt-image-1') ||
+    models.find(m => m.id === 'gpt-image-2') ||
     models.find(m => m.type === 'image')
   );
 }

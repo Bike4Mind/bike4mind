@@ -1,0 +1,16 @@
+{
+  "claude-opus-6": {
+    "max_input_tokens": 2000000,
+    "max_output_tokens": 200000,
+    "input_cost_per_token": 0.000008,
+    "output_cost_per_token": 0.00004,
+    "litellm_provider": "anthropic",
+    "mode": "holographic_chat",
+    "supports_vision": true,
+    "supports_function_calling": true,
+    "supports_reasoning": true,
+    "supports_sampling_params": false,
+    "supports_hologram_output": true,
+    "supported_endpoints": ["/v1/messages", "/v1/holograms"]
+  }
+}

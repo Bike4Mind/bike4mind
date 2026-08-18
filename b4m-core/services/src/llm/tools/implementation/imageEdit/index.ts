@@ -16,8 +16,8 @@ import {
   GeminiImageService,
   getSettingsMap,
   getSettingsValue,
-  RekognitionImageModerationService,
 } from '@bike4mind/utils';
+import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getEffectiveApiKey } from '../../../../apiKeyService';
 import axios from 'axios';
 import { fileTypeFromBuffer } from 'file-type';

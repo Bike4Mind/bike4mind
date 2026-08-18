@@ -8,7 +8,8 @@ import UserPrompt from '@client/app/components/Session/UserPrompt';
 import ResearchModeResponseDisplay from '@client/app/components/Session/ResearchModeResponseDisplay';
 import { useSessions, useWorkBenchFiles, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import { useUser } from '@client/app/contexts/UserContext';
-import { IChatHistoryItem, SettingKey } from '@bike4mind/common';
+import { IChatHistoryItem, SettingKey, ELISION_PUBLISH_BODY } from '@bike4mind/common';
+import { elidedReplyWarning } from '@client/app/utils/artifactParser';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
 import { Menu, MenuItem, ListItemDecorator } from '@mui/joy';
 import Box from '@mui/joy/Box';
@@ -35,7 +36,8 @@ import BugReportModal from '@client/app/components/BugReportModal';
 import { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useGetFabFilesByQuestId } from '@client/app/hooks/data/fabFiles';
-import { Save as SaveIcon, Add as AddIcon, Storage as StorageIcon } from '@mui/icons-material';
+import { Save as SaveIcon, Add as AddIcon } from '@mui/icons-material';
+import { DataLakeIcon, DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { usePromptMetaInspector } from '@client/app/components/Session/PromptMetaInspector';
@@ -450,16 +452,24 @@ const MessageContent: React.FC<ContentProps> = memo(
     const hasShareableReply = !!(extractedReplies[0] || messageData.reply);
     const handleShareReply = useCallback(() => {
       if (!messageData.id || !sessionId) return;
+      const markdown = extractedReplies[0] || messageData.reply || undefined;
       void publishAndShareReply({
         publish: replyPublisher({ sessionId, messageId: messageData.id, orgId: teamOrg?.id }),
         ...(teamOrg ? { orgOption: { label: 'Team', hint: `Members of ${teamOrg.name}` } } : {}),
         title: messageData.prompt?.slice(0, 80) || (APP_NAME ? `Shared from ${APP_NAME}` : 'Shared reply'),
-        markdown: extractedReplies[0] || messageData.reply || undefined,
+        markdown,
+        // Sharing a REPLY snapshots its markdown including any <artifact> body, so this surface can
+        // put an elided artifact behind a public /p/ link exactly like the artifact surfaces can - and
+        // it sits directly below the amber banner that says so. Gated on the same signal: the server
+        // verdict when it survived, otherwise a local scan of the markdown, which still catches the
+        // placeholder-comment class (the reference scans are type-gated and the type is unknown here).
+        ...(elidedReplyWarning(messageData.promptMeta, markdown) ? { incompleteWarning: ELISION_PUBLISH_BODY } : {}),
       });
     }, [
       messageData.id,
       messageData.prompt,
       messageData.reply,
+      messageData.promptMeta,
       sessionId,
       extractedReplies,
       teamOrg,
@@ -678,9 +688,7 @@ const MessageContent: React.FC<ContentProps> = memo(
             in agentExecutor.ts). Lazy-loads the iteration trace from the
             AgentExecution doc and replays it inline under the reply. */}
         {messageData.agentExecutionId && sessionId ? (
-          <Box sx={{ mt: 0.5 }}>
-            <ReasoningDisclosure agentExecutionId={messageData.agentExecutionId} sessionId={sessionId} />
-          </Box>
+          <ReasoningDisclosure agentExecutionId={messageData.agentExecutionId} sessionId={sessionId} />
         ) : null}
         {messageData.oob &&
           (() => {
@@ -889,9 +897,9 @@ const MessageContent: React.FC<ContentProps> = memo(
                           data-testid="message-send-to-datalake"
                         >
                           <ListItemDecorator>
-                            <StorageIcon />
+                            <DataLakeIcon />
                           </ListItemDecorator>
-                          Send to Data Lake
+                          Send to {DATA_LAKE}
                         </MenuItem>
                       )}
                       {hasShareableReply && (
@@ -1048,9 +1056,9 @@ const MessageContent: React.FC<ContentProps> = memo(
                           data-testid="message-send-to-datalake"
                         >
                           <ListItemDecorator>
-                            <StorageIcon />
+                            <DataLakeIcon />
                           </ListItemDecorator>
-                          Send to Data Lake
+                          Send to {DATA_LAKE}
                         </MenuItem>
                       )}
                       {hasShareableReply && (

@@ -32,14 +32,21 @@ const envelope = (displayMessage: string, familyId?: string) =>
   });
 
 const scheduleResult = envelope(
-  ['## Scheduling Results for "Sequencing"', 'Problem: 4 jobs, 4 machines', '', '### Winner: Simulated Annealing (makespan: 130)', '', '### Simulated Annealing'].join(
-    '\n'
-  )
+  [
+    '## Scheduling Results for "Sequencing"',
+    'Problem: 4 jobs, 4 machines',
+    '',
+    '### Winner: Simulated Annealing (makespan: 130)',
+    '',
+    '### Simulated Annealing',
+  ].join('\n')
 );
 const solveResultFor = (p?: unknown) => {
   const fam = (p as { problem?: { family?: string } })?.problem?.family ?? 'selection';
   return envelope(
-    [`## Results for "${fam} problem" (${fam})`, '', '### Winner: Tabu Search (score: 42)', '', '### Tabu Search'].join('\n'),
+    [`## Results for "${fam} problem" (${fam})`, '', '### Winner: Tabu Search (score: 42)', '', '### Tabu Search'].join(
+      '\n'
+    ),
     fam
   );
 };
@@ -80,7 +87,7 @@ function makeOptiTools() {
   };
 }
 
-const emptyState = (): PlanProgressState => ({ steps: null, solved: {}, results: {} });
+const emptyState = (): PlanProgressState => ({ steps: [], solved: {}, results: {} });
 
 describe('pure helpers', () => {
   it('capturePlan returns ordered steps with family + title; null for non-plan results', () => {
@@ -105,7 +112,11 @@ describe('pure helpers', () => {
     // Falls back to raw markdown for callers/strings that aren't the envelope.
     expect(extractResultDigest('### Winner: Greedy (bins: 4)')).toBe('Greedy (bins: 4)');
     // No winner line (single-solver run emits no Winner header) or an error -> null.
-    expect(extractResultDigest(envelope(['## Results for "X" (routing)', '', '### Concorde', 'tour: 88'].join('\n'), 'routing'))).toBeNull();
+    expect(
+      extractResultDigest(
+        envelope(['## Results for "X" (routing)', '', '### Concorde', 'tour: 88'].join('\n'), 'routing')
+      )
+    ).toBeNull();
     expect(extractResultDigest('Error: invalid problem')).toBeNull();
   });
 

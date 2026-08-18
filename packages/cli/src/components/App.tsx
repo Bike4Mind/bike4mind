@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Text, Static, useInput, useStdout } from 'ink';
+import { Box, Text, Static, useInput } from 'ink';
 import { StatusBar } from './StatusBar';
 import { InputPrompt } from './InputPrompt';
 import { AgentThinking } from './AgentThinking';
@@ -18,10 +18,18 @@ import { MessageItem } from './MessageItem';
 import { useCliStore, selectLiveSubagentTokens, selectLiveSubagentCredits } from '../store';
 import { useShallow } from 'zustand/react/shallow';
 import type { CliConfig } from '../storage';
+import type { PluginDescriptor } from '../plugins/PluginStore';
 import { ChatModels, type ModelInfo } from '@bike4mind/common';
 import type { McpManager } from '../utils/mcpAdapter';
 import { processFileReferences, hasFileReferences } from '../utils/processFileReferences.js';
 import type { CommandDefinition } from '../config/commands.js';
+import { useStdoutDimensions } from '../hooks/useStdoutDimensions.js';
+/**
+ * Live-frame rows reserved for everything outside the step trace: the thinking
+ * line and its margin, the bordered input box and the status bar come to six,
+ * and the rest is headroom for the background agent/shell status blocks.
+ */
+const LIVE_CHROME_ROWS = 10;
 
 interface AppProps {
   onMessage: (message: string) => Promise<void>;
@@ -36,6 +44,7 @@ interface AppProps {
   commands?: CommandDefinition[]; // Merged built-in + custom commands
   config?: CliConfig;
   availableModels?: ModelInfo[];
+  pluginDescriptors?: PluginDescriptor[];
   onSaveConfig?: (config: CliConfig) => Promise<void>;
   prefillInput?: string; // Pre-fill input (e.g., from rewind)
   onPrefillConsumed?: () => void; // Called after prefill is applied
@@ -55,6 +64,7 @@ export function App({
   commands = [],
   config,
   availableModels = [],
+  pluginDescriptors = [],
   onSaveConfig,
   prefillInput,
   onPrefillConsumed,
@@ -118,9 +128,15 @@ export function App({
 
   // Terminal width - needed to pad queued-message rows so the background
   // color fills the entire row (same pattern as the sent user-prompt
-  // highlight in MessageItem.tsx).
-  const { stdout } = useStdout();
-  const terminalCols = stdout?.columns ?? 80;
+  // highlight in MessageItem.tsx). Subscribes to resize so the live frame
+  // repaints at the new width instead of keeping the stale startup width.
+  const [terminalCols, terminalRows] = useStdoutDimensions();
+
+  // Ink wipes and rebuilds scrollback on every frame taller than the viewport
+  // (see liveStepWindow.ts), so the trace only gets the rows left over. On a
+  // terminal too short to have any left over it drops out entirely - keeping
+  // scrollback usable matters more than a two-line trace.
+  const liveTraceRows = Math.max(0, terminalRows - LIVE_CHROME_ROWS - messageQueue.length);
 
   const handleSubmit = React.useCallback(
     async (input: string) => {
@@ -185,6 +201,7 @@ export function App({
           <ConfigEditor
             config={config}
             availableModels={availableModels}
+            pluginDescriptors={pluginDescriptors}
             onSave={onSaveConfig}
             onClose={() => setShowConfigEditor(false)}
           />
@@ -215,7 +232,7 @@ export function App({
             <Box flexDirection="column">
               {pendingMessages.map(message => (
                 <Box key={message.id} flexDirection="column">
-                  <MessageItem message={message} showThoughts={showThoughts} />
+                  <MessageItem message={message} showThoughts={showThoughts} liveTraceRows={liveTraceRows} />
                 </Box>
               ))}
             </Box>

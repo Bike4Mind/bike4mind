@@ -1,5 +1,6 @@
 export * as referService from './referService';
 export * as userService from './userService';
+export * as authSessionService from './authSessionService';
 export * as userApiKeyService from './userApiKeyService';
 export * as counterService from './countersService';
 export * as importHistoryService from './importHistoryService';
@@ -19,12 +20,14 @@ export * as researchAgentService from './researchAgentService';
 export * as researchTaskService from './researchTaskService';
 export * as researchDataService from './researchData';
 export * as taskSchedulerService from './taskSchedulerService';
+export * as modelDiscoveryService from './modelDiscoveryService';
 export * as tagService from './tagService';
 export * as artifactService from './artifactService';
 export * as notebookExportService from './notebookExportService';
 export * as notebookImportService from './notebookImportService';
 export * as notebookCurationService from './notebookCurationService';
 export * as dataLakeService from './dataLakeService';
+export * as scopedSettingsService from './settings';
 export * as briefcaseService from './briefcaseService';
 export * as imageTemplateService from './imageTemplateService';
 export * as cheerioService from './lib/cheerio';
@@ -34,6 +37,10 @@ export * as mfaService from './mfaService';
 export * as adminSettingsService from './adminSettingsService';
 export * as creditService from './creditService';
 export * from './billing';
+export * as spendReconciliationService from './spendReconciliation';
+export * from './soundCost';
+export * from './musicCost';
+export * from './llm/agentToolMediaCost';
 export * as emailIngestionService from './emailIngestionService';
 export * as emailAnalysisService from './emailAnalysisService';
 export * as mementoService from './mementoService';
@@ -50,3 +57,8 @@ export { safeCompareTokens } from './utils/crypto';
 export { SreAgentService, type SrePatternLookup } from './sreAgentService';
 export { RATE_LIMITED_SENTINEL } from './sreAgentService/tools';
 export * from './audienceVariants';
+// Flat exports for the client components/hooks (which import the contract types
+// directly, per the package's dominant convention) plus the `prReportService`
+// namespace the server-side adapters in context.ts/send.ts/generate.ts consume.
+export * from './prReportService';
+export * as prReportService from './prReportService';

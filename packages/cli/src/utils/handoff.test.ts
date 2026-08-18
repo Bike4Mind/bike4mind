@@ -20,7 +20,11 @@ import {
   writeLocalHandoffFile,
   isLlmUnavailableError,
   LOCAL_HANDOFF_MESSAGE_TAIL,
+  MAX_MESSAGE_CHARS,
+  HEAD_CONVERSATION_MESSAGES,
+  TAIL_CONVERSATION_MESSAGES,
 } from './handoff.js';
+import { COMPACTION_SUMMARY_MARKER } from '../config/constants.js';
 import type { Message, Session, SessionHandoff, WorkflowState } from '../storage/types.js';
 import type { TodoItem } from '../tools/writeTodosTool.js';
 
@@ -518,8 +522,11 @@ describe('handoff', () => {
     });
   });
 
-  describe('buildHandoffPrompt message cap', () => {
-    it('caps the conversation excerpt to the most recent messages', () => {
+  describe('buildHandoffPrompt conversation window', () => {
+    // Each message renders as `**Role:** MSG_n\n\n`, so guard MSG_n assertions
+    // with a trailing `\n` - bare `MSG_5` is a substring of MSG_50..MSG_59.
+
+    it('keeps head + tail and elides the middle on a long session', () => {
       const total = 120;
       const messages = Array.from({ length: total }, (_, i) =>
         createMessage(i % 2 === 0 ? 'user' : 'assistant', `MSG_${i}`, i)
@@ -527,11 +534,157 @@ describe('handoff', () => {
 
       const prompt = buildHandoffPrompt(createSession(messages));
 
-      // Most recent messages are kept; earliest are dropped.
-      expect(prompt).toContain(`MSG_${total - 1}`);
-      expect(prompt).toContain(`MSG_${total - 50}`);
-      expect(prompt).not.toContain('MSG_0\n');
-      expect(prompt).not.toContain('MSG_5\n');
+      // Head (first HEAD messages) present.
+      expect(prompt).toContain('MSG_0\n');
+      expect(prompt).toContain(`MSG_${HEAD_CONVERSATION_MESSAGES - 1}\n`);
+      // Tail (last TAIL messages) present.
+      expect(prompt).toContain(`MSG_${total - 1}\n`);
+      expect(prompt).toContain(`MSG_${total - TAIL_CONVERSATION_MESSAGES}\n`);
+      // A message from the elided middle is absent.
+      expect(prompt).not.toContain('MSG_40\n');
+      // Elision marker names the omitted count (tailStart - HEAD).
+      const elided = total - TAIL_CONVERSATION_MESSAGES - HEAD_CONVERSATION_MESSAGES;
+      expect(prompt).toContain(`_[${elided} earlier messages omitted]_`);
+    });
+
+    it('pins the most recent compaction summary as the head', () => {
+      // Raw messages precede the summary; they must not be separately included.
+      const pre = Array.from({ length: 3 }, (_, i) => createMessage('user', `PRE_${i}`, i));
+      const summary = createMessage('user', `${COMPACTION_SUMMARY_MARKER}\n\nSUMMARY_BODY`, 3);
+      const rest = Array.from({ length: 80 }, (_, i) =>
+        createMessage(i % 2 === 0 ? 'user' : 'assistant', `MSG_${i}`, i)
+      );
+      const messages = [...pre, summary, ...rest];
+
+      const prompt = buildHandoffPrompt(createSession(messages));
+
+      // Summary pinned as head; the last TAIL raw messages present.
+      expect(prompt).toContain('SUMMARY_BODY');
+      expect(prompt).toContain('MSG_79\n');
+      // rest[30] is the oldest message inside the tail window (tailStart hits it).
+      expect(prompt).toContain('MSG_30\n');
+      // Pre-summary raw messages are not separately included.
+      expect(prompt).not.toContain('PRE_0\n');
+      // A message from the elided middle is absent.
+      expect(prompt).not.toContain('MSG_10\n');
+      // Summary-branch count = tailStart - (summaryIdx + 1) = 34 - 4 = 30.
+      expect(prompt).toContain('_[30 earlier messages omitted]_');
+    });
+
+    it('includes the whole conversation with no elision for a short session', () => {
+      const total = HEAD_CONVERSATION_MESSAGES + TAIL_CONVERSATION_MESSAGES;
+      const messages = Array.from({ length: total }, (_, i) =>
+        createMessage(i % 2 === 0 ? 'user' : 'assistant', `MSG_${i}`, i)
+      );
+
+      const prompt = buildHandoffPrompt(createSession(messages));
+
+      expect(prompt).toContain('MSG_0\n');
+      expect(prompt).toContain(`MSG_${total - 1}\n`);
+      expect(prompt).toContain(`MSG_${Math.floor(total / 2)}\n`);
+      expect(prompt).not.toContain('earlier messages omitted');
+    });
+
+    it('keeps the prompt bounded and independent of session length', () => {
+      // Bound derived from the window size + per-message char cap. Uniform role
+      // and body so both fixtures render byte-identical excerpts; equal digit
+      // counts (1000 vs 1010) keep the elision marker the same length.
+      const bigBody = 'X'.repeat(MAX_MESSAGE_CHARS + 100);
+      const build = (n: number) =>
+        buildHandoffPrompt(createSession(Array.from({ length: n }, (_, i) => createMessage('user', bigBody, i))));
+
+      const prompt1000 = build(1000);
+      const prompt1010 = build(1010);
+
+      // Prompt length does not grow with session length.
+      expect(prompt1000.length).toBe(prompt1010.length);
+
+      // ...[truncated] marker + `**User:** ` label + `\n\n` per message.
+      const perMessageMax = MAX_MESSAGE_CHARS + 50;
+      const bound = (HEAD_CONVERSATION_MESSAGES + TAIL_CONVERSATION_MESSAGES) * perMessageMax + 2000;
+      expect(prompt1000.length).toBeLessThan(bound);
+      expect(prompt1010.length).toBeLessThan(bound);
+      // A saturated short-of-1000 fixture is under the same bound.
+      expect(build(HEAD_CONVERSATION_MESSAGES + TAIL_CONVERSATION_MESSAGES + 5).length).toBeLessThan(bound);
+    });
+
+    it('pins the most recent of several summaries that precede the tail window', () => {
+      // Distinguishes greatest-index selection from first-match: a first-match
+      // loop would pin EARLY_SUMMARY and elide LATE_SUMMARY, failing here.
+      const early = createMessage('user', `${COMPACTION_SUMMARY_MARKER}\n\nEARLY_SUMMARY`, 0);
+      const gapA = Array.from({ length: 20 }, (_, i) => createMessage('user', `GAP_A_${i}`, i));
+      const late = createMessage('user', `${COMPACTION_SUMMARY_MARKER}\n\nLATE_SUMMARY`, 0);
+      const gapB = Array.from({ length: 20 }, (_, i) => createMessage('assistant', `GAP_B_${i}`, i));
+      const tailMsgs = Array.from({ length: TAIL_CONVERSATION_MESSAGES }, (_, i) =>
+        createMessage('user', `TAIL_${i}`, i)
+      );
+      // indices: early=0, gapA=1..20, late=21, gapB=22..41, tail=42..91; n=92, tailStart=42.
+      const messages = [early, ...gapA, late, ...gapB, ...tailMsgs];
+
+      const prompt = buildHandoffPrompt(createSession(messages));
+
+      expect(prompt).toContain('LATE_SUMMARY');
+      expect(prompt).not.toContain('EARLY_SUMMARY');
+      expect(prompt).toContain('TAIL_0\n');
+      expect(prompt).toContain(`TAIL_${TAIL_CONVERSATION_MESSAGES - 1}\n`);
+      expect(prompt).not.toContain('GAP_A_0\n');
+      expect(prompt).not.toContain('GAP_B_0\n');
+      // elidedCount = tailStart - (lateIdx + 1) = 42 - 22 = 20.
+      expect(prompt).toContain('_[20 earlier messages omitted]_');
+    });
+
+    it('emits no raw head when the only summary sits inside the tail window', () => {
+      // A first-match/raw-head fallback regression would re-emit PRE_0..PRE_14.
+      const pre = Array.from({ length: 40 }, (_, i) => createMessage('user', `PRE_${i}`, i));
+      const tailMsgs = Array.from({ length: TAIL_CONVERSATION_MESSAGES }, (_, i) =>
+        i === 20
+          ? createMessage('user', `${COMPACTION_SUMMARY_MARKER}\n\nINTAIL_SUMMARY`, i)
+          : createMessage(i % 2 === 0 ? 'user' : 'assistant', `TAIL_${i}`, i)
+      );
+      // n=90, tailStart=40; summary at index 60 (tail-local 20), none before tailStart.
+      const messages = [...pre, ...tailMsgs];
+
+      const prompt = buildHandoffPrompt(createSession(messages));
+
+      expect(prompt).toContain('INTAIL_SUMMARY');
+      expect(prompt).not.toContain('PRE_0\n');
+      expect(prompt).not.toContain(`PRE_${HEAD_CONVERSATION_MESSAGES - 1}\n`);
+      // All pre-tail messages omitted -> count = tailStart.
+      expect(prompt).toContain(`_[${messages.length - TAIL_CONVERSATION_MESSAGES} earlier messages omitted]_`);
+    });
+
+    it('elides exactly one message at the first over-window size', () => {
+      const total = HEAD_CONVERSATION_MESSAGES + TAIL_CONVERSATION_MESSAGES + 1;
+      const messages = Array.from({ length: total }, (_, i) =>
+        createMessage(i % 2 === 0 ? 'user' : 'assistant', `MSG_${i}`, i)
+      );
+      // tailStart = total - TAIL = HEAD + 1; the single index HEAD is elided.
+
+      const prompt = buildHandoffPrompt(createSession(messages));
+
+      expect(prompt).toContain('MSG_0\n');
+      expect(prompt).toContain(`MSG_${HEAD_CONVERSATION_MESSAGES - 1}\n`);
+      expect(prompt).toContain(`MSG_${HEAD_CONVERSATION_MESSAGES + 1}\n`);
+      expect(prompt).toContain(`MSG_${total - 1}\n`);
+      expect(prompt).not.toContain(`MSG_${HEAD_CONVERSATION_MESSAGES}\n`);
+      expect(prompt).toContain('_[1 earlier messages omitted]_');
+    });
+
+    it('suppresses the marker when a pinned summary sits immediately before the tail', () => {
+      const pre = Array.from({ length: 20 }, (_, i) => createMessage('user', `PRE_${i}`, i));
+      const summary = createMessage('user', `${COMPACTION_SUMMARY_MARKER}\n\nEDGE_SUMMARY`, 0);
+      const tailMsgs = Array.from({ length: TAIL_CONVERSATION_MESSAGES }, (_, i) =>
+        createMessage('user', `TAIL_${i}`, i)
+      );
+      // n=71, tailStart=21; summary at index 20 == tailStart-1 -> elidedCount=0.
+      const messages = [...pre, summary, ...tailMsgs];
+
+      const prompt = buildHandoffPrompt(createSession(messages));
+
+      expect(prompt).toContain('EDGE_SUMMARY');
+      expect(prompt).toContain('TAIL_0\n');
+      expect(prompt).not.toContain('PRE_0\n');
+      expect(prompt).not.toContain('earlier messages omitted');
     });
   });
 

@@ -1,6 +1,6 @@
 // Normalizes each provider's native finish/stop signal onto the vocabulary
 // documented on `CompletionInfo.stopReason` (backend.ts). The client's
-// CLEAN_FINISH_REASONS (PromptReplies.tsx) treats 'end_turn' | 'stop' | 'tool_use' |
+// CLEAN_FINISH_REASONS (apps/client/app/utils/replyTruncation.ts) treats 'end_turn' | 'stop' | 'tool_use' |
 // 'stop_sequence' as a clean finish; anything else - importantly 'max_tokens' -
 // falls through to the truncation heuristic. Unrecognized provider values pass
 // through unchanged, which still behaves correctly since they're absent from

@@ -28,6 +28,11 @@ NC='\033[0m' # No Color
 echo "${YELLOW}Running gitleaks to check for secrets...${NC}"
 echo "Using: $GITLEAKS_PATH"
 
+# Pass the repo config explicitly. Staged files are scanned from a temp dir below,
+# and gitleaks only auto-discovers a config in the directory it scans - so without
+# this the hook silently runs on default rules and disagrees with CI.
+GITLEAKS_CONFIG="$(git rev-parse --show-toplevel)/.gitleaks.toml"
+
 # Get all staged files
 STAGED_FILES=$(git diff --cached --name-only)
 
@@ -52,7 +57,7 @@ done
 
 # Scan the temporary directory with the --no-git flag
 echo "Scanning staged files..."
-if "$GITLEAKS_PATH" detect --verbose --redact --no-git -s "$TEMP_DIR" 2>/dev/null; then
+if "$GITLEAKS_PATH" detect --verbose --redact --no-git --config "$GITLEAKS_CONFIG" -s "$TEMP_DIR" 2>/dev/null; then
   echo "${GREEN}No secrets detected in staged files!${NC}"
   # Clean up
   rm -rf "$TEMP_DIR"
@@ -73,7 +78,7 @@ else
     echo "${RED}ERROR: gitleaks failed with exit code $EXIT_CODE${NC}"
     echo "${YELLOW}Debugging info:${NC}"
     echo "gitleaks path: $GITLEAKS_PATH"
-    echo "Try running manually: $GITLEAKS_PATH detect --verbose --redact --no-git -s ."
+    echo "Try running manually: $GITLEAKS_PATH detect --verbose --redact --no-git --config \"$GITLEAKS_CONFIG\" -s ."
     echo "Or bypass with: git commit --no-verify -m \"your message\""
     # Clean up
     rm -rf "$TEMP_DIR"

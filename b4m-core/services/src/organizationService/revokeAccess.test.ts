@@ -52,6 +52,12 @@ describe('organizationService - revokeAccess', () => {
           findById: vi.fn().mockResolvedValue(existingOrganization),
           update: vi.fn().mockResolvedValue(undefined),
         },
+        groups: {
+          findByOrganization: vi.fn().mockResolvedValue([]),
+        },
+        users: {
+          removeGroupsFromUser: vi.fn().mockResolvedValue(undefined),
+        },
       },
     };
   });
@@ -72,9 +78,29 @@ describe('organizationService - revokeAccess', () => {
       userDetails: [
         { id: 'user2', name: 'Second User', email: 'second@example.com', usedCredits: 0, lastCreditUsedAt: null },
       ],
+      adminUserIds: [], // purge normalizes adminUserIds (none appointed here)
     };
 
     expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(expectedUpdatedOrg);
+  });
+
+  it('purges the removed user group ids and drops them from adminUserIds', async () => {
+    mockAdapters.db.organizations.findById.mockResolvedValue({
+      ...existingOrganization,
+      users: [userToRevoke, secondUser],
+      userDetails: existingOrganization.userDetails?.map(d => ({ ...d })),
+      adminUserIds: ['user1', 'user2'],
+    });
+    mockAdapters.db.groups.findByOrganization.mockResolvedValue([{ id: 'g-a' }, { id: 'g-b' }]);
+
+    const result = await revokeAccess(mockOwnerUser as IUserDocument, { id: 'org1', userId: 'user1' }, mockAdapters);
+
+    expect(mockAdapters.db.groups.findByOrganization).toHaveBeenCalledWith('org1');
+    expect(mockAdapters.db.users.removeGroupsFromUser).toHaveBeenCalledWith('user1', ['g-a', 'g-b']);
+    expect(result.adminUserIds).toEqual(['user2']);
+    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(
+      expect.objectContaining({ adminUserIds: ['user2'] })
+    );
   });
 
   it('should throw NotFoundError when organization is not found', async () => {

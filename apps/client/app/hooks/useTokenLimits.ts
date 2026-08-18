@@ -1,7 +1,10 @@
 import { useMemo } from 'react';
+import { DEFAULT_UNKNOWN_CONTEXT_WINDOW, isMediaModelType, type ModelInfo } from '@bike4mind/common';
+import { computeDefaultMaxTokens } from '../utils/aiSettingsUtils';
 
 interface ModelInfoEntry {
   id: string;
+  type?: ModelInfo['type'];
   contextWindow?: number;
   max_tokens?: number;
 }
@@ -22,12 +25,22 @@ export function useTokenLimits({ model, modelInfo, max_tokens, chatInputLength }
   const safeMaxTokens = max_tokens ?? 2048;
 
   const activeModelEntry = useMemo(() => modelInfo?.find(m => m.id === model), [model, modelInfo]);
-  const contextWindowLimit = activeModelEntry?.contextWindow ?? 0;
+  const returnsMedia = activeModelEntry?.type !== undefined && isMediaModelType(activeModelEntry.type);
+  // A media row's contextWindow arriving as the literal 0 means "not applicable" (two provider
+  // feeds report it that way on purpose - see safeInputWindow in @bike4mind/utils), not a real
+  // zero-token budget. Falls back the same way an absent window would; a text row keeps 0
+  // literal, so contextWindowLimit === 0 still means "modelInfo hasn't loaded yet" below.
+  const rawContextWindow = activeModelEntry?.contextWindow;
+  const contextWindowLimit =
+    returnsMedia && !rawContextWindow ? DEFAULT_UNKNOWN_CONTEXT_WINDOW : (rawContextWindow ?? 0);
   const modelCatalogMaxOutput = activeModelEntry?.max_tokens ?? 0;
 
-  const getDefaultMaxOutputTokens = useMemo(() => {
-    return Math.min(modelCatalogMaxOutput, 16384);
-  }, [modelCatalogMaxOutput]);
+  // Must agree with the store's default (computeDefaultMaxTokens) - this only stands in for the
+  // window between mount and the model-change effect writing a real max_tokens.
+  const getDefaultMaxOutputTokens = useMemo(
+    () => computeDefaultMaxTokens({ contextWindow: contextWindowLimit, max_tokens: modelCatalogMaxOutput }),
+    [contextWindowLimit, modelCatalogMaxOutput]
+  );
 
   const effectiveMaxOutputTokens = useMemo(() => {
     const requested = max_tokens !== undefined && max_tokens > 0 ? max_tokens : getDefaultMaxOutputTokens;

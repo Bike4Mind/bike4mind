@@ -143,7 +143,12 @@ const handler = baseApi().patch(async (req, res) => {
     res.status(200).json({ success: true });
   } catch (error) {
     console.error('[Notion Settings] Error updating settings:', error);
-    res.status(500).json({ error: 'Failed to update Notion settings' });
+    const detail = error instanceof Error ? error.message : '';
+    res.status(500).json({
+      error: detail.includes('not connected')
+        ? 'Notion is not connected. Please reconnect your account before changing settings.'
+        : `Failed to update Notion settings: ${detail || 'unexpected server error'}`,
+    });
   }
 });
 

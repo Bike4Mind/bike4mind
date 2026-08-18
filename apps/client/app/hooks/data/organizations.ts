@@ -7,11 +7,12 @@ import {
   FileGeneratePresignedUrlResponseType,
 } from '@bike4mind/common';
 import { toast } from 'sonner';
-import axios, { AxiosResponse } from 'axios';
+import { AxiosResponse } from 'axios';
 import { updateAllQueryData } from '@client/app/utils/react-query';
 import { useGetOrganizationUsers, useGetPendingOrganizationUsers } from './user';
 import { useMemo } from 'react';
 import { getErrorMessage } from '@client/app/utils/error';
+import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
 
 /**
  * Hook to search organizations with pagination and filtering
@@ -231,12 +232,9 @@ export function useUploadOrganizationLogo() {
 
       const { url, fileId } = data;
 
-      // Step 2: Upload the file to the presigned URL
-      await axios.put(url, file, {
-        headers: {
-          'Content-Type': file.type,
-        },
-      });
+      // Step 2: Upload the bytes. The shared helper handles both shapes the server can hand back:
+      // an S3 presign (hosted, raw axios) and the same-origin app-file proxy (self-host, authed api).
+      await uploadFileToUrl(url, file, file.type);
 
       return fileId;
     },

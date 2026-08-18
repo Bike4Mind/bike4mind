@@ -53,6 +53,9 @@ vi.mock('@bike4mind/services', async () => {
       error instanceof MockInsufficientCreditsError ? error.code : getQuestErrorCode(error),
     buildSharedTools: mockBuildSharedTools,
     apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({ openai: 'k' }) },
+    // Availability filter that runs alongside buildSharedTools - tests here assert on
+    // enabledTools/kbScope, not on which tools are gated, so every tool reads as available.
+    resolveToolAvailability: vi.fn().mockResolvedValue({}),
   };
 });
 
@@ -86,6 +89,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   fabFileChunkRepository: {},
   dataLakeRepository: {},
+  lakeAccessEventRepository: {},
 }));
 
 const mockVerifyEmbedApiKey = vi.hoisted(() => vi.fn());
@@ -149,8 +153,8 @@ beforeEach(() => {
   mockCheckEmbedSessionRateLimit.mockResolvedValue({ allowed: true });
   mockProjectFindById.mockResolvedValue({ id: 'proj-1', userId: 'user-1', fileIds: ['f1', 'f2'], deletedAt: null });
   mockUserFindById.mockResolvedValue({ id: 'user-1', groups: [] });
-  // Org membership lives on the org doc (userDetails), not the user doc.
-  mockOrgFindById.mockResolvedValue({ id: 'org-1', currentCredits: 100, userId: 'admin-1', userDetails: [] });
+  // Org membership lives on the org doc's authoritative users[] ACL, not the user doc.
+  mockOrgFindById.mockResolvedValue({ id: 'org-1', currentCredits: 100, userId: 'admin-1', users: [] });
   mockHydrate.mockReturnValue({
     model: 'test-model',
     systemPrompt: 'AGENT PERSONA PROMPT',
@@ -265,10 +269,17 @@ describe('POST /api/embed/chat', () => {
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
-  it('returns 422 when the bound agent has no configured model', async () => {
+  it('returns 422 naming the fix when the bound agent has no configured model', async () => {
     mockHydrate.mockReturnValue({ model: '', systemPrompt: 'p', allowedTools: [], deniedTools: [] });
     const res = await post(CHAT);
     expect(res.status).toBe(422);
+    // Pin the full body: integrators branch on `code`, operators read the description.
+    expect(await res.json()).toEqual({
+      error: 'unprocessable',
+      error_description:
+        'Bound agent has no explicit model configured. Set a model on the agent; embed chat does not fall back to the system default.',
+      code: 'agent_model_not_configured',
+    });
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
@@ -282,6 +293,17 @@ describe('POST /api/embed/chat', () => {
     const res = await post(CHAT, { origin: 'https://evil.com' });
     expect(res.status).toBe(403);
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('permits the first-party serving origin even though it can never be allow-listed', async () => {
+    // The /embed/* widget page posts same-origin from our own host, which still
+    // sends an Origin header; the key's allow-list can never contain the app
+    // host. Deleting the first-party exemption in the gate must fail this test.
+    // PUBLISH_HOST is app.bike4mind.com under vitest.setup, so this exercises
+    // the branded-deployment branch a real deploy takes.
+    const res = await post(CHAT, { origin: 'https://app.bike4mind.com' });
+    expect(res.status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a client-supplied system turn (persona is server-set only)', async () => {
@@ -535,6 +557,11 @@ describe('POST /api/embed/chat - server-side tools', () => {
     expect(deps.kbScope).toEqual({ fileIds: ['f1', 'f2'] });
     expect(deps.entitlementKeys).toEqual([]);
 
+    // The resolved availability map must reach buildSharedTools' options (not just
+    // enabledTools/kbScope) - see toolAvailability.ts's enforcement filter.
+    const opts = mockBuildSharedTools.mock.calls[0][2] as { toolAvailability: unknown };
+    expect(opts.toolAvailability).toEqual({});
+
     const params = executeParams();
     expect(params.serverTools.map((t: { toolSchema: { name: string } }) => t.toolSchema.name)).toEqual([
       'search_knowledge_base',
@@ -581,14 +608,17 @@ describe('POST /api/embed/chat - server-side tools', () => {
     expect(deps.kbScope).toEqual({ fileIds: [] });
   });
 
-  it('an org-owned agent accepts a project owned by an org TEAMMATE (org-scoped grant)', async () => {
+  it('an org-owned agent accepts a project owned by an org TEAMMATE present only in the authoritative users[] (no userDetails row yet)', async () => {
     hydrateWith();
     mockProjectFindById.mockResolvedValue({ id: 'proj-1', userId: 'user-TEAMMATE', fileIds: ['f9'], deletedAt: null });
     mockOrgFindById.mockResolvedValue({
       id: 'org-1',
       currentCredits: 100,
       userId: 'admin-1',
-      userDetails: [{ id: 'user-TEAMMATE' }],
+      // Membership is the authoritative users[] ACL. userDetails (credit side-table) is empty
+      // for this teammate - reading it would wrongly deny KB scope (the pre-fix bug).
+      users: [{ userId: 'user-TEAMMATE' }],
+      userDetails: [],
     });
     await post(CHAT);
 
@@ -603,7 +633,7 @@ describe('POST /api/embed/chat - server-side tools', () => {
       id: 'org-1',
       currentCredits: 100,
       userId: 'admin-1',
-      userDetails: [{ id: 'user-1' }], // user-FOREIGN is not a member
+      users: [{ userId: 'user-1' }], // user-FOREIGN is not a member
     });
     await post(CHAT);
 
@@ -619,7 +649,7 @@ describe('POST /api/embed/chat - server-side tools', () => {
       id: 'org-1',
       currentCredits: 100,
       userId: 'admin-1',
-      userDetails: [{ id: 'user-TEAMMATE' }],
+      users: [{ userId: 'user-TEAMMATE' }],
     });
     await post(CHAT);
 

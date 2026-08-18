@@ -32,6 +32,9 @@ import {
   slackExportQueueDLQ,
   questExportQueueDLQ,
   dataLakeCleanupQueueDLQ,
+  dataLakeTaxonomyQueueDLQ,
+  lakeMemoryQueueDLQ,
+  driveLakeIngestQueueDLQ,
   videoGenerationDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
@@ -42,6 +45,7 @@ import {
   overwatchAnalyticsQueueDLQ,
   agentContinuationQueueDLQ,
   optihashiRunCompletionQueueDLQ,
+  bobRunQueueDLQ,
 } from './queues';
 import { telemetryAlertRuleDLQ } from './eventBus';
 import { emailIngestionQueueDLQ, emailAnalysisQueueDLQ } from './emailIngestion';
@@ -220,6 +224,27 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: dataLakeCleanupQueueDLQ,
   },
   {
+    label: 'data-lake-taxonomy',
+    displayName: 'Data Lake Taxonomy Analysis',
+    application: 'DataLakeManagement',
+    sourceQueue: 'dataLakeTaxonomyQueue',
+    queue: dataLakeTaxonomyQueueDLQ,
+  },
+  {
+    label: 'lake-memory',
+    displayName: 'Lake Memory Extraction',
+    application: 'DataLakeManagement',
+    sourceQueue: 'lakeMemoryQueue',
+    queue: lakeMemoryQueueDLQ,
+  },
+  {
+    label: 'drive-lake-ingest',
+    displayName: 'Drive Lake Ingest',
+    application: 'DataLakeManagement',
+    sourceQueue: 'driveLakeIngestQueue',
+    queue: driveLakeIngestQueueDLQ,
+  },
+  {
     label: 'video-generation',
     displayName: 'Video Generation',
     application: 'VideoGeneration',
@@ -325,6 +350,14 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'OptiHashiIntegration',
     sourceQueue: 'optihashiRunCompletionQueue',
     queue: optihashiRunCompletionQueueDLQ,
+  },
+  // queues.ts - Bob panel run (@bike4mind/premium-bob, issue #33 step B)
+  {
+    label: 'bob-run',
+    displayName: 'Bob Panel Run',
+    application: 'BobIntegration',
+    sourceQueue: 'bobRunQueue',
+    queue: bobRunQueueDLQ,
   },
 ];
 

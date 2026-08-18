@@ -5,6 +5,7 @@ export * from './adminUpdate';
 export * from './register';
 export * from './recordPolicyAcceptance';
 export * from './adminDelete';
+export * from './revokeSessions';
 export * from './searchUserCollection';
 export * from './recalculateUserStorage';
 export * from './listRecentActivities';

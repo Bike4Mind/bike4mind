@@ -42,7 +42,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
     () => ({ search: modalSearch, page: 1, limit: 10, publicView: true }),
     [modalSearch]
   );
-  const { data: usersData, isFetching } = useGetUsers(params, { enabled: !!modalSearch });
+  const { data: usersData, isFetching } = useGetUsers(params, { enabled: modalSearch.length >= 3 });
 
   const [permissions] = useState<{ value: Permission[]; error?: string | null }>({
     value: [Permission.read],
@@ -302,6 +302,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
                 getItemId={user => user.username}
                 onSearch={term => debouncedModalSearch(term)}
                 searchPlaceholder={t('common.search_users', 'Search users')}
+                searchMinLength={3}
                 onAdd={handleAddMembers}
                 isPending={shareDocument.isPending}
                 renderItem={renderUserItem}

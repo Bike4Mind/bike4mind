@@ -127,6 +127,16 @@ export const MIME_TYPE_MAP: Record<string, string> = {
   '.xml': 'application/xml',
   '.html': 'text/html',
   '.md': 'text/markdown',
+  // Audio (generated TTS / sound effects; canonical extension first per type
+  // so extensionFromMimeType prefers .mp3 for audio/mpeg)
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.opus': 'audio/opus',
+  '.aac': 'audio/aac',
+  '.flac': 'audio/flac',
+  '.pcm': 'audio/pcm',
+  '.ogg': 'audio/ogg',
+  '.weba': 'audio/webm',
   // Archives
   '.zip': 'application/zip',
   '.tar': 'application/x-tar',

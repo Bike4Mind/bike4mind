@@ -1,0 +1,14 @@
+{
+  "anthropic": {
+    "id": "anthropic",
+    "name": "Anthropic",
+    "models": {
+      "claude-opus-5": { "id": "claude-opus-5", "limit": { "context": 200000, "output": 64000 }, "cost": { "input": 5, "output": 25 } },
+      "claude-broken-limits": { "id": "claude-broken-limits", "limit": "200k", "cost": { "input": "five", "output": null } },
+      "claude-null": null,
+      "claude-empty": {}
+    }
+  },
+  "openai": { "id": "openai", "name": "OpenAI" },
+  "google": null
+}

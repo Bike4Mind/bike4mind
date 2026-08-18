@@ -43,7 +43,7 @@ openssl rand -hex 32   # -> SESSION_SECRET
 openssl rand -hex 32   # -> SECRET_ENCRYPTION_KEY
 ```
 
-> **Never change `SECRET_ENCRYPTION_KEY` after first boot.** It encrypts other secrets stored in the database - rotating it makes existing encrypted data unreadable.
+> **Do not rotate `SECRET_ENCRYPTION_KEY` casually.** It encrypts other secrets stored in the database, and rotation is not automated for self-host. If you must change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and leave it set permanently: reads fall back to the previous key, so old ciphertext (admin settings, per-user API keys, OAuth tokens, social connections) stays readable. Dropping the previous key makes anything still encrypted under it unrecoverable.
 
 > **Formatting:** compose reads `.env.selfhost` values verbatim - don't add comments on the same line as a value.
 
@@ -89,7 +89,7 @@ Working from a checkout and want to run your own edits (or a freshly pulled `mai
 docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile ollama up -d --build
 ```
 
-`--build` rebuilds the `app` image from the Dockerfile before starting; only `app` rebuilds, the backing services just restart. Drop `--profile ollama` if you are not running local models. Thanks to the pnpm store cache mount and Docker layer caching, a warm rebuild (only app source changed, deps unchanged) takes about 1-2 minutes; a cold first build takes several.
+`--build` rebuilds the `app` image from the Dockerfile before starting; only `app` rebuilds, the backing services just restart. Drop `--profile ollama` if you are not running local models, and keep any `-f compose.ollama-*.yaml` overrides you normally pass (see [Local models with Ollama](#local-models-with-ollama-no-api-keys)). Thanks to the pnpm store cache mount and Docker layer caching, a warm rebuild (only app source changed, deps unchanged) takes about 1-2 minutes; a cold first build takes several.
 
 Confirm it came up, then follow the logs:
 
@@ -98,6 +98,53 @@ docker compose -f compose.selfhost.yaml ps                      # services Up / 
 curl -s -o /dev/null -w '%{http_code}\n' localhost:3000         # expect 200
 docker compose -f compose.selfhost.yaml logs -f app             # follow app logs (Ctrl-C to stop)
 ```
+
+### Frontend dev mode (host `next dev`)
+
+Want hot reload on the Next app while the backing services keep running in compose? Run the app on your host with `next dev` and point it at the compose services over their published `localhost` ports. Two things need attention here - letting the host app reach Mailpit for sign-in, and how uploads get chunked - both covered below.
+
+**First, let the host app reach Mailpit for sign-in.** Sign-in emails a one-time code, and the app sends it over SMTP to `MAIL_HOST:MAIL_PORT`. In compose that host is the internal `mail` service and only Mailpit's web UI port (8025) is published, so a host-run app can't reach its SMTP port (1025) and no code is sent. Publish it with a small compose override (`compose.hostdev.yaml`):
+
+```yaml
+services:
+  mail:
+    ports:
+      - '127.0.0.1:1025:1025'
+```
+
+Bring the stack up with the override, then stop the compose `app` - it binds host port 3000, which `next dev` wants. Keep the `worker` running: it ingests uploads (queue consumers plus the safety-net scan), so chunking still happens even though the app now runs on your host.
+
+```bash
+docker compose -f compose.selfhost.yaml -f compose.hostdev.yaml --env-file .env.selfhost up -d
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost stop app
+```
+
+`next dev` reads `apps/client/.env.local` (gitignored), so create that file from your `.env.selfhost`, rewriting each compose service hostname to `localhost` and its published port:
+
+```bash
+B4M_SELF_HOST=true
+# directConnection avoids replica-set discovery, which would advertise the internal `mongo` host
+MONGODB_URI=mongodb://localhost:27017/bike4mind?replicaSet=rs0&directConnection=true
+AWS_ENDPOINT_URL_S3=http://localhost:9000       # was http://minio:9000
+AWS_ENDPOINT_URL_SQS=http://localhost:9324      # was http://sqs:9324
+MAIL_HOST=localhost                             # was mail (so sign-in codes reach Mailpit)
+# every *_QUEUE url: swap the `sqs` host for `localhost`, keep the path
+FAB_FILE_CHUNK_QUEUE=http://localhost:9324/000000000000/fabFileChunkQueue
+# ...the other *_QUEUE vars the same way
+# copy the rest verbatim from .env.selfhost: the three secrets, AWS creds, bucket names, LLM keys
+```
+
+Then start the app from the repo root:
+
+```bash
+pnpm --filter client dev      # http://localhost:3000
+```
+
+Open http://localhost:3000 and sign in - the code lands in Mailpit at http://localhost:8025 (see [4. Sign in](#4-sign-in)).
+
+> **Match your published ports.** The values above use the compose defaults. If you set `MONGO_HOST_PORT` / `MINIO_HOST_PORT` / `SQS_HOST_PORT` in `.env.selfhost` (for example to dodge a port already in use on your host), use those host ports here instead.
+
+**Chunking in this mode.** MinIO's ObjectCreated webhook is wired to the compose `app` (`http://app:3000/...`), which your host `next dev` is not - so that notification dead-ends and never enqueues chunking. You do not have to fix this: the host upload route marks each file complete on its own, and the `worker`'s safety-net scan re-enqueues any complete-but-unchunked file once it is a couple of minutes old, so uploads still chunk (and become searchable) within a few minutes. To make chunking fire instantly instead, re-point the webhook at your host by adding MinIO to the same `compose.hostdev.yaml` override - set `MINIO_NOTIFY_WEBHOOK_ENDPOINT_primary` to `http://host.docker.internal:3000/api/internal/s3/object-created`, then recreate MinIO with `docker compose -f compose.selfhost.yaml -f compose.hostdev.yaml --env-file .env.selfhost up -d minio`. On Linux, also add `extra_hosts: ["host.docker.internal:host-gateway"]` to the `minio` service.
 
 ## 4. Sign in
 
@@ -160,7 +207,7 @@ curl -N -X POST http://localhost:8788/api/ai/v1/completions \
   -H "x-api-key: $B4M_API_KEY" \
   -H "content-type: application/json" \
   -d '{
-    "model": "qwen2.5-coder:7b",
+    "model": "qwen3.5:2b-q4_K_M",
     "messages": [{ "role": "user", "content": "Say hello in five words." }]
   }'
 ```
@@ -183,12 +230,12 @@ data: [DONE]
 
 ## Drive it with the CLI (`b4m`)
 
-Prefer the terminal? The [Bike4Mind CLI](./BIKE4MIND_CLI.md) talks to your self-hosted stack directly — the OAuth device-flow and chat APIs ship in the open core, so no hosted account or credits are involved.
+Prefer the terminal? The [Bike4Mind CLI](./BIKE4MIND_CLI.md) talks to your self-hosted stack directly - the OAuth device-flow and chat APIs ship in the open core, so no hosted account or credits are involved.
 
 ```bash
 npm install -g @bike4mind/cli        # requires Node.js 24+
 b4m --api-url http://localhost:3000  # point it at your stack (use your APP_HOST_PORT if remapped)
-b4m                                  # start, then /login — read the sign-in code from Mailpit at :8025
+b4m                                  # start, then /login - read the sign-in code from Mailpit at :8025
 ```
 
 Auth is cached per environment, so you can keep a separate hosted login and switch with `--prod` / `--api-url`. Full guide (hosted **and** self-host, switching, troubleshooting): [**BIKE4MIND_CLI.md**](./BIKE4MIND_CLI.md).
@@ -197,40 +244,108 @@ Want other MCP clients (Claude Desktop, editors) to drive your stack? Run `b4m m
 
 ## Local models with Ollama (no API keys)
 
-Run open-weight models (Qwen, Llama, etc.) on your own hardware with **no provider API keys** and, once a model is pulled, **no internet**. Local models appear in the model picker under a **Local / Self-Hosted** section and work in chat like any other model.
+Run open-weight models (Qwen, Llama, etc.) on your own hardware with **no provider API keys** and, once a model is pulled, **no internet**, using the stack's optional `ollama` service. Local models appear in the model picker under a **Local / Self-Hosted** section and work in chat like any other model.
 
-The stack bundles an optional `ollama` service. To enable it:
+### Start here: check your RAM
 
-1. In `.env.selfhost`, uncomment `OLLAMA_BASE_URL` and pick your model(s) in `OLLAMA_PULL_MODELS`:
+The template's default model needs **24 GB of system RAM**. Check what you have before the first `up` - if it is less, change one line in `.env.selfhost`, or the puller downloads ~17 GB of a model your machine cannot run well.
+
+```bash
+free -g | awk '/^Mem:/ {print $2, "GB RAM"}'                  # Linux
+sysctl -n hw.memsize | awk '{print $1/1073741824, "GB RAM"}'  # macOS
+```
+
+**On Docker Desktop, match the row against the memory ALLOCATED TO DOCKER (Settings > Resources), not host RAM.** The VM defaults to a fraction of host RAM (commonly 8 GB) regardless of how much the host has, so a host with 24 GB does not mean the container gets 24 GB. Picking the "24 GB" row without raising the Docker VM allocation first makes chat silently fall back to the embedding model with a "Fallback Model Used" badge (the chat model failed to load, so the picker served the only other one available). Not an issue on Linux, where the daemon runs directly on the host.
+
+| System RAM | Set `OLLAMA_PULL_MODELS` to | Download | MoE override |
+|------------|-----------------------------|---------:|--------------|
+| **32 GB or more** | `qwen3.6:35b-a3b-q4_K_M qwen3-embedding:0.6b` | ~25 GB | required |
+| **24 GB** - template default | `gemma4:26b-a4b-it-q4_K_M qwen3-embedding:0.6b` | ~18 GB | required |
+| **16 GB** | `gpt-oss:20b qwen3-embedding:0.6b` | ~15 GB | required |
+| **8 GB** | `qwen3.5:2b-q4_K_M qwen2.5-coder:3b qwen3-embedding:0.6b` | ~5 GB | not used |
+| **4 GB** | `qwen3.5:0.8b qwen3-embedding:0.6b` | ~2 GB | not used |
+
+The first three rows are one sparse MoE model that handles chat, tools, artifacts, vision, and RAG on its own. The bottom two rows are small dense models: the 8 GB pair needs switching per task because a 2-4B model cannot finish an HTML artifact, and 4 GB is chat only. [Choosing a model](#choosing-a-model) has the full menu and the measured numbers behind these picks.
+
+**A GPU is optional at every row.** An NVIDIA card with >=4 GB VRAM roughly triples prompt-processing speed; with no GPU everything still runs on CPU, just slower. VRAM is not what gates the model choice here - the MoE experts live in system RAM, so a 26B model and a 2B model both need about 3 GB of VRAM.
+
+### Enable it
+
+1. In `.env.selfhost`, uncomment `OLLAMA_BASE_URL` and set `OLLAMA_PULL_MODELS` to your row above:
 
    ```bash
    OLLAMA_BASE_URL=http://ollama:11434
-   # Chat model + an embedder so offline file search works out of the box:
-   OLLAMA_PULL_MODELS=qwen2.5-coder:7b nomic-embed-text
+   OLLAMA_PULL_MODELS=gemma4:26b-a4b-it-q4_K_M qwen3-embedding:0.6b
    ```
 
-2. Bring the stack up with the `ollama` profile (this also downloads the model on first run):
+2. Bring the stack up with the `ollama` profile (this also downloads the models on first run). This is the full command for the default - an NVIDIA GPU running the MoE model:
 
    ```bash
-   docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile ollama up -d
+   docker compose -f compose.selfhost.yaml -f compose.ollama-gpu.yaml \
+     -f compose.ollama-moe.yaml --env-file .env.selfhost --profile ollama up -d
    ```
+
+   Adjust the override files for your setup:
+
+   | Your setup | Change |
+   |------------|--------|
+   | No NVIDIA GPU | drop `-f compose.ollama-gpu.yaml` |
+   | A dense model (the 8 GB or 4 GB row) | drop `-f compose.ollama-moe.yaml` |
+
+   The GPU override needs the [NVIDIA Container Toolkit](#gpu-acceleration-nvidia) installed first. The MoE override is what makes the large models fit - see [MoE expert offload](#moe-expert-offload). Pass the same `-f` set every time you bring the stack up: compose only applies overrides you name, so dropping one on a later `up` silently reconfigures the `ollama` service.
 
 That's it - open the model picker and select your model under **Local / Self-Hosted**. No keys, no admin settings to flip.
 
-### Choosing a model (Qwen menu + hardware)
+### Choosing a model
 
-Pick by the hardware you have. "Min GPU VRAM" is what it takes to run fully on a GPU; with less, it still runs but spills to CPU RAM (slower). "CPU-only RAM" is what it needs with no GPU at all. Qwen2.5-Coder is tuned for coding; qwen3 is a newer general model.
+The rows in [Start here](#start-here-check-your-ram) are the recommended pick per RAM tier; this is the full menu behind them. `VRAM` is what the model needs on the GPU with expert offload enabled; the experts sit in RAM, which is why the download is large and the VRAM figure is not. **Size the machine by the RAM column.** Throughput is indicative of an entry-level 4 GB discrete GPU with a modern laptop CPU, at Q4_K_M with one model loaded; faster hardware scales up. `prefill` is prompt processing - the wait before the first token on a tool or RAG turn.
 
-| Model tag | Download | Min GPU VRAM | CPU-only RAM | Notes |
-|-----------|---------:|-------------:|-------------:|-------|
-| `qwen2.5-coder:1.5b` | ~1.0 GB | ~2 GB | ~8 GB | Tiny; fast even on CPU |
-| `qwen2.5-coder:3b` | ~2.0 GB | ~4 GB | ~8 GB | Good on small / laptop GPUs |
-| `qwen2.5-coder:7b` | ~4.7 GB | ~6-8 GB | ~16 GB | Recommended default |
-| `qwen2.5-coder:14b` | ~9 GB | ~12 GB | ~32 GB | Stronger; needs a real GPU |
-| `qwen2.5-coder:32b` | ~20 GB | ~24 GB | ~64 GB | Best local coder |
-| `qwen3:8b` | ~5 GB | ~8 GB | ~16 GB | General-purpose alternative |
+| Model tag | Download | VRAM | RAM | gen | prefill | Notes |
+|-----------|---------:|-----:|----:|----:|--------:|-------|
+| **MoE - one model for everything** ||||||
+| `gpt-oss:20b` | ~14 GB | ~3.3 GB | ~16 GB | 15/s | 481/s | 21B total / 3.6B active |
+| `gemma4:26b-a4b-it-q4_K_M` | ~17 GB | ~3.4 GB | ~24 GB | 19/s | 295/s | 26B/4B; **default**; multimodal |
+| `qwen3.6:35b-a3b-q4_K_M` | ~24 GB | ~2.9 GB | ~32 GB | 22/s | 279/s | 35B/3B; strongest coder |
+| **Small dense - needs a separate coder for artifacts** ||||||
+| `qwen3.5:0.8b` | ~1.0 GB | ~2 GB | ~4 GB | - | - | Tiny; multimodal |
+| `qwen3.5:2b-q4_K_M` | ~1.9 GB | ~3.0 GB | ~8 GB | 93/s | 3621/s | Fastest; general/vision/tools |
+| `qwen3.5:4b` | ~3.4 GB | ~6 GB | ~8 GB | - | - | Spills to CPU under 6 GB VRAM |
+| `qwen2.5-coder:3b` | ~1.9 GB | ~3.1 GB | ~8 GB | 73/s | 2309/s | Coding-tuned; artifacts |
 
-Set one or more (space-separated) in `OLLAMA_PULL_MODELS`, e.g. `OLLAMA_PULL_MODELS=qwen2.5-coder:3b qwen2.5-coder:7b`. Re-running `up` pulls any new ones and skips already-present models. To pull one ad hoc without editing the env: `docker compose -f compose.selfhost.yaml exec ollama ollama pull qwen2.5-coder:14b`. No GPU? Everything runs on CPU - start with a 1.5b or 3b model.
+Note the shape of those numbers: a 26B MoE generates at roughly a fifth the speed of a 2B dense model while fitting in the same VRAM. That trade is usually worth it, because the small dense models cannot finish an HTML artifact at all.
+
+`gemma4:26b-a4b` is the default because it is the broadest fit: it writes complete, working single-purpose HTML artifacts (which the 2-4B dense models do not), answers multi-chunk knowledge-base queries with correct citations, calls tools natively, and reads images - from a single model on an entry-level GPU. `qwen3.6:35b-a3b` is the better coder but wants 32 GB of RAM, so it is the step up rather than the default.
+
+Set one or more (space-separated) in `OLLAMA_PULL_MODELS`. Re-running `up` pulls any new ones and skips already-present models. To pull one ad hoc without editing the env: `docker compose -f compose.selfhost.yaml exec ollama ollama pull gpt-oss:20b`.
+
+> **Not every MoE model offloads.** `qwen3.5:27b` does not - llama.cpp does not match its expert tensors, so the loader attempts a ~15 GB VRAM allocation and fails outright. Verify any tag not listed above: pull it, send one request, and check `ollama ps` reports `100% GPU` with a `SIZE` of a few GB rather than the full model size.
+
+#### What to expect from a local model
+
+Calibrate expectations on artifact complexity. A self-contained widget - a calculator, a form, a single chart - comes out working. A dashboard combining four interacting features will render and partly work, but expect a dead click handler or a CSS layout bug. Local models at this size are not one-shotting large UIs. Generation time scales with output: a widget is about a minute, a few-hundred-line dashboard is several.
+
+They do iterate, but they need precise direction. Reporting a symptom ("the chart is blank, the sort does nothing") is usually not enough - the model rewrites the whole file, misses the fix, and can introduce a fresh defect. Naming the actual cause ("each column div is 21px tall so the bar's percentage height collapses to 2px - give the column `height: 100%`"; "the `th` elements have no click listener attached") gets all of it fixed in one pass. Budget a full regeneration per follow-up: these models replace the artifact rather than patch it, so each round costs the same as the original generation.
+
+### MoE expert offload
+
+`compose.ollama-moe.yaml` (added as an extra `-f`, see [Enable it](#enable-it)) sets `LLAMA_ARG_N_CPU_MOE`, which keeps the expert weights in system RAM and leaves only the attention layers and KV cache on the GPU. For a 26B MoE that is roughly 16 GB of experts in RAM against 1.6 GB of weights in VRAM - which is why every MoE row in the tables above needs about the same VRAM as a 2B dense model.
+
+Ollama will run these models without the override - it spills to CPU on its own - but slower, and the gap is much wider on prefill than on generation (roughly 2.5x). That difference shows up directly as dead time before the first token on an agent turn carrying tool schemas and retrieved RAG chunks.
+
+The flag is inert for dense models, so it is safe to leave enabled for a mixed model set. Do not also pin `LLAMA_ARG_N_GPU_LAYERS`: that defeats llama.cpp's automatic layer placement and hard-OOMs any dense model too large for the card instead of letting it spill.
+
+**Context window.** Requests are sized from the model's own reported context length, capped by `OLLAMA_MAX_NUM_CTX` (default 32768). Budget this rather than maximising it - usable input is `OLLAMA_MAX_NUM_CTX - 8192 (reserved for the reply) - 1000 (safety buffer)`. A tool-enabled RAG turn spends roughly 2.2K tokens on the system prompt and 2.6K on tool schemas before any of your content, so 16384 leaves only about 2.4K for retrieved chunks and overflows; 32768 is the smallest value that comfortably fits tools plus RAG.
+
+| VRAM | Model class | Suggested | Usable input |
+|------|-------------|----------:|-------------:|
+| 4 GB | MoE 20-35B | 32768 | ~23.5K |
+| 4 GB | dense 2-4B | 16384 | ~7.2K |
+| 8 GB | MoE 20-35B | 65536 | ~56K |
+| 12 GB+ | MoE 20-35B | 131072 | ~122K |
+
+KV cache is what grows with this number, and MoE models are cheap here: at 32768 the default holds under 1 GB of KV. Do not assume KV scales linearly - `gemma4` uses sliding-window attention on most of its layers, so much of its cache is a fixed size. If you run out of VRAM, halve the KV cost with `OLLAMA_KV_CACHE_TYPE=q8_0` before lowering the context. Do not go below 8192: Ollama's own 4096 default is small enough to truncate the tool definitions out of a request and make a tool-capable model report it has no tools. Confirm what a loaded model actually got with `docker compose -f compose.selfhost.yaml exec ollama ollama ps` - the CONTEXT column shows the allocated window.
+
+**Context window.** Requests are sized from the model's own reported context length, capped at 32768 tokens by `OLLAMA_MAX_NUM_CTX`. The cap exists because KV cache is not free - a model advertising a 262K window would try to allocate far more memory than a typical box has. Lower it if you are tight on VRAM/RAM (`OLLAMA_MAX_NUM_CTX=8192`), raise it if you have headroom and want longer conversations. Confirm what a loaded model actually got with `docker compose -f compose.selfhost.yaml exec ollama ollama ps` - the CONTEXT column shows the allocated window.
 
 ### GPU acceleration (NVIDIA)
 
@@ -257,13 +372,7 @@ docker info | grep -i Runtimes                    # should list "nvidia"
 docker run --rm --gpus all ubuntu nvidia-smi -L   # should print your GPU
 ```
 
-Then bring the stack up with the GPU override added as a second `-f`:
-
-```bash
-docker compose -f compose.selfhost.yaml -f compose.ollama-gpu.yaml --env-file .env.selfhost --profile ollama up -d
-```
-
-The GPU needs enough free VRAM for your chosen model (see the table above); Ollama offloads as many layers as fit and runs the rest on CPU.
+With the toolkit in place, `-f compose.ollama-gpu.yaml` in the [Enable it](#enable-it) command is all that is needed. The GPU needs enough free VRAM for your chosen model (see the table above). Ollama offloads as many layers as fit and runs the rest on CPU; with MoE expert offload the experts stay in system RAM by design, so only the attention layers and KV cache compete for VRAM.
 
 ### Using an Ollama you already run
 
@@ -363,6 +472,8 @@ Resolve a digest for a tag you have pulled with `docker image inspect <image> --
 
 ## Offline RAG (file search / knowledge base)
 
+Self-host embeds and searches your uploaded files two ways: a **local Ollama embedder** (the default, fully offline, no key) or a **cloud embedding key** (OpenAI / Voyage). The local path below is the out-of-the-box default; see "Cloud embeddings" further down for the hosted-key path.
+
 Self-host can embed and search your uploaded files fully offline, using a local Ollama embedder - no OpenAI/Voyage key required. With a local Ollama server and no cloud embedding key, self-host defaults the embedding model to `qwen3-embedding:0.6b` automatically, so this works out of the box:
 
 1. **Pull an embedder.** The default `OLLAMA_PULL_MODELS` already includes `qwen3-embedding:0.6b`; if you customized it, add an embedder tag (see the embedder table in `.env.selfhost.example`) and re-run `up`.
@@ -379,6 +490,34 @@ Notes:
 
 - **Dimensions / re-indexing.** Each embedding model has its own vector dimensions (e.g. `qwen3-embedding:0.6b` = 1024, `nomic-embed-text` = 768, OpenAI = 1536). If you change the Default Embedding Model, previously embedded files stay on their old dimensions and are simply skipped in search until re-processed - re-embed them via **/api/files/reprocess** (or re-upload). Mixed dimensions never error; they just don't match.
 - **Small GPUs (4 GB).** The embedder is unloaded promptly after each call (`OLLAMA_EMBED_KEEP_ALIVE` defaults to `0`) so it doesn't pin VRAM alongside your chat model. Raise it (e.g. `5m`) if you embed constantly and have VRAM to spare.
+
+### Cloud embeddings (OpenAI / Voyage key)
+
+Prefer a hosted embedder over the local one? Set a real key in `.env.selfhost` and it takes priority over the local Ollama default:
+
+- `OPENAI_API_KEY` - enables OpenAI embeddings (`text-embedding-ada-002` by default).
+- `VOYAGE_API_KEY` - enables Voyage embeddings. Voyage can also be set per-user under **Settings -> API Keys**.
+
+Then pick the cloud model under **Settings -> AI -> Default Embedding Model** and re-upload (or reprocess via **/api/files/reprocess**) so files embed with it.
+
+- **A placeholder value is treated as no key.** If `OPENAI_API_KEY`/`VOYAGE_API_KEY` holds a dummy value (e.g. `sk-oai-dummy-...`, `your-api-key`, `changeme`), self-host ignores it and keeps the keyless local embedder default - a copy-pasted placeholder no longer silently routes embeddings to a cloud provider that then rejects them. A key that is present but genuinely invalid fails fast with an actionable message (see Troubleshooting) instead of an opaque 401.
+- **If you already selected a cloud embedder in Settings**, that choice is persisted and stays selected even after you clear the key. Set a valid key for that provider, or switch **Default Embedding Model** back to a local Ollama embedder for the fully-offline path.
+
+### Faster retrieval with OpenSearch (optional)
+
+By default, self-host Data Lake search ranks every chunk with a bounded brute-force scan - fine for smaller lakes, but it re-scans the whole scoped corpus on every query. An optional bundled OpenSearch container adds real kNN retrieval instead:
+
+1. Uncomment `OPENSEARCH_ENDPOINT` and `B4M_SELF_HOST_OPENSEARCH` in `.env.selfhost` (see the file for the full quick-start, including a Linux host-kernel setting OpenSearch needs).
+2. Bring the stack up with the `opensearch` profile:
+   ```bash
+   docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile opensearch up -d
+   ```
+
+Known limitations:
+
+- **No backfill.** Only chunks vectorized AFTER both variables are set get indexed into OpenSearch. Chunks from before that point keep working (still retrievable) but stay on the brute-force scan path until a future re-embed. This is a correctness-neutral gap: retrieval always re-derives which files you can currently access from live data, so a chunk that isn't in OpenSearch yet just gets scanned instead of returning nothing.
+- **A chunk lost to a transient indexing failure has no automatic repair.** If an OpenSearch write fails mid-vectorize (a transient cluster outage), that chunk's content is missing from OpenSearch results until a future re-embed re-processes the file - the same shape as the no-backfill gap above, and equally correctness-neutral (the scan path still sees it in Mongo). The compensating cleanup that makes this safe is itself best-effort: it only ever touches the chunks from the batch that failed (never a sibling batch for the same file, so it cannot destroy already-good data), and if the cleanup delete itself fails - most likely from the same outage that failed the write - it logs and moves on rather than retrying.
+- Disable it again by unsetting `B4M_SELF_HOST_OPENSEARCH` - search falls back to the scan path immediately, no data loss.
 
 ## Background worker
 
@@ -398,6 +537,26 @@ The worker reuses the chatCompletion image and connects to Mongo, ElasticMQ, Min
 
 > **Run a single `worker` replica.** The scheduler and safety-net scan are not leader-guarded, so scaling `worker` to multiple replicas would double-run them (duplicate scheduled tasks and duplicate chunk enqueues). Queue consumers are safe to scale, but the bundled compose runs one `worker`; keep it that way.
 
+Running the app on your host with `next dev` instead of the compose `app`? Keep this `worker` up and see [Frontend dev mode](#frontend-dev-mode-host-next-dev) for pointing the app at the compose services - and for why uploads still chunk when the MinIO webhook can't reach your host app.
+
+### Model discovery (off by default)
+
+Model discovery refreshes the model catalog - new model ids, context windows, prices - by querying the providers you have keys for plus two public model catalogs. **It is off unless you turn it on**, and while it is off the stack makes no discovery request at all, so an offline install stays offline.
+
+To enable it, set one flag in `.env.selfhost` and restart the stack:
+
+```bash
+# Makes the `worker` service the discovery driver. Comment on its own line:
+# env_file values are read verbatim, so a trailing comment becomes part of the value.
+B4M_DISCOVERY_DRIVER=true
+# Optional re-run interval in ms; default 21600000 (6h), clamped up to 900000 (15 min).
+# MODEL_DISCOVERY_INTERVAL_MS=21600000
+```
+
+The `worker` is the only service that runs discovery on a schedule, even though every service loads the same env file. It runs discovery once at boot (if no recent successful run exists) and then on the interval. The flag gates the admin "Run now" button too: without it the app answers 503 and starts nothing, so an install that never sets it stays offline however the run is asked for.
+
+Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Settings > API Keys) - there is nothing extra to configure. Everything else is tuned in the app under **Admin > Settings**, AI category, "Model Discovery" group: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). **Admin > Model Lifecycle** shows the last run and what it found.
+
 ## Troubleshooting
 
 - **`docker pull` fails with `unauthorized` / `manifest unknown`** - the prebuilt image isn't available to your account (or isn't published yet). Build it from source instead - see "Building from source" in step 3.
@@ -408,20 +567,24 @@ The worker reuses the chatCompletion image and connects to Mongo, ElasticMQ, Min
 - **A model returns "unauthorized"** - that provider's API key is missing or wrong in `.env.selfhost`. Only the providers you set keys for are available.
 - **The model picker is empty / "no models" warning** - no provider key is configured and no local Ollama is set up. Set at least one provider key in `.env.selfhost`, or enable local models (see "Local models with Ollama"), then restart with `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`.
 - **Local models don't appear under "Local / Self-Hosted"** - make sure you started the stack with `--profile ollama` and that `OLLAMA_BASE_URL` is uncommented in `.env.selfhost`. Confirm the model pulled: `docker compose -f compose.selfhost.yaml exec ollama ollama list`. The picker caches models for ~60s after a pull.
-- **Local model replies are slow** - with no GPU, inference runs on CPU; start with a small model (`qwen2.5-coder:1.5b` or `:3b`). For NVIDIA GPU acceleration, add `-f compose.ollama-gpu.yaml` (see that section).
+- **Local model replies are slow** - with no GPU, inference runs on CPU; start with a small model (`qwen3.5:0.8b` or `:2b-q4_K_M`). For NVIDIA GPU acceleration, add `-f compose.ollama-gpu.yaml` (see that section). Running an MoE model without `-f compose.ollama-moe.yaml` also costs throughput, most of it on prompt processing.
+- **An MoE model fails to load with `cudaMalloc failed: out of memory`** - the expert offload did not apply to that architecture, so llama.cpp tried to put the whole model on the GPU. Confirm the override is in the `up` command, then check placement with `docker compose -f compose.selfhost.yaml exec ollama ollama ps`: a working offload reports `100% GPU` with a `SIZE` of a few GB, not the full model size. Some tags never offload (`qwen3.5:27b`); use one of the models listed in "Choosing a model".
+- **A tool-enabled or RAG turn fails with "Your request is too large"** - `OLLAMA_MAX_NUM_CTX` is too low. The system prompt and tool schemas alone cost roughly 5K tokens, and usable input is the cap minus about 9K. Raise it to 32768 (see "Context window") and recreate the `app` and `chatcompletion` containers.
 - **Local image checkpoint doesn't show in the picker** - make sure you started the stack with `--profile imagegen` and that `IMAGE_GEN_BASE_URL` is uncommented in `.env.selfhost`. The checkpoint download is several GB; watch it with `docker compose -f compose.selfhost.yaml logs imagegen-pull` and confirm the file landed with `docker compose -f compose.selfhost.yaml exec imagegen ls /mnt/models/Stable-diffusion`. The puller triggers an SD.Next rescan once the download finishes, and the picker caches models for ~60s. If it still isn't listed, force a rescan from the host: `curl -X POST http://127.0.0.1:7860/sdapi/v1/refresh-checkpoints`.
 - **Image generation is very slow** - with no GPU, Stable Diffusion runs on CPU (~1-3 min/image). Start with SD 1.5, and for NVIDIA GPU acceleration add `-f compose.imagegen-gpu.yaml` (see "Local image generation").
 - **`apt-get install nvidia-container-toolkit` says "Unable to locate package"** - NVIDIA's apt repo isn't set up. Add it first (see "GPU acceleration"), then re-run `sudo apt-get update`.
 - **GPU override fails with "could not select device driver \"nvidia\" with capabilities: [[gpu]]"** - the NVIDIA Container Toolkit isn't installed or wired into Docker. Install it and run `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker` (see "GPU acceleration"). Without a working GPU runtime, drop the `-f compose.ollama-gpu.yaml` and run CPU-only.
+- **`opensearch` container exits at boot with a "max virtual memory areas" error** - the OpenSearch JVM needs a higher `vm.max_map_count` than most Linux kernels default to. Run once on the HOST (not in the container): `sudo sysctl -w vm.max_map_count=262144`, then restart the `opensearch` service. Not needed on Docker Desktop (macOS/Windows) - its VM already sets this.
 - **Chat replies only appear after a refresh** - realtime isn't connecting. Check the `ws` gateway is up (`docker compose -f compose.selfhost.yaml ps ws`) and healthy, that `INTERNAL_WS_SECRET` is set and identical for the `app` and `ws` services, and that `WEBSOCKET_URL`/`WEBSOCKET_MANAGEMENT_ENDPOINT` point at the gateway. In the browser console you should see `ws connected`; a reconnect loop usually means the gateway can't reach the app (`docker compose -f compose.selfhost.yaml logs ws`).
 - **Changed `SECRET_ENCRYPTION_KEY` and now secrets fail to decrypt** - restore the original key; it cannot be rotated in place.
 - **Notebook auto-naming / summaries / mementos never happen** - background enrichment runs on the `worker` service via the event queue. Check the worker is up (`docker compose -f compose.selfhost.yaml ps worker`) and that `SELF_HOST_EVENT_QUEUE` is set in `.env.selfhost` (the app warns and drops enrichment events when it's unset). Watch `docker compose -f compose.selfhost.yaml logs -f worker`.
 - **Research/deep-research tasks never complete** - the `worker` consumes the research queue. Confirm it's running and check its logs; a task that keeps failing is left for a few retries, then dropped with an error log (ElasticMQ has no dead-letter queue).
-- **Uploaded files never chunk or become searchable** - ingestion is triggered by a MinIO -> app webhook. Verify `INTERNAL_S3_WEBHOOK_SECRET` is set (identical value reaches both the `app` and `minio` services via `.env.selfhost`), that `createbuckets` ran the `mc event add` on the fab-file bucket (`docker compose -f compose.selfhost.yaml logs createbuckets`), and that a local embedder is configured (see "Offline RAG"). Even if the webhook is missed, the worker's 60s safety-net scan re-enqueues un-chunked files - so also check the `worker` logs.
+- **Files chunk but never get vectors / vectorize fails with a `401`** - your `OPENAI_API_KEY` (or `VOYAGE_API_KEY`) is set to an invalid or placeholder value, so embedding is routed to that cloud provider and rejected. Set a real key, or clear it and configure a local Ollama embedder (see "Offline RAG") for the airgapped path. A dummy/placeholder value is ignored automatically; a present-but-invalid key now surfaces an actionable error on the file instead of a raw 401. If you previously picked a cloud embedder in **Settings -> AI**, switch it back to a local one after clearing the key.
+- **Uploaded files never chunk or become searchable** - ingestion is triggered by a MinIO -> app webhook. Verify `INTERNAL_S3_WEBHOOK_SECRET` is set (identical value reaches both the `app` and `minio` services via `.env.selfhost`), that `createbuckets` ran the `mc event add` on the fab-file bucket (`docker compose -f compose.selfhost.yaml logs createbuckets`), and that a local embedder is configured (see "Offline RAG"). Even if the webhook is missed, the worker's 60s safety-net scan re-enqueues un-chunked files - so also check the `worker` logs. Running the app on your host with `next dev`? The webhook (aimed at the compose `app`) can't reach it at all - that is expected, and the safety-net scan still chunks within a few minutes. See [Frontend dev mode](#frontend-dev-mode-host-next-dev).
 
 ## Security notes
 
-The stack is configured for **local, single-host use**: the backing services (Mongo, MinIO, ElasticMQ, Mailpit) run without authentication and bind to `127.0.0.1` only. Before running on a public-facing server you must enable Mongo auth, change the MinIO credentials, use a real SMTP provider, and put the app behind a reverse proxy with TLS. See the header of `compose.selfhost.yaml`.
+The stack is configured for **local, single-host use**: the backing services (Mongo, MinIO, ElasticMQ, Mailpit, and OpenSearch if the optional `opensearch` profile is enabled) run without authentication and bind to `127.0.0.1` only. Before running on a public-facing server you must enable Mongo auth, change the MinIO credentials, use a real SMTP provider, and put the app behind a reverse proxy with TLS. See the header of `compose.selfhost.yaml`.
 
 When you put the app behind a reverse proxy, forward the original `Host` header and set `X-Forwarded-Proto` (e.g. `https` once TLS is terminated at the proxy). The published-artifact viewer derives each page's Content-Security-Policy origin and scheme from those headers, so getting them right is what lets published artifact bundles load their assets over your real origin.
 
@@ -443,10 +606,11 @@ Whichever path you choose, do the checklist first.
 ### Before you expose anything
 
 - [ ] **Change the MinIO credentials off the dev default.** `.env.selfhost.example` ships `minioadmin` / `minioadmin`. The app's S3 client authenticates to MinIO with the `AWS_*` keys, so set `MINIO_ROOT_USER` = `AWS_ACCESS_KEY_ID` and `MINIO_ROOT_PASSWORD` = `AWS_SECRET_ACCESS_KEY` to the same fresh values (generate the secret with `openssl rand -hex 24`).
-- [ ] **Keep the backing services on loopback, and know the Docker/ufw footgun.** Mongo (27017), MinIO (9000/9001), ElasticMQ (9324/9325), and Mailpit (8025) have **no authentication** and are already bound to `127.0.0.1` in `compose.selfhost.yaml` - never publish them. Be aware that on Linux, **Docker's published ports bypass `ufw`/`firewalld`**: Docker DNATs published ports through its own iptables chain before the filter table, so a "deny incoming" ufw policy does **not** block `3000`/`3001`/`8788`. Fixes: bind to `127.0.0.1` in compose (Path B's override does this for you), add `DOCKER-USER` iptables rules, use the `ufw-docker` helper, or - cleanest on a cloud VM - a provider security group that allows only inbound `80`/`443`. **Verify from a SECOND machine** (localhost always sees them), for example:
+- [ ] **Keep the backing services on loopback, and know the Docker/ufw footgun.** Mongo (27017), MinIO (9000/9001), ElasticMQ (9324/9325), Mailpit (8025), and OpenSearch (9200, if the optional `opensearch` profile is enabled) have **no authentication** and are already bound to `127.0.0.1` in `compose.selfhost.yaml` - never publish them. Be aware that on Linux, **Docker's published ports bypass `ufw`/`firewalld`**: Docker DNATs published ports through its own iptables chain before the filter table, so a "deny incoming" ufw policy does **not** block `3000`/`3001`/`8788`. Fixes: bind to `127.0.0.1` in compose (Path B's override does this for you), add `DOCKER-USER` iptables rules, use the `ufw-docker` helper, or - cleanest on a cloud VM - a provider security group that allows only inbound `80`/`443`. **Verify from a SECOND machine** (localhost always sees them), for example:
 
   ```bash
   # Run this from a DIFFERENT computer, against your host's public IP.
+  # Add 9200 if you enabled the opensearch profile.
   nmap -Pn -p 22,80,443,3000,3001,8788,27017,9000,9324,8025 <your-host-public-ip>
   # Path B expectation: only 22 (if you use SSH), 80, and 443 open; everything
   # else closed/filtered. Tailscale-only expectation: none of these open publicly.
@@ -454,7 +618,7 @@ Whichever path you choose, do the checklist first.
 
 - [ ] **Use a real SMTP provider.** Mailpit is local-only, so remote friends cannot read their sign-in codes from it. Point `MAIL_*` at a real provider (port 587 STARTTLS or 465 implicit TLS).
 - [ ] **Keep sign-up invite-only and cap per-user usage.** Registration is invite-only by default (`allowOpenRegistration` is OFF; the first account created becomes admin). Leave it off and invite friends explicitly from the admin settings. Self-host also defaults credit enforcement OFF - as admin, turn on **Enforce Credits** and give each friend a finite credit budget so a runaway (or a shared key) cannot burn your LLM spend. Per-key API rate limits default to 60/min and 1000/day.
-- [ ] **Back up `SECRET_ENCRYPTION_KEY`.** It is write-once (it encrypts other secrets in the database) and cannot be rotated in place - losing it makes that data unrecoverable.
+- [ ] **Back up `SECRET_ENCRYPTION_KEY`.** It encrypts other secrets in the database and losing it makes that data unrecoverable. Rotation is not automated for self-host: if you ever change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and keep it configured permanently so existing ciphertext still decrypts.
 
 ### Path A: Tailscale tailnet (recommended for friends)
 
@@ -575,7 +739,7 @@ It **does not**: enable Mongo authentication, change your MinIO credentials, con
 Self-host runs the open-core engine - notebooks, multi-LLM chat, agents, the Quest Master, the knowledge engine, and artifacts (including publishing and sharing artifact bundles - uploads proxy through the app, so MinIO stays internal). It includes **realtime streaming**: the `ws` gateway + `subscriber-fanout` services stream chat replies token-by-token and push live document updates (notebooks, sync) without a page refresh - the same WebSocket experience as the hosted app, with no AWS API Gateway. It also includes **background enrichment and offline RAG**: the `worker` service runs the queue consumers and scheduler, so notebook auto-naming, summaries, tagging, memento creation, research tasks, and automatic file chunking + embedding all work (embeddings can run fully offline via a local Ollama embedder - see "Offline RAG"). Known gaps today:
 
 - **Image moderation on upload** - the hosted upload path runs AWS Rekognition; self-host skips it (no AWS), so uploaded images are not content-scanned.
-- **Hosted-service features** - billing, entitlements, and premium overlays are not part of the open core; see the [open/closed boundary](./CONTRIBUTING.md#the-openclosed-boundary).
+- **Hosted-service features** - billing, entitlements, and premium overlays are not part of the open core; see the [open/closed boundary](./CONTRIBUTING.md#the-openclosed-boundary). Overlay mount points are empty in this repo and `pnpm install` behaves accordingly; the mechanism is documented under [premium overlays and the tracked lockfile](./CONTRIBUTING.md#premium-overlays-and-the-tracked-lockfile).
 - **Python artifacts need internet** - the in-browser Python runtime (Pyodide) is fetched from a public CDN, so running a Python artifact needs internet unless you point `PYODIDE_BASE_URL` at a local mirror (see below).
 
 ### Python artifacts offline

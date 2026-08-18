@@ -61,6 +61,10 @@ if [ -f "$INDEX_FILE" ] && [ -f "$EMBEDDINGS_FILE" ]; then
     echo "     OPENAI_API_KEY=sk-... pnpm --filter @bike4mind/scripts help:vectorize"
     echo "   Then stage help-embeddings.json and commit again."
     echo ""
-    return 1
+    # exit, not return: the pre-commit hook invokes this as a subprocess, so `return` at
+    # top level is an error and the non-zero status would be lost.
+    exit 1
   fi
 fi
+
+exit 0

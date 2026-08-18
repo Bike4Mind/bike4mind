@@ -427,11 +427,18 @@ export function useToggleFavoriteSession(sessionId: string) {
   });
 }
 
+/**
+ * A session write. Partial because the server only reads the fields its schema
+ * declares; `propagateToProjects` is a write OPTION rather than session state, and
+ * controls whether new knowledgeIds also fan out to the containing projects.
+ */
+export type UpdateSessionInput = Partial<ISessionDocument> & { id: string; propagateToProjects?: boolean };
+
 export function useUpdateSession(callback?: { onSuccess?: (session: ISessionDocument) => void }) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (session: ISessionDocument) => {
+    mutationFn: async (session: UpdateSessionInput) => {
       const result = (await updateSessionToServer(session)) as ISessionDocument;
 
       updateAllQueryData(queryClient, 'sessions', 'write', result, {

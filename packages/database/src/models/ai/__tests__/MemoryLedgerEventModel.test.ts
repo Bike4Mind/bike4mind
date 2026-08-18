@@ -63,6 +63,26 @@ describe('MemoryLedgerRepository', () => {
     expect(await memoryLedgerRepository.head('user', 'u2')).toEqual({ hash: 'b', seq: 0 });
   });
 
+  it('accepts a lake-kind principal chain (schema enum admits the new principal)', async () => {
+    // The whole point of the foundation: a data lake is a first-class memory principal. Before the
+    // enum change this insert threw on validation; it must now persist and read back like any chain.
+    const inserted = await memoryLedgerRepository.tryInsert(
+      sealedEvent({ principalKind: 'lake', principalId: 'lake:corpus', ownerUserId: 'owner1', seq: 0, hash: 'L0' })
+    );
+    expect(inserted).not.toBeNull();
+    expect(await memoryLedgerRepository.head('lake', 'lake:corpus')).toEqual({ hash: 'L0', seq: 0 });
+    expect((await memoryLedgerRepository.listChain('lake', 'lake:corpus', 'owner1')).map(e => e.hash)).toEqual(['L0']);
+  });
+
+  it('rejects an unknown principalKind (enum enforcement intact)', async () => {
+    // tryInsert only swallows the seq-collision 11000; a validation error must still propagate, so a
+    // bogus kind cannot slip into the chain. Guards the enum against a silent widening.
+    await expect(
+      // @ts-expect-error - deliberately invalid value to prove the enum still enforces
+      memoryLedgerRepository.tryInsert(sealedEvent({ principalKind: 'bogus', seq: 0, hash: 'x' }))
+    ).rejects.toThrow(/enum|validation/i);
+  });
+
   it('markShredded clears the embedding ciphertext along with the fact', async () => {
     // The embedding is a semantic image of the fact (inversion can partially reconstruct the source
     // text), so a shred that cleared the fact but left the embedding behind would leave a

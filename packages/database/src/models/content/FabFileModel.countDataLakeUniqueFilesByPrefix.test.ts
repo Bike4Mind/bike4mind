@@ -13,6 +13,7 @@ const makeFile = (overrides: {
   sessionId?: string | null;
   curatedNotebook?: boolean;
   deleted?: boolean;
+  archived?: boolean;
   fileName?: string;
 }) => {
   const tagNames = [...(overrides.tags ?? [])];
@@ -24,6 +25,7 @@ const makeFile = (overrides: {
     tags: tagNames.map(name => ({ name })),
     ...(overrides.sessionId !== undefined ? { sessionId: overrides.sessionId } : {}),
     ...(overrides.deleted ? { deletedAt: new Date() } : {}),
+    ...(overrides.archived ? { archivedAt: new Date() } : {}),
   });
 };
 
@@ -73,11 +75,53 @@ describe('FabFileRepository.countDataLakeUniqueFilesByPrefix', () => {
     expect(total).toBe(1);
   });
 
+  // Archiving a lake stamps archivedAt on every file it holds, and the article list this number
+  // labels filters those out. The route only ever passes non-archived lakes' prefixes, so this is
+  // the aggregate holding the line on its own rather than trusting its caller.
+  it('excludes archived files', async () => {
+    await makeFile({ tags: ['acme:industry'], fileName: 'live' });
+    await makeFile({ tags: ['acme:industry'], fileName: 'archived', archived: true });
+
+    const { total, byPrefix } = await fabFileRepository.countDataLakeUniqueFilesByPrefix(USER, ['acme:']);
+
+    expect(total).toBe(1);
+    expect(byPrefix).toEqual({ 'acme:': 1 });
+  });
+
   it('returns zero for an empty prefix list (guards the match-everything regex)', async () => {
     await makeFile({ tags: ['acme:industry'] });
 
     const result = await fabFileRepository.countDataLakeUniqueFilesByPrefix(USER, []);
 
     expect(result).toEqual({ total: 0, byPrefix: {} });
+  });
+
+  it('ignores a blank entry inside a non-empty prefix list', async () => {
+    // A blank contributes an empty alternation, so `^(acme:|)` would match every tag and sweep
+    // in the unrelated file below.
+    await makeFile({ tags: ['acme:industry'] });
+    await makeFile({ tags: ['personal-note'] });
+
+    const result = await fabFileRepository.countDataLakeUniqueFilesByPrefix(USER, ['acme:', '']);
+
+    expect(result).toEqual({ total: 1, byPrefix: { 'acme:': 1 } });
+  });
+
+  it('never counts a membership meta-tag as content, even for a datalake:-prefixed lake', async () => {
+    // Mirrors countDataLakeTagsByPrefix. Only legacy rows can have such a prefix (the create
+    // schema rejects it now), but the two counters must not disagree about what is content.
+    await makeFile({ tags: ['datalake:acme'] });
+
+    const result = await fabFileRepository.countDataLakeUniqueFilesByPrefix(USER, ['datalake:']);
+
+    expect(result).toEqual({ total: 0, byPrefix: { 'datalake:': 0 } });
+  });
+
+  it('counts a padded prefix under its trimmed key', async () => {
+    await makeFile({ tags: ['acme:industry'] });
+
+    const result = await fabFileRepository.countDataLakeUniqueFilesByPrefix(USER, [' acme:']);
+
+    expect(result).toEqual({ total: 1, byPrefix: { 'acme:': 1 } });
   });
 });

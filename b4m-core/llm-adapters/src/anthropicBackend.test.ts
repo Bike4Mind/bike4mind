@@ -15,11 +15,22 @@ describe('AnthropicBackend.getModelInfo', () => {
     expect(fable?.disabledReason).toBeUndefined();
   });
 
-  it('leaves the shipping flagship (claude-opus-4-8) selectable', async () => {
+  it('leaves the previous flagship (claude-opus-4-8) selectable', async () => {
     const models = await new AnthropicBackend('test-key').getModelInfo();
     const opus = models.find(m => m.id === ChatModels.CLAUDE_4_8_OPUS);
 
     expect(opus, 'claude-opus-4-8 should be present').toBeDefined();
     expect(opus?.disabled).toBeFalsy();
+  });
+
+  it('lists claude-opus-5 with the adaptive-thinking surface and Opus-tier pricing', async () => {
+    const models = await new AnthropicBackend('test-key').getModelInfo();
+    const opus5 = models.find(m => m.id === ChatModels.CLAUDE_5_OPUS);
+
+    expect(opus5, 'claude-opus-5 should be present').toBeDefined();
+    expect(opus5?.disabled).toBeFalsy();
+    expect(opus5?.thinkingStyle).toBe('adaptive');
+    // Same list price as Opus 4.8: $5/$25 per 1M tokens.
+    expect(opus5?.pricing[1_000_000]).toEqual({ input: 5 / 1_000_000, output: 25 / 1_000_000 });
   });
 });

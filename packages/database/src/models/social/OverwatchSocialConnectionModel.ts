@@ -250,6 +250,52 @@ class OverwatchSocialConnectionRepository extends BaseRepository<IOverwatchSocia
     }
     return results.map(doc => doc.toJSON());
   }
+
+  /**
+   * Every connection for one product, across all platforms. Credentials are NOT
+   * selected, so results are safe to log or return from an API.
+   *
+   * Distinct from listByProductsAndPlatform, which slices the other way (many
+   * products, one platform). This is the slice product deletion needs: enumerate
+   * what a product still holds so each can be revoked at its platform before the
+   * records go away.
+   */
+  async listByProduct(productId: string): Promise<(IOverwatchSocialConnectionDocument & IMongoDocument)[]> {
+    if (!productId) return [];
+    const results = await this.model.find({ productId });
+    return results.map(doc => doc.toJSON());
+  }
+
+  /**
+   * Hard-deletes every connection for a product. Returns the number removed.
+   *
+   * Used by Overwatch's product-deletion cascade. Deleting the product without
+   * this leaves connection documents orphaned — and those hold encrypted OAuth
+   * tokens that nothing will ever refresh or revoke again, so the credential stays
+   * live at the provider with no local record that it exists.
+   *
+   * This only removes OUR copy. Revoking the credential at the platform is the
+   * caller's job and must happen FIRST (see the Overwatch cascade): once these rows
+   * are gone there is nothing left to revoke with.
+   *
+   * A zero-match delete is normal — most products never connect an account — so it
+   * logs nothing rather than warning.
+   */
+  async deleteByProduct(productId: string): Promise<number> {
+    if (!productId) return 0;
+    const result = await this.model.deleteMany({ productId });
+    const deletedCount = result.deletedCount ?? 0;
+    if (deletedCount > 0) {
+      console.log(
+        JSON.stringify({
+          metric: 'overwatch.connection.deleted_by_product',
+          productId,
+          deletedCount,
+        })
+      );
+    }
+    return deletedCount;
+  }
 }
 
 export const overwatchSocialConnectionRepository = new OverwatchSocialConnectionRepository();

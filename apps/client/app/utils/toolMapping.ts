@@ -2,6 +2,8 @@ import {
   Schedule as DateTimeIcon,
   Casino as DiceIcon,
   Image as ImageIcon,
+  MusicNote as MusicIcon,
+  GraphicEq as AudioIcon,
   Calculate as MathIcon,
   Schema as MermaidIcon,
   Search as SearchIcon,
@@ -25,6 +27,7 @@ import {
 } from '@mui/icons-material';
 import { B4MLLMTools, OrchestrationDefaultsSchema } from '@bike4mind/common';
 import type { SlackLlmTools } from '@bike4mind/services';
+import type { ToolAvailability } from '@pages/api/settings/serverConfig';
 import React from 'react';
 
 export interface ToolInfo {
@@ -39,7 +42,9 @@ export type PublicTools = Exclude<
   B4MLLMTools,
   // `skill` is auto-enabled server-side when the user has skills defined - invocation is
   // via `/skill-name` slash mentions, not a tool toggle, so it stays out of the UI picker.
-  'edit_image' | 'blog_publish' | 'blog_edit' | 'blog_draft' | 'skill' | SlackLlmTools
+  // `count_knowledge_base` is paired server-side with `search_knowledge_base` (a corpus you can
+  // search but not count is the bug it exists to fix), so it needs no toggle of its own.
+  'edit_image' | 'blog_publish' | 'blog_edit' | 'blog_draft' | 'skill' | 'count_knowledge_base' | SlackLlmTools
 >;
 
 export const TOOL_MAPPING: Record<PublicTools, ToolInfo> = {
@@ -98,6 +103,20 @@ export const TOOL_MAPPING: Record<PublicTools, ToolInfo> = {
     description: 'AI-generated images from text descriptions',
     icon: ImageIcon,
     color: '#f57c00',
+  },
+  music_generation: {
+    name: 'music_generation',
+    displayName: 'Music Generation',
+    description: 'AI-generated background music from text descriptions',
+    icon: MusicIcon,
+    color: '#ab47bc',
+  },
+  audio_generation: {
+    name: 'audio_generation',
+    displayName: 'Audio Generation',
+    description: 'AI-generated speech (TTS) or sound effects from text',
+    icon: AudioIcon,
+    color: '#26a69a',
   },
   mermaid_chart: {
     name: 'mermaid_chart',
@@ -299,6 +318,35 @@ export const AGENT_MODE_TOOL_IDS: ReadonlySet<string> = (() => {
 /** Whether a Smart Tools toggle is honored when the composer is in Agent mode. */
 export const isToolAvailableInAgentMode = (toolName: B4MLLMTools): boolean => AGENT_MODE_TOOL_IDS.has(toolName);
 
+/**
+ * Whether the server reported this tool's required API key/config as missing
+ * (`serverConfig.toolAvailability`, computed by `computeToolAvailability` in
+ * `apps/client/pages/api/settings/serverConfig.ts`).
+ *
+ * Tests `=== false` on purpose: availability is `undefined` until /serverConfig
+ * resolves, and treating that as missing would blank the picker on first paint.
+ */
+export const isToolKeyMissing = (toolName: B4MLLMTools, availability: ToolAvailability | undefined): boolean =>
+  availability?.[toolName] === false;
+
+/**
+ * The user's enabled tools minus the ones whose key is missing, for DISPLAY and
+ * interaction gating only.
+ *
+ * A tool enabled while its key was present keeps its stored preference after the key
+ * goes away, so it restores when a valid key returns. Every surface that renders that
+ * preference (toggle state, "N pinned" tallies, composer indicators) has to combine it
+ * with availability, or a greyed-out row reads as enabled.
+ *
+ * NOT for building a send payload: the stored preference is still forwarded to the
+ * model on purpose (see `resolveTools` in useLLMSettingsAssembly), and dropping a tool
+ * here would silently diverge the request from what the user chose.
+ */
+export const filterToolsForDisplay = (
+  enabledTools: readonly B4MLLMTools[],
+  availability: ToolAvailability | undefined
+): B4MLLMTools[] => enabledTools.filter(tool => !isToolKeyMissing(tool, availability));
+
 export const getToolInfo = (toolName: PublicTools): ToolInfo | undefined => {
   return TOOL_MAPPING[toolName];
 };
@@ -328,6 +376,8 @@ export const TOOL_CATEGORIES: Record<string, string> = {
   web_fetch: 'Search',
   deep_research: 'Search',
   image_generation: 'Generation',
+  music_generation: 'Generation',
+  audio_generation: 'Generation',
   prompt_enhancement: 'Generation',
   edit_image: 'Generation',
   mermaid_chart: 'Visualization',

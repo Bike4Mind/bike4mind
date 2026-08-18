@@ -57,6 +57,7 @@ const handler = baseApi({ auth: true }).get(
         event: e.event,
         actorIp: e.actorIp,
         userAgent: e.userAgent,
+        actorUserId: e.actorUserId,
         createdAt: e.createdAt ? new Date(e.createdAt).toISOString() : '',
       })),
     };

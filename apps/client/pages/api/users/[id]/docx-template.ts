@@ -60,6 +60,11 @@ const handler = baseApi()
           });
         }
 
+        // preferences defaults to null (UserModel.ts), and Mongo's dot-path $set can't create
+        // a field inside a null parent ("Cannot create field 'x' in element {preferences: null}").
+        // Coerce it to an object first for any user who has never set a preference before.
+        await User.updateOne({ _id: userId, preferences: null }, { $set: { preferences: {} } });
+
         // Update user preferences with template file ID
         const updatedUser = await User.findByIdAndUpdate(
           userId,

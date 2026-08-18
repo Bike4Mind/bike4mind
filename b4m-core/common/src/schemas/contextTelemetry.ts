@@ -47,7 +47,7 @@ export const OperationSchema = z.object({
 export const ModelTelemetrySchema = z.object({
   /** gen_ai.request.model */
   modelId: z.string(),
-  provider: z.enum(['anthropic', 'openai', 'bedrock', 'google', 'xai', 'ollama']),
+  provider: z.enum(['anthropic', 'openai', 'bedrock', 'google', 'xai', 'ollama', 'moonshot']),
   fallbackUsed: z.boolean(),
   fallbackReason: z.string().optional(),
   originalModelId: z.string().optional(),
@@ -218,10 +218,13 @@ export const PerformanceTelemetrySchema = z.object({
 // Anomaly severity (aligns with PagerDuty/Datadog)
 export const AnomalySeveritySchema = z.enum(['critical', 'high', 'medium', 'low']);
 
-// Primary anomaly type
+// Primary anomaly type. One member per anomaly category in
+// TelemetryBuilder.computeAnomalies -- must stay in sync with it, since that is
+// what guarantees anomalyScore > 0 always maps to a member other than 'none'.
 export const PrimaryAnomalySchema = z.enum([
   'none',
   'context_overflow',
+  'high_utilization',
   'high_truncation',
   'tool_failure',
   'subagent_timeout',

@@ -19,6 +19,13 @@ export interface IPartnerSignupRule {
   entitlements: string[];
   /** One-time signup credits granted once at email verification. */
   signupCredits: number;
+  /**
+   * Optional organization a verified signup on this domain is auto-added to (as a
+   * read-permission member - the same shape `organizationService.addMember` writes).
+   * `null`/absent = no org auto-join. Members are added, never removed: disabling or
+   * deleting the rule stops future auto-adds but never evicts existing members.
+   */
+  organizationId?: string | null;
   /** Soft on/off without deleting the row. Disabled rules confer nothing. */
   enabled: boolean;
   /** Admin-facing display name (e.g. the partner's name). */

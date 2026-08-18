@@ -1,5 +1,6 @@
 import { deviceAuthorizationRepository, userRepository } from '@bike4mind/database';
-import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { issueSessionForRequest } from '@server/auth/issueSession';
+import { ACCESS_TOKEN_TTL_SECONDS } from '@server/auth/tokenGenerator';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { BadRequestError } from '@bike4mind/utils';
@@ -78,11 +79,11 @@ const handler = baseApi({ auth: false })
           throw new BadRequestError('Authorization approved but user no longer exists');
         }
 
-        // same token service used for regular login
-        const { accessToken, refreshToken } = authTokenGenerator.createAccessToken(
-          authorizedUser.id,
-          authorizedUser.tokenVersion ?? 0
-        );
+        // same session service used for regular login
+        const { accessToken, refreshToken } = await issueSessionForRequest(req, authorizedUser.id, {
+          createdVia: 'device',
+          tokenVersion: authorizedUser.tokenVersion ?? 0,
+        });
 
         // mark consumed to prevent token reuse
         await deviceAuthorizationRepository.update({
@@ -94,7 +95,7 @@ const handler = baseApi({ auth: false })
           access_token: accessToken,
           refresh_token: refreshToken,
           token_type: 'Bearer',
-          expires_in: 604800, // 7 days
+          expires_in: ACCESS_TOKEN_TTL_SECONDS,
         });
       }
 

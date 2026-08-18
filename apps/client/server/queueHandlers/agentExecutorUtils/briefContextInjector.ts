@@ -11,7 +11,15 @@ const BRIEF_SETTING_TOOLS = ['optihashi_formulate', 'optihashi_decompose', 'opti
 
 /** Pull the loaded problem out of a `populate*` side-effect payload. Null if there isn't one. */
 export function extractLoadedProblem(type: unknown, payload: unknown): unknown {
-  if (type === 'populateProblem') return payload ?? null; // scheduling problem IS the payload
+  if (type === 'populateProblem') {
+    // The payload is either the bare problem (formulate/edit) or a wrapper that nests it
+    // under `problem` alongside solve outputs (a solve tool). Unwrap the wrapper so callers
+    // always get the problem itself, never the envelope. Bare scheduling problems carry
+    // `jobs`; the wrapper does not (it has `problem`).
+    const p = payload as Record<string, unknown> | null;
+    if (p && typeof p === 'object' && !('jobs' in p) && 'problem' in p) return p.problem ?? null;
+    return payload ?? null;
+  }
   if (type === 'populateFamilyProblem') return (payload as { problem?: unknown } | null)?.problem ?? null;
   if (type === 'populateDecomposition') {
     // Decompose loads step 1 as the active brief; its instance is instances[0] (null if plan-only).

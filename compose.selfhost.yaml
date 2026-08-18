@@ -12,13 +12,14 @@
 # untouched; this file is the self-host stack.
 #
 # SECURITY — this stack is for LOCAL / single-host use. The backing services
-# (Mongo, MinIO, ElasticMQ, Mailpit) run without authentication and are bound
-# to 127.0.0.1 so they are NOT reachable off the host. Before running on a
-# public-facing server you MUST: enable Mongo auth (--auth + a user), set
-# strong MINIO_ROOT_USER/MINIO_ROOT_PASSWORD (do not ship the dev defaults),
-# point MAIL_* at a real SMTP provider, put the app behind a reverse proxy
-# with TLS, and keep the backing ports unpublished. Do not expose
-# 27017/9000/9324/8025 to the internet.
+# (Mongo, MinIO, ElasticMQ, Mailpit, and OpenSearch if the optional opensearch
+# profile is enabled) run without authentication and are bound to 127.0.0.1 so
+# they are NOT reachable off the host. Before running on a public-facing
+# server you MUST: enable Mongo auth (--auth + a user), set strong
+# MINIO_ROOT_USER/MINIO_ROOT_PASSWORD (do not ship the dev defaults), point
+# MAIL_* at a real SMTP provider, put the app behind a reverse proxy with
+# TLS, and keep the backing ports unpublished. Do not expose
+# 27017/9000/9324/8025/9200 to the internet.
 #
 # Realtime: the `ws` gateway + `subscriber-fanout` services provide live
 # streaming updates (chat, notebooks, sync) without AWS API Gateway. See the
@@ -231,6 +232,9 @@ services:
   # runs the task scheduler, calling the SAME handlers the hosted Lambdas use. Reuses the
   # chatcompletion image; only the command differs (runs server/worker/main.ts). No ports:
   # it dispatches nothing inbound. Logs: `docker compose -f compose.selfhost.yaml logs -f worker`.
+  # This is also the stack's only model-discovery driver: every service loads the same
+  # env file, and only this one acts on B4M_DISCOVERY_DRIVER. Discovery stays off (and
+  # makes no outbound request) until that flag is set - see SELF_HOST.md.
   worker:
     build:
       context: .
@@ -250,6 +254,10 @@ services:
     # matching the app/chatcompletion containers - background embedding needs it.
     extra_hosts:
       - 'host.docker.internal:host-gateway'
+    # server/worker/main.ts drains for up to 20s on SIGTERM (DRAIN_GRACE_MS). Docker's
+    # 10s default would SIGKILL through that, abandoning an in-flight scheduled run and
+    # stranding its Mongo lease until the TTL expires; keep this above the code budget.
+    stop_grace_period: 30s
     restart: unless-stopped
 
   # Realtime WebSocket gateway — the self-host replacement for AWS API Gateway
@@ -350,7 +358,7 @@ services:
         condition: service_healthy
     environment:
       OLLAMA_HOST: http://ollama:11434
-      OLLAMA_PULL_MODELS: ${OLLAMA_PULL_MODELS:-qwen2.5-coder:7b}
+      OLLAMA_PULL_MODELS: ${OLLAMA_PULL_MODELS:-qwen3.5:2b-q4_K_M}
     entrypoint:
       - /bin/sh
       - -c
@@ -504,9 +512,41 @@ services:
         echo "Done. Pulled checkpoints are now available in the app model picker."
     restart: 'no'
 
+  # Optional OpenSearch container for kNN-backed Data Lake retrieval (otherwise self-host
+  # falls back to the bounded brute-force scan). Opt in with the `opensearch` profile:
+  #   docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile opensearch up -d
+  # Then set OPENSEARCH_ENDPOINT and B4M_SELF_HOST_OPENSEARCH=true in .env.selfhost (see the file).
+  # No `depends_on` from `app`: that would force this optional container to always start,
+  # defeating the profile gate. The app fails open to the scan path if it's absent or unreachable.
+  opensearch:
+    image: opensearchproject/opensearch:2.19.1
+    profiles: ['opensearch']
+    environment:
+      discovery.type: single-node
+      # Security plugin needs real TLS/certs to run; this container is loopback-only and never
+      # exposed, so it's disabled rather than configured, matching the no-auth self-host client.
+      DISABLE_SECURITY_PLUGIN: 'true'
+      DISABLE_INSTALL_DEMO_CONFIG: 'true'
+      OPENSEARCH_JAVA_OPTS: '-Xms512m -Xmx512m'
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    # Loopback-only, like the other backing services. Override OPENSEARCH_HOST_PORT if 9200 is taken.
+    ports:
+      - '127.0.0.1:${OPENSEARCH_HOST_PORT:-9200}:9200'
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fsS http://localhost:9200/_cluster/health || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
 volumes:
   mongo-data:
   minio-data:
   ollama-data:
   imagegen-models:
   imagegen-data:
+  opensearch-data:

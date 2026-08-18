@@ -22,18 +22,15 @@ import { Session as SessionModel } from '@bike4mind/database/auth';
 import { accessibleBy } from '@casl/mongoose';
 import { Subscription } from '@server/models/Subscription';
 import { questMasterPlanSubscriptionScope } from '@server/websocket/subscriptionScopes';
-import { NotFoundError } from '@server/utils/errors';
 import { sendToConnection, withWebSocketContext } from '@server/websocket/utils';
+import { verifyWsAccessToken } from '@server/websocket/verifyWsAccessToken';
 import crypto from 'crypto';
-import jwt from 'jsonwebtoken';
 import { pickBy } from 'lodash';
 import pLimit from 'p-limit';
 import ability from '../auth/ability';
-import { secretRotationRepository } from '@bike4mind/database/infra';
-import { dayjs } from '@bike4mind/common';
-import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { Resource } from 'sst';
+import { resolveFieldLimits } from './dataSubscribeFieldLimits';
 
 const HARD_LIMIT = 200;
 
@@ -53,16 +50,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     fetchInitialData,
   } = DataSubscribeRequestAction.parse(JSON.parse(event.body ?? ''));
 
-  const secretRotation = await secretRotationRepository.findByKeyName('JWT_SECRET');
-  let previousSecret = undefined;
-  // If JWT_SECRET was just recently renewed within 24 hours, allow the user to continue using the old key
-  if (dayjs(secretRotation?.rotatedAt).isBefore(dayjs().add(1, 'day'))) {
-    previousSecret = secretRotation?.previousKey;
-  }
-  const decoded = authTokenGenerator.verifyToken(accessToken!, previousSecret) as jwt.JwtPayload;
-
-  const user = await User.findById(decoded.id);
-  if (!user) throw new NotFoundError('User not found');
+  const user = await verifyWsAccessToken(accessToken);
   const userAbility = ability(user);
 
   // 'scope' limits the scope of the query, to only things you're allowed to see.
@@ -70,9 +58,20 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   // are some cases where a Model isn't handled by casl/mongoose, and we handle those
   // cases explicitly.
   let scope: mongoose.FilterQuery<unknown>;
+  // Set only for the quests branch below - whether the single session this subscription's
+  // `query.sessionId` names (the only shape the client actually sends, sessions.ts:598) belongs
+  // to the caller. Determines whether resolveFieldLimits' owner-only exclusion applies.
+  let isOwnQuestSession = false;
   if (collectionName === Quest.collection.collectionName) {
-    const accessibleSessions = await SessionModel.find(accessibleBy(userAbility).ofType(SessionModel), { _id: true });
+    const accessibleSessions = await SessionModel.find(accessibleBy(userAbility).ofType(SessionModel), {
+      _id: true,
+      userId: true,
+    });
     scope = { sessionId: { $in: accessibleSessions.map(s => s._id) } };
+    const requestedSessionId = typeof query.sessionId === 'string' ? query.sessionId : undefined;
+    isOwnQuestSession =
+      !!requestedSessionId &&
+      accessibleSessions.some(s => s._id.toString() === requestedSessionId && s.userId === user.id);
   } else if (collectionName === QuestMasterPlan.collection.collectionName) {
     const accessibleSessions = await SessionModel.find(accessibleBy(userAbility).ofType(SessionModel), { _id: true });
     // Plan access is user-based (owner/shared/public) with a session-based
@@ -107,33 +106,53 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       [Subscription.collection.collectionName]: accessibleBy(userAbility).ofType(Subscription),
       [Artifact.collection.collectionName]: accessibleBy(userAbility).ofType(Artifact),
       [ArtifactVersion.collection.collectionName]: accessibleBy(userAbility).ofType(ArtifactVersion),
+      // [DELETION-FOOTPRINT] premium-bob run doc: the reading screen live-subscribes to its
+      // bob_runs doc by _id (issue #33). Owner-scoped so a user only sees their own runs. Literal
+      // string because the model lives in the overlay (not importable here); `userId` is a String
+      // field, so match the stringified id. This ownership rule (own runs only) MUST stay in sync
+      // with the GET /api/premium-bob/runs/:id polling route's read check (assertCanReadRun) so the
+      // poll can't leak what the socket wouldn't. Removed when Bob is extracted.
+      ['bob_runs']: { userId: user._id.toString() },
     }[collectionName];
   }
 
-  const fieldLimits = {
-    users: {
-      password: false,
-      stripeCustomerId: false,
-      resetPasswordToken: false,
-    },
-  }[collectionName];
+  // scopedFields (built below) is persisted onto the QuerySubscription record a few lines down
+  // as `fields`, which is what the separate subscriber-fanout service reads to build its own
+  // change-stream projection - so this exclusion applies to live update/insert events fanout
+  // relays, not just the one-time fetchInitialData query above.
+  const fieldLimits = resolveFieldLimits(collectionName, Quest.collection.collectionName, isOwnQuestSession);
 
-  let scopedFields: undefined | Record<string, boolean | number> = (fields || fieldLimits) && {
-    ...fields,
-    ...fieldLimits,
-  };
+  let scopedFields: undefined | Record<string, boolean | number> =
+    (fields || fieldLimits) &&
+    ({
+      ...fields,
+      ...fieldLimits,
+      // fields is z.looseObject({}) (arbitrary caller-supplied keys), so the spread widens to an
+      // index signature regardless of fieldLimits' own type - both sides are actually boolean/
+      // number Mongo projection flags.
+    } as Record<string, boolean | number>);
 
   if (scopedFields) {
     const inclusions = pickBy(scopedFields, v => v);
     if (Object.keys(inclusions).length) {
       const haveExclusions = Object.values(scopedFields).some(v => !v);
       if (haveExclusions) {
-        throw new Error('Cannot mix exclusions and inclusions');
+        // Mongo projections can't mix inclusion and exclusion keys. No current in-repo caller
+        // sends inclusion fields for the quests collection (all pass fields: {}), so
+        // fieldLimits' exclusions never meet an inclusion today - but the real callers live in
+        // the overlay, so that can't be verified from here. Killing the whole subscription over
+        // a caller's inclusion request would be a worse failure than just not honoring it, so
+        // drop the inclusions and keep fieldLimits' exclusions (e.g. returnValue/error) instead.
+        logger.warn(`[dataSubscribeRequest] Dropping inclusion fields mixed with exclusions for ${collectionName}`, {
+          fields,
+        });
+        scopedFields = pickBy(scopedFields, v => !v);
+      } else {
+        scopedFields = {
+          ...inclusions,
+          deletedAt: true,
+        };
       }
-      scopedFields = {
-        ...inclusions,
-        deletedAt: true,
-      };
     }
   }
 
@@ -186,6 +205,14 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     });
   }
 
+  // scopedFields feeds this hash, so a subscription created before fieldLimits existed and one
+  // created after hash to DIFFERENT queryIds - the fields write below is $setOnInsert only, so an
+  // old subscription is never mutated in place with the new exclusion; a client that reconnects
+  // (getting a fresh scopedFields) lands on a new document instead. This is what keeps
+  // $setOnInsert safe here rather than leaving pre-deploy subscriptions permanently unredacted.
+  // The gap is bounded by the connection's own lifetime, not by the deploy: API Gateway WebSocket
+  // connections are forcibly closed after 10 minutes idle or 2 hours total, so every pre-deploy
+  // subscriber reconnects (and re-hashes) well within a couple of hours regardless.
   const uniqueQuerySelector = crypto
     .createHash('sha256')
     .update(JSON.stringify(collectionName))

@@ -1,12 +1,12 @@
 import {
   CreateFabFileRequestInputType,
-  DATA_LAKES,
   IShareableDocument,
   KnowledgeType,
   UpdateFabFileRequestInputType,
   type IFabFileDocument,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { setPendingMessageFiles } from '@client/app/hooks/useSessionLayout';
 import {
   chunkFileUtility,
   createFabFileOnServer,
@@ -20,8 +20,8 @@ import {
 import { getContentFromFabfile as getContentFromFabfileInString } from '@client/app/utils/fabFileUtils';
 import { isOptimisticId } from '@client/app/utils/llm';
 import { getErrorMessage } from '@client/app/utils/error';
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import axios from 'axios';
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
 import { ActualFileObject } from 'filepond';
 import { toast } from 'sonner';
 
@@ -35,6 +35,13 @@ export function useDeleteAllFiles(options: { onSuccess?: () => void } = {}) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+      // Deleting all files zeroes every tag's file count - invalidate so the tag browser
+      // doesn't keep showing stale counts (matches useDeleteFile/useBulkDeleteFiles below).
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
+      // The composer's pending-attachment chips are a denormalized Zustand snapshot, not
+      // backed by the fabFiles query cache, so invalidation above doesn't reach them - clear
+      // them explicitly or they keep rendering chips for now-deleted files (see #1279).
+      setPendingMessageFiles([]);
       if (onSuccess) onSuccess();
     },
     onError: error => {
@@ -76,6 +83,7 @@ interface BulkDeleteResponse {
   results: {
     deleted: string[];
     unshared: string[];
+    notFound: string[];
     /** @deprecated Use deleted/unshared instead */
     success?: string[];
     failed: {
@@ -96,7 +104,17 @@ export function useBulkDeleteFiles(options?: { onSuccess?: () => void; onError?:
       queryClient.invalidateQueries({ queryKey: ['fabFiles'], exact: false });
       // Invalidate the tag query to refresh the number of files with that tag
       queryClient.invalidateQueries({ queryKey: ['file-tags'] });
-      toast.success(data.message);
+      // A batch that only hit notFound/failed removed nothing - don't show a green toast for it,
+      // and a batch that removed some files but also had errors isn't a clean success either.
+      const removedSomething = data.results.deleted.length > 0 || data.results.unshared.length > 0;
+      const hasFailures = data.results.failed.length > 0;
+      if (!removedSomething) {
+        toast.error(data.message);
+      } else if (hasFailures) {
+        toast.warning(data.message);
+      } else {
+        toast.success(data.message);
+      }
       options?.onSuccess?.();
     },
     onError: error => {
@@ -118,11 +136,7 @@ export function useCreateFabFileWithUpload(options?: {
       const newFabFile = await createFabFileOnServer(formData);
       // If the file has a presigned URL, upload it to the bucket
       if (newFabFile.presignedUrl) {
-        await axios.put(newFabFile.presignedUrl, file, {
-          headers: {
-            'Content-Type': file.type,
-          },
-        });
+        await uploadFileToUrl(newFabFile.presignedUrl, file, file.type);
       }
 
       // Optimistically add to the first page of fab files queries
@@ -145,6 +159,10 @@ export function useCreateFabFileWithUpload(options?: {
       });
 
       queryClient.invalidateQueries({ queryKey: ['fabFiles'], exact: false });
+      // A created file can carry tags, and per-tag counts are derived from the files holding each
+      // tag. This hook has no callers today; the invalidation is here so wiring it up later cannot
+      // silently reintroduce the stale-count bug the other write paths were fixed for.
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       options?.onSuccess?.(newFabFile);
       return newFabFile;
     } catch (err) {
@@ -197,7 +215,7 @@ export function useGetFabFiles(
   search: string = '',
   filters: {
     tags?: string;
-    type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code';
+    type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
     shared?: boolean;
     projectId?: string;
   } = {},
@@ -487,7 +505,7 @@ export interface ISearchFabFilesParams {
   search?: string;
   filters?: {
     tags?: string[];
-    type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code';
+    type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
     shared?: boolean;
     curated?: boolean;
   };
@@ -562,6 +580,11 @@ export function usePaginatedSearchFabFiles(parameters?: ISearchFabFilesParams & 
     },
     refetchOnWindowFocus: false,
     staleTime: 1000 * 60 * 5, // Cache results for 5 minutes
+    // Search text and page number are part of the query key, so without this every
+    // keystroke or page change would drop `data` to undefined and unmount every row.
+    // That flickers the list and destroys per-row local state mid-interaction (an
+    // in-progress inline rename loses its edit mode - see Browser/Item.tsx ToggleRename).
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -582,6 +605,9 @@ export function useUpdateFabFile(callback?: { onSuccess?: () => void }) {
       queryClient.invalidateQueries({ queryKey: ['fabFiles'], exact: false });
       // Invalidate and force refetch system prompt files (they have long staleTime)
       queryClient.invalidateQueries({ queryKey: ['system-prompt-files'], exact: false, refetchType: 'all' });
+      // This route replaces the whole tags array, so any tag surface showing a per-tag file count
+      // is stale afterwards. The bare prefix also covers ['file-tags','counts'].
+      queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       callback?.onSuccess?.();
     },
   });
@@ -720,85 +746,9 @@ export function useApplyAutoRenameFabFile() {
   });
 }
 
-export interface DataLakeArticlesParams {
-  id?: string;
-  tags?: string[];
-  search?: string;
-  page?: number;
-  limit?: number;
-  sortBy?: 'fileName' | 'createdAt';
-  sortDir?: 'asc' | 'desc';
-}
-
-/**
- * Fetches tag counts for the Data Lake Explorer tag tree via server-side aggregation.
- * Much lighter than fetching all articles - returns ~50 tag/count pairs instead of 2000 documents.
- */
-export interface DataLakeTagCountsResponse {
-  /** Tag-occurrence sums that drive the Data Lake Explorer's tag tree. */
-  tagCounts: { tag: string; count: number }[];
-  /** Distinct-file counts: combined total + per-prefix breakdown (keyed by lake tag prefix, e.g. 'opti:'). */
-  uniqueArticleCounts: { total: number; byPrefix: Record<string, number> };
-}
-
-/**
- * Which browse surface is reading. Both sources now hit the SAME consolidated
- * `/api/data-lakes/*` endpoints (the former product-gated `/api/opti/*` twins
- * were consolidated away - access is lake-scoped via each lake's declared
- * tag/entitlement gate, so the caller's accessible scope is identical either
- * way). The source is kept as a cache-key discriminator for the two UIs.
- */
-export type DataLakeBrowseSource = 'opti' | 'datalakes';
-const browseBase = (_source: DataLakeBrowseSource) => '/api/data-lakes';
-
-export function useGetDataLakeTagCounts(source: DataLakeBrowseSource = 'opti') {
-  return useQuery({
-    queryKey: ['dataLakeTagCounts', source],
-    queryFn: async () => {
-      const response = await api.get<DataLakeTagCountsResponse>(`${browseBase(source)}/tag-counts`);
-      return response.data;
-    },
-    refetchOnWindowFocus: false,
-    staleTime: 1000 * 60 * 5,
-  });
-}
-
-/**
- * Truthful Data-Lake article counts (distinct files, NOT tag occurrences) for the hero
- * tickers + mission chips, sourced from the same query the Explorer uses. `total` is the
- * combined unique count; the per-prefix fields are the individual per-lake unique counts.
- * Returns 0 for users without data-lake access (the endpoint yields an empty set); callers
- * fall back to a placeholder rather than rendering "0".
- *
- * `sales` is the unique count for the premium (overlay-contributed) lake - its tag prefix is
- * read from the lake config (DATA_LAKES) rather than hardcoded, so no customer-specific prefix
- * lives in open-core; it is 0 in the fork where no premium lake is contributed.
- */
-export function useDataLakeArticleCounts(): { total: number; sales: number; opti: number } {
-  const { data } = useGetDataLakeTagCounts();
-  const unique = data?.uniqueArticleCounts;
-  // The premium lake (if any) is whatever the overlay contributes beyond the base opti lake.
-  const premiumLake = DATA_LAKES.find(l => l.id !== 'opti-knowledge');
-  return {
-    total: unique?.total ?? 0,
-    sales: premiumLake ? (unique?.byPrefix[premiumLake.fileTagPrefix] ?? 0) : 0,
-    opti: unique?.byPrefix['opti:'] ?? 0,
-  };
-}
-
-export function useGetDataLakeArticles(params?: DataLakeArticlesParams | null, source: DataLakeBrowseSource = 'opti') {
-  return useQuery({
-    queryKey: ['dataLakeArticles', source, params],
-    queryFn: async () => {
-      const response = await api.get<{ data: IFabFileDocument[]; total: number; hasMore: boolean }>(
-        `${browseBase(source)}/articles`,
-        { params: params ?? undefined }
-      );
-      return response.data;
-    },
-    // Disabled when params is null/undefined (lazy-load pattern)
-    enabled: params != null,
-    refetchOnWindowFocus: false,
-    staleTime: 1000 * 60 * 5,
-  });
-}
+// The premium overlay imports this hook from the fabFiles path (pinned ref). Keep the alias
+// until the overlay repoints its imports, then delete it. New code imports from dataLakes.
+// The type aliases cost nothing at runtime (erased) and cover downstream declarations typed
+// against the pre-move fabFiles surface.
+export { useDataLakeArticleCounts } from './dataLakes';
+export type { DataLakeArticlesParams, DataLakeTagCountsResponse, DataLakeBrowseSource } from './dataLakes';

@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { IFileTag, IFileTagRepository, ITag, ITagRepository, TagType } from '@bike4mind/common';
+import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 
 const options = {
   toJSON: {
@@ -50,7 +51,6 @@ export const tagRepository = new TagRepository(TagModel);
 
 const FileTagSchema = new mongoose.Schema(
   {
-    fileCount: { type: Number, required: true },
     lastActivityAt: { type: Date, required: true },
   },
   options
@@ -105,15 +105,37 @@ class FileTagRepository extends BaseRepository<IFileTag> implements IFileTagRepo
     return result.map(p => p.toJSON());
   }
 
-  async incrementFileCountBy(by: Pick<IFileTag, 'name' | 'userId'>, count: number = 1): Promise<void> {
+  /**
+   * Marks a tag as just used. `lastActivityAt` is what the sidebar's recent/default ordering sorts
+   * on, and this and findOrCreateByNameAndUserId are the only things that refresh it after the
+   * document exists (tagService create/createFileTag set it once, at insert).
+   *
+   * Best-effort rather than an invariant, and deliberately so. Only the toggle path and the two
+   * file-delete doors call it. A tag rename (tagService/update) and a tag delete
+   * (tagService/remove) both rewrite the names stored on files without it, as do a whole-array tags
+   * replace on PUT /api/files/[id], the data lake taxonomy writers, and tags set at file creation -
+   * so a tag changed only through those reads as older than it is. Widening the set of callers
+   * would change the sidebar's ordering, which is its own decision to make.
+   */
+  async touchLastActivityBy(by: Pick<IFileTag, 'name' | 'userId'>): Promise<void> {
+    // Both required, refused rather than skipped: building the filter conditionally meant a missing
+    // name or userId dropped that arm, and an empty filter matches the first tag in the collection -
+    // some other user's. No caller does this, so refusing costs nothing and closes the shape.
+    if (!by.name || !by.userId) {
+      console.warn('touchLastActivityBy needs both a name and a userId; ignoring', by);
+      return;
+    }
+
     try {
       // Use updateOne instead of findOne + save to avoid potential conflicts
-      const filter: Record<string, unknown> = {};
-      if (by.name) filter.name = new RegExp(`^${by.name}$`, 'i');
-      if (by.userId) filter.userId = by.userId;
+      const filter = {
+        // Escaped for the same reason as findByFoldedNameAndUserId below: a tag name is user text,
+        // so an unescaped `a.b` also matched `axb`.
+        name: new RegExp(`^${escapeRegex(by.name)}$`, 'i'),
+        userId: by.userId,
+      };
 
       const updateResult = await this.fileTagModel.updateOne(filter, {
-        $inc: { fileCount: count },
         $set: { lastActivityAt: new Date() },
       });
 
@@ -121,51 +143,52 @@ class FileTagRepository extends BaseRepository<IFileTag> implements IFileTagRepo
         console.warn(`No tag found matching filter:`, filter);
       }
     } catch (error) {
-      console.error('Error incrementing file count:', error);
+      console.error('Error touching tag activity:', error);
       throw error;
     }
   }
 
-  async findByNameAndUserId(name: string, userId: string) {
-    const result = await this.fileTagModel.findOne({ name, userId });
+  /**
+   * Find a tag by name and user id under the shared collision rule (see common/utils/tagName):
+   * trimmed and case folded. Every path that mints a tag document checks this first, so one user
+   * cannot end up with two names differing only by case.
+   *
+   * Legacy data can still hold such a pair, so ordered oldest-first rather than left to whatever the
+   * scan returns: findOrCreateByNameAndUserId resolves its upsert onto the document this picks, and
+   * an unordered read could settle on a different one of the pair on each call.
+   *
+   * The regex means only the userId prefix of { userId, name } is usable as a bound, so this scans
+   * one user's tags. Same cost as touchLastActivityBy above, and small at realistic tag counts.
+   */
+  async findByFoldedNameAndUserId(name: string, userId: string) {
+    const result = await this.fileTagModel
+      .findOne({
+        name: new RegExp(`^${escapeRegex(name.trim())}$`, 'i'),
+        userId,
+      })
+      .sort({ createdAt: 1, _id: 1 });
     return result?.toJSON() || null;
   }
 
-  async incrementFileCountByIds(ids: string[], count: number = 1): Promise<void> {
-    try {
-      // Use updateMany for bulk updates to avoid potential conflicts
-      const updateResult = await this.fileTagModel.updateMany(
-        { _id: { $in: ids } },
-        {
-          $inc: { fileCount: count },
-          $set: { lastActivityAt: new Date() },
-        }
-      );
-
-      if (updateResult.matchedCount === 0) {
-        console.warn(`No tags found matching IDs:`, ids);
-      }
-    } catch (error) {
-      console.error('Error incrementing file count by IDs:', error);
-      throw error;
-    }
-  }
-
-  async findOrCreateByNameAndUserId(
-    name: string,
-    userId: string,
-    defaultData: Partial<IFileTag>,
-    incrementFileCount: number = 0
-  ) {
+  /**
+   * Upsert a tag by name, resolving to the casing the user already holds. The upsert filter matches
+   * the name exactly, so handing it a name the user holds in some other casing minted a second
+   * document folding to the same name - the pair the count aggregate reads as two buckets while the
+   * file-list filter and the row chips read as one. Folding here rather than at the caller keeps
+   * every caller safe by default; see findByFoldedNameAndUserId for the rule.
+   */
+  async findOrCreateByNameAndUserId(name: string, userId: string, defaultData: Partial<IFileTag>) {
+    const held = await this.findByFoldedNameAndUserId(name, userId);
+    const upsertName = held?.name ?? name.trim();
     try {
       const result = await this.fileTagModel.findOneAndUpdate(
-        { name, userId },
+        { name: upsertName, userId },
         {
-          $inc: { fileCount: incrementFileCount || 0 },
           $set: { lastActivityAt: new Date() },
           $setOnInsert: {
             ...defaultData,
-            name,
+            // Same value as the filter: two different ones would conflict on the insert path.
+            name: upsertName,
             userId,
             type: TagType.FILE,
             createdAt: new Date(),
@@ -182,12 +205,11 @@ class FileTagRepository extends BaseRepository<IFileTag> implements IFileTagRepo
     } catch (error: any) {
       // Handle duplicate key errors by retrying once
       if (error.code === 11000) {
-        // Duplicate key error, tag was created by another request
-        // Try to increment the existing tag
+        // Duplicate key error, tag was created by another request. Still touch it: this is the
+        // losing writer's only chance to record that the tag was just used.
         const result = await this.fileTagModel.findOneAndUpdate(
-          { name, userId },
+          { name: upsertName, userId },
           {
-            $inc: { fileCount: incrementFileCount || 0 },
             $set: { lastActivityAt: new Date() },
           },
           { new: true }

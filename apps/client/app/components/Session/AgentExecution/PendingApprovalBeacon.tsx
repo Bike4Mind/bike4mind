@@ -1,6 +1,6 @@
 import { Box, Button } from '@mui/joy';
 import { keyframes } from '@mui/system';
-import { memo, useMemo } from 'react';
+import { memo, useMemo, useEffect, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import WarningRoundedIcon from '@mui/icons-material/WarningRounded';
 import { useAgentExecutionStore, selectPendingApprovalForSession } from '@client/app/stores/useAgentExecutionStore';
@@ -34,8 +34,45 @@ const PendingApprovalBeacon = memo(({ sessionId, scrollerRef }: PendingApprovalB
   // (mirrors ActiveAgentExecutions); useShallow keeps the {executionId,toolName} output stable.
   const selector = useMemo(() => selectPendingApprovalForSession(sessionId), [sessionId]);
   const pending = useAgentExecutionStore(useShallow(selector));
+  const executionId = pending?.executionId;
+
+  // Only surface the beacon when the inline PermissionCard is OFF screen. If the
+  // user is already looking at the card, the beacon is redundant. Observe the
+  // card's visibility within the scroll container; show the beacon only when it
+  // is not intersecting (scrolled away).
+  const [cardVisible, setCardVisible] = useState(false);
+  useEffect(() => {
+    if (!executionId) {
+      setCardVisible(false);
+      return;
+    }
+    let raf = 0;
+    let attempts = 0;
+    let observer: IntersectionObserver | null = null;
+    const findAndObserve = () => {
+      const card = document.querySelector(`[data-testid="permission-card-${executionId}"]`);
+      if (!card) {
+        // The card mounts in the (non-virtualized) scroll footer; it may not be
+        // in the DOM for a frame or two. Retry briefly, then give up (in which
+        // case the beacon stays visible - the safe default for a pending gate).
+        if (attempts++ < 60) raf = requestAnimationFrame(findAndObserve);
+        return;
+      }
+      observer = new IntersectionObserver(entries => setCardVisible(entries[0]?.isIntersecting ?? false), {
+        root: scrollerRef.current ?? null,
+        threshold: 0,
+      });
+      observer.observe(card);
+    };
+    findAndObserve();
+    return () => {
+      cancelAnimationFrame(raf);
+      observer?.disconnect();
+    };
+  }, [executionId, scrollerRef]);
 
   if (!pending) return null;
+  if (cardVisible) return null;
 
   const handleClick = () => {
     // The PermissionCard is always mounted in the (non-virtualized) footer, so its element exists
@@ -70,9 +107,12 @@ const PendingApprovalBeacon = memo(({ sessionId, scrollerRef }: PendingApprovalB
         onClick={handleClick}
         sx={{
           pointerEvents: 'auto',
+          px: 1.5, // 12px sides
+          py: 1, // 8px top/bottom
           borderRadius: 'xl',
           boxShadow: 'md',
           whiteSpace: 'nowrap',
+          transition: 'background-color 0.25s ease', // smooth hover fade
           animation: `${bounce} 4s ease-in-out infinite`,
           '&:hover': { animation: 'none' },
         }}

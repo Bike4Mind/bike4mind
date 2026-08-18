@@ -11,7 +11,8 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { oauthAuthorizationCodeRepository, userRepository } from '@bike4mind/database';
 import { verifyPkce, validateClientSecret, validateClient, generateIdToken } from '@server/auth/oauthServer';
-import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { issueSessionForRequest } from '@server/auth/issueSession';
+import { ACCESS_TOKEN_TTL_SECONDS } from '@server/auth/tokenGenerator';
 
 const AuthCodeRequestSchema = z.object({
   grant_type: z.literal('authorization_code'),
@@ -80,7 +81,10 @@ const handler = baseApi({ auth: false })
         return res.status(400).json({ error: 'invalid_grant', error_description: 'User not found' });
       }
 
-      const { accessToken, refreshToken } = authTokenGenerator.createAccessToken(user.id, user.tokenVersion ?? 0);
+      const { accessToken, refreshToken } = await issueSessionForRequest(req, user.id, {
+        createdVia: 'oauth-token',
+        tokenVersion: user.tokenVersion ?? 0,
+      });
 
       const userEmail = user.email ?? '';
       const idToken = generateIdToken({
@@ -98,7 +102,7 @@ const handler = baseApi({ auth: false })
         id_token: idToken,
         refresh_token: refreshToken,
         token_type: 'Bearer',
-        expires_in: 3600,
+        expires_in: ACCESS_TOKEN_TTL_SECONDS,
       });
     }
 

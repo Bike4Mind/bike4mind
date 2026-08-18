@@ -1,6 +1,9 @@
-import type { IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
+import type { IDataLakeAccessGrantRepository, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
 import { UpdateDataLakeRequestInput, normalizeEntitlementKey } from '@bike4mind/common';
 import { secureParameters, BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { type ManageActor } from './manageRule';
+import { resolveCanManageLake } from './authorizeLakeManage';
+import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 import type { z } from 'zod';
 
 type UpdateDataLakeParams = z.infer<typeof UpdateDataLakeRequestInput>;
@@ -8,11 +11,20 @@ type UpdateDataLakeParams = z.infer<typeof UpdateDataLakeRequestInput>;
 interface UpdateDataLakeAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'update'>;
+    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
   };
 }
 
+/**
+ * Metadata update (name/description/access gate) by the lake's creator or an admin.
+ *
+ * Gate semantics: an omitted gate field leaves the current value alone, while an empty string
+ * clears it. Clearing does NOT make the lake world-readable - an ungated lake falls back to its
+ * visibility (private to the owner, org-wide if org-scoped, everyone if public), per
+ * Private-by-default in canAccessLake.
+ */
 export const updateDataLake = async (
-  actor: { userId: string; isAdmin: boolean },
+  actor: ManageActor,
   dataLakeId: string,
   parameters: UpdateDataLakeParams,
   { db }: UpdateDataLakeAdapters
@@ -24,8 +36,8 @@ export const updateDataLake = async (
     throw new NotFoundError(`Data lake not found`);
   }
 
-  if (!actor.isAdmin && existing.createdByUserId !== actor.userId) {
-    throw new BadRequestError('Only the creator can update this data lake');
+  if (!(await resolveCanManageLake(existing, actor, { db }))) {
+    throw new BadRequestError('You do not have permission to update this data lake');
   }
 
   // Mirror the setLakeVisibility guardrail from the other side so the "public => no gate"
@@ -42,11 +54,13 @@ export const updateDataLake = async (
   const updated = await db.dataLakes.update({
     id: dataLakeId,
     ...params,
+    // After `params`, never before: the stamp is resolved from the authenticated actor, so it must
+    // win over anything a crafted body carried. `secureParameters` already strips unknown keys
+    // (UpdateDataLakeRequestInput declares no such field), making this order belt-and-braces.
+    ...lakeConfigWriteStamp(actor),
     // Normalize the entitlement key at write time (Mongo $in is case-sensitive; the
-    // resolver produces lowercase keys). Only override when present so an absent field
-    // isn't written as undefined. NOTE: the gate can be set/changed but not CLEARED via this
-    // path (zod `.min(3)` also rejects ''); un-gating a lake is a deliberate non-affordance
-    // for v1 (the gate is a PHI boundary) - clear via a one-shot if ever needed.
+    // resolver produces lowercase keys). Only override when present so an absent field isn't
+    // written as undefined, and so the '' clear-sentinel passes through untouched.
     ...(params.requiredEntitlement ? { requiredEntitlement: normalizeEntitlementKey(params.requiredEntitlement) } : {}),
   });
 

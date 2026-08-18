@@ -7,11 +7,13 @@ import {
   type CacheUsageStats,
   type ModelInfo,
 } from '@bike4mind/common';
+import { stripToolDependentMessages } from './toolPairingUtils';
 import OpenAI from 'openai';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources';
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
 import { executeToolsBatch } from './executeToolsBatch';
+import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   CompletionInfo,
   DEFAULT_MAX_TOOL_CALLS,
@@ -84,7 +86,7 @@ export class XAIBackend implements ICompletionBackend {
         supportsTools: true,
         supportsImageVariation: false,
         description:
-          "xAI's most capable reasoning model. Excels at complex problem-solving, coding, math, and multimodal understanding with 256K context window.",
+          "xAI's Grok 4 reasoning model. Strong at complex problem-solving, coding, math, and multimodal understanding with a 256K context window. Grok 4.5 is newer, cheaper, and has a larger context window.",
       },
       {
         id: ChatModels.GROK_3,
@@ -103,7 +105,11 @@ export class XAIBackend implements ICompletionBackend {
         supportsTools: true,
         supportsImageVariation: false,
         description:
-          "xAI's flagship Grok 3 model that excels at enterprise use cases like data extraction, coding, and text summarization. Possesses deep domain knowledge in finance, healthcare, law, and science.",
+          "xAI's legacy Grok 3 model. Superseded by Grok 4.5, which is cheaper and adds reasoning, vision, and a 500K context window. No longer recommended.",
+        // Superseded by Grok 4.5 on every axis including price. Grok 3 still resolves upstream,
+        // so this date is what removes it from the picker; resolveDeprecatedModelId upgrades
+        // sessions already pinned to it.
+        deprecationDate: '2026-07-25',
       },
       {
         id: ChatModels.GROK_3_FAST,
@@ -200,8 +206,7 @@ export class XAIBackend implements ICompletionBackend {
         supportsVision: false,
         supportsTools: true,
         supportsImageVariation: false,
-        description:
-          "xAI's legacy Grok 2 model with 131K context window. Consider using Grok 3 for better performance.",
+        description: "xAI's legacy Grok 2 model with a 131K context window. Superseded by Grok 4.5.",
         deprecationDate: '2025-09-15',
       },
       {
@@ -221,7 +226,7 @@ export class XAIBackend implements ICompletionBackend {
         supportsTools: true,
         supportsImageVariation: false,
         deprecationDate: '2025-09-15', // Deprecated - same as Grok 3 Fast and Grok 2 Vision
-        description: "xAI's legacy beta text model. No longer recommended - use Grok 3 instead.",
+        description: "xAI's legacy beta text model. No longer recommended - use Grok 4.5 instead.",
       },
       {
         id: ChatModels.GROK_VISION_BETA,
@@ -241,7 +246,7 @@ export class XAIBackend implements ICompletionBackend {
         supportsImageVariation: false,
         deprecationDate: '2025-09-15', // Deprecated - same as Grok 3 Fast and Grok 2 Vision
         description:
-          "xAI's legacy beta multimodal model with vision capabilities. Use Grok 2 Vision for better performance.",
+          "xAI's legacy beta multimodal model with vision capabilities. Use Grok 4.5 instead, which also supports vision.",
       },
       // XAI Image Models
       {
@@ -267,7 +272,7 @@ export class XAIBackend implements ICompletionBackend {
     messages: IMessage[],
     options: Partial<ICompletionOptions>,
     callback: (text: (string | null | undefined)[], completionInfo: CompletionInfo) => Promise<void>,
-    toolsUsed: Array<{ name: string; arguments?: string; id?: string }> = []
+    toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     this.currentModel = model;
     options = {
@@ -294,7 +299,8 @@ export class XAIBackend implements ICompletionBackend {
       // Remove tools when limit is hit and continue, preserving _internal settings
       await this.complete(
         model,
-        messages,
+        // Tools are going away, so the prompts that order the model to use one have to go with them.
+        stripToolDependentMessages(messages),
         {
           ...options,
           tools: undefined,
@@ -438,6 +444,12 @@ export class XAIBackend implements ICompletionBackend {
                 this.logger.warn(`JSON parse error for ${toolCall.function.name} arguments`);
                 const entry = toolsUsed.find(t => t.name === toolCall.function.name && t.id === toolCall.id);
                 if (entry) entry.arguments = '{}';
+                recordToolResult(
+                  toolsUsed,
+                  { id: toolCall.id, name: toolCall.function.name },
+                  'Error: Tool arguments were malformed and could not be parsed.',
+                  false
+                );
               }
             }
 
@@ -478,17 +490,22 @@ export class XAIBackend implements ICompletionBackend {
             // Inject results in original order
             for (const outcome of outcomes) {
               if (outcome.ok) {
+                const resultStr = outcome.result.toString();
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
                 this.pushToolMessages(
                   messages,
                   { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  outcome.result.toString()
+                  resultStr
                 );
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
+                const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
+                const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
                 this.pushToolMessages(
                   messages,
                   { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`
+                  observation
                 );
               }
             }
@@ -689,6 +706,12 @@ export class XAIBackend implements ICompletionBackend {
             this.logger.warn(`JSON parse error for ${name} arguments (streaming)`);
             const entry = toolsUsed.find(t => t.name === name && t.id === id);
             if (entry) entry.arguments = '{}';
+            recordToolResult(
+              toolsUsed,
+              { id, name },
+              'Error: Tool arguments were malformed and could not be parsed.',
+              false
+            );
           }
         }
 
@@ -729,17 +752,22 @@ export class XAIBackend implements ICompletionBackend {
         // Inject results in original order
         for (const outcome of outcomes) {
           if (outcome.ok) {
+            const resultStr = outcome.result.toString();
+            recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
             this.pushToolMessages(
               messages,
               { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-              outcome.result.toString()
+              resultStr
             );
           } else {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
+            const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
+            const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+            recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
             this.pushToolMessages(
               messages,
               { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-              `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`
+              observation
             );
           }
         }

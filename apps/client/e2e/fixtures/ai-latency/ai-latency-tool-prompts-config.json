@@ -4,7 +4,8 @@
     {
       "id": "city-no-cars-image",
       "prompt": "Generate a picture of a futuristic city without cars",
-      "expectedKeywords": ["city", "image", "futuristic", "streets", "generated", "here", "picture"]
+      "expectedKeywords": ["city", "image", "futuristic", "streets", "generated", "here", "picture"],
+      "expectsImage": true
     },
     {
       "id": "usd-php-exchange",

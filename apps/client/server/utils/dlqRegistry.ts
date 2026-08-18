@@ -181,10 +181,34 @@ const DLQ_REGISTRY = [
     sourceQueue: 'optihashiRunCompletionQueue',
   },
   {
+    label: 'bob-run',
+    displayName: 'Bob Panel Run',
+    application: 'BobIntegration',
+    sourceQueue: 'bobRunQueue',
+  },
+  {
     label: 'data-lake-cleanup',
     displayName: 'Data Lake Cleanup',
     application: 'DataLakeManagement',
     sourceQueue: 'dataLakeCleanupQueue',
+  },
+  {
+    label: 'data-lake-taxonomy',
+    displayName: 'Data Lake Taxonomy Analysis',
+    application: 'DataLakeManagement',
+    sourceQueue: 'dataLakeTaxonomyQueue',
+  },
+  {
+    label: 'lake-memory',
+    displayName: 'Lake Memory Extraction',
+    application: 'DataLakeManagement',
+    sourceQueue: 'lakeMemoryQueue',
+  },
+  {
+    label: 'drive-lake-ingest',
+    displayName: 'Drive Lake Ingest',
+    application: 'DataLakeManagement',
+    sourceQueue: 'driveLakeIngestQueue',
   },
 ] as const satisfies readonly DlqDescriptor[];
 

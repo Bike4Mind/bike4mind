@@ -1,4 +1,11 @@
 import z from 'zod';
+import {
+  DATALAKE_TAG_PREFIX,
+  hasBlankTagPrefixSegment,
+  isReservedTagPrefix,
+  DATA_LAKE_GROUNDING_MODES,
+} from '../constants/dataLakes';
+import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '../constants/chunking';
 
 // Slug validation
 
@@ -17,9 +24,19 @@ export const CreateDataLakeRequestInput = z.object({
   description: z.string().max(2000).optional(),
   fileTagPrefix: z
     .string()
+    // Edge whitespace is stripped so the stored prefix equals its normalizeTagPrefix form -
+    // consumers split between raw reads (tree roots) and normalized reads (tag stamping),
+    // and " acme:" stored raw would desynchronize them.
+    .trim()
     .min(2)
     .max(30)
-    .refine(s => s.endsWith(':'), 'Tag prefix must end with ":" (e.g. "acme:")'),
+    .refine(s => s.endsWith(':'), 'Tag prefix must end with ":" (e.g. "acme:")')
+    // A prefix with a blank segment ("::", "a::", ":a:", "a: :", or zero-width characters)
+    // gives every derived tag a blank tree segment, which the tag-tree UIs can only paper
+    // over (empty node labels, orphaned back rows). Reject it at the source; the wizard
+    // mirrors this via tagPrefixIssue / hasBlankTagPrefixSegment so the rules cannot drift.
+    .refine(s => !hasBlankTagPrefixSegment(s), 'Tag prefix segments must be non-empty (e.g. "acme:" or "acme:legal:")')
+    .refine(s => !isReservedTagPrefix(s), `Tag prefix cannot use the reserved "${DATALAKE_TAG_PREFIX}" namespace`),
   requiredUserTag: z.string().min(1).max(100).optional(),
   // Entitlement keys are namespaced (must contain ":") so a bare user-tag value can never
   // be a requiredEntitlement - tags pass through 1:1 as entitlement keys, so an un-namespaced
@@ -44,15 +61,57 @@ export type CreateDataLakeRequestInputType = z.infer<typeof CreateDataLakeReques
 export const UpdateDataLakeRequestInput = z.object({
   name: z.string().min(1).max(200).optional(),
   description: z.string().max(2000).optional(),
-  requiredUserTag: z.string().min(1).max(100).optional(),
+  // Per-lake system prompt (see IDataLake.systemPrompt). Uncapped, matching the other system
+  // prompts in the codebase. Edit is gated to creator/admin by updateDataLake (canManageLake).
+  systemPrompt: z.string().optional(),
+  // Preferred registry system-prompt id bound to the lake (see IDataLake.preferredSystemPromptId).
+  // Empty string clears it, mirroring the requiredUserTag sentinel below. The session-activatable
+  // ALLOWLIST check is enforced at the write route (apps/client), which owns the allowlist - core
+  // cannot import it. This bound is a crafted-body cap only, not the real constraint.
+  preferredSystemPromptId: z.union([z.literal(''), z.string().min(1).max(200)]).optional(),
+  // Per-lake grounding mode (see IDataLake.groundingMode). Constrained to the shared enum tuple so
+  // the request, the Mongoose enum, and the resolver can never drift. Omitting it means "leave
+  // unchanged" (Mongo $set strips undefined); there is no clear sentinel because the field is not
+  // nullable - a lake always has a mode (its stored value or the resolver default).
+  groundingMode: z.enum(DATA_LAKE_GROUNDING_MODES).optional(),
+  // Empty string is the explicit "remove this gate" sentinel, accepted on UPDATE only (a
+  // create has no gate to clear). It is stored as-is rather than unset: every read path
+  // already treats '' as ungated - the access queries in DataLakeModel carry explicit
+  // `requiredUserTag: ''` arms, and lakeMatchesAccess/canAccessLake test truthiness.
+  // Omitting the field still means "leave unchanged" (Mongo $set strips undefined).
+  requiredUserTag: z.union([z.literal(''), z.string().min(1).max(100)]).optional(),
   requiredEntitlement: z
-    .string()
-    .min(3)
-    .max(100)
-    .refine(
-      s => s.includes(':') && s.split(':').every(part => part.length > 0),
-      'Entitlement key must be namespaced with non-empty parts (e.g. "product:pro")'
-    )
+    .union([
+      z.literal(''),
+      z
+        .string()
+        .min(3)
+        .max(100)
+        .refine(
+          s => s.includes(':') && s.split(':').every(part => part.length > 0),
+          'Entitlement key must be namespaced with non-empty parts (e.g. "product:pro")'
+        ),
+    ])
+    .optional(),
+  // Per-lake opt-in to query-text audit logging (see IDataLake.auditQueryTextEnabled).
+  auditQueryTextEnabled: z.boolean().optional(),
+  // The chunk passage target (TOKENS) this lake REQUIRES of its member files (#1662). A
+  // CONSTRAINT the chunk handler checks, never an override of the file-owner-altitude policy: a
+  // member file whose effective target differs is reported as a conflict, not re-chunked. Bounded
+  // to the same range the scoped DefaultChunkSize setting uses. `null` is the explicit clear
+  // sentinel (remove the requirement); omitting the field leaves it unchanged ($set strips
+  // undefined). Setting it does NOT re-chunk existing files - it only changes what future conflict
+  // checks compare against.
+  requiredPassageTokenTarget: z
+    .number()
+    .int()
+    .min(MIN_PASSAGE_TOKEN_TARGET)
+    // Same ceiling as the scoped DefaultChunkSize setting, which is what the comment above promises.
+    // A lake requiring a target above the detection threshold is the other route into #1804: its
+    // members re-chunk to a compliant size that still trips detection, so its rebuild badge never
+    // reaches zero. Bounding only the setting would leave this route open.
+    .max(OVERSIZED_PASSAGE_TOKEN_THRESHOLD)
+    .nullable()
     .optional(),
   // NOTE: status is intentionally NOT updatable here. Lifecycle transitions
   // (archive/unarchive/delete/cleanup) go through their dedicated endpoints so the
@@ -80,6 +139,8 @@ export const CreateBatchRequestInput = z.object({
   totalSizeBytes: z.number().nonnegative(),
   conflictResolution: ConflictResolutionSchema.optional(),
   appliedTags: z.array(z.object({ name: z.string(), strength: z.number() })).optional(),
+  /** Opt-in for background AI tag suggestion - never true in append mode. */
+  wantsTaxonomy: z.boolean().optional(),
 });
 export type CreateBatchRequestInputType = z.infer<typeof CreateBatchRequestInput>;
 
@@ -103,6 +164,11 @@ export const BatchPresignedUrlFileItem = z.object({
 
 export const BatchPresignedUrlRequestInput = z.object({
   files: z.array(BatchPresignedUrlFileItem).min(1).max(100),
+  /**
+   * The lake to upload into, as an id or a slug (`assertLakeWriteAccess` resolves either).
+   * Send the id: a slug the client derived from the lake's name resolves to whichever lake
+   * holds it, which after the server disambiguates a collision is not the new lake.
+   */
   dataLakeSlug: z.string().optional(),
   /**
    * When uploading into a data lake batch, the batch id so each created FabFile is
@@ -113,25 +179,36 @@ export const BatchPresignedUrlRequestInput = z.object({
 });
 export type BatchPresignedUrlRequestInputType = z.infer<typeof BatchPresignedUrlRequestInput>;
 
-// AI Taxonomy Inference
+// AI Taxonomy Application - the background job's inference call itself has no HTTP
+// request shape (triggered by the queue handler, not the client); these cover the review
+// panel's two actions against an already-analyzed batch.
 
-export const InferTaxonomyFolderEntry = z.object({
-  relativePath: z.string(),
-  fileName: z.string(),
-  fileSize: z.number(),
-  mimeType: z.string().optional(),
-  /** First ~500 chars of file content for AI analysis */
-  contentSample: z.string().max(1000).optional(),
+// Bounds are generous relative to real values (inference aims for 5-20 short hierarchical
+// tags like "type:contract") - they exist to cap worst-case request size/storage/CPU from a
+// crafted body, not to constrain legitimate use. applyTaxonomySuggestions also cross-checks
+// each originalName against the batch's actual stored suggestions, so these bounds are a
+// second, independent layer rather than the only protection.
+const TaxonomyTagInput = z.object({
+  suffix: z.string().min(1).max(100),
+  originalName: z.string().min(1).max(150),
+  strength: z.number().min(0).max(1),
+  source: z.enum(['folder', 'ai']),
+  matchingFolders: z.array(z.string().max(512)).max(100),
+  deleted: z.boolean(),
 });
 
-export const InferTaxonomyRequestInput = z.object({
-  folderTree: z.array(InferTaxonomyFolderEntry).min(1).max(500),
-  /** If re-running for an existing data lake, pass its prefix */
-  existingPrefix: z.string().optional(),
+export const ApplyTaxonomyRequestInput = z.object({
+  /** The reviewed/edited tag list to apply (already filtered to non-deleted by the caller, or
+   * filtered here - deleted entries are simply skipped since they carry no tag to write). */
+  tags: z.array(TaxonomyTagInput).max(100),
+});
+export type ApplyTaxonomyRequestInputType = z.infer<typeof ApplyTaxonomyRequestInput>;
+
+export const ReanalyzeTaxonomyRequestInput = z.object({
   /** User description of the data (helps the AI) */
   context: z.string().max(2000).optional(),
 });
-export type InferTaxonomyRequestInputType = z.infer<typeof InferTaxonomyRequestInput>;
+export type ReanalyzeTaxonomyRequestInputType = z.infer<typeof ReanalyzeTaxonomyRequestInput>;
 
 // Deduplication
 

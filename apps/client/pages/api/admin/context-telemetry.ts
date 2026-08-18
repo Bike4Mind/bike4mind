@@ -33,7 +33,6 @@ const handler = baseApi().get(
     // Build query - only fetch quests with context telemetry
     const query: Record<string, unknown> = {
       'promptMeta.contextTelemetry': { $exists: true },
-      'promptMeta.contextTelemetry.anomalies.anomalyScore': { $gt: 0 },
     };
 
     if (params.startDate || params.endDate) {
@@ -50,20 +49,32 @@ const handler = baseApi().get(
       query['promptMeta.contextTelemetry.model.provider'] = params.provider;
     }
 
-    if (params.minAnomalyScore) {
-      const minScore = parseInt(params.minAnomalyScore, 10);
-      // Validate parsed number to prevent NaN from breaking the query
-      if (!Number.isNaN(minScore) && minScore > 0 && minScore <= 100) {
-        query['promptMeta.contextTelemetry.anomalies.anomalyScore'] = { $gte: minScore };
-      }
+    // Score filter: absent or invalid minAnomalyScore keeps the legacy default of
+    // anomalous turns only ($gt: 0); an explicit 0-100 filters to scores >= the
+    // requested minimum, so 0 includes benign turns. The 0 case deliberately uses
+    // $gte: 0 rather than dropping the predicate: every path then hits the same
+    // anomalyScore key (index-ready), and legacy docs lacking the anomalies
+    // sub-object stay excluded (TelemetryEntryCard reads anomalies.* unguarded).
+    const minScore = params.minAnomalyScore === undefined ? NaN : parseInt(params.minAnomalyScore, 10);
+    if (Number.isNaN(minScore) || minScore < 0 || minScore > 100) {
+      query['promptMeta.contextTelemetry.anomalies.anomalyScore'] = { $gt: 0 };
+    } else {
+      query['promptMeta.contextTelemetry.anomalies.anomalyScore'] = { $gte: minScore };
     }
 
     if (params.severity) {
       query['promptMeta.contextTelemetry.anomalies.severity'] = params.severity;
     }
 
+    // primaryAnomaly: an explicit type filter wins; otherwise a severity filter still
+    // has to exclude benign turns, which are stored as severity 'low' because there is
+    // no benign tier (TelemetryBuilder floors at 'low'). Keeps "Severity: Low" meaning
+    // real low-severity anomalies, matching the Severity Distribution stat. No-op on
+    // the default view, where score > 0 already implies a real anomaly.
     if (params.anomalyType && params.anomalyType !== 'none') {
       query['promptMeta.contextTelemetry.anomalies.primaryAnomaly'] = params.anomalyType;
+    } else if (params.severity) {
+      query['promptMeta.contextTelemetry.anomalies.primaryAnomaly'] = { $ne: 'none' };
     }
 
     const [entries, total] = await Promise.all([
@@ -95,11 +106,19 @@ const handler = baseApi().get(
           avgResponseTime: { $avg: '$promptMeta.contextTelemetry.performance.totalResponseTimeMs' },
           providers: { $addToSet: '$promptMeta.contextTelemetry.model.provider' },
           models: { $addToSet: '$promptMeta.contextTelemetry.model.modelId' },
-          // Only push non-null severity values
+          // Only count severity for real anomalies (must stay in sync with the
+          // totalAnomalies condition above): benign turns are stored as severity
+          // 'low' (there is no benign tier), so with minAnomalyScore=0 they would
+          // otherwise swamp the distribution.
           severityCounts: {
             $push: {
               $cond: [
-                { $ne: ['$promptMeta.contextTelemetry.anomalies.severity', null] },
+                {
+                  $and: [
+                    { $ne: ['$promptMeta.contextTelemetry.anomalies.severity', null] },
+                    { $ne: ['$promptMeta.contextTelemetry.anomalies.primaryAnomaly', 'none'] },
+                  ],
+                },
                 '$promptMeta.contextTelemetry.anomalies.severity',
                 '$$REMOVE',
               ],

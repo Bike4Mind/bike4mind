@@ -8,7 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Resource } from 'sst';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import { EmbeddingFactory, getProviderFromModel } from '@bike4mind/fab-pipeline';
+import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
 import crypto from 'crypto';
 import {
   ISessionDocument,
@@ -595,29 +595,21 @@ export const handler = withEventContext(async (event, logger) => {
         const embeddingModel = defaultEmbeddingModel as SupportedEmbeddingModel;
         const requiredProvider = getProviderFromModel(embeddingModel);
 
-        const embeddingConfig: {
-          openaiApiKey?: string | null;
-          voyageApiKey?: string | null;
-          ollamaBaseUrl?: string | null;
-        } = {};
+        // Gate on whether a required credential is MISSING, not on whether the config ended up
+        // non-empty. The latter reads "no config fields set" as "no credentials available",
+        // which is wrong for a keyless provider: Bedrock authenticates through the AWS
+        // credential chain and correctly populates nothing, so spidering silently indexed
+        // without vectors on any Bedrock-configured environment.
+        const { config: embeddingConfig, missing } = resolveEmbeddingConfig(requiredProvider, apiKeyTable);
 
-        if (requiredProvider === 'openai' && apiKeyTable?.openai) {
-          embeddingConfig.openaiApiKey = apiKeyTable.openai;
-        } else if (requiredProvider === 'voyageai' && apiKeyTable?.voyageai) {
-          embeddingConfig.voyageApiKey = apiKeyTable.voyageai;
-        } else if (requiredProvider === 'ollama' && apiKeyTable?.ollama) {
-          // apiKeyTable.ollama carries the Ollama base URL (no secret) in self-host.
-          embeddingConfig.ollamaBaseUrl = apiKeyTable.ollama;
-        }
-
-        if (embeddingConfig.openaiApiKey || embeddingConfig.voyageApiKey || embeddingConfig.ollamaBaseUrl) {
+        if (!missing) {
           const embeddingFactory = new EmbeddingFactory(embeddingConfig);
           deps.embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
           deps.embeddingModel = embeddingModel;
           logger.info(`Embedding service configured with model: ${embeddingModel}`);
         } else {
           logger.warn(
-            `Embedding operation requested but no API key available for provider: ${requiredProvider}. Skipping embeddings.`
+            `Embedding operation requested but no ${missing} credential available for provider: ${requiredProvider}. Skipping embeddings.`
           );
         }
       } else {

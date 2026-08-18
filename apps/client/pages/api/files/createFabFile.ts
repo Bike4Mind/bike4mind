@@ -1,11 +1,21 @@
-import { CreateFabFileRequestInputType, FileEvents, Permission } from '@bike4mind/common';
-import { adminSettingsRepository, dataLakeRepository, FabFile, User, withTransaction } from '@bike4mind/database';
+import { CreateFabFileRequestInputType, FabFileSourceType, FileEvents, Permission } from '@bike4mind/common';
+import {
+  adminSettingsRepository,
+  dataLakeBatchRepository,
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+  FabFile,
+  User,
+  withTransaction,
+} from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError } from '@server/utils/errors';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { getFilesStorage } from '@server/utils/storage';
+import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
 
 const createFabFileSchema = fabFilesService.createFabFileSchema;
 
@@ -22,36 +32,71 @@ const handler = baseApi()
 
       const params = createFabFileSchema.parse(req.body);
 
-      // Applying a lake's `datalake:*` meta-tag at creation is a WRITE into that lake - gate it
-      // with the creator/admin check so this path can't be used to bypass the Send-to-Data-Lake
-      // authorization and inject files into a lake the caller only reads.
+      // Same feature gate as the presign siblings: when this create is bound to a data lake
+      // batch, the feature must actually be on.
+      if (params.batchId) {
+        const enabled = await adminSettingsRepository.getSettingsValue('EnableDataLakes');
+        if (!enabled) throw new ForbiddenError('Feature not available', { code: 'FEATURE_DISABLED' });
+      }
+
+      // Applying a lake's `datalake:*` meta-tag at creation is a WRITE into that lake - gate it so
+      // this path can't be used to bypass the Send-to-Data-Lake authorization and inject files into
+      // a lake the caller only reads. Full actor (ctx) + the grant repo so a transferred owner /
+      // curator / org admin can create-into their lake too, matching the presign doors.
+      const ctx = await toAccessContext(req);
       await dataLakeService.assertCanWriteDataLakeTags(
-        { userId: user.id, isAdmin: !!user.isAdmin },
+        ctx,
         (params.tags ?? []).map(t => t.name),
-        { db: { dataLakes: dataLakeRepository } }
+        {
+          db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+        }
       );
 
-      const result = await withTransaction(async () => {
-        return fabFilesService.createFabFile(user.id, params, {
-          db: {
-            adminSettings: adminSettingsRepository,
-            fabFiles: FabFile,
-            users: User,
-          },
-          storage: {
-            upload: async (filepath, content, option) => {
-              await getFilesStorage().upload(content, filepath, {
-                ContentType: option?.ContentType || 'text/plain',
-                ContentLength: option?.ContentLength || Buffer.byteLength(content, 'utf8'),
-              });
-              return filepath;
-            },
-            generateSignedUrl: (filepath: string, expireInSeconds: number) =>
-              getFilesStorage().getSignedUrl(filepath, 'put', {
-                expiresIn: expireInSeconds,
-              }),
-          },
+      // A file joining a lake must also land under that lake's content prefix, or it is
+      // invisible to tag-counts and to the Explorer's tag tree.
+      const tags = await dataLakeService.reconcileDataLakeFallbackTags(params.tags ?? [], {
+        db: { dataLakes: dataLakeRepository },
+        logger: req.logger,
+      });
+
+      // Verify batch ownership before stamping - batchId comes from the body (IDOR otherwise).
+      // Shared with the presign routes (see assertBatchOwnership).
+      if (params.batchId) {
+        await dataLakeService.assertBatchOwnership(user.id, params.batchId, {
+          db: { batches: dataLakeBatchRepository },
         });
+      }
+
+      const result = await withTransaction(async () => {
+        return fabFilesService.createFabFile(
+          user.id,
+          { ...params, ...(tags.length > 0 && { tags }) },
+          {
+            db: {
+              adminSettings: adminSettingsRepository,
+              fabFiles: FabFile,
+              users: User,
+              dataLakes: dataLakeRepository,
+            },
+            storage: {
+              upload: async (filepath, content, option) => {
+                await getFilesStorage().upload(content, filepath, {
+                  ContentType: option?.ContentType || 'text/plain',
+                  ContentLength: option?.ContentLength || Buffer.byteLength(content, 'utf8'),
+                });
+                return filepath;
+              },
+              generateSignedUrl: (filepath: string, expireInSeconds: number) =>
+                getFilesStorage().getSignedUrl(filepath, 'put', {
+                  expiresIn: expireInSeconds,
+                }),
+            },
+            // Admission provenance (#1679): a direct-API upload is a manual door. Passed as the
+            // server-side `provenance` adapter, never from the request body, so the origin cannot be
+            // forged. Not defaulted inside the service - other callers (e.g. research) are not manual.
+            provenance: { sourceType: FabFileSourceType.MANUAL_UPLOAD },
+          }
+        );
       });
 
       await logEvent(
@@ -59,13 +104,11 @@ const handler = baseApi()
         { ability: req.ability }
       );
 
-      // Self-host: the direct S3 presign targets the internal MinIO host (unreachable from a
-      // browser and blocked by CSP connect-src). Hand back a same-origin proxy URL instead;
-      // it streams the PUT to storage server-side (pages/api/files/[id]/upload.ts) and writes
-      // the same key, so the MinIO webhook + ingestion pipeline fire unchanged. Hosted keeps
-      // the direct presign (byte-identical).
-      if (process.env.B4M_SELF_HOST === 'true' && result.presignedUrl) {
-        result.presignedUrl = `/api/files/${result.id}/upload`;
+      // Route the browser's upload via the shared resolver: hosted keeps the direct S3 presign;
+      // self-host returns a same-origin proxy (S3/MinIO isn't browser-reachable). Shared with the
+      // batch path (generate-presigned-urls-batch) so the two upload entry points can't diverge.
+      if (result.presignedUrl) {
+        result.presignedUrl = resolveBrowserUploadUrl(result.id, result.presignedUrl);
       }
 
       return res.json(result);

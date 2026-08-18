@@ -1,9 +1,15 @@
 /**
  * deckChrome - shared visual language for the OptiHashi "command deck" surfaces
  *
- * Houses the hue palette, keyframe animations, the animated ion-trap hero
- * field, section headers, and card glow helpers used by SalesCommandDeck,
- * OptiHub, and any future deck-styled mission surface.
+ * Houses the animated ion-trap hero field, section headers, the active-brief card,
+ * and card glow helpers used by SalesCommandDeck, OptiHub, and any future
+ * deck-styled mission surface.
+ *
+ * The brand-agnostic primitives (palette, `inkFor`, generic animations, the stat
+ * ticker) live in `surfaceChrome.tsx` and are re-exported here under their
+ * historical deck names - import, never copy, so the two cannot drift. The open
+ * Data Lake surface reads them from `surfaceChrome`/`surfaceTokens` instead, so
+ * nothing in this file is on its dependency path.
  */
 
 import { Box, Card, Chip, Typography } from '@mui/joy';
@@ -11,25 +17,25 @@ import { alpha, keyframes } from '@mui/system';
 import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import { memo, type ReactNode } from 'react';
+import {
+  SURFACE_HUES as HUES,
+  inkFor,
+  surfaceBackground,
+  REDUCED_MOTION_OFF,
+  type Hue,
+} from '@client/app/components/datalake/surfaceChrome';
 
-/* Palette */
-
-/** Each hue carries a bright variant (dark mode ink) and a deep variant (light mode ink). */
-export const HUES = {
-  cyan: { base: '#5CE1FF', deep: '#0277A8' },
-  violet: { base: '#8B7CFF', deep: '#5B4BD6' },
-  magenta: { base: '#FF6FD8', deep: '#B81E90' },
-  amber: { base: '#FFC857', deep: '#A36F00' },
-  emerald: { base: '#4ADE80', deep: '#15803D' },
-  blue: { base: '#6FA8FF', deep: '#2563EB' },
-  red: { base: '#FF7A6B', deep: '#C2271A' },
-  slate: { base: '#9FB3C8', deep: '#52677D' },
-} as const;
-
-export type Hue = (typeof HUES)[keyof typeof HUES];
-
-/** Resolve a hue to readable ink for the current color scheme. */
-export const inkFor = (hue: Hue, isDark: boolean) => (isDark ? hue.base : hue.deep);
+export {
+  SURFACE_HUES as HUES,
+  inkFor,
+  REDUCED_MOTION_OFF,
+  cursorBlink,
+  driftFloat,
+  /** Historical name for the generic expanding-ring animation. */
+  ringPing as sonarPing,
+  StatTicker as TelemetryTicker,
+} from '@client/app/components/datalake/surfaceChrome';
+export type { Hue, TickerStat } from '@client/app/components/datalake/surfaceChrome';
 
 /** Map a Q/Work job status to a telemetry dot color + pulse flag. */
 export function statusDot(status: string | undefined, isDark: boolean): { color: string; pulse: boolean } {
@@ -86,42 +92,16 @@ export const arcFlow = keyframes`
   to { stroke-dashoffset: 0; }
 `;
 
-export const cursorBlink = keyframes`
-  0%, 49% { opacity: 1; }
-  50%, 100% { opacity: 0.15; }
-`;
-
 /** Deal-in flip for encounter cards - they land on the table like dealt cards. */
 export const cardDeal = keyframes`
   0% { opacity: 0; transform: translateY(20px) rotate(-1.5deg) scale(0.97); }
   100% { opacity: 1; transform: translateY(0) rotate(0deg) scale(1); }
 `;
 
-export const sonarPing = keyframes`
-  0% { transform: scale(0.3); opacity: 0.7; }
-  100% { transform: scale(1); opacity: 0; }
-`;
-
-export const driftFloat = keyframes`
-  0%, 100% { transform: translate(0, 0); }
-  25% { transform: translate(6px, -10px); }
-  50% { transform: translate(-4px, -16px); }
-  75% { transform: translate(-8px, -6px); }
-`;
-
-export const REDUCED_MOTION_OFF = {
-  '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
-} as const;
-
 /* Page background */
 
-/** Ambient radial washes behind a deck surface. */
-export const deckBackground = (isDark: boolean) =>
-  isDark
-    ? `radial-gradient(ellipse 80% 45% at 50% -8%, ${alpha(HUES.cyan.base, 0.1)}, transparent 65%),
-       radial-gradient(ellipse 60% 40% at 88% 108%, ${alpha(HUES.violet.base, 0.07)}, transparent 60%)`
-    : `radial-gradient(ellipse 80% 45% at 50% -8%, ${alpha(HUES.cyan.deep, 0.07)}, transparent 65%),
-       radial-gradient(ellipse 60% 40% at 88% 108%, ${alpha(HUES.violet.deep, 0.05)}, transparent 60%)`;
+/** Ambient radial washes behind a deck surface (the deck's cyan/violet tint). */
+export const deckBackground = (isDark: boolean) => surfaceBackground(isDark, HUES.cyan, HUES.violet);
 
 /* Card glow */
 
@@ -262,62 +242,6 @@ export function DeckSectionHeader({ label, hint }: { label: string; hint?: strin
           {hint}
         </Typography>
       )}
-    </Box>
-  );
-}
-
-/* Telemetry ticker */
-
-export interface TickerStat {
-  label: string;
-  value: string;
-  sub?: string;
-}
-
-export function TelemetryTicker({ stats, isDark }: { stats: TickerStat[]; isDark: boolean }) {
-  return (
-    <Box
-      sx={{
-        display: 'flex',
-        justifyContent: 'center',
-        flexWrap: 'wrap',
-        columnGap: 3,
-        rowGap: 0.5,
-      }}
-    >
-      {stats.map(stat => (
-        <Box key={stat.label} sx={{ display: 'flex', alignItems: 'baseline', gap: 0.6 }}>
-          <Box
-            sx={{
-              width: 5,
-              height: 5,
-              borderRadius: '50%',
-              bgcolor: inkFor(HUES.emerald, isDark),
-              animation: `${cursorBlink} 2.4s steps(1) infinite`,
-              ...REDUCED_MOTION_OFF,
-            }}
-          />
-          <Typography
-            level="body-xs"
-            sx={{
-              fontFamily: 'monospace',
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-              color: 'text.tertiary',
-            }}
-          >
-            {stat.label}
-          </Typography>
-          <Typography level="body-xs" sx={{ fontFamily: 'monospace', fontWeight: 700, color: 'text.primary' }}>
-            {stat.value}
-          </Typography>
-          {stat.sub && (
-            <Typography level="body-xs" sx={{ fontFamily: 'monospace', color: 'text.tertiary' }}>
-              {stat.sub}
-            </Typography>
-          )}
-        </Box>
-      ))}
     </Box>
   );
 }

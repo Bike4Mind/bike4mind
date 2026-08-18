@@ -3,10 +3,12 @@ import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 
 
 const mockGet = vi.fn();
 const mockPost = vi.fn();
+const mockAxiosPost = vi.fn();
 vi.mock('../auth/ApiClient', () => ({
   ApiClient: class {
     get = mockGet;
     post = mockPost;
+    getAxiosInstance = () => ({ post: mockAxiosPost });
   },
 }));
 
@@ -120,6 +122,186 @@ describe('B4mApiClient', () => {
     mockGet.mockResolvedValue({ id: 'f1' });
     await client.getFile('f1');
     expect(mockGet).toHaveBeenCalledWith('/api/files/f1');
+  });
+
+  it('generates a sound effect, requesting bytes and reading the persisted-file headers', async () => {
+    mockAxiosPost.mockResolvedValue({
+      data: Buffer.from('audio-bytes'),
+      headers: {
+        'content-type': 'audio/mpeg',
+        'x-b4m-audio-saved': 'true',
+        'x-b4m-audio-fab-file-id': 'fab1',
+        'x-b4m-audio-file-name': 'sound-effect-thunderclap.mp3',
+        'x-b4m-audio-file-url': 'https://signed.example/audio.mp3',
+      },
+    });
+
+    const result = await client.generateSoundEffect({
+      provider: 'elevenlabs',
+      text: 'thunderclap',
+      durationSeconds: 3,
+      promptInfluence: 0.5,
+      format: 'mp3_44100_128',
+    });
+
+    expect(mockAxiosPost).toHaveBeenCalledWith(
+      '/api/ai/sound-effects',
+      {
+        provider: 'elevenlabs',
+        text: 'thunderclap',
+        durationSeconds: 3,
+        promptInfluence: 0.5,
+        format: 'mp3_44100_128',
+      },
+      { responseType: 'arraybuffer' }
+    );
+    // The signed URL comes straight off the header, not a re-fetch, so the CLI never
+    // hits the moderation race that GET /api/files/:id would on a just-created file.
+    expect(result).toEqual({
+      audio: Buffer.from('audio-bytes'),
+      contentType: 'audio/mpeg',
+      saved: true,
+      fabFileId: 'fab1',
+      fileName: 'sound-effect-thunderclap.mp3',
+      fileUrl: 'https://signed.example/audio.mp3',
+    });
+  });
+
+  it('drops the persisted-file headers when the save header is not "true"', async () => {
+    // A duplicated header arrives as an array; only the scalar string form is kept,
+    // and none of the file headers are read at all unless the save actually succeeded.
+    mockAxiosPost.mockResolvedValue({
+      data: Buffer.from('audio-bytes'),
+      headers: {
+        'content-type': 'audio/mpeg',
+        'x-b4m-audio-saved': 'false',
+        'x-b4m-audio-fab-file-id': ['fab1', 'fab2'],
+        'x-b4m-audio-file-url': 'https://signed.example/audio.mp3',
+      },
+    });
+
+    const result = await client.generateSoundEffect({ provider: 'elevenlabs', text: 'wind' });
+
+    expect(result.saved).toBe(false);
+    expect(result.fabFileId).toBeUndefined();
+    expect(result.fileName).toBeUndefined();
+    expect(result.fileUrl).toBeUndefined();
+  });
+
+  it('omits optional sound-effect fields and reports not-saved when no fab-file header is set', async () => {
+    mockAxiosPost.mockResolvedValue({
+      data: Buffer.from('bytes'),
+      headers: { 'content-type': 'audio/mpeg' },
+    });
+
+    const result = await client.generateSoundEffect({ provider: 'elevenlabs', text: 'wind' });
+
+    expect(mockAxiosPost).toHaveBeenCalledWith(
+      '/api/ai/sound-effects',
+      { provider: 'elevenlabs', text: 'wind' },
+      { responseType: 'arraybuffer' }
+    );
+    expect(result.saved).toBe(false);
+    expect(result.fabFileId).toBeUndefined();
+  });
+
+  it('decodes an arraybuffer error body so mapApiError can read the server message', async () => {
+    const bodyBytes = Buffer.from(JSON.stringify({ error: 'Sound generation failed' }));
+    mockAxiosPost.mockRejectedValue(axiosError(502, { data: bodyBytes }));
+
+    await expect(client.generateSoundEffect({ provider: 'elevenlabs', text: 'x' })).rejects.toMatchObject({
+      response: { data: { error: 'Sound generation failed' } },
+    });
+  });
+
+  it('decodes an already-stringified error body (non-Node adapter shape)', async () => {
+    mockAxiosPost.mockRejectedValue(
+      axiosError(503, { data: JSON.stringify({ error: 'No elevenlabs API key configured' }) })
+    );
+
+    await expect(client.generateSoundEffect({ provider: 'elevenlabs', text: 'x' })).rejects.toMatchObject({
+      response: { data: { error: 'No elevenlabs API key configured' } },
+    });
+  });
+
+  it('lists projects with nested pagination and normalizes the envelope', async () => {
+    mockGet.mockResolvedValue({ data: [{ id: 'p1', name: 'Proj' }], hasMore: true, total: 5 });
+
+    const result = await client.listProjects({ limit: 100 });
+
+    expect(mockGet).toHaveBeenCalledWith('/api/projects', {
+      params: { pagination: { page: 1, limit: 100 } },
+    });
+    expect(result).toEqual({ data: [{ id: 'p1', name: 'Proj' }], hasMore: true });
+  });
+
+  it('threads search and an explicit page through project pagination', async () => {
+    mockGet.mockResolvedValue({ data: [], hasMore: false });
+
+    await client.listProjects({ search: 'apollo', limit: 10, page: 3 });
+
+    expect(mockGet).toHaveBeenCalledWith('/api/projects', {
+      params: { search: 'apollo', pagination: { page: 3, limit: 10 } },
+    });
+  });
+
+  it('normalizes a bare-array project response to { data, hasMore:false }', async () => {
+    mockGet.mockResolvedValue([{ id: 'p1' }, { id: 'p2' }]);
+
+    expect(await client.listProjects({ limit: 100 })).toEqual({
+      data: [{ id: 'p1' }, { id: 'p2' }],
+      hasMore: false,
+    });
+  });
+
+  it('gets a project by id (url-encoded)', async () => {
+    mockGet.mockResolvedValue({ id: 'p 1' });
+    await client.getProject('p 1');
+    expect(mockGet).toHaveBeenCalledWith('/api/projects/p%201');
+  });
+
+  it('lists artifacts with flat limit/offset params and normalizes the envelope', async () => {
+    mockGet.mockResolvedValue({
+      artifacts: [{ id: 'artifact_a_1', title: 'A' }],
+      pagination: { total: 3, limit: 100, offset: 0, hasMore: true },
+    });
+
+    const result = await client.listArtifacts({ limit: 100 });
+
+    expect(mockGet).toHaveBeenCalledWith('/api/artifacts', {
+      params: { limit: 100, offset: 0 },
+    });
+    expect(result).toEqual({ data: [{ id: 'artifact_a_1', title: 'A' }], hasMore: true });
+  });
+
+  it('threads search and an explicit offset through the artifact list', async () => {
+    mockGet.mockResolvedValue({ artifacts: [], pagination: { total: 0, limit: 10, offset: 20, hasMore: false } });
+
+    await client.listArtifacts({ search: 'chart', limit: 10, offset: 20 });
+
+    expect(mockGet).toHaveBeenCalledWith('/api/artifacts', {
+      params: { search: 'chart', limit: 10, offset: 20 },
+    });
+  });
+
+  it('defaults artifact hasMore to false when the envelope omits pagination', async () => {
+    mockGet.mockResolvedValue({ artifacts: [{ id: 'artifact_a_1' }] });
+
+    expect(await client.listArtifacts({ limit: 100 })).toEqual({
+      data: [{ id: 'artifact_a_1' }],
+      hasMore: false,
+    });
+  });
+
+  it('gets an artifact with content, url-encoding the id', async () => {
+    mockGet.mockResolvedValue({ artifact: { id: 'a 1' }, content: { content: 'hello' } });
+
+    const result = await client.getArtifact('a 1');
+
+    expect(mockGet).toHaveBeenCalledWith('/api/artifacts/a%201', {
+      params: { includeContent: 'true' },
+    });
+    expect(result).toEqual({ artifact: { id: 'a 1' }, content: { content: 'hello' } });
   });
 });
 

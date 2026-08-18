@@ -1,0 +1,42 @@
+[
+  {
+    "modelId": "eleven_flash_v2_5",
+    "patch": {
+      "id": "eleven_flash_v2_5",
+      "vendor": "elevenlabs",
+      "type": "tts",
+      "name": "Eleven Flash v2.5",
+      "contextWindow": 0
+    }
+  },
+  {
+    "modelId": "eleven_multilingual_v2",
+    "patch": {
+      "id": "eleven_multilingual_v2",
+      "vendor": "elevenlabs",
+      "type": "tts",
+      "name": "Eleven Multilingual v2",
+      "contextWindow": 0
+    }
+  },
+  {
+    "modelId": "eleven_v3",
+    "patch": {
+      "id": "eleven_v3",
+      "vendor": "elevenlabs",
+      "type": "tts",
+      "name": "Eleven v3",
+      "contextWindow": 0
+    }
+  },
+  {
+    "modelId": "scribe_v1",
+    "patch": {
+      "id": "scribe_v1",
+      "vendor": "elevenlabs",
+      "type": "speech-to-text",
+      "name": "Scribe v1",
+      "contextWindow": 0
+    }
+  }
+]

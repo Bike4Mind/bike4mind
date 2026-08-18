@@ -58,6 +58,18 @@ describe('EmbedAllowlistEditor', () => {
     );
   });
 
+  it('escapes a double quote in the title so the iframe snippet cannot break out of the attribute', async () => {
+    renderEditor({ title: 'Ac"me & Co' });
+    fireEvent.change(screen.getByTestId('publish-share-embed-input'), { target: { value: 'https://erikbethke.com' } });
+    fireEvent.click(screen.getByTestId('publish-share-embed-add'));
+    const snippet = await screen
+      .findByTestId('publish-share-embed-snippet')
+      .then(el => (el as HTMLTextAreaElement).value);
+    expect(snippet).toContain('title="Ac&quot;me &amp; Co"');
+    // The raw quote must not survive to break out of the double-quoted attribute.
+    expect(snippet).not.toContain('title="Ac"me');
+  });
+
   it('uplevels a casual bare host to a full https origin', async () => {
     renderEditor();
     fireEvent.change(screen.getByTestId('publish-share-embed-input'), { target: { value: 'erikbethke.com' } });

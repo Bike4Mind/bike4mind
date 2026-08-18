@@ -22,6 +22,7 @@ import {
   type ToolResult,
   type ToolUseInfo,
 } from './toolParallelizer';
+import { RepeatedCallGuard, repeatedCallWarning, repeatedCallBlockedObservation } from './repeatedCallGuard';
 
 /**
  * Placeholder tool_result content for a tool_use that never ran because the run
@@ -127,6 +128,33 @@ function appendWorkflowReminder(messages: IMessage[], provider?: () => string | 
 }
 
 /**
+ * Build the per-iteration prompt-cache strategy. History caching anchors on the
+ * last message so the cached prefix grows each turn (standard Anthropic
+ * incremental-caching pattern), skipping the degenerate case where there's no
+ * prior prefix to reuse yet - except when that last message is a workflow
+ * reminder, which is stripped and rebuilt every iteration and would otherwise
+ * never itself produce a cache hit; in that case the breakpoint anchors on the
+ * message before it instead.
+ */
+function buildCacheStrategy(
+  messages: IMessage[],
+  enableCaching: boolean | undefined,
+  hasTools: boolean
+): ICacheStrategy | undefined {
+  if (!enableCaching) return undefined;
+
+  const lastMessage = messages[messages.length - 1];
+  return {
+    enableCaching: true,
+    cacheSystemPrompt: true,
+    cacheTools: hasTools,
+    cacheConversationHistory: messages.length >= 2,
+    historyCacheExcludeTrailingCount: lastMessage && isWorkflowReminder(lastMessage) ? 1 : 0,
+    cacheTTL: '5m',
+  };
+}
+
+/**
  * Map a tool execution result to the observation string appended to history.
  * Backfills a cancellation placeholder for tools that never ran (absent from the
  * results map) or were aborted mid-flight, so every advertised tool_use is
@@ -213,6 +241,22 @@ export class ReActAgent extends EventEmitter {
    */
   private initialMessageCount = 0;
 
+  /**
+   * Circuit breaker against non-terminating exploration loops (same call, same
+   * args, same result, repeated). Instance-scoped so its state survives the
+   * per-iteration history trimming that otherwise hides the loop from the model.
+   * Reset at the start of every run()/runIteration().
+   */
+  private readonly repeatedCallGuard: RepeatedCallGuard;
+
+  /**
+   * Read-only classifier for the active run, captured from run options (falls
+   * back to the built-in check). Used by the repeated-call guard to decide
+   * whether a completed tool call was a mutation that should invalidate earlier
+   * read observations. Set at the start of every run()/runIteration().
+   */
+  private isReadOnlyToolFn: (toolName: string) => boolean = defaultIsReadOnlyTool;
+
   constructor(context: AgentContext) {
     super();
     this.context = {
@@ -221,6 +265,7 @@ export class ReActAgent extends EventEmitter {
       maxTokens: context.maxTokens ?? 4096,
       temperature: context.temperature ?? 0.7,
     };
+    this.repeatedCallGuard = new RepeatedCallGuard(context.repeatedCallGuard);
   }
 
   /**
@@ -313,6 +358,8 @@ export class ReActAgent extends EventEmitter {
     this.confidenceLog = [];
     this.iterationConfidences = [];
     this.lastStopReason = undefined;
+    this.repeatedCallGuard.reset();
+    this.isReadOnlyToolFn = options.isReadOnlyTool ?? defaultIsReadOnlyTool;
 
     const maxIterations = options.maxIterations ?? this.context.maxIterations ?? 50;
     const temperature = options.temperature ?? this.context.temperature ?? 0.7;
@@ -413,16 +460,10 @@ export class ReActAgent extends EventEmitter {
 
         appendWorkflowReminder(messages, options.workflowReminder);
 
-        // Build cache strategy for prompt caching (system prompt + tools are static across iterations)
-        const cacheStrategy: ICacheStrategy | undefined = options.enableCaching
-          ? {
-              enableCaching: true,
-              cacheSystemPrompt: true,
-              cacheTools: this.context.tools.length > 0,
-              cacheConversationHistory: false, // History changes each iteration
-              cacheTTL: '5m',
-            }
-          : undefined;
+        // Build cache strategy for prompt caching (system prompt + tools are static
+        // across iterations; conversation history uses a moving breakpoint - see
+        // buildCacheStrategy)
+        const cacheStrategy = buildCacheStrategy(messages, options.enableCaching, this.context.tools.length > 0);
 
         // Stream tokens so consumers (e.g. subagent UI) see live progress within
         // each iteration rather than a blackout until the full LLM response lands.
@@ -1092,6 +1133,8 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       this.iterationConfidences = [];
       this.lastStopReason = undefined;
       this.iterations = 0;
+      this.repeatedCallGuard.reset();
+      this.isReadOnlyToolFn = options.isReadOnlyTool ?? defaultIsReadOnlyTool;
 
       this.messages = [
         {
@@ -1185,15 +1228,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       const iterStartCacheWriteTokens = this.totalCacheWriteTokens;
       const iterStartCredits = this.totalCredits;
 
-      const cacheStrategy: ICacheStrategy | undefined = options.enableCaching
-        ? {
-            enableCaching: true,
-            cacheSystemPrompt: true,
-            cacheTools: this.context.tools.length > 0,
-            cacheConversationHistory: false,
-            cacheTTL: '5m',
-          }
-        : undefined;
+      const cacheStrategy = buildCacheStrategy(this.messages, options.enableCaching, this.context.tools.length > 0);
 
       // Stream tokens so consumers see live progress within the iteration.
       const iterationIndex = this.iterations - 1;
@@ -1721,14 +1756,41 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
         `if no more tools are needed.`
       );
     }
+    // Circuit breaker: refuse to re-run a call that has already returned the
+    // same result blockThreshold times, and return a nudge instead of spinning.
+    const signature = RepeatedCallGuard.signature(toolUse.name, toolUse.arguments);
+    if (this.repeatedCallGuard.shouldBlock(signature)) {
+      this.context.logger.warn(
+        `[ReActAgent] Repeated-call circuit breaker tripped for "${toolUse.name}" - skipping execution`
+      );
+      return repeatedCallBlockedObservation(toolUse.name, this.repeatedCallGuard.blockLimit);
+    }
+
+    const isReadOnly = this.isReadOnlyToolFn(toolUse.name);
+    let observation: string;
+    let succeeded = true;
     try {
       const params = this.parseToolArguments(toolUse.arguments);
       const result = await tool.toolFn(params);
-      return typeof result === 'string' ? result : JSON.stringify(result);
+      observation = typeof result === 'string' ? result : JSON.stringify(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return `Error: ${message}`;
+      observation = `Error: ${message}`;
+      succeeded = false;
     }
+
+    // Track this call's result. A changed result resets the counter (progress);
+    // an unchanged result escalates toward warn and then block.
+    const { count, warn } = this.repeatedCallGuard.record(signature, observation, isReadOnly);
+
+    // A successful mutation may have changed state that earlier reads sampled,
+    // so their "settled" counts (and any block) are now stale - clear them so a
+    // follow-up re-read of what just changed isn't wrongly short-circuited.
+    if (succeeded && !isReadOnly) {
+      this.repeatedCallGuard.invalidateReadOnly();
+    }
+
+    return warn ? `${observation}${repeatedCallWarning(toolUse.name, count)}` : observation;
   }
 
   /**

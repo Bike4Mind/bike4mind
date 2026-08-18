@@ -6,6 +6,7 @@ import {
   CreditHolderType,
   IEmbedBranding,
   IUserApiKeyDocument,
+  IUserApiKeyRateLimit,
   IUserApiKeyRepository,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
@@ -60,6 +61,20 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     await this.model.updateOne({ _id: id }, spendCap === null ? { $unset: { spendCap: 1 } } : { $set: { spendCap } });
   }
 
+  // Per-path $set (not a whole-subdoc $set) to stay consistent with updateUsage
+  // and to leave any future sibling under rateLimit untouched.
+  async setRateLimit(id: string, rateLimit: IUserApiKeyRateLimit) {
+    await this.model.updateOne(
+      { _id: id },
+      {
+        $set: {
+          'rateLimit.requestsPerMinute': rateLimit.requestsPerMinute,
+          'rateLimit.requestsPerDay': rateLimit.requestsPerDay,
+        },
+      }
+    );
+  }
+
   async resetSpend(id: string) {
     await this.model.updateOne({ _id: id }, { $set: { 'usage.totalSpendCredits': 0 } });
   }
@@ -83,11 +98,14 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       .exec();
   }
 
+  // Bulk deactivation has no human actor, so it stamps revokedAt without revokedBy.
+  // Scoped to keys actually transitioning: re-running must not reset an existing
+  // timestamp, and keys disabled before this field existed must not get a fabricated one.
   async deactivateAllByUserId(userId: string) {
     await this.model.updateMany(
-      { userId },
+      { userId, status: { $ne: ApiKeyStatus.DISABLED } },
       {
-        $set: { status: ApiKeyStatus.DISABLED },
+        $set: { status: ApiKeyStatus.DISABLED, revokedAt: new Date() },
       }
     );
   }
@@ -109,8 +127,32 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     return this.model.find({ productId }).sort({ createdAt: -1 }).exec();
   }
 
+  // Keys BILLED to this org, so the same billingOwnerType conjunct
+  // findByOrganizationIdsAndId applies: without it a legacy or direct-DB
+  // user-billed row carrying an organizationId would be listed to the org's
+  // admins on a surface whose write paths then refuse to resolve it.
   findByOrganizationId(organizationId: string) {
-    return this.model.find({ organizationId }).sort({ createdAt: -1 }).exec();
+    return this.model
+      .find({ organizationId, billingOwnerType: CreditHolderType.Organization })
+      .sort({ createdAt: -1 })
+      .exec();
+  }
+
+  // Positive org-admin scope for the write paths: the key with this id, but only
+  // if it is org-billed to one of the caller's administered orgs. The org-set and
+  // billingOwnerType filters ARE the authorization predicate, so it fails closed
+  // by construction - an empty set short-circuits without a query, and a personal
+  // (User-billed) or out-of-set key never matches. Hydrated doc, matching
+  // findByUserIdAndId so update() behaves identically on either resolution path.
+  findByOrganizationIdsAndId(organizationIds: string[], id: string) {
+    if (organizationIds.length === 0) return Promise.resolve(null);
+    return this.model
+      .findOne({ _id: id, organizationId: { $in: organizationIds }, billingOwnerType: CreditHolderType.Organization })
+      .exec();
+  }
+
+  findByAgentId(agentId: string) {
+    return this.model.find({ agentId, status: ApiKeyStatus.ACTIVE }).sort({ createdAt: -1 }).exec();
   }
 
   async countActiveByProductId(productId: string): Promise<number> {
@@ -142,6 +184,11 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     status: { type: String, enum: Object.values(ApiKeyStatus), default: ApiKeyStatus.ACTIVE },
     expiresAt: { type: Date },
     lastUsedAt: { type: Date },
+    // Revocation audit trail. Every path that flips status to DISABLED must stamp
+    // revokedAt, or a revoked key renders with no "when" - see IUserApiKey.
+    revokedAt: { type: Date },
+    revokedBy: { type: String },
+    revokedReason: { type: String },
     rateLimit: {
       requestsPerMinute: { type: Number, required: true, default: 60 },
       requestsPerDay: { type: Number, required: true, default: 1000 },

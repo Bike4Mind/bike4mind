@@ -11,6 +11,7 @@ import {
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import mongoose, { Document, Model, model, Schema, Query } from 'mongoose';
+import { NotFoundError } from '@bike4mind/utils';
 import { convertIds } from '../../utils/mongo';
 import { CountersSchema } from '../infra/ops/CounterModel';
 import BaseRepository from '@bike4mind/db-core';
@@ -140,6 +141,8 @@ const UserPreferencesSchema = new Schema(
     // ExperimentalFeatureToggle silently reverts to 'off' on reload.
     agentModeDefault: { type: String, enum: ['off', 'auto', 'on'] },
     showFunTools: { type: Boolean },
+    saveGeneratedAudio: { type: Boolean },
+    showSplashCards: { type: Boolean },
   },
   { _id: false }
 );
@@ -244,10 +247,58 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     super(model);
   }
 
+  /** Remove the given group ids from EVERY user that has them (group-type revoke/delete). */
+  async removeGroupsFromAllUsers(groupIds: string[]): Promise<void> {
+    if (groupIds.length === 0) return;
+    await this.model.updateMany({ groups: { $in: groupIds } }, { $pull: { groups: { $in: groupIds } } });
+  }
+
+  /** Add one group id to one user (idempotent via $addToSet). */
+  async addGroupToUser(userId: string, groupId: string): Promise<void> {
+    await this.model.updateOne({ _id: userId }, { $addToSet: { groups: groupId } });
+  }
+
+  /** Remove one group id from one user. */
+  async removeGroupFromUser(userId: string, groupId: string): Promise<void> {
+    await this.model.updateOne({ _id: userId }, { $pull: { groups: groupId } });
+  }
+
+  /** Remove several group ids from one user (idempotent $pull). No-op on an empty list. */
+  async removeGroupsFromUser(userId: string, groupIds: string[]): Promise<void> {
+    if (groupIds.length === 0) return;
+    await this.model.updateOne({ _id: userId }, { $pull: { groups: { $in: groupIds } } });
+  }
+
+  /** Member ids per group id in one aggregation (keyed by group id; absent = no members). */
+  async findUserIdsByGroupIds(groupIds: string[]): Promise<Record<string, string[]>> {
+    if (groupIds.length === 0) return {};
+    // $addToSet, not $push: a user whose user.groups array holds a duplicate entry for the same
+    // group (e.g. a pre-#1224 double-accept via the legacy group-invite path) would otherwise be
+    // counted twice for that group. $addToSet makes memberCount correct by construction rather
+    // than relying on every writer to dedupe user.groups itself.
+    const rows = await this.model.aggregate<{ _id: string; userIds: string[] }>([
+      { $match: { groups: { $in: groupIds } } },
+      { $unwind: '$groups' },
+      { $match: { groups: { $in: groupIds } } },
+      { $group: { _id: '$groups', userIds: { $addToSet: { $toString: '$_id' } } } },
+    ]);
+    const membersByGroup: Record<string, string[]> = {};
+    for (const row of rows) membersByGroup[row._id] = row.userIds;
+    return membersByGroup;
+  }
+
   async findAllByEmailsOrUsernames(emails: string[], usernames: string[]) {
-    const result = await this.model.find({
-      $or: [{ email: { $in: emails } }, { username: { $in: usernames } }],
-    });
+    // Case-insensitive to match findByUsernameOrEmail below -- email/username are stored
+    // verbatim (no lowercase transform), so a caller-typed case variant must still resolve.
+    // Caveat for callers: uniqueness on this schema is case-SENSITIVE (username_1, email_1),
+    // so two distinct real accounts differing only by case can both match one input string.
+    // A caller that grants access based on a result here (sharingService/create.ts is the one
+    // that does) must treat more than one match per input as ambiguous, not pick one silently.
+    const result = await this.model
+      .find({
+        $or: [{ email: { $in: emails } }, { username: { $in: usernames } }],
+      })
+      .collation({ locale: 'en', strength: 2 });
     return result.map(d => d.toJSON());
   }
 
@@ -383,6 +434,20 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       .select('name email username lastActiveAt isOnline photoUrl');
   }
 
+  /**
+   * Emailed users among `ids`, excluding any that carry `deletedAt` (mirrors the same guard
+   * `findBySlackUserId` applies) - narrower than `findByIds` so a notification addressee
+   * resolver never mails an emailless account.
+   */
+  async findActiveEmailsByIds(ids: string[]): Promise<Array<{ id: string; email: string }>> {
+    if (ids.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(ids) }, deletedAt: { $exists: false }, email: { $nin: [null, ''] } })
+      .select('email')
+      .lean({ virtuals: true });
+    return docs.map(d => ({ id: String(d._id), email: String(d.email) }));
+  }
+
   async searchCollections(
     userId: string,
     options: { page: number; limit: number; search: string; type?: CollectionType },
@@ -439,6 +504,14 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       ],
       { new: true }
     );
+  }
+
+  async incrementTokenVersion(userId: string): Promise<number> {
+    const updated = await this.model.findByIdAndUpdate(userId, { $inc: { tokenVersion: 1 } }, { new: true });
+    // A null result means the user was deleted between the caller's findById and this $inc.
+    // Falling back to 0 would report a successful revoke that never happened - fail loudly instead.
+    if (!updated) throw new NotFoundError(`User ${userId} not found`);
+    return updated.tokenVersion;
   }
 
   /**
@@ -761,7 +834,10 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
       default: 'auto',
     },
 
-    // Cross-device user preferences (synced from client localStorage)
+    // Cross-device user preferences (synced from client localStorage). Defaults to null, not
+    // {} - a dot-path $set (e.g. 'preferences.foo') on a user who has never set a preference
+    // fails with "Cannot create field 'foo' in element {preferences: null}"; coerce to {} in
+    // a separate update first (see docx-template.ts) before writing a nested path.
     preferences: { type: UserPreferencesSchema, default: null },
 
     lastCreditGrantAt: { type: Date, required: false },
@@ -777,6 +853,15 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
   }
 );
 
+// Dedupe key for an authProviders entry: strategy and id joined by a U+0000 delimiter, a
+// byte no legitimate strategy or id contains - nothing schema-level enforces this (the
+// strategy enum blocks it on validated paths; id has no validator), but no real value
+// carries it. Written as an escape (not a raw NUL) so the file stays greppable; see #1221.
+// Exported so the delimiter's separating property is unit-tested directly (see
+// UserModel.test.ts).
+export const authProviderDedupeKey = (strategy: AuthStrategy, id: string | null): string =>
+  `${strategy}\u0000${id ?? ''}`;
+
 // Duplicate-(strategy, id) integrity guard for authProviders. A concurrent
 // first-login race (two logins racing stage-1 miss -> stage-2 miss, see
 // verifyCallback.ts) can try to persist the same provider identity twice on
@@ -791,9 +876,11 @@ UserSchema.pre('save', function (next) {
   const providers = this.authProviders;
   if (Array.isArray(providers) && providers.length > 1) {
     const lastIndexByKey = new Map<string, number>();
-    providers.forEach((p, i) => lastIndexByKey.set(`${p?.strategy} ${p?.id ?? ''}`, i));
+    providers.forEach((p, i) => lastIndexByKey.set(authProviderDedupeKey(p?.strategy, p?.id), i));
     if (lastIndexByKey.size !== providers.length) {
-      this.authProviders = providers.filter((p, i) => lastIndexByKey.get(`${p?.strategy} ${p?.id ?? ''}`) === i);
+      this.authProviders = providers.filter(
+        (p, i) => lastIndexByKey.get(authProviderDedupeKey(p?.strategy, p?.id)) === i
+      );
     }
   }
   next();
@@ -827,12 +914,23 @@ UserSchema.index(
   }
 );
 
+// Case-insensitive username index for collation-based lookups (findAllByEmailsOrUsernames).
+// Same reasoning as email_ci above: the case-sensitive username_1 index above won't be used
+// by a .collation() query, and without a matching collated index that $in falls back to a
+// full collection scan.
+UserSchema.index({ username: 1 }, { collation: { locale: 'en', strength: 2 }, name: 'username_ci' });
+
 // resetPasswordToken index intentionally removed - password reset flow replaced by OTC email auth
 // Non-unique multikey index for the two-stage OAuth lookup (stage-1 matches by provider identity).
 // NOT unique: legacy rows carry id:null; a unique multikey would collide every (strategy, null).
 // Explicit name MUST match migration 20260620000000's createIndex name, otherwise autoIndex
 // (mongo.ts) and the migrator create the same key pattern under two names -> IndexKeySpecsConflict.
 UserSchema.index({ 'authProviders.strategy': 1, 'authProviders.id': 1 }, { name: 'authProviders_strategy_id' });
+// Serves the group-membership reads added by org-groups #1172: the per-group memberCount on
+// GET /organizations/:id/groups and the $pull in removeGroupsFromAllUsers on group-type revoke.
+// Without it both scan the full users collection. Explicit name so the migration and autoIndex
+// (mongo.ts) agree - see the authProviders_strategy_id note above.
+UserSchema.index({ groups: 1 }, { name: 'user_groups' });
 UserSchema.index({ 'slackSettings.slackUserId': 1 });
 UserSchema.index({ 'slackSettings.githubNotifications.githubUsername': 1 });
 UserSchema.index({ 'atlassianConnect.status': 1 });

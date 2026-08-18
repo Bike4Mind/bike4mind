@@ -109,3 +109,33 @@ describe('validateEmbedKeyOrigins', () => {
     expect(validate([])).toEqual({ ok: true, value: [] });
   });
 });
+
+describe('validateEmbedBranding', () => {
+  async function loadBrandingValidator() {
+    vi.resetModules();
+    process.env.SERVER_DOMAIN = 'bike4mind.com';
+    return (await import('./embedOrigins')).validateEmbedBranding;
+  }
+
+  it('passes undefined through and accepts a valid branding object', async () => {
+    const validate = await loadBrandingValidator();
+    expect(validate(undefined)).toEqual({ ok: true, value: undefined });
+    const branding = { displayName: 'Acme', primaryColor: '#336699', logoUrl: 'https://cdn.example.com/l.png' };
+    expect(validate(branding)).toEqual({ ok: true, value: branding });
+  });
+
+  it('rejects hostile values with the field named in the error', async () => {
+    const validate = await loadBrandingValidator();
+    const bad = validate({ logoUrl: 'javascript:alert(1)' });
+    expect(bad).toEqual(
+      expect.objectContaining({ ok: false, code: 'EMBED_BRANDING_INVALID', error: expect.stringContaining('logoUrl') })
+    );
+    expect(validate({ primaryColor: 'red;}x{' })).toEqual(expect.objectContaining({ ok: false }));
+  });
+
+  it('rejects a non-object body (param smuggling becomes a 4xx, not a 500)', async () => {
+    const validate = await loadBrandingValidator();
+    expect(validate('hideBranding=true')).toEqual(expect.objectContaining({ ok: false }));
+    expect(validate(42)).toEqual(expect.objectContaining({ ok: false }));
+  });
+});

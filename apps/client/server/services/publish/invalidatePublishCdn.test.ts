@@ -47,7 +47,16 @@ describe('publishCachePaths', () => {
   it('maps a bundle to its index + asset glob on BOTH the /p and /uc (isolated) origins', () => {
     expect(
       publishCachePaths({ publicId: 'p1', tier: 'user', scopeId: 'u1', slug: 'my-page', sourceKind: 'bundle' })
-    ).toEqual(['/p/u/u1/my-page', '/p/u/u1/my-page/*', '/uc/u/u1/my-page', '/uc/u/u1/my-page/*']);
+    ).toEqual([
+      '/p/u/u1/my-page',
+      // Bare wildcard clears query-string variants (?format=raw, ?embed=1, ?v=), which a
+      // slash-wildcard cannot reach - it matches further path segments only.
+      '/p/u/u1/my-page*',
+      '/p/u/u1/my-page/*',
+      '/uc/u/u1/my-page',
+      '/uc/u/u1/my-page*',
+      '/uc/u/u1/my-page/*',
+    ]);
   });
 
   it('uses the org/project url prefixes for bundles', () => {
@@ -70,11 +79,13 @@ describe('invalidatePublishCdn', () => {
     expect(cmd.input.DistributionId).toBe(DIST_ID);
     expect(cmd.input.InvalidationBatch.Paths.Items).toEqual([
       '/p/u/u1/my-page',
+      '/p/u/u1/my-page*',
       '/p/u/u1/my-page/*',
       '/uc/u/u1/my-page',
+      '/uc/u/u1/my-page*',
       '/uc/u/u1/my-page/*',
     ]);
-    expect(cmd.input.InvalidationBatch.Paths.Quantity).toBe(4);
+    expect(cmd.input.InvalidationBatch.Paths.Quantity).toBe(6);
   });
 
   it('skips (no send) when the Router distribution id is not configured', async () => {

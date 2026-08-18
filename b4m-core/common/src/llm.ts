@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ChatCompletionCreateInputSchema, OpenAIImageGenerationInput } from './schemas/openai';
 import { b4mLLMTools, B4MLLMTools } from './schemas/llm';
+import { supportedVoiceGenerationVendor, voiceOutputFormatSchema } from './voiceGeneration';
 
 // Re-export LLM tools for external use
 export { b4mLLMTools };
@@ -90,6 +91,35 @@ export const GenerateImageToolCallSchema = OpenAIImageGenerationInput.extend({
 });
 export type GenerateImageToolCall = z.infer<typeof GenerateImageToolCallSchema>;
 
+/**
+ * Current audio-generation selections threaded into chat dispatch so the
+ * `audio_generation` tool has defaults without the model having to pick a
+ * provider/voice. Mirrors how `imageConfig` (GenerateImageToolCall) threads the
+ * image selections. Assembled client-side from the `useAudioGenSettings` store
+ * (the single source of truth - see #1055/PR #1183); every field is optional so
+ * the tool falls back to its own defaults when a caller sends nothing.
+ */
+export const AudioGenerationToolCallSchema = z.object({
+  /** TTS provider for speech. Defaults to openai when unset. */
+  ttsProvider: supportedVoiceGenerationVendor.optional(),
+  /** Provider voice id/name; empty/unset falls back to the provider default. */
+  voice: z.string().optional(),
+  /** Output container for speech. Defaults to mp3. */
+  format: voiceOutputFormatSchema.optional(),
+  /** ISO 639-1 language pin for ElevenLabs speech; unset lets the provider auto-detect. */
+  languageCode: z.string().optional(),
+  /**
+   * Sound-effect clip length in seconds; null/unset lets the provider auto-select.
+   * Bounded to the same 0.5-30 range the direct sound-effects endpoint enforces
+   * (`soundGeneration.ts`) so a crafted client can't ship a huge duration that
+   * scales the per-second credit charge linearly.
+   */
+  durationSeconds: z.number().min(0.5).max(30).nullable().optional(),
+  /** Sound-effect prompt adherence (0-1), matching the direct endpoint's bound. */
+  promptInfluence: z.number().min(0).max(1).optional(),
+});
+export type AudioGenerationToolCall = z.infer<typeof AudioGenerationToolCallSchema>;
+
 export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   sessionId: z.string(),
   questId: z.string().optional(),
@@ -99,13 +129,56 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   image: z.string(),
 });
 
+/**
+ * Wire value for "no history window". It is the top mark on the client's history slider
+ * (apps/client/app/components/FibonacciSlider.tsx), so it is a slider position rather than a
+ * count, and clients keep sending it. The server translates it to UNLIMITED_HISTORY_COUNT once,
+ * on ingress; after that only promptMeta.requestedHistoryCount, which records the raw request,
+ * still holds this value.
+ */
+export const CLIENT_UNLIMITED_HISTORY_VALUE = 14;
+
+/**
+ * Internal marker for "no history window". Deliberately negative so it sits outside the
+ * [MIN_HISTORY_COUNT, MAX_HISTORY_COUNT] range that ChatCompletionProcess clamps computed history
+ * counts into: a computed count can never collide with it the way the old in-range sentinel did.
+ * Not a count - anything doing arithmetic on it must go through resolveHistoryFetchLimit.
+ */
+export const UNLIMITED_HISTORY_COUNT = -1;
+
+/** Quests fetched per history page when the caller sets no window of its own. */
+export const DEFAULT_HISTORY_FETCH_LIMIT = 14;
+
+export const isUnlimitedHistory = (historyCount: number | null | undefined): boolean =>
+  historyCount === UNLIMITED_HISTORY_COUNT;
+
+/**
+ * A usable number for callers that need one (page size, overflow math, telemetry). Unlimited
+ * history has no count, so it resolves to the default page size, which is what an unwindowed
+ * request has always actually fetched.
+ */
+export const resolveHistoryFetchLimit = (historyCount: number | null | undefined): number =>
+  isUnlimitedHistory(historyCount) || historyCount == null ? DEFAULT_HISTORY_FETCH_LIMIT : historyCount;
+
+/** Server ingress: swap the client's slider sentinel for the internal marker, exactly once. */
+export const normalizeRequestedHistoryCount = (historyCount: number): number =>
+  historyCount === CLIENT_UNLIMITED_HISTORY_VALUE ? UNLIMITED_HISTORY_COUNT : historyCount;
+
 export const ChatCompletionInvokeParamsSchema = z.object({
   /** Notebook session ID */
   sessionId: z.string(),
-  historyCount: z.number(),
+  /**
+   * A wire value, so never UNLIMITED_HISTORY_COUNT: normalization happens later, in
+   * ChatCompletionProcess, and the marker lives only inside that call. Rejecting negatives
+   * here makes that invariant enforceable rather than merely conventional, so a future path
+   * that forwards a raw client number cannot smuggle the internal marker in from outside.
+   * Zero is legitimate (image models ask for no history).
+   */
+  historyCount: z.number().nonnegative(),
   /** Epoch ms when the client submitted the prompt (for the request-lifecycle status log). */
   clientSubmittedAt: z.number().optional(),
   imageConfig: GenerateImageToolCallSchema.optional(),
+  audioConfig: AudioGenerationToolCallSchema.optional(),
   deepResearchConfig: z
     .object({
       maxDepth: z.number().optional(),
@@ -135,6 +208,14 @@ export const ChatCompletionInvokeParamsSchema = z.object({
   params: ChatCompletionCreateInputSchema,
   /** Whether Quest Master is enabled */
   enableQuestMaster: z.boolean().optional(),
+  /** Whether QuestMaster v5 (node-graph) is enabled */
+  enableQuestMasterV5: z.boolean().optional(),
+  /**
+   * How much of the system stack to put in front of the model, for callers that need a completion
+   * they can compare against the bare provider model. Unset keeps the full stack - what every
+   * in-app completion wants. See PROMPT_MODE_SOURCES in services/llm/systemPromptSources.
+   */
+  promptMode: z.enum(['raw', 'grounded', 'surface']).optional(),
   /** Whether Mementos is enabled */
   enableMementos: z.boolean().optional(),
   /** Whether Artifacts is enabled */
@@ -214,6 +295,15 @@ export interface ICacheStrategy {
 
   /** Cache conversation history */
   cacheConversationHistory?: boolean;
+
+  /**
+   * Number of trailing messages to exclude from the conversation-history cache
+   * breakpoint. Lets a caller append volatile, per-request content (e.g. a
+   * reminder message that's stripped and rebuilt every turn) after the stable
+   * history without it becoming the (never-reusable) cache anchor. Defaults to
+   * 0, i.e. the breakpoint anchors on the last message.
+   */
+  historyCacheExcludeTrailingCount?: number;
 
   /** Preferred TTL (only applicable to Anthropic, Bedrock) */
   cacheTTL?: '5m' | '1h';

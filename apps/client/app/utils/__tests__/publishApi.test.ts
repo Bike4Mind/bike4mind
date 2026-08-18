@@ -435,3 +435,41 @@ describe('replyPublisher / fabFilePublisher - org-tier mapping', () => {
     expect(body.scopeId).toBeUndefined();
   });
 });
+
+/**
+ * Publishing is the point of no return - the wiring is the single choke point every
+ * artifact publish surface routes through, so the completeness check lives here rather
+ * than in each dialog caller.
+ */
+describe('buildArtifactPublishWiring - incomplete-artifact warning', () => {
+  const wiringFor = (content: string, type = 'html') =>
+    buildArtifactPublishWiring({ artifactId: 'a1', type, content, title: 'T', userId: 'u1' });
+
+  it('warns when the artifact body is stubbed with placeholder comments', () => {
+    const elided = `<html><body><div id="board"></div><script>
+      // ... (same JS as the working artifact for interactivity)
+      function init() { renderBoard(); }
+      init();
+    </script></body></html>`;
+
+    expect(wiringFor(elided).incompleteWarning).toMatch(/placeholder/i);
+  });
+
+  it('stays silent for a complete artifact', () => {
+    const complete = `<html><body><div id="board"></div><script>
+      function renderBoard() { document.getElementById('board').textContent = 'ok'; }
+      function init() { renderBoard(); }
+      init();
+    </script></body></html>`;
+
+    expect(wiringFor(complete).incompleteWarning).toBeUndefined();
+  });
+
+  it('still returns a usable publish wiring when it warns', () => {
+    const wiring = wiringFor('<html><body><!-- rest of the sections omitted --></body></html>');
+
+    expect(wiring.incompleteWarning).toBeDefined();
+    expect(typeof wiring.publish).toBe('function');
+    expect(typeof wiring.resolveExisting).toBe('function');
+  });
+});

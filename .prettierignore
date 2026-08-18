@@ -5,3 +5,14 @@ server/node_modules
 /data
 .sst
 **/sst-env.d.ts
+
+# Generated model seeds and the captured aggregator key universes. Written by
+# packages/database/src/seeds/regenerate*.ts as JSON.stringify(_, null, 2), which
+# prettier then reflows at printWidth 120 - so every regeneration produced ~1100
+# lines of array-collapsing churn on top of the handful of rows that actually
+# changed, and a 7-model addition read as a 1151-line diff. The generator is the
+# authority for these files; leaving them alone keeps the next provider's seed
+# diff readable as content.
+packages/database/src/seeds/modelCatalog.seed.json
+packages/database/src/seeds/modelPrices.seed.json
+packages/database/src/seeds/__fixtures__/aggregatorKeys.json

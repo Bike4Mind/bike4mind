@@ -18,7 +18,14 @@ import { existsSync, promises as fs } from 'fs';
 import { homedir } from 'os';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
-import { App, TrustLocationSelector, RewindSelector, SessionSelector, EnvironmentPicker } from './components';
+import {
+  App,
+  TrustLocationSelector,
+  RewindSelector,
+  SessionSelector,
+  EnvironmentPicker,
+  ModelPicker,
+} from './components';
 import type { PermissionResponse, EnvChoice } from './components';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services';
 import { getShellSessionManager } from '@bike4mind/services/llm/tools/cliTools';
@@ -44,6 +51,9 @@ import {
   parseApiUrl,
   processFileReferences,
   formatStep,
+  resolveModelCommand,
+  performModelSwitch,
+  MODEL_SWITCH_BUSY_MESSAGE,
 } from './utils';
 import { getTokenCounter } from './utils/tokenCounter.js';
 import { ConversationContext, reconstructTurnBlocks } from './context/ConversationContext.js';
@@ -155,11 +165,15 @@ import {
   createBlockerStore,
   createReviewGateTool,
   createReviewGateStore,
+  createWorkItemTools,
 } from './tools';
+import { WorkItemsClient } from './api/WorkItemsClient.js';
 import { buildSkillsPromptSection } from './core/skillsPrompt';
 import { checkForUpdate } from './utils/updateChecker.js';
 import { FeatureModuleRegistry } from './features/FeatureModuleRegistry.js';
-import { TavernModule } from './features/tavern/index.js';
+import { buildFeatureRegistry } from './features/buildFeatureRegistry.js';
+import { createBuiltinModules } from './features/createBuiltinModules.js';
+import { PluginStore, type PluginDescriptor } from './plugins/PluginStore.js';
 import { bridgePresence } from './features/bridgePresence/index.js';
 import { buildLlmBackend } from './bootstrap/buildLlmBackend.js';
 import { buildSandbox } from './bootstrap/buildSandbox.js';
@@ -221,6 +235,7 @@ interface CliState {
   sessionSelector: SessionSelectorState | null;
   showLoginFlow?: boolean;
   showEnvironmentPicker?: boolean; // First-run backend picker when no endpoint is configured
+  showModelPicker?: boolean; // Interactive model picker opened by /model with no argument
   config?: CliConfig; // Cached config for synchronous access
   availableModels?: ModelInfo[]; // Models fetched from API at startup
   prefillInput?: string; // Pre-fill input (e.g., from rewind)
@@ -230,10 +245,11 @@ interface CliState {
   contextContent: string; // Raw CLAUDE.md content for compact instructions extraction
   backgroundManager: BackgroundAgentManager | null; // Background agent manager for grouped notifications
   sandboxOrchestrator: import('./sandbox/SandboxOrchestrator.js').SandboxOrchestrator | null; // Sandbox orchestrator for OS-level isolation
-  wsManager: WebSocketConnectionManager | null; // WebSocket connection manager for streaming
+  wsManager: WebSocketConnectionManager | null; // Feature-event socket; completions use SSE
   checkpointStore: CheckpointStore | null; // File change checkpointing for undo/restore
   additionalDirectories: string[]; // Additional directories for file access (from --add-dir or /add-dir)
   featureRegistry: FeatureModuleRegistry | null; // Opt-in feature module registry
+  pluginDescriptors: PluginDescriptor[]; // Installed plugins discovered at bootstrap (installs need a restart)
 }
 
 // Global state for exit handling (outside React for immediate response)
@@ -286,6 +302,7 @@ function CliApp() {
     checkpointStore: null,
     additionalDirectories: [],
     featureRegistry: null,
+    pluginDescriptors: [],
   });
 
   const [isInitialized, setIsInitialized] = useState(false);
@@ -587,16 +604,16 @@ function CliApp() {
         }
       }
 
-      // Token getter for WebSocket auth (shared by WS manager and backend)
+      // Token getter for the feature-event WebSocket auth
       const tokenGetter = async (): Promise<string | null> => {
         const tokens = await state.configStore.getAuthTokens();
         return tokens?.accessToken ?? null;
       };
 
-      // Build the LLM backend: WebSocket-first transport (bypasses CloudFront
-      // 20s timeout) with SSE fallback, optional Ollama multiplexing, and the
-      // resolved default model. The Keep handler is registered inside the WS
-      // path (see buildLlmBackend).
+      // Build the LLM backend: HTTP+SSE completions, optional Ollama
+      // multiplexing, and the resolved default model. `wsManager` comes back
+      // non-null only when a WS-consuming feature (Tavern) is enabled; it
+      // carries feature events, never completions (see buildLlmBackend).
       const { llm, wsManager, models, modelInfo } = await buildLlmBackend({
         config,
         apiClient,
@@ -880,30 +897,16 @@ function CliApp() {
       // Create get_file_structure tool for AST-based code overview
       const getFileStructureTool = createGetFileStructureTool();
 
-      // Create feature module registry and conditionally register modules
-      const featureRegistry = new FeatureModuleRegistry();
-      if (config.features?.tavern) {
-        featureRegistry.register(
-          new TavernModule(
-            apiClient,
-            entry => useCliStore.getState().addTavernLogEntry(entry),
-            () => useCliStore.getState().tavernActivityLog
-          )
-        );
-      }
+      // Persistent work tracking - outlives the session, unlike write_todos.
+      // Off by default: six tool schemas in every completion is a real cost for
+      // users who never touch the persistent store.
+      const workItemTools = config.preferences.enableWorkItemTools
+        ? createWorkItemTools(new WorkItemsClient(apiClient))
+        : [];
 
-      // Register feature module tool names with ToolRouter so they route as local tools
-      const featureModuleToolNames = featureRegistry.getAllToolNames();
-      if (featureModuleToolNames.length > 0) {
-        registerFeatureModuleTools(featureModuleToolNames);
-      }
-
-      // Register feature module WS handlers
-      if (wsManager && featureRegistry.hasModules) {
-        featureRegistry.registerAllWsHandlers(wsManager);
-      }
-
-      // Combine B4M, MCP, and CLI-specific tools
+      // Combine B4M, MCP, and CLI-specific tools. Assembled before the feature
+      // registry so their names can be reserved against plugin tool-name
+      // collisions (a duplicate tool name would 400 every completion).
       const cliTools = [
         agentDelegateTool,
         ...backgroundTools,
@@ -914,6 +917,7 @@ function CliApp() {
         reviewGateTool,
         findDefinitionTool,
         getFileStructureTool,
+        ...workItemTools,
       ];
       if (skillTool) {
         cliTools.push(skillTool);
@@ -926,6 +930,33 @@ function CliApp() {
       if (config.preferences.enableCoordinatorMode === true) {
         const coordinateTaskTool = createCoordinateTaskTool(orchestrator, agentStore, newSession.id);
         cliTools.push(coordinateTaskTool);
+      }
+
+      // Build the feature registry: config-gated built-ins plus any enabled
+      // external plugins (discovered once here; installs need a restart).
+      const pluginDescriptors = await new PluginStore().discover();
+      const {
+        registry: featureRegistry,
+        loaded: loadedPlugins,
+        skipped: skippedPlugins,
+      } = await buildFeatureRegistry({
+        builtins: createBuiltinModules(config, apiClient),
+        descriptors: pluginDescriptors,
+        config,
+        logger,
+        // 'tool_search' is added later but its name is fixed; reserve it too.
+        reservedToolNames: [...loadedB4mTools, ...cliTools].map(t => t.toolSchema.name).concat('tool_search'),
+      });
+
+      // Register feature module tool names with ToolRouter so they route as local tools
+      const featureModuleToolNames = featureRegistry.getAllToolNames();
+      if (featureModuleToolNames.length > 0) {
+        registerFeatureModuleTools(featureModuleToolNames);
+      }
+
+      // Register feature module WS handlers
+      if (wsManager && featureRegistry.hasModules) {
+        featureRegistry.registerAllWsHandlers(wsManager);
       }
 
       const featureTools = featureRegistry.getAllTools();
@@ -961,6 +992,12 @@ function CliApp() {
       if (featureRegistry.hasModules) {
         const moduleNames = featureRegistry.getModuleNames().join(', ');
         startupLog.push(`🏰 Feature modules: ${moduleNames} (${featureTools.length} tools)`);
+      }
+      if (loadedPlugins.length > 0) {
+        startupLog.push(`🔌 Plugins loaded: ${loadedPlugins.join(', ')}`);
+      }
+      if (skippedPlugins.length > 0) {
+        startupLog.push(`⚠️ Plugins skipped: ${skippedPlugins.map(s => s.name).join(', ')} (see debug log)`);
       }
       logger.debug(
         `Total tools available to agent: ${allTools.length} (${loadedB4mTools.length} B4M loaded + ${cliTools.length} CLI + ${featureTools.length} feature + ${toolSearchTool ? 1 : 0} tool_search, ${deferredB4mTools.length} B4M + ${mcpTools.length} MCP deferred)`
@@ -1023,10 +1060,11 @@ function CliApp() {
         contextContent: contextResult.mergedContent, // Store raw context for compact instructions
         backgroundManager, // Store for grouped notification turn tracking
         sandboxOrchestrator, // Store sandbox orchestrator for /sandbox commands
-        wsManager, // WebSocket connection manager (null if using SSE fallback)
+        wsManager, // Feature-event socket (null unless a WS-consuming feature is on)
         checkpointStore, // File change checkpointing for undo/restore
         additionalDirectories, // Store additional directories for file access
         featureRegistry, // Feature module registry for opt-in modules
+        pluginDescriptors, // Reused by /config hot-reload and the config editor
       }));
 
       // Sync initial session with Zustand store
@@ -3443,6 +3481,41 @@ function CliApp() {
         break;
       }
 
+      case 'model': {
+        // performModelSwitch guards the switch itself; this early check also
+        // keeps the no-arg picker from opening mid-run, where a selection would
+        // just be rejected anyway.
+        if (useCliStore.getState().isThinking) {
+          console.log(MODEL_SWITCH_BUSY_MESSAGE);
+          break;
+        }
+
+        const currentModel = useCliStore.getState().session?.model ?? state.config?.defaultModel;
+        const result = resolveModelCommand(state.availableModels ?? [], args, currentModel);
+        switch (result.kind) {
+          case 'no-models':
+            console.log('No models available. Check your API connection and try again.');
+            break;
+          case 'open-picker':
+            setState(prev => ({ ...prev, showModelPicker: true }));
+            break;
+          case 'no-match':
+            console.log(`No model matches "${result.query}". Run /model to browse available models.`);
+            break;
+          case 'ambiguous':
+            console.log(`"${args.join(' ')}" matches ${result.models.length} models - be more specific:`);
+            result.models.forEach(m => console.log(`  ${m.name} (${m.id})`));
+            break;
+          case 'already-current':
+            console.log(`Already using ${result.model.name} (${result.model.id}).`);
+            break;
+          case 'switch':
+            await applyModelSwitch(result.model);
+            break;
+        }
+        break;
+      }
+
       default: {
         // Delegate to feature module commands before showing unknown
         if (state.featureRegistry?.executeCommand(command, args)) {
@@ -3457,7 +3530,7 @@ function CliApp() {
   /**
    * Handle saving config from the interactive editor
    */
-  const handleSaveConfig = async (updatedConfig: CliConfig): Promise<void> => {
+  const handleSaveConfig = async (updatedConfig: CliConfig, options?: { skipModelApply?: boolean }): Promise<void> => {
     await state.configStore.save(updatedConfig);
 
     // Check if model changed
@@ -3476,18 +3549,23 @@ function CliApp() {
       // Clear old feature tool registrations from ToolRouter
       clearFeatureModuleTools();
 
-      // Create fresh registry with new config
-      newFeatureRegistry = new FeatureModuleRegistry();
+      // Create fresh registry with new config (same descriptors as bootstrap;
+      // newly installed plugins appear after a restart)
       const apiClient = new ApiClient(requireApiUrl(updatedConfig.apiConfig), state.configStore);
-
-      if (updatedConfig.features?.tavern) {
-        newFeatureRegistry.register(
-          new TavernModule(
-            apiClient,
-            entry => useCliStore.getState().addTavernLogEntry(entry),
-            () => useCliStore.getState().tavernActivityLog
-          )
-        );
+      // The agent's non-feature tools (core + B4M + tool_search) are reserved so
+      // a hot-reloaded plugin can't claim a name that would 400 completions.
+      const oldFeatureToolNames = new Set(state.featureRegistry?.getAllToolNames() ?? []);
+      const baseTools = state.agent.getTools().filter(t => !oldFeatureToolNames.has(t.toolSchema.name));
+      const rebuilt = await buildFeatureRegistry({
+        builtins: createBuiltinModules(updatedConfig, apiClient),
+        descriptors: state.pluginDescriptors,
+        config: updatedConfig,
+        logger,
+        reservedToolNames: baseTools.map(t => t.toolSchema.name),
+      });
+      newFeatureRegistry = rebuilt.registry;
+      for (const skippedPlugin of rebuilt.skipped) {
+        console.error(`\n\x1b[33m⚠️ Plugin ${skippedPlugin.name} skipped: ${skippedPlugin.reason}\x1b[0m`);
       }
 
       // Register new tool names with ToolRouter
@@ -3496,14 +3574,14 @@ function CliApp() {
         registerFeatureModuleTools(newToolNames);
       }
 
-      // Register new WS handlers
+      // Register new WS handlers. The feature-event socket is only opened at
+      // startup (see buildLlmBackend), so enabling a WS-consuming feature here
+      // gets its tools and commands but no live events until the next launch.
       if (state.wsManager && newFeatureRegistry.hasModules) {
         newFeatureRegistry.registerAllWsHandlers(state.wsManager);
       }
 
       // Hot-swap agent tools: remove old feature tools, add new ones
-      const oldFeatureToolNames = new Set(state.featureRegistry?.getAllToolNames() ?? []);
-      const baseTools = state.agent.getTools().filter(t => !oldFeatureToolNames.has(t.toolSchema.name));
       const newFeatureTools = newFeatureRegistry.getAllTools();
       state.agent.setTools([...baseTools, ...newFeatureTools]);
 
@@ -3547,32 +3625,67 @@ function CliApp() {
       return { ...prev, ...updates };
     });
 
-    // If the model changed, update the session model in the store (single source of truth)
-    if (modelChanged) {
-      const currentSession = useCliStore.getState().session;
-      if (currentSession) {
-        setStoreSession({
-          ...currentSession,
-          model: updatedConfig.defaultModel,
-          updatedAt: new Date().toISOString(),
-        });
+    // Propagate a config-driven model change to the live session. `/model`
+    // opts out (skipModelApply) and applies it itself, so that path owns the
+    // single mutation point and can re-check the in-flight-request guard after
+    // this save resolves.
+    if (modelChanged && !options?.skipModelApply) {
+      applyModelToSession(updatedConfig.defaultModel);
+    }
+  };
 
-        // Update the agent's model (context is private, but we can access it)
-        if (state.agent) {
-          (state.agent as any).context.model = updatedConfig.defaultModel;
-        }
+  /**
+   * Point the live session, agent context, and LLM backend at `modelId`. The
+   * single source of truth for the active model, shared by the config editor
+   * save path and the `/model` command. Idempotent: re-applying the current
+   * model is a no-op, so callers can invoke it defensively.
+   */
+  const applyModelToSession = (modelId: string): void => {
+    const currentSession = useCliStore.getState().session;
+    if (currentSession && currentSession.model !== modelId) {
+      setStoreSession({
+        ...currentSession,
+        model: modelId,
+        updatedAt: new Date().toISOString(),
+      });
+
+      // Update the agent's model (context is private, but we can access it)
+      if (state.agent) {
+        (state.agent as any).context.model = modelId;
       }
     }
 
-    // Update LLM backend's model if it changed
-    // The LLM backend is stored in the agent's context
-    if (modelChanged && state.agent) {
+    // Keep the LLM backend (stored in the agent's context) in sync
+    if (state.agent) {
       const backend = (state.agent as any).context.llm as ServerLlmBackend | WebSocketLlmBackend | MultiLlmBackend;
       if (backend) {
-        backend.currentModel = updatedConfig.defaultModel;
+        backend.currentModel = modelId;
       }
     }
   };
+
+  /**
+   * Persist and apply a `/model` switch. Both the argument dispatcher and the
+   * interactive picker funnel through here, so the busy guard, save, session
+   * apply, and messaging are identical from either entry point.
+   *
+   * The session apply is unconditional (handleSaveConfig is told to skip it):
+   * `/model X` must still switch when config.defaultModel already equalled X
+   * but the live session had diverged (fresh session / `--resume`).
+   */
+  const applyModelSwitch = async (model: ModelInfo): Promise<void> =>
+    performModelSwitch(model, {
+      isBusy: () => useCliStore.getState().isThinking,
+      saveModel: async modelId => {
+        if (!state.config) {
+          throw new Error('no CLI config is loaded');
+        }
+        await handleSaveConfig({ ...state.config, defaultModel: modelId }, { skipModelApply: true });
+      },
+      applyToSession: applyModelToSession,
+      log: message => console.log(message),
+      error: message => console.error(message),
+    });
 
   if (initError) {
     return (
@@ -3650,6 +3763,27 @@ function CliApp() {
             state.sessionSelector.resolve(null);
           }
         }}
+      />
+    );
+  }
+
+  // Show the model picker when /model is invoked without an argument.
+  if (state.showModelPicker) {
+    const models = state.availableModels ?? [];
+    const currentModelId = useCliStore.getState().session?.model ?? state.config?.defaultModel ?? '';
+    return (
+      <ModelPicker
+        models={models}
+        currentModelId={currentModelId}
+        onSelect={model => {
+          setState(prev => ({ ...prev, showModelPicker: false }));
+          if (model.id === currentModelId) {
+            console.log(`Already using ${model.name} (${model.id}).`);
+            return;
+          }
+          void applyModelSwitch(model);
+        }}
+        onCancel={() => setState(prev => ({ ...prev, showModelPicker: false }))}
       />
     );
   }
@@ -3746,6 +3880,7 @@ function CliApp() {
       commands={allCommands}
       config={state.config}
       availableModels={state.availableModels}
+      pluginDescriptors={state.pluginDescriptors}
       onSaveConfig={handleSaveConfig}
       prefillInput={state.prefillInput}
       onPrefillConsumed={() => {

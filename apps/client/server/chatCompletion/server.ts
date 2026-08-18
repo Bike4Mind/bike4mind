@@ -108,8 +108,14 @@ async function main() {
   // listen on connectDB previously left :8080 closed during boot, so health checks timed
   // out and ECS restart-looped the task. processQuest connects-if-needed, so /process is
   // safe even if a request lands before this resolves.
+  // Deliberately does NOT drive model discovery: this service and the self-host
+  // worker share one env file, so a startup leg here would arm a second driver
+  // on the same flag and run a provider fan-out inside the inference process.
+  // The worker is the single discovery driver (server/worker/main.ts).
   connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), bootLogger)
-    .then(() => bootLogger.info('MongoDB connected at boot'))
+    .then(() => {
+      bootLogger.info('MongoDB connected at boot');
+    })
     .catch(err =>
       bootLogger.error('MongoDB connection failed at boot', {
         error: err instanceof Error ? err.message : String(err),

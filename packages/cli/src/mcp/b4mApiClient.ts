@@ -60,7 +60,62 @@ interface SemanticSearchResponse {
 
 export interface RawFile {
   id: string;
+  fileName?: string;
   [key: string]: unknown;
+}
+
+/** Arguments for POST /api/ai/sound-effects; mirrors `soundEffectsRequestSchema`. */
+export interface SoundEffectArgs {
+  provider: string;
+  text: string;
+  durationSeconds?: number;
+  promptInfluence?: number;
+  format?: string;
+}
+
+/**
+ * Raw result of a sound-effects generation. The route answers with binary audio
+ * plus side-channel headers reporting whether it also persisted a browsable copy.
+ * `fabFileId`, `fileName`, and `fileUrl` are set only when `saved` is true (see
+ * persistGeneratedAudio). `fileUrl` is the signed download URL the route minted at
+ * upload; callers must use it as-is rather than re-resolving via GET /api/files/:id,
+ * which fails closed until the async moderation scan completes.
+ */
+export interface GeneratedSound {
+  audio: Buffer;
+  contentType: string;
+  saved: boolean;
+  fabFileId?: string;
+  fileName?: string;
+  fileUrl?: string;
+}
+
+export interface RawProject {
+  id: string;
+  name?: string;
+  [key: string]: unknown;
+}
+
+export interface RawArtifact {
+  id: string;
+  title?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * GET /api/artifacts answers with an offset-based envelope of its own rather than
+ * the `{ data, hasMore }` shape every other list route uses, so {@link ListEnvelope}
+ * and `toList` do not apply here.
+ */
+interface ArtifactListEnvelope {
+  artifacts: RawArtifact[];
+  pagination?: { total: number; limit: number; offset: number; hasMore: boolean };
+}
+
+/** GET /api/artifacts/:id response; `content` ships only when includeContent=true. */
+export interface ArtifactWithContent {
+  artifact: RawArtifact;
+  content?: unknown;
 }
 
 /**
@@ -149,6 +204,89 @@ export class B4mApiClient {
   async getFile(fileId: string): Promise<RawFile> {
     return this.client.get<RawFile>(`/api/files/${encodeURIComponent(fileId)}`);
   }
+
+  /**
+   * Generate a sound effect. Unlike the JSON routes, this one streams raw audio
+   * bytes, so it goes through the axios instance directly to read the response
+   * headers (content type + the persisted-FabFile side channel). On failure the
+   * error body arrives as bytes; {@link decodeArrayBufferErrorBody} restores the
+   * JSON shape so {@link mapApiError} can surface the server's message.
+   */
+  async generateSoundEffect(args: SoundEffectArgs): Promise<GeneratedSound> {
+    try {
+      const response = await this.client.getAxiosInstance().post<ArrayBuffer>(
+        '/api/ai/sound-effects',
+        {
+          provider: args.provider,
+          text: args.text,
+          ...(args.durationSeconds !== undefined ? { durationSeconds: args.durationSeconds } : {}),
+          ...(args.promptInfluence !== undefined ? { promptInfluence: args.promptInfluence } : {}),
+          ...(args.format ? { format: args.format } : {}),
+        },
+        { responseType: 'arraybuffer' }
+      );
+
+      // Node duplicates a repeated header into an array; keep only the scalar string form.
+      const headerString = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
+      const saved = String(response.headers['x-b4m-audio-saved'] ?? '') === 'true';
+      return {
+        audio: Buffer.from(response.data),
+        contentType: String(response.headers['content-type'] ?? 'application/octet-stream'),
+        saved,
+        fabFileId: saved ? headerString(response.headers['x-b4m-audio-fab-file-id']) : undefined,
+        fileName: saved ? headerString(response.headers['x-b4m-audio-file-name']) : undefined,
+        fileUrl: saved ? headerString(response.headers['x-b4m-audio-file-url']) : undefined,
+      };
+    } catch (error) {
+      throw decodeArrayBufferErrorBody(error);
+    }
+  }
+
+  async listProjects(args: {
+    search?: string;
+    limit: number;
+    page?: number;
+  }): Promise<{ data: RawProject[]; hasMore: boolean }> {
+    const result = await this.client.get<RawProject[] | ListEnvelope<RawProject>>('/api/projects', {
+      params: {
+        ...(args.search ? { search: args.search } : {}),
+        pagination: { page: args.page ?? 1, limit: args.limit },
+      },
+    });
+    return this.toList(result);
+  }
+
+  async getProject(projectId: string): Promise<RawProject> {
+    return this.client.get<RawProject>(`/api/projects/${encodeURIComponent(projectId)}`);
+  }
+
+  /**
+   * GET /api/artifacts takes flat `limit`/`offset` params (not the nested
+   * `pagination` object the session/file/project routes use) and hard-caps
+   * `limit` at 100 via a strict zod parse, so callers must not exceed it.
+   */
+  async listArtifacts(args: {
+    search?: string;
+    limit: number;
+    offset?: number;
+  }): Promise<{ data: RawArtifact[]; hasMore: boolean }> {
+    const result = await this.client.get<ArtifactListEnvelope>('/api/artifacts', {
+      params: {
+        ...(args.search ? { search: args.search } : {}),
+        limit: args.limit,
+        offset: args.offset ?? 0,
+      },
+    });
+    return { data: result.artifacts ?? [], hasMore: result.pagination?.hasMore ?? false };
+  }
+
+  async getArtifact(artifactId: string): Promise<ArtifactWithContent> {
+    // The route tests `req.query.includeContent === 'true'` as a string, and omits
+    // content entirely otherwise, so send the literal string.
+    return this.client.get<ArtifactWithContent>(`/api/artifacts/${encodeURIComponent(artifactId)}`, {
+      params: { includeContent: 'true' },
+    });
+  }
 }
 
 /**
@@ -189,6 +327,41 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
     return error.message;
   }
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * A request made with `responseType: 'arraybuffer'` also decodes its error body
+ * as bytes, so a JSON `{ error }` payload reaches us as a Buffer that
+ * {@link mapApiError} can't read. Decode it back to a parsed object in place so
+ * the server's message survives; leave a non-JSON body untouched.
+ */
+function decodeArrayBufferErrorBody(error: unknown): unknown {
+  if (!isAxiosError(error) || !error.response) return error;
+  const { data } = error.response;
+  // A non-Node axios adapter may hand back an already-decoded string body; parse it
+  // directly so the server message survives without going through the byte path.
+  if (typeof data === 'string') {
+    try {
+      error.response.data = JSON.parse(data);
+    } catch {
+      // Non-JSON string body; leave it for mapApiError's fallback.
+    }
+    return error;
+  }
+  const bytes = Buffer.isBuffer(data)
+    ? data
+    : data instanceof ArrayBuffer
+      ? Buffer.from(data)
+      : ArrayBuffer.isView(data)
+        ? Buffer.from(data.buffer, data.byteOffset, data.byteLength)
+        : undefined;
+  if (!bytes) return error;
+  try {
+    error.response.data = JSON.parse(bytes.toString('utf8'));
+  } catch {
+    // Non-JSON body (e.g. an HTML error page); leave it for mapApiError's fallback.
+  }
+  return error;
 }
 
 /**

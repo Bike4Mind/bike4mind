@@ -1,5 +1,11 @@
 import { z } from 'zod';
 
+import {
+  actorKindSchema,
+  hearthEventKindSchema,
+  hearthMachineBodySchema,
+  hearthEventRefsSchema,
+} from '@bike4mind/hearth';
 import { FallbackInfoSchema } from './llm';
 import { supportedChatModels } from '../models';
 import { shareableDocumentSchema, QUEST_ERROR_CODES } from '../types';
@@ -441,9 +447,17 @@ export const DataLakeBatchProgressAction = z.object({
   chunkedFiles: z.number().optional(),
   vectorizedFiles: z.number().optional(),
   failedFiles: z.number().optional(),
+  /** Subset of failedFiles caused by chunk/vectorize, so the client can say which stage a file
+   * failed at rather than a bare "failed" (#1412). Absent from a browser-upload-only failure. */
+  processingFailedFiles: z.number().optional(),
+  skippedFiles: z.number().optional(),
   totalFiles: z.number().optional(),
   status: z
     .enum(['preparing', 'uploading', 'processing', 'completed', 'completed_with_errors', 'failed', 'cancelled'])
+    .optional(),
+  /** Background AI-tagging phase - orthogonal to `status`, see `TaxonomyStatus`. */
+  taxonomyStatus: z
+    .enum(['none', 'queued', 'analyzing', 'ready', 'applying', 'applied', 'failed', 'dismissed'])
     .optional(),
 });
 
@@ -805,6 +819,36 @@ export const TavernHeartbeatLogAction = z.object({
   }),
 });
 export type ITavernHeartbeatLogAction = z.infer<typeof TavernHeartbeatLogAction>;
+
+/**
+ * Server -> Client: a Hearth event appended to a channel the user participates
+ * in. Payload mirrors the wire shape consumed by the CLI HearthEventStream and
+ * the SPA channel view; keep in sync with b4m-core/hearth/src/types.ts.
+ */
+export const HearthEventAction = z.object({
+  action: z.literal('hearth_event'),
+  // kind/machine/refs come from the @bike4mind/hearth boundary schemas so the
+  // enum lists have a single source of truth across model, route, and action.
+  event: z.object({
+    id: z.string(),
+    channelId: z.string(),
+    seq: z.number(),
+    actorId: z.string(),
+    actorName: z.string().optional(),
+    // Resolved server-side from the actor record. Surfaces badge it so a
+    // self-chosen displayName can never pass for a session-derived human.
+    actorKind: actorKindSchema.optional(),
+    kind: hearthEventKindSchema,
+    human: z.object({
+      text: z.string(),
+      format: z.enum(['md', 'text']),
+    }),
+    machine: hearthMachineBodySchema.optional(),
+    refs: hearthEventRefsSchema.prefault({}),
+    createdAt: z.string(),
+  }),
+});
+export type IHearthEventAction = z.infer<typeof HearthEventAction>;
 
 /** Server -> Client: real-time quest board update (replaces polling) */
 export const TavernQuestUpdateAction = z.object({
@@ -1480,6 +1524,7 @@ export const MessageDataToClient = z.discriminatedUnion('action', [
   KeepCommandResultAction,
   TavernSceneBroadcastAction,
   TavernHeartbeatLogAction,
+  HearthEventAction,
   TavernQuestUpdateAction,
   TavernStockUpdateAction,
   JupyterNotebookProgressAction,

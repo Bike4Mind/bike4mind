@@ -1,0 +1,11 @@
+{
+  "name": "b4m-plugin-example",
+  "version": "1.0.0",
+  "description": "Example Bike4Mind CLI plugin used by tests and QA",
+  "private": true,
+  "type": "module",
+  "b4m-plugin": {
+    "entry": "./index.mjs",
+    "configKey": "example"
+  }
+}

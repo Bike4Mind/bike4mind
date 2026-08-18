@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render } from '@testing-library/react';
+import { render, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -111,6 +111,8 @@ const gated = (container: HTMLElement, toolClass: string) =>
   container.querySelector(`.${toolClass} [data-tool-disabled="true"]`);
 
 beforeEach(() => {
+  mocks.state.tools = [];
+  mocks.useLLM.setState.mockClear();
   mocks.state.isAgentsEnabled = false;
   mocks.state.toolMode = 'smart';
   mocks.state.agentMode = { enabled: true, source: 'toggle' };
@@ -276,6 +278,129 @@ describe('ToolsSection missing-key gating', () => {
     mocks.toolAvailability.value = { search_knowledge_base: true };
     const { container: enabled } = render(<ToolsSection />, { wrapper: Wrapper });
     expect(gated(enabled, 'tool-item-knowledge-base')).toBeFalsy();
+  });
+});
+
+/**
+ * A tool enabled while its key was present keeps its stored preference after the key
+ * goes away, so it restores when a valid key returns. Until then it must not READ as
+ * enabled: greyed-out-but-on is a control that claims to be usable while refusing to
+ * be used, and the pinned tallies agree with it.
+ *
+ * Switches are found by their authored `.tool-item-*` class rather than getByRole:
+ * the Fun & Novelty grid renders with `display: none` (the useUserSettings mock omits
+ * `showFunTools`), which excludes it from the a11y tree.
+ */
+describe('ToolsSection unavailable-tool display', () => {
+  const switchFor = (container: HTMLElement, toolClass: string) =>
+    container.querySelector(`.${toolClass} [role="switch"]`);
+  const tallyFor = (container: HTMLElement, section: string) =>
+    Array.from(container.querySelectorAll('.tools-collapsible-title')).find(el => el.textContent?.startsWith(section))
+      ?.textContent;
+  const setToolsPayloads = () =>
+    mocks.useLLM.setState.mock.calls.filter((call: unknown[]) => {
+      const payload = call[0];
+      return !!payload && typeof payload === 'object' && 'tools' in payload;
+    });
+
+  it('renders an unavailable tool off and drops it from the pinned tally', () => {
+    mocks.state.tools = ['web_search', 'math_evaluate'];
+    mocks.toolAvailability.value = { web_search: false };
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+    expect(switchFor(container, 'tool-item-web-search')?.getAttribute('aria-checked')).toBe('false');
+    expect(switchFor(container, 'tool-item-math')?.getAttribute('aria-checked')).toBe('true');
+    expect(tallyFor(container, 'Individual tools')).toBe('Individual tools (1 pinned)');
+  });
+
+  // Control: proves the assertion above tracks availability rather than always reading off.
+  it('leaves the switch on and counted when the key is present', () => {
+    mocks.state.tools = ['web_search', 'math_evaluate'];
+    mocks.toolAvailability.value = { web_search: true };
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+    expect(switchFor(container, 'tool-item-web-search')?.getAttribute('aria-checked')).toBe('true');
+    expect(tallyFor(container, 'Individual tools')).toBe('Individual tools (2 pinned)');
+  });
+
+  // Control against an over-fix (`=== true`): availability is undefined until
+  // /serverConfig resolves, and treating that as missing would blank the panel on
+  // first paint.
+  it('leaves everything on while availability is still loading', () => {
+    mocks.state.tools = ['web_search'];
+    mocks.toolAvailability.value = undefined;
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+    expect(switchFor(container, 'tool-item-web-search')?.getAttribute('aria-checked')).toBe('true');
+    expect(tallyFor(container, 'Individual tools')).toBe('Individual tools (1 pinned)');
+  });
+
+  // The tally is `pinnedCount > 0 ? ... : ''`, so zero renders no parenthetical at all
+  // rather than "(0 pinned)".
+  it('renders no tally when the only enabled tool is unavailable', () => {
+    mocks.state.tools = ['web_search'];
+    mocks.toolAvailability.value = { web_search: false };
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+    expect(tallyFor(container, 'Individual tools')).toBe('Individual tools');
+  });
+
+  it('drops an unavailable Fun tool from the Fun tally without disturbing Individual tools', () => {
+    mocks.state.tools = ['weather_info', 'math_evaluate'];
+    mocks.toolAvailability.value = { weather_info: false };
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+    expect(switchFor(container, 'tool-item-weather')?.getAttribute('aria-checked')).toBe('false');
+    expect(tallyFor(container, 'Fun & Novelty')).toBe('Fun & Novelty');
+    expect(tallyFor(container, 'Individual tools')).toBe('Individual tools (1 pinned)');
+  });
+
+  // Mode gating dims a row without contradicting it: the preference is still honored
+  // the moment the mode changes, so the switch must stay on. Only a missing key -
+  // which nothing the user does in this panel can fix - reads as off.
+  it('does not flip a switch for Fast-mode dimming', () => {
+    mocks.state.tools = ['web_search'];
+    mocks.state.toolMode = 'fast';
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+    expect(gated(container, 'tool-item-web-search')).toBeTruthy();
+    expect(switchFor(container, 'tool-item-web-search')?.getAttribute('aria-checked')).toBe('true');
+    expect(tallyFor(container, 'Individual tools')).toBe('Individual tools (1 pinned)');
+  });
+
+  it('does not flip a switch for Agent-mode dimming', () => {
+    mocks.state.tools = ['wolfram_alpha'];
+    mocks.agentModeFeatureFlag.value = true; // bolt is on via beforeEach
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+    expect(gated(container, 'tool-item-wolfram-alpha')).toBeTruthy();
+    expect(switchFor(container, 'tool-item-wolfram-alpha')?.getAttribute('aria-checked')).toBe('true');
+    expect(tallyFor(container, 'Individual tools')).toBe('Individual tools (1 pinned)');
+  });
+
+  it('keeps the stored preference for an unavailable tool', () => {
+    mocks.adminFeatureFlags.value = { EnableKnowledgeBaseSearch: true };
+    mocks.state.tools = ['search_knowledge_base'];
+    mocks.toolAvailability.value = { search_knowledge_base: false };
+    render(<ToolsSection />, { wrapper: Wrapper });
+    expect(mocks.state.tools).toContain('search_knowledge_base');
+    expect(setToolsPayloads()).toHaveLength(0);
+  });
+
+  // ToolContainer only kills pointer events, so the greyed switch stays a focusable
+  // button. Without a guard in handleToggleTool, Enter/Space would erase the stored
+  // preference while the switch already reads off - a silent edit with no feedback.
+  it('refuses to toggle a key-gated switch', () => {
+    mocks.adminFeatureFlags.value = { EnableKnowledgeBaseSearch: true };
+    mocks.state.tools = ['search_knowledge_base'];
+    mocks.toolAvailability.value = { search_knowledge_base: false };
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+    fireEvent.click(switchFor(container, 'tool-item-knowledge-base') as Element);
+    expect(setToolsPayloads()).toHaveLength(0);
+  });
+
+  // Control: the same click DOES reach handleToggleTool once the key is present, so
+  // the assertion above is about the guard and not about an unclickable element.
+  it('still toggles that switch when the key is present', () => {
+    mocks.adminFeatureFlags.value = { EnableKnowledgeBaseSearch: true };
+    mocks.state.tools = ['search_knowledge_base'];
+    mocks.toolAvailability.value = { search_knowledge_base: true };
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+    fireEvent.click(switchFor(container, 'tool-item-knowledge-base') as Element);
+    expect(setToolsPayloads()).toEqual([[{ tools: [] }]]);
   });
 });
 

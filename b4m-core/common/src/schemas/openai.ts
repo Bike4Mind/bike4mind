@@ -11,7 +11,14 @@ export const ChatCompletionCreateInputSchema = z.object({
   temperature: z.number().min(0).max(2).optional(),
   top_p: z.number().min(0).max(1).optional(),
   n: z.number().min(1).max(10).optional(),
-  max_tokens: z.number(),
+  /**
+   * Optional so "the caller expressed no output budget" stays distinguishable from
+   * "the caller asked for exactly N". ChatCompletionProcess resolves the absent case
+   * against the resolved model, which is the only layer that knows whether it reasons
+   * inside the output budget (those need a larger default - see
+   * reasonsWithinOutputBudget). A number here is treated as deliberate.
+   */
+  max_tokens: z.number().optional(),
   presence_penalty: z.number().min(-2).max(2).optional(),
   frequency_penalty: z.number().min(-2).max(2).optional(),
   logit_bias: z.record(z.string(), z.number()).nullable().optional(),
@@ -107,8 +114,8 @@ export type OpenAIImageStyle = z.infer<typeof OpenAIImageStyleSchema>;
  * same-provider, same-modality replacement.
  */
 export const LEGACY_IMAGE_MODEL_MAP: Record<string, (typeof ALL_IMAGE_MODELS)[number]> = {
-  'dall-e-3': ImageModels.GPT_IMAGE_1,
-  'dall-e-2': ImageModels.GPT_IMAGE_1,
+  'dall-e-3': ImageModels.GPT_IMAGE_2,
+  'dall-e-2': ImageModels.GPT_IMAGE_2,
   'flux-dev': ImageModels.FLUX_PRO_1_1, // removed model -> live BFL standard
   'grok-2-image-1212': ImageModels.GROK_IMAGINE_IMAGE_QUALITY, // original xAI image id -> current id
   'grok-2-image': ImageModels.GROK_IMAGINE_IMAGE_QUALITY, // intermediate xAI image id -> current id

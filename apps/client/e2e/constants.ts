@@ -1,6 +1,14 @@
 /** Debounce margin for model search input (ModelSelection.tsx uses a 500ms debounce). */
 export const MODEL_SEARCH_DEBOUNCE_MS = 600;
 
+/**
+ * Text models the credits/timing spec measures. Also warmed by warmup.setup.ts so the
+ * measured runs hit a warm ChatCompletion backend instead of eating its cold start.
+ * Single source of truth - keep both consumers in sync by importing from here. Names must
+ * match the model selector exactly.
+ */
+export const MONITORED_MODELS = ['Claude 4.7 Opus', 'GPT-5.5'] as const;
+
 /** Centralized timeout constants for E2E tests (in milliseconds). */
 export const TIMEOUTS = {
   /** Short UI transitions and state settling */

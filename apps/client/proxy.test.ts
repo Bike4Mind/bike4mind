@@ -112,6 +112,19 @@ describe('proxy CSP header', () => {
     expect(page.headers.get('Referrer-Policy')).toBe('strict-origin-when-cross-origin');
   });
 
+  it('does NOT set CSP or X-Frame-Options on /embed/ routes (serve handler sets key-scoped frame-ancestors)', () => {
+    // The global CSP would clobber the per-key frame-ancestors and X-Frame-Options:
+    // SAMEORIGIN would block the external framing the embed widget exists for.
+    const response = proxy(makeRequest('https://app.bike4mind.com/embed/chat?k=b4m_live_x'));
+    expect(response.headers.get('Content-Security-Policy')).toBeNull();
+    expect(response.headers.get('X-Frame-Options')).toBeNull();
+  });
+
+  it('does NOT clobber Referrer-Policy on /embed/ routes (the URL carries the ?k= key)', () => {
+    const embed = proxy(makeRequest('https://app.bike4mind.com/embed/chat?k=b4m_live_x'));
+    expect(embed.headers.get('Referrer-Policy')).toBeNull();
+  });
+
   it('sets X-Frame-Options on HTML routes', () => {
     const response = proxy(makeRequest('https://app.bike4mind.com/'));
     expect(response.headers.get('X-Frame-Options')).toBe('SAMEORIGIN');

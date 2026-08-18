@@ -158,6 +158,14 @@ export default defineConfig({
       testMatch: [/(?:^|\/)auth\.spec\.ts$/, /(?:^|\/)signup\.spec\.ts$/, /(?:^|\/)mfa\.spec\.ts$/],
       dependencies: ['setup-core', 'setup-projects'],
     },
+    // WebSocket token enforcement: mints its own throwaway users (revoking a token kills every
+    // token that user holds), so it needs no shared auth state - only core setup.
+    {
+      name: 'websocket-auth',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: [/(?:^|\/)websocket-auth\.spec\.ts$/],
+      dependencies: ['setup-core'],
+    },
     // Admin specs
     {
       name: 'admin',
@@ -166,7 +174,7 @@ export default defineConfig({
         storageState: adminAuthFile,
       },
       dependencies: ['setup-core', 'unauthenticated'],
-      testMatch: [/(?:^|\/)admin\.spec\.ts$/],
+      testMatch: [/(?:^|\/)admin\.spec\.ts$/, /(?:^|\/)admin-settings-secrets\.spec\.ts$/],
     },
     // Per-spec test projects (each depends only on its own setup)
     ...specProjects.map(({ name, testMatch, auth }) => ({

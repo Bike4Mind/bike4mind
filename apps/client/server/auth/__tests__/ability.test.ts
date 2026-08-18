@@ -31,7 +31,7 @@ vi.mock('@server/models/Subscription', () => ({
 }));
 
 import defineAbilitiesFor from '../ability';
-import { Prompt } from '@bike4mind/database';
+import { Prompt, FabFile } from '@bike4mind/database';
 
 const makeUser = (overrides: Partial<IUserDocument> = {}): IUserDocument =>
   ({
@@ -88,5 +88,62 @@ describe('defineAbilitiesFor - Prompt library permissions', () => {
     const ability = defineAbilitiesFor(undefined);
     expect(ability.can('read', Prompt)).toBe(false);
     expect(ability.can('create', Prompt)).toBe(false);
+  });
+});
+
+// Org Groups Phase 2b (#1174): exercise the dormant `user.groups` consumer in the
+// CASL access gate with a NON-empty groups array. `groups[]` on a shareable doc pairs a
+// groupId with the permissions that group is granted; access requires the user to be a
+// member of a group whose entry carries the requested permission.
+describe('defineAbilitiesFor - group-shared document access', () => {
+  type GroupShare = { groupId: string; permissions: string[] };
+  const sharedWithGroups = (groups: GroupShare[]) =>
+    Object.assign(new FabFile(), { userId: 'owner', users: [], groups });
+
+  it('grants read to a member of a group the doc shares read with', () => {
+    const ability = defineAbilitiesFor(makeUser({ groups: ['g1'] }));
+    const doc = sharedWithGroups([{ groupId: 'g1', permissions: ['read'] }]);
+    expect(ability.can('read', doc)).toBe(true);
+  });
+
+  it('denies a non-member (no overlapping group id)', () => {
+    const ability = defineAbilitiesFor(makeUser({ groups: ['g-other'] }));
+    const doc = sharedWithGroups([{ groupId: 'g1', permissions: ['read'] }]);
+    expect(ability.can('read', doc)).toBe(false);
+  });
+
+  it('denies when the matched group lacks the requested permission', () => {
+    const ability = defineAbilitiesFor(makeUser({ groups: ['g1'] }));
+    const doc = sharedWithGroups([{ groupId: 'g1', permissions: ['share'] }]);
+    expect(ability.can('read', doc)).toBe(false);
+    expect(ability.can('share', doc)).toBe(true);
+  });
+
+  it('denies when the user has no groups (empty array is the prod no-op)', () => {
+    const ability = defineAbilitiesFor(makeUser({ groups: [] }));
+    const doc = sharedWithGroups([{ groupId: 'g1', permissions: ['read'] }]);
+    expect(ability.can('read', doc)).toBe(false);
+  });
+
+  // The over-broad-grant guard: groupId and permission must hold on the SAME entry.
+  // The user is in g1 (granted only `share`); `read` is granted to g2, which they are
+  // NOT in. A dotted filter would satisfy the two conditions across the two entries and
+  // leak read; $elemMatch keeps them denied.
+  it('does not leak a permission granted to a different group (no cross-element match)', () => {
+    const ability = defineAbilitiesFor(makeUser({ groups: ['g1'] }));
+    const doc = sharedWithGroups([
+      { groupId: 'g1', permissions: ['share'] },
+      { groupId: 'g2', permissions: ['read'] },
+    ]);
+    expect(ability.can('read', doc)).toBe(false);
+  });
+
+  it('resolves the right entry when a doc is shared with several groups', () => {
+    const ability = defineAbilitiesFor(makeUser({ groups: ['g2'] }));
+    const doc = sharedWithGroups([
+      { groupId: 'g1', permissions: ['read'] },
+      { groupId: 'g2', permissions: ['read', 'update'] },
+    ]);
+    expect(ability.can('update', doc)).toBe(true);
   });
 });

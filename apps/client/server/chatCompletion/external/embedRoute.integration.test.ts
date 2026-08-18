@@ -189,7 +189,12 @@ async function seed(overrides: SeedOverrides = {}) {
     name: 'Embed Org',
     userId: owner.id,
     currentCredits: 100000,
-    // Org membership lives here (a User doc carries no org field). Both are members.
+    // Membership is the authoritative users[] ACL (a User doc carries no org field). Both are members.
+    users: [
+      { userId: owner.id, permissions: ['read'] },
+      { userId: teammate.id, permissions: ['read'] },
+    ],
+    // Credit side-table, seeded in parallel but NOT the membership source of truth.
     userDetails: [
       { id: owner.id, email: 'owner@example.com', name: 'Embed Owner' },
       { id: teammate.id, email: 'teammate@example.com', name: 'Teammate' },
@@ -336,6 +341,22 @@ describe('embed tool loop (real executeCompletion + real KB tools + real Mongo)'
     );
     expect(text).toContain('ANSWER::');
     expect(text).not.toContain('TOOL_UNAVAILABLE');
+  }, 30000);
+
+  it('an opted-in key-gated tool with no configured key never reaches the backend tool list', async () => {
+    // weather_info is in the embed curated universe (embedToolResolver.ts) and the agent opts
+    // it in below, but no OpenWeather key is seeded anywhere in this test's real Mongo - this is
+    // the case the tool-availability filter (toolAvailability.ts + sharedToolBuilder.ts) exists
+    // for: allowed by the curated allowlist, still dropped for having no working key/config.
+    await seed({ agent: { allowedTools: ['weather_info'] } });
+    h.script = { toolName: 'weather_info', args: { location: 'San Francisco' } };
+
+    const { text } = await post('unavailable weather_info is absent from the materialized set');
+
+    const names = h.lastBackendTools.map(t => t.toolSchema.name);
+    expect(names).not.toContain('weather_info');
+    expect(names).toContain('search_knowledge_base');
+    expect(text).toContain('TOOL_UNAVAILABLE:weather_info');
   }, 30000);
 
   it('an agent with no project gets an empty KB: search returns nothing, never the owner corpus', async () => {

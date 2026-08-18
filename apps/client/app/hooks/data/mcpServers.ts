@@ -74,7 +74,7 @@ export const useConnectNotion = () => {
         : error instanceof Error
           ? error.message
           : 'Unknown error';
-      toast.error(`Failed to connect Notion: ${errorMessage}`);
+      toast.error(`Failed to connect Notion: ${errorMessage}`, { duration: 6000 });
     },
   });
 };
@@ -109,7 +109,8 @@ export const useDisconnectNotion = () => {
       if (context?.previousUser) {
         useUser.getState().setCurrentUser(context.previousUser);
       }
-      toast.error(`Failed to disconnect Notion: ${error.message}`);
+      const errorMessage = isAxiosError(error) ? error.response?.data?.error || error.message : error.message;
+      toast.error(`Failed to disconnect Notion: ${errorMessage}`, { duration: 6000 });
     },
   });
 };
@@ -148,7 +149,7 @@ export const useUpdateNotionSettings = () => {
         : error instanceof Error
           ? error.message
           : 'Unknown error';
-      toast.error(`Failed to update Notion settings: ${errorMessage}`);
+      toast.error(`Failed to update Notion settings: ${errorMessage}`, { duration: 6000 });
     },
   });
 };

@@ -1,0 +1,95 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "babbage-002",
+      "object": "model",
+      "created": 1692634615,
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-4",
+      "object": "model",
+      "created": 1687882411,
+      "owned_by": "openai"
+    },
+    {
+      "id": "gpt-4.1-2025-04-14",
+      "object": "model",
+      "created": 1744315746,
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-4o-mini",
+      "object": "model",
+      "created": 1721172741,
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-5",
+      "object": "model",
+      "created": 1754425777,
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-5-chat-latest",
+      "object": "model",
+      "created": 1754073306,
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-5.4-nano",
+      "object": "model",
+      "created": 1773450870,
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-5.6-sol",
+      "object": "model",
+      "created": 1782228018,
+      "owned_by": "system"
+    },
+    {
+      "id": "gpt-image-1.5",
+      "object": "model",
+      "created": 1764030620,
+      "owned_by": "system"
+    },
+    {
+      "id": "o3-2025-04-16",
+      "object": "model",
+      "created": 1744133301,
+      "owned_by": "system"
+    },
+    {
+      "id": "o4-mini-2025-04-16",
+      "object": "model",
+      "created": 1744133506,
+      "owned_by": "system"
+    },
+    {
+      "id": "sora-2",
+      "object": "model",
+      "created": 1759708615,
+      "owned_by": "system"
+    },
+    {
+      "id": "text-embedding-3-small",
+      "object": "model",
+      "created": 1705948997,
+      "owned_by": "system"
+    },
+    {
+      "id": "tts-1",
+      "object": "model",
+      "created": 1681940951,
+      "owned_by": "openai-internal"
+    },
+    {
+      "id": "whisper-1",
+      "object": "model",
+      "created": 1677532384,
+      "owned_by": "openai-internal"
+    }
+  ]
+}

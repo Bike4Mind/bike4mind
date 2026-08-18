@@ -144,12 +144,12 @@ export interface ApiKeyUsageItem {
     requestsPerMinute: number;
     requestsPerDay: number;
   };
-  usage: {
-    totalRequests: number;
-    totalTokens?: number;
-    lastRequest?: Date;
-    requestsToday: number;
-    requestsThisMinute: number;
+  /** Live usage from the rate-limit cache counters (source of truth); resets are epoch seconds. */
+  liveUsage: {
+    minute: number;
+    day: number;
+    minuteResetAt?: number;
+    dayResetAt?: number;
   };
   metadata?: {
     baseline?: {

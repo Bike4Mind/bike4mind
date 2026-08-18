@@ -47,6 +47,7 @@ vi.mock('@bike4mind/database', () => ({
   creditTransactionRepository: {},
   userRepository: { findByEmail: (...a: any[]) => mockFindByEmail(...a), count: vi.fn(), update: vi.fn() },
   pendingOtcTokenRepository: { validateAndRotateNonce: (...a: any[]) => mockValidateNonce(...a) },
+  authSessionRepository: {},
 }));
 
 const mockVerifyPendingOTC = vi.fn();
@@ -59,6 +60,9 @@ vi.mock('@bike4mind/services', () => ({
   },
   creditService: { addCredits: (...a: any[]) => mockAddCredits(...a) },
   mfaService: { userHasMFAConfigured: () => false },
+  authSessionService: {
+    issueSession: vi.fn().mockResolvedValue({ accessToken: 'a', refreshToken: 'r', sid: 'sid' }),
+  },
 }));
 
 import handler from '@pages/api/otc/verify';

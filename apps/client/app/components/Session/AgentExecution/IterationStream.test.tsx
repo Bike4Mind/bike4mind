@@ -53,6 +53,10 @@ vi.mock('@client/app/hooks/useAgentExecution', () => ({
   }),
 }));
 
+// CreditCounter reads settings via useGetSettingsValue (needs a QueryClient) and
+// isn't under test here - stub it out so the render tree stays provider-free.
+vi.mock('./CreditCounter', () => ({ default: () => null }));
+
 import { groupByIteration } from './IterationStream';
 import IterationStream from './IterationStream';
 

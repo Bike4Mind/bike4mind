@@ -1,6 +1,7 @@
-import { IOrganizationRepository, IUserDocument } from '@bike4mind/common';
+import { IGroupRepository, IOrganizationRepository, IUserDocument, IUserRepository } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
+import { purgeOrgMembershipArtifacts } from './purgeOrgMembership';
 
 const revokeAccessSchema = z.object({
   id: z.string(),
@@ -12,6 +13,8 @@ type RevokeAccessParameters = z.infer<typeof revokeAccessSchema>;
 interface RevokeAccessAdapters {
   db: {
     organizations: IOrganizationRepository;
+    groups: Pick<IGroupRepository, 'findByOrganization'>;
+    users: Pick<IUserRepository, 'removeGroupsFromUser'>;
   };
 }
 
@@ -42,6 +45,11 @@ export const revokeAccess = async (
 
   organization.userDetails ||= [];
   organization.userDetails = organization.userDetails.filter(user => user.id.toString() !== userId);
+
+  // Mirror leave.ts: an involuntarily-removed member must not keep the org's group ids (data
+  // access) or a seat in adminUserIds (org-admin authority - assertCanManageOrgGroups reads it).
+  // Involuntary removal is exactly where retained access matters most. Idempotent under retry.
+  organization.adminUserIds = await purgeOrgMembershipArtifacts(userId, organization, adapters);
 
   await adapters.db.organizations.update(organization);
 

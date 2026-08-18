@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Box, Text, useInput } from 'ink';
 import type { CliConfig } from '../storage';
 import type { ModelInfo } from '@bike4mind/common';
+import { isFeatureEnabled, type PluginDescriptor } from '../plugins/PluginStore';
 
 /**
  * Configuration item types
@@ -42,8 +43,9 @@ const EXPORT_FORMAT_OPTIONS = [
 /**
  * Build configuration items to display in the editor
  * @param availableModels - Models available for selection
+ * @param pluginDescriptors - Installed plugins (valid ones get a feature toggle)
  */
-function buildConfigItems(availableModels: ModelInfo[]): ConfigItem[] {
+function buildConfigItems(availableModels: ModelInfo[], pluginDescriptors: PluginDescriptor[] = []): ConfigItem[] {
   const modelOptions = availableModels.map(model => ({
     label: model.name,
     value: model.id,
@@ -226,12 +228,34 @@ function buildConfigItems(availableModels: ModelInfo[]): ConfigItem[] {
     }
   );
 
+  // Installed plugins get an auto-discovered toggle. Reserved keys are already
+  // rejected at discovery, so these can never duplicate the built-in items.
+  for (const descriptor of pluginDescriptors) {
+    if (!descriptor.valid) {
+      continue;
+    }
+    items.push({
+      key: `featuresPlugin:${descriptor.configKey}`,
+      label: `Plugin: ${descriptor.name}`,
+      type: 'boolean' as const,
+      getValue: config => isFeatureEnabled(config.features, descriptor.configKey),
+      setValue: (config, value) => ({
+        ...config,
+        features: {
+          ...config.features,
+          [descriptor.configKey]: value as boolean,
+        },
+      }),
+    });
+  }
+
   return items;
 }
 
 export interface ConfigEditorProps {
   config: CliConfig;
   availableModels: ModelInfo[];
+  pluginDescriptors?: PluginDescriptor[];
   onSave: (config: CliConfig) => Promise<void>;
   onClose: () => void;
 }
@@ -245,13 +269,16 @@ export interface ConfigEditorProps {
  * - +/- keys to adjust numeric values
  * - q or Escape to save and exit
  */
-export function ConfigEditor({ config, availableModels, onSave, onClose }: ConfigEditorProps) {
+export function ConfigEditor({ config, availableModels, pluginDescriptors = [], onSave, onClose }: ConfigEditorProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [editedConfig, setEditedConfig] = useState<CliConfig>(config);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
-  const configItems = useMemo(() => buildConfigItems(availableModels), [availableModels]);
+  const configItems = useMemo(
+    () => buildConfigItems(availableModels, pluginDescriptors),
+    [availableModels, pluginDescriptors]
+  );
 
   // Check if config has been modified
   const hasChanges = useMemo(() => {

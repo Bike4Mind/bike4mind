@@ -45,7 +45,12 @@ import {
 import { apiKeyService } from '@bike4mind/services';
 import { EmbeddingFactory, getProviderFromModel } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { KnowledgeType, isSupportedEmbeddingModel, type IFabFileChunkDocument } from '@bike4mind/common';
+import {
+  countCodePoints,
+  KnowledgeType,
+  isSupportedEmbeddingModel,
+  type IFabFileChunkDocument,
+} from '@bike4mind/common';
 import { chunkByHeadings, stripFrontmatter } from './utils.js';
 import type { HelpIndex } from './types.js';
 
@@ -139,10 +144,16 @@ async function main(opts: Options): Promise<number> {
   console.log(`Public help articles to ingest: ${publicEntries.length}`);
 
   // --- Idempotency: clear the existing help lake so this run is a clean mirror ---
-  const existingIds = await fabFileRepository.findIdsByDataLakeTag(DATALAKE_TAG);
+  // Meta-tag only. This script writes both signals on every article (see below), so the narrow
+  // scope already covers everything it created, and it deletes outright - widening it to the
+  // prefix arm would let the mirror reach a file some other lake put a `help:` tag on.
+  const existingIds = await fabFileRepository.findIdsByDataLakeTag({ datalakeTag: DATALAKE_TAG });
   if (existingIds.length > 0) {
     console.log(`Removing ${existingIds.length} existing help fabfile(s) + their chunks…`);
     if (!opts.dryRun) {
+      // No self-host OpenSearch mirror needed here: this script only runs via `sst shell`
+      // against an SST-deployed (dev/production) stage, which never sets B4M_SELF_HOST - so
+      // selfHostOpenSearchEnabled() can never be true on a path that reaches this line.
       for (const id of existingIds) await fabFileChunkRepository.deleteManyByFabFileId(id);
       await fabFileRepository.deleteManyInIds(existingIds);
     }
@@ -179,6 +190,7 @@ async function main(opts: Options): Promise<number> {
           fabFileId: '',
           text,
           tokenCount: estimateTokens(text),
+          charLength: countCodePoints(text),
           vector,
           createdAt: now,
           updatedAt: now,
@@ -196,6 +208,12 @@ async function main(opts: Options): Promise<number> {
     // Create the FabFile. Tags are what fabFileSearchQuery scopes on:
     //  - `datalake:system-help` -> the meta-tag (dataLakeTags match)
     //  - `help:<slug>`          -> the `help:` prefix match + encodes the slug for deep-linking
+    //
+    // MUST STAY IN SYNC with the invariant in dataLakeService/fallbackLakeTags: a file carrying a
+    // lake meta-tag must also carry a tag under that lake's fileTagPrefix, or it is invisible to
+    // tag-counts and to the Explorer tag tree. This writes through the repository rather than an
+    // API door, so no reconciler runs here - the `help:<slug>` tag is what satisfies it, and
+    // dropping it would silently reproduce the bug this invariant exists to prevent.
     const fileBody = `# ${entry.title}\n\n${markdown}`;
     const fabFile = await fabFileRepository.create({
       userId: opts.userId,
@@ -211,6 +229,7 @@ async function main(opts: Options): Promise<number> {
       system: true,
       chunked: true,
       chunkCount: chunkPayloads.length,
+      chunkedCharCount: chunkPayloads.reduce((sum, c) => sum + (c.charLength ?? 0), 0),
       vectorized: true,
       vectorizedChunkCount: chunkPayloads.length,
       embeddingModel,

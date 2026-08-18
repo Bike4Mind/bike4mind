@@ -4,7 +4,7 @@
 // convention as other apps/client/server/**/*.test.ts files that touch Buffer/fs).
 // @vitest-environment node
 import { describe, it, expect, vi } from 'vitest';
-import { ImageModerationBlockedError, UnsupportedImageFormatError } from '@bike4mind/utils';
+import { ImageModerationBlockedError, UnsupportedImageFormatError } from '@bike4mind/utils/imageModeration';
 import { moderateUploadedFile, isTerminalModerationStatus } from './moderateUploadedFile';
 
 // Fakes for the injected deps - no AWS, no DB.

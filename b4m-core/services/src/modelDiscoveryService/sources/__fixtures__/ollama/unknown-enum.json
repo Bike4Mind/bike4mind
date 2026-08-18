@@ -1,0 +1,10 @@
+{
+  "models": [
+    {
+      "name": "future-model:latest",
+      "model": "future-model:latest",
+      "details": { "family": "futurearch", "families": ["futurearch"], "context_length": 1048576 },
+      "capabilities": ["completion", "tools", "thinking", "vision", "audio", "worldmodel"]
+    }
+  ]
+}

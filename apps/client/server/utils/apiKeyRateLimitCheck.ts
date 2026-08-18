@@ -28,6 +28,95 @@ export interface RateLimitContext {
   method: string;
 }
 
+export interface RateLimitOptions {
+  /**
+   * Whether this request should consume the per-DAY quota. Defaults to true.
+   * Set false for cheap idempotent reads (async job-status polls, content
+   * fetches) so they don't burn the daily budget that meters actual generation
+   * submissions. The per-MINUTE burst limit still applies regardless, so a
+   * runaway poll loop is still throttled. The caller (middleware) owns the
+   * policy of which requests qualify; this function only honors the flag.
+   */
+  meterDailyLimit?: boolean;
+}
+
+/**
+ * Single source of truth for the rate-limit cache key format. Both the
+ * enforcer (checkApiKeyRateLimit) and the reset (resetApiKeyRateLimit) must
+ * derive keys from here so they can never desync.
+ */
+export function buildRateLimitKeys(keyId: string): { minuteKey: string; dayKey: string } {
+  return {
+    minuteKey: `api-key-rate-limit:${keyId}:minute`,
+    dayKey: `api-key-rate-limit:${keyId}:day`,
+  };
+}
+
+/**
+ * Clear a key's minute and day rate-limit counters. Deleting the cache docs
+ * also discards each window's stored expiresAt, so the next request opens a
+ * fresh fixed window - the intended "reset" semantics. deleteByKey is an
+ * exact-match deleteOne, so unrelated cache keys are never touched, and
+ * deleting a missing doc is a no-op (idempotent).
+ *
+ * Note: embed keys additionally have per-session counters
+ * (`embed-session-rate-limit:{sessionId}:minute|:day`, see ./embedSessionRateLimit)
+ * which this deliberately does not clear.
+ */
+export async function resetApiKeyRateLimit(keyId: string): Promise<void> {
+  const { minuteKey, dayKey } = buildRateLimitKeys(keyId);
+  await cacheRepository.deleteByKey(minuteKey);
+  await cacheRepository.deleteByKey(dayKey);
+}
+
+export interface RateLimitUsage {
+  minute: number;
+  day: number;
+  /** Epoch seconds when the current minute window ends; undefined when no window is open (count 0). */
+  minuteResetAt?: number;
+  /** Epoch seconds when the current day window ends; undefined when no window is open (count 0). */
+  dayResetAt?: number;
+}
+
+/**
+ * Read a key's current minute and day counter values without touching them.
+ * A missing doc, or one whose fixed window already ended (expiresAt in the
+ * past, awaiting TTL cleanup), reads as 0 - the same view the enforcer takes
+ * on the next request. The DB usage.* fields on the key doc are not
+ * maintained; these cache counters are the live source of truth.
+ */
+export async function getApiKeyRateLimitUsage(keyId: string): Promise<RateLimitUsage> {
+  const { minuteKey, dayKey } = buildRateLimitKeys(keyId);
+  const [minuteDoc, dayDoc] = await Promise.all([
+    cacheRepository.findByKey(minuteKey),
+    cacheRepository.findByKey(dayKey),
+  ]);
+  const minute = readCounter(minuteDoc);
+  const day = readCounter(dayDoc);
+  return {
+    minute: minute.count,
+    day: day.count,
+    minuteResetAt: minute.resetAt,
+    dayResetAt: day.resetAt,
+  };
+}
+
+/**
+ * Read a counter doc's live count and window-end (epoch seconds). A missing,
+ * expired-but-uncleaned, or malformed doc reads as count 0 with no reset - the
+ * window is effectively closed, so there is nothing to reset.
+ */
+function readCounter(doc: { result?: unknown; expiresAt?: Date } | null): { count: number; resetAt?: number } {
+  if (!doc || (doc.expiresAt && doc.expiresAt.getTime() <= Date.now())) {
+    return { count: 0 };
+  }
+  const count = (doc.result as { count?: unknown } | undefined)?.count;
+  if (typeof count !== 'number') {
+    return { count: 0 };
+  }
+  return { count, resetAt: doc.expiresAt ? Math.floor(doc.expiresAt.getTime() / 1000) : undefined };
+}
+
 /**
  * Atomically increment a rate-limit counter ONLY if under limit, using
  * FIXED-WINDOW semantics: the window opens on the first request and closes
@@ -67,18 +156,20 @@ async function decrementCounter(key: string): Promise<number> {
  * @param keyId - The API key ID to check
  * @param rateLimit - The rate limit configuration from the API key
  * @param context - Optional context for analytics logging (userId, endpoint, method)
+ * @param options - Enforcement options (e.g. exempt cheap reads from the day quota)
  * @returns RateLimitResult with allowed status, headers, and error if exceeded
  */
 export async function checkApiKeyRateLimit(
   keyId: string,
   rateLimit: { requestsPerMinute: number; requestsPerDay: number },
-  context?: RateLimitContext
+  context?: RateLimitContext,
+  options: RateLimitOptions = {}
 ): Promise<RateLimitResult> {
   const { requestsPerMinute, requestsPerDay } = rateLimit;
+  const { meterDailyLimit = true } = options;
 
   try {
-    const minuteKey = `api-key-rate-limit:${keyId}:minute`;
-    const dayKey = `api-key-rate-limit:${keyId}:day`;
+    const { minuteKey, dayKey } = buildRateLimitKeys(keyId);
 
     // Step 1: Atomically try to increment the minute counter (only if under
     // limit). The returned expiresAt is the real window end -> exact Retry-After.
@@ -103,6 +194,27 @@ export async function checkApiKeyRateLimit(
           requestsPerDay,
           0, // Day counter untouched on a minute-limit rejection
           Date.now() + DAY_IN_MS // Nominal; the day header is informational here
+        ),
+      };
+    }
+
+    // Step 1b: Cheap reads (status polls, content fetches) are exempt from the
+    // day quota. Don't touch the day counter - report its current value from a
+    // non-incrementing read so the day headers stay honest.
+    if (!meterDailyLimit) {
+      const dayDoc = await cacheRepository.findByKey(dayKey);
+      const dayCount = (dayDoc?.result as { count?: number } | undefined)?.count ?? 0;
+      const dayResetAt = dayDoc?.expiresAt ? dayDoc.expiresAt.getTime() : Date.now() + DAY_IN_MS;
+
+      return {
+        allowed: true,
+        headers: buildHeaders(
+          requestsPerMinute,
+          minuteResult.count,
+          minuteResetAt,
+          requestsPerDay,
+          dayCount,
+          dayResetAt
         ),
       };
     }

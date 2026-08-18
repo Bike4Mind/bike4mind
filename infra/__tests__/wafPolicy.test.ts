@@ -19,6 +19,48 @@ interface WafRule {
 
 const mockEmergencyIpSetArn = 'arn:aws:wafv2:us-east-1:123456789012:global/ipset/test-ipset/abc123';
 
+// any: deeply nested AWS WAF statement shapes - a bare ByteMatch or an OrStatement of them
+/** The CommonRuleSet scope-down statement for a stage, exactly as WAF receives it. */
+function commonRuleSetScopeDown(stage: string): any {
+  const parsed = JSON.parse(buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage }));
+  const rule = parsed.find((r: WafRule) => r.Name === 'AWS-AWSManagedRulesCommonRuleSet');
+  return (rule.Statement.ManagedRuleGroupStatement as any)?.ScopeDownStatement;
+}
+
+interface UriPathMatch {
+  searchString: string;
+  positionalConstraint: string;
+  textTransformations: string[];
+}
+
+/**
+ * Every UriPath match in the statement, at any nesting depth. Returns the match constraint and
+ * transformations too, not just the path - a path exemption that silently widens from EXACTLY to
+ * STARTS_WITH would otherwise pass unnoticed.
+ */
+function uriPathMatches(scopeDown: any): UriPathMatch[] {
+  const found: UriPathMatch[] = [];
+  const walk = (node: any): void => {
+    if (!node || typeof node !== 'object') return;
+    const byteMatch = node.ByteMatchStatement;
+    if (byteMatch?.FieldToMatch?.UriPath && typeof byteMatch.SearchString === 'string') {
+      found.push({
+        searchString: byteMatch.SearchString,
+        positionalConstraint: byteMatch.PositionalConstraint,
+        textTransformations: (byteMatch.TextTransformations ?? []).map((t: { Type: string }) => t.Type),
+      });
+    }
+    Object.values(node).forEach(walk);
+  };
+  walk(scopeDown);
+  return found;
+}
+
+/** The settings-update exemption entry, or undefined if it is missing entirely. */
+function settingsUpdateExemption(stage: string): UriPathMatch | undefined {
+  return uriPathMatches(commonRuleSetScopeDown(stage)).find(m => m.searchString === '/api/settings/update');
+}
+
 describe('wafPolicy', () => {
   describe('getDevWafMeta', () => {
     it('returns WAF metadata with default name suffix for dev stage', () => {
@@ -108,9 +150,7 @@ describe('wafPolicy', () => {
       const ruleJson = buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'dev' });
       const parsed = JSON.parse(ruleJson);
 
-      const adminRule = parsed.find(
-        (rule: WafRule) => rule.Name === 'AWS-AWSManagedRulesAdminProtectionRuleSet'
-      );
+      const adminRule = parsed.find((rule: WafRule) => rule.Name === 'AWS-AWSManagedRulesAdminProtectionRuleSet');
       expect(adminRule).toBeDefined();
 
       // any: deeply nested AWS WAF managed-rule-group statement shape
@@ -148,6 +188,31 @@ describe('wafPolicy', () => {
       expect(ruleJson).not.toContain('undefined');
       expect(ruleJson).not.toContain(': null');
     });
+
+    // The admin settings PUT carries prompt text containing '../' (from an instruction not to use
+    // relative imports), which CommonRuleSet's GenericLFI_BODY reads as path traversal. The
+    // endpoint is admin-gated and CASL-checked, and the other managed groups still apply to it.
+    it('exempts /api/settings/update from CommonRuleSet so prompt text can be saved', () => {
+      const scopeDown = commonRuleSetScopeDown('dev');
+
+      // The NotStatement IS the exemption - without it the scope-down inverts and CommonRuleSet
+      // would apply to these paths ONLY, leaving every other route unprotected.
+      expect(scopeDown.NotStatement).toBeDefined();
+
+      const paths = uriPathMatches(scopeDown).map(m => m.searchString);
+      expect(paths).toContain('/api/settings/update');
+      expect(paths).toContain('/api/modals/');
+    });
+
+    // EXACTLY, not STARTS_WITH: a prefix match would hand the exemption to any future sibling route
+    // such as /api/settings/update-bulk. LOWERCASE so casing cannot change which requests match.
+    it('scopes the /api/settings/update exemption to an exact, lowercased path match', () => {
+      expect(settingsUpdateExemption('dev')).toEqual({
+        searchString: '/api/settings/update',
+        positionalConstraint: 'EXACTLY',
+        textTransformations: ['LOWERCASE'],
+      });
+    });
   });
 
   describe('buildDevWafRuleJson — production stage', () => {
@@ -169,13 +234,13 @@ describe('wafPolicy', () => {
       expect(rateLimitRule.Statement.RateBasedStatement.Limit).toBe(2000);
     });
 
-    it('includes the ai-route-rate-limit rule at Priority 3', () => {
+    it('includes the ai-route-rate-limit rule at Priority 4', () => {
       const ruleJson = buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' });
       const parsed = JSON.parse(ruleJson);
 
       const aiRule = parsed.find((rule: WafRule) => rule.Name === 'ai-route-rate-limit');
       expect(aiRule).toBeDefined();
-      expect(aiRule.Priority).toBe(3);
+      expect(aiRule.Priority).toBe(4);
       expect(aiRule.Statement.RateBasedStatement.Limit).toBe(300);
     });
 
@@ -200,9 +265,7 @@ describe('wafPolicy', () => {
       const ruleJson = buildDevWafRuleJson({ emergencyIpSetArn: mockEmergencyIpSetArn, stage: 'production' });
       const parsed = JSON.parse(ruleJson);
 
-      const adminRule = parsed.find(
-        (rule: WafRule) => rule.Name === 'AWS-AWSManagedRulesAdminProtectionRuleSet'
-      );
+      const adminRule = parsed.find((rule: WafRule) => rule.Name === 'AWS-AWSManagedRulesAdminProtectionRuleSet');
       expect(adminRule).toBeDefined();
 
       // any: deeply nested AWS WAF managed-rule-group statement shape
@@ -212,6 +275,25 @@ describe('wafPolicy', () => {
       );
       expect(override).toBeDefined();
       expect(override.ActionToUse).toEqual({ Count: {} });
+    });
+
+    it('exempts /api/settings/update from CommonRuleSet without losing the /api/modals/ exemption', () => {
+      const scopeDown = commonRuleSetScopeDown('production');
+
+      // See the dev-stage counterpart: dropping the NotStatement inverts the scope-down.
+      expect(scopeDown.NotStatement).toBeDefined();
+
+      const paths = uriPathMatches(scopeDown).map(m => m.searchString);
+      expect(paths).toContain('/api/settings/update');
+      expect(paths).toContain('/api/modals/');
+    });
+
+    it('scopes the /api/settings/update exemption to an exact, lowercased path match', () => {
+      expect(settingsUpdateExemption('production')).toEqual({
+        searchString: '/api/settings/update',
+        positionalConstraint: 'EXACTLY',
+        textTransformations: ['LOWERCASE'],
+      });
     });
   });
 });

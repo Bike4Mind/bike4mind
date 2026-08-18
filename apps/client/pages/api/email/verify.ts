@@ -5,9 +5,10 @@ import {
   adminSettingsRepository,
   creditLotRepository,
   creditTransactionRepository,
+  organizationRepository,
 } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { userService, creditService } from '@bike4mind/services';
+import { userService, creditService, organizationService } from '@bike4mind/services';
 import { CreditHolderType, PENDING_FREE_CREDITS_TAG, settingsMap } from '@bike4mind/common';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
@@ -16,6 +17,10 @@ import { AuthEvents } from '@bike4mind/common';
 import { logAuditEvent, EmailAuditEvents, calculateTokenAge } from '@server/utils/auditLog';
 import { entitlementsForEmail, signupCreditsForKeys } from '@client/lib/entitlements/registry';
 import { partnerSignupGrantForEmail } from '@server/entitlements/partnerRules';
+import {
+  notifySeatCeilingRaised,
+  notifyPartnerSignupBlockedAtCapacity,
+} from '@server/organizations/notifySeatCeilingRaised';
 import { pushEntitlementInvalidation } from '@server/entitlements/invalidate';
 import { z } from 'zod';
 
@@ -140,11 +145,15 @@ const handler = baseApi({ auth: false })
       // with 0 bonus credits without falling through to the env amount.
       let domainGrantKeys = new Set<string>();
       let signupCredits = 0;
+      // Only a DB-backed PartnerSignupRule can confer org membership (the env registry has
+      // no org concept), so this stays null unless a rule matched with an organizationId.
+      let partnerOrganizationId: string | null = null;
       if (userBeforeVerify) {
         const partnerGrant = await partnerSignupGrantForEmail(userBeforeVerify.email, true);
         if (partnerGrant.matched) {
           domainGrantKeys = partnerGrant.entitlements;
           signupCredits = partnerGrant.signupCredits;
+          partnerOrganizationId = partnerGrant.organizationId;
         } else {
           domainGrantKeys = entitlementsForEmail(userBeforeVerify.email, true);
           signupCredits = signupCreditsForKeys(domainGrantKeys);
@@ -188,6 +197,63 @@ const handler = baseApi({ auth: false })
           // Deliberately swallow: verification succeeded; re-throwing would show the user
           // "Verification Failed" despite the success. The stable transactionId lets an
           // admin/maintenance flow retry the grant without re-issuing an email token.
+        }
+      }
+
+      // Phase 2c: auto-add to the partner rule's organization. A DB rule may point a
+      // verified domain at an org; membership is derive-on-write (unlike entitlements),
+      // so it happens here, right after verification proves the email. applyPartnerRuleMembership
+      // re-reads the now-verified user, is idempotent, and never removes anyone. Own try/catch
+      // so a failure can't skip the audit below or 500 an already-successful verification.
+      if (userBeforeVerify && partnerOrganizationId) {
+        try {
+          const result = await organizationService.applyPartnerRuleMembership(
+            { userId: userBeforeVerify.id, organizationId: partnerOrganizationId },
+            { db: { users: userRepository, organizations: organizationRepository }, logger: req.logger }
+          );
+          if (result.added) {
+            req.logger.info(
+              `Partner-rule org membership: added verified user ${userBeforeVerify.id} to org ${partnerOrganizationId}`
+            );
+            if (result.reason === 'added-seat-raised') {
+              // Membership + raise already committed; the alert/audit is best-effort and never throws.
+              await notifySeatCeilingRaised(
+                {
+                  organizationId: partnerOrganizationId,
+                  userId: userBeforeVerify.id,
+                  previousSeats: result.previousSeats,
+                  newSeats: result.newSeats,
+                  trigger: 'email-verification',
+                },
+                req.logger
+              );
+            }
+          } else if (result.reason === 'at-capacity') {
+            // Org at capacity with no auto-raise: a Stripe-billed org (ceiling not raised out of band)
+            // or a non-Stripe org already at MAX_SEATS (the raise is clamped there, #1424). Alert an
+            // admin to add seats and admit this stranded partner user. Best-effort, never throws.
+            await notifyPartnerSignupBlockedAtCapacity(
+              {
+                organizationId: partnerOrganizationId,
+                userId: userBeforeVerify.id,
+                seats: result.seats,
+                trigger: 'email-verification',
+              },
+              req.logger
+            );
+          } else if (result.reason === 'org-missing') {
+            // Surfaces a misconfiguration (dangling org ref) without failing verification.
+            req.logger.warn(
+              `Partner-rule org membership not applied for user ${userBeforeVerify.id} ` +
+                `(org ${partnerOrganizationId}): ${result.reason}`
+            );
+          }
+        } catch (membershipError) {
+          req.logger.error(
+            `Email verified for user ${userBeforeVerify.id} but partner-rule org auto-add failed ` +
+              `(org ${partnerOrganizationId}); membership is idempotent so a retry is safe`,
+            membershipError
+          );
         }
       }
 

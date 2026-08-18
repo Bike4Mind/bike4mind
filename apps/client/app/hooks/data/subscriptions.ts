@@ -121,7 +121,7 @@ export const useGetAllSubscriptions = (
       };
       const response = await api.get<{
         subscriptions: Array<
-          IUserSubscription & { user: { username: string; email: string; name: string; _id: string } }
+          IUserSubscription & { owner: { username: string; email: string; name: string; _id: string } }
         >;
         pagination: {
           total: number;

@@ -94,9 +94,14 @@ function defineAbilitiesFor(user: IUserDocument | undefined) {
           'users.userId': user.id,
           'users.permissions': permission,
         };
+        // $elemMatch so groupId and permission must hold on the SAME group entry.
+        // A dotted `{ 'groups.groupId': ..., 'groups.permissions': ... }` lets the two
+        // conditions be satisfied by different array elements - a doc shared with
+        // group A (some other permission) and group B (this permission) would grant
+        // access to an A-member, a cross-group over-grant. Mirrors the $elemMatch the
+        // fabFile search query already uses (packages/database fabFileSearchQuery.ts).
         const groupWithPermissions: MongoQuery = {
-          'groups.groupId': { $in: user.groups },
-          'groups.permissions': permission,
+          groups: { $elemMatch: { groupId: { $in: user.groups }, permissions: permission } },
         };
         allow(permission, resource, userWithPermissions);
 

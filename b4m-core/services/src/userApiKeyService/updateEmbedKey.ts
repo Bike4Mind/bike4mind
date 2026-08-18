@@ -1,13 +1,13 @@
-import { ApiKeyScope, EmbedOriginsSchema, IUserApiKeyRepository } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  EmbedBrandingSchema,
+  EmbedOriginsSchema,
+  IOrganizationRepository,
+  IUserApiKeyRepository,
+} from '@bike4mind/common';
 import { secureParameters, BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { z } from 'zod';
-
-const embedBrandingSchema = z.object({
-  primaryColor: z.string().optional(),
-  logoUrl: z.string().optional(),
-  displayName: z.string().optional(),
-  hideBranding: z.boolean().optional(),
-});
+import { resolveOwnedApiKey } from './resolveOwnedApiKey';
 
 const updateEmbedKeySchema = z.object({
   keyId: z.string(),
@@ -17,7 +17,7 @@ const updateEmbedKeySchema = z.object({
   // lives at the route, which has the runtime host.
   agentId: z.string().min(1).optional(),
   allowedOrigins: EmbedOriginsSchema.optional(),
-  branding: embedBrandingSchema.optional(),
+  branding: EmbedBrandingSchema.optional(),
 });
 
 export type UpdateEmbedKeyParameters = z.infer<typeof updateEmbedKeySchema>;
@@ -25,6 +25,7 @@ export type UpdateEmbedKeyParameters = z.infer<typeof updateEmbedKeySchema>;
 interface UpdateEmbedKeyAdapters {
   db: {
     userApiKeys: IUserApiKeyRepository;
+    organizations: Pick<IOrganizationRepository, 'findIdsAdministeredBy'>;
   };
 }
 
@@ -47,6 +48,12 @@ export interface UpdateEmbedKeyResult {
  * `embed:chat` scope can be configured - the embed fields are meaningless on any
  * other key (mirrors the create-side coherence invariant). Absent fields are
  * left untouched; `allowedOrigins: []` explicitly clears the allow-list.
+ *
+ * Scoped by resolveOwnedApiKey (the key's minter, or an admin of the org it is
+ * billed to), so an org admin can configure any key billed to an org they
+ * administer, not just keys they minted. The [id] route resolves the branding
+ * owner through that same function, which is what keeps its white-label gate
+ * from ever being narrower than this write.
  */
 export const updateEmbedKey = async (
   userId: string,
@@ -56,7 +63,7 @@ export const updateEmbedKey = async (
   const { db } = adapters;
   const params = secureParameters(parameters, updateEmbedKeySchema);
 
-  const apiKey = await db.userApiKeys.findByUserIdAndId(userId, params.keyId);
+  const apiKey = await resolveOwnedApiKey(userId, params.keyId, { db });
   if (!apiKey) {
     throw new NotFoundError('API key not found');
   }

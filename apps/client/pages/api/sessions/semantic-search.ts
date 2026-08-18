@@ -21,7 +21,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { apiKeyRepository, adminSettingsRepository, sessionRepository } from '@bike4mind/database';
 import { Quest } from '@bike4mind/database/content';
 import { computeCosineSimilarity, getSettingsByNames } from '@bike4mind/utils';
-import { EmbeddingFactory, getProviderFromModel } from '@bike4mind/fab-pipeline';
+import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
 import { isSupportedEmbeddingModel, SupportedEmbeddingModel } from '@bike4mind/common';
 import { apiKeyService, ReRankService, SmallLLMService } from '@bike4mind/services';
 import { OperationsModelService } from '@client/services/operationsModelService';
@@ -149,41 +149,28 @@ const handler = baseApi().post(
       // STEP 3: Setup embedding service
       const requiredProvider = getProviderFromModel(embeddingModel);
       req.logger?.debug?.('Required provider for model:', requiredProvider);
-      const embeddingConfig: {
-        openaiApiKey?: string | null;
-        voyageApiKey?: string | null;
-        ollamaBaseUrl?: string | null;
-      } = {};
-
-      if (requiredProvider === 'openai') {
-        if (!apiKeyTable?.openai) {
-          req.logger?.error?.('OpenAI API key not configured');
-          return res.status(400).json({
-            error: `OpenAI API key is required for semantic search (model: ${embeddingModel}) but not configured. Please add your OpenAI API key in Settings, or contact your administrator.`,
-          });
-        }
-        embeddingConfig.openaiApiKey = apiKeyTable.openai;
-      } else if (requiredProvider === 'voyageai') {
-        if (!apiKeyTable?.voyageai) {
-          req.logger?.error?.('VoyageAI API key not configured');
-          return res.status(400).json({
-            error: `VoyageAI API key is required for semantic search (model: ${embeddingModel}) but not configured. Please add your VoyageAI API key in Settings, or contact your administrator.`,
-          });
-        }
-        embeddingConfig.voyageApiKey = apiKeyTable.voyageai;
-      } else if (requiredProvider === 'ollama') {
-        // apiKeyTable.ollama carries the Ollama base URL (no secret) in self-host.
-        if (!apiKeyTable?.ollama) {
-          req.logger?.error?.('Ollama base URL not configured');
-          return res.status(400).json({
-            error: `Ollama base URL is required for semantic search (model: ${embeddingModel}) but not configured. Set OLLAMA_BASE_URL or configure Ollama in Settings.`,
-          });
-        }
-        embeddingConfig.ollamaBaseUrl = apiKeyTable.ollama;
-      } else {
-        req.logger?.error?.('Unsupported embedding provider:', requiredProvider);
+      // A keyless provider (Bedrock, authenticating through the AWS credential chain) resolves
+      // to an EMPTY config with nothing missing - that is its ready state. The trailing `else`
+      // this replaced treated it as an unsupported provider and 400'd, which was doubly wrong:
+      // the admin dropdown offers Bedrock embedders and the vectorize pipeline accepts them,
+      // so a corpus ingested fine and then failed on every query.
+      const { config: embeddingConfig, missing } = resolveEmbeddingConfig(requiredProvider, apiKeyTable);
+      if (missing === 'openai') {
+        req.logger?.error?.('OpenAI API key not configured');
         return res.status(400).json({
-          error: `Unsupported embedding provider: ${requiredProvider}. Please configure a supported embedding model.`,
+          error: `OpenAI API key is required for semantic search (model: ${embeddingModel}) but not configured. Please add your OpenAI API key in Settings, or contact your administrator.`,
+        });
+      }
+      if (missing === 'voyageai') {
+        req.logger?.error?.('VoyageAI API key not configured');
+        return res.status(400).json({
+          error: `VoyageAI API key is required for semantic search (model: ${embeddingModel}) but not configured. Please add your VoyageAI API key in Settings, or contact your administrator.`,
+        });
+      }
+      if (missing === 'ollama') {
+        req.logger?.error?.('Ollama base URL not configured');
+        return res.status(400).json({
+          error: `Ollama base URL is required for semantic search (model: ${embeddingModel}) but not configured. Set OLLAMA_BASE_URL or configure Ollama in Settings.`,
         });
       }
 

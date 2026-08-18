@@ -23,6 +23,9 @@ vi.mock('@client/app/components/Session/NotebookFilepondProvider', () => ({
 vi.mock('@client/app/components/Session/SessionContainer', () => ({
   default: () => <div data-testid="session-container-stub" />,
 }));
+vi.mock('@client/app/components/datalake/DataLakeChatSurface', () => ({
+  default: ({ chat }: { chat: React.ReactNode }) => <>{chat}</>,
+}));
 
 // useGetSession is the unit under test's input - control its result per test.
 let sessionQuery: Record<string, unknown> = {};

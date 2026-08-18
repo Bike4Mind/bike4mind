@@ -1,11 +1,31 @@
-import type { AccessContext, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
+import type {
+  AccessContext,
+  IAdminSettingsRepository,
+  IDataLakeAccessGrantRepository,
+  IDataLakeDocument,
+  IDataLakeRepository,
+} from '@bike4mind/common';
 import { DATA_LAKES, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
-import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { BadRequestError, NotFoundError, normalizeId } from '@bike4mind/utils';
+import type { LakeGrant } from './manageRule';
+import { classifyLakeAccess } from './classifyLakeAccess';
+import { resolveEnforceReadGrants, resolveLakeReadAccess, type LakeAccessLogger } from './resolveLakeReadAccess';
 
 interface AssertLakeAccessAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug'>;
+    // Optional: when wired, a transferred/delegated owner or curator reaches the lake through the
+    // single read gate too (canAccessLake delegates to the grant-aware canManageLake). Absent ->
+    // read access falls back to createdByUserId + org/tag/public, the pre-grant behavior.
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+    // Optional: the read-time grant cutover flag (#1673). When wired, a persisted READER grant
+    // resolves into an ephemeral membership view at the gate; the flag governs whether that
+    // resolution is ENFORCED or merely reported (report-only). Absent -> report-only (legacy), so
+    // a caller that has not threaded settings keeps exact pre-cutover behavior.
+    settings?: Pick<IAdminSettingsRepository, 'getSettingsValue'>;
   };
+  // Optional diagnostic sink for the report-only divergence line (the expected-grant-set diff).
+  logger?: LakeAccessLogger;
 }
 
 /**
@@ -34,28 +54,13 @@ export function canAccessLake(
     IDataLakeDocument,
     'createdByUserId' | 'organizationId' | 'requiredUserTag' | 'requiredEntitlement' | 'isPublic'
   >,
-  ctx: AccessContext
+  ctx: AccessContext,
+  grants: readonly LakeGrant[] = []
 ): boolean {
-  if (ctx.isAdmin || lake.createdByUserId === ctx.userId) return true;
-
-  const normalizedTags = ctx.userTags.map(t => t.toLowerCase());
-  const normalizedKeys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
-
-  // Public: readable app-wide - bypasses BOTH the org prerequisite and Private-by-default. Must
-  // run before those checks (a public gateless lake trips the private rule otherwise). The gate
-  // is STILL respected via lakeMatchesAccess (defense in depth: a gate added after publishing
-  // keeps holding), but a normal public lake is gate-less so this returns true for everyone.
-  if (lake.isPublic) return lakeMatchesAccess(lake, normalizedTags, normalizedKeys);
-
-  // Private (no org, no gate of any kind) -> owner/admin only; deny every other caller.
-  // Must run before lakeMatchesAccess, which treats a no-requirement lake as public.
-  if (!lake.organizationId && !lake.requiredUserTag && !lake.requiredEntitlement) return false;
-
-  // Org is a hard prerequisite when the lake is org-scoped - evaluated BEFORE the
-  // tag/entitlement any-of so a holder in a different org can never pass.
-  if (lake.organizationId && lake.organizationId !== ctx.organizationId) return false;
-
-  return lakeMatchesAccess(lake, normalizedTags, normalizedKeys);
+  // ONE decision path: canAccessLake IS classifyLakeAccess().allowed. The classifier decomposes the
+  // same five arms so the read-time grant cutover (#1673) can report which arm decided without a
+  // drift-prone second copy of this rule.
+  return classifyLakeAccess(lake, ctx, grants).allowed;
 }
 
 /**
@@ -79,6 +84,20 @@ export function assertLakeWritable(lake: Pick<IDataLakeDocument, 'id'>): void {
 }
 
 /**
+ * Refuse access-grant (membership) operations against a fallback lake. A hardcoded DATA_LAKES lake
+ * has no backing document, so there is nothing to hang a grant row on and no `createdByUserId` to
+ * seed an owner grant from - its access is curated config, granted to everyone via the list/read
+ * path. This is the explicit fallback carve-out issue #1667 calls for; every grant write path
+ * (add/remove/reprocess a member) must call it after the access gate, mirroring how
+ * `assertLakeWritable` guards the file-write paths.
+ */
+export function assertLakeGrantable(lake: Pick<IDataLakeDocument, 'id'>): void {
+  if (isFallbackLake(lake)) {
+    throw new BadRequestError('This data lake is built into the platform; its membership is managed by configuration');
+  }
+}
+
+/**
  * Resolve a hardcoded DATA_LAKES fallback as a synthetic read-only document, applying
  * the same access rule the list path uses for fallbacks (admin, or tag/entitlement
  * any-of via lakeMatchesAccess) plus the hard org prerequisite from canAccessLake.
@@ -88,14 +107,18 @@ export function assertLakeWritable(lake: Pick<IDataLakeDocument, 'id'>): void {
 function resolveFallbackLake(lakeIdOrSlug: string, ctx: AccessContext): IDataLakeDocument | null {
   const config = DATA_LAKES.find(dl => dl.id === lakeIdOrSlug || dl.slug === lakeIdOrSlug);
   if (!config) return null;
-  if (config.organizationId && config.organizationId !== ctx.organizationId) return null;
+  const configOrgId = normalizeId(config.organizationId);
+  // `?? []`: same runtime belt as canAccessLake above - a malformed ctx must deny, not throw.
+  if (configOrgId && !(ctx.organizationIds ?? []).includes(configOrgId)) return null;
   if (!ctx.isAdmin) {
     const normalizedTags = ctx.userTags.map(t => t.toLowerCase());
     const normalizedKeys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
     if (!lakeMatchesAccess(config, normalizedTags, normalizedKeys)) return null;
   }
-  // Owner-less on purpose: reads key off datalakeTag/fileTagPrefix, and writes are
-  // refused wholesale by assertLakeWritable, so no one is the creator.
+  // Owner-less on purpose: reads key off datalakeTag/fileTagPrefix, and document writes
+  // (rename/delete/visibility/file-removal) are refused wholesale by assertLakeWritable, so no
+  // one is the creator. The one exception is assertLakeRebuildAccess (authorizeLakeWrite.ts),
+  // which re-chunks files without mutating this document and gates on ctx.isAdmin directly.
   return {
     ...config,
     createdByUserId: '',
@@ -117,13 +140,43 @@ function resolveFallbackLake(lakeIdOrSlug: string, ctx: AccessContext): IDataLak
 export const assertLakeAccess = async (
   lakeIdOrSlug: string,
   ctx: AccessContext,
-  { db }: AssertLakeAccessAdapters
+  { db, logger }: AssertLakeAccessAdapters
 ): Promise<IDataLakeDocument> => {
   const lake =
     (await db.dataLakes.findById(lakeIdOrSlug).catch(() => null)) ??
-    (await db.dataLakes.findBySlug(lakeIdOrSlug, ctx.organizationId));
+    (await db.dataLakes.findBySlug(lakeIdOrSlug, ctx.organizationIds));
   if (lake) {
-    if (!canAccessLake(lake, ctx)) throw new NotFoundError('Data lake not found');
+    // A persisted lake may carry grants; a fallback lake never does. Fetch only when the repo is
+    // wired, so callers that have not threaded it keep the createdByUserId + org/tag/public behavior.
+    const grants: LakeGrant[] =
+      db.dataLakeAccessGrants && !isFallbackLake(lake)
+        ? (await db.dataLakeAccessGrants.listByLake(lake.id, { activeAsOf: new Date() })).map(g => ({
+            principalType: g.principalType,
+            principalId: g.principalId,
+            role: g.role,
+          }))
+        : [];
+    // Read-time grant resolution (#1673). Resolve the persisted READER grant into an ephemeral
+    // membership view alongside the legacy five arms; the platform cutover flag governs whether that
+    // resolution is ENFORCED or merely reported. A failed flag read degrades to report-only (legacy),
+    // so a transient glitch can never silently WIDEN access.
+    const enforceReadGrants = await resolveEnforceReadGrants(db.settings, logger);
+    const decision = resolveLakeReadAccess(lake, ctx, grants, { enforceReadGrants });
+    // The expected-grant-set diff: while report-only, log every case where the read grant WOULD
+    // change the legacy outcome, so an operator can watch the cutover before flipping enforce on.
+    // Deliberately NOT logged once enforced: post-flip a reader read is expected behavior, so a
+    // per-access "diverges" line is just noise (grant-based access auditing is #1663's concern, not
+    // the cutover's). The gate is the diff's whole purpose, so it lives only in the report-only phase.
+    if (decision.diverges && !decision.enforced) {
+      logger?.info?.('[lakeReadGrantCutover] read grant would change access (report-only)', {
+        lakeId: lake.id,
+        userId: ctx.userId,
+        legacyArm: decision.legacyArm,
+        legacyAllowed: decision.legacyAllowed,
+        resolvedAllowed: decision.resolvedAllowed,
+      });
+    }
+    if (!decision.allowed) throw new NotFoundError('Data lake not found');
     return lake;
   }
   const fallback = resolveFallbackLake(lakeIdOrSlug, ctx);

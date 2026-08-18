@@ -41,6 +41,14 @@ export interface SessionsContextProps {
 
   currentSession: ISessionDocument | null;
   setCurrentSession: Dispatch<SetStateAction<ISessionDocument | null>>;
+  /**
+   * Updates currentSession WITHOUT the knowledgeIds auto-persist that
+   * `setCurrentSession` performs. For callers that have already written to the
+   * server themselves - going through `setCurrentSession` instead would fire a
+   * second, redundant PUT that carries none of the first one's options
+   * (`propagateToProjects`, notably), silently undoing them.
+   */
+  setCurrentSessionRaw: Dispatch<SetStateAction<ISessionDocument | null>>;
 
   addMessageToSession: (message: IChatHistoryItem) => Promise<void>;
 
@@ -288,8 +296,7 @@ export const useSystemPromptFiles = () => {
   };
 };
 
-export const useSessionAgents = (sessionId?: string) => {
-};
+export const useSessionAgents = (sessionId?: string) => {};
 
 export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
   const { currentUser } = useUser.getState();
@@ -309,9 +316,19 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
     useShallow(s => ({ setLLM: s.setLLM, tools: s.tools, isQuestMasterEnabled: s.isQuestMasterEnabled }))
   );
   const previousSessionIdRef = useRef<string | null>(null);
+  // Generation counter for workbench hydration; see the fetchFiles effect below.
+  const hydrationSeqRef = useRef(0);
 
   const { data: paginatedFabFiles } = useGetFabFiles();
   const fabFiles = useMemo(() => paginatedFabFiles?.pages?.map(page => page.data).flat(), [paginatedFabFiles?.pages]);
+  // Ref mirror so fetchFiles can read the latest fabFiles without re-creating
+  // itself on every paginated refetch. Without this, every fabFiles change
+  // re-triggers the hydration effect, which re-reads currentSession.knowledgeIds
+  // and can overwrite an in-flight optimistic removal.
+  const fabFilesRef = useRef(fabFiles);
+  useEffect(() => {
+    fabFilesRef.current = fabFiles;
+  }, [fabFiles]);
   const queryClient = useQueryClient();
 
   // Memoize the query object to prevent re-subscription churn: this is an
@@ -416,10 +433,12 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
     [settings.experimentalFeatures, isFeatureEnabled, availableAgents, currentSession, queryClient]
   );
 
-  // Utility function to fetch files, first trying local storage, then the server
+  // Utility function to fetch files, first trying local storage, then the server.
+  // Reads fabFilesRef (not fabFiles) so this callback is stable across paginated
+  // refetches and does not re-trigger the hydration effect.
   const fetchFiles = useCallback(
     async (knowledgeIds: string[]): Promise<IFabFileDocument[]> => {
-      const safeFabFiles = fabFiles ?? [];
+      const safeFabFiles = fabFilesRef.current ?? [];
 
       const localFiles = knowledgeIds
         .map(knowledgeId => safeFabFiles.find(file => file.id === knowledgeId))
@@ -427,17 +446,23 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
 
       const filesToFetch = knowledgeIds.filter(id => !localFiles.some(file => file.id === id));
 
-      if (filesToFetch.length < 1) {
-        return localFiles;
+      let fetchedFilesResults: IFabFileDocument[] = [];
+      if (filesToFetch.length > 0) {
+        fetchedFilesResults = await getFabFilesFromServerByIds(filesToFetch);
+        setFilesMetaDataVersion(prevVersion => prevVersion + 1);
       }
 
-      const fetchedFilesResults = await getFabFilesFromServerByIds(filesToFetch);
-
-      setFilesMetaDataVersion(prevVersion => prevVersion + 1);
-
-      return [...localFiles, ...fetchedFilesResults].map(file => ({ ...file, enabled: true }));
+      // Return in knowledgeIds order. Concatenating local-then-fetched reordered the
+      // workbench, and knowledgeIds is rewritten from workbench order on the next write,
+      // so the shuffle got persisted. Ids that resolve to nothing are dropped.
+      const byId = new Map([...localFiles, ...fetchedFilesResults].map(file => [file.id, file]));
+      return knowledgeIds
+        .map(id => byId.get(id))
+        .filter((file): file is IFabFileDocument => file !== undefined)
+        .map(file => ({ ...file, enabled: true }));
     },
-    [fabFiles]
+
+    []
   );
 
   // Persist session knowledgeIds to the backend
@@ -447,9 +472,12 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
         id: sessionId,
         knowledgeIds: knowledgeIds,
       });
-    } catch {
-      // Don't throw - this is a background operation
-      // Silent failure to avoid console noise
+    } catch (error) {
+      // Don't throw - callers treat this as a background operation. But it must not be
+      // silent: a dropped knowledgeIds write is invisible in the UI and looks exactly
+      // like the file was never attached. Callers that can surface it should use
+      // useNotebookContextFiles instead, which rolls back and tells the user.
+      console.error('Failed to persist session knowledgeIds', error);
     }
   }, []);
 
@@ -553,25 +581,51 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
 
       // Session switch completed - files will be restored via useEffect
 
-      // Update the user's last notebook ID if it's a different session
+      // Fire-and-forget on purpose: lastNotebookId feeds API chat routing (getSessionId in
+      // pages/api/chat.ts), session resumption, and Slack notebook resolution (notebook-manager
+      // in b4m-core/slack, which only ever reads it - a lost write is repaired by the next
+      // web-app message, never by a Slack one). Awaiting would hold up the switch, and a toast
+      // would interrupt a path the user is actively navigating.
       if (sessionId && currentUser.lastNotebookId !== sessionId) {
-        updateUserToServer(currentUser.id, { lastNotebookId: sessionId });
+        updateUserToServer(currentUser.id, { lastNotebookId: sessionId }).catch(error => {
+          console.error('[SessionsContext] Failed to persist lastNotebookId to server', error);
+        });
         queryClient.invalidateQueries({ queryKey: ['sessions', sessionId] });
       }
     },
     [currentSessionId, currentUser?.id, queryClient, currentUser?.lastNotebookId, setWorkBenchFiles, initializeSession]
   );
 
+  // Whether the context's session copy can be BELIEVED about having no knowledge files: every
+  // full document carries the array (the schema defaults it to []), so a missing field marks a
+  // partial copy that must not drive a workbench reset. A boolean, so the hydration effect's
+  // cadence stays keyed to knowledgeIds identity rather than to every session-object touch.
+  const knowledgeFieldTrustworthy = !currentSession || Array.isArray(currentSession.knowledgeIds);
+
   // Usage in useEffect for initial fetch
   useEffect(() => {
+    // Every run claims a generation. A fetch that resolves after a newer run started is
+    // carrying an older knowledgeIds set, and writing it would drop whatever the newer
+    // one added - which the next knowledgeIds write then persists, turning a stale
+    // render into real data loss. The same guard covers a session switch mid-fetch.
+    const seq = ++hydrationSeqRef.current;
+
     if (currentSession?.knowledgeIds?.length && currentSessionId) {
+      const sessionId = currentSessionId;
       fetchFiles(currentSession.knowledgeIds)
-        .then(fetched => setWorkBenchFiles(currentSessionId, fetched))
+        .then(fetched => {
+          if (seq !== hydrationSeqRef.current) return;
+          setWorkBenchFiles(sessionId, fetched);
+        })
         .catch(console.error);
-    } else if (currentSessionId) {
+    } else if (currentSessionId && knowledgeFieldTrustworthy) {
+      // Zero the workbench only when the emptiness is trustworthy (see the flag above): a doc
+      // with the field missing is a partial copy - e.g. the session.created fanout payload,
+      // which can adopt the session before the create response does - and zeroing on it wipes
+      // files the store legitimately holds (the Data Lake mint writes the opened file there).
       setWorkBenchFiles(currentSessionId, []);
     }
-  }, [currentSession?.knowledgeIds, fabFiles, fetchFiles, currentSessionId, setWorkBenchFiles]);
+  }, [currentSession?.knowledgeIds, fetchFiles, currentSessionId, setWorkBenchFiles, knowledgeFieldTrustworthy]);
 
   // AUTO-DISABLE EXPENSIVE TOOLS: Disable Deep Research and QuestMaster when SWITCHING notebooks (A->B)
   // This prevents accidental expensive operations when users change context
@@ -645,6 +699,7 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
       changeSession,
       currentSession,
       setCurrentSession: setCurrentSessionWithPersistence, // Use enhanced version
+      setCurrentSessionRaw: setCurrentSession,
       addMessageToSession,
       currentSessionId,
       setCurrentSessionId,

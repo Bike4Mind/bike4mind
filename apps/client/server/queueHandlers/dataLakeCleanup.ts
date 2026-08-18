@@ -1,17 +1,30 @@
 import {
   dataLakeRepository,
   dataLakeBatchRepository,
+  dataLakeAccessGrantRepository,
   fabFileRepository,
   fabFileChunkRepository,
+  memoryLedgerRepository,
+  memoryPrincipalKeyRepository,
 } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
+import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
+import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { shredPrincipalMemory } from '@server/memory/ledgerMemoryStore';
+import { createKeyProvider } from '@server/memory/factCipher';
 import { BadRequestError } from '@bike4mind/utils';
 import { z, ZodError } from 'zod';
 
 const CleanupPayload = z.object({
   dataLakeId: z.string(),
-  actor: z.object({ userId: z.string(), isAdmin: z.boolean() }),
+  // administeredOrgIds rides along so the async re-check keeps the org-manageable rung the request
+  // path used (optional for back-compat with any message enqueued before this field existed).
+  actor: z.object({
+    userId: z.string(),
+    isAdmin: z.boolean(),
+    administeredOrgIds: z.array(z.string()).optional(),
+  }),
 });
 
 /**
@@ -29,9 +42,35 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     await dataLakeService.cleanupDeletedDataLake(actor, dataLakeId, {
       db: {
         dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
         batches: dataLakeBatchRepository,
         fabFiles: fabFileRepository,
         fabFileChunks: fabFileChunkRepository,
+      },
+      // Undefined everywhere except self-host OpenSearch - Atlas's vector index lives on the
+      // FabFileChunk collection itself, so the chunk-sweep two steps below already removes it.
+      retrievalIndex: selfHostOpenSearchEnabled()
+        ? dataLakeService.openSearchRetrievalIndex({
+            db: { fabFileChunks: fabFileChunkRepository },
+            searchIndex: FabFileChunkSearchIndex,
+          })
+        : undefined,
+      // Crypto-shred the lake's memory profile as part of the purge (#1440) - destroy the DEK and mark
+      // the ledger shredded, so a deleted lake leaves no readable belief ledger behind.
+      //
+      // LOG IT. This is a data-retention operation, and until it logged, a successful shred and a
+      // shred that never ran were indistinguishable from the outside: the port is optional, so a host
+      // that failed to wire it would still exit 0 and look identical in CloudWatch. Verified live on a
+      // preview - the cleanup Lambda ran clean and emitted nothing, which is exactly the evidence gap
+      // this closes. The log is the only artifact that says a given lake's beliefs were destroyed.
+      shredMemory: async ({ datalakeTag, ownerUserId }) => {
+        await shredPrincipalMemory(
+          memoryLedgerRepository,
+          createKeyProvider(memoryPrincipalKeyRepository),
+          { kind: 'lake', id: datalakeTag },
+          ownerUserId
+        );
+        logger.info('[lakeMemory] crypto-shredded the lake memory profile', { datalakeTag, ownerUserId });
       },
       logger,
     });

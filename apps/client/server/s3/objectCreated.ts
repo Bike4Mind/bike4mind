@@ -8,10 +8,14 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { moderateImageOrThrow } from '@bike4mind/services';
+import { isAudioMimeType } from '@bike4mind/common';
 import { decodeS3Key, findWithRetry, withContext } from '@server/s3/utils';
-import { getSettingsMap, getSettingsValue, RekognitionImageModerationService } from '@bike4mind/utils';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getFilesStorage } from '@server/utils/storage';
 import { moderateUploadedFile } from '@server/s3/moderateUploadedFile';
+import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
+import { finalizeBatchIfComplete, isBatchComplete } from '@server/queueHandlers/dataLakeBatchProgress';
 import { sendToQueue } from '@server/utils/sqs';
 import { sendToClient } from '@server/websocket/utils';
 import { Resource } from 'sst';
@@ -192,21 +196,56 @@ export const func = withContext(async (event, context, logger) => {
       }
     }
 
+    // Now that the bytes are in storage, the lakes this file's meta-tags name can count it.
+    await recomputeStatsForUploadedFile(metadata, { logger });
+
     const enableKnowledgeAutoChunk = await adminSettingsRepository.getSettingsValue('enableAutoChunk');
 
-    if (enableKnowledgeAutoChunk) {
+    // Audio (generated TTS / sound effects) is never chunked/vectorized - it is
+    // not attachable to an LLM, and the chunker would only produce 0 chunks.
+    // Skip the enqueue so audio doesn't make a wasteful no-op queue round-trip.
+    if (enableKnowledgeAutoChunk && !isAudioMimeType(metadata.mimeType)) {
       try {
         const queueUrl = Resource.fabFileChunkQueue.url;
         if (!queueUrl) throw new Error('Chunk queue URL not found');
 
+        // No chunkSize: the chunker's passage-granularity default applies (#1420).
         const messageId = await sendToQueue(queueUrl, {
           fabFileId: metadata._id,
           userId: metadata.userId,
-          chunkSize: '1000',
         });
         logger.info(`Sent newly-uploaded FabFile to chunkQueue: ${messageId}`);
       } catch (error) {
         logger.error(`Error sending newly-uploaded FabFile to chunkQueue: ${error}`);
+      }
+    } else if (metadata.batchId) {
+      // A skipped file never reaches the chunk/vectorize handlers, so it would never
+      // satisfy the batch completion threshold on its own - the batch would hang until
+      // the stuck-batch reconciler forces it terminal. Count it here instead, mirroring
+      // the zero-chunk accounting in fabFileChunk.ts.
+      try {
+        const claimed = await dataLakeBatchRepository.claimFileStatus(
+          metadata.batchId,
+          metadata.id,
+          ['uploaded', 'pending'],
+          'skipped'
+        );
+        if (claimed) {
+          const batch = await dataLakeBatchRepository.incrementCounter(metadata.batchId, 'skippedFiles');
+          await finalizeBatchIfComplete(batch, logger);
+          await sendToClient(user.id, wsEndpoint, {
+            action: 'data_lake_batch_progress',
+            batchId: metadata.batchId,
+            skippedFiles: batch?.skippedFiles ?? 1,
+            status: isBatchComplete(batch)
+              ? batch!.failedFiles > 0
+                ? 'completed_with_errors'
+                : 'completed'
+              : undefined,
+          });
+        }
+      } catch (error) {
+        logger.error(`Error finalizing skipped file in batch: ${error}`);
       }
     }
 

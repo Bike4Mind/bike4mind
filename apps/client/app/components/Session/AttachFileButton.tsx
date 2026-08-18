@@ -17,7 +17,8 @@ import {
   ListItem,
   ListItemButton,
   ListItemDecorator,
-  Switch,
+  Radio,
+  RadioGroup,
   Tooltip,
   Typography,
 } from '@mui/joy';
@@ -46,56 +47,9 @@ import { useShallow } from 'zustand/react/shallow';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useGetSessionAgents } from '@client/app/hooks/data/agents';
 import CountBadge from '@client/app/components/common/CountBadge';
+import { ensureGoogleDrivePickerStyles } from '@client/app/utils/googleDrivePickerStyles';
 
-const GOOGLE_DRIVE_PICKER_STYLE_ID = 'b4m-google-drive-picker-styles';
-
-const ensureGoogleDrivePickerStyles = () => {
-  if (typeof document === 'undefined') return;
-  if (document.getElementById(GOOGLE_DRIVE_PICKER_STYLE_ID)) return;
-  const style = document.createElement('style');
-  style.id = GOOGLE_DRIVE_PICKER_STYLE_ID;
-  style.textContent = `
-    .picker-dialog,
-    .picker-dialog-bg,
-    .google-picker-dialog {
-      z-index: 1400 !important;
-    }
-
-    /* Improve file type icons */
-    .picker-spr-generic-file,
-    .picker-spr-unknown-file {
-      background: #f1f3f4 !important;
-      border-radius: 2px !important;
-      position: relative !important;
-    }
-
-    /* Google Docs icon */
-    .picker-spr-doc-icon {
-      background: #4285f4 !important;
-      border-radius: 2px !important;
-    }
-
-    /* Google Sheets icon */
-    .picker-spr-spreadsheet-icon {
-      background: #0f9d58 !important;
-      border-radius: 2px !important;
-    }
-
-    /* PDF icon */
-    .picker-spr-pdf-icon {
-      background: #ea4335 !important;
-      border-radius: 2px !important;
-    }
-
-    /* Fallback for missing thumbnails */
-    .picker-photo-control-default {
-      background: #f8f9fa !important;
-      border: 1px solid #dadce0 !important;
-      border-radius: 4px !important;
-    }
-  `;
-  document.head.appendChild(style);
-};
+import type { AttachScopeMode } from '@bike4mind/common';
 
 ensureGoogleDrivePickerStyles();
 
@@ -103,8 +57,8 @@ interface IProps {
   onUploadFromComputer: () => void;
   onAddFromGoogleDrive: (fabFile: IFabFileDocument) => void;
   onAddFromFileBrowser: () => void;
-  isSessionFileMode: boolean;
-  onToggleFileMode: (checked: boolean) => void;
+  attachScopeMode: AttachScopeMode;
+  onAttachScopeModeChange: (mode: AttachScopeMode) => void;
   totalFilesCount?: number;
   chatInputValue?: string;
   onOptimizePrompt?: () => void;
@@ -114,8 +68,8 @@ const AttachFileButton = ({
   onUploadFromComputer,
   onAddFromGoogleDrive,
   onAddFromFileBrowser,
-  isSessionFileMode,
-  onToggleFileMode,
+  attachScopeMode,
+  onAttachScopeModeChange,
   totalFilesCount,
   chatInputValue,
   onOptimizePrompt,
@@ -398,13 +352,29 @@ const AttachFileButton = ({
               borderColor: 'divider',
             }}
           >
-            <Switch
-              data-testid="notebook-context-switch"
-              checked={isSessionFileMode}
-              onChange={event => onToggleFileMode(event.target.checked)}
-            />
-            <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-              Add as Notebook Context
+            {/* Three-valued, not a switch: "this document, just once" and "this image,
+                keep it" are opposite overrides of the default and a boolean can only
+                express one of them. */}
+            <RadioGroup
+              orientation="horizontal"
+              size="sm"
+              value={attachScopeMode}
+              data-testid="attach-file-scope-radiogroup"
+              onChange={event => onAttachScopeModeChange(event.target.value as AttachScopeMode)}
+              sx={{ gap: 1.5, flexWrap: 'wrap' }}
+            >
+              <Radio value="auto" label="Smart" data-testid="attach-file-scope-auto-radio" />
+              <Radio value="notebook" label="Whole notebook" data-testid="attach-file-scope-notebook-radio" />
+              <Radio value="message" label="Just this message" data-testid="attach-file-scope-message-radio" />
+            </RadioGroup>
+          </Box>
+          <Box sx={{ mb: 1.5 }}>
+            <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+              {attachScopeMode === 'auto'
+                ? 'Documents stay available to this notebook; images attach to one message.'
+                : attachScopeMode === 'notebook'
+                  ? 'Everything is kept for this notebook and re-sent with every message.'
+                  : 'Nothing is kept - files attach to one message only.'}
             </Typography>
           </Box>
 

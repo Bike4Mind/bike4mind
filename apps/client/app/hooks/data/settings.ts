@@ -13,7 +13,7 @@ import { z } from 'zod';
 import type { ServerConfig } from '@pages/api/settings/serverConfig';
 import type { ServerConfigPublic } from '@pages/api/settings/serverConfigPublic';
 import { ADMIN_SETTINGS_QUERY_KEY, ADMIN_SETTINGS_ARRAY_QUERY_KEY, BRANDING_SETTINGS_QUERY_KEY } from './queryKeys';
-import { useAccessToken } from '../useAccessToken';
+import { useAccessToken, useIsFullyAuthenticated } from '@client/app/hooks/useAccessToken';
 
 export function useUpdateSettings() {
   const queryClient = useQueryClient();
@@ -21,13 +21,18 @@ export function useUpdateSettings() {
     mutationFn: async ({
       key,
       value,
+      confirmClear,
     }: {
       key: SettingKey;
       value: z.TypeOf<(typeof settingsMap)[SettingKey]['schema']>;
+      // Required by the server to unset a sensitive setting - clearing one destroys a live
+      // credential, so the intent has to be explicit rather than inferred from an empty value.
+      confirmClear?: boolean;
     }) => {
       const { data } = await api.put(`/api/settings/update`, {
         key,
         value,
+        ...(confirmClear ? { confirmClear } : {}),
       });
 
       return data;
@@ -152,7 +157,7 @@ export function usePublicConfig() {
 }
 
 export function useConfig() {
-  const accessToken = useAccessToken(s => s.accessToken);
+  const isFullyAuthenticated = useIsFullyAuthenticated();
 
   return useQuery({
     queryKey: ['server-config'],
@@ -163,10 +168,12 @@ export function useConfig() {
     },
     staleTime: 1000 * 60 * 5, // 5 minutes
     refetchOnWindowFocus: false,
-    // Only fetch when authenticated - prevents a 401 race on first login where
+    // Only fetch when fully authenticated - prevents a 401 race on first login where
     // useConfig fires before setAccessToken runs, permanently erroring the query
-    // and leaving the WebSocket URL undefined (stuck on "pending").
-    enabled: !!accessToken,
+    // and leaving the WebSocket URL undefined (stuck on "pending"). Gating on the
+    // fully-authenticated state (not just a token) also keeps it quiet during the
+    // mfaPending window (#804), where a token exists but every request 401s.
+    enabled: isFullyAuthenticated,
     // Override global retry: false - this query provides the WebSocket URL,
     // so transient failures should not permanently block the connection.
     // Skip retries on 401 (unauthenticated) to avoid spurious console errors on login page.

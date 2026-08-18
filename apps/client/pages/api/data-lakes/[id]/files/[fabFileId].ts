@@ -1,14 +1,15 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository, fabFileRepository } from '@bike4mind/database';
+import { dataLakeRepository, dataLakeAccessGrantRepository, fabFileRepository } from '@bike4mind/database';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 
 /**
  * DELETE /api/data-lakes/:id/files/:fabFileId
- * Removes a single file from a data lake (lake-scoped: drops the lake's datalake tag +
- * stat recompute; the file and its chunks survive - see removeFileFromDataLake).
+ * Removes a single file from a data lake (lake-scoped: drops every tag that makes the file a
+ * member of this lake, then recomputes stats; the file and its chunks survive - see
+ * removeFileFromDataLake).
  * Access-gated like the articles list (org-aware, not-found-style denial); the write is
  * then further restricted to owner/admin inside the service.
  */
@@ -18,20 +19,18 @@ const handler = baseApi()
     const { id, fabFileId } = req.query;
     const ctx = await toAccessContext(req);
 
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, { db: { dataLakes: dataLakeRepository } });
+    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+    });
     dataLakeService.assertLakeWritable(lake);
 
-    const result = await dataLakeService.removeFileFromDataLake(
-      { userId: ctx.userId, isAdmin: ctx.isAdmin },
-      lake.id,
-      fabFileId,
-      {
-        db: {
-          dataLakes: dataLakeRepository,
-          fabFiles: fabFileRepository,
-        },
-      }
-    );
+    const result = await dataLakeService.removeFileFromDataLake(ctx, lake.id, fabFileId, {
+      db: {
+        dataLakes: dataLakeRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        fabFiles: fabFileRepository,
+      },
+    });
 
     return res.json(result);
   });

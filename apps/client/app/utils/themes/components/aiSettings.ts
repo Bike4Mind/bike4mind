@@ -8,11 +8,16 @@ export const aiSettingsTheme = {
     cardBorderColor: brandAlpha[100][15],
     tooltipArrowBorder: `${gray[800]} ${gray[800]} transparent transparent`,
     modelCard: {
-      background: gray[900],
+      background: gray[850],
       border: `1px solid ${brandAlpha[100][15]}`,
       activeBorder: `1px solid ${greenAlpha[800][50]}`,
-      activeBackground: greenAlpha[800][2],
-      hoverBackground: grayAlpha[775][25],
+      // Layered over `background` rather than replacing it, so the selected tint reads as a
+      // wash on the card instead of a different surface. Same green as activeBorder.
+      activeBackground: greenAlpha[800][4],
+      // Same tint as the sidenav rows (gray[775]) but a step down in alpha: a card is a much
+      // larger fill area than a nav row, so the sidebar's 70% reads far heavier here. Matches
+      // the file-browser row hover.
+      hoverBackground: grayAlpha[775][50],
       hoverBorder: `1px solid ${brandAlpha[100][15]}`,
     },
     modal: {
@@ -28,8 +33,8 @@ export const aiSettingsTheme = {
       background: gray[0],
       border: `1px solid ${grayAlpha[150][50]}`,
       activeBorder: `1px solid ${greenAlpha[800][50]}`,
-      activeBackground: greenAlpha[800][2],
-      hoverBackground: `linear-gradient(0deg, ${gray[0]}, ${gray[0]}), linear-gradient(0deg, ${brandAlpha[100][20]}, ${brandAlpha[100][20]})`,
+      activeBackground: greenAlpha[800][4],
+      hoverBackground: brandAlpha[100][25],
       hoverBorder: `1px solid ${grayAlpha[150][50]}`,
     },
     modal: {

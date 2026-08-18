@@ -170,4 +170,102 @@ describe('Organization Permissions', () => {
       expect(canViewUsage({ id: 'owner123' }, null)).toBe(false);
     });
   });
+
+  describe('canManageGroups Helper', () => {
+    // Mirrors the canManageGroups memo in $id.tsx, which must match
+    // assertCanManageOrgGroups (organizationService/groupMembership.ts) so the Groups tab never
+    // shows to someone whose every write would 403. Kept in sync with that predicate.
+    const canManageGroups = (
+      currentUser: { id: string; isAdmin?: boolean } | null,
+      organization: {
+        userId: string;
+        personal?: boolean;
+        adminUserIds?: string[];
+        users?: Array<{ userId: string }>;
+      } | null
+    ): boolean => {
+      if (!currentUser || !organization || organization.personal) return false;
+      if (currentUser.isAdmin) return true;
+      if (currentUser.id === organization.userId) return true;
+      return (
+        (organization.adminUserIds ?? []).includes(currentUser.id) &&
+        (organization.users ?? []).some(member => member.userId === currentUser.id)
+      );
+    };
+
+    const org = {
+      userId: 'owner123',
+      personal: false,
+      adminUserIds: ['orgadmin456'],
+      users: [{ userId: 'orgadmin456' }, { userId: 'member789' }],
+    };
+
+    it('allows the billing owner', () => {
+      expect(canManageGroups({ id: 'owner123' }, org)).toBe(true);
+    });
+
+    it('allows a platform admin who is neither owner nor appointed', () => {
+      expect(canManageGroups({ id: 'someoneelse', isAdmin: true }, org)).toBe(true);
+    });
+
+    it('allows an appointed org admin who is still a member', () => {
+      expect(canManageGroups({ id: 'orgadmin456' }, org)).toBe(true);
+    });
+
+    // The membership conjunct. The server enforces it (groupMembership.test.ts: "forbids an
+    // appointed org admin who is no longer a member of the org"), so the tab must hide too -
+    // otherwise a stale adminUserIds entry gets a surface whose every write 403s.
+    it('denies an appointed org admin who is no longer a member', () => {
+      expect(canManageGroups({ id: 'orgadmin456' }, { ...org, users: [{ userId: 'member789' }] })).toBe(false);
+    });
+
+    it('denies a plain member', () => {
+      expect(canManageGroups({ id: 'member789' }, org)).toBe(false);
+    });
+
+    it('denies a stranger', () => {
+      expect(canManageGroups({ id: 'stranger999' }, org)).toBe(false);
+    });
+
+    it('denies everyone on a personal organization, including its owner', () => {
+      expect(canManageGroups({ id: 'owner123' }, { ...org, personal: true })).toBe(false);
+      expect(canManageGroups({ id: 'someoneelse', isAdmin: true }, { ...org, personal: true })).toBe(false);
+    });
+
+    it('returns false when user or organization is missing', () => {
+      expect(canManageGroups(null, org)).toBe(false);
+      expect(canManageGroups({ id: 'owner123' }, null)).toBe(false);
+    });
+  });
+
+  describe('canSetAdmins Helper', () => {
+    // Mirrors the canSetAdmins memo in $id.tsx and the PUT /organizations/:id/admins route: only
+    // the billing owner or a platform admin may appoint org admins. An appointed org admin
+    // deliberately cannot appoint others - that is the escalation the authz matrix forbids.
+    const canSetAdmins = (
+      currentUser: { id: string; isAdmin?: boolean } | null,
+      organization: { userId: string; adminUserIds?: string[] } | null
+    ): boolean => {
+      if (!currentUser || !organization) return false;
+      return Boolean(currentUser.isAdmin) || currentUser.id === organization.userId;
+    };
+
+    const org = { userId: 'owner123', adminUserIds: ['orgadmin456'] };
+
+    it('allows the billing owner', () => {
+      expect(canSetAdmins({ id: 'owner123' }, org)).toBe(true);
+    });
+
+    it('allows a platform admin', () => {
+      expect(canSetAdmins({ id: 'someoneelse', isAdmin: true }, org)).toBe(true);
+    });
+
+    it('denies an appointed org admin - no self-service escalation', () => {
+      expect(canSetAdmins({ id: 'orgadmin456' }, org)).toBe(false);
+    });
+
+    it('denies a stranger', () => {
+      expect(canSetAdmins({ id: 'stranger999' }, org)).toBe(false);
+    });
+  });
 });

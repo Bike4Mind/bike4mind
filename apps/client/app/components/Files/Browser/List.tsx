@@ -1,4 +1,4 @@
-import { IFabFileDocument, IFileTag } from '@bike4mind/common';
+import { IFabFileDocument, IFileTag, matchTagDocument, resolveFileTagDocs } from '@bike4mind/common';
 import { SwapVert } from '@mui/icons-material';
 import { Box, Grid, IconButton, LinearProgress, Typography, Select, Option, Button } from '@mui/joy';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
@@ -20,7 +20,8 @@ export interface FileBrowserListProps {
   sortDirection?: 'asc' | 'desc';
   onSortChange?: (field: 'fileName' | 'fileSize' | 'createdAt', direction: 'asc' | 'desc') => void;
   isLoading?: boolean;
-  isFetching?: boolean;
+  /** True while the rows on screen are the previous page/search standing in for a not-yet-loaded one. */
+  isPlaceholderData?: boolean;
   // Pagination props
   currentPage?: number;
   totalPages?: number;
@@ -47,7 +48,7 @@ const FileBrowserList: FC<FileBrowserListProps> = ({
   sortDirection = 'asc',
   onSortChange,
   isLoading = false,
-  isFetching = false,
+  isPlaceholderData = false,
   currentPage = 1,
   totalPages = 1,
   onPageChange,
@@ -61,12 +62,26 @@ const FileBrowserList: FC<FileBrowserListProps> = ({
 }) => {
   const { t } = useTranslation();
 
+  // The query keeps the previous rows while a new page/search loads (see
+  // usePaginatedSearchFabFiles), so isLoading alone is false during a page change. Latch on
+  // isPlaceholderData rather than isFetching: background refetches (the WebSocket-driven
+  // ['fabFiles'] invalidations in Content.tsx) leave the visible page current, and disabling
+  // Prev/Next through those would flicker the controls for no reason.
+  // Must stay in sync with Content.tsx's `isChangingPage`, which feeds the bottom-bar Prev/Next.
+  const isChangingPage = isLoading || isPlaceholderData;
+
+  /**
+   * The chips a row shows, resolved from the names the FILE stores to the caller's tag documents
+   * (see matchTagDocument for why that direction and that rule). Filtering the document list by
+   * "does any of the file's names fold to this" instead drew one chip per matching DOCUMENT, so two
+   * documents differing only by case put both chips on every file carrying either name.
+   */
   function getTags(file: IFabFileDocument): IFileTag[] | undefined {
     // For shared files, show all tags from the file itself
     if (fileFilterType === 'shared') {
       return (
         file.tags?.map(tag => {
-          const existingTag = fileTags?.find(userTag => userTag.name.toLowerCase() === tag.name.toLowerCase());
+          const existingTag = matchTagDocument(tag.name, fileTags ?? []);
 
           if (existingTag) {
             return existingTag;
@@ -101,7 +116,6 @@ const FileBrowserList: FC<FileBrowserListProps> = ({
             icon: tagIcons[iconIndex],
             color: tagColors[colorIndex],
             description: '',
-            fileCount: 1,
             createdAt: new Date(),
             updatedAt: new Date(),
             lastActivityAt: new Date(),
@@ -112,7 +126,11 @@ const FileBrowserList: FC<FileBrowserListProps> = ({
       );
     }
 
-    return fileTags?.filter(tag => file.tags?.some(t => t.name.toLowerCase() === tag.name.toLowerCase()));
+    if (!fileTags) return undefined;
+    return resolveFileTagDocs(
+      (file.tags ?? []).map(t => t.name),
+      fileTags
+    );
   }
 
   const handleSort = (field: SortField) => {
@@ -349,7 +367,7 @@ const FileBrowserList: FC<FileBrowserListProps> = ({
           >
             <Button
               variant="outlined"
-              disabled={currentPage === 1 || isLoading}
+              disabled={currentPage === 1 || isChangingPage}
               onClick={() => onPageChange(currentPage - 1)}
               size="sm"
             >
@@ -360,7 +378,7 @@ const FileBrowserList: FC<FileBrowserListProps> = ({
             </Typography>
             <Button
               variant="outlined"
-              disabled={currentPage === totalPages || isLoading}
+              disabled={currentPage === totalPages || isChangingPage}
               onClick={() => onPageChange(currentPage + 1)}
               size="sm"
             >
@@ -434,7 +452,7 @@ const FileBrowserList: FC<FileBrowserListProps> = ({
         >
           <Button
             variant="outlined"
-            disabled={currentPage === 1 || isLoading}
+            disabled={currentPage === 1 || isChangingPage}
             onClick={() => onPageChange(currentPage - 1)}
             size="sm"
           >
@@ -445,7 +463,7 @@ const FileBrowserList: FC<FileBrowserListProps> = ({
           </Typography>
           <Button
             variant="outlined"
-            disabled={currentPage === totalPages || isLoading}
+            disabled={currentPage === totalPages || isChangingPage}
             onClick={() => onPageChange(currentPage + 1)}
             size="sm"
           >

@@ -4,7 +4,7 @@ import { sanitizeJsonString, parseTransformationResult, wrapDraftAsArtifact } fr
 
 // Mirror the production artifact-parsing regexes (sharedToolBuilder.ts / client artifactParser.ts)
 const ARTIFACT_RE = /<artifact\s+([^>]*)>([\s\S]*?)<\/artifact>/i;
-const ATTR_RE = /(\w+)=["']([^"']*?)["']/g;
+const ATTR_RE = /(\w+)=(?:"([^"]*)"|'([^']*)')/g;
 
 function parseArtifact(tagged: string) {
   const m = ARTIFACT_RE.exec(tagged);
@@ -12,7 +12,7 @@ function parseArtifact(tagged: string) {
   const attrs: Record<string, string> = {};
   let a: RegExpExecArray | null;
   ATTR_RE.lastIndex = 0;
-  while ((a = ATTR_RE.exec(m[1])) !== null) attrs[a[1]] = a[2];
+  while ((a = ATTR_RE.exec(m[1])) !== null) attrs[a[1]] = a[2] ?? a[3];
   return { attrs, body: m[2].trim() };
 }
 
@@ -264,8 +264,9 @@ Line 3",
     });
 
     it('keeps a title with an apostrophe intact (no truncation at the quote)', () => {
-      // Real-world: "Why You Can't Tax Attention". A straight ' would terminate the
-      // [^"'] value matcher and truncate metadata.title to "Why You Can".
+      // Real-world: "Why You Can't Tax Attention". The attribute regex no longer
+      // truncates at an apostrophe, but sanitizeArtifactTitle still curls it for
+      // display, so the emitted title is the curly form.
       const out = wrapDraftAsArtifact({ ...baseResult, title: "Why You Can't Tax Attention" }, 'id');
       const parsed = parseArtifact(out)!;
       expect(parsed.attrs.type).toBe(ClaudeArtifactMimeTypes.BLOG_DRAFT);

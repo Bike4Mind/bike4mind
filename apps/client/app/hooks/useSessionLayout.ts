@@ -11,17 +11,11 @@ import {
   type PythonArtifact,
   QuestMasterData,
   type IFabFileDocument,
+  type AttachScope,
 } from '@bike4mind/common';
 
 export type DefaultLayoutType =
-  | 'horizontal'
-  | 'vertical'
-  | 'pip'
-  | 'noAI'
-  | 'hide'
-  | 'floatingChat'
-  | 'dockRight'
-  | 'dockBottom';
+  'horizontal' | 'vertical' | 'pip' | 'noAI' | 'hide' | 'floatingChat' | 'dockRight' | 'dockBottom';
 
 export interface CodeArtifactData {
   title: string;
@@ -55,11 +49,29 @@ export interface PendingMessageFile {
   // 'scanning'/'blocked' cover an uploaded image pending/failing the async content-moderation
   // scan before it's safe to serve (see fabFile.moderationStatus + isImageServeable).
   status: 'uploading' | 'complete' | 'error' | 'scanning' | 'blocked';
+  /**
+   * How long this attachment lives, frozen when the upload STARTED. Deliberately not
+   * re-read later: the attach-scope control governs the next attachment, and re-scoping
+   * a file mid-flight would make the outcome depend on invisible network timing.
+   */
+  scope: AttachScope;
+  /**
+   * The notebook this upload was made against, frozen for the same reason. The
+   * moderation websocket can land after a session switch, and this store is not
+   * session-keyed, so promoting against the CURRENT session would file the image under
+   * whichever notebook the user happens to be looking at.
+   */
+  uploadSessionId: string | null;
 }
 
 interface SessionLayoutControlState {
   layout: DefaultLayoutType;
   artifactData?: ArtifactData;
+  // Data-lake View: a file shown in the KnowledgeViewer WITHOUT being attached to the session
+  // workbench (viewing must not mutate the prompt - the explicit [+] action does that). The
+  // viewer renders it as one extra tab; replaced by the next View, cleared on session switch.
+  // Not persisted: a preview is a transient look, not session state.
+  previewFile: IFabFileDocument | null;
   recentArtifacts: ArtifactData[]; // Collection of recently clicked artifacts
   selectedArtifactId?: string;
   // Selected version number for viewing, keyed by artifact id. Per-artifact so a version
@@ -79,7 +91,6 @@ interface SessionLayoutControlState {
   floatingChatPosition: { x: number; y: number };
   floatingChatSize: { width: number; height: number };
   floatingChatMinimized: boolean;
-  previousLayout?: DefaultLayoutType; // Track layout before entering floating mode for close behavior
   // Docked chat panel sizing (percentage)
   dockChatWidth: number; // Width % for dockRight mode (default 35)
   dockChatHeight: number; // Height % for dockBottom mode (default 40)
@@ -96,6 +107,7 @@ const useSessionLayout = create<SessionLayoutControlState>()(
   persist(
     _set => ({
       layout: 'hide',
+      previewFile: null,
       knowledgeViewerWidth: 50, // Default to 50% width
       recentArtifacts: [],
       maxRecentArtifacts: 10, // Default max cache size
@@ -107,7 +119,6 @@ const useSessionLayout = create<SessionLayoutControlState>()(
       floatingChatPosition: { x: -1, y: -1 }, // -1 indicates "center on first use"
       floatingChatSize: { width: 450, height: 600 },
       floatingChatMinimized: false,
-      previousLayout: undefined,
       dockChatWidth: 35,
       dockChatHeight: 40,
     }),
@@ -129,8 +140,7 @@ const useSessionLayout = create<SessionLayoutControlState>()(
         // Docked chat panel sizing persisted for cross-session memory
         dockChatWidth: state.dockChatWidth,
         dockChatHeight: state.dockChatHeight,
-        // recentArtifacts, pendingMessageFiles, pendingModerationEvents, and previousLayout
-        // intentionally excluded
+        // recentArtifacts, pendingMessageFiles, and pendingModerationEvents intentionally excluded
       }),
     }
   )
@@ -171,8 +181,7 @@ export const addArtifactToRecent = (artifact: ArtifactData): ArtifactData[] => {
 
 export const setSessionLayout = (
   newStateOrUpdater:
-    | Partial<SessionLayoutControlState>
-    | ((prev: SessionLayoutControlState) => Partial<SessionLayoutControlState>)
+    Partial<SessionLayoutControlState> | ((prev: SessionLayoutControlState) => Partial<SessionLayoutControlState>)
 ) => {
   const currentState = useSessionLayout.getState();
 

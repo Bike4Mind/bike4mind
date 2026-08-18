@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ImageModerationBlockedError } from '@bike4mind/utils';
+import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import type { ToolContext } from '../../base/types';
 
 // The agent-tool image_generation path must run the SAME moderation gate the
@@ -8,8 +8,8 @@ import type { ToolContext } from '../../base/types';
 // so this test mocks the AWS-calling class itself rather than injecting a fake through context.
 const mockCheckImage = vi.fn();
 
-vi.mock('@bike4mind/utils', async importOriginal => {
-  const actual = await importOriginal<typeof import('@bike4mind/utils')>();
+vi.mock('@bike4mind/utils/imageModeration', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/utils/imageModeration')>();
   return {
     ...actual,
     // Regular `function` (not an arrow) so `new RekognitionImageModerationService(...)` in the

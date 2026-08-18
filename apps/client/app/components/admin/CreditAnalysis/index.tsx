@@ -1,24 +1,31 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Box, Tabs, TabList, Tab, TabPanel } from '@mui/joy';
 import PeopleIcon from '@mui/icons-material/People';
 import InsightsIcon from '@mui/icons-material/Insights';
 import PriceChangeIcon from '@mui/icons-material/PriceChange';
 import BusinessIcon from '@mui/icons-material/Business';
 import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
+import HistoryIcon from '@mui/icons-material/History';
 import { MarginDashboard } from './components/MarginDashboard';
 import { ModelPricingCatalog } from './components/ModelPricingCatalog';
-import { OrgUsageDashboard } from './components/OrgUsageDashboard';
+import { UsageDashboard } from './components/UsageDashboard';
+import { CreditHolderType } from '@bike4mind/common';
 import { TransactionLedger } from './components/TransactionLedger';
+import { CreditAdjustmentsLog } from './components/CreditAdjustmentsLog';
 import { UserCreditsManager } from './components/UserCreditsManager';
 import AdminProfileModal from '../AdminProfileModal';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { useCreditAnalysisStore, type CreditAnalysisTab } from './store';
 
 export const CreditAnalyticsTab: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<string>('users');
+  // Held in the store rather than locally so another admin tab can land the
+  // operator on a specific inner tab (Model Lifecycle -> Model Pricing).
+  const activeTab = useCreditAnalysisStore(state => state.activeTab);
+  const setActiveTab = useCreditAnalysisStore(state => state.setActiveTab);
 
   return (
     <Box sx={{ height: '100%', overflow: 'auto', px: 2, py: 1 }}>
-      <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as string)} sx={{ mb: 2 }}>
+      <Tabs value={activeTab} onChange={(_, value) => setActiveTab(value as CreditAnalysisTab)} sx={{ mb: 2 }}>
         <TabList sx={{ overflowX: { xs: 'auto', sm: 'visible' }, minWidth: { xs: 'max-content', sm: 'auto' } }}>
           <Tab value="users">
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -50,6 +57,12 @@ export const CreditAnalyticsTab: React.FC = () => {
               <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>Ledger</Box>
             </Box>
           </Tab>
+          <Tab value="adjustments" data-testid="credit-analysis-adjustments-tab">
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <HistoryIcon sx={{ fontSize: '18px' }} />
+              <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>Adjustments</Box>
+            </Box>
+          </Tab>
           <ContextHelpButton helpId="admin/credit-analytics" tooltipText="Credit Analytics Help" />
         </TabList>
 
@@ -66,11 +79,15 @@ export const CreditAnalyticsTab: React.FC = () => {
         </TabPanel>
 
         <TabPanel value="org-usage" sx={{ p: 0 }}>
-          <OrgUsageDashboard />
+          <UsageDashboard ownerType={CreditHolderType.Organization} />
         </TabPanel>
 
         <TabPanel value="ledger" sx={{ p: 0 }}>
           <TransactionLedger />
+        </TabPanel>
+
+        <TabPanel value="adjustments" sx={{ p: 0 }}>
+          <CreditAdjustmentsLog />
         </TabPanel>
       </Tabs>
 

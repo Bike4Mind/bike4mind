@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { questRepository, sessionRepository } from '@bike4mind/database';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, redactPromptMetaForViewer } from '@bike4mind/common';
 import { toGeneratedFiles } from '@server/utils/generatedFiles';
 import type { Request } from 'express';
 
@@ -10,6 +10,9 @@ import type { Request } from 'express';
 // a least-privilege chat key 403s on its own reply. OR / "any of" semantics.
 const handler = baseApi({
   requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
+  // Quest status is the poll step of the async generation pipeline; don't let
+  // polling one job to completion burn the daily quota that meters submissions.
+  exemptReadsFromDailyRateLimit: true,
 }).get(async (req: Request<{}, {}, {}, { id: string }>, res) => {
   const { id: questId } = req.query;
   const userId = req.user?.id;
@@ -35,13 +38,19 @@ const handler = baseApi({
     throw new NotFoundError('Quest not found');
   }
 
-  // `quest.images` holds bare generated-file basenames (e.g. `<uuid>.png`, or a `.xlsx` from
-  // excel_generation - not everything here is an image). Programmatic pollers shouldn't have to
-  // know the CDN path convention, so we resolve each into a typed descriptor with a ready-to-use
-  // URL server-side (the single source of truth). `images` (raw basenames) is kept for parity
-  // with the WebSocket payload; `files[].isImage` lets a caller pick out renderable images.
+  // `quest.images` holds bare generated-file basenames (e.g. `<uuid>.png`, a `.mp3` from
+  // music_generation, or a `.xlsx` from excel_generation - not everything here is an image).
+  // Programmatic pollers shouldn't have to know the CDN path convention, so we resolve each into
+  // a typed descriptor with a ready-to-use URL server-side (the single source of truth). `images`
+  // (raw basenames) is kept for parity with the WebSocket payload; `files[].isImage`/`isAudio`
+  // let a caller pick out renderable media.
   const images = quest.images ?? [];
   const files = toGeneratedFiles(images);
+
+  // A share grant authorizes reading the conversation, not re-reading whatever the owner's
+  // tools touched on the owner's behalf - see redactPromptMetaForViewer.
+  const isOwner = session.userId === userId;
+  const promptMeta = redactPromptMetaForViewer(quest.promptMeta, isOwner);
 
   return res.json({
     id: quest.id,
@@ -53,7 +62,7 @@ const handler = baseApi({
     files,
     createdAt: quest.createdAt,
     updatedAt: quest.updatedAt,
-    promptMeta: quest.promptMeta,
+    promptMeta,
     executionTracking: quest.promptMeta?.executionTracking,
   });
 });

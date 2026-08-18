@@ -36,6 +36,15 @@ describe('TokenCounter', () => {
     it('should handle empty string', () => {
       expect(counter.countTokens('')).toBe(0);
     });
+
+    it('should count special-token literals instead of rejecting them', () => {
+      // Pasted text, file content and tool output can all carry one of these. tiktoken's encode()
+      // rejects them, which took the TUI down; ordinary encoding charges them as the characters
+      // they are (so > 1, not the single token an admitted special token would cost).
+      expect(counter.countTokens('what does <|endoftext|> mean')).toBeGreaterThan(1);
+      expect(counter.countTokens('<|endofprompt|>')).toBeGreaterThan(1);
+      expect(counter.countTokens('<|fim_prefix|>')).toBeGreaterThan(1);
+    });
   });
 
   describe('countSessionTokens', () => {

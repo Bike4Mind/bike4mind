@@ -1,3 +1,5 @@
 import { setupSpecUser } from './helpers/spec-setup';
 
-setupSpecUser({ key: 'ai-latency-tool-prompts', authFile: 'ai-latency-tool-prompts-user.json' });
+// key is camelCase so it matches projectNameToSpecKey('ai-latency-tool-prompts') in fixtures.ts;
+// authFile keeps its kebab storageState path (referenced verbatim in playwright.config.ts).
+setupSpecUser({ key: 'aiLatencyToolPrompts', authFile: 'ai-latency-tool-prompts-user.json' });

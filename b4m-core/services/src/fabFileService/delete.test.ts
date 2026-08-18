@@ -37,6 +37,7 @@ describe('deleteFabFile', () => {
       };
       fabFileChunks: {
         deleteManyByFabFileId: Mock;
+        distinctEmbeddingModelsByFabFileIds: Mock;
       };
       users: {
         findById: Mock;
@@ -51,6 +52,7 @@ describe('deleteFabFile', () => {
       delete: Mock;
     };
     onDeleteComplete?: Mock;
+    searchIndex?: { deleteByFabFileId: Mock };
   };
 
   beforeEach(() => {
@@ -67,6 +69,7 @@ describe('deleteFabFile', () => {
         },
         fabFileChunks: {
           deleteManyByFabFileId: vi.fn(),
+          distinctEmbeddingModelsByFabFileIds: vi.fn().mockResolvedValue([]),
         },
         users: {
           findById: vi.fn().mockResolvedValue({ id: mockUserId }),
@@ -146,6 +149,48 @@ describe('deleteFabFile', () => {
     });
   });
 
+  describe('searchIndex (self-host OpenSearch mirror)', () => {
+    it('resolves every model the file actually used from the chunk store, not just FabFile.embeddingModel, and deletes from each', async () => {
+      // A re-embedded file's chunks can span more than one model (see IFabFileChunk.embeddingModel) -
+      // FabFile.embeddingModel alone is only the CURRENT one and would miss an earlier index.
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(mockFabFile);
+      mockAdapter.db.fabFiles.update.mockResolvedValue(mockFabFile);
+      mockAdapter.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds.mockResolvedValue([
+        'text-embedding-3-small',
+        'text-embedding-3-large',
+      ]);
+      mockAdapter.searchIndex = { deleteByFabFileId: vi.fn().mockResolvedValue(undefined) };
+
+      await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(mockAdapter.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds).toHaveBeenCalledWith([mockFileId]);
+      expect(mockAdapter.searchIndex.deleteByFabFileId).toHaveBeenCalledTimes(2);
+      expect(mockAdapter.searchIndex.deleteByFabFileId).toHaveBeenCalledWith(mockFileId, 'text-embedding-3-small');
+      expect(mockAdapter.searchIndex.deleteByFabFileId).toHaveBeenCalledWith(mockFileId, 'text-embedding-3-large');
+    });
+
+    it('skips the delete calls (but still resolves models) when the chunk store has no models for this file', async () => {
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(mockFabFile);
+      mockAdapter.db.fabFiles.update.mockResolvedValue(mockFabFile);
+      mockAdapter.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds.mockResolvedValue([]);
+      mockAdapter.searchIndex = { deleteByFabFileId: vi.fn() };
+
+      await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(mockAdapter.searchIndex.deleteByFabFileId).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op when searchIndex is not provided (non-self-host) - never even queries the chunk store', async () => {
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(mockFabFile);
+      mockAdapter.db.fabFiles.update.mockResolvedValue(mockFabFile);
+
+      await expect(deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter)).resolves.toMatchObject({
+        action: 'deleted',
+      });
+      expect(mockAdapter.db.fabFileChunks.distinctEmbeddingModelsByFabFileIds).not.toHaveBeenCalled();
+    });
+  });
+
   describe('shared files (self-unshare)', () => {
     it('should remove user from share list and return action "unshared"', async () => {
       mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(null);
@@ -198,7 +243,7 @@ describe('deleteFabFile', () => {
       expect(mockAdapter.storage.delete).not.toHaveBeenCalled();
     });
 
-    it('should return action "not_found" when file exists but user is not in share list', async () => {
+    it('should return action "denied" when file exists but user is not in share list', async () => {
       const fileNotSharedToUser: Partial<IFabFileDocument> = {
         ...createMockSharedFile(),
         users: [{ userId: 'other-user', permissions: ['read'] }],
@@ -208,7 +253,7 @@ describe('deleteFabFile', () => {
 
       const result = await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
 
-      expect(result.action).toBe('not_found');
+      expect(result.action).toBe('denied');
       expect(result.fabFile).toBeNull();
       expect(mockAdapter.db.fabFiles.update).not.toHaveBeenCalled();
     });

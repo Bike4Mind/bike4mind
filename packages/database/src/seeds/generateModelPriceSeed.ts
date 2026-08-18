@@ -2,6 +2,7 @@ import {
   AnthropicBackend,
   AWSBackend,
   GeminiBackend,
+  KimiBackend,
   OpenAIBackend,
   REALTIME_VOICE_PRICING,
   UndifferentiatedBedrockBackend,
@@ -27,6 +28,7 @@ export async function collectStaticTextModels(): Promise<ModelInfo[]> {
     new UndifferentiatedBedrockBackend(),
     new GeminiBackend('seed-key'),
     new XAIBackend('seed-key'),
+    new KimiBackend('seed-key'),
     new AWSBackend(),
   ];
   const models = (await Promise.all(backends.map(b => b.getModelInfo()))).flat();

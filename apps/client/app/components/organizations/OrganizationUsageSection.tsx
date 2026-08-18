@@ -2,8 +2,8 @@ import { FC, useState } from 'react';
 import { Box, Tab, TabList, TabPanel, Tabs } from '@mui/joy';
 import BusinessIcon from '@mui/icons-material/Business';
 import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
-import { IOrganizationDocument } from '@bike4mind/common';
-import { OrgUsageDashboard } from '@client/app/components/admin/CreditAnalysis/components/OrgUsageDashboard';
+import { CreditHolderType, IOrganizationDocument } from '@bike4mind/common';
+import { UsageDashboard } from '@client/app/components/admin/CreditAnalysis/components/UsageDashboard';
 import { TransactionLedger } from '@client/app/components/admin/CreditAnalysis/components/TransactionLedger';
 
 /**
@@ -33,7 +33,7 @@ const OrganizationUsageSection: FC<{ organization: IOrganizationDocument }> = ({
       </TabList>
 
       <TabPanel value="usage" sx={{ p: 0 }}>
-        <OrgUsageDashboard organizationId={organization.id} />
+        <UsageDashboard ownerType={CreditHolderType.Organization} ownerId={organization.id} />
       </TabPanel>
       <TabPanel value="ledger" sx={{ p: 0 }}>
         <TransactionLedger organizationId={organization.id} />

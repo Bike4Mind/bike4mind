@@ -30,6 +30,7 @@ interface FileBrowserActionsProps {
   currentPage?: number;
   totalPages?: number;
   onPageChange?: (page: number) => void;
+  /** True while a page change is in flight; pass the same signal as Browser/List.tsx's `isChangingPage`. */
   isLoadingPage?: boolean;
 }
 

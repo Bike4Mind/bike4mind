@@ -1,0 +1,7 @@
+[
+  { "model_id": "eleven_v3", "name": "Eleven v3", "can_do_text_to_speech": true },
+  { "name": "No Model Id" },
+  { "model_id": "", "name": "Blank" },
+  { "model_id": 42, "name": "Numeric Id" },
+  null
+]

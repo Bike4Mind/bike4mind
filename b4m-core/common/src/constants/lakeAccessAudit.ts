@@ -1,0 +1,79 @@
+/**
+ * Lake access audit retention limits, in DAYS.
+ *
+ * Live here (not next to the model) for the same reason as `constants/chunking.ts`: the values
+ * are needed by both the admin-settings schema in this package and by the repository that
+ * applies them (`packages/database`, which cannot import an app-server layer), so they must sit
+ * somewhere both can reach without a cycle.
+ *
+ * The audit-retention FLOOR is the point of this file. #1658's levers rule ("adjustable does not
+ * mean unbounded") exists because an org could otherwise configure its own retention to nothing
+ * and defeat the audit control the workstream exists to provide - so `resolveLakeAccessAuditRetentionDays`
+ * is a one-way ratchet UP: no input path can produce fewer than `LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS`.
+ *
+ * This is a PLATFORM-level lever, not a per-org one: `LakeAccessAuditRetentionDays` and
+ * `LakeAccessQueryTextRetentionDays` carry no `scope.settableAt` metadata, so #1660's scoped
+ * settings resolver (platform -> org -> owner -> lake) resolves them to their platform value at
+ * every scope, same as any other unscoped setting. Opting them in later is a metadata addition,
+ * not new infrastructure - the invariant to preserve when that happens is
+ * `max(orgConfigured, PLATFORM_FLOOR)`, since the floor belongs to the platform, never to the org.
+ */
+
+/** ~15 months: 12 months live retention plus a ~3-month Type II observation-window tail. */
+export const LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS = 450;
+/** A separate constant from the floor on purpose, even though they agree today - a future change
+ * to one must not silently move the other. */
+export const LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS = 450;
+/** Ceiling so "adjustable" cannot mean "unbounded" in either direction. */
+export const LAKE_ACCESS_AUDIT_RETENTION_MAX_DAYS = 2555;
+
+export const LAKE_ACCESS_QUERY_TEXT_RETENTION_DEFAULT_DAYS = 30;
+export const LAKE_ACCESS_QUERY_TEXT_RETENTION_MIN_DAYS = 1;
+export const LAKE_ACCESS_QUERY_TEXT_RETENTION_MAX_DAYS = 90;
+
+/** Query text is the most useful field for a customer and the most sensitive; capped rather than
+ * stored verbatim so an unusually long query cannot balloon the (already short-retention) row. */
+export const LAKE_ACCESS_QUERY_TEXT_MAX_CHARS = 4000;
+
+const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), max);
+
+/** `undefined` on anything that isn't a finite number once coerced (absent, null, '', NaN, Infinity). */
+const toFiniteDaysOrUndefined = (value: number | null | undefined): number | undefined => {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? Math.floor(parsed) : undefined;
+};
+
+/** An unset/blank/non-finite input yields the default; any numeric input is clamped into
+ * [FLOOR, MAX] - the floor applies unconditionally, even to an explicit low value. */
+export function resolveLakeAccessAuditRetentionDays(configuredDays?: number | null): number {
+  const parsed = toFiniteDaysOrUndefined(configuredDays);
+  if (parsed === undefined) return LAKE_ACCESS_AUDIT_RETENTION_DEFAULT_DAYS;
+  return clamp(parsed, LAKE_ACCESS_AUDIT_RETENTION_FLOOR_DAYS, LAKE_ACCESS_AUDIT_RETENTION_MAX_DAYS);
+}
+
+/**
+ * Query-text retention must be strictly shorter than the audit event's own retention - a value
+ * this cannot express with a static max, since it depends on another, dynamically-resolved
+ * setting. Clamped into [MIN, min(MAX, effectiveAuditDays - 1)] so equality at the boundary
+ * (both configured to the same value) still yields a strictly shorter result.
+ */
+export function resolveLakeAccessQueryTextRetentionDays(
+  configuredDays: number | null | undefined,
+  effectiveAuditDays: number
+): number {
+  const upperBound = clamp(
+    effectiveAuditDays - 1,
+    LAKE_ACCESS_QUERY_TEXT_RETENTION_MIN_DAYS,
+    LAKE_ACCESS_QUERY_TEXT_RETENTION_MAX_DAYS
+  );
+  const base = toFiniteDaysOrUndefined(configuredDays) ?? LAKE_ACCESS_QUERY_TEXT_RETENTION_DEFAULT_DAYS;
+  return clamp(base, LAKE_ACCESS_QUERY_TEXT_RETENTION_MIN_DAYS, upperBound);
+}
+
+/** The one place `now + days` is computed, so the event and query-text collections cannot drift
+ * on the arithmetic (AdminSupportAccessAuditLogModel and WebhookAuditLogModel each re-inline this
+ * same computation independently - other audit models sidestep it with a fixed-duration TTL on
+ * `createdAt` instead, which this file's two-collection, two-different-lifetimes shape can't use). */
+export function lakeAccessExpiresAt(now: Date, days: number): Date {
+  return new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+}

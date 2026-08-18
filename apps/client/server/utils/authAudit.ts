@@ -19,6 +19,8 @@ export async function logAuthAudit(
     userId: string;
     event: UserAuthAuditEvent;
     strategy?: string;
+    /** The user who performed the action, when it differs from `userId` (e.g. an admin force-logout). */
+    actorUserId?: string;
     metadata?: Record<string, unknown>;
   }
 ): Promise<void> {
@@ -27,6 +29,7 @@ export async function logAuthAudit(
       userId: params.userId,
       event: params.event,
       strategy: params.strategy,
+      actorUserId: params.actorUserId,
       actorIp: getClientIp(req) || 'unknown',
       userAgent: (req.headers['user-agent'] as string) || 'unknown',
       requestId: req.requestId,

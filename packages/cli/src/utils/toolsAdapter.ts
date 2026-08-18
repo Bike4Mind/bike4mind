@@ -6,14 +6,14 @@ import { BaseStorage } from '@bike4mind/fab-pipeline';
 import type { ICompletionOptionTools, ICompletionBackend } from '@bike4mind/llm-adapters';
 import { PermissionDeniedError, type IUserDocument, type IChatHistoryItemDocument } from '@bike4mind/common';
 import {
-  b4mTools,
+  cliSharedTools,
   generateTools,
-  type LlmTools,
+  getCliOnlyTools,
   setShowUserQuestionFn,
+  type LlmTools,
   type UserQuestionPayload,
   type UserQuestionResponse,
-} from '@bike4mind/services';
-import { getCliOnlyTools } from '@bike4mind/services/llm/tools/cliTools';
+} from '@bike4mind/services/llm/tools/cliTools';
 import type { PermissionManager } from './PermissionManager';
 import type { PermissionResponse } from '../components/PermissionPrompt';
 import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
@@ -849,11 +849,14 @@ export async function generateCliTools(
     'web_fetch',
   ];
 
-  // Filter b4mTools to only CLI-enabled ones, then merge with all CLI-only tools
+  // Filter the CLI-safe shared tools to only CLI-enabled ones, then merge with all
+  // CLI-only tools. `cliSharedTools` (from the services cliTools entry) exposes just
+  // the shared tools the CLI may use - it deliberately excludes the server-only
+  // image/excel tools so they never enter the CLI bundle (issue #660).
   const filteredB4mTools = Object.fromEntries(
     enabledB4mToolNames
-      .filter((name): name is keyof typeof b4mTools => name in b4mTools)
-      .map(name => [name, b4mTools[name]])
+      .filter((name): name is keyof typeof cliSharedTools => name in cliSharedTools)
+      .map(name => [name, cliSharedTools[name]])
   );
   const cliOnlyTools = await getCliOnlyTools();
   const tools_to_generate = { ...filteredB4mTools, ...cliOnlyTools };
@@ -944,4 +947,4 @@ export async function generateCliTools(
 export type { AgentContext };
 
 // Re-export user question types for CLI consumers
-export type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services';
+export type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm/tools/cliTools';

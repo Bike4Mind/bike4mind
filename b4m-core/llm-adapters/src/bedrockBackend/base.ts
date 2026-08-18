@@ -1,6 +1,8 @@
 import { Logger } from '@bike4mind/observability';
 import { ChatModels, IMessage, ModelBackend, PermissionDeniedError, type ModelInfo } from '@bike4mind/common';
+import { stripAllToolBlocks, stripToolDependentMessages } from '../toolPairingUtils';
 import { executeToolsBatch } from '../executeToolsBatch';
+import { recordToolResult, type RecordableToolUse } from '../recordToolResult';
 import {
   ChoiceEndReason,
   type CompletionInfo,
@@ -59,7 +61,7 @@ function isAbortError(err: unknown): boolean {
 
 export abstract class BaseBedrockBackend implements ICompletionBackend {
   private _options: BedrockOptions;
-  private _bedrockRuntime: BedrockRuntimeClient;
+  protected _bedrockRuntime: BedrockRuntimeClient;
   private _usEast1Models: string[] = [];
   public currentModel: string = '';
 
@@ -88,6 +90,29 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     return this._usEast1Models.includes(model) ? 'us-east-1' : 'us-east-2';
   }
 
+  /**
+   * Sends a non-streaming completion request. Subclasses whose Bedrock model doesn't support
+   * the raw Invoke API's response format (e.g. DeepSeek, which reports no usage on Invoke and
+   * must use Converse instead) override this - and invokeModelStream - to call a different
+   * Bedrock command while reusing the tool-loop/pruning/accumulation logic in complete() below.
+   */
+  protected async invokeModel(
+    input: { modelId: string; contentType: string; accept: string; body: string },
+    abortSignal?: AbortSignal
+  ): Promise<{ body?: Uint8Array }> {
+    const command = new InvokeModelCommand(input);
+    return this._bedrockRuntime.send(command, { abortSignal });
+  }
+
+  /** @see invokeModel */
+  protected async invokeModelStream(
+    input: { modelId: string; contentType: string; accept: string; body: string },
+    abortSignal?: AbortSignal
+  ): Promise<{ body?: AsyncIterable<{ chunk?: { bytes?: Uint8Array } }> }> {
+    const command = new InvokeModelWithResponseStreamCommand(input);
+    return this._bedrockRuntime.send(command, { abortSignal });
+  }
+
   protected updateClientForModel(model: string): void {
     const requiredRegion = this.getRegionForModel(model);
     this._options.region = requiredRegion;
@@ -103,7 +128,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     messages: IMessage[],
     options: Partial<ICompletionOptions>,
     callback: (text: (string | null | undefined)[], completionInfo?: CompletionInfo) => Promise<void>,
-    toolsUsed: Array<{ name: string; arguments?: string; id?: string }> = []
+    toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     this.currentModel = model;
     // Update client region if needed for this specific model
@@ -129,7 +154,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
       // Remove tools when limit is hit and continue, preserving _internal settings
       await this.complete(
         model,
-        messages,
+        // Tools are going away, so the prompts that order the model to use one have to go with them.
+        stripToolDependentMessages(messages),
         {
           ...options,
           tools: undefined,
@@ -149,8 +175,27 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     // native structured-output API, so we inject the schema as a system-level
     // instruction and surface `responseFormatMode: 'best-effort'` so callers
     // know to post-validate.
-    const messagesWithFormat = injectJsonSchemaInstruction(messages, options.responseFormat);
+    let messagesWithFormat = injectJsonSchemaInstruction(messages, options.responseFormat);
     const bestEffortFormat = isBestEffortJsonSchema(options.responseFormat);
+
+    // A replayed history turn (utils.ts Priority 2) can carry perfectly-paired tool_use/
+    // tool_result blocks from a PRIOR turn, even when THIS turn offers no tools - Bedrock talks
+    // the same Anthropic Messages API as anthropicBackend.ts and rejects any tool block when
+    // `tools` is absent regardless of pairing. Mirrors the same proactive strip added there;
+    // the reactive count-mismatch warning below only logs, it never stripped this case either.
+    if (!options.tools?.length) {
+      const hasToolBlocks = messagesWithFormat.some(
+        m =>
+          Array.isArray(m.content) &&
+          m.content.some((b: { type?: string }) => b.type === 'tool_use' || b.type === 'tool_result')
+      );
+      if (hasToolBlocks) {
+        Logger.globalInstance.warn(
+          '[BaseBedrockBackend Pre-API #6181] Tool blocks present but no tools offered this turn. Stripping all tool blocks.'
+        );
+        messagesWithFormat = stripAllToolBlocks(messagesWithFormat, Logger.globalInstance);
+      }
+    }
 
     let formattedMessages = this.formatMessages(messagesWithFormat);
     let input = this.getPayload(model, formattedMessages, options);
@@ -222,6 +267,12 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     let outputTokens = 0;
     let cacheReadTokens = 0;
     let cacheWriteTokens = 0;
+    // Last normalized stop reason a translate() reported, on either transport. Only
+    // the final frame of a stream carries one, so keeping the last non-empty value is
+    // what makes it available on the callbacks that follow. ChatCompletionProcess reads this to
+    // flag a truncated reply ('max_tokens'); adapters that do not set it leave the
+    // reply on the client's truncation heuristic instead.
+    let stopReason: string | undefined;
 
     const buildCompletionInfo = (): CompletionInfo => {
       // Emit accum + this turn's running tokens. wrappedOnChunk's assign-not-add
@@ -239,6 +290,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         ...(cacheReadTokens > 0 ? { cacheReadInputTokens: cacheReadTokens } : {}),
         ...(cacheWriteTokens > 0 ? { cacheCreationInputTokens: cacheWriteTokens } : {}),
         ...(bestEffortFormat ? { responseFormatMode: 'best-effort' as const } : {}),
+        ...(stopReason ? { stopReason } : {}),
       };
 
       if (options.cacheStrategy?.enableCaching && (cacheReadTokens > 0 || cacheWriteTokens > 0)) {
@@ -293,12 +345,9 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
       );
 
       if (options.stream) {
-        const command = new InvokeModelWithResponseStreamCommand(input);
         let response;
         try {
-          response = await this._bedrockRuntime.send(command, {
-            abortSignal: options.abortSignal,
-          });
+          response = await this.invokeModelStream(input, options.abortSignal);
         } catch (err: unknown) {
           this.handleBedrockError(err);
         }
@@ -315,6 +364,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
           if (streamEvent.chunk?.bytes) {
             const json = new TextDecoder().decode(streamEvent.chunk.bytes);
             const { chunk } = this.translateStreamChunk(model, JSON.parse(json));
+            if (chunk?.stopReason) stopReason = chunk.stopReason;
 
             chunk?.choices?.forEach(choice => {
               func[choice.index] ||= {};
@@ -393,6 +443,14 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 resolvedTools.push({ id, name, parameters, parsedParams: JSON.parse(parameters), toolFn });
               } catch {
                 Logger.globalInstance.warn('[BaseBedrockBackend] Tool parameter parse error, skipping tool:', name);
+                const entry = toolsUsed.find(t => t.name === name && t.id === id);
+                if (entry) entry.arguments = '{}';
+                recordToolResult(
+                  toolsUsed,
+                  { id, name },
+                  'Error: Tool arguments were malformed and could not be parsed.',
+                  false
+                );
               }
             }
 
@@ -438,10 +496,12 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                   await callback(results, buildCompletionInfo());
                 });
 
+                const resultStr = outcome.result.toString();
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
                 this.pushToolMessages(
                   messages,
                   { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  outcome.result.toString()
+                  resultStr
                 );
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
@@ -450,11 +510,14 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                   `[BaseBedrockBackend] Tool ${outcome.name} failed:`,
                   outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
                 );
+                const errorMessage = outcome.error instanceof Error ? outcome.error.message : 'Unknown error';
+                const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
                 // Push error result so the model can continue
                 this.pushToolMessages(
                   messages,
                   { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
-                  `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`
+                  observation
                 );
               }
             }
@@ -491,18 +554,16 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
           return; // Exit after handling tools
         }
       } else {
-        const command = new InvokeModelCommand(input);
         let response;
         try {
-          response = await this._bedrockRuntime.send(command, {
-            abortSignal: options.abortSignal,
-          });
+          response = await this.invokeModel(input, options.abortSignal);
         } catch (err: unknown) {
           this.handleBedrockError(err);
         }
         if (!response.body) throw new Error('No response body');
         const json = new TextDecoder().decode(response.body);
         const { chunk } = this.translateChunk(model, JSON.parse(json));
+        if (chunk?.stopReason) stopReason = chunk.stopReason;
         const streamedText: string[] = [];
         chunk?.choices.forEach(choice => {
           streamedText[choice.index] = choice.chunkText || '';
@@ -513,45 +574,55 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         cacheReadTokens = chunk?.choices[0].usage?.cache_read_input_tokens || 0;
         cacheWriteTokens = chunk?.choices[0].usage?.cache_creation_input_tokens || 0;
 
-        // Check if there's a tool use in the response
-        const toolChoice = chunk?.choices.find(choice => choice.statusEndReason === ChoiceEndReason.TOOL_USE) as
-          IChoiceEndToolUse | undefined;
+        // Collect EVERY tool call, not just the first. A provider that emits
+        // parallel calls returns one TOOL_USE choice per call, and the old
+        // `.find()` silently dropped all but the first with no result message.
+        const toolChoices = (chunk?.choices ?? []).filter(
+          choice => choice.statusEndReason === ChoiceEndReason.TOOL_USE && (choice as IChoiceEndToolUse).tool
+        ) as IChoiceEndToolUse[];
 
-        if (toolChoice?.tool) {
-          const { id, name, parameters } = toolChoice.tool;
-
+        if (toolChoices.length > 0) {
           // Track tool usage (including ID for history reconstruction, allow empty parameters)
-          if (name) {
-            toolsUsed.push({ name, arguments: parameters || '{}', id });
+          for (const { tool } of toolChoices) {
+            if (tool.name) toolsUsed.push({ name: tool.name, arguments: tool.parameters || '{}', id: tool.id });
           }
 
           // Check if we should execute tools or just report them
           if (options.executeTools !== false) {
-            // Default behavior: execute tools and recurse
-            const toolFn = options.tools?.find(tool => tool.toolSchema.name === name)?.toolFn;
-            // Allow empty parameters (some tools don't require input)
-            const safeParameters = parameters || '{}';
+            const executable = toolChoices
+              .map(tc => tc.tool)
+              .filter(tool => tool.id && tool.name && options.tools?.some(o => o.toolSchema.name === tool.name));
 
-            if (id && name && toolFn) {
-              let result: { toString(): string };
-              try {
-                result = await toolFn(JSON.parse(safeParameters));
-              } catch (err) {
-                if (err instanceof PermissionDeniedError) throw err;
-                if (isAbortError(err)) throw err;
-                Logger.globalInstance.error(
-                  `[BaseBedrockBackend] Tool ${name} failed:`,
-                  err instanceof Error ? err.message : String(err)
-                );
-                result = `Error processing ${name} tool: ${err instanceof Error ? err.message : 'Unknown error'}`;
+            if (executable.length > 0) {
+              // Execute each resolved call and push its result, so the model sees
+              // every tool it invoked on the recursive turn, then recurse once.
+              for (const { id, name, parameters } of executable) {
+                const toolFn = options.tools?.find(o => o.toolSchema.name === name)?.toolFn;
+                if (!toolFn) continue;
+                const safeParameters = parameters || '{}';
+                let result: { toString(): string };
+                let succeeded = true;
+                try {
+                  result = await toolFn(JSON.parse(safeParameters));
+                } catch (err) {
+                  if (err instanceof PermissionDeniedError) throw err;
+                  if (isAbortError(err)) throw err;
+                  Logger.globalInstance.error(
+                    `[BaseBedrockBackend] Tool ${name} failed:`,
+                    err instanceof Error ? err.message : String(err)
+                  );
+                  succeeded = false;
+                  result = `Error processing ${name} tool: ${err instanceof Error ? err.message : 'Unknown error'}`;
+                }
+
+                // For tools that return artifacts (like recharts), stream the result directly
+                await handleToolResultStreaming(name, result, async results => {
+                  await callback(results, buildCompletionInfo());
+                });
+
+                recordToolResult(toolsUsed, { id, name }, result.toString(), succeeded);
+                this.pushToolMessages(messages, { id, name, parameters }, result.toString());
               }
-
-              // For tools that return artifacts (like recharts), stream the result directly
-              await handleToolResultStreaming(name, result, async results => {
-                await callback(results, buildCompletionInfo());
-              });
-
-              this.pushToolMessages(messages, { id, name, parameters }, result.toString());
 
               // Add newline separator before recursive call to ensure proper markdown rendering
               await callback(['\n\n'], buildCompletionInfo());

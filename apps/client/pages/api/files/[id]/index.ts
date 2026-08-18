@@ -2,6 +2,7 @@ import { FileEvents, IFabFile, KnowledgeType } from '@bike4mind/common';
 import {
   changeStorageSize,
   dataLakeRepository,
+  dataLakeAccessGrantRepository,
   fabFileChunkRepository,
   fabFileRepository,
   fileTagRepository,
@@ -10,11 +11,19 @@ import {
   userRepository,
   withTransaction,
   User,
+  lakeAccessEventRepository,
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
+import { NotFoundError } from '@bike4mind/utils';
+import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
+import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
+import { grantingLakes, resolveAccessibleLakes } from '@server/dataLakes';
+import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
 import { getFilesStorage } from '@server/utils/storage';
+import { normalizeId } from '@bike4mind/utils/normalizeId';
+import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import { Request } from 'express';
 import { Types } from 'mongoose';
 
@@ -22,29 +31,67 @@ const handler = baseApi()
   .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
     req.logger.updateMetadata({ userId: req.user.id, fileId: req.query.id });
 
-    const fabFile = await fabFilesService.getFabFile(
-      req.user.id,
-      { id: req.query.id },
-      {
-        db: {
-          fabFiles: fabFileRepository,
-          users: userRepository,
-          adminSettings: adminSettingsRepository,
+    const adapter = {
+      db: {
+        fabFiles: fabFileRepository,
+        users: userRepository,
+        adminSettings: adminSettingsRepository,
+      },
+      storage: {
+        generateSignedUrl: async (path: string, expireInSeconds: number) => {
+          try {
+            return await getFilesStorage().getSignedUrl(path, 'get', { expiresIn: expireInSeconds });
+          } catch (error) {
+            req.logger.error('Error generating signed URL:', { error, path });
+            throw error;
+          }
         },
-        storage: {
-          generateSignedUrl: async (path: string, expireInSeconds: number) => {
-            try {
-              return await getFilesStorage().getSignedUrl(path, 'get', { expiresIn: expireInSeconds });
-            } catch (error) {
-              req.logger.error('Error generating signed URL:', { error, path });
-              throw error;
-            }
-          },
-        },
-      }
-    );
+      },
+    };
 
-    return res.json(fabFile);
+    try {
+      const fabFile = await fabFilesService.getFabFile(req.user.id, { id: req.query.id }, adapter);
+      return res.json(fabFile);
+    } catch (error) {
+      if (!(error instanceof NotFoundError)) throw error;
+      // Fallback: data-lake files are authorized by lake tag/prefix, NOT by per-file ACL.
+      // Curated/shared lake articles (e.g. OptiHashi's opti-knowledge) are owned by a curator,
+      // so getFabFile 404s for entitled non-owner users. Re-authorize via the SAME lake gate the
+      // browse endpoints use and, if granted, mint a fresh signed URL through the same path so
+      // the shared file viewer (KnowledgeModal) can render it. (#836)
+      const lakes = await resolveAccessibleLakes(req);
+      // Fetched directly and checked against the already-resolved `lakes` rather than a per-id
+      // helper that would re-run resolveAccessibleLakes's own DB read - the same one-resolve,
+      // reuse-everywhere shape as files/byIds.ts's lake fallback.
+      const candidate = lakes.length > 0 ? await fabFileRepository.findById(req.query.id) : null;
+      // The SAME computation grants access and names the grantor, so an open-prefix match (no
+      // tag to reverse) attributes to the specific lake whose prefix matched rather than falling
+      // back to every accessible lake - a false row in an immutable, 450-day-floor audit trail is
+      // worse than a missing one.
+      const grantors =
+        candidate && !candidate.deletedAt ? grantingLakes(lakes, candidate.tags?.map(t => t.name) ?? []) : [];
+      // No accessible lake serves this id either - never an audit-worthy read, so nothing is
+      // recorded; preserve the original 404 exactly as getFabFile raised it.
+      if (!candidate || grantors.length === 0) throw error;
+      const fabFile = await fabFilesService.generateSignedUrl(candidate, adapter);
+      // Best-effort audit write - this is the same single-file metadata + URL read as the
+      // articles `?id=` deep link, just reached through the direct-fetch fallback door instead.
+      // Awaited (never rethrows): a per-request serverless route must not race a post-response
+      // freeze of the execution environment.
+      await dataLakeService.recordLakeAccessEvent(
+        lakeAccessEventRepository,
+        {
+          ...resolveAuditPrincipal(req.user, req.apiKeyInfo),
+          organizationId: normalizeId(req.user.organizationId),
+          resolvedLakeIds: grantors.map(lake => lake.id),
+          fileIds: [candidate.id],
+          surface: 'data-lake-file-fallback',
+        },
+        req.logger,
+        adminSettingsRepository
+      );
+      return res.json(fabFile);
+    }
   })
   /**
    * Update FabFile by ID
@@ -55,15 +102,27 @@ const handler = baseApi()
 
     req.logger.updateMetadata({ userId, fileId: fabFileId });
 
+    // Same guard the DELETE branch below carries. The round trip matters on top of isValid():
+    // isValid() also accepts any 12-character string, which then coerces to an unrelated id.
+    if (!Types.ObjectId.isValid(fabFileId) || new Types.ObjectId(fabFileId).toString() !== fabFileId) {
+      return res.status(404).json({ msg: 'File not found' });
+    }
+
     // Data-lake membership is conferred by the lake's `datalake:*` meta-tag. Applying one is a
     // WRITE into that lake, so gate it with the same creator/admin check the remove path uses -
     // otherwise a read-only member could inject files via Send-to-Data-Lake.
+    //
+    // A `fileTagPrefix` content tag is membership too, but this route-level gate is NOT extended
+    // to cover it: it has no resolved file, so it cannot know the owner a prefix-arm join is
+    // anchored to. `reconcileLakeTags` (inside `updateFabFile` below) gates that join - a whole-
+    // array write can only ever join or preserve membership through either mechanism, never
+    // leave one; see that function's docstring.
     const candidateTagNames = [
       ...(req.body.tags?.map(t => t.name) ?? []),
       ...(req.body.primaryTag ? [req.body.primaryTag] : []),
     ];
     await dataLakeService.assertCanWriteDataLakeTags({ userId, isAdmin: !!req.user.isAdmin }, candidateTagNames, {
-      db: { dataLakes: dataLakeRepository },
+      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
     const updatedFabFile = await withTransaction(async () => {
@@ -87,7 +146,12 @@ const handler = baseApi()
             error: req.body.error,
           },
           {
-            db: { fabFiles: fabFileRepository },
+            db: {
+              fabFiles: fabFileRepository,
+              dataLakes: dataLakeRepository,
+              dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            },
+            logger: req.logger,
             storage: {
               upload: (filepath, content, option) => {
                 return getFilesStorage().upload(content, filepath, option);
@@ -127,26 +191,24 @@ const handler = baseApi()
       return res.status(404).json({ msg: 'File not found' });
     }
 
-    // Only decrement tag counts for owned files (shared file "delete" = unshare, not removal)
+    // Only touch tag activity for owned files (shared file "delete" = unshare, not removal)
     const fabFile = await fabFileRepository.findById(fabFileId);
     const isOwned = fabFile?.userId === userId;
     if (isOwned && fabFile?.tags?.length) {
       for (const tag of fabFile.tags) {
         try {
           if (tag?.name) {
-            await fileTagRepository.incrementFileCountBy({ name: tag.name, userId }, -1);
+            await fileTagRepository.touchLastActivityBy({ name: tag.name, userId });
           }
         } catch (tagError) {
-          req.logger.error('Error updating tag count during single file delete:', { tagError, tag });
+          req.logger.error('Error touching tag activity during single file delete:', { tagError, tag });
         }
       }
     }
 
     let sizeToDeduct = 0;
 
-    let deleteAction: string = 'not_found';
-
-    await withTransaction(async session => {
+    const deleteAction = await withTransaction(async session => {
       const result = await fabFilesService.deleteFabFile(
         userId,
         { id: fabFileId },
@@ -161,10 +223,9 @@ const handler = baseApi()
           onDeleteComplete: async (_fabFile, size) => {
             sizeToDeduct = size;
           },
+          searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
         }
       );
-
-      deleteAction = result.action;
 
       if (result.action === 'deleted') {
         await logEvent(
@@ -181,6 +242,8 @@ const handler = baseApi()
           { ability: req.ability, session }
         );
       }
+
+      return result.action;
     });
 
     // Deduct storage size after successful deletion
@@ -201,7 +264,19 @@ const handler = baseApi()
       }
     }
 
-    return res.json({ msg: 'Fab file deleted', action: deleteAction });
+    // After the transaction, so the aggregation sees the committed `deletedAt`. The shared helper
+    // also backs bulk-delete; see it for why only the 'deleted' outcome moves lake membership.
+    if (deleteAction === 'deleted') {
+      await recomputeStatsForLakeTags(
+        (fabFile?.tags ?? []).map(tag => tag?.name),
+        { logger: req.logger }
+      );
+    }
+
+    return res.json({
+      msg: 'Fab file deleted',
+      action: fabFilesService.toPublicDeleteAction(deleteAction),
+    });
   });
 
 export const config = {

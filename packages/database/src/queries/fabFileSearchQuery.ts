@@ -1,7 +1,8 @@
-import { CODE_FILE_MIME_TYPES } from '@bike4mind/common';
+import { CODE_FILE_MIME_TYPES, normalizeTagPrefix, type DataLakeMembershipScope } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { buildFilenameMarkerRegex } from '@bike4mind/utils/retrievalExclusion';
 import { USE_DOCUMENTDB } from '../utils/documentdb-compat';
+import { buildDataLakeMembershipFilter } from './dataLakeLifecycleScope';
 
 /**
  * Stop words filtered out during text search to improve match quality.
@@ -99,7 +100,7 @@ export { escapeRegex };
 
 /** Map file type filter to MongoDB mimeType query condition */
 export function getMimeTypeFilter(
-  type: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code'
+  type: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio'
 ): Record<string, unknown> {
   switch (type) {
     case 'text':
@@ -126,6 +127,8 @@ export function getMimeTypeFilter(
       return { mimeType: 'text/markdown' };
     case 'code':
       return { mimeType: { $in: CODE_FILE_MIME_TYPES } };
+    case 'audio':
+      return { mimeType: { $regex: '^audio/' } };
   }
 }
 
@@ -162,21 +165,57 @@ export function buildOwnershipConditions(
      * (assertLakeAccess), so matching the unique meta-tag without the ownership arms is safe.
      */
     restrictToDataLake?: boolean;
+    /**
+     * A single lake's membership scope, replacing the `dataLakeTags`/`scopedTagPrefixes` pair
+     * with the SAME predicate the whole-lake writes use, so a single-lake browse lists exactly
+     * what an archive or a permanent delete would act on. Its prefix arm is anchored to the
+     * lake's CREATOR, not the viewer: a viewer's own file that merely happens to carry a
+     * colliding tag prefix is not a member of someone else's lake, and a per-viewer answer could
+     * never agree with the lake's persisted fileCount.
+     *
+     * MUST be built server-side from the lake document. It carries a `creatorUserId` that widens
+     * what the query matches, so a value reaching this from request input would let a caller
+     * name any user and read their files - keep it out of every parsed-input surface.
+     */
+    lakeMembership?: DataLakeMembershipScope;
+    /**
+     * Drop the "shared 1:1 with this user" arm from base access, keeping owned + group +
+     * data-lake arms, for the per-user WORKSPACES tag/namespace count only (GET
+     * /api/files/tags/counts opts in; GET /api/files/tags does not - see userFileScope.ts).
+     *
+     * The write paths that keep a tag's denormalized name in sync (removeTagByUserId,
+     * updateTagsByUserId) only ever touch files the user owns, so a tag string surviving solely
+     * on a file merely shared with them can never be cleared by renaming/deleting their own tag -
+     * it keeps counting as an orphan bucket (the bug this flag fixes).
+     *
+     * That reconciliation argument is EQUALLY true of a group-shared or data-lake file owned by
+     * someone else - the write paths can't fix those either. Group/data-lake access stays IN as
+     * a deliberate product choice (they are the user's own persistent, subscribed-to workspaces,
+     * not an incidental share), not because it is more reconcilable. The group/data-lake orphan
+     * case this does not cover is a known, accepted gap. If revisited, the two options are
+     * extending this same narrowing to the group/data-lake arms, or leaving it as accepted
+     * behavior (the choice made here).
+     */
+    excludePersonalShares?: boolean;
   }
 ): object[] {
   // Base access: the file genuinely belongs to / is shared with this user. Reused both
   // as top-level $or arms and to scope the dynamic-lake prefix match.
   const baseAccess: object[] = [
     { userId }, // Files owned by user
-    {
-      // Files explicitly shared with user
-      users: {
-        $elemMatch: {
-          userId,
-          permissions: { $in: ['read', 'write'] },
-        },
-      },
-    },
+    ...(options?.excludePersonalShares
+      ? []
+      : [
+          {
+            // Files explicitly shared with user
+            users: {
+              $elemMatch: {
+                userId,
+                permissions: { $in: ['read', 'write'] },
+              },
+            },
+          },
+        ]),
   ];
 
   // Add group-level sharing if user has groups (organization sharing)
@@ -195,8 +234,14 @@ export function buildOwnershipConditions(
   // below select files, so a single-lake view can't fall back to "all files the user owns".
   const conditions: object[] = options?.restrictToDataLake ? [] : [...baseAccess];
 
+  if (options?.lakeMembership) {
+    conditions.push(buildDataLakeMembershipFilter(options.lakeMembership));
+  }
+
+  // Shared with the single-file removal write path (see normalizeTagPrefix): the prefixes
+  // matched here are exactly the ones a removal is allowed to clear.
   const validPrefixes = (prefixes: string[] | undefined) =>
-    (prefixes ?? []).map(p => p.trim()).filter(p => p.length > 0 && p.endsWith(':'));
+    (prefixes ?? []).map(normalizeTagPrefix).filter((p): p is string => p !== null);
 
   // Include data lake files accessible to this user (by exact meta-tag). The meta-tag
   // (`datalake:<org>:<slug>`) is uniquely namespaced and the accessible set is resolved
@@ -226,6 +271,9 @@ export function buildOwnershipConditions(
 
   // SCOPED prefix arm (dynamic lakes) - prefix match ANDed with base access, so a
   // user-chosen prefix colliding with another tenant's tags can never bypass ownership.
+  // Inherits excludePersonalShares through baseAccess: a scoped-lake file reachable ONLY via a
+  // 1:1 share would also drop out. Currently unreachable - no caller passes scopedTagPrefixes
+  // alongside excludePersonalShares - but documented so a future one doesn't get surprised.
   const scopedPrefixes = validPrefixes(options?.scopedTagPrefixes);
   if (scopedPrefixes.length > 0) {
     const prefixPattern = scopedPrefixes.map(p => escapeRegex(p)).join('|');
@@ -240,7 +288,7 @@ export function buildOwnershipConditions(
   // ($or must be a non-empty array). Fail fast here with a descriptive error instead.
   if (options?.restrictToDataLake && conditions.length === 0) {
     throw new Error(
-      'buildOwnershipConditions: restrictToDataLake requires at least one of dataLakeTags or scopedTagPrefixes'
+      'buildOwnershipConditions: restrictToDataLake requires lakeMembership, dataLakeTags or scopedTagPrefixes'
     );
   }
 
@@ -248,7 +296,7 @@ export function buildOwnershipConditions(
 }
 
 export type FabFileFilterType =
-  'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code';
+  'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code' | 'audio';
 
 export interface FabFileSearchParams {
   userId: string;
@@ -279,6 +327,8 @@ export interface FabFileSearchParams {
     /** Dynamic (owner/org-scoped) lake prefixes - see buildOwnershipConditions. */
     scopedTagPrefixes?: string[];
     /** Single-lake view: return only this lake's files, not all owned files - see buildOwnershipConditions. */
+    /** Server-supplied only - see buildOwnershipConditions.lakeMembership. */
+    lakeMembership?: DataLakeMembershipScope;
     restrictToDataLake?: boolean;
     /**
      * Treat the restrictToFileIds allow-list as the SOLE authorization: skip the
@@ -299,6 +349,12 @@ export interface FabFileSearchParams {
     excludeFilenameMarkers?: string[];
     /** When true, restrict results to vectorized files only (excludes unvectorized). */
     vectorizedOnly?: boolean;
+    /**
+     * When true, append an `_id` tiebreaker to a `fileName` sort so it becomes a total order.
+     * Required by callers that skip-paginate past page 1, because `fileName` is not unique.
+     * Ignored for other sort fields - see the sort block below for why.
+     */
+    stableSort?: boolean;
   };
   useDocumentDB?: boolean;
 }
@@ -349,10 +405,15 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
     }
   }
 
-  // Tag filter
+  // Tag filter. Anchored: these are whole tag names picked from the user's tag list, not a search
+  // term, so filtering by `test` must not also return files tagged `testing`. Unanchored, this
+  // disagreed with countFilesByTagForUser, which groups on the exact stored name - so the badge and
+  // the list it is compared against could cover different files.
   if (filters.tags && filters.tags.length > 0) {
     andConditions.push({
-      tags: { $elemMatch: { name: { $in: filters.tags.map(tag => new RegExp(escapeRegex(String(tag)), 'i')) } } },
+      tags: {
+        $elemMatch: { name: { $in: filters.tags.map(tag => new RegExp(`^${escapeRegex(String(tag))}$`, 'i')) } },
+      },
     });
   }
 
@@ -399,6 +460,7 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
       dataLakeTagPrefixes: options.dataLakeTagPrefixes,
       scopedTagPrefixes: options.scopedTagPrefixes,
       restrictToDataLake: options.restrictToDataLake,
+      lakeMembership: options.lakeMembership,
     });
     andConditions.push({ $or: ownershipConds });
   } else {
@@ -442,11 +504,21 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
   }
 
   // Sort - DocumentDB uses lowercase field for case-insensitive sorting
+  const direction = order.direction === 'asc' ? 1 : -1;
   let sort: Record<string, 1 | -1>;
   if (order.by === 'fileName' && useDocumentDB) {
-    sort = { fileNameLower: order.direction === 'asc' ? 1 : -1 };
+    sort = { fileNameLower: direction };
   } else {
-    sort = { [order.by]: order.direction === 'asc' ? 1 : -1 };
+    sort = { [order.by]: direction };
+  }
+  // `fileName` is NOT unique - a lake legitimately holds duplicate uploads - so skip-paginating a
+  // fileName sort can drop or repeat a file at a page boundary. Callers that walk more than one
+  // page opt in to an `_id` tiebreaker, which makes the sort a total order.
+  // Deliberately restricted to the fileName branches: they already require an in-memory sort
+  // (no usable collated fileName index), so the tiebreaker is free there, whereas adding it to
+  // `createdAt` would turn an indexed 21-document scan into a full-collection blocking sort.
+  if (options?.stableSort && (order.by === 'fileName' || sort.fileNameLower !== undefined)) {
+    sort._id = direction;
   }
 
   return {

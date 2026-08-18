@@ -109,20 +109,26 @@ describe('ReActAgent Parallel Execution Integration', () => {
 
       const agent = new ReActAgent(context);
 
-      const startTime = Date.now();
       const result = await agent.run('Test query', {
         parallelExecution: true,
       });
-      const duration = Date.now() - startTime;
 
       // All tools should have been called
       expect(tool1.toolFn).toHaveBeenCalledTimes(1);
       expect(tool2.toolFn).toHaveBeenCalledTimes(1);
       expect(tool3.toolFn).toHaveBeenCalledTimes(1);
 
-      // Parallel execution should be faster than sequential
-      // Sequential would take ~150ms (3 * 50ms), parallel should be ~50-60ms
-      expect(duration).toBeLessThan(TOOL_DELAY * 2.5);
+      // Concurrency means every tool starts before any of them finishes; sequential
+      // execution interleaves start/end pairs instead. Asserted on executionLog order
+      // (as the sibling tests below do) rather than elapsed time: a wall-clock threshold
+      // has to separate ~50ms from ~150ms, which CI contention routinely erases, and it
+      // cannot distinguish real concurrency from tools that merely ran fast.
+      const firstEndIndex = executionLog.findIndex(entry => entry.startsWith('end:'));
+      // Guard the -1 miss explicitly: slice(0, -1) would silently mean "all but the last
+      // entry" and the count below would then fail for the wrong reason.
+      expect(firstEndIndex).toBeGreaterThan(-1);
+      const startsBeforeFirstEnd = executionLog.slice(0, firstEndIndex).filter(e => e.startsWith('start:'));
+      expect(startsBeforeFirstEnd).toHaveLength(3);
 
       expect(result.finalAnswer).toBe('Done');
       expect(result.completionInfo.toolCalls).toBe(3);

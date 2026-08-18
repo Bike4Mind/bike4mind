@@ -7,8 +7,17 @@
  * no-op) so a regression is caught here rather than in a production ledger.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { billIteration, type BillingCounters, type IterationBillingEffects } from './agentExecutor.billing';
+import {
+  billIteration,
+  addToolUsage,
+  takeToolUsage,
+  foldGeneratedMediaUsd,
+  type BillingCounters,
+  type IterationBillingEffects,
+  type PendingToolUsage,
+} from './agentExecutor.billing';
 import type { ModelInfo } from '@bike4mind/common';
+import { estimateGeneratedMediaUsd } from '@bike4mind/services';
 
 // input rate = 1, everything else 0, so `getTextModelCost` reduces to
 // `1 * inputTokens` and cost math in the assertions stays trivial.
@@ -249,5 +258,258 @@ describe('billIteration (#657 context-window guard)', () => {
     // Second iteration's delta is 3500 - 1000 = 2500, NOT the raw 3500.
     expect(spies.addIterationBilling).toHaveBeenNthCalledWith(2, expect.objectContaining({ inputTokens: 2500 }));
     expect(counters.inputTokens).toBe(3500);
+  });
+});
+
+describe('billIteration (#630 tool-internal spend fold)', () => {
+  const tool = (overrides: Partial<PendingToolUsage> = {}): PendingToolUsage => ({
+    costUsd: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    ...overrides,
+  });
+
+  it('folds tool USD into the charge; charge + usage event carry agent+tool tokens, billing record stays agent-only', async () => {
+    const counters = makeCounters();
+    const { effects, spies } = makeEffects();
+
+    await billIteration({
+      iterationIndex: 1,
+      checkpoint: checkpoint(100, { output: 20 }),
+      counters,
+      modelInfo: makeModelInfo(1000),
+      model: 'test-model',
+      startTime: 0,
+      toolUsage: tool({ costUsd: 5, inputTokens: 30, outputTokens: 10 }),
+      effects,
+    });
+
+    // costDelta = agent 100 + tool 5 = 105.
+    expect(spies.deductCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ credits: 105, inputTokens: 130, outputTokens: 30 })
+    );
+    expect(spies.recordUsageEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ costUsd: 105, creditsCharged: 105, inputTokens: 130, outputTokens: 30 })
+    );
+    // Resume-critical record: AGENT-ONLY tokens, but the full agent+tool credits.
+    expect(spies.addIterationBilling).toHaveBeenCalledWith(
+      expect.objectContaining({ inputTokens: 100, outputTokens: 20, credits: 105 })
+    );
+  });
+
+  it('bills a tool-only iteration where the agent cost did not grow (the #630 bug: previously charged 0)', async () => {
+    // Agent already billed up to 100 tokens; this iteration adds no agent tokens.
+    const counters = makeCounters({ cumulativeCost: 100, inputTokens: 100 });
+    const { effects, spies } = makeEffects();
+
+    await billIteration({
+      iterationIndex: 2,
+      checkpoint: checkpoint(100), // no agent growth -> agent costDelta 0
+      counters,
+      modelInfo: makeModelInfo(1000),
+      model: 'test-model',
+      startTime: 0,
+      toolUsage: tool({ costUsd: 3, inputTokens: 7, outputTokens: 4 }),
+      effects,
+    });
+
+    // Pre-#630 this returned early (costDelta 0) and the tool spend was lost.
+    expect(spies.deductCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ credits: 3, inputTokens: 7, outputTokens: 4 })
+    );
+    expect(spies.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({ costUsd: 3, creditsCharged: 3 }));
+    // Agent-only token delta is 0; the charge still reflects the tool spend.
+    expect(spies.addIterationBilling).toHaveBeenCalledWith(
+      expect.objectContaining({ inputTokens: 0, outputTokens: 0, credits: 3 })
+    );
+  });
+
+  it('guard trip drops the snapshotted tool spend along with the (corrupt) agent charge', async () => {
+    const counters = makeCounters();
+    const { effects, spies } = makeEffects();
+
+    await billIteration({
+      iterationIndex: 4,
+      checkpoint: checkpoint(2000), // agent input delta > contextWindow 1000
+      counters,
+      modelInfo: makeModelInfo(1000),
+      model: 'test-model',
+      startTime: 0,
+      toolUsage: tool({ costUsd: 5, inputTokens: 9 }),
+      effects,
+    });
+
+    expect(spies.logGuardTrip).toHaveBeenCalledTimes(1);
+    expect(spies.deductCredits).not.toHaveBeenCalled();
+    // Anomaly marker only; tool tokens/cost are not smuggled into the zeroed event.
+    expect(spies.recordUsageEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'error', costUsd: 0, creditsCharged: 0, inputTokens: 0 })
+    );
+    expect(spies.addIterationBilling).toHaveBeenCalledWith(expect.objectContaining({ credits: 0, inputTokens: 2000 }));
+  });
+
+  it('a zero/absent toolUsage bills identically to the no-tool path', async () => {
+    const counters = makeCounters();
+    const { effects, spies } = makeEffects();
+
+    await billIteration({
+      iterationIndex: 1,
+      checkpoint: checkpoint(100),
+      counters,
+      modelInfo: makeModelInfo(1000),
+      model: 'test-model',
+      startTime: 0,
+      // toolUsage omitted -> defaults to zero
+      effects,
+    });
+
+    expect(spies.deductCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 100, inputTokens: 100 }));
+    expect(spies.addIterationBilling).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 100, credits: 100 }));
+  });
+});
+
+describe('tool-usage accumulator (addToolUsage / takeToolUsage)', () => {
+  it('accumulates successive reports and snapshot-and-resets exactly once', () => {
+    const pending: PendingToolUsage = {
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
+    addToolUsage(pending, { costUsd: 1, inputTokens: 10, outputTokens: 2, cacheReadTokens: 3, cacheWriteTokens: 4 });
+    addToolUsage(pending, { costUsd: 2, inputTokens: 20, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 1 });
+
+    const snapshot = takeToolUsage(pending);
+    expect(snapshot).toEqual({ costUsd: 3, inputTokens: 30, outputTokens: 7, cacheReadTokens: 3, cacheWriteTokens: 5 });
+    // Reset so a repeat take can't double-count the same spend.
+    expect(takeToolUsage(pending)).toEqual({
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
+  });
+});
+
+// Drives the SAME `estimateGeneratedMediaUsd` + phase routing the real agentExecutor
+// onToolStart/onToolFinish closures call, on payloads shaped like the tools actually emit.
+// Without this, deleting the media-cost fold from agentExecutor.ts (reverting to empty
+// stubs), a typo'd tool name, or an inverted `usd > 0` guard leaves the suite green while
+// agent-mode generation silently goes unbilled.
+describe('foldGeneratedMediaUsd', () => {
+  const zeroPending = (): PendingToolUsage => ({
+    costUsd: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  });
+
+  it('folds audio_generation speech cost into pending on finish (matches the estimator)', () => {
+    const pending = zeroPending();
+    const data = { kind: 'speech', provider: 'openai', model: 'tts-1', characters: 4096, paths: ['a.mp3'] };
+    const expected = estimateGeneratedMediaUsd('audio_generation', data, []);
+
+    foldGeneratedMediaUsd({
+      phase: 'finish',
+      toolName: 'audio_generation',
+      data,
+      models: [],
+      pending,
+      estimateUsd: estimateGeneratedMediaUsd,
+    });
+
+    expect(expected).toBeGreaterThan(0);
+    expect(pending.costUsd).toBe(expected);
+    // Media cost folds in as USD only; token counts stay untouched.
+    expect(pending.inputTokens).toBe(0);
+    expect(pending.outputTokens).toBe(0);
+  });
+
+  it('does NOT fold audio_generation on start - audio settles at finish', () => {
+    const pending = zeroPending();
+    const data = { kind: 'sound_effect', provider: 'elevenlabs', durationSeconds: 3, paths: ['a.mp3'] };
+
+    foldGeneratedMediaUsd({
+      phase: 'start',
+      toolName: 'audio_generation',
+      data,
+      models: [],
+      pending,
+      estimateUsd: estimateGeneratedMediaUsd,
+    });
+
+    expect(pending.costUsd).toBe(0);
+  });
+
+  it('does NOT fold image_generation on finish - image reserves at start', () => {
+    const pending = zeroPending();
+    const data = { model: 'unpriced-so-zero', n: 1, prompt: 'x' };
+
+    foldGeneratedMediaUsd({
+      phase: 'finish',
+      toolName: 'image_generation',
+      data,
+      models: [],
+      pending,
+      estimateUsd: estimateGeneratedMediaUsd,
+    });
+
+    expect(pending.costUsd).toBe(0);
+  });
+
+  it('is a no-op for a non-media tool', () => {
+    const pending = zeroPending();
+    const estimateUsd = vi.fn();
+
+    foldGeneratedMediaUsd({ phase: 'finish', toolName: 'web_search', data: {}, models: [], pending, estimateUsd });
+
+    // Routing short-circuits before the estimator is even consulted.
+    expect(estimateUsd).not.toHaveBeenCalled();
+    expect(pending.costUsd).toBe(0);
+  });
+
+  it('skips the fold when the estimate is <= 0', () => {
+    const pending = zeroPending();
+    // Speech payload missing `characters` prices at 0.
+    const data = { kind: 'speech', provider: 'openai', model: 'tts-1', paths: ['a.mp3'] };
+
+    foldGeneratedMediaUsd({
+      phase: 'finish',
+      toolName: 'audio_generation',
+      data,
+      models: [],
+      pending,
+      estimateUsd: estimateGeneratedMediaUsd,
+    });
+
+    expect(pending.costUsd).toBe(0);
+  });
+
+  it('routes an estimator error to onError and bills the iteration without the media cost', () => {
+    const pending = zeroPending();
+    const onError = vi.fn();
+    const boom = new Error('estimator blew up');
+    const estimateUsd = vi.fn(() => {
+      throw boom;
+    });
+
+    expect(() =>
+      foldGeneratedMediaUsd({
+        phase: 'finish',
+        toolName: 'audio_generation',
+        data: {},
+        models: [],
+        pending,
+        estimateUsd,
+        onError,
+      })
+    ).not.toThrow();
+    expect(onError).toHaveBeenCalledWith(boom);
+    expect(pending.costUsd).toBe(0);
   });
 });

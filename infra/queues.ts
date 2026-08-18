@@ -12,7 +12,48 @@ import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
 import { mcpHandler } from './mcp';
-import { router, whatsNewDistributionId } from './router';
+import { router, whatsNewDistributionId, appUrlForLambdaEnv } from './router';
+
+// Data Lake Taxonomy Analysis Queue - declared before the chunk/vectorize queues below
+// because both of those Lambdas now need to link it too (finalizeBatchIfComplete, which they
+// call, enqueues taxonomy analysis as a backstop - see the fuller comment further down where
+// the queue's own subscription is wired).
+const dataLakeTaxonomyQueueDLQ = new sst.aws.Queue('dataLakeTaxonomyQueueDLQ', {});
+const dataLakeTaxonomyQueue = new sst.aws.Queue('dataLakeTaxonomyQueue', {
+  visibilityTimeout: '6 minutes',
+  dlq: {
+    queue: dataLakeTaxonomyQueueDLQ.arn,
+    retry: 2, // LLM calls cost money; the stuck-job reconciler is the backstop for the rest.
+  },
+});
+
+// Lake Memory Extraction Queue (#1440 producer). Declared up here alongside taxonomy because the chunk
+// and vectorize Lambdas must link it too: finalizeBatchIfComplete (which they call) enqueues lake
+// memory extraction, so it needs Resource.lakeMemoryQueue.url. Full-lake LLM extraction, so retry: 2
+// like taxonomy (a dropped run is re-covered by the next finalize's whole-lake re-scan).
+const lakeMemoryQueueDLQ = new sst.aws.Queue('lakeMemoryQueueDLQ', {});
+const lakeMemoryQueue = new sst.aws.Queue('lakeMemoryQueue', {
+  // Must exceed the handler's 10-minute timeout (below), or SQS redelivers the message while the run
+  // is still in flight and a duplicate extraction runs concurrently.
+  visibilityTimeout: '12 minutes',
+  dlq: {
+    queue: lakeMemoryQueueDLQ.arn,
+    retry: 2,
+  },
+});
+
+// Google Drive -> data lake ingest (#1589). Walks a connected Drive folder, fetches/exports each
+// file, and lands bytes in fabFileBucket for the existing chunk/vectorize pipeline. Long ingest, so
+// a generous timeout; idempotent by driveFileId, so a dropped run is safe to retry.
+const driveLakeIngestQueueDLQ = new sst.aws.Queue('driveLakeIngestQueueDLQ', {});
+const driveLakeIngestQueue = new sst.aws.Queue('driveLakeIngestQueue', {
+  // Must exceed the handler's 10-minute timeout (below) or SQS redelivers mid-run.
+  visibilityTimeout: '12 minutes',
+  dlq: {
+    queue: driveLakeIngestQueueDLQ.arn,
+    retry: 2,
+  },
+});
 
 // FabFile Vectorize Queue
 const fabFileVectorizeQueueDLQ = new sst.aws.Queue('fabFileVectorizeQueueDLQ', {});
@@ -29,7 +70,17 @@ const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket],
+    // dataLakeTaxonomyQueue + lakeMemoryQueue: finalizeBatchIfComplete (called from this handler)
+    // enqueues taxonomy analysis and lake memory extraction, which need their queue URLs.
+    link: [
+      ...allSecrets,
+      websocketApi,
+      fabFileBucket,
+      generatedImagesBucket,
+      appFilesBucket,
+      dataLakeTaxonomyQueue,
+      lakeMemoryQueue,
+    ],
     logging: {
       retention: '3 days',
     },
@@ -87,7 +138,18 @@ const fabFileChunkQueueSubscription = fabFileChunkQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '13 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi, fabFileVectorizeQueue, fabFileBucket, generatedImagesBucket, appFilesBucket],
+    // dataLakeTaxonomyQueue + lakeMemoryQueue: finalizeBatchIfComplete (called from this handler)
+    // enqueues taxonomy analysis and lake memory extraction, which need their queue URLs.
+    link: [
+      ...allSecrets,
+      websocketApi,
+      fabFileVectorizeQueue,
+      fabFileBucket,
+      generatedImagesBucket,
+      appFilesBucket,
+      dataLakeTaxonomyQueue,
+      lakeMemoryQueue,
+    ],
     logging: {
       retention: '3 days',
     },
@@ -420,6 +482,12 @@ const agentProactiveMessageQueueSubscription = agentProactiveMessageQueue.subscr
         actions: ['rekognition:DetectModerationLabels'],
         resources: ['*'],
       },
+      {
+        // generateAndSend resolves the agent's pinned model, which emits
+        // Lumina5/ModelSunset. PutMetricData takes no resource scope.
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
     ],
     copyFiles: [
       {
@@ -629,6 +697,76 @@ const dataLakeCleanupQueueSubscription = dataLakeCleanupQueue.subscribe(
     timeout: '10 minutes',
     vpc: lambdaVpc,
     link: [...allSecrets],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
+// Data Lake Taxonomy Analysis Queue (Queue + DLQ declared near the top of this file, since
+// the chunk/vectorize subscriptions above need to link it too)
+// Triggered once per batch (from finalizeBatchIfComplete) when the wizard opted into
+// background AI tag suggestion. A single bounded OpenAI call over already-uploaded
+// FabFiles - no buckets needed (metadata-only sampling in v1), but links websocketApi
+// so the handler can push `data_lake_batch_progress` taxonomyStatus updates live.
+const dataLakeTaxonomyQueueSubscription = dataLakeTaxonomyQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/dataLakeTaxonomyAnalysis.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '5 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
+// Lake Memory Extraction subscription (#1440 producer). Reads a lake's chunk text and calls the LLM
+// per document (sequential, up to MAX_DOCS_PER_RUN=100), so it gets a 10-minute timeout - longer than
+// taxonomy because it does per-document LLM work across the whole lake, not a single inference (the
+// queue's visibilityTimeout is set to 12 min above to stay ahead of it). SINGLE_RECORD_BATCH so one
+// lake fails in isolation and DLQs on its own.
+const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/lakeMemoryExtraction.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    // lakeMemoryQueue: this handler self-re-enqueues for bounded continuation (a lake too large for one
+    // run sends the next slice's message to its own queue), so it needs Resource.lakeMemoryQueue.url and
+    // the sqs:SendMessage grant that linking the queue confers.
+    link: [...allSecrets, websocketApi, lakeMemoryQueue],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
+const driveLakeIngestQueueSubscription = driveLakeIngestQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/driveLakeIngest.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    // fabFileBucket: the handler streams fetched Drive bytes into the FabFile bucket via
+    // getFilesStorage().upload, which fires the existing objectCreated -> chunk -> vectorize pipeline.
+    // driveLakeIngestQueue: this handler self-re-enqueues to defer a concurrent second sync behind the
+    // one in flight, so it needs Resource.driveLakeIngestQueue.url and the sqs:SendMessage grant that
+    // linking the queue confers (mirrors lakeMemoryQueue above).
+    link: [...allSecrets, fabFileBucket, driveLakeIngestQueue],
     logging: {
       retention: '3 days',
     },
@@ -907,7 +1045,10 @@ const sreFixQueueSubscription = sreFixQueue.subscribe(
     handler: 'apps/client/server/queueHandlers/sreFix.dispatch',
     runtime: 'nodejs24.x',
     timeout: '2 minutes',
-    memory: '256 MB',
+    // 1024 MB, not 256: at 256 the handler died in INIT (module graph is the full
+    // @bike4mind/database model set + GitHubService + Slack) and never logged a line.
+    // Sized off sreJobQueue, which loads a comparable graph and peaks under 500 MB.
+    memory: '1024 MB',
     vpc: lambdaVpc,
     link: [...allSecrets],
     logging: {
@@ -915,7 +1056,7 @@ const sreFixQueueSubscription = sreFixQueue.subscribe(
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
-      APP_URL: $dev ? 'http://localhost:3000' : router.url,
+      APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
     },
   },
   SINGLE_RECORD_BATCH
@@ -1174,6 +1315,58 @@ const optihashiRunCompletionQueueSubscription = optihashiRunCompletionQueue.subs
   ],
 });
 
+// Bob Panel Run Queue (@bike4mind/premium-bob, issue #33 step B)
+// POST /api/premium-bob/bob-run creates the bob_runs doc + enqueues here, then returns
+// 202 {runId}; this worker runs the ~60s five-persona panel and finalizes the doc. The
+// handler lives in the overlay and is re-exported into the stable premium-generated path
+// via b4mContributions.serverHandlerStubs (same pattern as optihashiRunCompletion above).
+// Bob is a paid premium AI feature whose messages carry user prompts and panel outputs, so it
+// matches the optihashi/agent-continuation sensitivity tier: KMS-at-rest on both queues, and an
+// extended DLQ retention so a stuck panel run is still debuggable beyond SQS's 4-day default
+// (e.g. a weekend + on-call handoff).
+const bobRunQueueDLQ = new sst.aws.Queue('bobRunQueueDLQ', {
+  transform: {
+    queue: {
+      kmsMasterKeyId: 'alias/aws/sqs',
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+const bobRunQueue = new sst.aws.Queue('bobRunQueue', {
+  // ≥ the worker timeout below (+ buffer) so an in-flight run isn't redelivered mid-panel.
+  visibilityTimeout: '6 minutes',
+  dlq: {
+    queue: bobRunQueueDLQ.arn,
+    retry: 2,
+  },
+  transform: {
+    queue: {
+      kmsMasterKeyId: 'alias/aws/sqs',
+    },
+  },
+});
+const bobRunQueueSubscription = bobRunQueue.subscribe(
+  {
+    handler: 'apps/client/server/premium-generated/bobRunWorker.dispatch',
+    runtime: 'nodejs24.x',
+    // The panel (5 parallel persona reads + merge + publish) targets ≤ ~5 min end to end.
+    timeout: '5 minutes',
+    memory: '1024 MB',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    // Progress/finalize is written to the bob_runs doc; ManageConnections lets the worker
+    // push live status over the reading-screen websocket subscription (issue #33 step D).
+    permissions: [{ actions: ['execute-api:ManageConnections'], resources: ['*'] }],
+  },
+  SINGLE_RECORD_BATCH
+);
+
 export {
   // Queues
   fabFileChunkQueue,
@@ -1191,6 +1384,9 @@ export {
   webhookDeliveryQueue,
   questExportQueue,
   dataLakeCleanupQueue,
+  dataLakeTaxonomyQueue,
+  lakeMemoryQueue,
+  driveLakeIngestQueue,
   liveOpsTriageQueue,
   tavernHeartbeatQueue,
   deepAgentWakeQueue,
@@ -1199,6 +1395,7 @@ export {
   secopsTriageQueue,
   agentContinuationQueue,
   optihashiRunCompletionQueue,
+  bobRunQueue,
   // DLQs
   fabFileChunkQueueDLQ,
   fabFileVectorizeQueueDLQ,
@@ -1216,6 +1413,9 @@ export {
   webhookDeliveryQueueDLQ,
   questExportQueueDLQ,
   dataLakeCleanupQueueDLQ,
+  dataLakeTaxonomyQueueDLQ,
+  lakeMemoryQueueDLQ,
+  driveLakeIngestQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -1226,6 +1426,7 @@ export {
   overwatchAnalyticsQueueDLQ,
   agentContinuationQueueDLQ,
   optihashiRunCompletionQueueDLQ,
+  bobRunQueueDLQ,
   // Subscriptions
   fabFileChunkQueueSubscription,
   fabFileVectorizeQueueSubscription,
@@ -1243,6 +1444,9 @@ export {
   webhookDeliveryQueueSubscription,
   questExportQueueSubscription,
   dataLakeCleanupQueueSubscription,
+  dataLakeTaxonomyQueueSubscription,
+  lakeMemoryQueueSubscription,
+  driveLakeIngestQueueSubscription,
   liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,
@@ -1250,4 +1454,5 @@ export {
   secopsTriageQueueSubscription,
   overwatchAnalyticsQueueSubscription,
   optihashiRunCompletionQueueSubscription,
+  bobRunQueueSubscription,
 };

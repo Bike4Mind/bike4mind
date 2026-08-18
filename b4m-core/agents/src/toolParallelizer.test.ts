@@ -435,12 +435,16 @@ describe('toolParallelizer (agents package)', () => {
     });
   });
 
-  describe('timing verification', () => {
-    it('should complete parallel execution faster than sequential would', async () => {
+  describe('concurrency verification', () => {
+    it('should overlap the parallel batch rather than serializing it', async () => {
       const TOOL_DELAY = 50;
+      const TOOL_NAMES = ['tool_a', 'tool_b', 'tool_c'];
+      const executionLog: string[] = [];
 
-      const executor = vi.fn(async () => {
+      const executor = vi.fn(async (tool: ToolUseInfo) => {
+        executionLog.push(`start:${tool.name}`);
         await new Promise(r => setTimeout(r, TOOL_DELAY));
+        executionLog.push(`end:${tool.name}`);
         return 'result';
       });
 
@@ -454,12 +458,13 @@ describe('toolParallelizer (agents package)', () => {
         originalOrder: ['tool_a_"{}"', 'tool_b_"{}"', 'tool_c_"{}"'],
       };
 
-      const start = Date.now();
       await executeToolsInParallel(plan, executor);
-      const duration = Date.now() - start;
 
-      // Sequential would be ~150ms, parallel should be ~50ms
-      expect(duration).toBeLessThan(TOOL_DELAY * 2);
+      // Every tool starts before any finishes; a serialized batch would log start/end
+      // in pairs. Asserting the ordering keeps this immune to loaded-runner jitter.
+      const lastStart = Math.max(...TOOL_NAMES.map(name => executionLog.indexOf(`start:${name}`)));
+      const firstEnd = Math.min(...TOOL_NAMES.map(name => executionLog.indexOf(`end:${name}`)));
+      expect(lastStart).toBeLessThan(firstEnd);
     });
   });
 });

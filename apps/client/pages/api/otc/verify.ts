@@ -13,14 +13,23 @@ import {
   subscriberRepository,
   creditTransactionRepository,
   pendingOtcTokenRepository,
+  organizationRepository,
+  authSessionRepository,
 } from '@bike4mind/database';
-import { creditService, userService } from '@bike4mind/services';
+import { creditService, userService, organizationService, authSessionService } from '@bike4mind/services';
 import { entitlementsForEmail, signupCreditsForKeys } from '@client/lib/entitlements/registry';
 import { partnerSignupGrantForEmail } from '@server/entitlements/partnerRules';
+import {
+  notifySeatCeilingRaised,
+  notifyPartnerSignupBlockedAtCapacity,
+} from '@server/organizations/notifySeatCeilingRaised';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { consumeTrustedDevice, trustedDevicesAllowed } from '@server/auth/trustedDevice';
+import { setRefreshCookie } from '@server/auth/refreshCookie';
+import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { Config } from '@server/utils/config';
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
@@ -151,7 +160,15 @@ const handler = baseApi({ auth: false })
       const enforceMFA = getSettingsValue('enforceMFA', settings) || false;
       const userHasMFA = mfaService.userHasMFAConfigured(existingUser);
 
-      if (userHasMFA || (enforceMFA && !userHasMFA)) {
+      // "Remember this device": a live trust for THIS account skips the TOTP re-challenge
+      // for the rest of its window. It only ever suppresses the SECOND factor - the emailed
+      // code above is still required, so the cookie alone is not a credential. It cannot
+      // stand in for MFA *enrollment* either: the enforceMFA/!userHasMFA branch below is
+      // deliberately outside this check.
+      const trustedDevice =
+        userHasMFA && (await trustedDevicesAllowed()) ? await consumeTrustedDevice(req, existingUser.id) : null;
+
+      if ((userHasMFA && !trustedDevice) || (enforceMFA && !userHasMFA)) {
         // Only issue the short-lived mfaPending access token (no refresh token).
         // /api/auth/mfa/verify mints the full token pair on success. Without this
         // omission, a client could POST the mfaPending refresh token directly to
@@ -170,7 +187,17 @@ const handler = baseApi({ auth: false })
       }
 
       // --- DIRECT LOGIN ---
-      const tokens = authTokenGenerator.createAccessToken(existingUser.id, existingUser.tokenVersion ?? 0);
+      const { accessToken, refreshToken } = await authSessionService.issueSession(
+        existingUser.id,
+        { createdVia: 'otc', tokenVersion: existingUser.tokenVersion ?? 0, device: buildSessionDevice(req) },
+        {
+          db: { authSessions: authSessionRepository },
+          signAccessToken: (id, tv, extra) => authTokenGenerator.signAccessToken(id, tv, extra),
+          logger: req.logger,
+        }
+      );
+      setRefreshCookie(res, refreshToken);
+      const tokens = { accessToken };
       const ip = req.socket?.remoteAddress || (req.headers['x-forwarded-for'] as string) || req.ip || 'unknown';
 
       // Analytics + device history are best-effort for the same post-rotation reason as
@@ -181,7 +208,24 @@ const handler = baseApi({ auth: false })
         type: AuthEvents.LOGIN,
         metadata: { strategy: 'otc', ip, userAgent: req.headers['user-agent'] || 'unknown' },
       }).catch(err => req.logger.error('OTC login analytics log failed', err));
-      await logAuthAudit(req, { userId: existingUser.id, event: 'login_success', strategy: 'otc' });
+      await logAuthAudit(req, {
+        userId: existingUser.id,
+        event: 'login_success',
+        strategy: 'otc',
+        metadata: trustedDevice ? { trustedDeviceId: trustedDevice.id } : undefined,
+      });
+      if (trustedDevice) {
+        await logAuthAudit(req, {
+          userId: existingUser.id,
+          event: 'trusted_device_used',
+          strategy: 'otc',
+          metadata: {
+            deviceId: trustedDevice.id,
+            label: trustedDevice.label,
+            expiresAt: trustedDevice.expiresAt.toISOString(),
+          },
+        });
+      }
 
       // Update login records
       const clientData = req.body.clientData;
@@ -331,8 +375,10 @@ const handler = baseApi({ auth: false })
     // Wrapped whole (resolve + grant) so a failure can't 500 a completed registration: the
     // account exists and the client already holds a token, the same post-rotation invariant as
     // the analytics call below. The stable transactionId makes an admin/maintenance retry safe.
+    let partnerOrganizationId: string | null = null;
     try {
       const partnerGrant = await partnerSignupGrantForEmail(normalizedEmail, true);
+      partnerOrganizationId = partnerGrant.matched ? partnerGrant.organizationId : null;
       const signupCredits = partnerGrant.matched
         ? partnerGrant.signupCredits
         : signupCreditsForKeys(entitlementsForEmail(normalizedEmail, true));
@@ -362,6 +408,61 @@ const handler = baseApi({ auth: false })
       );
     }
 
+    // Partner-rule org auto-add (mirrors /api/email/verify Phase 2c). registerViaOTC set
+    // emailVerified=true, so a DB rule may place this signup into an org. Idempotent, additive,
+    // and never removes anyone. Wrapped so a failure can't 500 a completed registration; the
+    // membership write is safe to retry. Reflect the join on the returned user so the client
+    // sees the org immediately.
+    if (partnerOrganizationId) {
+      try {
+        const result = await organizationService.applyPartnerRuleMembership(
+          { userId: newUser.id, organizationId: partnerOrganizationId },
+          { db: { users: userRepository, organizations: organizationRepository }, logger: req.logger }
+        );
+        if (result.added) {
+          newUser.organizationId = partnerOrganizationId;
+          req.logger.info(`Partner-rule org membership: added OTC user ${newUser.id} to org ${partnerOrganizationId}`);
+          if (result.reason === 'added-seat-raised') {
+            // Never awaited-into-failure: the join already committed; the alert/audit is best-effort.
+            await notifySeatCeilingRaised(
+              {
+                organizationId: partnerOrganizationId,
+                userId: newUser.id,
+                previousSeats: result.previousSeats,
+                newSeats: result.newSeats,
+                trigger: 'otc-signup',
+              },
+              req.logger
+            );
+          }
+        } else if (result.reason === 'at-capacity') {
+          // Org at capacity with no auto-raise: a Stripe-billed org (ceiling not raised out of band)
+          // or a non-Stripe org already at MAX_SEATS (the raise is clamped there, #1424). Alert an
+          // admin to add seats so this stranded partner user can be admitted. Best-effort, never throws.
+          await notifyPartnerSignupBlockedAtCapacity(
+            {
+              organizationId: partnerOrganizationId,
+              userId: newUser.id,
+              seats: result.seats,
+              trigger: 'otc-signup',
+            },
+            req.logger
+          );
+        } else if (result.reason === 'org-missing') {
+          req.logger.warn(
+            `Partner-rule org membership not applied for OTC user ${newUser.id} ` +
+              `(org ${partnerOrganizationId}): ${result.reason}`
+          );
+        }
+      } catch (membershipError) {
+        req.logger.error(
+          `OTC registration succeeded for user ${newUser.id} but partner-rule org auto-add failed ` +
+            `(org ${partnerOrganizationId}); membership is idempotent so a retry is safe`,
+          membershipError
+        );
+      }
+    }
+
     // Analytics only - the account already exists, so a counter-write failure must not 500 a
     // completed registration (post-rotation, that would strand the client on a success).
     await logEvent({
@@ -370,9 +471,19 @@ const handler = baseApi({ auth: false })
       metadata: { strategy: 'otc' },
     }).catch(err => req.logger.error('OTC registration analytics log failed', err));
 
+    const registrationSession = await authSessionService.issueSession(
+      newUser.id,
+      { createdVia: 'otc-registration', tokenVersion: newUser.tokenVersion ?? 0, device: buildSessionDevice(req) },
+      {
+        db: { authSessions: authSessionRepository },
+        signAccessToken: (id, tv, extra) => authTokenGenerator.signAccessToken(id, tv, extra),
+        logger: req.logger,
+      }
+    );
+    setRefreshCookie(res, registrationSession.refreshToken);
     return res.status(200).json({
       user: redactUserSecretsForSelf(newUser),
-      ...authTokenGenerator.createAccessToken(newUser.id, newUser.tokenVersion ?? 0),
+      accessToken: registrationSession.accessToken,
     });
   });
 

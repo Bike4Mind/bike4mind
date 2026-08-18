@@ -1,4 +1,4 @@
-import { Permission, isImageServeable } from '@bike4mind/common';
+import { Permission, isImageServeable, FAB_FILE_CONTENT_REWRITE_PATCH } from '@bike4mind/common';
 import { FabFile, withTransaction } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -101,7 +101,15 @@ const handler = baseApi()
           // concurrent edit can't silently clobber this one (its bytes are just orphaned).
           const claimed = await FabFile.findOneAndUpdate(
             { _id: file._id, filePath: s3Key },
-            { $set: { filePath: newFilePath, fileSize: newBuffer.length, versions, updatedAt: now } }
+            {
+              $set: {
+                filePath: newFilePath,
+                fileSize: newBuffer.length,
+                versions,
+                updatedAt: now,
+                ...FAB_FILE_CONTENT_REWRITE_PATCH,
+              },
+            }
           );
           if (!claimed) {
             throw new BadRequestError('File was modified by another edit. Please reload and try again.');
@@ -147,6 +155,7 @@ const handler = baseApi()
             $set: {
               updatedAt: new Date(),
               fileSize: Buffer.byteLength(newContent, 'utf8'),
+              ...FAB_FILE_CONTENT_REWRITE_PATCH,
             },
           }
         );

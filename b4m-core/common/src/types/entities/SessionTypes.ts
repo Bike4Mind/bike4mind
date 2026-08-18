@@ -6,6 +6,7 @@ import { PromptMeta } from './PromptMetaTypes';
 import { SearchOptions } from '../../search';
 import { ChatModelName } from '../../models';
 import { MessageContentObject } from './MessageTypes';
+import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 
 /** Pending action for Slack/Web button-based confirmation flow */
 export interface IPendingAction {
@@ -21,26 +22,55 @@ export interface IPendingAction {
  * extracts it, persists it on the quest, and the client dispatches it.
  * Discriminated union - add new variants here as needed.
  */
+
+/** A job-shop scheduling problem - the bare payload a formulate/edit tool populates. */
+export type SchedulingProblemPayload = {
+  name: string;
+  description?: string;
+  jobs: Array<{
+    id: number;
+    name: string;
+    operations: Array<{ jobId: number; machineId: number; duration: number }>;
+  }>;
+  machines: Array<{ id: number; name: string }>;
+};
+
+/**
+ * Optional solver-run outputs a solve tool can carry alongside a populated problem so the
+ * client can surface the run without re-solving. `results`/`result` are opaque here (the
+ * full set and/or a single winner; their shape is validated by the tool that emits them),
+ * `errors` are per-solver failure messages, and `solvedAt` is an ISO solve timestamp.
+ */
+export type PopulatedSolveOutputs = {
+  results?: unknown[];
+  result?: unknown;
+  errors?: string[];
+  solvedAt?: string;
+};
+
 export type UiSideEffect =
   | {
+      // A BARE scheduling problem populated by a formulate/edit tool. A solve tool's problem +
+      // race rides `populateScheduleRace` (below), NOT this type, so this payload is never a
+      // wrapper — a client bundle that predates the race feature reads it as the bare problem
+      // and stays correct.
       type: 'populateProblem';
-      payload: {
-        name: string;
-        description?: string;
-        jobs: Array<{
-          id: number;
-          name: string;
-          operations: Array<{ jobId: number; machineId: number; duration: number }>;
-        }>;
-        machines: Array<{ id: number; name: string }>;
-      };
+      payload: SchedulingProblemPayload;
     }
   | {
-      // The eight unified families (routing/packing/assignment/...) carry their familyId
-      // alongside the family-specific problem shape. Emitted by optihashi_formulate;
-      // `problem` is validated server-side by FAMILY_PROBLEM_SCHEMAS before serialization.
+      // A solve tool's scheduling problem WRAPPED with its solver-run outputs. Deliberately a
+      // distinct type from populateProblem: routing a wrapper through populateProblem would let
+      // an older client persist the wrapper as the active brief. A client that predates this
+      // type ignores it (its handler has no case) instead of mis-applying it.
+      type: 'populateScheduleRace';
+      payload: { problem: SchedulingProblemPayload } & PopulatedSolveOutputs;
+    }
+  | {
+      // The unified families carry their familyId alongside the family-specific problem
+      // shape, optionally wrapped with solve outputs. `problem` is validated server-side
+      // before serialization.
       type: 'populateFamilyProblem';
-      payload: { familyId: string; problem: unknown };
+      payload: { familyId: string; problem: unknown } & PopulatedSolveOutputs;
     };
 
 export type SessionProps = {
@@ -464,6 +494,14 @@ export interface ISession {
    */
   systemPromptText?: string;
   /**
+   * Optional reference to a curated system prompt in the admin registry (SystemPromptModel), by
+   * `promptId`. When set to a session-activatable id (e.g. 'triage_router'), that registry prompt's
+   * current content is injected as the session's system message - the versioned, admin-editable
+   * counterpart to the raw `systemPromptText`, so the prompt can be tuned with no deploy. Like
+   * `systemPromptText`, it suppresses the generic brand-identity prompt.
+   */
+  systemPromptId?: string;
+  /**
    * Optional product surface that owns this session (e.g. 'libreoncology').
    * Default sessions have no surface. Generic capability - lets any product surface
    * mark its sessions so they stay out of the main B4M list and can scope their own
@@ -512,6 +550,15 @@ export interface ISession {
    * Generic capability - lets a surface focus the grounded tutor on one topic.
    */
   retrievalTags?: string[];
+  /**
+   * How this session grounds an attached data-lake corpus (inline vs retrieve vs auto-by-size),
+   * resolved ONCE at create time from the lake this session was created for (see
+   * resolveLakeSessionDefaults). The completion path's corpus defer plan reads this to decide
+   * whether to keep the corpus inlined or defer the tool-retrievable subset to
+   * search_knowledge_base, generalizing the size-only rule to an explicit per-lake choice. Unset on
+   * a session not created for a lake, which the plan treats as its pre-existing size-only behavior.
+   */
+  corpusGroundingMode?: DataLakeGroundingMode;
   /**
    * Generic retrieval exclusion: filename markers (case-insensitive, matched as a LEADING
    * marker at a word boundary - the marker must start the name and be followed by end-of-string

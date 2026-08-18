@@ -1,8 +1,42 @@
+import { type APIRequestContext } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { TIMEOUTS } from './constants';
-import { getTestUsers } from './helpers/test-users';
+import { getTestUsers, getTestRunId, getE2ETestId } from './helpers/test-users';
 import { seedAuthOnPage } from './helpers/auth-seed';
-import { apiGetOtcCode } from './helpers/api';
+import { apiCreateTestUser, apiGetOtcCode, apiLoginViaOtc } from './helpers/api';
+
+/**
+ * Mint a dedicated throwaway account for a test that logs out. Logout is now per-device (issue
+ * #1194): it revokes only the requesting session, not the user's other tokens. These specs still
+ * use a throwaway user for clean isolation (they seed one session and log it out), which keeps the
+ * teardown sweep simple - not because logout would otherwise nuke a shared user. The email mirrors
+ * the setup convention (`...-<id>-e2e@test.com`) so global-teardown's cleanup sweep matches it.
+ *
+ * The retry index is baked into the identity: attempt 0 already created (and logged out)
+ * `auth-<label>0-...`, and createUser rejects a duplicate username OR email, so without this a
+ * retry would die inside apiCreateTestUser instead of re-running the test - defeating the retry
+ * safety net for exactly these tests. The marker stays BEFORE the `<id>-<runId>` tail so both
+ * cleanup regexes in pages/api/test/cleanup.ts still match.
+ */
+async function createLogoutUser(request: APIRequestContext, label: string) {
+  const e2eId = getE2ETestId();
+  const idSuffix = e2eId ? `${e2eId}-${getTestRunId()}` : getTestRunId();
+  const slug = `auth-${label}${test.info().retry}`;
+  const email = `${slug}-${idSuffix}-e2e@test.com`;
+  const result = await apiCreateTestUser(request, {
+    username: `${slug}-${idSuffix}`,
+    email,
+    name: `Auth ${label} ${idSuffix}`,
+    password: `E2eAuth${label}Pass123!`,
+    isAdmin: false,
+  });
+  return {
+    email,
+    userId: (result.user.id || result.user._id) as string,
+    accessToken: result.accessToken,
+    refreshToken: result.refreshToken,
+  };
+}
 
 test.describe('Authentication', () => {
   test('authenticated session loads the app', async ({ basePage, page }) => {
@@ -56,8 +90,9 @@ test.describe('Authentication', () => {
     await expect(page).toHaveURL(/.*login.*/);
   });
 
-  test('should logout successfully', async ({ basePage, navigationPage, page }) => {
-    const { user } = getTestUsers();
+  test('should logout successfully', async ({ basePage, navigationPage, page, request }) => {
+    // Dedicated user keeps this self-contained; logout only revokes this seeded session (per-device).
+    const user = await createLogoutUser(request, 'logout');
     await basePage.clearAllStorage();
     await seedAuthOnPage(page, { accessToken: user.accessToken, refreshToken: user.refreshToken });
     await page.goto('/');
@@ -68,9 +103,66 @@ test.describe('Authentication', () => {
     await expect(page).toHaveURL(/.*login.*/);
   });
 
+  test('logout on one device leaves other devices signed in (per-device, #1194)', async ({ request }) => {
+    // Pure API-level proof of the per-device contract, independent of the browser logout UI: two
+    // sessions for the SAME user, log one out, the other must survive.
+    const user = await createLogoutUser(request, 'perdevice');
+
+    // Session A is the one minted at user creation; session B is a second independent login. Reusing
+    // the creation session as A keeps this to a single extra OTC round-trip (avoids OTC-send limits).
+    const sessionA = { accessToken: user.accessToken, refreshToken: user.refreshToken };
+    const sessionB = await apiLoginViaOtc(request, user.email);
+
+    // Log out session A only. GET /api/logout reads the sid from A's bearer access token and
+    // revokes just that session - no tokenVersion bump.
+    const logoutRes = await request.get('/api/logout', {
+      headers: { Authorization: `Bearer ${sessionA.accessToken}` },
+    });
+    expect(logoutRes.status()).toBe(200);
+
+    // Session B's access token still authenticates - other devices stay signed in.
+    const identifyB = await request.get('/api/identify', {
+      headers: { Authorization: `Bearer ${sessionB.accessToken}` },
+    });
+    expect(identifyB.status()).toBe(200);
+
+    // Session B can still refresh (its session is alive)...
+    const refreshB = await request.post('/api/auth/refreshToken', { data: { token: sessionB.refreshToken } });
+    expect(refreshB.status()).toBe(200);
+
+    // ...while session A's refresh token is dead (its session was revoked).
+    const refreshA = await request.post('/api/auth/refreshToken', { data: { token: sessionA.refreshToken } });
+    expect(refreshA.status()).toBe(401);
+  });
+
+  test('log out of all other devices keeps the current one, revokes the rest (#1194)', async ({ request }) => {
+    // "Log out other devices" (GitHub/Google model): keep the calling session, revoke every other.
+    const user = await createLogoutUser(request, 'logoutothers');
+    const sessionA = { accessToken: user.accessToken, refreshToken: user.refreshToken };
+    const sessionB = await apiLoginViaOtc(request, user.email);
+
+    // Authenticated as session A -> A is kept, B is revoked. No tokenVersion bump.
+    const res = await request.post('/api/users/me/sessions/revoke-others', {
+      headers: { Authorization: `Bearer ${sessionA.accessToken}` },
+    });
+    expect(res.status()).toBe(200);
+
+    // Current session A stays fully alive (still authenticates and can still refresh).
+    const identifyA = await request.get('/api/identify', {
+      headers: { Authorization: `Bearer ${sessionA.accessToken}` },
+    });
+    expect(identifyA.status()).toBe(200);
+    const refreshA = await request.post('/api/auth/refreshToken', { data: { token: sessionA.refreshToken } });
+    expect(refreshA.status()).toBe(200);
+
+    // The other device's session is revoked - its refresh token can no longer mint tokens.
+    const refreshB = await request.post('/api/auth/refreshToken', { data: { token: sessionB.refreshToken } });
+    expect(refreshB.status()).toBe(401);
+  });
+
   // Skipped: indexedDB is not cleared after logout. Covered by a manual test; re-enable once the fix lands.
-  test.skip('should clear IndexedDB caches on logout', async ({ basePage, navigationPage, page }) => {
-    const { user } = getTestUsers();
+  test.skip('should clear IndexedDB caches on logout', async ({ basePage, navigationPage, page, request }) => {
+    const user = await createLogoutUser(request, 'cachelogout');
     await basePage.clearAllStorage();
     await seedAuthOnPage(page, { accessToken: user.accessToken, refreshToken: user.refreshToken });
     await basePage.dismissModals();
@@ -217,9 +309,15 @@ test.describe('Authentication', () => {
     }
   });
 
-  test('should load fresh data after re-login (no stale cache)', async ({ basePage, navigationPage, page }) => {
+  test('should load fresh data after re-login (no stale cache)', async ({
+    basePage,
+    navigationPage,
+    page,
+    request,
+  }) => {
     test.slow();
-    const { user } = getTestUsers();
+    // Dedicated user: logout revokes the seeded token, so we re-login below for a fresh one.
+    const user = await createLogoutUser(request, 'relogin');
     await basePage.clearAllStorage();
     // Seed auth, navigate to populate cache, then logout
     await seedAuthOnPage(page, { accessToken: user.accessToken, refreshToken: user.refreshToken });
@@ -237,8 +335,10 @@ test.describe('Authentication', () => {
       { timeout: TIMEOUTS.ACTION }
     );
 
-    // Re-seed auth and verify notebooks load from server (not stale cache)
-    await seedAuthOnPage(page, { accessToken: user.accessToken, refreshToken: user.refreshToken });
+    // Logout revoked this seeded session, so re-login for a fresh one before re-seeding -
+    // otherwise /api/identify rejects the dead session's token with 401.
+    const fresh = await apiLoginViaOtc(request, user.email);
+    await seedAuthOnPage(page, { accessToken: fresh.accessToken, refreshToken: fresh.refreshToken });
     await basePage.dismissModals();
 
     // Navigate to notebooks to trigger the quest-plans fetch

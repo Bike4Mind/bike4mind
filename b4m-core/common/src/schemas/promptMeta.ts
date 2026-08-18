@@ -1,5 +1,13 @@
 import { z } from 'zod';
-import { ContextTelemetrySchema } from './contextTelemetry';
+import { ContextTelemetrySchema, SystemPromptDetailSchema } from './contextTelemetry';
+
+/**
+ * A Date that also accepts its own JSON form. promptMeta makes a round trip through the client:
+ * MessageContent hands it to the bug-report modal, which posts it to /api/feedback, where this
+ * same schema parses the request body. JSON has no Date, so a bare z.date() would reject every
+ * value that survives that trip. statusLog.timestamp has carried the same allowance for years.
+ */
+const JsonSafeDate = z.date().or(z.string());
 
 const PromptMetaModelParametersSchema = z.object({
   // Text generation parameters
@@ -71,7 +79,9 @@ const PromptMetaAttachedFileSchema = z.object({
   type: z.string().optional(),
   size: z.number().optional(),
   mimeType: z.string().optional(),
-  lastModified: z.date().optional(),
+  // attachedFiles already persists, so a writer that starts setting this would hit the same
+  // JSON round trip as the fields above. Promoted before that can happen rather than after.
+  lastModified: JsonSafeDate.optional(),
 });
 
 const SystemPromptSourceSchema = z.object({
@@ -103,6 +113,11 @@ const PromptMetaContextSchema = z.object({
   mementoCount: z.number().optional(),
   mementoIds: z.array(z.string()).optional(),
   tokensBySource: PromptMetaTokensBySourceSchema.optional(),
+  // Per-source system prompt breakdown, derived from the tagged assembly (see
+  // services systemPromptSources). Stored on every completion - unlike contextTelemetry,
+  // which only exists when enhanced telemetry is enabled - so the API layer can report
+  // which prompts fed a completion.
+  systemPromptDetails: z.array(SystemPromptDetailSchema).optional(),
   systemPrompt: z.string().optional(),
   userPrompt: z.string().optional(),
   conversationContext: z
@@ -133,6 +148,29 @@ const PromptMetaContextSchema = z.object({
   globalSystemFileIds: z.array(z.string()).optional(),
   userSystemFileIds: z.array(z.string()).optional(),
   projectSystemFileIds: z.array(z.string()).optional(),
+  // What the assembler decided about inlining the attached knowledge corpus vs deferring it to
+  // the offered search_knowledge_base tool. Pairs with `offeredTools` + `tokensBySource.fabFiles`
+  // so one row shows: tools offered, docs deferred, resulting inline token cost. `deferredCount`
+  // counts only the RETRIEVABLE subset (docs the tool can actually reach); non-retrievable
+  // attachments are always inlined and never counted here.
+  knowledgeInlining: z
+    .object({
+      attachedCount: z.number(),
+      retrievableCount: z.number(),
+      deferredCount: z.number(),
+      deferredToRetrieval: z.boolean(),
+      minInlineTokensPerDoc: z.number(),
+    })
+    .optional(),
+  // Lake memory hot-card (#1440): the durable lake-profile beliefs injected on a Data-Lake-mode turn,
+  // and which lakes they came from. Present only when the card fired, so an eval row shows lake
+  // grounding independent of whether the model then also called the knowledge tools.
+  lakeMemory: z
+    .object({
+      beliefCount: z.number(),
+      dataLakeTags: z.array(z.string()),
+    })
+    .optional(),
   // Phase 2: Context window debug fields
   contextWindowUsage: z
     .object({
@@ -144,6 +182,9 @@ const PromptMetaContextSchema = z.object({
       utilizationPercentage: z.number(),
       overflowDetected: z.boolean().optional(),
       overflowAmount: z.number().optional(),
+      // Older turns dropped from the verbatim window this turn and folded into
+      // contextSummary (drives the client's "earlier turns condensed" note).
+      verbatimTurnsExcluded: z.number().optional(),
     })
     .optional(),
   // Phase 2: Message truncation tracking
@@ -207,10 +248,15 @@ const PromptMetaSessionSchema = z.object({
 });
 
 const PromptMetaArtifactSchema = z.object({
-  type: z.enum(['text', 'image', 'file', 'data']),
+  // Deliberately open. Writers put internal artifact types here (`ArtifactTypeSchema`:
+  // 'chess', 'react', 'html', ...) and tool extraction can fall back to a raw MIME string,
+  // so a closed enum would reject real values. That matters more than usual here, because
+  // ChatCompletionInvoke parses the whole promptMeta on every turn - a value this schema
+  // rejects fails the completion rather than just failing to record telemetry.
+  type: z.string(),
   content: z.string(),
   metadata: z.record(z.string(), z.unknown()).optional(),
-  timestamp: z.date().optional(),
+  timestamp: JsonSafeDate.optional(),
 });
 
 const ToolHealthSchema = z.object({
@@ -218,7 +264,7 @@ const ToolHealthSchema = z.object({
   available: z.boolean(),
   failureCount: z.number(),
   lastError: z.string().optional(),
-  lastChecked: z.date().optional(),
+  lastChecked: JsonSafeDate.optional(),
   lastExecutionTime: z.number().optional(),
   successRate: z.number().optional(),
 });
@@ -263,6 +309,17 @@ export const PromptMetaZodSchema = z.object({
   tokenUsage: PromptMetaTokenUsageSchema.optional(),
   context: PromptMetaContextSchema.optional(),
   functionCalls: z.array(PromptMetaFunctionCallSchema).optional(),
+  /**
+   * Names of the tools actually offered to the model this turn - the output of `buildTools`
+   * (`allTools`), after the post-build denylist pass and the Ollama auto-added trim. This is a
+   * superset of the resolved `enabledTools`: it also includes MCP server tools and the
+   * auto-injected `delegate_to_agent`, neither of which ever appears in `enabledTools`. Distinct
+   * from the chat response's `effectiveTools`, which reflects only the API-layer (phrase-
+   * recommender) selection and so cannot see server-side offers like the attached-knowledge
+   * auto-offer. This is the authoritative "what did the model actually get" signal for
+   * eval/measurement and for diagnosing the silent no-tool-offered state.
+   */
+  offeredTools: z.array(z.string()).optional(),
   performance: PromptMetaPerformanceSchema.optional(),
   session: PromptMetaSessionSchema.optional(),
   questId: z.string().optional(),
@@ -281,6 +338,23 @@ export const PromptMetaZodSchema = z.object({
    * letting the client render a truncated-artifact recovery affordance.
    */
   finishReason: z.string().optional(),
+  /**
+   * Set when an emitted artifact looks voluntarily abbreviated - placeholder comments in
+   * place of real code, or calls into functions that were never defined. The complement to
+   * `finishReason === 'max_tokens'`: truncation is a hard stop the provider reports, elision
+   * finishes cleanly and reports nothing, so this is the only completeness signal available
+   * for it (and the only one at all on backends that never emit a stop reason).
+   * Advisory - the client renders a "may be incomplete" notice; content is never altered.
+   */
+  suspectedElision: z
+    .object({
+      confidence: z.enum(['high', 'low']),
+      /** Total signals across every artifact in the reply. */
+      signalCount: z.number().nonnegative(),
+      /** Human-readable signal descriptions, capped for payload size. */
+      details: z.array(z.string()),
+    })
+    .optional(),
   statusLog: z
     .array(
       z.object({
@@ -297,7 +371,7 @@ export const PromptMetaZodSchema = z.object({
       comments: z.string().optional(),
       modifications: z.string().optional(),
       reviewedBy: z.string().optional(),
-      reviewedAt: z.date().optional(),
+      reviewedAt: JsonSafeDate.optional(),
     })
     .optional(),
   executionTracking: z
@@ -307,8 +381,8 @@ export const PromptMetaZodSchema = z.object({
           z.object({
             name: z.string(),
             status: z.enum(['pending', 'running', 'completed', 'failed']),
-            startTime: z.date().optional(),
-            endTime: z.date().optional(),
+            startTime: JsonSafeDate.optional(),
+            endTime: JsonSafeDate.optional(),
             result: z.string().optional(),
             error: z.string().optional(),
           })

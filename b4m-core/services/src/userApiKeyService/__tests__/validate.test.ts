@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createUserApiKey } from '../create';
 import { validateUserApiKey, validateUserApiKeyById } from '../validate';
-import { ApiKeyScope, ApiKeyStatus } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyStatus, CreditHolderType } from '@bike4mind/common';
 import type { IUserApiKeyDocument } from '@bike4mind/common';
 import { KEY_PREFIX_LENGTH } from '../constants';
 
@@ -142,7 +142,10 @@ describe('validateUserApiKey - embed context fields', () => {
         name: 'embed-key',
         scopes: [ApiKeyScope.EMBED_CHAT],
         agentId: 'agent-1',
+        billingOwnerType: CreditHolderType.Organization,
+        organizationId: 'org-1',
         allowedOrigins: ['https://example.com'],
+        branding: { displayName: 'Acme', primaryColor: '#336699', hideBranding: true },
         metadata: { createdFrom: 'dashboard' as const },
       },
       { ...adapters, systemUserId: 'sys-1' }
@@ -153,6 +156,9 @@ describe('validateUserApiKey - embed context fields', () => {
     expect(result.isValid).toBe(true);
     expect(result.agentId).toBe('agent-1');
     expect(result.allowedOrigins).toEqual(['https://example.com']);
+    // The serve route reads branding off this projection; dropping it from
+    // finalizeApiKeyValidation silently un-themes every widget.
+    expect(result.branding).toEqual({ displayName: 'Acme', primaryColor: '#336699', hideBranding: true });
   });
 
   it('leaves embed fields undefined for a non-embed key', async () => {
@@ -170,6 +176,7 @@ describe('validateUserApiKey - embed context fields', () => {
     expect(result.isValid).toBe(true);
     expect(result.agentId).toBeUndefined();
     expect(result.allowedOrigins).toBeUndefined();
+    expect(result.branding).toBeUndefined();
   });
 });
 
@@ -186,6 +193,7 @@ describe('validateUserApiKeyById + shared finalize gates', () => {
     status: ApiKeyStatus.ACTIVE,
     agentId: 'agent-1',
     allowedOrigins: ['https://example.com'],
+    branding: { hideBranding: true },
   } as unknown as IUserApiKeyDocument;
 
   function repoWith(doc: IUserApiKeyDocument | null) {
@@ -203,6 +211,7 @@ describe('validateUserApiKeyById + shared finalize gates', () => {
     expect(result.isValid).toBe(true);
     expect(result.keyId).toBe('key-1');
     expect(result.agentId).toBe('agent-1');
+    expect(result.branding).toEqual({ hideBranding: true });
     // updateLastUsed must fire on the token path too (the drift the refactor fixed).
     expect(repo.updateLastUsed).toHaveBeenCalledWith('key-1');
   });

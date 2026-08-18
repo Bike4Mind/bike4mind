@@ -30,7 +30,7 @@ import dayjs from 'dayjs';
 import { useTheme } from '@mui/joy/styles';
 import { useTranslation } from 'react-i18next';
 import { getModels } from '@client/app/utils/llm';
-import { ModelInfo, usdToCredits } from '@bike4mind/common';
+import { ModelInfo, resolveModelName, usdToCredits } from '@bike4mind/common';
 import SectionContainer from './SectionContainer';
 import { TYPE } from './settingsStyles';
 import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
@@ -117,6 +117,9 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const voiceUsageTransactions = sortedTransactions.filter(t => t.type === 'realtime_voice_usage');
     const toolUsageTransactions = sortedTransactions.filter(t => t.type === 'tool_usage');
     const speechToTextUsageTransactions = sortedTransactions.filter(t => t.type === 'speech_to_text_usage');
+    const textToSpeechUsageTransactions = sortedTransactions.filter(t => t.type === 'text_to_speech_usage');
+    const soundEffectsUsageTransactions = sortedTransactions.filter(t => t.type === 'sound_effects_usage');
+    const musicUsageTransactions = sortedTransactions.filter(t => t.type === 'music_generation_usage');
 
     // Combined deduct transactions for burn rate calculation
     const allDeductTransactions = [
@@ -128,6 +131,9 @@ const CreditAnalyticsTabContent: React.FC = () => {
       ...voiceUsageTransactions,
       ...toolUsageTransactions,
       ...speechToTextUsageTransactions,
+      ...textToSpeechUsageTransactions,
+      ...soundEffectsUsageTransactions,
+      ...musicUsageTransactions,
     ];
 
     // Calculate burn rate (average daily usage)
@@ -179,19 +185,10 @@ const CreditAnalyticsTabContent: React.FC = () => {
       }
     }
 
-    // Track model usage if available in metadata
     const modelUsageMap: Record<string, number> = {};
 
     allDeductTransactions.forEach(transaction => {
-      let modelName = 'Unknown';
-
-      // Check metadata first
-      if (transaction.metadata?.modelName) {
-        modelName = transaction.metadata.modelName;
-      } else if ('model' in transaction) {
-        // Type-safe check for model property on usage transactions
-        modelName = (transaction as { model?: string }).model || 'Unknown';
-      }
+      const modelName = resolveModelName(transaction);
 
       if (!modelUsageMap[modelName]) {
         modelUsageMap[modelName] = 0;
@@ -211,6 +208,9 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const voiceUsageDailyData = new Map<string, { x: string; y: number }>();
     const toolUsageDailyData = new Map<string, { x: string; y: number }>();
     const speechToTextUsageDailyData = new Map<string, { x: string; y: number }>();
+    const textToSpeechUsageDailyData = new Map<string, { x: string; y: number }>();
+    const soundEffectsUsageDailyData = new Map<string, { x: string; y: number }>();
+    const musicUsageDailyData = new Map<string, { x: string; y: number }>();
     const creditsAddedDailyData = new Map<string, { x: string; y: number }>(); // Combined purchases, subscriptions, and generic adds
     const allUsageDailyData = new Map<string, { x: string; y: number }>(); // Combined all usage types including generic deducts
 
@@ -242,6 +242,9 @@ const CreditAnalyticsTabContent: React.FC = () => {
     processTransactionType(voiceUsageTransactions, voiceUsageDailyData);
     processTransactionType(toolUsageTransactions, toolUsageDailyData);
     processTransactionType(speechToTextUsageTransactions, speechToTextUsageDailyData);
+    processTransactionType(textToSpeechUsageTransactions, textToSpeechUsageDailyData);
+    processTransactionType(soundEffectsUsageTransactions, soundEffectsUsageDailyData);
+    processTransactionType(musicUsageTransactions, musicUsageDailyData);
 
     // Create combined credits added (purchases + subscriptions + generic adds)
     [...purchaseTransactions, ...subscriptionTransactions, ...genericAddTransactions].forEach(transaction => {
@@ -263,6 +266,9 @@ const CreditAnalyticsTabContent: React.FC = () => {
       ...voiceUsageTransactions,
       ...toolUsageTransactions,
       ...speechToTextUsageTransactions,
+      ...textToSpeechUsageTransactions,
+      ...soundEffectsUsageTransactions,
+      ...musicUsageTransactions,
     ].forEach(transaction => {
       const day = dayjs(transaction.createdAt).format('YYYY-MM-DD');
       if (!allUsageDailyData.has(day)) {
@@ -289,6 +295,9 @@ const CreditAnalyticsTabContent: React.FC = () => {
         voiceUsageDailyData,
         toolUsageDailyData,
         speechToTextUsageDailyData,
+        textToSpeechUsageDailyData,
+        soundEffectsUsageDailyData,
+        musicUsageDailyData,
         creditsAddedDailyData,
         allUsageDailyData,
       ].forEach(dataMap => {
@@ -315,6 +324,9 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const voiceUsageDataPoints = sortDataPoints(voiceUsageDailyData);
     const toolUsageDataPoints = sortDataPoints(toolUsageDailyData);
     const speechToTextUsageDataPoints = sortDataPoints(speechToTextUsageDailyData);
+    const textToSpeechUsageDataPoints = sortDataPoints(textToSpeechUsageDailyData);
+    const soundEffectsUsageDataPoints = sortDataPoints(soundEffectsUsageDailyData);
+    const musicUsageDataPoints = sortDataPoints(musicUsageDailyData);
     const creditsAddedDataPoints = sortDataPoints(creditsAddedDailyData);
     const allUsageDataPoints = sortDataPoints(allUsageDailyData);
 
@@ -427,6 +439,33 @@ const CreditAnalyticsTabContent: React.FC = () => {
           id: 'speech_to_text_usage',
           data: speechToTextUsageDataPoints,
           color: theme.palette.primary[400],
+        });
+      }
+
+      if (textToSpeechUsageDataPoints.some(p => p.y > 0)) {
+        lines.push({
+          id: 'text_to_speech_usage',
+          data: textToSpeechUsageDataPoints,
+          color: theme.palette.primary[300],
+        });
+      }
+
+      if (soundEffectsUsageDataPoints.some(p => p.y > 0)) {
+        lines.push({
+          id: 'sound_effects_usage',
+          data: soundEffectsUsageDataPoints,
+          color: theme.palette.warning[400],
+        });
+      }
+
+      if (musicUsageDataPoints.some(p => p.y > 0)) {
+        lines.push({
+          id: 'music_generation_usage',
+          data: musicUsageDataPoints,
+          // Adjacent to sound_effects_usage (both audio) and unused elsewhere in
+          // this chart - success[400] already belongs to the subscriptions series,
+          // and the chart has no legend to disambiguate a collision.
+          color: theme.palette.warning[300],
         });
       }
 
@@ -935,6 +974,12 @@ const CreditAnalyticsTabContent: React.FC = () => {
                       return 'Tool Usage';
                     case 'speech_to_text_usage':
                       return 'Speech to Text';
+                    case 'text_to_speech_usage':
+                      return 'Text to Speech';
+                    case 'sound_effects_usage':
+                      return 'Sound Effects';
+                    case 'music_generation_usage':
+                      return 'Music Generation';
                     case 'usage':
                       return t('credits.credits_used');
                     case 'credits_added':

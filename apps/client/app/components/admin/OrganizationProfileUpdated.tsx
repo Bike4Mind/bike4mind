@@ -22,6 +22,8 @@ import LoginIcon from '@mui/icons-material/Login';
 import { getLastLoginDate } from '@client/app/utils/user';
 import Compressor from 'compressorjs';
 import { useUpdateOrganization } from '@client/app/hooks/data/organizations';
+import OrganizationGroupTypesCard from './OrganizationGroupTypesCard';
+import OrganizationGroupMembersCard from './OrganizationGroupMembersCard';
 
 export async function compressLogo(file: File, quality: number = 0.8): Promise<File | Blob> {
   return new Promise((resolve, reject) => {
@@ -211,6 +213,8 @@ const OrganizationProfileUpdated: React.FC<OrganizationProfileProps> = ({ org, o
                 )}
               </Stack>
             </Card>
+            <OrganizationGroupTypesCard org={org} />
+            <OrganizationGroupMembersCard org={org} />
             {children}
           </Grid>
         </Grid>

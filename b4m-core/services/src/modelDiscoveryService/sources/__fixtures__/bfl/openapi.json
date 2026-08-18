@@ -1,0 +1,1292 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "BFL API",
+    "description": "Authorize with an API key from your user profile.",
+    "version": "0.0.1"
+  },
+  "servers": [
+    {
+      "url": "https://api.bfl.ai",
+      "description": "BFL API"
+    }
+  ],
+  "paths": {
+    "/v1/flux-pro-1.1": {
+      "post": {
+        "tags": [
+          "Models"
+        ],
+        "summary": "Generate an image with FLUX1.1 [pro]",
+        "operationId": "flux_pro_1_1_v1_flux_pro_1_1_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FluxPro11Inputs"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AsyncResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AsyncWebhookResponse"
+                    }
+                  ],
+                  "title": "Response Flux Pro 1 1 V1 Flux Pro 1 1 Post"
+                }
+              }
+            }
+          }
+        },
+        "x-mint": {
+          "metadata": {
+            "sidebarTitle": "FLUX1.1 [pro]"
+          }
+        }
+      }
+    },
+    "/v1/flux-pro-1.1-ultra": {
+      "post": {
+        "tags": [
+          "Models"
+        ],
+        "summary": "Generate an image with FLUX1.1 [pro] ultra mode",
+        "operationId": "generate_flux_1_1_ultra_v1_flux_pro_1_1_ultra_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FluxUltraInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AsyncResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AsyncWebhookResponse"
+                    }
+                  ],
+                  "title": "Response Generate Flux 1 1 Ultra V1 Flux Pro 1 1 Ultra Post"
+                }
+              }
+            }
+          }
+        },
+        "x-mint": {
+          "metadata": {
+            "sidebarTitle": "FLUX1.1 [pro] ultra"
+          }
+        }
+      }
+    },
+    "/v1/flux-kontext-pro": {
+      "post": {
+        "tags": [
+          "Models"
+        ],
+        "summary": "Edit or create an image with FLUX.1 Kontext [pro]",
+        "operationId": "generate_flux_kontext_pro_v1_flux_kontext_pro_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FluxKontextProInputs"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AsyncResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AsyncWebhookResponse"
+                    }
+                  ],
+                  "title": "Response Generate Flux Kontext Pro V1 Flux Kontext Pro Post"
+                }
+              }
+            }
+          }
+        },
+        "x-mint": {
+          "metadata": {
+            "sidebarTitle": "FLUX.1 Kontext [pro]"
+          },
+          "content": "FLUX.1 Kontext [pro] is a legacy editing model. For new integrations, use FLUX.2 [pro] (/flux-2-pro). See [which model to use](/flux_2/flux2_overview#which-model-to-choose)."
+        }
+      }
+    },
+    "/v1/flux-2-pro": {
+      "post": {
+        "tags": [
+          "Models"
+        ],
+        "summary": "Generate or edit an image with FLUX.2 [pro]",
+        "operationId": "generate_flux_2_pro_v1_flux_2_pro_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Flux2Inputs"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AsyncResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AsyncWebhookResponse"
+                    }
+                  ],
+                  "title": "Response Generate Flux 2 Pro V1 Flux 2 Pro Post"
+                }
+              }
+            }
+          }
+        },
+        "x-mint": {
+          "metadata": {
+            "sidebarTitle": "FLUX.2 [pro]"
+          },
+          "content": "The recommended default model for most generation and editing. New to FLUX.2? See [which model to use](/flux_2/flux2_overview#which-model-to-choose)."
+        }
+      }
+    },
+    "/v1/flux-dev": {
+      "post": {
+        "tags": [
+          "Models"
+        ],
+        "summary": "Generate an image with FLUX.1 [dev]",
+        "operationId": "flux_dev_v1_flux_dev_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FluxDevInputs"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AsyncResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AsyncWebhookResponse"
+                    }
+                  ],
+                  "title": "Response Flux Dev V1 Flux Dev Post"
+                }
+              }
+            }
+          }
+        },
+        "x-mint": {
+          "metadata": {
+            "sidebarTitle": "FLUX.1 [dev]"
+          }
+        }
+      }
+    },
+    "/v1/flux-tools/erase-v1": {
+      "post": {
+        "tags": [
+          "Models"
+        ],
+        "summary": "Erase an object from an image",
+        "operationId": "generate_flux_tools_erase_v1_v1_flux_tools_erase_v1_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Flux2EraseInputs"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AsyncResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AsyncWebhookResponse"
+                    }
+                  ],
+                  "title": "Response Generate Flux Tools Erase V1 V1 Flux Tools Erase V1 Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/flux-tools/vto-v2": {
+      "post": {
+        "tags": [
+          "Models"
+        ],
+        "summary": "Virtual try-on (v2)",
+        "operationId": "generate_flux_tools_vto_v2_v1_flux_tools_vto_v2_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Flux2KleinTryonInputs"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AsyncResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AsyncWebhookResponse"
+                    }
+                  ],
+                  "title": "Response Generate Flux Tools Vto V2 V1 Flux Tools Vto V2 Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/credits": {
+      "get": {
+        "summary": "Get the user's credits",
+        "operationId": "get_credits_v1_credits_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreditsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/v1/delete_finetune": {
+      "post": {
+        "tags": [
+          "Utility"
+        ],
+        "summary": "Delete Finetune",
+        "operationId": "delete_finetune_v1_delete_finetune_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteFinetuneInputs"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteFinetuneResponse"
+                }
+              }
+            }
+          }
+        },
+        "servers": [
+          {
+            "url": "https://api.us1.bfl.ai",
+            "description": "BFL Finetune API"
+          }
+        ]
+      }
+    },
+    "/v1/get_result": {
+      "get": {
+        "tags": [
+          "Utility"
+        ],
+        "summary": "Get Result",
+        "operationId": "get_result_v1_get_result_get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResultResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "DeleteFinetuneInputs": {
+        "properties": {
+          "finetune_id": {
+            "type": "string",
+            "title": "Finetune Id",
+            "example": "my-finetune"
+          }
+        },
+        "type": "object",
+        "required": [
+          "finetune_id"
+        ],
+        "title": "DeleteFinetuneInputs"
+      },
+      "Flux2EraseInputs": {
+        "properties": {
+          "image": {
+            "type": "string",
+            "title": "Image"
+          },
+          "mask": {
+            "type": "string",
+            "title": "Mask"
+          },
+          "dilate_pixels": {
+            "type": "integer",
+            "maximum": 25.0,
+            "minimum": 0.0,
+            "title": "Dilate Pixels",
+            "default": 10
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed",
+            "example": 42
+          },
+          "safety_tolerance": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Safety Tolerance",
+            "default": 2,
+            "example": 2
+          },
+          "output_format": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OutputFormat"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "png"
+          },
+          "webhook_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2083,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Url"
+          },
+          "webhook_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Secret"
+          }
+        },
+        "type": "object",
+        "required": [
+          "image",
+          "mask"
+        ],
+        "title": "Flux2EraseInputs",
+        "description": "Input model for public FLUX.2 erase."
+      },
+      "Flux2Inputs": {
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "title": "Prompt",
+            "example": "ein fantastisches bild"
+          },
+          "disable_pup": {
+            "type": "boolean",
+            "title": "Disable Pup",
+            "default": false
+          },
+          "input_image": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image"
+          },
+          "input_image_2": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image 2"
+          },
+          "input_image_3": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image 3"
+          },
+          "input_image_4": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image 4"
+          },
+          "input_image_5": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image 5"
+          },
+          "input_image_6": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image 6"
+          },
+          "input_image_7": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image 7"
+          },
+          "input_image_8": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image 8"
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed",
+            "example": 42
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 64.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width",
+            "default": 0
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 64.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height",
+            "default": 0
+          },
+          "safety_tolerance": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Safety Tolerance",
+            "default": 2
+          },
+          "output_format": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OutputFormat"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "jpeg"
+          },
+          "webhook_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2083,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Url"
+          },
+          "webhook_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Secret"
+          }
+        },
+        "type": "object",
+        "required": [
+          "prompt"
+        ],
+        "title": "Flux2Inputs"
+      },
+      "Flux2KleinTryonInputs": {
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "title": "Prompt",
+            "example": "TRY-ON: The person of image 1 wearing the garments of image 2."
+          },
+          "person": {
+            "type": "string",
+            "title": "Person"
+          },
+          "garment": {
+            "type": "string",
+            "title": "Garment"
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed",
+            "example": 42
+          },
+          "safety_tolerance": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Safety Tolerance",
+            "default": 2
+          },
+          "output_format": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OutputFormat"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "jpeg"
+          },
+          "webhook_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2083,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Url"
+          },
+          "webhook_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Secret"
+          }
+        },
+        "type": "object",
+        "required": [
+          "prompt",
+          "person",
+          "garment"
+        ],
+        "title": "Flux2KleinTryonInputs",
+        "description": "Input model for FLUX.2 Klein VTO endpoint.\n\nExposes only person/garment image fields for cleaner API ergonomics."
+      },
+      "FluxDevInputs": {
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "title": "Prompt",
+            "default": "",
+            "example": "ein fantastisches bild"
+          },
+          "image_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Prompt"
+          },
+          "width": {
+            "type": "integer",
+            "multipleOf": 32.0,
+            "maximum": 1440.0,
+            "minimum": 256.0,
+            "title": "Width",
+            "default": 1024
+          },
+          "height": {
+            "type": "integer",
+            "multipleOf": 32.0,
+            "maximum": 1440.0,
+            "minimum": 256.0,
+            "title": "Height",
+            "default": 768
+          },
+          "steps": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 50.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Steps",
+            "default": 28,
+            "example": 28
+          },
+          "prompt_upsampling": {
+            "type": "boolean",
+            "title": "Prompt Upsampling",
+            "default": false
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed",
+            "example": 42
+          },
+          "guidance": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 5.0,
+                "minimum": 1.5
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Guidance",
+            "default": 3.0,
+            "example": 3.0
+          },
+          "safety_tolerance": {
+            "type": "integer",
+            "maximum": 6.0,
+            "minimum": 0.0,
+            "title": "Safety Tolerance",
+            "default": 2,
+            "example": 2
+          },
+          "output_format": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OutputFormat"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "jpeg"
+          },
+          "webhook_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2083,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Url"
+          },
+          "webhook_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Secret"
+          }
+        },
+        "type": "object",
+        "title": "FluxDevInputs"
+      },
+      "FluxKontextProInputs": {
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "title": "Prompt",
+            "example": "ein fantastisches bild"
+          },
+          "input_image": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image"
+          },
+          "input_image_2": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image 2"
+          },
+          "input_image_3": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image 3"
+          },
+          "input_image_4": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Image 4"
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed",
+            "example": 42
+          },
+          "aspect_ratio": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aspect Ratio"
+          },
+          "output_format": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OutputFormat"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "png"
+          },
+          "webhook_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2083,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Url"
+          },
+          "webhook_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Secret"
+          },
+          "prompt_upsampling": {
+            "type": "boolean",
+            "title": "Prompt Upsampling",
+            "default": false
+          },
+          "safety_tolerance": {
+            "type": "integer",
+            "maximum": 6.0,
+            "minimum": 0.0,
+            "title": "Safety Tolerance",
+            "default": 2,
+            "example": 2
+          }
+        },
+        "type": "object",
+        "required": [
+          "prompt"
+        ],
+        "title": "FluxKontextProInputs"
+      },
+      "FluxPro11Inputs": {
+        "properties": {
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt",
+            "default": "",
+            "example": "ein fantastisches bild"
+          },
+          "image_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Prompt"
+          },
+          "width": {
+            "type": "integer",
+            "multipleOf": 32.0,
+            "maximum": 1440.0,
+            "minimum": 256.0,
+            "title": "Width",
+            "default": 1024
+          },
+          "height": {
+            "type": "integer",
+            "multipleOf": 32.0,
+            "maximum": 1440.0,
+            "minimum": 256.0,
+            "title": "Height",
+            "default": 768
+          },
+          "prompt_upsampling": {
+            "type": "boolean",
+            "title": "Prompt Upsampling",
+            "default": false
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed",
+            "example": 42
+          },
+          "safety_tolerance": {
+            "type": "integer",
+            "maximum": 6.0,
+            "minimum": 0.0,
+            "title": "Safety Tolerance",
+            "default": 2,
+            "example": 2
+          },
+          "output_format": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OutputFormat"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "jpeg"
+          },
+          "webhook_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2083,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Url"
+          },
+          "webhook_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Secret"
+          }
+        },
+        "type": "object",
+        "title": "FluxPro11Inputs"
+      },
+      "FluxUltraInput": {
+        "properties": {
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt",
+            "default": "",
+            "example": "A beautiful landscape with mountains and a lake"
+          },
+          "prompt_upsampling": {
+            "type": "boolean",
+            "title": "Prompt Upsampling",
+            "default": false
+          },
+          "seed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed",
+            "example": 42
+          },
+          "aspect_ratio": {
+            "type": "string",
+            "title": "Aspect Ratio",
+            "default": "16:9"
+          },
+          "safety_tolerance": {
+            "type": "integer",
+            "maximum": 6.0,
+            "minimum": 0.0,
+            "title": "Safety Tolerance",
+            "default": 2,
+            "example": 2
+          },
+          "output_format": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OutputFormat"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "jpeg"
+          },
+          "raw": {
+            "type": "boolean",
+            "title": "Raw",
+            "default": false,
+            "example": false
+          },
+          "image_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Prompt"
+          },
+          "image_prompt_strength": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Image Prompt Strength",
+            "default": 0.1
+          },
+          "webhook_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2083,
+                "minLength": 1,
+                "format": "uri"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Url"
+          },
+          "webhook_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Webhook Secret"
+          }
+        },
+        "type": "object",
+        "title": "FluxUltraInput"
+      }
+    }
+  }
+}

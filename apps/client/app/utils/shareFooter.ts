@@ -2,8 +2,9 @@
  * Lead-gen footer for published share pages (reply/fabfile viewers + artifact
  * bundles). Pure string builder - NO imports beyond the inlined logo, NO JS -
  * so it's safe under the strict serve CSP (`script-src 'none'`) and passes
- * `validateBundle` (no external asset fetch). Used by both `renderViewerPage`
- * (serve handler) and `buildArtifactIndexHtml` (client bundler).
+ * `validateBundle` (no external asset fetch). Used by `renderViewerPage` (serve
+ * handler), `renderArtifactIndexHtml` (server artifact renderer - the permanent
+ * home), and `buildArtifactIndexHtml` (client bundler, removed in #1492).
  *
  * Dark-navy card, a brand wordmark (the inlined built-in SVG when the operator
  * opts in via NEXT_PUBLIC_SHARE_BUILTIN_LOGO, otherwise a text wordmark of the
@@ -14,6 +15,7 @@
 import { B4M_HORIZONTAL_LOGO_SVG } from '@client/app/utils/b4mLogo';
 // Marketing-site URL sourced from config (empty when unconfigured).
 import { WEBSITE_URL, getBrandName } from '@client/config/general';
+import { escapeAttr } from './htmlEscape';
 
 const SITE_URL = WEBSITE_URL;
 
@@ -35,13 +37,6 @@ export interface ShareFooterOptions {
    * footers, where the publicId isn't known until finalize.
    */
   reportPublicId?: string;
-}
-
-// Escapes &, <, >, " - safe for BOTH attribute values and element inner text
-// (this footer uses it in both: the text-wordmark/CTA spans render the escaped
-// value as inner text). The extra `"` escaping is harmless in a text context.
-function escapeAttr(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 /**
