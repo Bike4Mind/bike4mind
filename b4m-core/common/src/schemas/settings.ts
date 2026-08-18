@@ -1861,9 +1861,9 @@ export const settingsMap = {
   EnableDataLakeSlackAdd: makeBooleanSetting({
     key: 'EnableDataLakeSlackAdd',
     name: 'Data Lakes: Slack "@datalake add" path',
-    defaultValue: false,
+    defaultValue: true,
     description:
-      'Server-side gate for adding content to a Data Lake from Slack via "@datalake add". Off by default - the Slack command is intercepted deterministically but performs no ingest until this is turned on.',
+      'Server-side gate for adding content to a Data Lake from Slack via "@datalake add". On by default. Turn OFF to make the Slack command inert - it is still intercepted deterministically, so the bot stays silent rather than falling through to the LLM.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 90,
