@@ -52,13 +52,16 @@ describe('OrgSubscriptionSubscribeSchema.quantity', () => {
 describe('OrgSubscriptionSubscribeSchema.callbackUrl', () => {
   const baseSeats = { ...baseRequest, quantity: ORGANIZATION_SUBSCRIPTION_MIN_SEATS };
 
-  it('accepts an absolute https callbackUrl', () => {
+  it('accepts an absolute https callbackUrl and passes it through unchanged', () => {
     const result = OrgSubscriptionSubscribeSchema.safeParse({
       ...baseSeats,
       callbackUrl: 'https://app.example.com/settings/billing',
     });
 
     expect(result.success).toBe(true);
+    // The value must survive parsing verbatim - appendSuccessParams and the origin guard
+    // both operate on exactly what the caller sent, so any normalization would matter.
+    expect(result.data?.callbackUrl).toBe('https://app.example.com/settings/billing');
   });
 
   it('accepts an origin-only callbackUrl with no trailing path', () => {
@@ -71,6 +74,7 @@ describe('OrgSubscriptionSubscribeSchema.callbackUrl', () => {
     });
 
     expect(result.success).toBe(true);
+    expect(result.data?.callbackUrl).toBe('https://app.example.com');
   });
 
   it('rejects a relative path', () => {
