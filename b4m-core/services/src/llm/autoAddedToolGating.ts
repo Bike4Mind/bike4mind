@@ -92,8 +92,6 @@ export function shouldOfferSkillTool(input: {
   return hasPriorToolUse(input.priorToolNames, ['skill']);
 }
 
-const DELEGATE_TOOL_NAMES = ['delegate_to_agent'];
-
 /**
  * Normalizes an agent handle for comparison. `ServerAgentStore` names its built-ins with
  * underscores (`code_review`, `github_manager`) while the mention parser accepts hyphens too, so
@@ -128,15 +126,19 @@ export function mentionsDelegatableAgent(message: string, delegatableAgentNames:
  * Whether `delegate_to_agent` should be offered on this chat turn.
  *
  * Delegation is opt-in: without a signal the model would auto-delegate on benign prompts and burn
- * subagent runs the user never asked for. A hard veto plus four opt-in signals, cheap-first:
+ * subagent runs the user never asked for. A hard veto plus three opt-in signals, cheap-first:
  *   - `disableUserIntegrations` hard-vetoes everything (a curated surface must never delegate);
  *   - an explicit `allowedAgents` allowlist from the caller (persona surfaces scoping the set) -
  *     an *empty* allowlist means "no delegation requested", not "delegation to nothing";
  *   - an agent attached to the session via the UI;
- *   - an @mention naming an agent this store can actually run;
- *   - a `delegate_to_agent` call earlier in this conversation, so a multi-turn delegated workflow
- *     does not lose the tool the moment a follow-up stops repeating the @mention (same
- *     continuation rescue, and the same history-window bound, as `hasPriorToolUse` above).
+ *   - an @mention naming an agent this store can actually run.
+ *
+ * Deliberately NO prior-turn continuation rescue, unlike the blog and skill gates above. Those
+ * rescue a cheap tool whose worst case is a wasted schema; this one would re-arm autonomous
+ * subagent spawning for the rest of a conversation off a single earlier delegation, which is the
+ * expensive failure mode the gate exists to prevent (one such run rolled up ~18k credits). A
+ * multi-turn delegated workflow is instead carried by `session.agentIds`, which
+ * AgentDetectionFeature persists for every summon that resolves to a real agent.
  */
 export function shouldOfferDelegation(input: {
   disableUserIntegrations: boolean;
@@ -144,11 +146,9 @@ export function shouldOfferDelegation(input: {
   sessionAgentIds: readonly string[] | undefined;
   message: string;
   delegatableAgentNames: readonly string[];
-  priorToolNames: readonly string[];
 }): boolean {
   if (input.disableUserIntegrations) return false;
   if ((input.allowedAgents?.length ?? 0) > 0) return true;
   if ((input.sessionAgentIds?.length ?? 0) > 0) return true;
-  if (mentionsDelegatableAgent(input.message, input.delegatableAgentNames)) return true;
-  return hasPriorToolUse(input.priorToolNames, DELEGATE_TOOL_NAMES);
+  return mentionsDelegatableAgent(input.message, input.delegatableAgentNames);
 }

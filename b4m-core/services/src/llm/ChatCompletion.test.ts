@@ -2534,12 +2534,16 @@ describe('ChatCompletionProcess', () => {
       expect(agentStore).toBeUndefined();
     });
 
-    it('exposes delegate_to_agent on a follow-up turn that continues an earlier delegation', async () => {
+    // No prior-turn rescue here, deliberately, unlike the blog/skill gates: an earlier delegation
+    // must not re-arm autonomous subagent spawning for the rest of the conversation. A real
+    // multi-turn workflow rides session.agentIds, which AgentDetectionFeature persists for any
+    // summon that resolved to a real agent.
+    it('does NOT re-expose delegate_to_agent on a follow-up turn just because an earlier turn delegated', async () => {
       const agentStore = await runWithBuildToolsSpy({
         message: 'now check battery life too',
         priorToolNames: ['delegate_to_agent'],
       });
-      expect(agentStore).toBeDefined();
+      expect(agentStore).toBeUndefined();
     });
 
     it('treats an empty allowedAgents allowlist as "no delegation" rather than "delegation to nothing"', async () => {

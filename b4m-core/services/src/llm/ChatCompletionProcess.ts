@@ -2362,14 +2362,13 @@ export class ChatCompletionProcess {
         sessionAgentIds: session.agentIds,
         message,
         delegatableAgentNames: fullAgentStore.getAgentNames(),
-        priorToolNames,
       });
-      // Both delegation surfaces (the tool schema in sharedToolBuilder and the "Agent Delegation"
-      // section of the tool prompt) key off the `agentStore` below, so this one line explains both.
+      // All three delegation surfaces (the tool schema in sharedToolBuilder, the "Agent Delegation"
+      // section of the tool prompt, and `promptMeta.offeredTools`) key off the `agentStore` below,
+      // so this one line explains all of them.
       logger.debug(
         `[Delegation] delegate_to_agent ${userRequestedDelegation ? 'offered' : 'withheld'} ` +
-          `(allowlist=${hasAllowedAgentsAllowlist}, sessionAgents=${session.agentIds?.length ?? 0}, ` +
-          `priorDelegation=${priorToolNames.includes('delegate_to_agent')})`
+          `(allowlist=${hasAllowedAgentsAllowlist}, sessionAgents=${session.agentIds?.length ?? 0})`
       );
       const agentStore = !userRequestedDelegation
         ? undefined

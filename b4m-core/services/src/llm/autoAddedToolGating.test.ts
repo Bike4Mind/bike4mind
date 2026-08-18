@@ -198,7 +198,6 @@ describe('shouldOfferDelegation', () => {
     sessionAgentIds: undefined,
     message: 'compare the latest smartphones',
     delegatableAgentNames: STORE_AGENTS,
-    priorToolNames: [] as string[],
   };
 
   it('withholds delegation from a benign prompt with no signal', () => {
@@ -227,14 +226,13 @@ describe('shouldOfferDelegation', () => {
     expect(shouldOfferDelegation({ ...base, sessionAgentIds: ['agent-id'] })).toBe(true);
   });
 
-  // Without this a multi-turn delegated workflow loses the tool on the first follow-up that stops
-  // repeating the @mention - the "no feature degradation" guardrail this gate has to respect.
-  it('rescues a follow-up turn that continues a delegation started earlier in the conversation', () => {
-    expect(shouldOfferDelegation({ ...base, priorToolNames: ['delegate_to_agent'] })).toBe(true);
-  });
-
-  it('does not treat an unrelated prior tool call as a delegation continuation', () => {
-    expect(shouldOfferDelegation({ ...base, priorToolNames: ['web_search', 'skill'] })).toBe(false);
+  // Pins the deliberate asymmetry with the blog/skill gates, which DO rescue on a prior call.
+  // Re-arming autonomous subagent spawning for a whole conversation off one earlier delegation is
+  // the expensive failure mode this gate exists to prevent; a genuine multi-turn workflow is
+  // carried by session.agentIds instead. If someone adds a rescue here, this test should be the
+  // conversation, not a silent green.
+  it('does not re-offer delegation on a later turn just because an earlier turn delegated', () => {
+    expect(shouldOfferDelegation({ ...base, message: 'now check battery life too' })).toBe(false);
   });
 
   // disableUserIntegrations is a hard veto: a curated surface must never delegate, whatever the
@@ -243,7 +241,6 @@ describe('shouldOfferDelegation', () => {
     ['an allowlist', { allowedAgents: ['researcher'] }],
     ['a session agent', { sessionAgentIds: ['agent-id'] }],
     ['a store-agent mention', { message: '@researcher help' }],
-    ['a prior delegation', { priorToolNames: ['delegate_to_agent'] }],
   ])('vetoes delegation on a disableUserIntegrations surface despite %s', (_label, override) => {
     expect(shouldOfferDelegation({ ...base, ...override, disableUserIntegrations: true })).toBe(false);
   });
