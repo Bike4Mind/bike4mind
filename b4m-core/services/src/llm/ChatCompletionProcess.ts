@@ -136,6 +136,7 @@ import {
   buildTaggedContextMessages,
   filterByPromptMode,
   filterFeaturesByPromptMode,
+  markShareablePrefixBoundary,
   PROMPT_SOURCE_METADATA,
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
@@ -2713,6 +2714,12 @@ export class ChatCompletionProcess {
         attachedFiles: fabMessages,
       });
       const admittedContextMessages = filterByPromptMode(taggedContextMessages, promptMode);
+      // Close the deployment-wide shareable prefix with a cache breakpoint. Applied after the
+      // promptMode filter so the boundary lands on a block that actually ships. Unconditional
+      // by design: `IMessage.cache` only DECLARES a breakpoint - each backend decides whether
+      // to translate it (Anthropic-family does, the others ignore it per the field's contract),
+      // and the cacheStrategy built later in this method still governs the other breakpoints.
+      markShareablePrefixBoundary(admittedContextMessages);
       const contextAndSystemMessages: IMessage[] = admittedContextMessages.map(t => t.message);
       // Carries each message's source across into the builder, which sees only an IMessage[] and so
       // could otherwise decide what to drop on array position alone. Keyed by reference, which survives
