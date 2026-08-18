@@ -32,16 +32,18 @@ const fallbackDb = () => ({
   },
 });
 
-describe('resolveFallbackLake (via assertLakeAccess) - merges the groundingMode overlay', () => {
+describe('resolveFallbackLake (via assertLakeAccess) - merges the fallback overlay', () => {
   it('resolves the coded default when no overlay adapter is wired (back-compat)', async () => {
     const resolved = await assertLakeAccess('opti-knowledge', ctx({ userTags: ['opti'] }), { db: fallbackDb() });
     expect(resolved.groundingMode).toBeUndefined();
+    expect(resolved.preferredSystemPromptId).toBeUndefined();
   });
 
   it('resolves the coded default when the overlay adapter finds no row', async () => {
     const db = { ...fallbackDb(), fallbackLakeSettings: { findByLakeId: vi.fn().mockResolvedValue(null) } };
     const resolved = await assertLakeAccess('opti-knowledge', ctx({ userTags: ['opti'] }), { db });
     expect(resolved.groundingMode).toBeUndefined();
+    expect(resolved.preferredSystemPromptId).toBeUndefined();
   });
 
   it('merges the overlay groundingMode when a row exists', async () => {
@@ -52,6 +54,22 @@ describe('resolveFallbackLake (via assertLakeAccess) - merges the groundingMode 
     expect(findByLakeId).toHaveBeenCalledWith('opti-knowledge');
   });
 
+  it('merges the overlay preferredSystemPromptId when a row exists', async () => {
+    const findByLakeId = vi
+      .fn()
+      .mockResolvedValue({ lakeId: 'opti-knowledge', preferredSystemPromptId: 'triage_router' });
+    const db = { ...fallbackDb(), fallbackLakeSettings: { findByLakeId } };
+    const resolved = await assertLakeAccess('opti-knowledge', ctx({ userTags: ['opti'] }), { db });
+    expect(resolved.preferredSystemPromptId).toBe('triage_router');
+  });
+
+  it('a stored empty-string preferredSystemPromptId resolves as absent, not as an empty string', async () => {
+    const findByLakeId = vi.fn().mockResolvedValue({ lakeId: 'opti-knowledge', preferredSystemPromptId: '' });
+    const db = { ...fallbackDb(), fallbackLakeSettings: { findByLakeId } };
+    const resolved = await assertLakeAccess('opti-knowledge', ctx({ userTags: ['opti'] }), { db });
+    expect(resolved.preferredSystemPromptId).toBeUndefined();
+  });
+
   it('degrades to the coded default when the overlay read throws', async () => {
     const db = {
       ...fallbackDb(),
@@ -59,6 +77,7 @@ describe('resolveFallbackLake (via assertLakeAccess) - merges the groundingMode 
     };
     const resolved = await assertLakeAccess('opti-knowledge', ctx({ userTags: ['opti'] }), { db });
     expect(resolved.groundingMode).toBeUndefined();
+    expect(resolved.preferredSystemPromptId).toBeUndefined();
   });
 
   it('never merges the overlay onto a real DB lake shadowing the same slug', async () => {
@@ -108,9 +127,9 @@ describe('updateFallbackLakeSettings', () => {
   // findByLakeId is stubbed too: assertLakeAccess (called via assertFallbackLakeSettingsWriteAccess)
   // reads it on every resolution, independent of whether this call writes anything.
   it('persists groundingMode via the overlay repo and returns it merged onto the lake', async () => {
-    const setGroundingMode = vi.fn().mockResolvedValue({ lakeId: 'opti-knowledge', groundingMode: 'inline' });
+    const setFields = vi.fn().mockResolvedValue({ lakeId: 'opti-knowledge', groundingMode: 'inline' });
     const findByLakeId = vi.fn().mockResolvedValue(null);
-    const db = { ...fallbackDb(), fallbackLakeSettings: { setGroundingMode, findByLakeId } };
+    const db = { ...fallbackDb(), fallbackLakeSettings: { setFields, findByLakeId } };
 
     const result = await updateFallbackLakeSettings(
       'opti-knowledge',
@@ -119,29 +138,66 @@ describe('updateFallbackLakeSettings', () => {
       { db }
     );
 
-    expect(setGroundingMode).toHaveBeenCalledWith('opti-knowledge', 'inline');
+    expect(setFields).toHaveBeenCalledWith('opti-knowledge', { groundingMode: 'inline' });
     expect(result.groundingMode).toBe('inline');
   });
 
-  it('is a no-op write when groundingMode is omitted (unchanged wins)', async () => {
-    const setGroundingMode = vi.fn();
+  it('persists preferredSystemPromptId and both fields together in one setFields call', async () => {
+    const setFields = vi.fn().mockResolvedValue({});
     const findByLakeId = vi.fn().mockResolvedValue(null);
-    const db = { ...fallbackDb(), fallbackLakeSettings: { setGroundingMode, findByLakeId } };
+    const db = { ...fallbackDb(), fallbackLakeSettings: { setFields, findByLakeId } };
+
+    const result = await updateFallbackLakeSettings(
+      'opti-knowledge',
+      ctx({ isAdmin: true }),
+      { groundingMode: 'inline', preferredSystemPromptId: 'triage_router' },
+      { db }
+    );
+
+    expect(setFields).toHaveBeenCalledTimes(1);
+    expect(setFields).toHaveBeenCalledWith('opti-knowledge', {
+      groundingMode: 'inline',
+      preferredSystemPromptId: 'triage_router',
+    });
+    expect(result.preferredSystemPromptId).toBe('triage_router');
+  });
+
+  it("an explicit '' preferredSystemPromptId IS written (the clear sentinel), unlike an omitted field", async () => {
+    const setFields = vi.fn().mockResolvedValue({});
+    const findByLakeId = vi.fn().mockResolvedValue(null);
+    const db = { ...fallbackDb(), fallbackLakeSettings: { setFields, findByLakeId } };
+
+    const result = await updateFallbackLakeSettings(
+      'opti-knowledge',
+      ctx({ isAdmin: true }),
+      { preferredSystemPromptId: '' },
+      { db }
+    );
+
+    expect(setFields).toHaveBeenCalledWith('opti-knowledge', { preferredSystemPromptId: '' });
+    expect(result.preferredSystemPromptId).toBeUndefined();
+  });
+
+  it('is a no-op write when both fields are omitted (unchanged wins)', async () => {
+    const setFields = vi.fn();
+    const findByLakeId = vi.fn().mockResolvedValue(null);
+    const db = { ...fallbackDb(), fallbackLakeSettings: { setFields, findByLakeId } };
 
     const result = await updateFallbackLakeSettings('opti-knowledge', ctx({ isAdmin: true }), {}, { db });
 
-    expect(setGroundingMode).not.toHaveBeenCalled();
+    expect(setFields).not.toHaveBeenCalled();
     expect(result.groundingMode).toBeUndefined();
+    expect(result.preferredSystemPromptId).toBeUndefined();
   });
 
   it('refuses a non-admin before ever touching the overlay repo', async () => {
-    const setGroundingMode = vi.fn();
+    const setFields = vi.fn();
     const findByLakeId = vi.fn().mockResolvedValue(null);
-    const db = { ...fallbackDb(), fallbackLakeSettings: { setGroundingMode, findByLakeId } };
+    const db = { ...fallbackDb(), fallbackLakeSettings: { setFields, findByLakeId } };
 
     await expect(
       updateFallbackLakeSettings('opti-knowledge', ctx({ userTags: ['opti'] }), { groundingMode: 'inline' }, { db })
     ).rejects.toThrow(/permission to change/i);
-    expect(setGroundingMode).not.toHaveBeenCalled();
+    expect(setFields).not.toHaveBeenCalled();
   });
 });

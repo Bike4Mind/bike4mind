@@ -244,7 +244,14 @@ export default function DataLakeManagerPanel() {
   // required fields (name is its only real one; description/tags/visibility don't apply to it).
   const editingFallbackLake = useMemo<EditableFallbackLake | null>(() => {
     const l = dataLakes?.find(d => d.id === editingFallbackLakeId);
-    return l ? { id: l.id, name: l.name, groundingMode: l.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE } : null;
+    return l
+      ? {
+          id: l.id,
+          name: l.name,
+          groundingMode: l.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE,
+          preferredSystemPromptId: l.preferredSystemPromptId ?? '',
+        }
+      : null;
   }, [dataLakes, editingFallbackLakeId]);
 
   const selectLake = (lake: ManagerLake) => {

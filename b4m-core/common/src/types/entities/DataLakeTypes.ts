@@ -834,22 +834,39 @@ export interface IDataLakeSpendResponse {
  * DB lake stores directly on its document), not a resolved operational lever, and every consumer
  * reads them off a lake object rather than through the scoped-settings resolver.
  *
- * Starts with `groundingMode` only. `systemPrompt` and `preferredSystemPromptId` are intentionally
- * NOT here yet - surfacing them for a static lake requires widening `getDataLakePrompts`' trust
- * rule (a static lake has no creator/org, so it is never "trusted" for prompt injection today),
- * which is a security decision to make on its own terms, not a storage change.
+ * `groundingMode` (Phase 0) and `preferredSystemPromptId` (Phase 1) live here. `systemPrompt` is
+ * intentionally NOT here yet - surfacing free text for a static lake requires widening
+ * `getDataLakePrompts`' trust rule (a static lake has no creator/org, so it is never "trusted" for
+ * prompt injection today), which is a security decision to make on its own terms, not a storage
+ * change. `preferredSystemPromptId` carries no such risk: it is an id reference re-validated
+ * against the session-activatable allowlist at every write AND read boundary (see
+ * `isSessionActivatablePromptId`), never injected text.
  */
 export interface IFallbackLakeSetting extends IMongoDocument {
   /** The registry lake's `id` (a human slug, never an ObjectId hex string - see `isFallbackLake`). */
   lakeId: string;
   /** Absent means "use the coded default" - mirrors how a DB lake treats an unset groundingMode. */
   groundingMode?: DataLakeGroundingMode;
+  /**
+   * Preferred registry system-prompt id (see IDataLake.preferredSystemPromptId). Absent (never an
+   * empty-string stand-in) means "no preferred prompt" - the write route's `''` clear sentinel is
+   * translated to absent before it reaches this row, matching how a DB lake treats the same clear.
+   */
+  preferredSystemPromptId?: string;
 }
 
 export interface IFallbackLakeSettingsRepository extends IBaseRepository<IFallbackLakeSetting> {
   findByLakeId: (lakeId: string) => Promise<IFallbackLakeSetting | null>;
   /** Batch read for the manager list, which renders every accessible fallback lake in one response. */
   findByLakeIds: (lakeIds: string[]) => Promise<IFallbackLakeSetting[]>;
-  /** Upsert-by-lakeId: a fallback lake has no document to attach this row to via the base `create`. */
-  setGroundingMode: (lakeId: string, groundingMode: DataLakeGroundingMode) => Promise<IFallbackLakeSetting>;
+  /**
+   * Upsert-by-lakeId: a fallback lake has no document to attach this row to via the base `create`.
+   * Only the keys actually present in `fields` are written - an omitted field leaves its stored
+   * value alone (mirrors `updateDataLake`'s "omitted -> unchanged" semantics), so a caller that
+   * sets only `groundingMode` cannot accidentally clear a previously-set `preferredSystemPromptId`.
+   */
+  setFields: (
+    lakeId: string,
+    fields: Partial<Pick<IFallbackLakeSetting, 'groundingMode' | 'preferredSystemPromptId'>>
+  ) => Promise<IFallbackLakeSetting>;
 }

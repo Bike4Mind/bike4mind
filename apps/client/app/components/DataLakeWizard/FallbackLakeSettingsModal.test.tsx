@@ -12,15 +12,40 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useUpdateFallbackLakeSettings: () => ({ mutate: updateMutate, isPending: false }),
 }));
 
+// Same seam as DataLakeSettingsModal.test.tsx: the picker's options come from an async
+// react-query hook, mocked so the modal renders without a QueryClientProvider and each test can
+// control the two states that matter (not-yet-arrived vs loaded).
+type MockActivatable = { promptId: string; name: string; description: string };
+let activatablePrompts: MockActivatable[] | undefined;
+let activatableLoading = false;
+let activatableError = false;
+vi.mock('@client/app/hooks/data/useActivatablePrompts', () => ({
+  useActivatablePrompts: () => ({ data: activatablePrompts, isLoading: activatableLoading, isError: activatableError }),
+}));
+
+const TRIAGE_ROUTER: MockActivatable = {
+  promptId: 'triage_router',
+  name: 'Triage Router',
+  description: 'Grounding-first routing prompt.',
+};
+
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-const lake = { id: 'opti-knowledge', name: 'OptiHashi Knowledge', groundingMode: 'retrieve' as const };
+const lake = {
+  id: 'opti-knowledge',
+  name: 'OptiHashi Knowledge',
+  groundingMode: 'retrieve' as const,
+  preferredSystemPromptId: '',
+};
 
 beforeEach(() => {
   updateMutate.mockClear();
+  activatablePrompts = [TRIAGE_ROUTER];
+  activatableLoading = false;
+  activatableError = false;
 });
 
 describe('FallbackLakeSettingsModal', () => {
@@ -43,6 +68,64 @@ describe('FallbackLakeSettingsModal', () => {
       { id: 'opti-knowledge', groundingMode: 'inline' },
       expect.objectContaining({ onSuccess: expect.any(Function) })
     );
+  });
+
+  it('seeds the preferred-prompt picker as None when unbound, and sends nothing if unchanged', async () => {
+    const user = userEvent.setup();
+    render(<FallbackLakeSettingsModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+
+    expect(screen.getByTestId('fallback-lake-preferred-prompt-button')).toHaveTextContent('None');
+
+    await user.click(screen.getByTestId('fallback-lake-settings-save-btn'));
+
+    // groundingMode is unchanged here too, so this pins BOTH fields are omitted when neither moved.
+    expect(updateMutate).toHaveBeenCalledWith({ id: 'opti-knowledge', groundingMode: 'retrieve' }, expect.anything());
+  });
+
+  it('binds a prompt from the picker and sends the new id', async () => {
+    const user = userEvent.setup();
+    render(<FallbackLakeSettingsModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+
+    await user.click(screen.getByTestId('fallback-lake-preferred-prompt-button'));
+    await user.click(screen.getByTestId('fallback-lake-preferred-prompt-triage_router'));
+    await user.click(screen.getByTestId('fallback-lake-settings-save-btn'));
+
+    expect(updateMutate).toHaveBeenCalledWith(
+      { id: 'opti-knowledge', groundingMode: 'retrieve', preferredSystemPromptId: 'triage_router' },
+      expect.anything()
+    );
+  });
+
+  it('clearing a bound prompt back to None sends the "" clear sentinel', async () => {
+    const user = userEvent.setup();
+    const bound = { ...lake, preferredSystemPromptId: 'triage_router' };
+    render(<FallbackLakeSettingsModal lake={bound} onClose={vi.fn()} />, { wrapper: Wrapper });
+
+    expect(screen.getByTestId('fallback-lake-preferred-prompt-button')).toHaveTextContent('Triage Router');
+
+    await user.click(screen.getByTestId('fallback-lake-preferred-prompt-button'));
+    await user.click(screen.getByTestId('fallback-lake-preferred-prompt-none'));
+    await user.click(screen.getByTestId('fallback-lake-settings-save-btn'));
+
+    expect(updateMutate).toHaveBeenCalledWith(
+      { id: 'opti-knowledge', groundingMode: 'retrieve', preferredSystemPromptId: '' },
+      expect.anything()
+    );
+  });
+
+  it('keeps a delisted bound prompt visible via the fallback Option, and does not clear it on an unrelated save', async () => {
+    activatablePrompts = []; // TRIAGE_ROUTER has been delisted server-side
+    const user = userEvent.setup();
+    const bound = { ...lake, preferredSystemPromptId: 'triage_router' };
+    render(<FallbackLakeSettingsModal lake={bound} onClose={vi.fn()} />, { wrapper: Wrapper });
+
+    // The delisted id still renders (as itself, since the loading state has already resolved).
+    expect(screen.getByTestId('fallback-lake-preferred-prompt-button')).toHaveTextContent('triage_router');
+
+    await user.click(screen.getByTestId('fallback-lake-settings-save-btn'));
+
+    // Unchanged (still bound to the same, now-delisted id) - omitted, never re-sent to 400.
+    expect(updateMutate).toHaveBeenCalledWith({ id: 'opti-knowledge', groundingMode: 'retrieve' }, expect.anything());
   });
 
   it('does NOT offer name/description/visibility/gate fields - a fallback lake has no document for them', () => {

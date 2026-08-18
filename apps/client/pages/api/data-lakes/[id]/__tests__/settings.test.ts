@@ -91,4 +91,41 @@ describe('PUT /api/data-lakes/:id/settings', () => {
     await expect(invoke(makeReq(), res)).rejects.toThrow(/permission to change/i);
     expect(json).not.toHaveBeenCalled();
   });
+
+  // Real allowlist predicate on purpose (not mocked) - the whole point is which ids pass, mirroring
+  // id-put-preferred-prompt.test.ts's convention for the sibling DB-lake route.
+  it('rejects a non-activatable preferredSystemPromptId before ever calling the service', async () => {
+    const { res, json } = makeRes();
+    await expect(invoke(makeReq({ preferredSystemPromptId: 'not-on-the-allowlist' }), res)).rejects.toThrow(
+      /not a valid preferred system prompt/i
+    );
+    expect(h.updateFallbackLakeSettings).not.toHaveBeenCalled();
+    expect(json).not.toHaveBeenCalled();
+  });
+
+  it('accepts an activatable preferredSystemPromptId and passes it through', async () => {
+    const { res, json } = makeRes();
+    await invoke(makeReq({ preferredSystemPromptId: 'triage_router' }), res);
+
+    expect(h.updateFallbackLakeSettings).toHaveBeenCalledWith(
+      'opti-knowledge',
+      { userId: 'admin-1', isAdmin: true },
+      { preferredSystemPromptId: 'triage_router' },
+      expect.anything()
+    );
+    expect(json).toHaveBeenCalledWith(LAKE);
+  });
+
+  it("accepts '' (the clear sentinel) without consulting the allowlist", async () => {
+    const { res, json } = makeRes();
+    await invoke(makeReq({ preferredSystemPromptId: '' }), res);
+
+    expect(h.updateFallbackLakeSettings).toHaveBeenCalledWith(
+      'opti-knowledge',
+      { userId: 'admin-1', isAdmin: true },
+      { preferredSystemPromptId: '' },
+      expect.anything()
+    );
+    expect(json).toHaveBeenCalledWith(LAKE);
+  });
 });

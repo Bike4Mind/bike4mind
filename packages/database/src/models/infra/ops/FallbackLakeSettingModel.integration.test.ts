@@ -5,8 +5,8 @@ import { FallbackLakeSetting, fallbackLakeSettingsRepository } from './FallbackL
 
 /**
  * Real-Mongo guard for the fallback-lake settings overlay: a hand-mocked repo cannot exercise the
- * unique index on `lakeId`, and the upsert-by-lakeId semantics `setGroundingMode` depends on are
- * exactly what only a real index/query catches.
+ * unique index on `lakeId`, and the upsert-by-lakeId semantics `setFields` depends on are exactly
+ * what only a real index/query catches.
  */
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 
@@ -41,9 +41,9 @@ describe('FallbackLakeSettingModel - unique index on lakeId', () => {
   });
 });
 
-describe('fallbackLakeSettingsRepository.setGroundingMode - upsert by lakeId', () => {
+describe('fallbackLakeSettingsRepository.setFields - upsert by lakeId', () => {
   it('creates a row on first call', async () => {
-    const result = await fallbackLakeSettingsRepository.setGroundingMode('opti-knowledge', 'inline');
+    const result = await fallbackLakeSettingsRepository.setFields('opti-knowledge', { groundingMode: 'inline' });
     expect(result.lakeId).toBe('opti-knowledge');
     expect(result.groundingMode).toBe('inline');
 
@@ -52,12 +52,41 @@ describe('fallbackLakeSettingsRepository.setGroundingMode - upsert by lakeId', (
   });
 
   it('updates the SAME row on a second call, never creating a duplicate', async () => {
-    await fallbackLakeSettingsRepository.setGroundingMode('opti-knowledge', 'inline');
-    await fallbackLakeSettingsRepository.setGroundingMode('opti-knowledge', 'auto-by-size');
+    await fallbackLakeSettingsRepository.setFields('opti-knowledge', { groundingMode: 'inline' });
+    await fallbackLakeSettingsRepository.setFields('opti-knowledge', { groundingMode: 'auto-by-size' });
 
     const rows = await FallbackLakeSetting.find({ lakeId: 'opti-knowledge' });
     expect(rows).toHaveLength(1);
     expect(rows[0].groundingMode).toBe('auto-by-size');
+  });
+
+  it('setting ONE field leaves an already-stored sibling field untouched', async () => {
+    await fallbackLakeSettingsRepository.setFields('opti-knowledge', {
+      groundingMode: 'inline',
+      preferredSystemPromptId: 'triage_router',
+    });
+    await fallbackLakeSettingsRepository.setFields('opti-knowledge', { groundingMode: 'retrieve' });
+
+    const row = await fallbackLakeSettingsRepository.findByLakeId('opti-knowledge');
+    expect(row?.groundingMode).toBe('retrieve');
+    expect(row?.preferredSystemPromptId).toBe('triage_router');
+  });
+
+  it('can set both fields together in one call', async () => {
+    const result = await fallbackLakeSettingsRepository.setFields('opti-knowledge', {
+      groundingMode: 'auto-by-size',
+      preferredSystemPromptId: 'triage_router',
+    });
+    expect(result.groundingMode).toBe('auto-by-size');
+    expect(result.preferredSystemPromptId).toBe('triage_router');
+  });
+
+  it('an explicit empty-string preferredSystemPromptId clears a previously-stored one', async () => {
+    await fallbackLakeSettingsRepository.setFields('opti-knowledge', { preferredSystemPromptId: 'triage_router' });
+    await fallbackLakeSettingsRepository.setFields('opti-knowledge', { preferredSystemPromptId: '' });
+
+    const row = await fallbackLakeSettingsRepository.findByLakeId('opti-knowledge');
+    expect(row?.preferredSystemPromptId).toBeFalsy();
   });
 });
 
@@ -67,15 +96,15 @@ describe('fallbackLakeSettingsRepository.findByLakeId / findByLakeIds', () => {
   });
 
   it('findByLakeIds batches multiple lakes in one query and skips unconfigured ones', async () => {
-    await fallbackLakeSettingsRepository.setGroundingMode('lake-a', 'inline');
-    await fallbackLakeSettingsRepository.setGroundingMode('lake-b', 'retrieve');
+    await fallbackLakeSettingsRepository.setFields('lake-a', { groundingMode: 'inline' });
+    await fallbackLakeSettingsRepository.setFields('lake-b', { groundingMode: 'retrieve' });
 
     const rows = await fallbackLakeSettingsRepository.findByLakeIds(['lake-a', 'lake-b', 'lake-c-never-configured']);
     expect(rows.map(r => r.lakeId).sort()).toEqual(['lake-a', 'lake-b']);
   });
 
   it('findByLakeIds returns nothing for an empty id list', async () => {
-    await fallbackLakeSettingsRepository.setGroundingMode('lake-a', 'inline');
+    await fallbackLakeSettingsRepository.setFields('lake-a', { groundingMode: 'inline' });
     expect(await fallbackLakeSettingsRepository.findByLakeIds([])).toEqual([]);
   });
 });

@@ -47,7 +47,7 @@ describe('listDataLakes / listAllDataLakes - canManageSettings flag for fallback
   });
 });
 
-describe('listAllDataLakes - groundingMode overlay for fallback lakes', () => {
+describe('listAllDataLakes - overlay fields (groundingMode, preferredSystemPromptId) for fallback lakes', () => {
   it('merges the overlay groundingMode for an admin', async () => {
     const db = {
       dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) },
@@ -59,18 +59,33 @@ describe('listAllDataLakes - groundingMode overlay for fallback lakes', () => {
     expect(result.find(l => l.id === 'opti-knowledge')?.groundingMode).toBe('inline');
   });
 
-  it('omits groundingMode when no overlay row exists', async () => {
+  it('merges the overlay preferredSystemPromptId for an admin', async () => {
+    const db = {
+      dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) },
+      fallbackLakeSettings: {
+        findByLakeIds: vi
+          .fn()
+          .mockResolvedValue([{ lakeId: 'opti-knowledge', preferredSystemPromptId: 'triage_router' }]),
+      },
+    };
+    const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
+    expect(result.find(l => l.id === 'opti-knowledge')?.preferredSystemPromptId).toBe('triage_router');
+  });
+
+  it('omits both fields when no overlay row exists', async () => {
     const db = {
       dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) },
       fallbackLakeSettings: { findByLakeIds: vi.fn().mockResolvedValue([]) },
     };
     const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
     expect(result.find(l => l.id === 'opti-knowledge')?.groundingMode).toBeUndefined();
+    expect(result.find(l => l.id === 'opti-knowledge')?.preferredSystemPromptId).toBeUndefined();
   });
 
   it('lists cleanly with no overlay adapter wired (back-compat)', async () => {
     const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) } };
     const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
     expect(result.find(l => l.id === 'opti-knowledge')?.groundingMode).toBeUndefined();
+    expect(result.find(l => l.id === 'opti-knowledge')?.preferredSystemPromptId).toBeUndefined();
   });
 });

@@ -1,10 +1,10 @@
 import type {
   AccessContext,
-  DataLakeGroundingMode,
   IAdminSettingsRepository,
   IDataLakeAccessGrantRepository,
   IDataLakeDocument,
   IDataLakeRepository,
+  IFallbackLakeSetting,
   IFallbackLakeSettingsRepository,
   DataLakeConfig,
   ManageableDataLakeConfig,
@@ -152,20 +152,26 @@ const resolveOwnerNames = async (
   return nameById;
 };
 
+type FallbackOverlay = Pick<IFallbackLakeSetting, 'groundingMode' | 'preferredSystemPromptId'>;
+
 /**
- * Batch-resolve the overlay's `groundingMode` for a set of fallback lake ids, in one round-trip.
- * Empty map when no overlay repo was supplied (the content-scope resolver / Slack never render
- * this field) - mirrors `resolveOwnerNames`'s "pay nothing when nobody reads it" shape.
+ * Batch-resolve the overlay (`groundingMode`, `preferredSystemPromptId`) for a set of fallback
+ * lake ids, in one round-trip. Empty map when no overlay repo was supplied (the content-scope
+ * resolver / Slack never render these fields) - mirrors `resolveOwnerNames`'s "pay nothing when
+ * nobody reads it" shape.
  */
 const resolveFallbackSettings = async (
   lakeIds: string[],
   fallbackLakeSettings?: Pick<IFallbackLakeSettingsRepository, 'findByLakeIds'>
-): Promise<Map<string, DataLakeGroundingMode>> => {
-  const byLakeId = new Map<string, DataLakeGroundingMode>();
+): Promise<Map<string, FallbackOverlay>> => {
+  const byLakeId = new Map<string, FallbackOverlay>();
   if (!fallbackLakeSettings || lakeIds.length === 0) return byLakeId;
   const rows = await fallbackLakeSettings.findByLakeIds(lakeIds);
   for (const row of rows) {
-    if (row.groundingMode) byLakeId.set(row.lakeId, row.groundingMode);
+    byLakeId.set(row.lakeId, {
+      groundingMode: row.groundingMode,
+      preferredSystemPromptId: row.preferredSystemPromptId,
+    });
   }
   return byLakeId;
 };
@@ -229,16 +235,18 @@ const toManageableConfig = (
  * (e.g. `systemPrompt`) to follow without the same reasoning - see `getDataLakePrompts`'s trust
  * rule, which is the reason `systemPrompt` is not surfaced here at all.
  *
- * `groundingMode` is the one exception to "no editor-only field for a fallback lake": it is merged
- * in from the overlay (`fallbackSettingsByLakeId`) and gated on `canManageSettings`, mirroring how
- * `toManageableConfig` gates it on `manageable` - it needs to round-trip into the settings modal the
- * same way a DB lake's does. It is NOT the effective value a session actually resolves (that is
- * `resolveFallbackLake`'s job); this is purely what the editor UI seeds its picker from.
+ * `groundingMode` and `preferredSystemPromptId` are the exceptions to "no editor-only field for a
+ * fallback lake": both are merged in from the overlay (`fallbackSettingsByLakeId`) and gated on
+ * `canManageSettings`, mirroring how `toManageableConfig` gates the same fields on `manageable` -
+ * they need to round-trip into the settings modal the same way a DB lake's do. Neither is the
+ * effective value a session actually resolves (that is `resolveFallbackLake`'s job); this is
+ * purely what the editor UI seeds its picker from. `systemPrompt` stays absent here regardless -
+ * see `getDataLakePrompts`'s trust rule above.
  */
 const toFallbackConfig = (
   dl: DataLakeConfig,
   ctx: Pick<AccessContext, 'isAdmin'>,
-  groundingModeOverride?: DataLakeGroundingMode
+  overlay?: FallbackOverlay
 ): ManageableDataLakeConfig => ({
   ...toDataLakeConfig(dl),
   canManage: false,
@@ -246,7 +254,10 @@ const toFallbackConfig = (
   canManageSettings: ctx.isAdmin,
   // Built-in registry lakes have no creator, so they are never "yours" and carry no owner label.
   isOwn: false,
-  ...(ctx.isAdmin && groundingModeOverride ? { groundingMode: groundingModeOverride } : {}),
+  ...(ctx.isAdmin && overlay?.groundingMode ? { groundingMode: overlay.groundingMode } : {}),
+  ...(ctx.isAdmin && overlay?.preferredSystemPromptId
+    ? { preferredSystemPromptId: overlay.preferredSystemPromptId }
+    : {}),
 });
 
 /**

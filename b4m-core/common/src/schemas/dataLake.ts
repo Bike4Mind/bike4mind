@@ -142,6 +142,11 @@ export type UpdatableDataLakeFieldsAreAudited = LakeConfigAuditCoversEveryUpdata
 // description, or gate fields, since a fallback lake's identity is config, not editable metadata.
 export const UpdateFallbackLakeSettingsRequestInput = z.object({
   groundingMode: z.enum(DATA_LAKE_GROUNDING_MODES).optional(),
+  // Same shape and sentinel as UpdateDataLakeRequestInput's field above - kept deliberately
+  // identical so the two write paths cannot silently diverge on what a crafted body may contain.
+  // The session-activatable ALLOWLIST check is enforced at the write route (apps/client), same as
+  // the DB-lake path; this schema is a crafted-body cap only, not the real constraint.
+  preferredSystemPromptId: z.union([z.literal(''), z.string().min(1).max(200)]).optional(),
 });
 export type UpdateFallbackLakeSettingsRequestInputType = z.infer<typeof UpdateFallbackLakeSettingsRequestInput>;
 /**

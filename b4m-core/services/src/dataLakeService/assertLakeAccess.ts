@@ -109,12 +109,12 @@ export function assertLakeGrantable(lake: Pick<IDataLakeDocument, 'id'>): void {
  * Unlike DB lakes, a gateless fallback is deliberately public: fallbacks are curated
  * config, not user-created, and the list path already shows them to everyone.
  *
- * `fallbackLakeSettings` merges in the registry lake's admin-settable overlay (currently
- * `groundingMode` only), when the caller has wired one. This is the ONE place a synthetic fallback
- * document is constructed, so it is the one seam an overlay value must reach for every downstream
- * consumer - sessions/create.ts reads `lake.groundingMode` straight off this return value via
- * resolveLakeSessionDefaults - to see it, with no per-consumer change. A read failure degrades to
- * the coded default rather than failing the request, matching every other optional adapter here.
+ * `fallbackLakeSettings` merges in the registry lake's admin-settable overlay (`groundingMode` and
+ * `preferredSystemPromptId`), when the caller has wired one. This is the ONE place a synthetic
+ * fallback document is constructed, so it is the one seam an overlay value must reach for every
+ * downstream consumer - sessions/create.ts reads both fields straight off this return value via
+ * resolveLakeSessionDefaults, with no per-consumer change. A read failure degrades to the coded
+ * default rather than failing the request, matching every other optional adapter here.
  */
 async function resolveFallbackLake(
   lakeIdOrSlug: string,
@@ -143,6 +143,7 @@ async function resolveFallbackLake(
     createdAt: new Date(0),
     updatedAt: new Date(0),
     ...(overlay?.groundingMode ? { groundingMode: overlay.groundingMode } : {}),
+    ...(overlay?.preferredSystemPromptId ? { preferredSystemPromptId: overlay.preferredSystemPromptId } : {}),
   };
 }
 
