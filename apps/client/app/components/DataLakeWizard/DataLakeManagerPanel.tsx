@@ -90,7 +90,7 @@ import TaxonomyReviewPanel from './TaxonomyReviewPanel';
 import FieldTooltip from '@client/app/components/help/FieldTooltip';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
 import type { IDataLakeBatchSummary, IFabFileDocument } from '@bike4mind/common';
-import { satisfiesTagPrefix, DEFAULT_DATA_LAKE_GROUNDING_MODE } from '@bike4mind/common';
+import { satisfiesTagPrefix, submittedTagPrefix, DEFAULT_DATA_LAKE_GROUNDING_MODE } from '@bike4mind/common';
 
 type ManagerLake = NonNullable<ReturnType<typeof useGetDataLakes>['data']>[number];
 
@@ -98,7 +98,12 @@ type ManagerLake = NonNullable<ReturnType<typeof useGetDataLakes>['data']>[numbe
  *  meta-tag-only files), so every file is always reachable in the manager. */
 const UNCATEGORIZED_KEY = '__uncategorized__';
 
-const normalizePrefix = (fileTagPrefix: string) => (fileTagPrefix.endsWith(':') ? fileTagPrefix : `${fileTagPrefix}:`);
+/** The lake's prefix in the form its tags carry, via the same helper the wizard's request-rule
+ *  mirror uses so trimming and colon-appending cannot drift between the two surfaces.
+ *  The `|| ':'` keeps an unusable (empty) prefix matching NOTHING: submittedTagPrefix returns ''
+ *  there, and every tag startsWith(''), which would pull the whole knowledge base into one
+ *  lake's tree and empty its Uncategorized bucket. */
+const normalizePrefix = (fileTagPrefix: string) => submittedTagPrefix(fileTagPrefix) || ':';
 
 /** The prefix's namespace segments, e.g. 'books' -> ['books']. Lake navigation seeds the
  *  path past these so clicking a lake lands directly on its categories. */
