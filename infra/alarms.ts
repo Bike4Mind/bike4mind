@@ -129,6 +129,10 @@ export const dataLakeStuckBatchesAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('DataLakeStuckBatchesAlarm')
   : undefined;
 
+export const feedbackDeliveryFailureAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('FeedbackDeliveryFailureAlarm')
+  : undefined;
+
 // --- MetricAlarm definitions (only created for monitored stages) ---
 
 if (isMonitoredStage) {
@@ -1015,6 +1019,35 @@ if (isMonitoredStage) {
    * asked for. Alarms match one exact dimension set, so this uses the Stage-only
    * datapoint; the per-model breakdown lives on the model-sunset dashboard.
    */
+  /**
+   * Alarm: Feedback Delivery Failure
+   *
+   * A user reported a problem, the record was saved, and the notification did not reach anyone.
+   * Threshold 0 (any failure) because the whole point of the delivery path is that a human hears
+   * about it - one dropped report is already the failure this alarm exists to catch, and the volume
+   * is far too low for a rate-based threshold to fire before the signal is lost.
+   *
+   * Metric emitted by: pages/api/feedback/index.ts, via emitFeedbackDeliveryMetric
+   * Namespace: Lumina5/FeedbackDelivery / Failed
+   */
+  new aws.cloudwatch.MetricAlarm('feedbackDeliveryFailure', {
+    name: `${$app.name}-${$app.stage}-feedback-delivery-failure`,
+    alarmDescription: 'Feedback was saved but could not be delivered to Slack or email',
+    comparisonOperator: 'GreaterThanThreshold',
+    evaluationPeriods: 1,
+    metricName: 'Failed',
+    namespace: 'Lumina5/FeedbackDelivery',
+    period: 3600, // 1 hour - submissions are sporadic, so a short window would mostly be empty
+    statistic: 'Sum',
+    threshold: 0,
+    treatMissingData: 'notBreaching',
+    alarmActions: [feedbackDeliveryFailureAlarm!.arn],
+    tags: {
+      Application: 'Feedback',
+      Severity: 'High',
+    },
+  });
+
   new aws.cloudwatch.MetricAlarm('deprecatedModelRequest', {
     name: `${$app.name}-${$app.stage}-deprecated-model-request`,
     alarmDescription: 'A request arrived pinned to a deprecated model - a session or agent pin needs upgrading',

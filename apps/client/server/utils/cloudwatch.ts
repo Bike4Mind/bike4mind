@@ -502,3 +502,36 @@ export async function recordReconcileRun(): Promise<void> {
 export async function recordTaxonomyTagsApplySkipped(count: number): Promise<void> {
   return emitDataLakeBatchMetric(DataLakeBatchMetrics.TAXONOMY_TAGS_APPLY_SKIPPED, count, {}, StandardUnit.Count);
 }
+
+// --- Feedback delivery ---------------------------------------------------------------------
+
+const FEEDBACK_DELIVERY_NAMESPACE = 'Lumina5/FeedbackDelivery';
+
+/**
+ * Feedback delivery metric names (typed constants).
+ *
+ * Keep in sync with infra/alarms.ts (`feedbackDeliveryFailure`), which alarms on FAILED.
+ *
+ * SKIPPED and FAILED are deliberately separate: a skip means the route is switched off or
+ * unconfigured (an operator decision, or a gap in setup), while a failure means it was switched on
+ * and the send did not land. Collapsing them would make a disabled integration look like an outage
+ * and an outage look like a config choice.
+ */
+export const FeedbackDeliveryMetrics = {
+  DELIVERED: 'Delivered',
+  FAILED: 'Failed',
+  SKIPPED: 'Skipped',
+} as const;
+
+/**
+ * Feedback delivery metric emitter. Fire-and-forget, like every other emitter here: a metric write
+ * must never fail the feedback submission it is reporting on, since the record is already saved.
+ */
+export async function emitFeedbackDeliveryMetric(
+  metricName: string,
+  value: number,
+  dimensions: MetricDimensions = {},
+  unit: StandardUnit = StandardUnit.Count
+): Promise<void> {
+  return emitMetric(FEEDBACK_DELIVERY_NAMESPACE, metricName, value, dimensions, unit);
+}

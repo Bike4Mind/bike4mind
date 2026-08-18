@@ -57,6 +57,16 @@ export async function postMessageToSlack(message: string): Promise<void> {
   }
 }
 
+/**
+ * Outcome of one delivery attempt. Returned rather than swallowed because the feedback record is
+ * already saved by the time this runs - the submitter is correctly told it succeeded, and the only
+ * thing that can go wrong from here is that nobody on our side ever hears about it.
+ */
+export type FeedbackDeliveryOutcome =
+  | { status: 'delivered' }
+  | { status: 'skipped'; reason: 'disabled' | 'no_webhook_configured' | 'no_recipients' }
+  | { status: 'failed'; reason: string };
+
 export async function postFeedbackToSlack(
   type: string,
   organization: string,
@@ -65,12 +75,13 @@ export async function postFeedbackToSlack(
   userId: string,
   content: string,
   promptMeta: string
-): Promise<void> {
+): Promise<FeedbackDeliveryOutcome> {
   try {
-    // only production feedbacks is sent to Slack
-    if (process.env.NODE_ENV !== 'production') return;
-
-    // Feedback routes to the feedback channel.
+    // No NODE_ENV gate. Admin settings are per-stage (each stage has its own database, see the
+    // %STAGE% placeholder in the MONGODB_URI template), so SlackFeedbackWebhookUrl already routes
+    // each stage to its own channel. Gating on NODE_ENV instead made non-production stages
+    // unverifiable while doing nothing to separate them, since deployed stages run a production
+    // build regardless.
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
     const slackWebhookUrl = resolveSlackWebhookUrl('SlackFeedbackWebhookUrl', settings);
 
@@ -78,7 +89,7 @@ export async function postFeedbackToSlack(
       Logger.error(
         'Error posting feedback to Slack: no SlackFeedbackWebhookUrl / SlackDefaultWebhookUrl set in admin settings or config'
       );
-      return;
+      return { status: 'skipped', reason: 'no_webhook_configured' };
     }
 
     const message = `*Type:* ${type}\n*User Details:* ${organization} - ${username} (ID: ${userId})\n*User Email:* ${userEmail}\n*Feedback:* ${content}
@@ -91,8 +102,11 @@ export async function postFeedbackToSlack(
         headers: { 'Content-Type': 'application/json' },
       }
     );
+
+    return { status: 'delivered' };
   } catch (error) {
     Logger.error('Error posting feedback to Slack:', error);
+    return { status: 'failed', reason: error instanceof Error ? error.message : String(error) };
   }
 }
 

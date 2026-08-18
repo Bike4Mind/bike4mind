@@ -12,7 +12,9 @@ import { adminSettingsRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@server/utils/errors';
 import { EmailEvents } from '@server/utils/eventBus';
-import { postFeedbackToSlack } from '@server/integrations/slack/slack';
+import { postFeedbackToSlack, type FeedbackDeliveryOutcome } from '@server/integrations/slack/slack';
+import { emitFeedbackDeliveryMetric, FeedbackDeliveryMetrics } from '@server/utils/cloudwatch';
+import { Logger } from '@bike4mind/observability';
 import { toRedactedFeedback } from '@server/utils/redactedFeedback';
 import sanitizeHtml from 'sanitize-html';
 import { z } from 'zod';
@@ -90,9 +92,17 @@ const handler = baseApi()
       );
 
     // Send feedback to Slack if enabled
+    // Delivery outcomes are collected rather than ignored. The record above is already saved, so
+    // the submitter is correctly told it succeeded; the failure this tracks is ours - nobody on our
+    // side hearing about the feedback at all.
+    const delivery: { slack: FeedbackDeliveryOutcome; email: FeedbackDeliveryOutcome } = {
+      slack: { status: 'skipped', reason: 'disabled' },
+      email: { status: 'skipped', reason: 'disabled' },
+    };
+
     if (getSettingsValue('EnableFeedBackToSlack', settings)) {
       console.log('Sending feedback to Slack is enabled');
-      await postFeedbackToSlack(
+      delivery.slack = await postFeedbackToSlack(
         type || 'CS',
         organization,
         username,
@@ -109,6 +119,10 @@ const handler = baseApi()
     console.log(`Sending feedback to all of these folks: ${feedbackEmails}`);
 
     // Send Feedback to Email
+    if (getSettingsValue('EnableFeedBackToEmail', settings) && feedbackEmails.length === 0) {
+      delivery.email = { status: 'skipped', reason: 'no_recipients' };
+    }
+
     if (getSettingsValue('EnableFeedBackToEmail', settings) && feedbackEmails.length > 0) {
       console.log('Sending feedback to email is enabled');
       const sanitizedContent = sanitizeHtml(content);
@@ -120,12 +134,13 @@ const handler = baseApi()
         ? sanitizeHtml(JSON.stringify(promptMetaForExternalEgress, null, 2))
         : '';
 
-      await Promise.all(
-        feedbackEmails.map((email: string) =>
-          EmailEvents.Send.publish({
-            to: email,
-            subject: 'New Feedback Received',
-            body: `
+      try {
+        await Promise.all(
+          feedbackEmails.map((email: string) =>
+            EmailEvents.Send.publish({
+              to: email,
+              subject: 'New Feedback Received',
+              body: `
               <!DOCTYPE html>
               <html lang="en" xmlns="http://www.w3.org/1999/xhtml">
               <head>
@@ -248,12 +263,32 @@ const handler = baseApi()
               </body>
               </html>
               `,
-          })
-        )
-      );
+            })
+          )
+        );
+        delivery.email = { status: 'delivered' };
+      } catch (error) {
+        // Never rethrow: the feedback is stored, and failing the request would tell the submitter
+        // their report was lost when it was not.
+        Logger.error('Error sending feedback to email:', error);
+        delivery.email = { status: 'failed', reason: error instanceof Error ? error.message : String(error) };
+      }
     }
 
-    return res.status(201).send(newFeedback);
+    const failedChannels = (Object.keys(delivery) as Array<keyof typeof delivery>).filter(
+      channel => delivery[channel].status === 'failed'
+    );
+
+    if (failedChannels.length > 0) {
+      Logger.error('Feedback delivery failed', { feedbackId: newFeedback.id, delivery });
+      // Fire-and-forget, and deliberately not awaited into the response path: a metric write must
+      // not delay or fail a submission whose record is already committed.
+      void emitFeedbackDeliveryMetric(FeedbackDeliveryMetrics.FAILED, failedChannels.length, {
+        channels: failedChannels.join(','),
+      });
+    }
+
+    return res.status(201).send({ ...newFeedback.toObject(), delivery });
   });
 
 export const config = {
