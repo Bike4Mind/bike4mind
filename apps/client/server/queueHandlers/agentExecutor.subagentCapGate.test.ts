@@ -155,3 +155,31 @@ describe('agentExecutor DAG-node refusal paths fire onDagNodeTerminal', () => {
     );
   });
 });
+
+describe('buildDispatchedSubagentCreditCapCheck', () => {
+  it('re-fetches organization on every call, so it reflects credits billed since the entry-gate snapshot', async () => {
+    const notYetCapped = { id: 'org-1', maxCreditsPerMember: 5, userDetails: [{ id: 'user-1', usedCredits: 4 }] };
+    const nowCapped = { id: 'org-1', maxCreditsPerMember: 5, userDetails: [{ id: 'user-1', usedCredits: 5 }] };
+    const findById = vi
+      .fn()
+      .mockResolvedValueOnce(notYetCapped as never)
+      .mockResolvedValueOnce(nowCapped as never);
+
+    const { buildDispatchedSubagentCreditCapCheck } = await import('./agentExecutor');
+    const check = buildDispatchedSubagentCreditCapCheck({ findById }, 'org-1', 'user-1');
+
+    expect(await check()).toBe(false);
+    expect(await check()).toBe(true);
+    expect(findById).toHaveBeenCalledTimes(2);
+    expect(findById).toHaveBeenCalledWith('org-1');
+  });
+
+  it('returns false without a DB read when the subagent has no organizationId', async () => {
+    const findById = vi.fn();
+    const { buildDispatchedSubagentCreditCapCheck } = await import('./agentExecutor');
+    const check = buildDispatchedSubagentCreditCapCheck({ findById }, undefined, 'user-1');
+
+    expect(await check()).toBe(false);
+    expect(findById).not.toHaveBeenCalled();
+  });
+});

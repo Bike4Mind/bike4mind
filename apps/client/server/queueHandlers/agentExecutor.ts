@@ -2609,6 +2609,29 @@ async function fireDagNodeTerminalOnRefusal(args: {
  * TODO (Phase 2 follow-up): port the top-level iteration loop here so dispatched
  * children also checkpoint + self-dispatch.
  */
+
+/**
+ * Builds the `checkMemberCreditCap` hook for a dispatched subagent's own in-process
+ * delegation. Re-fetches the organization fresh on every call rather than closing
+ * over a snapshot: the entry-gate check just above this hook's construction site
+ * already refused when that snapshot was over cap, so reusing it here would make
+ * the hook unconditionally false - it could never see credits this same subagent's
+ * own earlier iterations billed within this invocation. Extracted as a standalone
+ * function (rather than inlined) so this re-fetch behavior is directly unit
+ * testable without spinning up the whole dispatch handler.
+ */
+export function buildDispatchedSubagentCreditCapCheck(
+  organizations: Pick<typeof organizationRepository, 'findById'>,
+  organizationId: string | undefined,
+  userId: string
+): () => Promise<boolean> {
+  return async () => {
+    if (!organizationId) return false;
+    const freshOrg = await organizations.findById(organizationId);
+    return Boolean(freshOrg && creditService.isMemberAtOrOverCap(freshOrg, userId));
+  };
+}
+
 async function processSubagentDispatch(
   childExecutionId: string,
   connectionId: string,
@@ -2873,15 +2896,13 @@ async function processSubagentDispatch(
       depth,
       // This dispatched subagent's own in-process delegation needs the same gate as the
       // top-level path - a grandchild delegated in-process here is otherwise unchecked.
-      // Re-fetches `organization` at call time rather than reusing the snapshot captured
-      // above: that snapshot already passed the entry-gate check a few lines up, so reusing
-      // it here would make this closure unconditionally false - it can never see credits
-      // this subagent's own earlier iterations billed within this same invocation.
-      checkMemberCreditCap: async () => {
-        if (!child.organizationId) return false;
-        const freshOrg = await organizationRepository.findById(child.organizationId);
-        return Boolean(freshOrg && creditService.isMemberAtOrOverCap(freshOrg, child.userId));
-      },
+      // See `buildDispatchedSubagentCreditCapCheck` for why this re-fetches rather than
+      // reusing the `organization` snapshot captured above.
+      checkMemberCreditCap: buildDispatchedSubagentCreditCapCheck(
+        organizationRepository,
+        child.organizationId,
+        child.userId
+      ),
     };
     const toolCallbacks: ToolBuilderCallbacks = {
       onStatusUpdate: async changes => {

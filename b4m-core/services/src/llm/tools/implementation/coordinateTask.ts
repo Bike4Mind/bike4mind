@@ -242,12 +242,15 @@ export function createCoordinateTaskTool(deps: CoordinateTaskToolDeps): IComplet
         });
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        deps.logger.error('[coordinate_task] coordinator agent failed', { error: msg });
-        // delegate_to_agent shares the same checkMemberCreditCap gate, so suggesting it
-        // as a fallback here would just spend the grace iteration on a guaranteed refusal.
+        // A capped-out refusal is deliberate policy, not a coordinator malfunction - log it
+        // at warn (matching the sibling gates) rather than error, and skip suggesting
+        // delegate_to_agent as a fallback, since it shares the same gate and would just
+        // spend the grace iteration on a guaranteed refusal.
         if (msg === MEMBER_CREDIT_CAP_MESSAGE) {
+          deps.logger.warn('[coordinate_task] coordinator refused: member credit cap reached');
           return `Error: ${msg}`;
         }
+        deps.logger.error('[coordinate_task] coordinator agent failed', { error: msg });
         return `Error: the coordinator agent failed to produce a decomposition: ${msg}. Consider calling delegate_to_agent directly with a single specialized agent.`;
       }
 
