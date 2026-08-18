@@ -4,6 +4,8 @@ import {
   hasBlankTagPrefixSegment,
   isReservedTagPrefix,
   DATA_LAKE_GROUNDING_MODES,
+  MAX_TAG_PREFIX_LENGTH,
+  MIN_TAG_PREFIX_LENGTH,
 } from '../constants/dataLakes';
 import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '../constants/chunking';
 
@@ -28,8 +30,10 @@ export const CreateDataLakeRequestInput = z.object({
     // consumers split between raw reads (tree roots) and normalized reads (tag stamping),
     // and " acme:" stored raw would desynchronize them.
     .trim()
-    .min(2)
-    .max(30)
+    // Bounds shared with the wizard (tagPrefixIssue, the Start Upload gate, and the prefix it
+    // derives from a lake name) so a value the form offers is never one this rejects.
+    .min(MIN_TAG_PREFIX_LENGTH)
+    .max(MAX_TAG_PREFIX_LENGTH)
     .refine(s => s.endsWith(':'), 'Tag prefix must end with ":" (e.g. "acme:")')
     // A prefix with a blank segment ("::", "a::", ":a:", "a: :", or zero-width characters)
     // gives every derived tag a blank tree segment, which the tag-tree UIs can only paper
