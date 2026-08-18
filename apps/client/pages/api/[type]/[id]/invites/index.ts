@@ -64,6 +64,15 @@ const CreateInviteRequestSchema = z.object({
   available: z.number().prefault(1).optional(),
 });
 
+// Runtime parse schema. z.coerce.date() accepts ISO strings from axios (z.date() would not).
+const createInviteBodySchema = z.object({
+  permissions: z.array(z.enum(Object.keys(Permission) as [string, ...string[]])),
+  recipients: z.string().array().optional(),
+  description: z.string().optional(),
+  expiresAt: z.coerce.date().optional(),
+  available: z.number().optional(),
+});
+
 const handler = baseApi()
   /**
    * GET /api/:type/invites/:id - Retrieves all pending invitations for a document
@@ -116,10 +125,11 @@ const handler = baseApi()
       const inviteType = resolveInviteType(urlPathType);
       if (!inviteType) throw new BadRequestError('Invalid type');
 
+      const body = createInviteBodySchema.parse(req.body);
       const created = await withTransaction(() => {
         return sharingService.createInvite(
           req.user,
-          { id, type: inviteType, ...(req.body as any) },
+          { id, type: inviteType, ...body },
           {
             db: {
               invites: inviteRepository,
@@ -177,7 +187,7 @@ const handler = baseApi()
                     projectId: id,
                     projectName: project.name,
                     memberId: recipientId,
-                    memberRole: (req.body.permissions || []).join(','),
+                    memberRole: (body.permissions || []).join(','),
                   },
                 },
                 { ability: req.ability }
@@ -205,7 +215,7 @@ const handler = baseApi()
           documentName,
           typeName,
           inviteLink,
-          req.body.description
+          body.description
         ).catch(error => {
           req.logger?.error('Failed to send invite notification emails', { error, inviteId: created.id });
         });

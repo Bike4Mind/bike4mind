@@ -26,6 +26,15 @@ const CreateInviteRequestSchema = z.object({
   available: z.number().prefault(1).optional(),
 });
 
+// Runtime parse schema. z.coerce.date() accepts ISO strings from axios (z.date() would not).
+const createInviteBodySchema = z.object({
+  permissions: z.array(z.enum(Object.keys(Permission) as [string, ...string[]])),
+  recipients: z.string().array().optional(),
+  description: z.string().optional(),
+  expiresAt: z.coerce.date().optional(),
+  available: z.number().optional(),
+});
+
 const handler = baseApi()
   .get(async (req, res) => {
     const result = await projectService.listInvites(req.user!, req.query as any, {
@@ -45,10 +54,11 @@ const handler = baseApi()
         return res.status(400).json({ message: 'Invalid project ID' });
       }
 
+      const body = createInviteBodySchema.parse(req.body);
       const created = await withTransaction(() => {
         return sharingService.createInvite(
           req.user,
-          { id, type: InviteType.Project, ...(req.body as any) },
+          { id, type: InviteType.Project, ...body },
           {
             db: {
               invites: inviteRepository,
@@ -84,7 +94,7 @@ const handler = baseApi()
                   projectId: id,
                   projectName: project.name,
                   memberId: recipientId,
-                  memberRole: (req.body.permissions || []).join(','),
+                  memberRole: (body.permissions || []).join(','),
                 },
               },
               { ability: req.ability }
