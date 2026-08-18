@@ -18,18 +18,32 @@ const BOOLEAN_FIELDS = new Set<LakeConfigChangeField>(['isPublic', 'auditQueryTe
 
 const FINGERPRINTED = new Set<LakeConfigChangeField>(LAKE_CONFIG_FINGERPRINTED_FIELDS);
 
+/** The two access-gate fields, whose "unset" must match `lakeMatchesAccess`'s raw truthiness rather
+ * than a trim - see normalizeValue. */
+const GATE_FIELDS = new Set<LakeConfigChangeField>(['requiredUserTag', 'requiredEntitlement']);
+
 /**
  * The canonical value of one audited field, or `undefined` for "not set".
  *
- * The three spellings of unset on this surface - `undefined` (never written), `null` (the explicit
- * clear sentinel on `requiredPassageTokenTarget` and `organizationId`) and `''` (the clear
- * sentinel on `requiredUserTag`/`requiredEntitlement`) - all collapse to `undefined` here, because
- * every read path already treats them identically. Without that, clearing an already-clear gate
- * would record a change that made no difference to a single answer the lake gives.
+ * `undefined` (never written), `null` (the clear sentinel on `requiredPassageTokenTarget` and
+ * `organizationId`) and `''` all collapse to `undefined`, so clearing an already-clear field does
+ * not record a change that made no difference to a single answer the lake gives.
+ *
+ * THE GATE FIELDS ARE THE EXCEPTION, and the reason is that the access gate does not trim. The
+ * predicate every read path actually runs is `lakeMatchesAccess`
+ * (`common/src/constants/dataLakes.ts`), whose test is raw truthiness:
+ * `!!lake.requiredUserTag || !!lake.requiredEntitlement`. `!!' '` is `true`, so a whitespace-only
+ * tag is a LIVE gate that no user can satisfy, while `''` is no gate at all - opposite behaviours,
+ * not two spellings of the same one. Trimming them together made the audit blind to the single
+ * most important write on this surface: clearing a stuck whitespace gate emitted
+ * `before=undefined, after=undefined` and recorded nothing. So for those two fields only, "unset"
+ * means exactly what the gate means by it.
  */
 function normalizeValue(field: LakeConfigChangeField, raw: unknown): LakeConfigLiteralValue | undefined {
   if (BOOLEAN_FIELDS.has(field)) return !!raw;
   if (raw === undefined || raw === null) return undefined;
+  // Gate fields keep whitespace, matching lakeMatchesAccess's truthiness - see the note above.
+  if (typeof raw === 'string' && GATE_FIELDS.has(field)) return raw === '' ? undefined : raw;
   if (typeof raw === 'string') return raw.trim() === '' ? undefined : raw;
   if (typeof raw === 'number') return Number.isFinite(raw) ? raw : undefined;
   if (typeof raw === 'boolean') return raw;
