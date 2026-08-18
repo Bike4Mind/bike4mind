@@ -2880,6 +2880,13 @@ export class ChatCompletionProcess {
         ) {
           let recoveryHistory: IMessage[] = previousMessages;
           let shedTurns = 0;
+          // Baseline from the first build (the full maxSafeInputTokens budget, not the
+          // tool-schema-reserved one below) - a system message present there is content that should
+          // survive recovery. preSystemBudget/systemTokenCap derive only from the budget argument, which
+          // is fixed at maxSafeInputTokens - toolSchemaTokens for every iteration of this loop, so once
+          // that reservation is too small to admit any system message it stays too small on every
+          // iteration - shedding more history cannot free system-prompt budget.
+          const hadSystemMessages = messages.some(message => message.role === 'system');
           while (inputTokens > maxSafeInputTokens) {
             const trimmed = dropOldestHistoryTurn(recoveryHistory);
             if (!trimmed) break; // only the most-recent turn left: system/tools/prompt itself is oversized
@@ -2900,6 +2907,12 @@ export class ChatCompletionProcess {
               buildOptions
             );
             if (!rebuilt || rebuilt.length === 0) break; // keep the last good build; guard below decides
+            // A non-empty rebuild can still have silently dropped every system message: the reserved
+            // budget can land small enough that buildAndSortMessages' own system-prompt cap admits none
+            // of them, and messageTruncation never reports this (its removed-message tracking only
+            // covers history/content, not the system-candidate admission loop). Reject it the same way
+            // as an empty rebuild rather than accepting a completion missing its system-role content.
+            if (hadSystemMessages && rebuilt.every(message => message.role !== 'system')) break;
             messages = rebuilt;
             // Unlike messageTruncationInfo, refreshed here: the rebuild produces fresh message
             // identities, so the first build's injectedBlocks would misreport delivery against this

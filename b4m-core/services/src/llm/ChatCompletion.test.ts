@@ -2799,6 +2799,10 @@ describe('ChatCompletionProcess', () => {
     const runRecoveryScenario = async (opts: {
       recoveryTokenCounts: number[];
       toolSchemaTokens?: number;
+      // Simulates buildAndSortMessages' own system-prompt cap admitting none of the system candidates
+      // once the reserved recovery budget lands too small - the first build still carries a system
+      // message, every rebuild after it does not.
+      dropSystemMessagesOnRebuild?: boolean;
     }): Promise<any> => {
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(manyMcpTools as any);
       const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
@@ -2825,10 +2829,20 @@ describe('ChatCompletionProcess', () => {
         currentModel: ChatModels.GPT4,
       } as any);
       mockedGetAvailableModels.mockResolvedValue([smallContextModel] as any);
-      mockedBuildAndSortMessages.mockResolvedValue({
-        messages: [{ role: 'user', content: 'Hello' }],
-        messageTruncation: null,
-      } as any);
+      const userOnlyBuild = { messages: [{ role: 'user', content: 'Hello' }], messageTruncation: null };
+      if (opts.dropSystemMessagesOnRebuild) {
+        mockedBuildAndSortMessages
+          .mockResolvedValueOnce({
+            messages: [
+              { role: 'system', content: 'system prompt' },
+              { role: 'user', content: 'Hello' },
+            ],
+            messageTruncation: null,
+          } as any)
+          .mockResolvedValue(userOnlyBuild as any);
+      } else {
+        mockedBuildAndSortMessages.mockResolvedValue(userOnlyBuild as any);
+      }
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([priorHistory, priorHistory.length, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
@@ -2880,6 +2894,23 @@ describe('ChatCompletionProcess', () => {
       });
 
       expect(buildCalls.length).toBe(1);
+      expect(updateCall?.type).toBe('error');
+      expect(updateCall?.reply).toMatch(/too large for/);
+    });
+
+    it('rejects a rebuild that silently dropped every system message instead of accepting it as recovered (#1795)', async () => {
+      // The first build carries a system message; every rebuild after it does not (simulating
+      // buildAndSortMessages' own system-prompt cap admitting none of the system candidates once the
+      // reserved recovery budget - maxSafeInputTokens - toolSchemaTokens - lands too small). Without the
+      // fix, the loop would accept the rebuilt user-only messages as a successful recovery once
+      // recoveryTokenCounts let inputTokens fit; instead it must break and fall through to the existing
+      // clear overflow message rather than completing a turn with no system-role content.
+      const { updateCall, buildCalls } = await runRecoveryScenario({
+        recoveryTokenCounts: [100, 50],
+        dropSystemMessagesOnRebuild: true,
+      });
+
+      expect(buildCalls.length).toBe(2);
       expect(updateCall?.type).toBe('error');
       expect(updateCall?.reply).toMatch(/too large for/);
     });
