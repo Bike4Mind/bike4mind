@@ -116,6 +116,15 @@ export function hasDriveFileChanged(
  * lake through that lake's PREFIX carries no meta-tag for it - the gate would read "nobody else wants this"
  * and delete a full member out of a lake it never looked at.
  *
+ * The gate also refuses to delete a copy anyone but its owner can read - a direct user share, a group share,
+ * or isGlobalRead. The delete is global, so it would take the share vector with it, and the replacement is
+ * minted for connection.connectedBy alone and carries none, so there is nothing to hand the sharee instead;
+ * they would be left with a notebook reference that getAccessibleFiles silently drops. The trade is the same
+ * one the other-lake branch makes: a shared copy is left unpicked-but-alive, so it does accumulate one stale
+ * orphan per edit (it drops out of findByDriveConnectionIdInDataLake once unpicked, and no later poll revisits
+ * it), and the sharee reads pre-edit content. Recoverable staleness beats a silent, unrecoverable loss of
+ * access. If Drive-lake files turn out never to be shared directly, this branch simply never fires.
+ *
  * The full delete goes through fabFileService.deleteFabFile rather than a bare `deletedAt` stamp because
  * only that path also reaps the chunks, the per-model search-index docs, the session (notebook) links, the
  * S3 object and the owner's counted storage. A bare stamp leaves all of it billed and orphaned forever -
@@ -380,7 +389,8 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
 
     /**
      * Retire a superseded copy of a Drive file: unpick it from THIS lake, then delete it outright
-     * only when no OTHER lake still claims it, under either membership arm. `replacementFabFileId`
+     * only when nothing else claims it - no other lake under either membership arm, and no share
+     * granting a reader other than its owner. `replacementFabFileId`
      * is the fresh copy that supersedes this one, and inherits its links and tags. The header covers
      * why the two steps cannot collapse into one soft-delete, why both arms have to be tested, and
      * why the actor is the row's own owner. Returns what it did, for the log.
@@ -402,6 +412,27 @@ export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
         });
         return 'unpicked' as const;
       }
+
+      // A grant to anyone other than the owner is a claim too, and the same argument the other-lake
+      // branch makes below applies: the delete is global, so it would take the share vector with it
+      // and leave the sharee holding a notebook reference they can no longer resolve - silently,
+      // because getAccessibleFiles just drops an id the reader has no grant on. The replacement
+      // carries no shares (it is minted for connection.connectedBy alone), so there is nothing to
+      // hand them instead. Keep the retired copy alive and merely unpicked: the sharee sees the
+      // PRE-EDIT content, which they can re-request, rather than losing the file outright.
+      const shareClaims = {
+        users: (retiredCopy.users ?? []).length,
+        groups: (retiredCopy.groups ?? []).length,
+        globalRead: !!retiredCopy.isGlobalRead,
+      };
+      if (shareClaims.users > 0 || shareClaims.groups > 0 || shareClaims.globalRead) {
+        logger.info('[driveLakeIngest] superseded copy is shared outside its owner; unpicked only', {
+          fabFileId: staleCopy.id,
+          ...shareClaims,
+        });
+        return 'unpicked' as const;
+      }
+
       const tagNames = (retiredCopy.tags ?? [])
         .map(tag => tag?.name)
         .filter((name): name is string => typeof name === 'string');

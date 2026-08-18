@@ -440,6 +440,76 @@ describe('driveLakeIngest consumer', () => {
     expect(h.changeStorageSize).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['a direct user share', { users: [{ userId: 'bob', permissions: 'read' }] }],
+    ['a group share', { groups: [{ groupId: 'g1', permissions: 'read' }] }],
+    ['isGlobalRead', { isGlobalRead: true }],
+  ])('does NOT delete a superseded copy carrying %s - only unpicks it', async (_label, share) => {
+    // The delete is global, so it would take the share vector with it. The replacement is minted for
+    // connection.connectedBy alone and carries no shares, so the sharee would be left with a notebook
+    // reference getAccessibleFiles silently drops - a loss of access with no signal and no recovery.
+    h.walkFolder.mockResolvedValue([
+      { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt', md5Checksum: 'NEW' },
+    ]);
+    setExisting([
+      {
+        id: 'ff-old',
+        driveFileId: 'd1',
+        userId: 'user1',
+        driveMd5Checksum: 'OLD',
+        tags: [{ name: 'lake-tag' }],
+        ...share,
+      },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+    await run();
+
+    // Leaves the Drive lake; the sharee keeps reading the pre-edit copy.
+    expect(h.removeFileFromLake).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'ff-old',
+      expect.anything()
+    );
+    expect(h.deleteFabFile).not.toHaveBeenCalled();
+    expect(h.changeStorageSize).not.toHaveBeenCalled();
+    // Same as the other-lake branch: the copy survives holding its own links and tags, so carrying
+    // them onto the replacement would put the same document in a notebook twice.
+    expect(h.sessionUpdate).not.toHaveBeenCalled();
+    expect(h.pushTagsByFabFileId).not.toHaveBeenCalled();
+    // Lake A still gets the fresh copy.
+    expect(h.createFabFile).toHaveBeenCalledWith(
+      expect.objectContaining({ driveFileId: 'd1', driveMd5Checksum: 'NEW' }),
+      expect.anything()
+    );
+  });
+
+  it('still deletes a superseded copy whose share arrays are present but EMPTY', async () => {
+    // The gate keys on a real grant, not on the fields existing - an empty users/groups array is the
+    // default shape on every FabFile, so treating presence as a claim would disable the delete branch.
+    h.walkFolder.mockResolvedValue([
+      { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt', md5Checksum: 'NEW' },
+    ]);
+    setExisting([
+      {
+        id: 'ff-old',
+        driveFileId: 'd1',
+        userId: 'user1',
+        driveMd5Checksum: 'OLD',
+        tags: [{ name: 'lake-tag' }],
+        users: [],
+        groups: [],
+        isGlobalRead: false,
+      },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+    await run();
+
+    expect(h.deleteFabFile).toHaveBeenCalledWith('user1', { id: 'ff-old' }, expect.anything());
+  });
+
   it('retires pre-existing DUPLICATE copies of a still-present file, keeping the newest (P3)', async () => {
     // main's add-only handler had no walk de-dup, so a multi-parented file or an SQS retry could
     // leave a second non-pending row. It stays a lake member holding pre-edit content and no future
