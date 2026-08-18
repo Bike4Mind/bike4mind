@@ -12,6 +12,7 @@ import type { ModelInfo } from '@bike4mind/common';
 import { ServerSubagentOrchestrator } from '../../agents/ServerSubagentOrchestrator';
 import type { ServerSubagentTracker, SubagentHandoffSignal } from '../../agents/ServerSubagentOrchestrator';
 import { ServerAgentStore } from '../../agents/ServerAgentStore';
+import { MEMBER_CREDIT_CAP_MESSAGE } from '../../../creditService';
 
 /**
  * Maximum number of nodes the coordinator is allowed to emit in a single DAG.
@@ -163,7 +164,7 @@ export interface CoordinateTaskToolDeps {
    * per-member credit cap. Forwarded to the orchestrator that runs the
    * coordinator agent in-process; see `ServerOrchestratorDeps.checkMemberCreditCap`.
    */
-  checkMemberCreditCap?: () => boolean;
+  checkMemberCreditCap?: () => boolean | Promise<boolean>;
 }
 
 /**
@@ -242,6 +243,11 @@ export function createCoordinateTaskTool(deps: CoordinateTaskToolDeps): IComplet
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         deps.logger.error('[coordinate_task] coordinator agent failed', { error: msg });
+        // delegate_to_agent shares the same checkMemberCreditCap gate, so suggesting it
+        // as a fallback here would just spend the grace iteration on a guaranteed refusal.
+        if (msg === MEMBER_CREDIT_CAP_MESSAGE) {
+          return `Error: ${msg}`;
+        }
         return `Error: the coordinator agent failed to produce a decomposition: ${msg}. Consider calling delegate_to_agent directly with a single specialized agent.`;
       }
 

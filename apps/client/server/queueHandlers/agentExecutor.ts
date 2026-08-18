@@ -805,7 +805,7 @@ async function processExecution(
         cap: organization.maxCreditsPerMember,
       });
       await agentExecutionRepository.markFailed(executionId, {
-        message: 'Organization member credit limit reached',
+        message: creditService.MEMBER_CREDIT_CAP_MESSAGE,
       });
       await sendWs('failed', { executionId, reason: 'insufficient_credits' });
       return;
@@ -1292,10 +1292,14 @@ async function processExecution(
       dagHandoffSignal,
       dagDispatcher,
       getCurrentExecutionId: () => executionId,
-      // In-process delegate_to_agent/coordinate_task have no pre-flight reservation
-      // of their own (unlike ChatCompletionProcess), so a member who crosses the cap
-      // mid-run could otherwise delegate a subagent's full iteration budget in-process
-      // with no credit-cap check at all.
+      // In-process delegate_to_agent/coordinate_task have no pre-flight reservation of
+      // their own (unlike ChatCompletionProcess), so without this a member who crosses
+      // the cap could delegate a subagent's full iteration budget in-process for free.
+      // `organization` is this invocation's start-of-wake snapshot, so this can only
+      // ever return true on the one wake where it matters: an `isAggregationOnlyWake`
+      // grace iteration, which is deliberately exempted from the entry gate above and
+      // would otherwise be able to sneak in extra in-process delegation unchecked. On
+      // every other wake the entry gate already refused before this closure is built.
       checkMemberCreditCap: () =>
         Boolean(organization && creditService.isMemberAtOrOverCap(organization, execution.userId)),
     };
@@ -2734,7 +2738,7 @@ async function processSubagentDispatch(
         cap: organization.maxCreditsPerMember,
       });
       await agentExecutionRepository.markFailed(childExecutionId, {
-        message: 'Organization member credit limit reached',
+        message: creditService.MEMBER_CREDIT_CAP_MESSAGE,
       });
       await sendWs('subagent_failed', {
         executionId: parentId,
@@ -2869,8 +2873,15 @@ async function processSubagentDispatch(
       depth,
       // This dispatched subagent's own in-process delegation needs the same gate as the
       // top-level path - a grandchild delegated in-process here is otherwise unchecked.
-      checkMemberCreditCap: () =>
-        Boolean(organization && creditService.isMemberAtOrOverCap(organization, child.userId)),
+      // Re-fetches `organization` at call time rather than reusing the snapshot captured
+      // above: that snapshot already passed the entry-gate check a few lines up, so reusing
+      // it here would make this closure unconditionally false - it can never see credits
+      // this subagent's own earlier iterations billed within this same invocation.
+      checkMemberCreditCap: async () => {
+        if (!child.organizationId) return false;
+        const freshOrg = await organizationRepository.findById(child.organizationId);
+        return Boolean(freshOrg && creditService.isMemberAtOrOverCap(freshOrg, child.userId));
+      },
     };
     const toolCallbacks: ToolBuilderCallbacks = {
       onStatusUpdate: async changes => {

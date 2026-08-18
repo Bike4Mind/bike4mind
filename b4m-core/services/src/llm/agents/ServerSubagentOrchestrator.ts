@@ -4,6 +4,7 @@ import { getTextModelCost, type ModelInfo } from '@bike4mind/common';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { usdToCredits } from '@bike4mind/utils';
+import { MEMBER_CREDIT_CAP_MESSAGE } from '../../creditService';
 
 /** Maximum delegation depth rendered inline in the UI. Children at this
  * depth and beyond have `delegate_to_agent` stripped so nesting stays bounded. */
@@ -283,8 +284,11 @@ export interface ServerOrchestratorDeps {
    * run has no separate pre-flight gate of its own. Omitted (no-op) by callers
    * with no organization context (Slack, voice API, embed) or that already gate
    * the whole request upstream (ChatCompletionProcess's credit reservation).
+   * May return a Promise: a caller whose only fresh usage figure lives in the
+   * database (rather than an in-memory snapshot already known not to be stale)
+   * needs to read it at call time, not just close over one fetched earlier.
    */
-  checkMemberCreditCap?: () => boolean;
+  checkMemberCreditCap?: () => boolean | Promise<boolean>;
 }
 
 /**
@@ -336,8 +340,11 @@ export class ServerSubagentOrchestrator {
   async delegateToAgent(options: ServerSpawnOptions): Promise<ServerAgentExecutionResult> {
     const { task, agentDef, thoroughness, variables, attachedFiles } = options;
 
-    if (this.deps.checkMemberCreditCap?.()) {
-      throw new Error('Organization member credit limit reached');
+    if (await this.deps.checkMemberCreditCap?.()) {
+      this.deps.logger.warn('[Credits] Member credit cap reached; refusing in-process delegation', {
+        agent: agentDef.name,
+      });
+      throw new Error(MEMBER_CREDIT_CAP_MESSAGE);
     }
 
     // Use the agent's preferred model if specified, fall back to parent's model

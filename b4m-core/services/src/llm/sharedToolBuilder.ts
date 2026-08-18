@@ -127,7 +127,7 @@ export interface ToolBuilderDeps {
    * organization context, or that already gate the whole request upstream
    * (see `ServerOrchestratorDeps.checkMemberCreditCap`).
    */
-  checkMemberCreditCap?: () => boolean;
+  checkMemberCreditCap?: () => boolean | Promise<boolean>;
 }
 
 /**

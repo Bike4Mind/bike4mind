@@ -15,6 +15,18 @@ import { IOrganizationDocument } from '@bike4mind/common';
 
 type MemberCapOrg = Pick<IOrganizationDocument, 'userDetails' | 'maxCreditsPerMember'>;
 
+/**
+ * Internal (non-chat-facing) refusal message for an already-capped member, shared by
+ * every caller that records a plain execution-failure string rather than rendering a
+ * chat notice: `ServerSubagentOrchestrator`'s in-process delegation gate, the agent
+ * executor's own per-member cap gates, and the CLI/API pre-flight. Deliberately
+ * distinct from `buildMemberCreditCapMessage` (in `../llm/insufficientCreditsMessage`),
+ * which builds the longer chat-facing CTA notice paired with `InsufficientCreditsError`
+ * - swapping a caller here for that builder would change what gets persisted/asserted
+ * on, not just the wording.
+ */
+export const MEMBER_CREDIT_CAP_MESSAGE = 'Organization member credit limit reached';
+
 /** Credits a member has already spent against the org pool (0 when untracked). */
 export function getMemberUsedCredits(organization: Pick<IOrganizationDocument, 'userDetails'>, userId: string): number {
   return organization.userDetails?.find(u => u.id === userId)?.usedCredits ?? 0;

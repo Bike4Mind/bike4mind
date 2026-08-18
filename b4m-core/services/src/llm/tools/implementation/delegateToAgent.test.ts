@@ -359,17 +359,20 @@ describe('createDelegateToAgentTool \u2014 per-member credit cap gate', () => {
   });
 
   it('does not affect delegation when checkMemberCreditCap is absent or returns false', async () => {
-    const tracker = makeTracker();
-    const resultBase: ServerAgentExecutionResult = {
-      agentName: 'researcher',
-      thoroughness: 'medium',
-      summary: 'done',
-      finalAnswer: 'done',
-      model: 'claude-sonnet-4-6',
-      steps: [],
-      completionInfo: { totalCredits: 0, iterations: 1, toolCalls: 0, reachedMaxIterations: false },
-    } as ServerAgentExecutionResult;
-    const spy = vi.spyOn(ServerSubagentOrchestrator.prototype, 'delegateToAgent').mockResolvedValue(resultBase);
+    // Drives the REAL (un-mocked) ServerSubagentOrchestrator.delegateToAgent via the
+    // sync dispatch-and-poll path (same recipe as the depth-cap test below), rather
+    // than mocking the method away - a mocked method never reaches the gate check at
+    // all, so it can't prove checkMemberCreditCap: () => false actually lets the real
+    // path through.
+    const remainingMs = PARENT_DEADLINE_BUFFER_MS + 1;
+    const completedStatus: ChildExecutionStatus = {
+      status: 'completed',
+      result: { answer: 'done', iterations: 1, totalCredits: 0 },
+    };
+    const tracker: ServerSubagentTracker = {
+      ...makeTracker(),
+      pollChildStatus: vi.fn().mockResolvedValue(completedStatus),
+    };
 
     const tool = createDelegateToAgentTool({
       userId: 'u1',
@@ -378,13 +381,13 @@ describe('createDelegateToAgentTool \u2014 per-member credit cap gate', () => {
       parentTools: [],
       agentStore: makeStore(),
       tracker,
+      getRemainingTimeMs: () => remainingMs,
       checkMemberCreditCap: () => false,
     });
 
     const result = await tool.toolFn({ task: 't', agent: 'researcher' });
-    expect(result).toBe('done');
-
-    spy.mockRestore();
+    expect(result).toContain('done');
+    expect(tracker.onStart).toHaveBeenCalled();
   });
 });
 

@@ -133,7 +133,7 @@ export interface DelegateToAgentToolDeps {
    * grandchild delegate tool below (`...deps`) so the gate applies at every
    * delegation depth, not just the first.
    */
-  checkMemberCreditCap?: () => boolean;
+  checkMemberCreditCap?: () => boolean | Promise<boolean>;
 }
 
 /**
