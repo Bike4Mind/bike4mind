@@ -30,6 +30,12 @@ export interface Message {
     steps?: AgentStep[];
     model?: string;
     permissionDenied?: boolean; // True if this message ended due to permission denial
+    /**
+     * Provider stop reason, when the reply did NOT finish cleanly (see isEarlyStop in
+     * `@bike4mind/common`). Present only for an early stop, so its mere presence means
+     * "this answer was cut off" - the renderer needs no vocabulary knowledge.
+     */
+    earlyStopReason?: string;
     cancelled?: boolean; // True if this message/operation was cancelled by user
     isContinuation?: boolean; // True if this is a continuation message (renders without header)
     // Subagent execution metadata
@@ -197,7 +203,12 @@ export interface CliConfig {
     enabled: boolean;
   }>;
   preferences: {
-    maxTokens: number;
+    /**
+     * Output-token ceiling per completion. Unset means "let the server size it for the
+     * model", which is the right default: a pinned small value starves models that spend
+     * reasoning tokens inside the output budget. Only set this to impose a real cap.
+     */
+    maxTokens?: number;
     temperature: number;
     autoSave: boolean;
     autoCompact?: boolean; // Enable auto-compact at 80% context usage (default: true)

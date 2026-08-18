@@ -235,7 +235,7 @@ const CliConfigSchema = z.object({
     .optional(),
   mcpServers: McpServersSchema,
   preferences: z.object({
-    maxTokens: z.number(),
+    maxTokens: z.number().optional(),
     temperature: z.number(),
     autoSave: z.boolean(),
     autoCompact: z.boolean().optional().prefault(true),
@@ -370,6 +370,16 @@ const ProjectLocalConfigSchema = z.object({
 });
 
 /**
+ * The output budget every pre-migration config was born with, back when
+ * `preferences.maxTokens` was required and DEFAULT_CONFIG supplied this value. It is
+ * indistinguishable from a user who deliberately typed 4096 - accepted deliberately,
+ * because reverting an explicit 4096 to model-sized costs that user nothing (they can
+ * set it again) while leaving it pinned keeps the truncation bug alive for everyone who
+ * never chose it at all.
+ */
+const LEGACY_PINNED_MAX_TOKENS = 4096;
+
+/**
  * Default configuration
  */
 const DEFAULT_CONFIG: CliConfig = {
@@ -382,7 +392,7 @@ const DEFAULT_CONFIG: CliConfig = {
   },
   mcpServers: [],
   preferences: {
-    maxTokens: 4096,
+    // maxTokens intentionally absent - see LEGACY_PINNED_MAX_TOKENS.
     temperature: 0.7,
     autoSave: true,
     autoCompact: true,
@@ -763,6 +773,16 @@ export class ConfigStore {
             // All other environments (production/staging/preview/local) become the default service
             rawConfig.apiConfig = {}; // No customUrl = use the build-time default service
           }
+        }
+
+        // Auto-migrate the legacy pinned output budget. Every config written before
+        // maxTokens became optional carries this exact value from the old DEFAULT_CONFIG,
+        // not from a user decision - and leaving it pinned keeps starving adaptive
+        // reasoning models on machines that have merely *run* an older CLI. Only the
+        // untouched legacy value is cleared, so a budget the user actually chose (any
+        // other number) survives.
+        if (rawConfig.preferences?.maxTokens === LEGACY_PINNED_MAX_TOKENS) {
+          delete rawConfig.preferences.maxTokens;
         }
 
         // Validate with Zod - this auto-migrates missing fields

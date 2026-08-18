@@ -22,10 +22,12 @@ import {
   getSettingsMap,
   getSettingsValue,
   getSettingsByNames,
+  DEFAULT_OUTPUT_MAX_TOKENS,
 } from '@bike4mind/utils';
 import {
   getLlmByModel,
   getAvailableModels,
+  resolveOutputMaxTokens,
   type ICompletionOptions,
   type ICompletionOptionTools,
   type ApiKeyTable,
@@ -144,6 +146,13 @@ function estimateInputTokens(messages: IMessage[]): number {
 }
 
 /**
+ * Output cap assumed for a model whose catalog row declares no `max_tokens`. Mirrors the
+ * figure ChatCompletionProcess uses for the same unknown - kept in step with it, since a
+ * lower value here would clamp a resolved budget below what that path allows.
+ */
+const UNKNOWN_MODEL_MAX_OUTPUT_TOKENS = 16384;
+
+/**
  * Shared LLM completion logic
  * Used by Next.js API route, Lambda function, and available for 3rd party integrations
  */
@@ -203,7 +212,24 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // to disable in an emergency without a redeploy.
   const responseFormatEnabled = (process.env.B4M_FEATURE_RESPONSE_FORMAT ?? 'true') === 'true';
 
-  const maxTokens = options?.maxTokens ?? 4096;
+  // Sized by the same rule as ChatCompletionProcess rather than a local constant.
+  // This path used to hardcode `?? 4096`, which silently starved every
+  // reasons-inside-the-output-budget model: adaptive Anthropic thinking is spent
+  // *within* max_tokens, so a 4096 ceiling let reasoning consume the budget and cut
+  // the visible answer mid-sentence. The fallback is DEFAULT_OUTPUT_MAX_TOKENS (4096),
+  // so models that do not reason inside the budget are unaffected.
+  const maxTokens = modelInfo
+    ? resolveOutputMaxTokens({
+        requested: options?.maxTokens,
+        fallback: DEFAULT_OUTPUT_MAX_TOKENS,
+        modelInfo,
+        // Same unknown-cap default as ChatCompletionProcess, deliberately NOT
+        // DEFAULT_OUTPUT_MAX_TOKENS: the cap CLAMPS the resolved budget, so falling back to
+        // 4096 here would re-pin an adaptive model whose catalog row happens to omit
+        // max_tokens - reintroducing this very bug for runtime-discovered models.
+        modelMaxOutputTokens: modelInfo.max_tokens ?? UNKNOWN_MODEL_MAX_OUTPUT_TOKENS,
+      })
+    : (options?.maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS);
   // Promote wire tools to ICompletionOptionTools by stamping a no-op toolFn.
   // executeTools: false means the backend never calls toolFn - it only reads
   // toolSchema. The placeholder satisfies the type contract without changing
@@ -258,9 +284,18 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   let reservedCredits = 0;
 
   if (enforceCredits && modelInfo) {
-    // Estimate cost based on input message length + maxTokens for output
+    // Estimate cost based on input message length + expected output.
+    //
+    // Deliberately NOT `maxTokens`: that is now a model-sized *ceiling* (64K on adaptive
+    // reasoners), not an expectation, and a ceiling-sized hold is a real user-facing
+    // regression - the reservation below is atomically deducted and rejects the turn
+    // outright, so reserving 16x would fail short prompts for anyone near their balance
+    // or org member cap. Settlement further down trues the ledger up to actual usage, so
+    // this only needs to stay a sane guard, and holding it at the historical basis keeps
+    // reservation behavior byte-for-byte unchanged.
     const estimatedInputTokens = estimateInputTokens(messages);
-    const estimatedUsdCost = getTextModelCost(modelInfo, estimatedInputTokens, maxTokens);
+    const estimatedOutputTokens = Math.min(maxTokens, DEFAULT_OUTPUT_MAX_TOKENS);
+    const estimatedUsdCost = getTextModelCost(modelInfo, estimatedInputTokens, estimatedOutputTokens);
     reservedCredits = usdToCredits(estimatedUsdCost);
 
     logger?.debug?.(`[CLI_CREDITS] Reserving ${reservedCredits} credits (estimated) before execution`);
@@ -307,12 +342,17 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Same assign-not-add contract as input/output tokens.
   let finalCacheReadTokens = 0;
   let finalCacheCreationTokens = 0;
+  // Latched from whichever chunk carries it (backends emit it on their terminal chunk)
+  // and re-emitted on the final settlement event below, so a client that only inspects
+  // the last event still learns the reply was truncated.
+  let finalStopReason: string | undefined;
 
   const wrappedOnChunk = async (text: (string | null | undefined)[], info?: CompletionInfo) => {
     if (info?.inputTokens) finalInputTokens = info.inputTokens;
     if (info?.outputTokens) finalOutputTokens = info.outputTokens;
     if (info?.cacheReadInputTokens) finalCacheReadTokens = info.cacheReadInputTokens;
     if (info?.cacheCreationInputTokens) finalCacheCreationTokens = info.cacheCreationInputTokens;
+    if (info?.stopReason) finalStopReason = info.stopReason;
 
     if (info?.inputTokens || info?.outputTokens) {
       logger?.debug?.(
@@ -435,6 +475,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       cacheCreationInputTokens: finalCacheCreationTokens || undefined,
       creditsUsed: finalCredits,
       usdCost: finalUsdCost,
+      stopReason: finalStopReason,
     });
   } else {
     logger?.warn?.('[CLI_CREDITS] Cannot send credits - modelInfo is undefined');
