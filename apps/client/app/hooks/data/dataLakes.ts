@@ -294,18 +294,19 @@ export function usePermanentDeleteDataLake() {
  * Clearing the row from the cache alone is not enough: the next read of that list re-adds it, and
  * there are two easy triggers - re-expanding the Deleted section, and any sibling lake mutation,
  * since they all invalidate this key (see useLifecycleMutation). Consulted by
- * useGetDeletedDataLakes, which self-prunes each id once a response that could see the purge stops
- * listing it.
+ * useGetDeletedDataLakes, which self-prunes each id on the first response from a request that
+ * STARTED after the purge, whether or not that response still lists the lake.
  *
  * The value is a sequence number, and it is load-bearing for the prune: a response from a request
  * that STARTED before the purge says nothing about whether the sweep has run, so pruning on it would
  * un-hide a row that is still mid-purge. Purges and fetch-starts both tick the same counter, which
  * orders them exactly - a wall clock cannot, since both can land inside the same millisecond.
  *
- * Module-scoped so it survives the section remounting. Deliberate consequence: if a sweep fails
- * permanently (message DLQs), the row stays hidden until a reload rather than reappearing - which
- * since #1744 is only a display lag, since the consumer releases a guard-refused purge back to
- * `deleted` and the next fetch prunes the id anyway.
+ * Module-scoped so it survives the section remounting. What keeps a row hidden after a sweep that
+ * failed permanently (message DLQs) is not this map, which prunes on the next post-accept fetch
+ * either way - it is the SERVER omitting a lake still sitting in 'purging' (#1744). The map's only
+ * remaining job is the in-flight fetch that started before the accept and lands after it, carrying
+ * a payload that still names the lake.
  */
 const purgingLakes = new Map<string, number>();
 let purgeOrderTick = 0;
@@ -384,11 +385,15 @@ export function useGetDeletedDataLakes(enabled = true) {
       const startedAt = nextPurgeOrderTick();
       const response = await api.get<{ data: DataLakeConfig[] }>('/api/data-lakes/deleted');
       const lakes = response.data.data;
-      // Self-prune, so the map cannot outlive the purges it describes: once the sweep has removed a
-      // lake, stop tracking it. Only a request that STARTED after the purge can settle that - an
-      // older one may predate the soft-delete entirely, and pruning on it would un-hide the row.
+      // Self-prune, so the map cannot outlive the purges it describes. A response from a request
+      // that STARTED after the purge is authoritative either way, now that the server omits a
+      // 'purging' lake (#1744): ABSENT means the sweep finished, PRESENT means the consumer refused
+      // the purge and released it back to 'deleted', and that row must come back. Also requiring
+      // absence would strand a released lake hidden in this tab until a full reload - precisely the
+      // case the server-side release exists to recover. An OLDER request still settles nothing: one
+      // that started before the accept may not have seen the soft-delete at all.
       for (const [id, purgedAt] of purgingLakes) {
-        if (purgedAt < startedAt && !lakes.some(lake => lake.id === id)) purgingLakes.delete(id);
+        if (purgedAt < startedAt) purgingLakes.delete(id);
       }
       return lakes.filter(lake => !purgingLakes.has(lake.id));
     },
