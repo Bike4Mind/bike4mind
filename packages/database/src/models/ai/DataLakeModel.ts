@@ -22,19 +22,9 @@ import {
   TAXONOMY_ATTENTION_STATUSES,
   normalizeEntitlementKey,
   DATA_LAKE_GROUNDING_MODES,
+  DATA_LAKE_STATUSES,
   DEFAULT_DATA_LAKE_GROUNDING_MODE,
 } from '@bike4mind/common';
-
-const DATA_LAKE_STATUSES: DataLakeStatus[] = [
-  'draft',
-  'active',
-  'archiving',
-  'archived',
-  'restoring',
-  'deleting',
-  'deleted',
-  'purging',
-];
 
 // --- Data Lake Schema ---
 
@@ -96,7 +86,7 @@ const DataLakeSchema = new mongoose.Schema(
     // Per-lake opt-in to query-text audit logging (see IDataLake.auditQueryTextEnabled). No
     // dedicated index - same rationale as isPublic/requiredEntitlement (tiny collection).
     auditQueryTextEnabled: { type: Boolean, default: false },
-    status: { type: String, enum: DATA_LAKE_STATUSES, default: 'draft' },
+    status: { type: String, enum: [...DATA_LAKE_STATUSES], default: 'draft' },
     fileCount: { type: Number, default: 0 },
     totalSizeBytes: { type: Number, default: 0 },
     totalChunkedChars: { type: Number, default: 0 },
