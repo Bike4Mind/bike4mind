@@ -16,17 +16,7 @@ import {
 } from '@bike4mind/database';
 import { z } from 'zod';
 
-// Used only for type inference via z.infer<typeof ...>
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const CreateInviteRequestSchema = z.object({
-  permissions: z.array(z.enum(Object.keys(Permission) as [string, ...string[]])),
-  recipients: z.string().array().optional(),
-  description: z.string().optional(),
-  expiresAt: z.date().optional(),
-  available: z.number().prefault(1).optional(),
-});
-
-// Runtime parse schema. z.coerce.date() accepts ISO strings from axios (z.date() would not).
+// z.coerce.date() accepts ISO strings from axios (z.date() would not).
 // z.enum(Permission) produces Permission[] so the service type is satisfied.
 const createInviteBodySchema = z.object({
   permissions: z.array(z.enum(Permission)),
@@ -49,7 +39,7 @@ const handler = baseApi()
     return res.json(result);
   })
   .post(
-    asyncHandler<{}, unknown, z.infer<typeof CreateInviteRequestSchema>>(async (req, res) => {
+    asyncHandler<{}, unknown, z.infer<typeof createInviteBodySchema>>(async (req, res) => {
       const { id } = req.query as { id: string };
       if (!id || typeof id !== 'string') {
         return res.status(400).json({ message: 'Invalid project ID' });

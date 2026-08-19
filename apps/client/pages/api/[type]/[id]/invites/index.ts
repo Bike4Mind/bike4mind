@@ -54,17 +54,7 @@ const resolveInviteType = (segment: string | undefined): InviteType | undefined 
   return Object.values(InviteType).find(value => value === segment);
 };
 
-// Used only for type inference via z.infer<typeof ...>
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const CreateInviteRequestSchema = z.object({
-  permissions: z.array(z.enum(Object.keys(Permission) as [string, ...string[]])),
-  recipients: z.string().array().optional(),
-  description: z.string().optional(),
-  expiresAt: z.date().optional(),
-  available: z.number().prefault(1).optional(),
-});
-
-// Runtime parse schema. z.coerce.date() accepts ISO strings from axios (z.date() would not).
+// z.coerce.date() accepts ISO strings from axios (z.date() would not).
 // z.enum(Permission) produces Permission[] so the service type is satisfied.
 const createInviteBodySchema = z.object({
   permissions: z.array(z.enum(Permission)),
@@ -117,7 +107,7 @@ const handler = baseApi()
    * - Creates a new invitation.  If one or more email addresses given, will also send email(s) to the given addresses.
    */
   .post(
-    asyncHandler<{}, unknown, z.infer<typeof CreateInviteRequestSchema>, IParams>(async (req, res) => {
+    asyncHandler<{}, unknown, z.infer<typeof createInviteBodySchema>, IParams>(async (req, res) => {
       const { type: urlPathType, id } = req.query;
       if (!urlPathType || !id) {
         return res.status(400).json({ message: 'Invalid invite request' });

@@ -138,6 +138,27 @@ describe('POST /api/[type]/[id]/invites', () => {
     );
   });
 
+  it('does not allow a body id to redirect the invite to a different document', async () => {
+    // Security property: body spread used to win over the path param. Verify the path param is authoritative.
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: 'doc-path-id' },
+      body: { permissions: ['read'], id: 'attacker-doc-id' },
+    });
+    (req as any).user = { id: 'u1' };
+    await mockRefs.postHandler!(req, res);
+    expect(createInvite).toHaveBeenCalledWith(
+      req.user,
+      expect.objectContaining({ id: 'doc-path-id', type: 'FabFile' }),
+      expect.anything()
+    );
+    expect(createInvite).not.toHaveBeenCalledWith(
+      req.user,
+      expect.objectContaining({ id: 'attacker-doc-id' }),
+      expect.anything()
+    );
+  });
+
   it('rejects an unrecognized type without calling the service', async () => {
     const { req, res } = createMocks({ method: 'POST', query: { type: 'bogus', id: 'doc-1' }, body: {} });
     (req as any).user = { id: 'u1' };
