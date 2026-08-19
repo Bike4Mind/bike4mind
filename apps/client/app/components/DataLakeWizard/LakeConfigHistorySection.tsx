@@ -2,11 +2,11 @@ import React from 'react';
 import { Alert, Box, Chip, CircularProgress, Sheet, Stack, Table, Typography } from '@mui/joy';
 import type { ColorPaletteProp } from '@mui/joy';
 import type {
-  ILakeConfigFieldChange,
-  ILakeConfigTextFingerprint,
   LakeConfigChangeAction,
   LakeConfigChangeField,
   LakeConfigHistoryEntry,
+  LakeConfigHistoryFieldChange,
+  LakeConfigHistoryFingerprintChange,
   LakeConfigHistoryView,
   LakeConfigLiteralValue,
   LakeManageRung,
@@ -84,25 +84,24 @@ export function describeLakeConfigValue(value: LakeConfigLiteralValue | undefine
  * A long free-text field's move, described WITHOUT reproducing it - the whole point of the
  * fingerprint form. Lengths are code points, as stored.
  *
- * Equal hashes with both sides present means the trimmed text is identical, so the recorded move was
- * whitespace-only; saying "formatting only" is more honest than "replaced", which would send an owner
- * hunting for a change to the prompt's meaning that never happened.
+ * `textUnchanged` is resolved server-side (the client never sees the hashes it was derived from):
+ * it means the trimmed text is identical, so the recorded move was whitespace-only. Saying
+ * "formatting only" is more honest than "replaced", which would send an owner hunting for a change
+ * to the prompt's meaning that never happened.
  */
-export function describeLakeConfigFingerprint(
-  before: ILakeConfigTextFingerprint,
-  after: ILakeConfigTextFingerprint
-): string {
+export function describeLakeConfigFingerprint(change: LakeConfigHistoryFingerprintChange): string {
+  const { beforeFingerprint: before, afterFingerprint: after } = change;
   if (!before.present && !after.present) return 'still not set';
   if (!before.present) return `set (${after.length} chars)`;
   if (!after.present) return `cleared (was ${before.length} chars)`;
-  if (before.hash === after.hash) return `formatting only (${after.length} chars)`;
+  if (change.textUnchanged) return `formatting only (${after.length} chars)`;
   return `replaced (${before.length} -> ${after.length} chars)`;
 }
 
 /** The right-hand cell for one changed field, per arm of the discriminated union. */
-export function describeLakeConfigChange(change: ILakeConfigFieldChange): string {
+export function describeLakeConfigChange(change: LakeConfigHistoryFieldChange): string {
   if (change.kind === 'fingerprint') {
-    return describeLakeConfigFingerprint(change.beforeFingerprint, change.afterFingerprint);
+    return describeLakeConfigFingerprint(change);
   }
   const clipped = change.truncated ? ' (clipped)' : '';
   return `${describeLakeConfigValue(change.before)} -> ${describeLakeConfigValue(change.after)}${clipped}`;
