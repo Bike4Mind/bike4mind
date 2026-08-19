@@ -1,12 +1,14 @@
 import type {
   AccessContext,
   BrowsePublicDataLakesResult,
+  IAdminSettingsRepository,
   IDataLakeAccessGrantRepository,
   IDataLakeDocument,
   IDataLakeRepository,
   PublicDataLakeSummary,
 } from '@bike4mind/common';
 import { canManageLake, isEffectiveOwner, type LakeGrant } from './manageRule';
+import { grantedLakeIdsFor, resolveEnforceReadGrants } from './resolveLakeReadAccess';
 
 /**
  * The browsing caller: the full access context, not just an id. The catalog is per-caller (a
@@ -33,17 +35,23 @@ interface BrowsePublicDataLakesAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findPublicLakes'>;
     users: { findByIds: (ids: string[]) => Promise<OwnerLookup> };
-    /** Optional: makes the isOwn/canManage labels honor curator + transferred-owner grants. */
-    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes'>;
+    /**
+     * Optional: makes the isOwn/canManage labels honor curator + transferred-owner grants, and
+     * makes a grant-reachable lake discoverable (`listByPrincipal`), mirroring the grant arm
+     * `listDataLakes` feeds `findAccessible`. Unwired, both degrade to the pre-grant behavior.
+     */
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes' | 'listByPrincipal'>;
+    /** Optional: the read-grant cutover flag - governs reader/org-grant inclusion in discovery. */
+    settings?: Pick<IAdminSettingsRepository, 'getSettingsValue'>;
   };
 }
 
 /**
  * The discover/browse catalog of public data lakes. Returns one page of the public lakes this
- * caller can reach (the repo enforces public + active + the same gate `findAccessible` applies,
- * so discover and access never disagree) enriched with the preview metadata the
- * catalog renders: owner display name, file count, total size, plus per-caller `isOwn`/
- * `canManage` so the UI can gate management affordances. This is a read-only discovery
+ * caller can reach (the repo enforces public + active + the same gate and grant arms
+ * `findAccessible` applies, so discover and access never disagree) enriched with the preview
+ * metadata the catalog renders: owner display name, file count, total size, plus per-caller
+ * `isOwn`/`canManage` so the UI can gate management affordances. This is a read-only discovery
  * surface - it grants nothing; access is already ambient once a lake is public (a public
  * lake's knowledge is retrievable by everyone), so there is no "subscribe" step.
  *
@@ -56,10 +64,21 @@ export const browsePublicDataLakes = async (
   opts: BrowsePublicDataLakesOptions,
   { db }: BrowsePublicDataLakesAdapters
 ): Promise<BrowsePublicDataLakesResult> => {
+  // Resolved before the catalog query so an explicitly granted public lake discovers on the same
+  // terms it lists on - the arm `listDataLakes` already passes to findAccessible.
+  const includeReaders = await resolveEnforceReadGrants(db.settings);
+  const grantedLakeIds = await grantedLakeIdsFor(
+    actor.userId,
+    actor.organizationIds ?? [],
+    db.dataLakeAccessGrants,
+    includeReaders
+  );
+
   const { lakes, total } = await db.dataLakes.findPublicLakes(actor, {
     search: opts.search,
     limit: opts.limit,
     offset: opts.offset,
+    grantedLakeIds,
   });
 
   // Batch-resolve owners in one round-trip. Dedupe ids and drop blanks so a lake with a

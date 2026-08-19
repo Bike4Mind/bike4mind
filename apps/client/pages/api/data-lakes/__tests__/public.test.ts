@@ -9,15 +9,23 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * rejected query never reaches the service, and an accepted one arrives coerced.
  */
 
-const { mockBrowse, LAKES_REPO, USERS_REPO, GRANTS_REPO, mockToAccessContext, mockRecord } = vi.hoisted(() => ({
-  mockBrowse: vi.fn(),
-  // Distinguishable sentinels so the adapter case can assert identity pass-through.
-  LAKES_REPO: { __tag: 'dataLakeRepository' },
-  USERS_REPO: { __tag: 'userRepository' },
-  GRANTS_REPO: { __tag: 'dataLakeAccessGrantRepository' },
-  mockToAccessContext: vi.fn(),
-  mockRecord: vi.fn().mockResolvedValue(undefined),
-}));
+const { mockBrowse, LAKES_REPO, USERS_REPO, GRANTS_REPO, SETTINGS_REPO, mockToAccessContext, mockRecord } = vi.hoisted(
+  () => ({
+    mockBrowse: vi.fn(),
+    // Distinguishable sentinels so the adapter case can assert identity pass-through.
+    LAKES_REPO: { __tag: 'dataLakeRepository' },
+    USERS_REPO: { __tag: 'userRepository' },
+    GRANTS_REPO: { __tag: 'dataLakeAccessGrantRepository' },
+    SETTINGS_REPO: {
+      __tag: 'adminSettingsRepository',
+      findBySettingNames: vi.fn().mockResolvedValue([]),
+      findAll: vi.fn().mockResolvedValue([]),
+      getSettingsValue: vi.fn().mockResolvedValue(undefined),
+    },
+    mockToAccessContext: vi.fn(),
+    mockRecord: vi.fn().mockResolvedValue(undefined),
+  })
+);
 
 // The route is baseApi().use(...).get(fn), so `use` must return the chain and `get` returns the
 // raw handler - which makes the module's default export the handler itself.
@@ -45,10 +53,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: USERS_REPO,
   dataLakeAccessGrantRepository: GRANTS_REPO,
   lakeAccessEventRepository: { record: mockRecord },
-  adminSettingsRepository: {
-    findBySettingNames: vi.fn().mockResolvedValue([]),
-    findAll: vi.fn().mockResolvedValue([]),
-  },
+  adminSettingsRepository: SETTINGS_REPO,
 }));
 // Real toAccessContext pulls in entitlements/subscription lookups that are out of scope for this
 // query-bounds test; stub it. What matters at this seam is that the route builds the actor
@@ -176,6 +181,9 @@ describe('GET /api/data-lakes/public - search and pass-through', () => {
     expect(browseArgs()[2].db.dataLakes).toBe(LAKES_REPO);
     expect(browseArgs()[2].db.users).toBe(USERS_REPO);
     expect(browseArgs()[2].db.dataLakeAccessGrants).toBe(GRANTS_REPO);
+    // The grant repo alone is not enough: grant-reachable discovery also reads the read-grant
+    // cutover flag, so the settings repo has to arrive with it.
+    expect(browseArgs()[2].db.settings).toBe(SETTINGS_REPO);
   });
 
   it('returns the service result as JSON', async () => {

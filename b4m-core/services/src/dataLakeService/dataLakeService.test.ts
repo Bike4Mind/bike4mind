@@ -2902,6 +2902,30 @@ describe('browsePublicDataLakes — public discover catalog projection', () => {
       search: 'widgets',
       limit: 10,
       offset: 20,
+      grantedLakeIds: [],
     });
+  });
+
+  it("resolves the caller's owner/curator grants and passes them to the repository", async () => {
+    // The arm listDataLakes already feeds findAccessible: without it a transferred owner opens a
+    // gated public lake from their lake list but cannot find it in discover. Reader and org rows
+    // stay out here because the read-grant cutover is still report-only (resolveEnforceReadGrants).
+    const db = {
+      ...makeDb([publicLake()]),
+      dataLakeAccessGrants: {
+        listActiveByLakes: vi.fn().mockResolvedValue([]),
+        listByPrincipal: vi.fn().mockResolvedValue([
+          { dataLakeId: 'granted-lake', role: 'curator', principalType: 'user', principalId: 'x' },
+          { dataLakeId: 'reader-only-lake', role: 'reader', principalType: 'user', principalId: 'x' },
+        ]),
+      },
+    };
+
+    await browsePublicDataLakes(ctx({ userId: 'x' }), {}, { db } as any);
+
+    expect(db.dataLakes.findPublicLakes).toHaveBeenCalledWith(
+      ctx({ userId: 'x' }),
+      expect.objectContaining({ grantedLakeIds: ['granted-lake'] })
+    );
   });
 });

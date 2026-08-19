@@ -326,10 +326,12 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * Deliberately PER-CALLER, not one catalog for everyone: it applies the same gate as
    * `findAccessible`'s public arm, so a lake that acquired a `requiredUserTag`/
    * `requiredEntitlement` after being published is hidden from callers who lack the gate but
-   * still discoverable by the ones who hold it (plus its owner and admins). Without that, an
-   * entitled user could open such a lake from their own lake list while discover insisted no
-   * such public lake existed. `total` is therefore per-caller too. `search` matches name or
-   * description case-insensitively. Returns one page plus the unpaged `total` for the UI.
+   * still discoverable by the ones who hold it (plus its owner, its grant holders and admins).
+   * Without that, an entitled user could open such a lake from their own lake list while discover
+   * insisted no such public lake existed. `grantedLakeIds` mirrors `findAccessible`'s grant arm
+   * and is resolved by the caller the same way (`grantedLakeIdsFor`). `total` is therefore
+   * per-caller too. `search` matches name or description case-insensitively. Returns one page
+   * plus the unpaged `total` for the UI.
    */
   findPublicLakes(
     viewer: AccessContext,
@@ -337,6 +339,7 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
       search?: string;
       limit?: number;
       offset?: number;
+      grantedLakeIds?: string[];
     }
   ): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
   /** Persist recomputed stats (source via IFabFileRepository.computeDataLakeStats). */

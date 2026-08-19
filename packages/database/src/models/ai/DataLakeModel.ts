@@ -473,6 +473,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       search?: string;
       limit?: number;
       offset?: number;
+      grantedLakeIds?: string[];
     }
   ): Promise<{ lakes: IDataLakeDocument[]; total: number }> {
     // Clamp paging here (defense in depth) even though the route also validates: a caller
@@ -482,19 +483,25 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
 
     // Public + active, with the SAME per-caller gate findAccessible's public arm applies, so
     // discover and access agree: a lake gated after publishing stays out of the catalog for
-    // everyone except the callers who actually hold the gate (plus its owner and admins, who
-    // reach it via findAccessible's own bypass arms). The catalog is therefore per-caller -
-    // `total` included - which is the price of not showing a lake in one surface while the
-    // other insists it does not exist.
+    // everyone except the callers who actually hold the gate (plus its owner, its grant holders
+    // and admins, who reach it via findAccessible's own bypass arms). The catalog is therefore
+    // per-caller - `total` included - which is the price of not showing a lake in one surface
+    // while the other insists it does not exist. `grantedLakeIds` is pre-resolved by the caller
+    // from listByPrincipal exactly as findAccessible's grant arm is (grantedLakeIdsFor); an
+    // unwired/empty list simply adds no arm.
     const filter: Record<string, unknown> = {
       status: 'active',
       isPublic: true,
       $and: [] as Record<string, unknown>[],
     };
     if (!viewer.isAdmin) {
-      (filter.$and as Record<string, unknown>[]).push({
-        $or: [{ createdByUserId: viewer.userId }, requirementConstraint(viewer.userTags, viewer.entitlementKeys)],
-      });
+      const grantedLakeIds = opts?.grantedLakeIds ?? [];
+      const reachArms: Record<string, unknown>[] = [
+        { createdByUserId: viewer.userId },
+        requirementConstraint(viewer.userTags, viewer.entitlementKeys),
+      ];
+      if (grantedLakeIds.length > 0) reachArms.push({ _id: { $in: grantedLakeIds } });
+      (filter.$and as Record<string, unknown>[]).push({ $or: reachArms });
     }
 
     const search = opts?.search?.trim();

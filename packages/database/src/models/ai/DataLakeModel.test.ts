@@ -412,7 +412,7 @@ describe('DataLakeRepository.findPublicLakes — public discover catalog', () =>
     userId: 'stranger',
     isAdmin: false,
     userTags: [],
-    organizationId: undefined,
+    organizationIds: [],
     entitlementKeys: [],
     ...overrides,
   });
@@ -469,28 +469,60 @@ describe('DataLakeRepository.findPublicLakes — public discover catalog', () =>
   it('agrees with findAccessible on which public lakes a caller can see', async () => {
     await seedMixed();
     await dataLakeRepository.create(baseLake({ slug: 'ent-gated', isPublic: true, requiredEntitlement: 'medlib:pro' }));
+    // Org-scoped AND gated: findAccessible can reach this one by its org arm as well as its
+    // public arm, so it is the case that would expose a divergence if either filter's org
+    // handling drifted. Seeded here only, so the slug-by-slug tests above stay as written.
+    const orgGated = await dataLakeRepository.create(
+      baseLake({ slug: 'org-gated-pub', isPublic: true, organizationId: 'orgB', requiredUserTag: 'Opti' })
+    );
 
-    const cases: AccessContext[] = [
-      viewer(),
-      viewer({ userTags: ['Opti'] }),
-      viewer({ entitlementKeys: ['medlib:pro'] }),
-      viewer({ userTags: ['Opti'], entitlementKeys: ['medlib:pro'] }),
-      viewer({ userTags: ['unrelated'], entitlementKeys: ['unrelated:key'] }),
-      viewer({ userId: 'admin' }),
-      viewer({ isAdmin: true }),
-      viewer({ organizationId: 'orgB' }),
+    // Grant arm: both filters must honor an explicit grant, so a transferred/delegated owner
+    // discovers the lake they can already open. Resolved by the caller in the real paths
+    // (grantedLakeIdsFor); passed directly here to keep this test at the repo boundary.
+    const grantee = { userId: 'grantee', grantedLakeIds: [orgGated.id] };
+
+    const cases: { ctx: AccessContext; grantedLakeIds?: string[] }[] = [
+      { ctx: viewer() },
+      { ctx: viewer({ userTags: ['Opti'] }) },
+      { ctx: viewer({ entitlementKeys: ['medlib:pro'] }) },
+      { ctx: viewer({ userTags: ['Opti'], entitlementKeys: ['medlib:pro'] }) },
+      { ctx: viewer({ userTags: ['unrelated'], entitlementKeys: ['unrelated:key'] }) },
+      { ctx: viewer({ userId: 'admin' }) },
+      { ctx: viewer({ isAdmin: true }) },
+      { ctx: viewer({ organizationIds: ['orgB'] }) },
+      { ctx: viewer({ organizationIds: ['orgB'], userTags: ['Opti'] }) },
+      { ctx: viewer({ userId: grantee.userId }), grantedLakeIds: grantee.grantedLakeIds },
     ];
 
-    for (const ctx of cases) {
-      const discovered = (await dataLakeRepository.findPublicLakes(ctx)).lakes.map(l => l.slug).sort();
+    for (const { ctx, grantedLakeIds } of cases) {
+      const discovered = (await dataLakeRepository.findPublicLakes(ctx, { grantedLakeIds })).lakes
+        .map(l => l.slug)
+        .sort();
       // What findAccessible grants this caller, restricted to the catalog's own scope
       // (public + active). Anything the caller can access there must be discoverable.
-      const accessible = (await dataLakeRepository.findAccessible(ctx, { statuses: ['active'] }))
+      const accessible = (await dataLakeRepository.findAccessible(ctx, { statuses: ['active'], grantedLakeIds }))
         .filter(l => l.isPublic)
         .map(l => l.slug)
         .sort();
-      expect(discovered).toEqual(accessible);
+      expect(discovered, `ctx=${JSON.stringify({ ...ctx, grantedLakeIds })}`).toEqual(accessible);
     }
+  });
+
+  it('surfaces a public lake the caller holds an explicit grant on, gate or no gate', async () => {
+    await seedMixed();
+    const gated = (await dataLakeRepository.findPublicLakes(viewer({ isAdmin: true }))).lakes.find(
+      l => l.slug === 'gated'
+    )!;
+
+    const withGrant = await dataLakeRepository.findPublicLakes(viewer(), { grantedLakeIds: [gated.id] });
+    expect(withGrant.lakes.map(l => l.slug)).toEqual(['alpha', 'beta', 'gated']);
+    expect(withGrant.total).toBe(3);
+
+    // A grant on some other lake widens nothing.
+    const unrelated = await dataLakeRepository.findPublicLakes(viewer(), {
+      grantedLakeIds: ['deadbeefdeadbeefdeadbeef'],
+    });
+    expect(unrelated.lakes.map(l => l.slug)).toEqual(['alpha', 'beta']);
   });
 
   it('admits a public lake as soon as its first member file activates it (#1342)', async () => {
