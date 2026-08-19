@@ -881,6 +881,14 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * it is stable across edits where contentHash is not, so it decides create-vs-skip-vs-update.
    */
   findByDriveFileIdsInDataLake(driveFileIds: string[], datalakeTag: string): Promise<IFabFileDocument[]>;
+  /**
+   * Every file a given Drive connection has ingested into a lake (META-TAG ONLY, mirroring
+   * findByDriveFileIdsInDataLake). This is the basis re-sync diffs the fresh folder walk against:
+   * a stored file whose driveFileId is absent from the walk was DELETED from the folder, and one
+   * whose driveMd5Checksum/driveModifiedTime moved was EDITED - neither detectable from the walk
+   * alone. Scoped to the connection so a re-sync only reconciles the files it owns.
+   */
+  findByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<IFabFileDocument[]>;
   markFailedIfNotAlready(fabFileId: string, errorMessage: string): Promise<boolean>;
 
   // ── Data lake lifecycle. Scoped by DataLakeMembershipScope - the lake's meta-tag OR a

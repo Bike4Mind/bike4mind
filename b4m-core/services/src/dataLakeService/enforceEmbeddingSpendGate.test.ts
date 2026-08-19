@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { CreditHolderType } from '@bike4mind/common';
 import {
   EMBEDDING_SPEND_PERIOD_KEY,
   EMBEDDING_SPEND_RATE_KEY,
@@ -22,8 +23,12 @@ const levers = (overrides: Partial<DataLakeSpendLevers> = {}): DataLakeSpendLeve
   periodHours: 24,
   maxCallsPerMinute: 120,
   vectorizeChunkBatchSize: 50,
+  tierMultiplier: 1,
   ...overrides,
 });
+
+/** An individual-owned lake unless a test says otherwise (no organizationId). */
+const lakeDoc = (organizationId?: string) => ({ id: 'lake1', createdByUserId: 'user1', organizationId });
 
 const grantAll = () => ({
   adminSettings: { findBySettingNames: vi.fn(), findAll: vi.fn() },
@@ -32,7 +37,10 @@ const grantAll = () => ({
       .fn()
       .mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) }),
   },
-  dataLakes: { tryAddEmbeddingSpendMetered: vi.fn().mockResolvedValue({ granted: true, spendMicroUsd: 1_000 }) },
+  dataLakes: {
+    tryAddEmbeddingSpendMetered: vi.fn().mockResolvedValue({ granted: true, spendMicroUsd: 1_000 }),
+    findById: vi.fn().mockResolvedValue(lakeDoc()),
+  },
   dataLakeBatches: { tryAddEmbeddingSpend: vi.fn().mockResolvedValue(true) },
 });
 
@@ -389,5 +397,55 @@ describe('enforceEmbeddingSpendGate - spend notifications', () => {
         notifyTimeoutMs: 10,
       })
     ).resolves.toBeUndefined();
+  });
+});
+
+// #1675: the gate is where a lake's ownership becomes its cost tier. These pin WHICH owner type
+// reaches the resolver - the ratio the tiers imply is resolveSpendLevers' concern, tested there.
+describe('enforceEmbeddingSpendGate cost tier', () => {
+  const ownerTypePassedToResolver = () => mockedLevers.mock.calls[0]?.[2];
+
+  it('resolves an org-owned lake on the organization tier', async () => {
+    const db = grantAll();
+    db.dataLakes.findById.mockResolvedValue(lakeDoc('org1'));
+    await gate(db);
+    expect(db.dataLakes.findById).toHaveBeenCalledWith('lake1');
+    expect(ownerTypePassedToResolver()).toBe(CreditHolderType.Organization);
+  });
+
+  it('resolves a lake with no organization on the individual tier', async () => {
+    const db = grantAll();
+    await gate(db);
+    expect(ownerTypePassedToResolver()).toBe(CreditHolderType.User);
+  });
+
+  // A lake deleted mid-run is a deterministic ABSENCE of ownership, so the restrictive tier is an
+  // honest answer and the run proceeds against it.
+  it('leaves the tier unresolved rather than guessing when the lake row is gone', async () => {
+    const db = grantAll();
+    db.dataLakes.findById.mockResolvedValue(null);
+    await expect(gate(db)).resolves.toBeUndefined();
+    expect(ownerTypePassedToResolver()).toBeUndefined();
+  });
+
+  // But an ERRORING read is unknown, not absent. Swallowing it into the restrictive tier could
+  // deny on the per-lake budget, and that denial is non-retryable - the handler would permanently
+  // fail the file over a transient blip, blaming a budget that was never the problem. The error
+  // must surface so the message stays on the queue.
+  it('propagates a lake-read error instead of billing the run on a tier nobody chose', async () => {
+    const db = grantAll();
+    const outage = new Error('mongo down');
+    db.dataLakes.findById.mockRejectedValue(outage);
+    await expect(gate(db)).rejects.toThrow(outage);
+    // Not an EmbeddingSpendDeniedError: the caller must see a retryable error, not a verdict.
+    await expect(gate(db)).rejects.not.toBeInstanceOf(EmbeddingSpendDeniedError);
+    expect(db.dataLakeBatches.tryAddEmbeddingSpend).not.toHaveBeenCalled();
+  });
+
+  it('does not read a lake when the run has none (a per-run budget still applies)', async () => {
+    const db = grantAll();
+    await enforceEmbeddingSpendGate({ estimatedMicroUsd: 1, batchId: 'batch1', db, sleep: vi.fn() });
+    expect(db.dataLakes.findById).not.toHaveBeenCalled();
+    expect(ownerTypePassedToResolver()).toBeUndefined();
   });
 });

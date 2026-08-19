@@ -18,6 +18,12 @@ vi.mock('@client/app/hooks/data/googleDrive', () => ({
   useLakeDriveConnection: () => ({ data: h.connection.current, isLoading: false, isError: h.isError.current }),
   useConnectDriveFolderToLake: () => ({ mutate: h.connectMutate, isPending: false }),
   useDisconnectLakeDrive: () => ({ mutate: h.disconnectMutate, isPending: false }),
+  // Real map, not a stub: the status wording is the thing under test in the connected case.
+  DRIVE_STATUS_BADGE: {
+    connected: { label: 'Connected', color: 'success' },
+    needs_reconnect: { label: 'Needs reconnect', color: 'warning' },
+    credential_error: { label: 'Credential error', color: 'danger' },
+  },
 }));
 vi.mock('react-google-drive-picker', () => ({ default: () => [h.openPicker] }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn(), post: vi.fn() } }));

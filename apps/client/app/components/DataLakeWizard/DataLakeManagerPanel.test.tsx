@@ -18,6 +18,17 @@ const useActiveDataLakeBatches = vi.fn(() => ({ data: [] as unknown[] }));
 // empty-section rendering.
 const useGetArchivedDataLakes = vi.fn(() => ({ data: undefined as unknown[] | undefined }));
 const useGetDeletedDataLakes = vi.fn(() => ({ data: undefined as unknown[] | undefined }));
+// LakeInfoPanel's Drive chip and the purge dialog's warning both read the connection. Default to
+// "no connection" so existing cases are unaffected; the Drive-specific cases override it.
+const useLakeDriveConnection = vi.fn(() => ({ data: null as unknown, isError: false, isLoading: false }));
+vi.mock('@client/app/hooks/data/googleDrive', () => ({
+  useLakeDriveConnection: () => useLakeDriveConnection(),
+  DRIVE_STATUS_BADGE: {
+    connected: { label: 'Connected', color: 'success' },
+    needs_reconnect: { label: 'Needs reconnect', color: 'warning' },
+    credential_error: { label: 'Credential error', color: 'danger' },
+  },
+}));
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });
   return {
@@ -206,6 +217,11 @@ beforeEach(() => {
   useGetDeletedDataLakes.mockReturnValue({ data: undefined });
   useActiveDataLakeBatches.mockReset();
   useActiveDataLakeBatches.mockReturnValue({ data: [] });
+  // Reset here as well as at the point of use: the purge cases below set this persistently, and
+  // without a reset the next test added after them would silently inherit a connected/erroring
+  // Drive mock.
+  useLakeDriveConnection.mockReset();
+  useLakeDriveConnection.mockReturnValue({ data: null, isError: false, isLoading: false });
   useGetArchivedDataLakes.mockReset();
   useGetArchivedDataLakes.mockReturnValue({ data: undefined });
   useGetDeletedDataLakes.mockReset();
@@ -812,5 +828,56 @@ describe('DataLakeManagerPanel - purge confirmation', () => {
     // this argument rather than refetching (see dataLakes.test.ts).
     expect(cleanupMutate).toHaveBeenCalledWith('gone', expect.objectContaining({ onSuccess: expect.any(Function) }));
     await waitFor(() => expect(screen.queryByTestId('datalake-purge-confirm')).not.toBeInTheDocument());
+  });
+
+  /** Opens the purge dialog for `deletedLake`, whatever the Drive-connection mock is set to. */
+  const openPurgeDialog = async () => {
+    useGetDeletedDataLakes.mockReturnValue({ data: [deletedLake] });
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(screen.getByTestId('datalake-deleted-section-toggle'));
+    await user.click(screen.getByTestId('datalake-deleted-section-menu-btn-gone'));
+    await user.click(screen.getByTestId('datalake-purge-btn-gone'));
+    expect(screen.getByTestId('datalake-purge-confirm')).toBeInTheDocument();
+  };
+
+  it('names the attached Drive folder, so the stranding hazard is visible before an irreversible purge', async () => {
+    useLakeDriveConnection.mockReturnValue({
+      data: { folderName: 'Q3-Reports', driveFolderId: 'fld_1', status: 'connected' },
+      isError: false,
+      isLoading: false,
+    });
+    await openPurgeDialog();
+
+    expect(screen.getByTestId('datalake-purge-drive-warning')).toHaveTextContent('Q3-Reports');
+    expect(screen.queryByTestId('datalake-purge-drive-unknown')).not.toBeInTheDocument();
+  });
+
+  it('warns when the connection could not be READ, instead of silently omitting the warning', async () => {
+    // The dangerous collapse: a failed read is not "no connection". Staying silent here would let
+    // the user purge and permanently strand the Drive claim on that folder (#1807) - the exact
+    // outcome this warning exists to prevent, hidden by a transient error.
+    useLakeDriveConnection.mockReturnValue({ data: undefined, isError: true, isLoading: false });
+    await openPurgeDialog();
+
+    expect(screen.getByTestId('datalake-purge-drive-unknown')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-purge-drive-warning')).not.toBeInTheDocument();
+  });
+
+  it('stays quiet for a lake with no connection, so an ordinary purge is not nagged', async () => {
+    // A 404 (personal lake, or genuinely no connection) resolves to null and must NOT read as an error.
+    useLakeDriveConnection.mockReturnValue({ data: null, isError: false, isLoading: false });
+    await openPurgeDialog();
+
+    expect(screen.queryByTestId('datalake-purge-drive-warning')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-purge-drive-unknown')).not.toBeInTheDocument();
+  });
+
+  it('stays quiet while the connection read is still in flight', async () => {
+    useLakeDriveConnection.mockReturnValue({ data: undefined, isError: false, isLoading: true });
+    await openPurgeDialog();
+
+    expect(screen.queryByTestId('datalake-purge-drive-warning')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-purge-drive-unknown')).not.toBeInTheDocument();
   });
 });

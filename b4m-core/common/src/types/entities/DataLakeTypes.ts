@@ -38,9 +38,11 @@ export interface AccessContext {
    * Orgs the caller holds admin RIGHTS in (billing owner / manager / appointed admin), resolved
    * app-side via `organizationRepository.findIdsWithAdminRights` and injected here (same pre-resolved
    * seam as `entitlementKeys`; core never imports the Organization model). An org admin may MANAGE any
-   * lake scoped to one of these orgs - the org-manageable rung in `canManageLake`. Distinct from the
-   * singular `organizationId` above, which is the caller's selected-org display preference, never an
-   * authorization input on its own. Optional - absent -> no org-admin rung (back-compat).
+   * lake scoped to one of these orgs - the org-manageable rung in `canManageLake`. Distinct from
+   * `organizationIds` above: that set is MEMBERSHIP (which orgs the caller may READ), this one is
+   * admin RIGHTS (which orgs the caller may MANAGE) - a member is not an admin. Neither is
+   * `user.organizationId`, the selected-org display preference, which is never an authorization
+   * input (#1674). Optional - absent -> no org-admin rung (back-compat).
    */
   administeredOrgIds?: string[];
   /**
@@ -749,7 +751,8 @@ export interface SyncDelta {
  * admin reset or a release-after-failure, not because one is "actual" and the other isn't -
  * the client must label them distinctly (lifetime meter vs. attributed/ledgered cost)
  * without implying either is a true provider-billed number. Budgets mirror
- * `resolveSpendLevers()`'s live values so the view never has to re-derive them.
+ * `resolveSpendLevers()`'s live values so the view never has to re-derive them - resolved at the
+ * lake's OWN cost tier, so they are the same ceilings the ingestion gate enforces on it.
  */
 export interface IDataLakeSpendResponse {
   dataLakeId: string;
@@ -762,6 +765,11 @@ export interface IDataLakeSpendResponse {
   perLakeBudgetMicroUsd: number;
   perPeriodBudgetMicroUsd: number;
   periodHours: number;
+  /**
+   * Cost-tier factor the two per-resource budgets above were scaled by, from the lake's ownership
+   * (individual vs organization). Returned so the view can explain a ceiling rather than just state it.
+   */
+  tierMultiplier: number;
   /** Actual COGS from the UsageEvent ledger (ingestion embeds attributed to this lake). */
   ledger: ILakeUsageSummary;
 }

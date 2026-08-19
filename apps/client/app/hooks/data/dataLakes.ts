@@ -294,6 +294,11 @@ function useLifecycleMutation(action: LifecycleAction, successMessage: string, e
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.archived });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.deleted });
+      // A lifecycle move changes what is BROWSABLE, not just which lakes are listed: archiving
+      // stamps archivedAt on the lake's files, which both tag counters exclude. Without this the
+      // lake list and the tag tree disagree - the page's lake rail (sourced from `list`) drops the
+      // row while the tree beside it still shows that lake's branches and counts it in the totals.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
       // Every lifecycle action records a config-history row. Invalidated for all five rather than
       // only the reversible ones: for delete/cleanup the history observer is already unmounted, so
       // the extra key is inert, and enumerating which actions qualify would rot as actions are added.
